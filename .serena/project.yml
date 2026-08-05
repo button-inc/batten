@@ -1,0 +1,35 @@
+# Serena project configuration — checked in so every contributor gets an
+# identical, working setup the moment they open the repo. See AGENTS.md
+# ("Serena (semantic code tools)") for the how and why.
+#
+# This file is shared by the main checkout AND every git worktree under
+# .claude/worktrees/. Serena's global registry keys projects by *path*, and the
+# MCP server (see .mcp.json) activates with `--project .`, so each worktree gets
+# its own registry entry and its own .serena/cache — no cross-worktree bleed.
+# The one collision that path-isolation does NOT solve is the main checkout
+# recursively indexing the worktree copies that live inside it; `ignored_paths`
+# below is what prevents that.
+
+# Referenced when activating by name. Intentionally the same across worktrees;
+# activation is path-based (--project .), so this is only a display label.
+project_name: "batten"
+
+# LSP-backed semantic tools. This is a Rust workspace.
+language_servers:
+- rust
+
+encoding: "utf-8"
+
+# Honour .gitignore (keeps target/, etc. out of the symbol index).
+ignore_all_files_in_gitignore: true
+
+# CRITICAL for worktrees: the main checkout physically contains every worktree
+# under .claude/worktrees/. Without this, activating Serena on the main repo
+# would index N+1 copies of the whole tree and cross-link their symbols. Also
+# skip .cc-writes (Claude Code scratch) and build output.
+ignored_paths:
+- ".claude/worktrees/**"
+- ".claude/.cc-writes/**"
+- "target/**"
+
+read_only: false

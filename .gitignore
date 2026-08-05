@@ -7,3 +7,15 @@
 .idea/
 .vscode/
 *.swp
+
+# Claude Code local workspace (git worktrees live here; never commit them).
+/.claude/worktrees/
+/.claude/.cc-writes/
+
+# Serena semantic-code config is shared with the whole team. Force-track it here:
+# this overrides a common per-user global ignore of `.serena` (higher precedence
+# than core.excludesFile). Only the per-machine cache and local overrides stay
+# ignored — see also .serena/.gitignore.
+!.serena/
+.serena/cache/
+.serena/project.local.yml

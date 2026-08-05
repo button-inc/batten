@@ -11,6 +11,7 @@ rust = { version = "1.85.0", components = "rustfmt,clippy" }
 hk = "1.54.0"                 # git-hook runner (see hk.pkl)
 "aqua:EmbarkStudios/cargo-deny" = "0.20"  # dependency license/advisory policy (deny.toml)
 "aqua:release-plz/release-plz" = "0.3"    # conventional-commit-driven semver + changelog
+uv = "0.8"                    # provides `uvx`, used by .mcp.json to launch Serena's MCP server
 
 [env]
 CARGO_TERM_COLOR = "always"

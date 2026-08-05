@@ -36,6 +36,41 @@ mise run cross-check   # type-check other targets from Linux
 mise tasks             # list them all
 ```
 
+## Serena (semantic code tools)
+
+The repo ships a project-scoped [Serena](https://github.com/oraios/serena) MCP
+server so agents get LSP-backed *semantic* code navigation and edits (find
+symbol / references, rename, symbol-level edits) instead of grep-and-splice. You
+do not need to know Serena to benefit from it — it is wired up in `.mcp.json` and
+starts automatically. The only prerequisite is the pinned toolchain:
+
+```bash
+mise install   # provides `uv`/`uvx`, which .mcp.json uses to launch Serena
+```
+
+`.mcp.json` runs `uvx --from serena-agent==<pinned> serena start-mcp-server
+--context claude-code --project .`. The `--project .` matters: Serena keys
+projects by **path** and activates the current working directory, so the main
+checkout and every worktree under `.claude/worktrees/` are independent projects
+with their own symbol cache.
+
+**Worktree collisions are configured away**, so you don't have to think about
+them:
+
+- `.serena/project.yml` is checked in (shared, working config: Rust language
+  server, gitignore-aware indexing). Its `ignored_paths` excludes
+  `.claude/worktrees/**` — without that, the main checkout, which physically
+  contains every worktree, would index N+1 copies of the tree and cross-link
+  their symbols. This is *the* worktree failure mode; it is handled here.
+- `.serena/cache/` (the per-machine symbol index) and `.serena/project.local.yml`
+  (local overrides) are git-ignored via `.serena/.gitignore`. Each checkout
+  builds its own cache; nothing machine-specific is committed.
+- `.claude/worktrees/` is git-ignored, so worktree copies are never committed.
+
+If a worktree ever misbehaves (stale index), delete its `.serena/cache/` and let
+Serena rebuild. Do not commit `.serena/cache/` or point two worktrees at one
+cache.
+
 ## Branching model — trunk-based development
 
 This repo follows [trunk-based development](https://trunkbaseddevelopment.com/).
@@ -152,7 +187,9 @@ crates/batten/
   src/exit.rs   the exit-code contract
   tests/cli.rs  end-to-end tests over the compiled binary
 batten.toml     Batten's own policy config (consumer #1)
-mise.toml       pinned toolchain (Rust, hk)
+.mcp.json       project-scoped MCP servers (Serena semantic code tools)
+.serena/        Serena project config (project.yml tracked; cache/ ignored)
+mise.toml       pinned toolchain (Rust, hk, uv)
 hk.pkl          git hooks (fmt, clippy, test, conventional commits)
 deny.toml       cargo-deny policy (licenses, advisories, sources)
 ```
