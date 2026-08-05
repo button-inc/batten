@@ -1,0 +1,28 @@
+name: commit-lint
+
+# PRs land by fast-forward, so every commit reaches main unchanged. For
+# conventional-commit-driven semver (release-plz) to be correct, EACH commit must
+# be conventional — not just the PR title. This is a CI backstop to the local hk
+# commit-msg hook, which GitHub's server-side merge never runs. The rule itself
+# lives once in mise.toml (`mise run commit-lint`).
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  commit-lint:
+    name: commit-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@v2
+      - run: mise run commit-lint
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}

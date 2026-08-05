@@ -1,0 +1,36 @@
+name: fast-forward
+
+# GitHub's merge button cannot fast-forward: "Rebase and merge" rewrites every
+# commit under a new SHA, and "Merge" adds a merge commit. Both discard the exact
+# objects CI tested. This workflow lands a PR by *true* fast-forward instead —
+# main is moved to the PR's existing head commit, unchanged — when a maintainer
+# comments `/fast-forward` on the PR.
+#
+# It is safe under the branch ruleset: the push only succeeds if the PR head is a
+# fast-forward of main (linear, no rewrite) AND that exact SHA already has the
+# required checks green. Nothing weakens the gate; this is just the honest merge
+# GitHub declines to offer.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  fast-forward:
+    if: >-
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/fast-forward') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: sequoia-pgp/fast-forward@v1
+        with:
+          merge: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Comment back on the PR only when the fast-forward is not possible
+          # (e.g. main moved and the branch needs updating first).
+          comment: on-error
