@@ -27,6 +27,17 @@ mise run cross-check   # type-check other targets from Linux
 mise tasks             # list them all
 ```
 
+## Branching model — trunk-based development
+
+This repo follows [trunk-based development](https://trunkbaseddevelopment.com/).
+`main` is the single long-lived branch and is always releasable. Work happens on
+**short-lived** branches that are opened, reviewed, and landed within a day or
+two — not long-running feature branches that drift and rot. Keep changes small
+and integrate frequently; land by fast-forward so `main` is a linear sequence of
+tested commits (see [Commits and pull requests](#commits-and-pull-requests)).
+Batten exists to make "done" mean *landed and verified* rather than merely
+pushed, so its own history holds to that.
+
 ## Non-negotiable project rules
 
 1. **The core stays repo-agnostic.** No consumer-specific identifiers — no
