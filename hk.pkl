@@ -1,10 +1,8 @@
 // Git hooks for this repository, run by hk (https://hk.jdx.dev) — a single Rust
 // binary provisioned through mise (see mise.toml), no Node.js involved.
 //
-// Unlike a noisy legacy workspace, Batten is rustfmt-clean and clippy-clean from
-// line one, so the pre-commit gate enforces the full trio: format, lint (warnings
-// denied), and the workspace test suite. Keeping "done" honest starts with the
-// tool's own commits.
+// Every step delegates to a mise task, so the hook, CI, and a local `mise run`
+// all execute byte-identical commands — mise.toml is the single source of truth.
 //
 // Activation is per-clone and manual — creating this file does nothing until:
 //   hk install
@@ -12,16 +10,13 @@
 amends "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Config.pkl"
 
 hooks {
-    // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/): the
-    // subject must start with a type, an optional scope, an optional `!`, and a
-    // colon-space. This feeds changelog automation and keeps history greppable.
+    // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
+    // PRs land by fast-forward, so every commit reaches main with its original
+    // SHA and must be conventional for release-plz to compute semver correctly.
     ["commit-msg"] {
         steps {
             ["conventional-commit"] {
-                check = """
-                    head -n1 {{commit_msg_file}} | grep -Eq '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+' \
-                      || { echo 'commit-msg: subject must follow Conventional Commits, e.g. "feat(cli): add check subcommand"'; exit 1; }
-                    """
+                check = "mise run commit-msg {{commit_msg_file}}"
             }
         }
     }
@@ -29,18 +24,18 @@ hooks {
         steps {
             ["fmt"] {
                 glob = List("**/*.rs")
-                check = "mise exec -- cargo fmt --all --check"
-                fix = "mise exec -- cargo fmt --all"
+                check = "mise run fmt-check"
+                fix = "mise run fmt"
             }
-            ["clippy"] {
+            ["lint"] {
                 glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
-                check = "mise exec -- cargo clippy --all-targets --all-features -- -D warnings"
+                check = "mise run lint"
             }
-            // Tests the whole workspace (not just staged files) because a change in
-            // one crate can break another.
+            // Tests the whole workspace because a change in one crate can break
+            // another.
             ["test"] {
                 glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
-                check = "mise exec -- cargo test --workspace"
+                check = "mise run test"
             }
         }
     }

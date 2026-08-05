@@ -9,32 +9,23 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
-
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: mise exec -- cargo fmt --all --check
-      - name: Clippy
-        run: mise exec -- cargo clippy --all-targets --all-features
-      - name: Test
-        run: mise exec -- cargo test --all-features --workspace
+      # fmt-check, lint, test, and cargo-deny — the whole local `mise run ci`.
+      - run: mise run ci
 
-  deny:
-    name: cargo-deny
+  cross:
+    name: cross
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: jdx/mise-action@v2
+      - uses: Swatinem/rust-cache@v2
+      # Cross-platform compile coverage without paying for macOS/Windows runners.
+      - run: mise run cross-check

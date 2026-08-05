@@ -1,10 +1,85 @@
-# Repo toolchain, provisioned by mise (https://mise.jdx.dev). Committed so a local
-# build and CI resolve byte-identical versions — Batten's determinism discipline
-# depends on the compiler being pinned, not just the crates.
+# The single source of truth for this repo's dev environment: every tool, env
+# var, and task lives here, so CI, git hooks, and local shells all run the exact
+# same thing. Provisioned by mise (https://mise.jdx.dev).
 #
-# `hk` (https://hk.jdx.dev) is jdx's git-hook runner — a single Rust binary, no
-# Node.js — that runs the pre-commit gate defined in hk.pkl. It does nothing until
-# a contributor runs `hk install` once; see CONTRIBUTING.md.
+#   mise install       # get every tool below at its pinned version
+#   mise tasks         # list the tasks
+#   mise run ci        # everything CI runs, locally
+
 [tools]
 rust = { version = "1.85.0", components = "rustfmt,clippy" }
-hk = "1.54.0"
+hk = "1.54.0"                 # git-hook runner (see hk.pkl)
+cargo-deny = "0.16"           # dependency license/advisory policy (deny.toml)
+release-plz = "0.3"           # conventional-commit-driven semver + changelog
+
+[env]
+CARGO_TERM_COLOR = "always"
+# Conventional Commits subject pattern, shared by the commit-msg hook and the CI
+# commit linter so there is exactly one definition of "valid commit".
+CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
+
+[tasks.fmt]
+description = "Format all code"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check formatting"
+run = "cargo fmt --all --check"
+
+[tasks.lint]
+description = "Clippy with warnings denied"
+run = "cargo clippy --all-targets --all-features -- -D warnings"
+
+[tasks.test]
+description = "Run the workspace test suite"
+run = "cargo test --workspace"
+
+[tasks.deny]
+description = "cargo-deny: licenses, advisories, sources"
+run = "cargo deny check"
+
+[tasks.cross-check]
+description = "Type-check for other targets from Linux (no macOS runner needed)"
+run = '''
+for t in x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-gnu; do
+  rustup target add "$t"
+  # `check` does codegen-to-metadata without linking, so it needs no target
+  # linker or SDK — cross-platform compile coverage at Linux-runner cost.
+  cargo check --workspace --target "$t"
+done
+'''
+
+[tasks.ci]
+description = "Everything CI runs"
+depends = ["fmt-check", "lint", "test", "deny"]
+
+[tasks.commit-msg]
+description = "Validate one commit-message file is Conventional Commits"
+run = '''
+head -n1 "{{arg(name="file")}}" | grep -Eq "$CONVENTIONAL_RE" \
+  || { echo 'commit-msg: subject must follow Conventional Commits, e.g. "feat(cli): add check subcommand"'; exit 1; }
+'''
+
+[tasks.commit-lint]
+description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits"
+run = '''
+fail=0
+for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
+  subject=$(git show -s --format=%s "$sha")
+  if printf '%s' "$subject" | grep -Eq "$CONVENTIONAL_RE"; then
+    echo "OK    ${sha:0:8}  $subject"
+  else
+    echo "::error::Non-conventional commit ${sha:0:8}: '$subject'"
+    fail=1
+  fi
+done
+exit $fail
+'''
+
+[tasks.release-pr]
+description = "Open/update the release PR (version bump + changelog)"
+run = "release-plz release-pr --git-token ${GITHUB_TOKEN:?}"
+
+[tasks.release]
+description = "Tag and publish a GitHub release when the version changed"
+run = "release-plz release --git-token ${GITHUB_TOKEN:?}"
