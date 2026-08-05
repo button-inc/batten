@@ -26,22 +26,31 @@ hk install        # install the git hooks into .git/hooks
 
 ## Development
 
+`mise.toml` is the single source of truth for tools, env, and tasks:
+
 ```bash
-mise exec -- cargo fmt --all
-mise exec -- cargo clippy --all-targets --all-features
-mise exec -- cargo test --workspace
+mise run test    # workspace tests
+mise run lint    # clippy, warnings denied
+mise run fmt     # format
+mise run ci      # everything CI runs (fmt-check + lint + test + deny)
+mise tasks       # list them all
 ```
 
-The `hk` pre-commit hook runs format, Clippy (warnings denied), and the test
-suite; the commit-msg hook enforces Conventional Commits. CI runs the same on
-Linux and macOS, plus `cargo-deny`. Please run the hooks locally before opening
-a PR.
+The `hk` pre-commit hook runs the same tasks, and the commit-msg hook enforces
+Conventional Commits. CI runs on Linux only; cross-platform compilation is
+covered by `mise run cross-check` (`cargo check` for macOS/Windows targets — no
+macOS runner needed). Please run `mise run ci` locally before opening a PR.
 
 ## Commits and pull requests
 
-- Commit messages follow
+- **Every commit** follows
   [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/), e.g.
   `feat(cli): add check subcommand` or `fix: correct exit code for usage errors`.
+  PRs land by **fast-forward** (comment `/fast-forward`), so each commit reaches
+  `main` with its original SHA and feeds semver. GitHub's merge button is
+  intentionally disabled — it would rewrite SHAs and discard what CI tested.
+- **Versioning and `CHANGELOG.md` are automated by `release-plz`** — don't edit
+  them by hand.
 - Keep PRs small and focused; rebase on `main` before opening.
 - Every behavioral change ships with a test.
 - Reference the relevant issue in the PR description.

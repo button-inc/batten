@@ -15,13 +15,16 @@ mise install     # provision the pinned Rust toolchain and hk
 hk install       # install the git hooks into .git/hooks
 ```
 
-Prefix cargo with `mise exec --` so the pinned toolchain is used:
+Everything — tools, env vars, and tasks — is defined in `mise.toml`. Use the
+tasks rather than raw cargo so local, hook, and CI runs are identical:
 
 ```bash
-mise exec -- cargo build --workspace
-mise exec -- cargo test --workspace
-mise exec -- cargo clippy --all-targets --all-features
-mise exec -- cargo fmt --all
+mise run test          # workspace test suite
+mise run lint          # clippy, warnings denied
+mise run fmt           # format
+mise run ci            # fmt-check + lint + test + deny (what CI runs)
+mise run cross-check   # type-check other targets from Linux
+mise tasks             # list them all
 ```
 
 ## Non-negotiable project rules
@@ -59,25 +62,30 @@ mise exec -- cargo fmt --all
 
 ## Before you commit
 
-The `hk` pre-commit hook runs format, Clippy (warnings denied), and the full
-workspace test suite; the commit-msg hook enforces Conventional Commits. Run the
-same locally rather than discovering it at commit time:
-
-```bash
-mise exec -- cargo fmt --all --check
-mise exec -- cargo clippy --all-targets --all-features -- -D warnings
-mise exec -- cargo test --workspace
-```
+The `hk` pre-commit hook runs `mise run fmt/lint/test`; the commit-msg hook runs
+`mise run commit-msg`. Run `mise run ci` locally rather than discovering a
+failure at commit time.
 
 ## Commits and pull requests
 
-- Commit messages follow
+- **Every commit** follows
   [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
   `type(scope): summary`, e.g. `feat(cli): add check subcommand`. Allowed types:
-  `build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test`.
+  `build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test`. This
+  is enforced per-commit (not just the PR title) because PRs land by
+  **fast-forward** — each commit lands on `main` with its **original SHA**,
+  unchanged, and drives semver.
+- **Landing a PR:** comment `/fast-forward` on it. GitHub's merge button is
+  disabled/blocked on purpose — "Rebase and merge" rewrites every commit under a
+  new SHA and throws away the objects CI tested. `main` only advances to a commit
+  whose exact SHA already passed `ci`, `cross`, and `commit-lint`. Keep your
+  branch fast-forwardable (rebase it on `main` locally before it lands).
+- **Semver and the changelog are automated.** `release-plz` reads the commits
+  since the last release and bumps the version + `CHANGELOG.md` in a release PR
+  (`feat` → minor, `fix` → patch, `!`/`BREAKING CHANGE` → major). Do **not**
+  hand-edit the version or changelog.
 - Keep PRs small and focused; rebase on `main` before opening.
 - Reference the relevant issue (the `CLOUD-*` board) in the PR description.
-- Update `CHANGELOG.md` under `[Unreleased]` for anything user-visible.
 
 ## Where things are
 
