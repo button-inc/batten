@@ -15,6 +15,15 @@ mise install     # provision the pinned Rust toolchain and hk
 hk install       # install the git hooks into .git/hooks
 ```
 
+**Use [mise](https://mise.jdx.dev) for everything it is reasonably designed for
+in this repo — always.** That means: install and pin every dev tool through
+`[tools]` (never a one-off `brew`/`cargo install` or a system binary), read and
+set env vars through `[env]` (never ad-hoc `export`s), and run every repeatable
+command as a `[tasks]` task invoked with `mise run` (never a bare `cargo …` or a
+duplicated shell snippet in CI or a hook). If you reach for a tool, a variable,
+or a scripted command, define it in `mise.toml` first and call it through mise.
+CI, `hk`, and your shell then execute byte-identical commands.
+
 Everything — tools, env vars, and tasks — is defined in `mise.toml`. Use the
 tasks rather than raw cargo so local, hook, and CI runs are identical:
 
