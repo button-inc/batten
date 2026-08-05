@@ -62,6 +62,7 @@ head -n1 "{{arg(name="file")}}" | grep -Eq "$CONVENTIONAL_RE" \
 
 [tasks.commit-lint]
 description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits"
+shell = "bash -c"   # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
 run = '''
 fail=0
 for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
