@@ -29,7 +29,8 @@
         "required_status_checks": [
           { "context": "test (ubuntu-latest)" },
           { "context": "test (macos-latest)" },
-          { "context": "cargo-deny" }
+          { "context": "cargo-deny" },
+          { "context": "pr-title" }
         ]
       }
     }

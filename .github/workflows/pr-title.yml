@@ -1,0 +1,30 @@
+name: pr-title
+
+# Squash merges use the PR title as the commit subject on main, and GitHub's
+# server-side merge never runs the local hk commit-msg hook. So the PR title is
+# the last place to enforce Conventional Commits before history is written. The
+# regex here is kept in lockstep with hk.pkl.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  pr-title:
+    name: pr-title
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title is Conventional Commits
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          re='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
+          if printf '%s' "$PR_TITLE" | grep -Eq "$re"; then
+            echo "OK: $PR_TITLE"
+          else
+            echo "::error title=Non-conventional PR title::'$PR_TITLE' must follow Conventional Commits, e.g. 'feat(cli): add check subcommand'"
+            exit 1
+          fi
