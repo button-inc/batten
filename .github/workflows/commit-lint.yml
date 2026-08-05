@@ -3,12 +3,13 @@ name: commit-lint
 # PRs land by fast-forward, so every commit reaches main unchanged. For
 # conventional-commit-driven semver (release-plz) to be correct, EACH commit must
 # be conventional — not just the PR title. This is a CI backstop to the local hk
-# commit-msg hook, which GitHub's server-side merge never runs. The rule itself
-# lives once in mise.toml (`mise run commit-lint`).
+# commit-msg hook; the rule lives once in mise.toml (`mise run commit-lint`).
+#
+# Runs only on NON-DRAFT PRs — same cost discipline as ci.yml.
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
@@ -16,6 +17,7 @@ permissions:
 jobs:
   commit-lint:
     name: commit-lint
+    if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -51,7 +51,13 @@ macOS runner needed). Please run `mise run ci` locally before opening a PR.
   intentionally disabled — it would rewrite SHAs and discard what CI tested.
 - **Versioning and `CHANGELOG.md` are automated by `release-plz`** — don't edit
   them by hand.
-- Keep PRs small and focused; rebase on `main` before opening.
+- **Open PRs as drafts** (`gh pr create --draft`). CI does not run on drafts —
+  iterate and verify locally at no CI cost.
+- **Run `mise run verify` and get it green before `gh pr ready`.** It runs the
+  exact tasks CI runs and checks your branch is rebased on the latest `main`
+  (fast-forward-green). Marking ready is what triggers CI, and it should pass
+  first try.
+- Keep PRs small and focused.
 - Every behavioral change ships with a test.
 - Reference the relevant issue in the PR description.
 

@@ -53,6 +53,21 @@ done
 description = "Everything CI runs"
 depends = ["fmt-check", "lint", "test", "deny"]
 
+[tasks.verify]
+description = "Full local pre-flight — run this before marking any draft PR ready"
+shell = "bash -c"
+depends = ["ci", "cross-check"]
+run = '''
+git fetch -q origin main
+main=$(git rev-parse origin/main)
+if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
+  echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
+  exit 1
+fi
+BASE_SHA="$main" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint
+echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit-lint all pass"
+'''
+
 [tasks.commit-msg]
 description = "Validate one commit-message file is Conventional Commits"
 run = '''

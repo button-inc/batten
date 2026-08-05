@@ -47,6 +47,41 @@ tested commits (see [Commits and pull requests](#commits-and-pull-requests)).
 Batten exists to make "done" mean *landed and verified* rather than merely
 pushed, so its own history holds to that.
 
+## CI is expensive; your local execution is free
+
+Every CI run costs real minutes. **Your own execution costs nothing.** So the
+default is always: verify everything locally, exhaustively, *before* CI ever
+runs. CI is a final confirmation of what you already proved locally — never a
+remote place to discover failures you could have caught for free.
+
+This only works because **CI runs the exact same `mise` tasks you run locally**.
+`mise run ci` (fmt-check + lint + test + deny), `mise run cross-check`, and
+`mise run commit-lint` are literally what the workflows invoke. If CI ever runs a
+command that isn't a `mise` task you can run locally, that is a bug — fix it so
+they match.
+
+**The workflow contract (all of it is enforced or it has failed):**
+
+1. **PRs start as drafts.** Open every PR with `gh pr create --draft`. **CI does
+   not run on draft PRs** — drafts are where you iterate and verify locally at
+   zero CI cost.
+2. **Before marking a draft ready, run `mise run verify` and get it green.** That
+   task mirrors CI *and* asserts your branch is **fast-forward-green**: rebased
+   onto the current `origin/main`, with `ci` + `cross` + `commit-lint` all
+   passing. "Green but stale" is not green — rebase first.
+3. **Only then `gh pr ready`.** Marking ready is the single event that triggers
+   CI. Because you already ran the identical tasks locally against an up-to-date
+   base, this run should pass on the first try. A red CI run on a freshly-readied
+   PR means step 2 was skipped.
+4. **Land by fast-forward** (`/fast-forward` comment). Never the merge button.
+5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
+   the PR's exact commits, which already passed CI, so nothing re-runs on `main`.
+   Do not add push-to-`main` CI triggers.
+
+If a PR is not rebased on the latest green `main`, if `mise run verify` was not
+green locally first, or if CI ran a command you couldn't run locally, the process
+has failed — stop and fix the process, not just the symptom.
+
 ## Non-negotiable project rules
 
 1. **The core stays repo-agnostic.** No consumer-specific identifiers — no

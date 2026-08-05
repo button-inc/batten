@@ -1,9 +1,17 @@
 name: CI
 
+# CI minutes cost money; an agent's local execution does not. So CI runs as
+# rarely as correctness allows:
+#   - Only on NON-DRAFT PRs. Draft = still being verified locally; no CI.
+#   - Not on push to main: main only advances by fast-forward to a commit that
+#     already passed these exact checks on its PR, so re-running would be pure
+#     waste.
+# The jobs run the SAME `mise run` tasks an agent runs locally, so a green
+# `mise run verify` locally means these will pass.
+
 on:
-  push:
-    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -12,20 +20,20 @@ concurrency:
 jobs:
   ci:
     name: ci
+    if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
       - uses: Swatinem/rust-cache@v2
-      # fmt-check, lint, test, and cargo-deny — the whole local `mise run ci`.
       - run: mise run ci
 
   cross:
     name: cross
+    if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
       - uses: Swatinem/rust-cache@v2
-      # Cross-platform compile coverage without paying for macOS/Windows runners.
       - run: mise run cross-check
