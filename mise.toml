@@ -9,8 +9,8 @@
 [tools]
 rust = { version = "1.85.0", components = "rustfmt,clippy" }
 hk = "1.54.0"                 # git-hook runner (see hk.pkl)
-cargo-deny = "0.16"           # dependency license/advisory policy (deny.toml)
-release-plz = "0.3"           # conventional-commit-driven semver + changelog
+"aqua:EmbarkStudios/cargo-deny" = "0.20"  # dependency license/advisory policy (deny.toml)
+"aqua:release-plz/release-plz" = "0.3"    # conventional-commit-driven semver + changelog
 
 [env]
 CARGO_TERM_COLOR = "always"
