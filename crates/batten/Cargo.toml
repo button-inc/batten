@@ -1,0 +1,28 @@
+[package]
+name = "batten"
+description = "Repo-agnostic policy engine that keeps \"done\" aligned with landed-and-verified work."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+readme = "../../README.md"
+categories = ["command-line-utilities", "development-tools"]
+keywords = ["policy", "ci", "git", "hooks", "agents"]
+
+[[bin]]
+name = "batten"
+path = "src/main.rs"
+
+[lib]
+name = "batten"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

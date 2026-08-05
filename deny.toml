@@ -1,0 +1,32 @@
+# cargo-deny configuration.
+#
+# Batten adopts cargo-deny's severity model and, as its own consumer #1, runs
+# this policy against itself in CI. See https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[licenses]
+version = 2
+# Batten is MIT OR Apache-2.0; only permissive, compatible licenses are allowed
+# in the dependency tree so the project stays open-sourceable.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

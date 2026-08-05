@@ -1,0 +1,10 @@
+# Repo toolchain, provisioned by mise (https://mise.jdx.dev). Committed so a local
+# build and CI resolve byte-identical versions — Batten's determinism discipline
+# depends on the compiler being pinned, not just the crates.
+#
+# `hk` (https://hk.jdx.dev) is jdx's git-hook runner — a single Rust binary, no
+# Node.js — that runs the pre-commit gate defined in hk.pkl. It does nothing until
+# a contributor runs `hk install` once; see CONTRIBUTING.md.
+[tools]
+rust = { version = "1.85.0", components = "rustfmt,clippy" }
+hk = "1.54.0"

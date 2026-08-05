@@ -1,0 +1,13 @@
+# Batten's own policy configuration.
+#
+# Consumer #1 is Batten itself: this checked-in file is what `batten check` runs
+# against this repository. It is intentionally minimal at the scaffold stage and
+# grows as the rule and check engine lands.
+#
+# Configuration is a deliberately narrow two-layer model: this repo file, plus
+# environment and flag overrides. There is no upward directory walk and no
+# conf.d merge surface.
+
+# Minimum Batten version permitted to read this file. Enforced once the loader
+# and version gate land (see the project board).
+min_batten_version = "0.0.0"
