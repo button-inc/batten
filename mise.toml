@@ -119,6 +119,18 @@ fi
 echo "hk-version: mise.toml and hk.pkl agree on hk $mise_v"
 '''
 
+[tasks.no-docs-tree]
+description = "Gate: no committed docs/ tree. Research deliverables and evidence notes attach to the Linear issue, not a repo docs/ folder (see AGENTS.md)."
+shell = "bash -c"
+run = '''
+tracked=$(git ls-files 'docs/*' 'docs/**' | head -n1)
+if [ -n "$tracked" ]; then
+  echo "::error:: committed docs/ tree found (e.g. $tracked). Research evidence belongs on the Linear issue, not in a repo docs/ folder (see AGENTS.md)." >&2
+  exit 1
+fi
+echo "no-docs-tree: no committed docs/ tree"
+'''
+
 [tasks.hooks]
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
 run = "hk check --all"

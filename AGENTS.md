@@ -224,6 +224,12 @@ fresh VM) — commit/push before a long run, and keep background runs bounded.
    with the hook layer only.
 6. **Keep configuration narrow.** One committed authority plus raise-only
    overrides, no directory walk, no `conf.d` merge (house-style §8). Don't widen it.
+7. **Research goes to Linear, not a repo `docs/` tree.** Research deliverables and
+   evidence notes (literature runs, per-claim verdicts) attach to the Linear issue
+   they back — the repo carries code and its close-in config, not research prose.
+   Don't create a `docs/` folder. Enforced by the `no-docs-tree` gate (`mise run
+   no-docs-tree`, wired into the shared hk `gate`), which fails if any `docs/` path
+   is tracked.
 
 ## Editing conventions
 
