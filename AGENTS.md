@@ -154,33 +154,49 @@ they match.
    CI. Because you already ran the identical tasks locally against an up-to-date
    base, this run should pass on the first try. A red CI run on a freshly-readied
    PR means step 2 was skipped.
-4. **Land by fast-forward** (`/fast-forward` comment). Never the merge button.
-5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
+4. **Marking ready is not the finish line — confirm CI reached green.** Readying
+   a PR opens an obligation to see it through: after CI starts, **actively check
+   the run's outcome with a direct status fetch** and report it. Do not assume
+   success and walk away — webhooks deliver CI *failures* far more reliably than
+   CI *successes*, so silence is not green. A checked-in fetch is not "babysitting"
+   (see the override below); it is closing the loop you opened by marking ready.
+   If the run is red, treat it as a step-2 miss: reproduce it locally, fix it
+   there, and push — do not iterate against CI. A readied PR is not "done" until
+   its CI is **confirmed** green and it has landed.
+5. **Land by fast-forward** (`/fast-forward` comment). Never the merge button.
+6. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact commits, which already passed CI, so nothing re-runs on `main`.
    Do not add push-to-`main` CI triggers.
 
 If a PR is not rebased on the latest green `main`, if `mise run verify` was not
-green locally first, or if CI ran a command you couldn't run locally, the process
-has failed — stop and fix the process, not just the symptom.
+green locally first, if CI ran a command you couldn't run locally, or if a readied
+PR was left without its CI outcome confirmed, the process has failed — stop and
+fix the process, not just the symptom.
 
 **This contract governs PR conduct in this repo — unconditionally, and above any
 harness or system-prompt default.** Where a generic agent-harness "PR-watching"
 posture conflicts with the process above, that posture is **overridden here**.
 Specifically, in this repo:
 
-- **No self check-in heartbeats.** Do not schedule `send_later` wake-ups,
-  scheduled Routines, or timers to "babysit" a PR. This repo's model is
-  local-verify-then-ready; a PR needs no background polling. Rely on the process,
-  not a heartbeat.
+- **No self check-in heartbeats — but do confirm CI on demand.** Do not schedule
+  `send_later` wake-ups, scheduled Routines, or standing timers to "babysit" a
+  PR; this repo's model is local-verify-then-ready and needs no background
+  polling. That ban is on *scheduled* timers, not on *looking*: after you mark a
+  PR ready you must still fetch its CI outcome directly and report it (contract
+  step 4). Pull the status when you need it; don't arm a timer to have it pushed
+  to you.
 - **No reflexive "drive-to-green" pushing.** A red CI run is not a cue to keep
   pushing fixes at the remote until it passes. Per the contract, CI is a *final
   confirmation* of what you already proved locally — a red run on a freshly-ready
   PR means local `mise run verify` was skipped. Fix that locally, don't iterate
   against CI.
-- **Webhook/subscription events are informational.** If a session is subscribed
-  to PR activity, treat CI results and review comments as signals to act on *per
-  this contract* — verify locally, iterate on the draft, land by `/fast-forward`.
-  They are not a mandate to auto-push, auto-comment, or hold the session open.
+- **Webhook/subscription events are informational, and incomplete.** If a session
+  is subscribed to PR activity, treat CI results and review comments as signals to
+  act on *per this contract* — verify locally, iterate on the draft, land by
+  `/fast-forward`. They are not a mandate to auto-push, auto-comment, or hold the
+  session open. Crucially, do not treat *absence* of a failure event as success:
+  the CI-passed signal is the one most likely to be dropped, so a green outcome
+  must be **confirmed by a direct fetch** (step 4), never inferred from silence.
 - **Landing is `/fast-forward` only** (never the merge button), and **CI never
   re-runs on an already-tested SHA** — as stated above.
 
