@@ -35,3 +35,37 @@ fn unknown_flag_is_a_usage_error() {
     let status = batten().arg("--nope").status().expect("run batten --nope");
     assert_eq!(status.code(), Some(2));
 }
+
+#[test]
+fn spec_emits_parseable_json_on_stdout() {
+    let output = batten().arg("spec").output().expect("run batten spec");
+    assert!(output.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("spec stdout is valid JSON");
+    assert_eq!(value["path"], "batten");
+    // The surface is data: `spec` describes itself, with its effect merged in.
+    let subs = value["subcommands"].as_array().expect("subcommands array");
+    let spec_node = subs
+        .iter()
+        .find(|node| node["path"] == "spec")
+        .expect("spec appears in its own surface");
+    assert_eq!(spec_node["effect"], "read");
+}
+
+#[test]
+fn spec_json_is_byte_stable_across_runs() {
+    // §6: identical input yields identical bytes — no timestamps or ordering drift.
+    let first = batten().arg("spec").output().expect("run batten spec");
+    let second = batten().arg("spec").output().expect("run batten spec");
+    assert_eq!(first.stdout, second.stdout);
+}
+
+#[test]
+fn spec_default_format_matches_explicit_json() {
+    let bare = batten().arg("spec").output().expect("run batten spec");
+    let explicit = batten()
+        .args(["spec", "--format", "json"])
+        .output()
+        .expect("run batten spec --format json");
+    assert_eq!(bare.stdout, explicit.stdout);
+}

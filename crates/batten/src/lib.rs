@@ -9,14 +9,25 @@
 //! keeps the binary's `main` trivial.
 
 pub mod cli;
+pub mod effect;
 pub mod exit;
+pub mod spec;
+
+use std::io::Write;
 
 use anyhow::Result;
+use clap::CommandFactory;
 
-pub use cli::{Cli, Command};
+pub use cli::{Cli, Command, SpecFormat};
+pub use effect::Effect;
 pub use exit::ExitCode;
 
-/// Execute a parsed [`Cli`] and return the [`ExitCode`] to hand back to the OS.
+/// Execute a parsed [`Cli`], writing any data output to `out`, and return the
+/// [`ExitCode`] to hand back to the OS.
+///
+/// Data output goes to `out` (the binary passes stdout) rather than through a
+/// `print!`, so the library stays byte-stable and testable and the
+/// stdout-is-the-answer split of the output contract is honoured.
 ///
 /// # Errors
 ///
@@ -24,13 +35,22 @@ pub use exit::ExitCode;
 /// failure (I/O, a missing external tool, or an internal invariant violation).
 /// Such errors map to [`ExitCode::Internal`] at the boundary; a *policy
 /// violation*, by contrast, is a normal return of [`ExitCode::Violation`].
-pub fn run(cli: Cli) -> Result<ExitCode> {
-    match cli.command {
-        // The command tree is empty at this scaffold stage; with no subcommand,
-        // clap's default help has already been offered. Nothing to do yet.
+pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
+    let Cli { command } = cli;
+    match command {
+        // With no subcommand, clap's default help has already been offered.
         None => Ok(ExitCode::Success),
-        // `Command` is an empty enum, so this arm is statically unreachable and
-        // will start matching real variants as the surface is filled in.
-        Some(command) => match command {},
+        Some(Command::Spec { format }) => run_spec(format, out),
     }
+}
+
+fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {
+    let described = spec::describe(&Cli::command());
+    match format {
+        SpecFormat::Json => {
+            let json = spec::to_json(&described)?;
+            writeln!(out, "{json}")?;
+        }
+    }
+    Ok(ExitCode::Success)
 }

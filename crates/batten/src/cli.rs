@@ -1,12 +1,16 @@
 //! The command surface, defined with `clap`.
 //!
-//! The command tree is intentionally empty at this scaffold stage: the shape of
-//! the surface (`check`, `doctor`, `config`, `at-risk`, `test-guard`, `rgr`, the
-//! `hook` mediator, and the append-only record operations) is a Phase-0 decision
-//! that dependent work must follow rather than outrun. New subcommands are added
-//! to [`Command`] as those decisions land.
+//! The surface is defined once, here, as data: `clap` derives the parser, and
+//! [`crate::spec`] introspects this same tree at runtime to emit the command
+//! spec (house-style §11). Each command's `///` doc comment is its human
+//! summary, and each command's effect is declared in the one table in
+//! [`crate::effect`] (§5).
+//!
+//! The tree grows one verb at a time: a verb is added here together with its
+//! effect-table entry and its behaviour, in the verb's own change. A completeness
+//! test in [`crate::spec`] fails if a command is ever added without an effect.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 /// Repo-agnostic policy engine that keeps "done" aligned with landed-and-verified work.
 #[derive(Debug, Parser)]
@@ -19,4 +23,19 @@ pub struct Cli {
 /// The top-level subcommands.
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
-pub enum Command {}
+pub enum Command {
+    /// Print the tool's own command spec.
+    Spec {
+        /// The output format for the spec.
+        #[arg(long, value_enum, default_value_t = SpecFormat::Json)]
+        format: SpecFormat,
+    },
+}
+
+/// The formats `batten spec` can emit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[non_exhaustive]
+pub enum SpecFormat {
+    /// Byte-stable JSON — the agent-facing contract (§6).
+    Json,
+}

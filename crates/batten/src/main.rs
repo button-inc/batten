@@ -5,6 +5,7 @@
 // code is held to pointer-only, byte-stable output and keeps the workspace lint.
 #![allow(clippy::print_stderr)]
 
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 use anyhow::Result;
@@ -24,5 +25,10 @@ fn main() -> ExitCode {
 
 fn real_main() -> Result<batten::ExitCode> {
     let cli = batten::Cli::parse();
-    batten::run(cli)
+    // stdout is the answer channel; hold the lock for the whole run and flush
+    // before exit so buffered output is never dropped.
+    let mut out = io::stdout().lock();
+    let code = batten::run(cli, &mut out)?;
+    out.flush()?;
+    Ok(code)
 }
