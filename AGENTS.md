@@ -465,17 +465,19 @@ after.
 2. **Rules ship with their mechanism.** A new rule without a runnable gate (a
    check with an exit code) is only half a change. A prose rule is feedforward
    only; a log without a gate is sensor only.
-3. **Gates are computable predicates, not model judgements.** An enforcement gate
-   resolves to a command and an exit code, never a classification.
-4. **Machine-readable output is byte-stable and pointer-only.** The same input
-   produces identical bytes. Checks over sensitive content return a count,
-   pointer, or boolean — never the sensitive content itself.
-5. **Respect the exit-code contract** (`crates/batten/src/exit.rs`): `0` success,
-   `1` policy violation, `2` usage error, `70` internal error. The `hook`
-   subcommand deliberately inverts part of this so exit `2` *denies* a mediated
-   tool call — that inversion lives with the hook layer only.
-6. **Configuration stays narrow:** a two-layer model — the repo `batten.toml`
-   plus env and flag overrides. No upward directory walk, no `conf.d` merge.
+3. **Gates are computable predicates.** An enforcement gate resolves to a command
+   and an exit code, never a model classification. Don't add a gate that needs a
+   judgement call to evaluate. *(Spec: house-style §0.3, §5.)*
+4. **Output is a pointer, never the payload.** Checks over sensitive content emit a
+   count, `path:line`, or boolean — byte-stable, never the content itself. Don't
+   print the sensitive bytes. *(Spec: house-style §6.)*
+5. **Branch on the named exit codes, never integer literals.** Use the `ExitCode`
+   variants from `crates/batten/src/exit.rs`; the contract is specified in
+   house-style §7. The `hook` layer inverts part of it so exit `2` *denies* a
+   mediated tool call — that inversion lives with the hook layer only.
+6. **Keep configuration narrow.** The model — one committed authority plus
+   raise-only overrides, no directory walk, no `conf.d` merge — is specified in
+   house-style §8. Don't widen it.
 
 ## Editing conventions
 
