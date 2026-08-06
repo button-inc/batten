@@ -18,6 +18,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::rules::Rule;
 
 /// The config schema version this build understands. A file declaring any other
 /// version is refused rather than partially interpreted.
@@ -36,6 +37,10 @@ pub struct Config {
     /// enforcement lands with the `min_batten_version` gate (CLOUD-33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_batten_version: Option<String>,
+    /// The declarative rules `batten check` runs against the repository. Absent
+    /// or empty means "no rules configured"; `check` then has nothing to report.
+    #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<Rule>,
 }
 
 /// Parse and validate a `batten.toml` from `text`, attributing errors to

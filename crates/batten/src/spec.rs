@@ -203,6 +203,7 @@ mod tests {
         assert_eq!(
             read_only_allowlist(&spec()),
             vec![
+                "check".to_owned(),
                 "config".to_owned(),
                 "config show".to_owned(),
                 "spec".to_owned(),

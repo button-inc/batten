@@ -71,6 +71,8 @@ impl Serialize for Effect {
 /// entry here in the same change that adds it to the surface.
 fn table() -> BTreeMap<&'static str, Effect> {
     BTreeMap::from([
+        // `check` only inspects the tree and reports findings; it mutates nothing.
+        ("check", Effect::Read),
         ("config", Effect::Read),
         ("config show", Effect::Read),
         ("spec", Effect::Read),

@@ -33,11 +33,12 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
 /// path is exercised without leaking config between cases.
 ///
 /// Coverage spans the codes reachable today — `Success` (0) for well-formed runs
-/// and `Usage` (2) for malformed input or bad config. `Violation` (1) and
-/// `Internal` (3) have no command that reaches them at this scaffold stage: their
-/// numeric contract is pinned in the `exit` unit tests, and a row is added here
-/// as the command producing each lands (the `hook` exit-2-denies inversion is
-/// CLOUD-40).
+/// and `Usage` (2) for malformed input or bad config. `Violation` (1) is reached
+/// by `check` when a rule fires; because that needs source files placed beside
+/// the config, it is exercised in the dedicated `check_*` tests below rather than
+/// this config-only table. `Internal` (3) has no command that reaches it at this
+/// stage: its numeric contract is pinned in the `exit` unit tests (the `hook`
+/// exit-2-denies inversion is CLOUD-40).
 #[test]
 fn exit_code_contract() {
     struct Case {
@@ -114,6 +115,83 @@ fn exit_code_contract() {
             .expect("run batten");
         assert_eq!(status.code(), Some(case.expected), "case: {}", case.name);
     }
+}
+
+#[test]
+fn check_clean_repo_exits_success() {
+    let dir = repo_with_config(
+        "check-clean",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "all clear\n").expect("write source");
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty(), "clean run reports nothing");
+}
+
+#[test]
+fn check_violation_exits_one_with_pointer_only_output() {
+    let dir = repo_with_config(
+        "check-violation",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "fine\nTODO fix this\n").expect("write source");
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(1), "a finding is a violation");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Pointer only: the location and rule id, never the offending line text.
+    assert_eq!(stdout, "lib.rs:2 no-todo\n");
+    assert!(
+        !stdout.contains("fix this"),
+        "output must not leak the bytes"
+    );
+}
+
+#[test]
+fn check_output_is_byte_stable_across_runs() {
+    let dir = repo_with_config(
+        "check-stable",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+    );
+    fs::write(dir.join("b.rs"), "TODO\n").expect("write b");
+    fs::write(dir.join("a.rs"), "TODO\n").expect("write a");
+    let first = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run 1");
+    let second = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run 2");
+    assert_eq!(first.stdout, second.stdout);
+}
+
+#[test]
+fn check_unknown_rule_key_is_a_usage_error() {
+    let dir = repo_with_config(
+        "check-bad-rule",
+        "version = 1\n\n[[rule]]\nid = \"x\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"y\"\nbogus = true\n",
+    );
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "an unknown rule key is usage"
+    );
 }
 
 #[test]

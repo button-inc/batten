@@ -24,6 +24,8 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
 pub enum Command {
+    /// Run the configured rules against the repository.
+    Check,
     /// Inspect configuration.
     Config {
         #[command(subcommand)]

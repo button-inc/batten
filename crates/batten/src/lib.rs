@@ -13,6 +13,7 @@ pub mod config;
 pub mod effect;
 pub mod error;
 pub mod exit;
+pub mod rules;
 pub mod spec;
 pub mod state;
 
@@ -50,8 +51,28 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     match command {
         // With no subcommand, clap's default help has already been offered.
         None => Ok(ExitCode::Success),
+        Some(Command::Check) => run_check(out),
         Some(Command::Config { command }) => run_config(&command, out),
         Some(Command::Spec { format }) => run_spec(format, out),
+    }
+}
+
+/// Run the configured rules against the current directory and report findings.
+///
+/// Output is pointer-only (non-negotiable rule 4): one `path:line rule-id` per
+/// finding, byte-stable and never the matched bytes. A clean run exits
+/// [`ExitCode::Success`]; any finding exits [`ExitCode::Violation`].
+fn run_check(out: &mut dyn Write) -> Result<ExitCode> {
+    let config = config::load(Path::new(CONFIG_FILE))?;
+    let findings = rules::check(&config.rules, Path::new("."))?;
+    for finding in &findings {
+        // Pointer only: location and the rule that fired, never the line text.
+        writeln!(out, "{}:{} {}", finding.path, finding.line, finding.rule)?;
+    }
+    if findings.is_empty() {
+        Ok(ExitCode::Success)
+    } else {
+        Ok(ExitCode::Violation)
     }
 }
 
