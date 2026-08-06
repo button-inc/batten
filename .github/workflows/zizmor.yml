@@ -1,9 +1,15 @@
 name: zizmor
 
 # Static analysis of the GitHub Actions workflows themselves: zizmor flags
-# unpinned actions, over-broad `permissions`, and template-injection sinks. A
-# policy/trust engine should hold its own CI to the standard it exists to enforce.
-# Runs only when a workflow file changes, so it costs nothing on ordinary PRs.
+# unpinned actions, over-broad `permissions`, dangerous triggers, and
+# template-injection sinks. A policy/trust engine should hold its own CI to the
+# standard it exists to enforce. Runs only when a workflow file changes, so it
+# costs nothing on ordinary PRs.
+#
+# Dispatched through mise (`mise run zizmor`) so it is the exact task — and pinned
+# zizmor version — an agent runs locally in `mise run verify`; the two cannot
+# drift. Kept as its own job so it runs on a separate runner, in parallel with ci
+# and cross.
 
 on:
   pull_request:
@@ -15,14 +21,12 @@ jobs:
   zizmor:
     name: zizmor
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
-        with:
-          advanced-security: false
-          min-severity: high
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - run: mise run zizmor

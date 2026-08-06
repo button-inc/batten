@@ -18,7 +18,14 @@ name: auto-release-land
 # author_association gate nor trigger it.
 
 on:
-  workflow_run:
+  # zizmor flags workflow_run as dangerous because it runs privileged and is
+  # usually paired with checking out and executing PR-controlled content. This
+  # workflow does neither: it never checks out the repo or runs any PR content —
+  # it only reads check status via the API and posts a fixed `/fast-forward`
+  # string to a release-plz-owned branch. head_sha/head_branch are used only in
+  # API queries and a startsWith filter, never interpolated into a run script, so
+  # the injection/exfiltration this audit guards against cannot occur here.
+  workflow_run:  # zizmor: ignore[dangerous-triggers]
     workflows: [CI, commit-lint]
     types: [completed]
 

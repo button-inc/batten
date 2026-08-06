@@ -12,6 +12,7 @@ hk = "1.54.0"                 # git-hook runner (see hk.pkl)
 "aqua:cli/cli" = "2.97"       # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
 "aqua:EmbarkStudios/cargo-deny" = "0.20"  # dependency license/advisory policy (deny.toml)
 "aqua:release-plz/release-plz" = "0.3"    # conventional-commit-driven semver + changelog
+zizmor = "1.29.0"             # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
 uv = "0.8"                    # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
@@ -67,6 +68,12 @@ run = "cargo test --workspace"
 description = "cargo-deny: licenses, advisories, sources"
 run = "cargo deny check"
 
+[tasks.zizmor]
+description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
+# Same tool + severity CI enforces. GH_TOKEN (set in [env]) enables the online
+# audits. This is the one command CI's zizmor job also runs, so they cannot drift.
+run = "zizmor --min-severity high .github/"
+
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
 run = '''
@@ -105,7 +112,7 @@ depends = ["hooks", "deny"]
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"
 shell = "bash -c"
-depends = ["ci", "cross-check"]
+depends = ["ci", "cross-check", "zizmor"]
 run = '''
 git fetch -q origin main
 main=$(git rev-parse origin/main)
