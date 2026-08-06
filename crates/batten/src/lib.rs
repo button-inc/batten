@@ -14,6 +14,7 @@ pub mod effect;
 pub mod error;
 pub mod exit;
 pub mod spec;
+pub mod state;
 
 use std::io::Write;
 use std::path::Path;
