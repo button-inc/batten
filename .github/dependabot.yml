@@ -1,0 +1,26 @@
+version: 2
+
+# Grouped, unhurried dependency updates. A 7-day cooldown lets churny releases
+# settle before a PR opens. The github-actions ecosystem is what keeps the
+# SHA-pinned action references (see the workflows) current: pin, then let the bot
+# raise the bumps. Keep updates MSRV-compatible rather than forcing an MSRV bump.
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
