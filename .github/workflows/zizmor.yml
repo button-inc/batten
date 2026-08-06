@@ -1,0 +1,28 @@
+name: zizmor
+
+# Static analysis of the GitHub Actions workflows themselves: zizmor flags
+# unpinned actions, over-broad `permissions`, and template-injection sinks. A
+# policy/trust engine should hold its own CI to the standard it exists to enforce.
+# Runs only when a workflow file changes, so it costs nothing on ordinary PRs.
+
+on:
+  pull_request:
+    paths: [".github/workflows/**"]
+
+permissions: {}
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@6fc4b006235f201fdab3722e17240ab420d580e5 # v0.6.1
+        with:
+          advanced-security: false
+          min-severity: high

@@ -17,23 +17,49 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: these jobs only read the repo. Third-party actions are pinned
+# to a full commit SHA (a moving tag is a supply-chain hole an attacker can move).
+permissions:
+  contents: read
+
 jobs:
   ci:
     name: ci
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        # Only main writes the cache, so a PR cannot poison the cache other PRs restore.
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run ci
 
   cross:
     name: cross
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run cross-check
+
+  # Single fan-in status. Point branch protection at `final` instead of
+  # enumerating every leg, so adding a job never requires a ruleset change.
+  final:
+    name: final
+    if: ${{ always() && github.event.pull_request.draft == false }}
+    needs: [ci, cross]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Assert all required jobs passed
+        run: |
+          echo "ci=${{ needs.ci.result }} cross=${{ needs.cross.result }}"
+          [ "${{ needs.ci.result }}" = "success" ] && [ "${{ needs.cross.result }}" = "success" ]
