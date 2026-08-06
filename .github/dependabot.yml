@@ -4,6 +4,13 @@ version: 2
 # settle before a PR opens. The github-actions ecosystem is what keeps the
 # SHA-pinned action references (see the workflows) current: pin, then let the bot
 # raise the bumps. Keep updates MSRV-compatible rather than forcing an MSRV bump.
+#
+# Every commit in this repo must be Conventional Commits (the commit-lint gate,
+# CONVENTIONAL_RE in mise.toml) because PRs land by fast-forward. Dependabot's
+# default "Bump X from A to B" subject has no type prefix and would fail that
+# gate — so a bot PR could never land. The commit-message.prefix settings below
+# make Dependabot emit "ci(deps): ..." / "build(deps): ..." so its PRs pass
+# commit-lint and are fast-forwardable like any other.
 updates:
   - package-ecosystem: cargo
     directory: "/"
@@ -11,6 +18,9 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "build(deps)"
+      prefix-development: "build(deps-dev)"
     groups:
       cargo:
         patterns: ["*"]
@@ -21,6 +31,8 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    commit-message:
+      prefix: "ci(deps)"
     groups:
       actions:
         patterns: ["*"]
