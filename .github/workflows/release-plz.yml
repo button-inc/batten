@@ -15,6 +15,9 @@ name: release-plz
 on:
   push:
     branches: [main]
+  # Manual re-run for recovery (e.g. re-open/refresh a stuck release PR). The
+  # release/release-pr tasks are idempotent, so a dispatch is safe to repeat.
+  workflow_dispatch:
 
 permissions:
   contents: write

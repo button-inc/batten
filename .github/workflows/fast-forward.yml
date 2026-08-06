@@ -30,7 +30,13 @@ jobs:
       - uses: sequoia-pgp/fast-forward@v1
         with:
           merge: true
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Push main with the PAT, not GITHUB_TOKEN: a push made with
+          # GITHUB_TOKEN does not trigger other workflows, so release-plz (on:
+          # push to main) would never run after a landing and no release would
+          # ever be cut. The PAT is a real identity, so the push triggers it.
+          # Falls back to GITHUB_TOKEN when the secret is absent (fast-forward
+          # still lands; only the release trigger is lost).
+          github_token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           # Comment back on the PR only when the fast-forward is not possible
           # (e.g. main moved and the branch needs updating first).
           comment: on-error
