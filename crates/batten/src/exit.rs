@@ -32,7 +32,9 @@ impl ExitCode {
 
 impl From<ExitCode> for std::process::ExitCode {
     fn from(value: ExitCode) -> Self {
-        // ExitCode is constrained to the 0..=255 process-exit range.
-        Self::from(u8::try_from(value.code()).unwrap_or(70))
+        // ExitCode is constrained to the 0..=255 process-exit range, so this
+        // conversion is total. Tie the out-of-range fallback to Internal's code
+        // rather than a bare literal, so the two cannot silently drift apart.
+        Self::from(u8::try_from(value.code()).unwrap_or(ExitCode::Internal as u8))
     }
 }
