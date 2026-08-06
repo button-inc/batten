@@ -9,6 +9,7 @@
 [tools]
 rust = { version = "1.85.0", components = "rustfmt,clippy" }
 hk = "1.54.0"                 # git-hook runner (see hk.pkl)
+"aqua:cli/cli" = "2.97"       # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
 "aqua:EmbarkStudios/cargo-deny" = "0.20"  # dependency license/advisory policy (deny.toml)
 "aqua:release-plz/release-plz" = "0.3"    # conventional-commit-driven semver + changelog
 uv = "0.8"                    # fast Rust installer the pipx: backend uses to fetch Serena
