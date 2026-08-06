@@ -1,0 +1,70 @@
+name: auto-release-land
+
+# Land release-plz's version-bump PR with no human in the loop. release-plz opens
+# a `release-plz-*` PR (version + CHANGELOG bump); once its CI is green this
+# posts `/fast-forward` on that PR so the existing fast-forward workflow lands it
+# — a true fast-forward, the PR's exact tested SHA preserved, under the same
+# green-and-linear gate a maintainer's manual comment uses. The push to main then
+# triggers release-plz's `release` job (tag + GitHub release).
+#
+# Scoped to `release-plz-*` branches only, so ordinary PRs still require an
+# explicit human `/fast-forward`. The comment is posted with RELEASE_PLZ_TOKEN, a
+# real identity (repo owner): a GITHUB_TOKEN comment would neither satisfy
+# fast-forward.yml's author_association gate nor trigger it (issue_comment events
+# from GITHUB_TOKEN do not start workflows).
+
+on:
+  check_suite:
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: auto-release-land-${{ github.event.check_suite.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  fast-forward-release-pr:
+    # Only a fully green check suite on a release-plz branch is a candidate.
+    if: >-
+      github.event.check_suite.conclusion == 'success' &&
+      startsWith(github.event.check_suite.head_branch, 'release-plz-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.event.check_suite.head_sha }}
+    steps:
+      # check_suite success covers only this app's suite; require that *every*
+      # non-skipped check-run on the SHA is completed and successful before
+      # landing, so a second app's still-running or failed check can't be skipped.
+      - name: Confirm every check on the head SHA is green
+        id: checks
+        run: |
+          set -euo pipefail
+          outstanding=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+            --jq '[.check_runs[]
+                   | select(.conclusion != "skipped")
+                   | select(.status != "completed" or .conclusion != "success")]
+                  | length')
+          if [ "$outstanding" != "0" ]; then
+            echo "not all checks green yet ($outstanding outstanding); skipping"
+            echo "green=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "green=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Find the open release PR for this SHA
+        if: steps.checks.outputs.green == 'true'
+        id: pr
+        run: |
+          set -euo pipefail
+          num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+            --jq 'map(select(.state == "open")) | .[0].number // empty')
+          [ -n "$num" ] || echo "no open PR for $SHA; skipping"
+          echo "num=$num" >> "$GITHUB_OUTPUT"
+      - name: Comment /fast-forward to land the release PR
+        if: steps.checks.outputs.green == 'true' && steps.pr.outputs.num != ''
+        run: gh pr comment "${{ steps.pr.outputs.num }}" --repo "$REPO" --body '/fast-forward'
