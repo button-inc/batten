@@ -13,24 +13,29 @@ name: auto-release-land
 # the step below re-verifies that *every* check on the SHA is green, so an
 # early-finishing workflow can't land ahead of a still-running one. Scoped to
 # `release-plz-*` branches, so ordinary PRs still land on an explicit human
-# `/fast-forward`. The comment is posted with RELEASE_PLZ_TOKEN, a real identity
-# (repo owner): a GITHUB_TOKEN comment would neither satisfy fast-forward.yml's
-# author_association gate nor trigger it.
+# `/fast-forward`.
+#
+# Token split: check status is read with the Actions GITHUB_TOKEN (which carries
+# checks:read — a fine-grained PAT does not), but the `/fast-forward` comment is
+# posted with RELEASE_PLZ_TOKEN, a real identity (repo owner) that both satisfies
+# fast-forward.yml's author_association gate and triggers it (a GITHUB_TOKEN
+# comment would do neither).
 
 on:
   # zizmor flags workflow_run as dangerous because it runs privileged and is
   # usually paired with checking out and executing PR-controlled content. This
   # workflow does neither: it never checks out the repo or runs any PR content —
-  # it only reads check status via the API and posts a fixed `/fast-forward`
-  # string to a release-plz-owned branch. head_sha/head_branch are used only in
-  # API queries and a startsWith filter, never interpolated into a run script, so
-  # the injection/exfiltration this audit guards against cannot occur here.
+  # it only reads check status and posts a fixed `/fast-forward` string to a
+  # release-plz-owned branch. head_sha/head_branch are used only in API queries
+  # and a startsWith filter, never interpolated into a run script, so the
+  # injection/exfiltration this audit guards against cannot occur here.
   workflow_run:  # zizmor: ignore[dangerous-triggers]
     workflows: [CI, commit-lint]
     types: [completed]
 
 permissions:
   contents: read
+  checks: read
   pull-requests: write
 
 concurrency:
@@ -46,15 +51,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
       REPO: ${{ github.repository }}
       SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       # This fires per gating workflow; require that *every* non-skipped check-run
       # on the SHA is completed and successful before landing, so the first
       # workflow to finish can't land while another is still running or has failed.
+      # Read with GITHUB_TOKEN — it carries checks:read; the release PAT does not.
       - name: Confirm every check on the head SHA is green
         id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           outstanding=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
@@ -71,14 +78,20 @@ jobs:
       - name: Find the open release PR for this SHA
         if: steps.checks.outputs.green == 'true'
         id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
             --jq 'map(select(.state == "open")) | .[0].number // empty')
           [ -n "$num" ] || echo "no open PR for $SHA; skipping"
           echo "num=$num" >> "$GITHUB_OUTPUT"
+      # Post with the release PAT (repo owner): fast-forward.yml only acts on a
+      # comment from OWNER/MEMBER/COLLABORATOR, and a GITHUB_TOKEN comment would
+      # not trigger that workflow at all.
       - name: Comment /fast-forward to land the release PR
         if: steps.checks.outputs.green == 'true' && steps.pr.outputs.num != ''
         env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.pr.outputs.num }}
         run: gh pr comment "$PR_NUM" --repo "$REPO" --body '/fast-forward'
