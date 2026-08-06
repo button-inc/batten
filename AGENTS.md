@@ -431,7 +431,10 @@ failure at commit time.
   (`feat` → minor, `fix` → patch, `!`/`BREAKING CHANGE` → major). Do **not**
   hand-edit the version or changelog.
 - Keep PRs small and focused; rebase on `main` before opening.
-- Reference the relevant issue (the `CLOUD-*` board) in the PR description.
+- Reference the relevant issue (the `CLOUD-*` board) in the PR description. Work
+  for this repo is tracked in the **Batten** project on that board — the board
+  itself spans other projects (Website, Paisley, Compliance, …), so scope issue
+  lookups to the Batten project rather than the board as a whole.
 
 ## Where things are
 
