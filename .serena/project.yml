@@ -14,8 +14,10 @@
 # activation is path-based (--project .), so this is only a display label.
 project_name: "batten"
 
-# LSP-backed semantic tools. This is a Rust workspace.
-language_servers:
+# Languages whose LSP servers Serena starts. This is a Rust workspace. The key
+# is `languages` (a list) — Serena treats it as required and fails startup with
+# `KeyError: 'languages'` if it is missing or misnamed (e.g. `language_servers`).
+languages:
 - rust
 
 encoding: "utf-8"
