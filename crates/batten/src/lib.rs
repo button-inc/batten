@@ -9,18 +9,27 @@
 //! keeps the binary's `main` trivial.
 
 pub mod cli;
+pub mod config;
 pub mod effect;
+pub mod error;
 pub mod exit;
 pub mod spec;
 
 use std::io::Write;
+use std::path::Path;
 
 use anyhow::Result;
 use clap::CommandFactory;
 
-pub use cli::{Cli, Command, SpecFormat};
+pub use cli::{Cli, Command, ConfigCommand, SpecFormat};
+pub use config::Config;
 pub use effect::Effect;
+pub use error::UsageError;
 pub use exit::ExitCode;
+
+/// The committed authority Batten reads: the repo `batten.toml` in the current
+/// directory. No upward walk, no `conf.d` merge (§8).
+const CONFIG_FILE: &str = "batten.toml";
 
 /// Execute a parsed [`Cli`], writing any data output to `out`, and return the
 /// [`ExitCode`] to hand back to the OS.
@@ -40,7 +49,20 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     match command {
         // With no subcommand, clap's default help has already been offered.
         None => Ok(ExitCode::Success),
+        Some(Command::Config { command }) => run_config(&command, out),
         Some(Command::Spec { format }) => run_spec(format, out),
+    }
+}
+
+fn run_config(command: &ConfigCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    match command {
+        ConfigCommand::Show => {
+            let config = config::load(Path::new(CONFIG_FILE))?;
+            // stdout is the answer: byte-stable JSON of the effective config.
+            let json = serde_json::to_string_pretty(&config)?;
+            writeln!(out, "{json}")?;
+            Ok(ExitCode::Success)
+        }
     }
 }
 

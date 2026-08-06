@@ -1,0 +1,14 @@
+# Example batten.toml — copy to your repository root and adjust.
+#
+# Batten reads exactly one committed authority (this file) plus raise-only
+# overrides (env vars, flags, and a git-ignored batten.local.toml that may only
+# tighten policy, never weaken a gate). There is no upward directory walk and no
+# conf.d merge surface. See the Batten house style, §8.
+
+# The config schema version. Required; this build supports version 1. A file
+# declaring any other version is refused rather than half-understood.
+version = 1
+
+# The minimum Batten version permitted to read this file (semver). Parsed today;
+# the version gate that enforces it lands separately.
+min_batten_version = "0.0.0"

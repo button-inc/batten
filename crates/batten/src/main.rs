@@ -15,10 +15,17 @@ fn main() -> ExitCode {
     match real_main() {
         Ok(code) => code.into(),
         Err(err) => {
-            // A failure to *complete* a check. Report the full chain to stderr;
-            // policy violations never travel this path.
-            eprintln!("batten: {err:?}");
-            batten::ExitCode::Internal.into()
+            // Policy violations never travel this path. An expected bad-input
+            // error (§7) maps to Usage and prints as a clean one-line message;
+            // an internal failure to *complete* prints its full chain for
+            // diagnosis.
+            if err.downcast_ref::<batten::UsageError>().is_some() {
+                eprintln!("batten: {err}");
+                batten::ExitCode::Usage.into()
+            } else {
+                eprintln!("batten: {err:?}");
+                batten::ExitCode::Internal.into()
+            }
         }
     }
 }

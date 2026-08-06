@@ -70,7 +70,11 @@ impl Serialize for Effect {
 /// the emitted spec and the derived allowlist both read from; a command grows an
 /// entry here in the same change that adds it to the surface.
 fn table() -> BTreeMap<&'static str, Effect> {
-    BTreeMap::from([("spec", Effect::Read)])
+    BTreeMap::from([
+        ("config", Effect::Read),
+        ("config show", Effect::Read),
+        ("spec", Effect::Read),
+    ])
 }
 
 /// Resolve the declared effect for a full command path.

@@ -199,7 +199,14 @@ mod tests {
 
     #[test]
     fn allowlist_is_exactly_the_read_commands() {
-        // With the current surface, `spec` is the only read-effect command.
-        assert_eq!(read_only_allowlist(&spec()), vec!["spec".to_owned()]);
+        // The derived allowlist is every read-effect command path, sorted.
+        assert_eq!(
+            read_only_allowlist(&spec()),
+            vec![
+                "config".to_owned(),
+                "config show".to_owned(),
+                "spec".to_owned(),
+            ]
+        );
     }
 }

@@ -24,12 +24,25 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
 pub enum Command {
+    /// Inspect configuration.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Print the tool's own command spec.
     Spec {
         /// The output format for the spec.
         #[arg(long, value_enum, default_value_t = SpecFormat::Json)]
         format: SpecFormat,
     },
+}
+
+/// Subcommands of `config`.
+#[derive(Debug, Subcommand)]
+#[non_exhaustive]
+pub enum ConfigCommand {
+    /// Print the effective configuration.
+    Show,
 }
 
 /// The formats `batten spec` can emit.

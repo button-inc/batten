@@ -7,10 +7,21 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 
 fn batten() -> Command {
     Command::new(env!("CARGO_BIN_EXE_batten"))
+}
+
+/// Create a fresh temp directory under the test target dir containing a
+/// `batten.toml` with `contents`, and return its path so a command can run there.
+fn repo_with_config(name: &str, contents: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    fs::create_dir_all(&dir).expect("create temp repo dir");
+    fs::write(dir.join("batten.toml"), contents).expect("write batten.toml");
+    dir
 }
 
 #[test]
@@ -68,4 +79,56 @@ fn spec_default_format_matches_explicit_json() {
         .output()
         .expect("run batten spec --format json");
     assert_eq!(bare.stdout, explicit.stdout);
+}
+
+#[test]
+fn config_show_prints_the_effective_config() {
+    let dir = repo_with_config(
+        "config-show-ok",
+        "version = 1\nmin_batten_version = \"0.0.0\"\n",
+    );
+    let output = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    assert!(output.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("config show stdout is JSON");
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["min_batten_version"], "0.0.0");
+}
+
+#[test]
+fn config_show_rejects_unsupported_version_with_usage_code() {
+    let dir = repo_with_config("config-bad-version", "version = 2\n");
+    let status = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .status()
+        .expect("run batten config show");
+    assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn config_show_rejects_unknown_key_with_usage_code() {
+    let dir = repo_with_config("config-unknown-key", "version = 1\nbogus = true\n");
+    let status = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .status()
+        .expect("run batten config show");
+    assert_eq!(status.code(), Some(2));
+}
+
+#[test]
+fn config_show_without_a_config_file_is_a_usage_error() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-missing");
+    fs::create_dir_all(&dir).expect("create empty temp dir");
+    let status = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .status()
+        .expect("run batten config show");
+    assert_eq!(status.code(), Some(2));
 }
