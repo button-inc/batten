@@ -413,6 +413,45 @@ Specifically, in this repo:
 These are enforced, not aspirational. An agent that reaches for a scheduled
 check-in or an auto-push loop in this repo is following the wrong instructions.
 
+## Background the slow path; never block the foreground
+
+**Any command that can run longer than ~2 minutes goes to the background**
+(`run_in_background`). The foreground is for sub-minute work only — reads, greps,
+`git status`, a single fast check. Everything compile- or wait-heavy — `mise run
+ci`, `mise run verify`, `mise run cross-check`, a full test suite, a cold `cargo`
+build, a provision/install step, or waiting on any external result — runs
+backgrounded.
+
+**This is not a style preference; the environment enforces it.** Foreground
+`sleep` is blocked outright, and a foreground command is killed at ~2 minutes — so
+a long foreground command does not run slower, it *fails*, and wastes the turn.
+That kill and that block are the mechanism: this rule ships with its own gate,
+because violating it fails loudly and immediately.
+
+**What backgrounding buys you, concretely:**
+
+1. It escapes the ~2-minute foreground kill, so long verifications actually
+   complete.
+2. It **keeps the session alive while it runs.** A tracked background task held the
+   VM through at least a 16-minute idle window in testing and re-invoked the agent
+   on exit — where a bare idle turn ("standing by") gets the ephemeral VM
+   reclaimed.
+3. It **re-invokes you when it exits**, so you neither poll nor stall. Kick off
+   `mise run verify` in the background, get woken on completion, then act on the
+   result.
+
+**Never**: use `sleep` to wait; spin a busy-poll loop; or end a turn idle "to
+watch" something. To wait on *work*, background it and act on its exit
+notification. To watch *external events* (a PR, CI), use the activity subscription
+— not a poll (see the workflow contract above). If neither applies, end the turn
+**after** pushing.
+
+**Pair this with durability.** The 16-minute hold is confirmed; the upper
+session-lifetime ceiling is not. So treat committed-and-pushed as the only state
+that survives a reclaim (a resume re-clones from GitHub onto a fresh VM), keep
+individual background runs bounded, and commit/push before a long run rather than
+after.
+
 ## Non-negotiable project rules
 
 1. **The core stays repo-agnostic.** No consumer-specific identifiers — no
