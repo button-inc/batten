@@ -40,11 +40,13 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 #     uv-backed Serena install keeps working). Off-sandbox there is no proxy, so
 #     this is a no-op.
 # See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
-# `gh` reads GH_TOKEN, not MISE_GITHUB_TOKEN, so mirror the PAT into it too. In the
-# sandbox the ambient GH_TOKEN is a proxy placeholder that 401s when sent direct
-# (NO_PROXY, above); overriding it with our PAT is what makes `mise exec -- gh …`
-# work. Empty off-sandbox / in CI, where gh uses its own auth or the job's token.
-GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default='') }}"
+# `gh` and zizmor read GH_TOKEN. In the sandbox the ambient GH_TOKEN is a proxy
+# placeholder that 401s when sent direct (NO_PROXY, above), so set it to our PAT;
+# in CI there is no PAT, so fall back to MISE_GITHUB_TOKEN, which mise-action sets
+# to the job token. Both are valid, non-empty tokens (never the proxy
+# placeholder), so a tool that rejects an *empty* GH_TOKEN — like zizmor — works
+# in both. Only these two tokens, per project policy.
+GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default=get_env(name='MISE_GITHUB_TOKEN', default='')) }}"
 NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
@@ -73,6 +75,24 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # Same tool + severity CI enforces. GH_TOKEN (set in [env]) enables the online
 # audits. This is the one command CI's zizmor job also runs, so they cannot drift.
 run = "zizmor --min-severity high .github/"
+
+[tasks.lock-check]
+description = "Assert mise.lock is complete and current — what CI installs with `mise install --locked`"
+shell = "bash -c"
+# CI installs tools with `mise install --locked`, which fails if the lockfile is
+# missing a URL for a tool on the runner's platform. `mise install` writes only a
+# partial entry, so a tool bump can pass locally yet break CI. Regenerate the lock
+# and fail if it changed: a clean diff means every tool has full per-platform
+# URLs, so the locked install cannot surprise CI.
+run = '''
+mise lock
+if ! git diff --quiet -- mise.lock; then
+  echo "::error:: mise.lock was stale/incomplete — regenerated it. Review and commit the change; CI installs with --locked and needs complete per-platform URLs." >&2
+  git --no-pager diff --stat -- mise.lock >&2
+  exit 1
+fi
+echo "lock-check: mise.lock is complete and current"
+'''
 
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
@@ -112,7 +132,7 @@ depends = ["hooks", "deny"]
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"
 shell = "bash -c"
-depends = ["ci", "cross-check", "zizmor"]
+depends = ["ci", "cross-check", "zizmor", "lock-check"]
 run = '''
 git fetch -q origin main
 main=$(git rev-parse origin/main)
