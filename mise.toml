@@ -19,6 +19,26 @@ CARGO_TERM_COLOR = "always"
 # commit linter so there is exactly one definition of "valid commit".
 CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
 
+# --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
+# mise resolves every tool's release through GitHub's *API* host, api.github.com.
+# When an egress proxy fronts the network (HTTPS_PROXY set) and injects a
+# repo-scoped token, that host answers 403 for third-party tool repos and a bare
+# `mise install` fails ("GitHub access to this repository is not enabled"). The
+# fix is not to give up — GitHub is reachable — it is to send just the API/asset
+# hosts straight to GitHub and let mise authenticate with the session PAT:
+#   * MISE_GITHUB_TOKEN uses GITHUB_PERSONAL_ACCESS_TOKEN when present. It is
+#     mise-only, so the proxy's own GITHUB_TOKEN (which authenticates git to
+#     private repos) is left untouched. Empty when there is no PAT.
+#   * NO_PROXY gains api.github.com (+ the redirect/asset hosts) so those calls
+#     bypass the proxy. github.com itself is deliberately left proxied, so git
+#     keeps its proxy-provided auth to button-inc/batten. The guard appends once
+#     and preserves the existing NO_PROXY (which carries pypi.org/crates so uvx +
+#     Serena keep working). Off-sandbox there is no proxy, so this is a no-op.
+# See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
+MISE_GITHUB_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default='') }}"
+NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
+no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
+
 [tasks.fmt]
 description = "Format all code"
 run = "cargo fmt --all"
