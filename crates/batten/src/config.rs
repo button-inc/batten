@@ -129,6 +129,40 @@ mod tests {
     }
 
     #[test]
+    fn malformed_toml_is_a_usage_error() {
+        // A syntactic parse failure is bad input (→ exit 2), not an internal error.
+        let err = parse("version = = 1\n", "test").unwrap_err();
+        assert!(is_usage_error(&err), "malformed TOML must be a usage error");
+    }
+
+    #[test]
+    fn wrong_value_type_is_a_usage_error() {
+        // `version` is a u32; a string must be refused rather than coerced. This
+        // pins the parser's typing behaviour — the surface a `toml` bump is most
+        // likely to shift silently (see auto-dependabot-land.yml).
+        let err = parse("version = \"1\"\n", "test").unwrap_err();
+        assert!(is_usage_error(&err), "type mismatch must be a usage error");
+    }
+
+    #[test]
+    fn duplicate_key_is_a_usage_error() {
+        // TOML forbids a key defined twice; ensure that stays a hard error and is
+        // not last-wins-silently coerced by a future parser.
+        let err = parse("version = 1\nversion = 1\n", "test").unwrap_err();
+        assert!(is_usage_error(&err), "duplicate key must be a usage error");
+    }
+
+    #[test]
+    fn error_message_attributes_the_source() {
+        // Parse errors must name their source so a consumer can locate the file.
+        let err = parse("version = = 1\n", "some/path/batten.toml").unwrap_err();
+        assert!(
+            err.to_string().contains("some/path/batten.toml"),
+            "parse error must attribute its source, got: {err}"
+        );
+    }
+
+    #[test]
     fn missing_file_is_a_usage_error() {
         let err = load(Path::new("does/not/exist/batten.toml")).unwrap_err();
         assert!(is_usage_error(&err));

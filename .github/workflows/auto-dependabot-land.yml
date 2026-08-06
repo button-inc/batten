@@ -1,0 +1,109 @@
+name: auto-dependabot-land
+
+# Land Dependabot PRs with no human in the loop, on the same green-and-linear gate
+# a maintainer's manual `/fast-forward` uses. Once every check on a Dependabot PR's
+# head SHA is green this posts `/fast-forward` on that PR, so the existing
+# fast-forward workflow lands it — a true fast-forward, the PR's exact tested SHA
+# preserved. This is the sibling of auto-release-land.yml; see it for the token and
+# trigger rationale, which are identical.
+#
+# WHY FLAT (no major/minor carve-out). The compiler is our reviewer. A dependency
+# break that matters reaches us as one of: a compile error (API removed/renamed/
+# retyped — caught by CI + cross), a failing test (behaviour changed on a path we
+# cover), an MSRV bump (rust-version is pinned, so it fails to build), or an
+# advisory/license regression (cargo-deny in `mise run ci`). The semver *label*
+# (major vs minor) is a convention Cargo doesn't read; gating "major" for a human
+# glance filters on the wrong axis and adds no computable safety. The only residual
+# green CI can't see is a semantic change on a path we don't test — and that is
+# equally reachable by a minor bump, so the mitigation is test coverage of the
+# dependency-touching behaviour (see crates/batten/src/config.rs), not a human
+# reading changelogs. Tracked, with the outstanding gap, in the Linear issue.
+#
+# Triggered by `workflow_run` on the PR-gating workflows completing — NOT
+# `check_suite`, which GitHub does not fire for its own Actions-created suites.
+# Both gating workflows are listed so whichever finishes last re-checks and lands;
+# the step below re-verifies that *every* check on the SHA is green, so an
+# early-finishing workflow can't land ahead of a still-running one. Scoped to
+# `dependabot/*` branches, so ordinary PRs still land on an explicit human
+# `/fast-forward`.
+#
+# Token split: check status is read with the Actions GITHUB_TOKEN (which carries
+# checks:read — a fine-grained PAT does not), but the `/fast-forward` comment is
+# posted with RELEASE_PLZ_TOKEN, a real identity (repo owner) that both satisfies
+# fast-forward.yml's author_association gate and triggers it (a GITHUB_TOKEN
+# comment would do neither).
+
+on:
+  # workflow_run runs privileged; zizmor flags it as dangerous because it is
+  # usually paired with checking out and executing PR-controlled content. This
+  # workflow does neither: it never checks out the repo or runs any PR content —
+  # it only reads check status and posts a fixed `/fast-forward` string to a
+  # dependabot-owned branch. head_sha/head_branch are used only in API queries and
+  # a startsWith filter, never interpolated into a run script, so the
+  # injection/exfiltration this audit guards against cannot occur here.
+  workflow_run:  # zizmor: ignore[dangerous-triggers]
+    workflows: [CI, commit-lint]
+    types: [completed]
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: write
+
+concurrency:
+  group: auto-dependabot-land-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  fast-forward-dependabot-pr:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      REPO: ${{ github.repository }}
+      SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # This fires per gating workflow; require that *every* non-skipped check-run
+      # on the SHA is completed and successful before landing, so the first
+      # workflow to finish can't land while another is still running or has failed.
+      # Read with GITHUB_TOKEN — it carries checks:read; the release PAT does not.
+      - name: Confirm every check on the head SHA is green
+        id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          outstanding=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+            --jq '[.check_runs[]
+                   | select(.conclusion != "skipped")
+                   | select(.status != "completed" or .conclusion != "success")]
+                  | length')
+          if [ "$outstanding" != "0" ]; then
+            echo "not all checks green yet ($outstanding outstanding); skipping"
+            echo "green=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "green=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Find the open Dependabot PR for this SHA
+        if: steps.checks.outputs.green == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
+            --jq 'map(select(.state == "open")) | .[0].number // empty')
+          [ -n "$num" ] || echo "no open PR for $SHA; skipping"
+          echo "num=$num" >> "$GITHUB_OUTPUT"
+      # Post with the release PAT (repo owner): fast-forward.yml only acts on a
+      # comment from OWNER/MEMBER/COLLABORATOR, and a GITHUB_TOKEN comment would
+      # not trigger that workflow at all.
+      - name: Comment /fast-forward to land the Dependabot PR
+        if: steps.checks.outputs.green == 'true' && steps.pr.outputs.num != ''
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.pr.outputs.num }}
+        run: gh pr comment "$PR_NUM" --repo "$REPO" --body '/fast-forward'
