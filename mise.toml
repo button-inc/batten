@@ -11,7 +11,11 @@ rust = { version = "1.85.0", components = "rustfmt,clippy" }
 hk = "1.54.0"                 # git-hook runner (see hk.pkl)
 "aqua:EmbarkStudios/cargo-deny" = "0.20"  # dependency license/advisory policy (deny.toml)
 "aqua:release-plz/release-plz" = "0.3"    # conventional-commit-driven semver + changelog
-uv = "0.8"                    # provides `uvx`, used by .mcp.json to launch Serena's MCP server
+uv = "0.8"                    # fast Rust installer the pipx: backend uses to fetch Serena
+# Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
+# .mcp.json — so its version lives with every other tool and lands in mise.lock.
+# The pipx backend installs it with `uv` (present above), keeping the fast resolver.
+"pipx:serena-agent" = "1.6.1"
 
 [env]
 CARGO_TERM_COLOR = "always"
@@ -32,8 +36,9 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 #   * NO_PROXY gains api.github.com (+ the redirect/asset hosts) so those calls
 #     bypass the proxy. github.com itself is deliberately left proxied, so git
 #     keeps its proxy-provided auth to button-inc/batten. The guard appends once
-#     and preserves the existing NO_PROXY (which carries pypi.org/crates so uvx +
-#     Serena keep working). Off-sandbox there is no proxy, so this is a no-op.
+#     and preserves the existing NO_PROXY (which carries pypi.org/crates so the
+#     uv-backed Serena install keeps working). Off-sandbox there is no proxy, so
+#     this is a no-op.
 # See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
 MISE_GITHUB_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default='') }}"
 NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
@@ -139,3 +144,6 @@ release-plz release-pr --git-token "${GITHUB_TOKEN:?}" $base_args
 [tasks.release]
 description = "Tag and publish a GitHub release when the version changed"
 run = "release-plz release --git-token ${GITHUB_TOKEN:?}"
+
+[settings]
+lockfile = true
