@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/button-inc/batten/compare/v0.0.4...v0.0.5) - 2026-08-06
+
+### Added
+
+- *(check)* add rule and check engine with a static forbid kind
+- *(state)* derive the out-of-tree state path from the repo name
+
+### Other
+
+- *(check)* derive unit-test scratch dir at runtime
+- *(exit)* assert the exit-code contract as a table
+
 ## [0.0.4](https://github.com/button-inc/batten/compare/v0.0.3...v0.0.4) - 2026-08-06
 
 ### Added
