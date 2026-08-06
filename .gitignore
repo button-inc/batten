@@ -8,9 +8,24 @@
 .vscode/
 *.swp
 
-# Claude Code local workspace (git worktrees live here; never commit them).
+# Claude Code: the project settings.json is shared with the team, so force-track
+# it — this overrides a common per-user global ignore of `.claude/` (repo
+# .gitignore has higher precedence than core.excludesFile). Everything else under
+# .claude stays ignored: per-user overrides (settings.local.json), the worktree
+# copies, and scratch dirs.
+# Claude Code: the whole project `.claude/` config is shared with the team
+# (settings.json, agents/, skills/, commands/, rules/, hooks/, …). Force-track it
+# past a common per-user global ignore of `.claude/` — repo .gitignore outranks
+# core.excludesFile, same as the .serena/ block above. Only per-user,
+# machine-local, and scratch paths are re-ignored below.
+!.claude/
+**/.claude/settings.local.json
+.claude/history/
 /.claude/worktrees/
 /.claude/.cc-writes/
+
+# Per-user local Claude memory — never shared (personal overrides of CLAUDE.md).
+CLAUDE.local.md
 
 # Serena semantic-code config is shared with the whole team. Force-track it here:
 # this overrides a common per-user global ignore of `.serena` (higher precedence
