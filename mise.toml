@@ -95,7 +95,26 @@ exit $fail
 
 [tasks.release-pr]
 description = "Open/update the release PR (version bump + changelog)"
-run = "release-plz release-pr --git-token ${GITHUB_TOKEN:?}"
+# release-plz derives the next version by diffing each crate against its last
+# *published* release, downloaded from a cargo registry. This workspace is
+# `publish = false` and never reaches a registry, so that download fails
+# ("Package batten not found") and release-plz can never bump past the initial
+# version — every run reports "next version is 0.0.0". The documented fix for
+# unpublished crates is to supply the baseline as a checkout of the latest
+# release tag via --registry-manifest-path. With no tag yet (first release),
+# pass nothing and let release-plz treat it as the initial version.
+run = '''
+set -eu
+base_args=""
+tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 2>/dev/null || true)"
+if [ -n "$tag" ]; then
+  worktree="$(mktemp -d)"
+  git worktree add -q --detach "$worktree" "$tag"
+  trap 'git worktree remove --force "$worktree" >/dev/null 2>&1 || true' EXIT
+  base_args="--registry-manifest-path $worktree/Cargo.toml"
+fi
+release-plz release-pr --git-token "${GITHUB_TOKEN:?}" $base_args
+'''
 
 [tasks.release]
 description = "Tag and publish a GitHub release when the version changed"
