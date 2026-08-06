@@ -61,8 +61,17 @@ without asking at any step:
 4. `mise run verify` and get it green (rebased on latest `main`; `ci` + `cross` +
    `commit-lint` all pass). A red verify is a real blocker — fix it, do not ask
    whether to.
-5. `gh pr ready` once verify is green.
-6. Land by commenting `/fast-forward` (never the merge button).
+5. **Re-assert linearity on `main` as the very last thing before readying** —
+   immediately after a green verify and immediately before `gh pr ready`, with
+   nothing in between. `git fetch origin main` and confirm the branch is still a
+   fast-forward of `origin/main` (its merge-base equals `origin/main`'s tip).
+   `main` moves constantly here; a verify that was green a minute ago may already
+   be stale, and readying a non-linear branch means it can't fast-forward-land.
+   If `main` advanced, rebase onto it and re-run verify — then re-check again.
+   Never mark ready on a branch that is not linear on the current `main` tip.
+6. `gh pr ready` — only once verify is green **and** the branch is linear on the
+   current `main`.
+7. Land by commenting `/fast-forward` (never the merge button).
 
 Execute these yourself as one continuous flow. Do **not** stop between steps to
 report progress and wait — that waiting is the defect. The gates are the only
