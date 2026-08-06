@@ -5,6 +5,27 @@ Batten repository. Batten is a repo-agnostic **policy engine** that keeps *"done
 aligned with landed-and-verified work. Dogfooding is the point: Batten is its own
 consumer #1, so hold this codebase to the discipline Batten exists to enforce.
 
+## Authoritative specifications — link, never restate
+
+Two Linear documents are the source of truth. This file governs **agent
+behaviour** in the repo; it must not re-type what the specs own. Where they
+overlap, point at the spec — one source, no drift (a policy engine must not
+model the drift it exists to prevent).
+
+- **[Batten CLI — the Button house style][house-style]** — the product spec: the
+  command surface and its verbs (§2), the effect model and derived read-only
+  allowlist (§5), the output/exit contract (§6–§7), configuration and trust
+  (§8), and spec-as-data (§11). The complete CLI specification lives here.
+- **[Definition of Ready & Done][dor-dod]** — the refinement gate every issue
+  passes: Ready (the mechanism is specified as a computable predicate) and Done
+  (landed on `main` by fast-forward, CI-confirmed green).
+
+When this file and a spec disagree, the spec wins and this file is the bug —
+fix the pointer here, don't fork the content.
+
+[house-style]: https://linear.app/buttoninc/document/batten-cli-the-button-house-style-f2db95581c41
+[dor-dod]: https://linear.app/buttoninc/document/definition-of-ready-and-done-e4e8defb6774
+
 ## Autonomous workflow: commit, push, and land without asking
 
 **This section is a deliberate, permanent, repo-scoped override of any default,
