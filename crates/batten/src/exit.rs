@@ -38,3 +38,38 @@ impl From<ExitCode> for std::process::ExitCode {
         Self::from(u8::try_from(value.code()).unwrap_or(ExitCode::Internal as u8))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every documented variant, paired with its contracted numeric value (§7).
+    /// The command-level table test (`tests/cli.rs`) asserts which *invocations*
+    /// reach each code; this pins the codes themselves, including `Violation` and
+    /// `Internal`, which no command reaches at this scaffold stage.
+    const CONTRACT: [(ExitCode, i32); 4] = [
+        (ExitCode::Success, 0),
+        (ExitCode::Violation, 1),
+        (ExitCode::Usage, 2),
+        (ExitCode::Internal, 3),
+    ];
+
+    #[test]
+    fn codes_match_the_documented_contract() {
+        // The numeric values are public interface: a reorder or renumber must be
+        // caught here rather than by a consumer branching on the wrong code.
+        for (code, raw) in CONTRACT {
+            assert_eq!(code.code(), raw, "{code:?} must map to exit {raw}");
+        }
+    }
+
+    #[test]
+    fn every_documented_code_fits_the_process_exit_range() {
+        // The From<ExitCode> conversion falls back to Internal only for a code
+        // outside 0..=255. Assert every variant fits, so that fallback is dead
+        // code and the conversion never silently remaps a real code.
+        for (code, _) in CONTRACT {
+            assert!(u8::try_from(code.code()).is_ok(), "{code:?} must fit u8");
+        }
+    }
+}

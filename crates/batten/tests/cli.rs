@@ -24,10 +24,96 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
     dir
 }
 
+/// The exit-code contract (§7), asserted as one table over the compiled binary.
+///
+/// The contract is CLI-wide, so each command's invocations are pinned together
+/// here rather than one assertion per test: a regression in any command's code
+/// surfaces in this single place. Each case runs in its own fresh directory,
+/// with a `batten.toml` written only when `config` is `Some`, so the missing-file
+/// path is exercised without leaking config between cases.
+///
+/// Coverage spans the codes reachable today — `Success` (0) for well-formed runs
+/// and `Usage` (2) for malformed input or bad config. `Violation` (1) and
+/// `Internal` (3) have no command that reaches them at this scaffold stage: their
+/// numeric contract is pinned in the `exit` unit tests, and a row is added here
+/// as the command producing each lands (the `hook` exit-2-denies inversion is
+/// CLOUD-40).
 #[test]
-fn no_args_exits_success() {
-    let status = batten().status().expect("run batten");
-    assert_eq!(status.code(), Some(0));
+fn exit_code_contract() {
+    struct Case {
+        /// What the invocation exercises, surfaced on assertion failure.
+        name: &'static str,
+        /// Arguments passed to `batten`.
+        args: &'static [&'static str],
+        /// `batten.toml` contents to place in the run directory, if any.
+        config: Option<&'static str>,
+        /// The exit code the invocation must return.
+        expected: i32,
+    }
+
+    let cases = [
+        Case {
+            name: "no subcommand → success",
+            args: &[],
+            config: None,
+            expected: 0,
+        },
+        Case {
+            name: "spec → success",
+            args: &["spec"],
+            config: None,
+            expected: 0,
+        },
+        Case {
+            name: "config show, valid config → success",
+            args: &["config", "show"],
+            config: Some("version = 1\n"),
+            expected: 0,
+        },
+        Case {
+            name: "unknown flag → usage",
+            args: &["--nope"],
+            config: None,
+            expected: 2,
+        },
+        Case {
+            name: "config show, unsupported version → usage",
+            args: &["config", "show"],
+            config: Some("version = 2\n"),
+            expected: 2,
+        },
+        Case {
+            name: "config show, unknown key → usage",
+            args: &["config", "show"],
+            config: Some("version = 1\nbogus = true\n"),
+            expected: 2,
+        },
+        Case {
+            name: "config show, missing config → usage",
+            args: &["config", "show"],
+            config: None,
+            expected: 2,
+        },
+    ];
+
+    for (index, case) in cases.iter().enumerate() {
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("exit-case-{index}"));
+        fs::create_dir_all(&dir).expect("create case dir");
+        let config_path = dir.join("batten.toml");
+        match case.config {
+            Some(contents) => fs::write(&config_path, contents).expect("write batten.toml"),
+            // A stale file from a prior run would mask the missing-config path.
+            None => {
+                let _ = fs::remove_file(&config_path);
+            }
+        }
+        let status = batten()
+            .args(case.args)
+            .current_dir(&dir)
+            .status()
+            .expect("run batten");
+        assert_eq!(status.code(), Some(case.expected), "case: {}", case.name);
+    }
 }
 
 #[test]
@@ -38,13 +124,6 @@ fn version_flag_succeeds() {
         .expect("run batten --version");
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("batten"));
-}
-
-#[test]
-fn unknown_flag_is_a_usage_error() {
-    // clap reports argument errors with exit code 2, matching ExitCode::Usage.
-    let status = batten().arg("--nope").status().expect("run batten --nope");
-    assert_eq!(status.code(), Some(2));
 }
 
 #[test]
@@ -97,38 +176,4 @@ fn config_show_prints_the_effective_config() {
         serde_json::from_slice(&output.stdout).expect("config show stdout is JSON");
     assert_eq!(value["version"], 1);
     assert_eq!(value["min_batten_version"], "0.0.0");
-}
-
-#[test]
-fn config_show_rejects_unsupported_version_with_usage_code() {
-    let dir = repo_with_config("config-bad-version", "version = 2\n");
-    let status = batten()
-        .args(["config", "show"])
-        .current_dir(&dir)
-        .status()
-        .expect("run batten config show");
-    assert_eq!(status.code(), Some(2));
-}
-
-#[test]
-fn config_show_rejects_unknown_key_with_usage_code() {
-    let dir = repo_with_config("config-unknown-key", "version = 1\nbogus = true\n");
-    let status = batten()
-        .args(["config", "show"])
-        .current_dir(&dir)
-        .status()
-        .expect("run batten config show");
-    assert_eq!(status.code(), Some(2));
-}
-
-#[test]
-fn config_show_without_a_config_file_is_a_usage_error() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-missing");
-    fs::create_dir_all(&dir).expect("create empty temp dir");
-    let status = batten()
-        .args(["config", "show"])
-        .current_dir(&dir)
-        .status()
-        .expect("run batten config show");
-    assert_eq!(status.code(), Some(2));
 }
