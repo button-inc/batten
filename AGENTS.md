@@ -84,11 +84,15 @@ do not need to know Serena to benefit from it — it is wired up in `.mcp.json` 
 starts automatically. The only prerequisite is the pinned toolchain:
 
 ```bash
-mise install   # provides `uv`/`uvx`, which .mcp.json uses to launch Serena
+mise install   # installs serena-agent (pinned in mise.toml) and puts `serena` on PATH
 ```
 
-`.mcp.json` runs `uvx --from serena-agent==<pinned> serena start-mcp-server
---context claude-code --project .`. The `--project .` matters: Serena keys
+Serena is pinned like every other tool: `"pipx:serena-agent"` in `mise.toml`
+`[tools]`, so its version lands in `mise.lock` alongside rust, hk, and the rest —
+one lockfile, one place. The `pipx` backend installs it with `uv` (also pinned),
+keeping the fast resolver. `.mcp.json` then launches it through mise: `mise exec
+-- serena start-mcp-server --context claude-code --project .`. The `--project .`
+matters: Serena keys
 projects by **path** and activates the current working directory, so the main
 checkout and every worktree under `.claude/worktrees/` are independent projects
 with their own symbol cache.
