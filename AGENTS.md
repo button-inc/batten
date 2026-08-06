@@ -264,13 +264,17 @@ That — not `curl`, not the PAT — is the dead ground. There are two paths tha
    ready/`update_pull_request`, landing via `add_issue_comment`, and especially
    CI status via `pull_request_read` `get_check_runs`.
 
-**One scope gap to know, so you don't misdiagnose it as a proxy problem:** this
-PAT lacks the fine-grained **Checks: read** permission, so
-`…/commits/<sha>/check-runs` 403s with `x-accepted-github-permissions: checks=read`
-even off-proxy. That is a *token scope*, not a network block. Read CI status via
-the MCP `get_check_runs` tool (which has the permission), or have the PAT granted
-`Checks: read`. Do **not** generalise this one endpoint into "the PAT is useless" —
-everything the PAT is scoped for works fine off-proxy.
+**One scope gap to know, so you don't misdiagnose it as a proxy problem:**
+reading CI checks needs a token that carries **Checks: read**, and a
+**fine-grained** PAT cannot — even with every box ticked, a fine-grained token
+gets `…/commits/<sha>/check-runs` (and `gh pr checks --watch`) 403s with
+`x-accepted-github-permissions: checks=read`, off-proxy included. That is a
+*token capability*, not a network block. To read CI status either use a
+**classic PAT scoped `repo`** (its `repo` scope bundles checks-read, so
+`--watch` works), or use the MCP `get_check_runs` tool (which carries the
+permission via the session's App auth). Do **not** generalise this one endpoint
+into "the PAT is useless" — everything the token is scoped for works fine
+off-proxy.
 
 `git` over `github.com` (clone, fetch, push, `ls-remote`) uses the proxied git auth
 and works as-is; leave it alone.
