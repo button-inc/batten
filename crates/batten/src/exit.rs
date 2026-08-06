@@ -19,7 +19,7 @@ pub enum ExitCode {
     /// The invocation was malformed: bad flags, unreadable config, or usage error.
     Usage = 2,
     /// Batten could not complete the check (I/O failure, missing tool, internal error).
-    Internal = 70,
+    Internal = 3,
 }
 
 impl ExitCode {
