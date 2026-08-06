@@ -63,9 +63,8 @@ macOS runner needed). Please run `mise run ci` locally before opening a PR.
 
 ## Licensing of contributions
 
-By contributing, you agree that your contributions will be dual licensed under
-the [Apache-2.0](LICENSE-APACHE) and [MIT](LICENSE-MIT) licenses, matching the
-project.
+By contributing, you agree that your contributions will be licensed under the
+[Apache-2.0](LICENSE-APACHE) license, matching the project.
 
 ## License compatibility of adopted tools
 
@@ -73,7 +72,7 @@ Batten adopts rather than rebuilds where strong prior art exists. Track the
 license of each adopted or vendored tool here so the project stays
 open-sourceable:
 
-| Tool | Role | License | Compatible with MIT/Apache-2.0 |
+| Tool | Role | License | Compatible with Apache-2.0 |
 | ---- | ---- | ------- | ------------------------------ |
 | alint | file-shape, merge-marker, naming rules | _to confirm_ | _to confirm_ |
 | Probity | red-green-refactor discipline, LLM judge | _to confirm_ | _to confirm_ |

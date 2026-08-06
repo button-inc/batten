@@ -13,8 +13,9 @@ wildcards = "deny"
 
 [licenses]
 version = 2
-# Batten is MIT OR Apache-2.0; only permissive, compatible licenses are allowed
-# in the dependency tree so the project stays open-sourceable.
+# Batten is licensed Apache-2.0; only permissive, Apache-2.0-compatible licenses
+# are allowed in the dependency tree so the project stays open-sourceable. (MIT
+# and the BSD/ISC family below cover dependencies, not Batten's own license.)
 allow = [
     "MIT",
     "Apache-2.0",
