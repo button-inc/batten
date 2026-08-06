@@ -25,6 +25,11 @@ allow = [
     "Unicode-3.0",
     "Zlib",
 ]
+# The allow-list above is a deliberately broader, pre-approved set of permissive
+# licenses than the current tree happens to pull in. Don't warn when an allowed
+# license isn't currently encountered — a pre-approval that isn't exercised yet
+# is the intended state, not a misconfiguration.
+unused-allowed-license = "allow"
 confidence-threshold = 0.9
 
 [sources]
