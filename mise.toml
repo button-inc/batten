@@ -42,6 +42,11 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 #     this is a no-op.
 # See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
 MISE_GITHUB_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default='') }}"
+# `gh` reads GH_TOKEN, not MISE_GITHUB_TOKEN, so mirror the PAT into it too. In the
+# sandbox the ambient GH_TOKEN is a proxy placeholder that 401s when sent direct
+# (NO_PROXY, above); overriding it with our PAT is what makes `mise exec -- gh …`
+# work. Empty off-sandbox / in CI, where gh uses its own auth or the job's token.
+GH_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default='') }}"
 NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
