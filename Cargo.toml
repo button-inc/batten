@@ -34,3 +34,17 @@ clap = { version = "4", features = ["derive"] }
 [profile.release]
 lto = "thin"
 strip = true
+
+# Faster incremental builds for the compile-heavy fmt -> lint -> test hook chain.
+[profile.dev]
+debug = 1
+
+# The profile the distributed single binary is built with: maximal optimization
+# and the smallest artifact. Distinct from `release` (used for local/dev release
+# builds) so day-to-day `cargo build --release` stays fast.
+[profile.dist]
+inherits = "release"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
