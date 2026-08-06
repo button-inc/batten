@@ -39,5 +39,15 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      # release-plz clones the repo into a temp dir; `git fetch origin main` there
+      # has no credentials (actions/checkout's auth lives only on the main clone),
+      # so it cannot rebase the release branch onto main — the PR is then re-opened
+      # on a stale base and can never fast-forward. A global insteadOf with the
+      # token gives every github.com git operation (including that temp clone) a
+      # credential.
+      - name: Authenticate git to github.com for release-plz's internal clone
+        env:
+          GH_PAT: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+        run: git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
       - run: mise run release
       - run: mise run release-pr
