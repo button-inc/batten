@@ -9,6 +9,47 @@
 // is run once (see CONTRIBUTING.md). hk stores the hooks in .git/hooks.
 amends "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Config.pkl"
 
+// The commit gate — hk-version, fmt, clippy, test — defined once and shared by
+// two hooks:
+//   - `pre-commit` runs it in fix mode on the way into a commit (stashes, applies
+//     fmt fixes).
+//   - `check` runs it in check-only mode; CI drives it via `mise run hooks`
+//     (`hk check --all`) so the exact hook config is exercised on CI too, not
+//     just locally. If a step is misconfigured here, CI catches it.
+// clippy and the test build are both whole-workspace cargo compiles. Chaining
+// fmt -> lint -> test keeps exactly one cargo build holding the target-dir lock
+// at a time: parallel steps would only serialize on that lock while
+// oversubscribing the CPU. Each step also reads the formatted, then linted, tree.
+local gate = new Mapping<String, Step> {
+    // Enforces the "revisit hk config" reminder as a runnable gate, not prose:
+    // fails if hk's pinned version drifts between mise.toml and this file's
+    // `amends` URL. Fires on any change to either file — which includes every
+    // hk version bump, the moment to re-check this config (see AGENTS.md).
+    ["hk-version"] {
+        glob = List("hk.pkl", "mise.toml")
+        check = "mise run hk-version"
+    }
+    ["fmt"] {
+        glob = List("**/*.rs")
+        // check_first: skip the fixer (a write pass) on the common case where the
+        // tree is already formatted; only rewrite when it isn't. (fix mode only.)
+        check_first = true
+        check = "mise run fmt-check"
+        fix = "mise run fmt"
+    }
+    ["lint"] {
+        depends = List("fmt")
+        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
+        check = "mise run lint"
+    }
+    // Tests the whole workspace because a change in one crate can break another.
+    ["test"] {
+        depends = List("lint")
+        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
+        check = "mise run test"
+    }
+}
+
 hooks {
     // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
     // PRs land by fast-forward, so every commit reaches main with its original
@@ -21,22 +62,15 @@ hooks {
         }
     }
     ["pre-commit"] {
-        steps {
-            ["fmt"] {
-                glob = List("**/*.rs")
-                check = "mise run fmt-check"
-                fix = "mise run fmt"
-            }
-            ["lint"] {
-                glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
-                check = "mise run lint"
-            }
-            // Tests the whole workspace because a change in one crate can break
-            // another.
-            ["test"] {
-                glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
-                check = "mise run test"
-            }
-        }
+        // Check only what is staged, and never let fmt's fixer clobber unstaged
+        // work: hk stashes the working tree, runs the steps, then restores it via
+        // three-way merge. patch-file is faster than `git stash` and sidesteps
+        // index-lock races. See https://hk.jdx.dev/environment_variables.
+        stash = "patch-file"
+        steps = gate
+    }
+    // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
+    ["check"] {
+        steps = gate
     }
 }

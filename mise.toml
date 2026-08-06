@@ -75,9 +75,29 @@ for t in x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-gnu; do
 done
 '''
 
+[tasks.hk-version]
+description = "Gate: hk's version is pinned identically in mise.toml and hk.pkl (amends URL). A bump to one without the other is the moment to revisit the hook config."
+shell = "bash -c"   # uses grep -oE + cut; keep off /bin/sh for consistency
+run = '''
+mise_v=$(grep -E '^hk = ' mise.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
+pkl_v=$(grep -oE 'hk@[0-9]+\.[0-9]+\.[0-9]+' hk.pkl | head -n1 | cut -d@ -f2)
+if [ "${mise_v:?}" != "${pkl_v:?}" ]; then
+  echo "::error:: hk version drift: mise.toml pins $mise_v but hk.pkl amends $pkl_v." >&2
+  echo "Sync both, then revisit hk.pkl for new features worth adopting (see AGENTS.md)." >&2
+  exit 1
+fi
+echo "hk-version: mise.toml and hk.pkl agree on hk $mise_v"
+'''
+
+[tasks.hooks]
+description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"
+run = "hk check --all"
+
 [tasks.ci]
 description = "Everything CI runs"
-depends = ["fmt-check", "lint", "test", "deny"]
+# fmt-check + lint + test come from the SAME hk.pkl the pre-commit hook runs
+# (via `hooks`), so CI exercises the hook config itself; `deny` rounds it out.
+depends = ["hooks", "deny"]
 
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"

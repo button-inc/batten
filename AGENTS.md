@@ -36,6 +36,43 @@ mise run cross-check   # type-check other targets from Linux
 mise tasks             # list them all
 ```
 
+### Keep the git hooks fast — revisit `hk.pkl` regularly
+
+The pre-commit hook runs on **every commit**, so its latency is a tax every
+contributor and agent pays constantly. Treat `hk.pkl` as living config, not
+set-and-forget: whenever you touch the hooks, add a task the hook runs, or bump
+the pinned `hk` version in `mise.toml`, re-check that the hook is still optimally
+configured.
+
+This reminder is not prose-only — it ships with its mechanism, as this repo
+requires. The `hk-version` gate (`mise run hk-version`, wired into the shared hk
+`gate` so it runs on both pre-commit and CI) **fails** if hk's pinned version
+drifts between `mise.toml` and `hk.pkl`'s `amends` URL. Since the two must move
+together on every hk bump, that failure lands you back in this config at exactly
+the moment there may be new features to adopt.
+
+The current design leans on three hk features — keep them as the baseline:
+
+- **`stash = "patch-file"`** so hooks check exactly what is staged and fixers
+  never clobber unstaged work (faster than `git stash`, no index-lock races).
+- **`check_first`** on fixer steps (e.g. `fmt`) so the write pass is skipped when
+  the tree is already clean.
+- **`depends`** to chain the compile-heavy cargo steps (`fmt → lint → test`) into
+  a single serial cargo build — parallel steps only serialize on the target-dir
+  lock while oversubscribing the CPU.
+
+The gate lives once in `hk.pkl` (the `gate` step mapping) and is run by two
+hooks: `pre-commit` (fix mode) locally and `check` (check-only) on CI via
+`mise run hooks` → `hk check --all`, which `mise run ci` depends on. So the hook
+config is exercised on CI too — a misconfigured step fails CI, not just a commit.
+Keep it that way: any new gate step belongs in `hk.pkl`, not bolted onto CI
+separately.
+
+Before adding a step, make it a `mise` task first (so hook, CI, and local runs
+stay byte-identical) and scope its `glob` so it only fires when relevant files
+change. When a new `hk` release lands features that would tighten this further
+(better batching, caching, or scheduling), adopt them.
+
 ## GitHub is reachable here — never report the toolchain as unrunnable
 
 Read this before you ever tell a user "I can't run the tests / `mise install` /
