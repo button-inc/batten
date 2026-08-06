@@ -254,7 +254,9 @@ mod tests {
     use super::*;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+        // `CARGO_TARGET_TMPDIR` is only defined for integration-test crates, not
+        // the library's own unit tests, so derive a scratch dir at runtime.
+        let dir = std::env::temp_dir().join("batten-rules-tests").join(name);
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
