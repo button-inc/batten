@@ -30,10 +30,8 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # repo-scoped token, that host answers 403 for third-party tool repos and a bare
 # `mise install` fails ("GitHub access to this repository is not enabled"). The
 # fix is not to give up — GitHub is reachable — it is to send just the API/asset
-# hosts straight to GitHub and let mise authenticate with the session PAT:
-#   * MISE_GITHUB_TOKEN uses GITHUB_PERSONAL_ACCESS_TOKEN when present. It is
-#     mise-only, so the proxy's own GITHUB_TOKEN (which authenticates git to
-#     private repos) is left untouched. Empty when there is no PAT.
+# hosts straight to GitHub, over the direct route (our tools are public repos, so
+# unauthenticated resolution works there; GH_TOKEN below still carries our PAT):
 #   * NO_PROXY gains api.github.com (+ the redirect/asset hosts) so those calls
 #     bypass the proxy. github.com itself is deliberately left proxied, so git
 #     keeps its proxy-provided auth to button-inc/batten. The guard appends once
@@ -41,7 +39,6 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 #     uv-backed Serena install keeps working). Off-sandbox there is no proxy, so
 #     this is a no-op.
 # See AGENTS.md, "GitHub is reachable — never report the toolchain as unrunnable".
-MISE_GITHUB_TOKEN = "{{ get_env(name='GITHUB_PERSONAL_ACCESS_TOKEN', default='') }}"
 # `gh` reads GH_TOKEN, not MISE_GITHUB_TOKEN, so mirror the PAT into it too. In the
 # sandbox the ambient GH_TOKEN is a proxy placeholder that 401s when sent direct
 # (NO_PROXY, above); overriding it with our PAT is what makes `mise exec -- gh …`
