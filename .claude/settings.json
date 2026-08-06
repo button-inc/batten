@@ -1,6 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
+    "allow": [
+      "Bash(git:*)",
+      "Bash(gh:*)",
+      "Bash(mise:*)"
+    ],
     "deny": [
       "mcp__Claude_Code_Remote__send_later",
       "mcp__Claude_Code_Remote__create_trigger"
