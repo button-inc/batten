@@ -7,7 +7,8 @@ and that memories are checked in; this is the setup detail.
 ## What it is
 
 Project-scoped Serena MCP server (LSP-backed semantic navigation/edits). Wired in
-`.mcp.json`, starts automatically. Pinned like every tool: `"pipx:serena-agent"`
+`.mcp.json`. It does **not** "just start" on a cold container — see "Two gates"
+below. Pinned like every tool: `"pipx:serena-agent"`
 in `mise.toml [tools]` (pipx backend installs with pinned `uv`), version in
 `mise.lock`. `.mcp.json` launches it via mise: `mise exec -- serena
 start-mcp-server --context claude-code --project .`.
@@ -15,6 +16,45 @@ start-mcp-server --context claude-code --project .`.
 `--project .` matters: Serena keys projects by **path** and activates the cwd, so
 the main checkout and every `.claude/worktrees/` worktree are independent projects
 with their own symbol cache.
+
+## Two gates stand between a cold container and Serena (CLOUD-196)
+
+Both must be closed. Each alone looks sufficient on a **warm** container, which is
+why the first fix was validated green and Serena stayed absent anyway.
+
+1. **Install timing.** `mise exec` installs on demand; on a cold container that
+   24s `pipx:serena-agent` install lands inside the MCP startup window, the
+   handshake never completes, and MCP servers are not retried mid-session.
+   Closed by the synchronous `SessionStart` hook (`.claude/hooks/session-start.sh`)
+   running `mise install` **before** the session starts.
+2. **Approval.** A `.mcp.json` server is project-scoped and needs per-project
+   approval. A cold container gets a fresh `~/.claude.json` whose
+   `enabledMcpjsonServers` is `[]`, and a remote session has nobody to answer the
+   prompt — so the server is never launched at all. Closed by committing
+   `"enabledMcpjsonServers": ["serena"]` in `.claude/settings.json`.
+
+**Diagnosing "Serena is missing" — do this in order, it is easy to get wrong:**
+
+- Do **not** reach for `mem:connector-allowlist-recovery`. That covers claude.ai
+  connectors (Linear/Gmail/Xero) flipping to UUID tool names. Serena is neither:
+  the host's injected `/tmp/mcp-config-cse_*.json` lists the connectors and **no
+  serena**; Serena comes from the repo's own `.mcp.json`. Wrong mechanism entirely.
+- **Prove liveness before concluding anything is broken.** `mise exec -- serena
+--version`, then `timeout 45 mise exec -- serena start-mcp-server --context
+claude-code --project . </dev/null`. A server that starts in ~1s and advertises
+  21 tools while absent in-session means the **handshake** lost — not that Serena
+  is down. That exact misdiagnosis has been made.
+- Check `~/.claude.json` → `projects["<repo path>"].enabledMcpjsonServers`. `[]`
+  means gate 2 is open regardless of how healthy the binary is.
+- Timestamps that establish cold vs warm: `ps -o lstart= -p 1` (container start)
+  vs `stat -c '%y' /root/.local/share/mise/installs/pipx-serena-agent/*`. An
+  install _after_ container start = cold. **A warm container cannot test any of
+  this** — it exercises only the case that was never broken.
+
+Known wart: the hook's `mise install` writes a `linux-x64-cargo-zigbuild`
+checksum into `mise.lock` that the `lock-complete` gate rejects as install-time
+residue, so a cold session starts with a dirty tree that fails `mise run verify`.
+Revert `mise.lock` before committing; don't commit the tree wholesale.
 
 ## Worktree collisions are configured away
 
