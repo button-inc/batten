@@ -19,6 +19,16 @@
 # Failure is loud, never silent: a session that could not provision its
 # toolchain must say so, because the original defect's whole signature was an
 # absence with no error anywhere.
+#
+# This hook is NECESSARY BUT NOT SUFFICIENT. Measured on a genuinely cold
+# container: the hook ran and completed before the session started, serena was
+# installed and startable (21 tools, 1.1s warm) — and it was STILL absent from
+# the session. A `.mcp.json` server is project-scoped and requires per-project
+# approval; a cold container gets a fresh `~/.claude.json` whose
+# `enabledMcpjsonServers` is `[]`, and a remote session has nobody to answer the
+# approval prompt. That second gate is closed by committing
+# `"enabledMcpjsonServers": ["serena"]` in .claude/settings.json — do not remove
+# it thinking this hook covers the case. Both are load-bearing.
 set -uo pipefail
 
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" || exit 0
