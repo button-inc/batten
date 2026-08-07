@@ -63,6 +63,16 @@ local gate = new Mapping<String, Step> {
     glob = List("**/*.md")
     check = "mise run memories-check"
   }
+  // `.claude/rules/rust.md` carries no module tree — it defers to mem:core as
+  // the authority kept current instead. Nothing checked that authority, so a
+  // module could land with no row and leave the rule pointing at an incomplete
+  // map; `severity.rs` (CLOUD-168) did exactly that, past a green gate.
+  // memories-check does not cover this: it gates the graph's *edges*, which
+  // stay coherent while the map is missing rows (CLOUD-194).
+  ["module-map-check"] {
+    glob = List("crates/*/src/*.rs", ".serena/memories/core.md")
+    check = "mise run module-map-check"
+  }
   // An MCP allow rule that matches no tool name grants nothing and says nothing
   // about it — the only symptom is an approval prompt on every call, which
   // reads as harness behaviour rather than as a settings bug. This repo shipped

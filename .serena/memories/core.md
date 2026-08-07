@@ -41,6 +41,13 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do.
+- `severity.rs` — the severity taxonomy (CLOUD-168): one rank table plus the
+  adapter across the three axes — `RuleSeverity` (config, CLOUD-61),
+  `AdvisoryTier` (the one _stored_ severity, CLOUD-80/78), `ReportLevel`
+  (render, CLOUD-130). Mapping is by **rank, never by name**: config `warn` is
+  tier `caution`, tier `warning` is config `deny`. Lookups are exhaustive
+  matches into the table, so they are total with no panic path. A leaf module —
+  consumers attach as they land.
 
 ## Tests
 
