@@ -109,7 +109,14 @@ shell = "bash -c"
 # and fail if it changed: a clean diff means every tool has full per-platform
 # URLs, so the locked install cannot surprise CI.
 run = '''
-mise lock
+# Fails closed: mise task bodies do not run under `set -e`, so an unguarded
+# `mise lock` that failed would leave mise.lock untouched, the diff below clean,
+# and this gate reporting "complete and current" about a file it never
+# regenerated — the same silent false-green class as the fetch in linear-check.
+if ! mise lock; then
+  echo "::error:: \`mise lock\` failed, so the lockfile could not be regenerated and its currency is unverified. Refusing to pass." >&2
+  exit 1
+fi
 if ! git diff --quiet -- mise.lock; then
   echo "::error:: mise.lock was stale/incomplete — regenerated it. Review and commit the change; CI installs with --locked and needs complete per-platform URLs." >&2
   git --no-pager diff --stat -- mise.lock >&2
@@ -128,7 +135,14 @@ depends = ["doctor"]
 # would be duplicate work on the critical path.
 run = '''
 for t in x86_64-pc-windows-gnu; do
-  rustup target add "$t"
+  # Guarded because task bodies do not run under `set -e`: with more than one
+  # triple in the list, a failed target install would otherwise be masked by a
+  # later iteration's exit status and this gate would pass having checked less
+  # than it claims.
+  if ! rustup target add "$t"; then
+    echo "::error:: could not install target $t, so its type-check did not run." >&2
+    exit 1
+  fi
   # `check` does codegen-to-metadata without linking, so it needs no target
   # linker or SDK — cross-platform compile coverage at Linux-runner cost.
   cargo check --workspace --target "$t"
@@ -178,28 +192,6 @@ description = "Everything CI runs"
 # fmt-check + lint + test come from the SAME hk.pkl the pre-commit hook runs
 # (via `hooks`), so CI exercises the hook config itself; `deny` rounds it out.
 depends = ["hooks", "deny"]
-
-[tasks.linear-check]
-description = "Gate: HEAD is linear on the current origin/main, so the PR can fast-forward-land"
-shell = "bash -c"
-# Re-asserted twice — inside `verify`, and again immediately before `gh pr ready`,
-# because `main` moves constantly and a verify green a minute ago may be stale
-# (AGENTS.md, workflow step 5). One definition, called from both places, instead
-# of the fetch/merge-base snippet retyped per session.
-run = '''
-git fetch -q origin main
-main=$(git rev-parse origin/main)
-if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
-  echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
-  exit 1
-fi
-receipts="$(git rev-parse --git-dir)/batten-receipts"
-mkdir -p "$receipts"
-# The receipt records WHICH main we were linear against, so a main that moves
-# afterwards invalidates it instead of silently still counting (see ready-guard).
-printf '%s' "$main" >"$receipts/linear-check.$(git rev-parse HEAD)"
-echo "linear-check: HEAD is linear on origin/main ($main)"
-'''
 
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"

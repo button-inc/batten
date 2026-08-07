@@ -74,3 +74,24 @@ at check time rather than when a hook tries to run), `prettier` (Markdown, with
 
 The pre-commit hook runs the gate and commit-msg validates the subject. Run
 `mise run ci` locally rather than discovering a failure at commit time.
+
+## Task bodies do not run under `set -e` — fail closed by hand
+
+A `shell = "bash -c"` body in `mise.toml` runs every line regardless of the
+previous line's exit status (verified: a body of `false` followed by an `echo`
+prints the echo and exits 0). So in a **gate**, any command whose failure would
+change the verdict must be guarded explicitly — otherwise the gate reports on
+state it never refreshed, which is a silent false green and worse than no gate.
+
+Two instances of this had already landed. `linear-check`'s `git fetch` fed the
+`origin/main` ref every later line reads, so a failed fetch left it comparing a
+stale main to itself, passing, and writing a receipt `ready-guard` then honours
+— `gh pr ready` allowed on a branch that was not rebased. `lock-check` ran
+`mise lock` unguarded, so a failed lock left a clean diff and the gate claiming
+"complete and current" about a file it never regenerated.
+
+The rule: **a gate step that cannot run must exit non-zero and leave no
+receipt.** Prefer `if ! cmd; then echo "::error:: …" >&2; exit 1; fi` over a
+bare call. A task complex enough to need several of those belongs in
+`mise-tasks/` as a file task with `set -euo pipefail` and a bats suite — which
+is why `linear-check` lives there, gated by `tests/linear-check.bats`.

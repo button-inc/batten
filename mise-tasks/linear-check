@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#MISE description="Gate: HEAD is linear on the current origin/main, so the PR can fast-forward-land"
+#
+# Re-asserted twice — inside `verify`, and again immediately before `gh pr ready`,
+# because `main` moves constantly and a verify green a minute ago may be stale
+# (AGENTS.md, workflow step 5). One definition, called from both places, instead
+# of the fetch/merge-base snippet retyped per session.
+#
+# Lives here rather than inline in mise.toml for two reasons. It is testable:
+# `tests/linear-check.bats` stubs `git` and asserts the fail-closed path below,
+# which an inline `run =` body cannot express. And it gets `set -euo pipefail`,
+# which mise's `shell = "bash -c"` bodies do NOT have — a task body there runs
+# every line regardless of the previous one's exit status.
+#
+# That missing `set -e` is exactly what made the fetch below load-bearing. The
+# fetch refreshes the `origin/main` ref that every line after it reads. When it
+# failed silently, `git rev-parse origin/main` still succeeded against the ref
+# already on disk, the merge-base comparison compared a stale main to itself,
+# the gate passed, and a receipt was written attesting a linearity that had not
+# been checked. `ready-guard` then compares that receipt to the same stale ref
+# (mise-tasks/ready-guard:82) and matches, so `gh pr ready` was allowed and CI
+# ran on a branch that was not actually rebased. A gate that silently passes on
+# a broken precondition is worse than no gate, so the fetch now fails closed.
+set -euo pipefail
+
+if ! git fetch -q origin main; then
+	echo "::error:: could not fetch origin/main, so linearity is unverifiable. Refusing to pass on a stale ref — re-run when the network is back." >&2
+	exit 1
+fi
+
+main=$(git rev-parse origin/main)
+if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
+	echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
+	exit 1
+fi
+
+receipts="$(git rev-parse --git-dir)/batten-receipts"
+mkdir -p "$receipts"
+# The receipt records WHICH main we were linear against, so a main that moves
+# afterwards invalidates it instead of silently still counting (see ready-guard).
+# `--git-dir` resolves per-worktree, so a receipt taken in one worktree cannot
+# authorise `gh pr ready` in another.
+printf '%s' "$main" >"$receipts/linear-check.$(git rev-parse HEAD)"
+echo "linear-check: HEAD is linear on origin/main ($main)"
