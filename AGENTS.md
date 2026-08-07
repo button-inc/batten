@@ -78,8 +78,8 @@ blessing.
 4. `mise run verify` green (rebased on latest `main`; `ci` + `cross` +
    `commit-lint` all pass). A red verify is a real blocker — fix it, don't ask.
 5. **Re-assert linearity on `main` as the very last thing before readying** —
-   right after a green verify, right before `gh pr ready`. `git fetch origin
-   main`; confirm the branch's merge-base equals `origin/main`'s tip. `main`
+   right after a green verify, right before `gh pr ready`: `mise run linear-check`
+   (the same gate `verify` runs; don't retype the fetch/merge-base check). `main`
    moves constantly; a verify green a minute ago may be stale, and a non-linear
    branch can't fast-forward-land. If `main` advanced, rebase and re-run verify,
    then re-check. Never ready a branch that isn't linear on the current `main`.

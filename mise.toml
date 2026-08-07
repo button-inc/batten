@@ -141,10 +141,13 @@ description = "Everything CI runs"
 # (via `hooks`), so CI exercises the hook config itself; `deny` rounds it out.
 depends = ["hooks", "deny"]
 
-[tasks.verify]
-description = "Full local pre-flight — run this before marking any draft PR ready"
+[tasks.linear-check]
+description = "Gate: HEAD is linear on the current origin/main, so the PR can fast-forward-land"
 shell = "bash -c"
-depends = ["ci", "cross-check", "zizmor", "lock-check"]
+# Re-asserted twice — inside `verify`, and again immediately before `gh pr ready`,
+# because `main` moves constantly and a verify green a minute ago may be stale
+# (AGENTS.md, workflow step 5). One definition, called from both places, instead
+# of the fetch/merge-base snippet retyped per session.
 run = '''
 git fetch -q origin main
 main=$(git rev-parse origin/main)
@@ -152,7 +155,16 @@ if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
   echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
   exit 1
 fi
-BASE_SHA="$main" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint
+echo "linear-check: HEAD is linear on origin/main ($main)"
+'''
+
+[tasks.verify]
+description = "Full local pre-flight — run this before marking any draft PR ready"
+shell = "bash -c"
+depends = ["ci", "cross-check", "zizmor", "lock-check"]
+run = '''
+mise run linear-check
+BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint
 echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit-lint all pass"
 '''
 
