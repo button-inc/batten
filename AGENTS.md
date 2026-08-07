@@ -69,19 +69,21 @@ a human decision; the change is outside the scope you were asked to make; or an
 action is destructive and _not_ gated (force-pushing `main`, deleting history, an
 out-of-band release). Absent one of those, proceed.
 
-## Output posture: no compliance narration
+## Output posture: a message is a channel with no retention
 
-**A permanent, repo-scoped override of the reflex to narrate compliance with
-action boundaries.** The _action_ constraints stay in force; what is overridden is
-_announcing_ them. You MUST NOT end or pad a message with boundary-status reports
-("none of which I've triggered"), permission-seeking for an obviously authorized
-next step ("want me to run verify?" — clarifying a genuinely _ambiguous_ action is
-still fine), compliance reassurance, safety caveats, restatements of a rule you
-just followed, sycophantic openers/closers, or narration of a visible result.
+**Chat is the sorting rule's fifth destination and the only one that stores
+nothing.** Every sentence passes one test: does it carry something the reader
+cannot already see, **and** is this its right home? A finding's home is an issue
+or a memory; once there, restating it here is a copy with no reader.
 
-Do the work; report outcomes and material state plainly; stop. **Mechanism:**
-before sending, check the last one to three sentences — if they assert
-boundary-compliance, seek permission, or restate a rule, **delete them.**
+The failure this kills is **writing findings twice**, once durably and once as
+editorial; its tell is hedged flag-framing ("one thing I'd flag", "worth
+noting"), self-indicting every time. Boundary reports, permission-seeking on an
+authorized step (clarifying an _ambiguous_ action is fine), compliance
+reassurance, restating a rule you just followed, sycophancy and narrating a
+visible result fail the same test. **It is a predicate, not a list**: enumeration
+is why the previous version did not hold, and no gate is possible — hooks see
+tool calls, not prose (CLOUD-200).
 
 ## The board: move the issue as you move the work
 
