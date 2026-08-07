@@ -101,3 +101,43 @@ dropped), confirm green, and land.
   just the old SHA dropped when you pushed a new head.)
 - Never echo a credential. Check presence with `${VAR:+SET}` — never a bare
   `$VAR` or a `${VAR:-…}` that expands the value into the transcript.
+
+## Transparent TLS interception — tools that carry their own CA roots
+
+Egress TLS is intercepted at the network layer, **not** by the `HTTPS_PROXY` env
+var. Every connection presents a certificate issued by `O = Anthropic, CN =
+Egress Gateway ... CA`, and unsetting `HTTPS_PROXY` or adding a host to `NO_PROXY`
+changes nothing — those only steer tools that _read_ the vars, and the
+interception is below that layer. Verify in one line:
+
+```
+openssl s_client -connect github.com:443 -servername github.com </dev/null 2>/dev/null | grep ' i:'
+```
+
+Most tools work anyway because the system trust store already carries that CA.
+The ones that break are those shipping **their own** root bundle and ignoring the
+system store. The fix is never a proxy variable — it is handing that tool the
+gateway bundle at `/root/.ccr/ca-bundle.crt`, usually via a `--ca-certificates`
+style flag (which typically _replaces_ the tool's roots rather than adding to
+them, so pass it only when the file exists).
+
+Known instance: `pkl`. Measured cold — **delete `~/.pkl/cache` before every
+attempt**, or a cached package turns the next command into a no-op that reads as
+a pass (this is what made an earlier diagnosis wrong):
+
+| attempt (cold cache)                  | result                |
+| ------------------------------------- | --------------------- |
+| `pkl eval`                            | SSL handshake failure |
+| `SSL_CERT_FILE=<bundle> pkl eval`     | same — pkl ignores it |
+| `pkl eval --http-no-proxy github.com` | same                  |
+| `env -u HTTPS_PROXY pkl eval`         | same                  |
+| `pkl eval --ca-certificates <bundle>` | OK                    |
+
+Two things generalise. **Symptom misreads as a content error:** the tool reports
+a broken config/package, not a network problem, so the first instinct is to debug
+the file. **It only bites cold:** anything cached, and any environment without
+interception (CI), never sees it — so "works on CI" is not evidence the sandbox
+path is fine.
+
+This is a Claude-sandbox fact and belongs here. It does not belong in the
+codebase: repo files carry the guardrail itself, not the story behind it.
