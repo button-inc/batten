@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the board's dependency graph is coherent, and every started issue is honestly labelled (reads get_issue payloads on stdin; emits the ready frontier)"
+#
+# CLOUD-175. The board is the observability surface the whole workflow contract
+# leans on, and its discipline was prose: an issue sitting in In Progress
+# unassigned, or in In Review with nothing landed, is a false signal of exactly
+# the kind Batten exists to catch. These are the two predicates
+# mem:workflow/board-states names as the computable version of that discipline,
+# plus the graph coherence the frontier depends on:
+#
+#   in-progress-unassigned   In Progress => assignee != null
+#   in-review-no-pr          In Review   => at least one linked GitHub PR
+#   blockedby-cycle          the blockedBy relation is acyclic
+#   dangling-blocker         every blocker is present in the piped set
+#
+# "At least one linked PR attachment" is a deliberate approximation of "landed":
+# it is checkable from the payload alone. Commit containment and "all referenced
+# PRs merged" are release-gate questions and belong to the In Review -> Done
+# transition, not this column check.
+#
+# On stdout, the by-product that makes the same command the scheduler: the READY
+# FRONTIER — Todo issues whose Ready block passes ready-lint and whose blockers
+# are all resolved (Done, or In Review: landed code is on main in a fast-forward
+# trunk, so a dependent can build on it) — plus the build WIP count. Every agent
+# computing this independently gets the same answer; that shared determinism is
+# what replaces a dispatcher.
+#
+# Agents fetch, gates decide: the caller pipes get_issue(includeRelations: true)
+# payloads (a stream or a JSON array) and this stays a pure function of stdin —
+# no tracker credential, no network. Pipe the closure you want judged; an edge
+# leaving the piped set is reported as dangling rather than guessed about.
+set -euo pipefail
+
+lint="$(dirname "$0")/ready-lint"
+
+# Accept either a JSON array or a concatenated stream of payload objects.
+# Exit 2 is "unreadable input", distinct from a failing board.
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
+	[ "$(jq 'length' <<<"$issues")" = 0 ] ||
+	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
+	exit 2
+fi
+
+violations=0
+# Pointer-only per non-negotiable rule 4: issue id and rule id, never bodies.
+report() {
+	echo "$1 $2" >&2
+	violations=$((violations + 1))
+}
+
+# Byte-stable ordering everywhere: numeric by issue number.
+by_num() { sort -t- -k2,2n; }
+
+ids=$(jq -r '.[].id' <<<"$issues" | by_num)
+in_set() { grep -qxF "$1" <<<"$ids"; }
+status_of() { jq -r --arg id "$1" '.[] | select(.id == $id) | .status' <<<"$issues"; }
+
+# --- the two board predicates -------------------------------------------------
+while IFS=$'\t' read -r id status assignee prs; do
+	if [ "$status" = "In Progress" ] && [ "$assignee" = "null" ]; then
+		report "$id" "in-progress-unassigned"
+	fi
+	if [ "$status" = "In Review" ] && [ "$prs" = 0 ]; then
+		report "$id" "in-review-no-pr"
+	fi
+done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? | select(.url | test("github.com/.*/pull/"))] | length)] | @tsv' <<<"$issues" | by_num)
+
+# --- graph coherence ----------------------------------------------------------
+edges=$(jq -r '.[] | .id as $id | .relations.blockedBy[]?.id | "\($id) \(.)"' <<<"$issues" | by_num)
+
+while read -r from to; do
+	[ -n "$from" ] || continue
+	in_set "$to" || report "$from" "dangling-blocker ($to)"
+done <<<"$edges"
+
+if [ -n "$edges" ] && ! tsort <<<"$edges" >/dev/null 2>&1; then
+	cycle=$(tsort <<<"$edges" 2>&1 >/dev/null | grep -oE 'CLOUD-[0-9]+' | by_num | sort -u | tr '\n' ' ' || true)
+	report "graph" "blockedby-cycle (${cycle% })"
+fi
+
+# --- the frontier and WIP, on stdout ------------------------------------------
+#
+# Frontier membership composes the one definition of Ready rather than copying
+# it: a Todo issue is on the frontier iff its own payload passes ready-lint and
+# every blocker in the piped set is resolved. Resolved means Done or In Review —
+# landed code is on main, so a dependent can build on it.
+frontier=()
+while read -r id; do
+	[ -n "$id" ] || continue
+	[ "$(status_of "$id")" = "Todo" ] || continue
+	jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues" | "$lint" >/dev/null 2>&1 || continue
+	ok=1
+	while read -r _ to; do
+		[ -n "$to" ] || continue
+		case "$(status_of "$to")" in Done | "In Review") ;; *) ok=0 ;; esac
+	done < <(grep -E "^$id " <<<"$edges" || true)
+	[ "$ok" = 1 ] && frontier+=("$id")
+done <<<"$ids"
+
+echo "wip $(jq -r '[.[] | select(.status == "In Progress")] | length' <<<"$issues")"
+for id in "${frontier[@]:-}"; do
+	[ -n "$id" ] && echo "frontier $id"
+done
+
+if [ "$violations" -ne 0 ]; then
+	echo "::error:: graph-check: $violations violation(s) — the board is signalling falsely" >&2
+	exit 1
+fi
+echo "graph-check: board coherent ($(wc -l <<<"$ids" | tr -d ' ') issues)"
