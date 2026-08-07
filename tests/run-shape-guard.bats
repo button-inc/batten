@@ -114,3 +114,16 @@ detaching it with nohup / & loses the wake-up
 PY"
 	! denied "$output"
 }
+
+@test "a pager on an EARLIER command does not condemn a later mise run" {
+	# The guard denied this exact shape: the `| tail -2` belongs to `git push`,
+	# and `mise run verified` in a later segment carries no pager at all. Judging
+	# the whole command string flagged a correct use of the recommended form.
+	run guard 'git push -u origin br 2>&1 | tail -2; mise run verified'
+	! denied "$output"
+}
+
+@test "a pager in the SAME segment as the mise run is still caught" {
+	run guard 'git push -u origin br; mise run verify 2>&1 | tail -2'
+	denied "$output"
+}

@@ -65,7 +65,19 @@ scrubbed=$(printf '%s' "$body" | sed -zE "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTE
 
 # Only `mise run <task>` is judged. `mise exec -- …` runs a program directly and
 # `git log | head` is ordinary read-only paging; neither carries a gate's verdict.
-grep -qE '(^|[^[:alnum:]_-])mise[[:space:]]+run[[:space:]]' <<<"$scrubbed" || exit 0
+MISE_RUN='(^|[^[:alnum:]_-])mise[[:space:]]+run[[:space:]]'
+grep -qE "$MISE_RUN" <<<"$scrubbed" || exit 0
+
+# Both checks are per SEGMENT, not per command. `git push >log 2>&1; echo $?;
+# mise run verified` is three separate commands, and a pager attached to the
+# FIRST says nothing about the third — judging the whole string denied exactly
+# that, a correct command using the very form this guard recommends.
+segments=$(sed -E 's/(\&\&|\|\||;)/\n/g' <<<"$scrubbed")
+piped_run=0
+while IFS= read -r seg; do
+	grep -qE "$MISE_RUN" <<<"$seg" || continue
+	grep -qE '\|[[:space:]]*(tail|head)([[:space:]]|$)' <<<"$seg" && piped_run=1
+done < <(printf '%s\n' "$segments")
 
 deny() {
 	jq -n --arg r "$1" '{
@@ -88,7 +100,7 @@ and pass run_in_background on the tool call itself for anything that can exceed
 # --- piped-verdict ----------------------------------------------------------
 # A pipe into a pager replaces the task's exit status with the pager's, which is
 # 0 whether the task passed or failed.
-if grep -qE '\|[[:space:]]*(tail|head)([[:space:]]|$)' <<<"$scrubbed"; then
+if [ "$piped_run" = 1 ]; then
 	deny "Refused: piping \`mise run\` into a pager discards the task's exit status — the command exits with the pager's, which is 0 whether the task passed or failed. This has already produced \"green\" reports over failed runs.
 
 $CORRECT
