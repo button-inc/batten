@@ -41,9 +41,15 @@ configured — do not "fix" its filter. A story is invisible only if you started
 work without moving Todo → In Progress; the fix is the discipline above, not the
 view.
 
-## Gate gap (honesty per non-negotiable rule 2)
+## The gate (was: gate gap)
 
-This discipline is currently prose (feedforward), because the transitions are
-Linear-side and Batten does not yet gate them. The computable version —
-`In Progress ⇒ assignee != null`, `In Review ⇒ a landed PR exists` — is a Batten
-roadmap predicate. Until it ships, hold the discipline manually.
+The computable version of this discipline ships as `mise run graph-check`
+(CLOUD-175): pipe the active columns' `get_issue(includeRelations: true)`
+payloads and it enforces `In Progress ⇒ assignee != null` and `In Review ⇒ at
+least one linked GitHub PR attachment` (the checkable approximation of "a
+landed PR exists" — commit containment belongs to the In Review → Done release
+transition), plus acyclic and non-dangling `blockedBy`, emitting the ready
+frontier and WIP count as a by-product. What remains manual is only the
+_fetch_: no tracker credential exists, so an agent pipes the board in; the
+verdict is the gate's alone. Attach every landed PR to its issue — the
+attachment is what makes the In Review predicate true.
