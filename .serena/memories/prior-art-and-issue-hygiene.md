@@ -70,13 +70,36 @@ reviewer should look at. Not how the work unfolded.
 
 ## Sorting rule
 
-Three destinations, no overlap:
+Four destinations, no overlap:
 
-| Knowledge                                    | Goes to           |
-| -------------------------------------------- | ----------------- |
-| Must bind every turn, every agent            | AGENTS.md         |
-| Needed only at a trigger, by whoever hits it | a Serena memory   |
-| A unit of work with Ready/Done predicates    | a `CLOUD-*` issue |
+| Knowledge                                    | Goes to              |
+| -------------------------------------------- | -------------------- |
+| Must bind every turn, every agent            | AGENTS.md            |
+| Needed only at a trigger, by whoever hits it | a Serena memory      |
+| A unit of work with Ready/Done predicates    | a `CLOUD-*` issue    |
+| Derived from code, for a consumer to read    | generated at publish |
 
 If a paragraph does not answer "who reads this, and when", it has no destination
 and should not be written.
+
+**Generated output is not written by anyone and is not committed.** CI derives it
+from the code and publishes it; nothing lands in the tree. Two things follow.
+`no-docs-tree` is not an obstacle to documentation — it fails on _tracked_
+`docs/` paths, so generated output never trips it. And a generated artifact needs
+no drift gate: one produced from the binary at publish time is current by
+construction, and "regenerate + `git diff --exit-code`" only exists to protect a
+_committed_ copy from going stale. Committing generated output creates the
+problem the drift gate then solves. The exception is an artifact a consumer must
+resolve independently — a published JSON schema — which is committed _and_ gated,
+because the copy they fetch has to match the code.
+
+## Portability constrains where instructions live
+
+Instructions live in vendor-neutral files: `AGENTS.md` (with `CLAUDE.md` a
+symlink to it) and the checked-in Serena memories, all plain markdown any agent
+can read. Do **not** move instructions into a vendor-specific mechanism —
+`.claude/rules/`, or any other single-tool rule format — even when it offers a
+capability the neutral files lack, such as path-scoped loading. Buying a context
+saving with a lock-in is the wrong trade here: the repo is read by more than one
+agent, and an instruction only one of them can see is an instruction the others
+will violate.
