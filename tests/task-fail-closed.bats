@@ -16,13 +16,14 @@ setup() {
 @test "the verify body was found at all — this suite is not passing vacuously" {
 	[ -n "$BODY" ]
 	[[ "$BODY" == *"linear-check"* ]]
-	[[ "$BODY" == *"batten-receipts"* ]]
+	[[ "$BODY" == *"receipt record"* ]]
 }
 
 @test "every command verify's verdict depends on is guarded, since the body has no set -e" {
-	# A bare `mise run X` line is the defect: its failure would not stop the body.
+	# A bare `mise run X` (or `cargo run` — the receipt write, CLOUD-203) line
+	# is the defect: its failure would not stop the body.
 	local unguarded
-	unguarded=$(grep -nE '^[[:space:]]*(BASE_SHA=[^ ]* )?(HEAD_SHA=[^ ]* )?mise run ' <<<"$BODY" || true)
+	unguarded=$(grep -nE '^[[:space:]]*(BASE_SHA=[^ ]* )?(HEAD_SHA=[^ ]* )?(mise|cargo) run ' <<<"$BODY" || true)
 	[ -z "$unguarded" ] || {
 		echo "unguarded call in the verify body: $unguarded"
 		false
@@ -32,7 +33,7 @@ setup() {
 @test "verify writes its receipt only after the guarded steps, never before" {
 	local guard_line receipt_line
 	guard_line=$(grep -n 'linear-check' <<<"$BODY" | head -1 | cut -d: -f1)
-	receipt_line=$(grep -n 'batten-receipts' <<<"$BODY" | head -1 | cut -d: -f1)
+	receipt_line=$(grep -n 'receipt record' <<<"$BODY" | head -1 | cut -d: -f1)
 	[ "$guard_line" -lt "$receipt_line" ]
 }
 

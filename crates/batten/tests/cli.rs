@@ -670,13 +670,291 @@ fn bare_invocation_lists_subcommands() {
     let output = batten().output().expect("run batten");
     assert_eq!(output.status.code(), Some(2));
     let listing = String::from_utf8_lossy(&output.stderr);
-    for verb in ["check", "enforce", "config", "spec"] {
+    for verb in ["check", "enforce", "config", "spec", "receipt"] {
         assert!(listing.contains(verb), "the listing must name `{verb}`");
     }
     assert!(
         output.stdout.is_empty(),
         "stdout is the answer channel; a bare invocation has no answer"
     );
+}
+
+// --- receipts (CLOUD-203) ----------------------------------------------------
+
+/// Run `git` in `dir`, asserting success; returns trimmed stdout.
+fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .expect("run git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .expect("git stdout is UTF-8")
+        .trim_end()
+        .to_owned()
+}
+
+/// A repo fixture for the receipt tests, in the normal PR shape: a committed
+/// `batten.toml` as the base commit, `origin/main` pinned to it, and one
+/// commit of work on top. Returns `(repo, home)` where `home` isolates the
+/// out-of-tree receipt store.
+fn receipt_fixture(name: &str) -> (PathBuf, PathBuf) {
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    // A stale fixture from a prior run would mask state-dir behaviour.
+    let _ = fs::remove_dir_all(&root);
+    let repo = root.join("repo");
+    let home = root.join("home");
+    fs::create_dir_all(&repo).expect("create fixture repo");
+    fs::create_dir_all(&home).expect("create fixture home");
+    git_in(&repo, &["init", "-q"]);
+    git_in(&repo, &["config", "user.email", "t@example.com"]);
+    git_in(&repo, &["config", "user.name", "t"]);
+    fs::write(repo.join("batten.toml"), "version = 1\n").expect("write policy");
+    git_in(&repo, &["add", "batten.toml"]);
+    git_in(&repo, &["commit", "-q", "-m", "policy"]);
+    git_in(&repo, &["branch", "-M", "main"]);
+    let base = git_in(&repo, &["rev-parse", "HEAD"]);
+    git_in(&repo, &["update-ref", "refs/remotes/origin/main", &base]);
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "work"]);
+    (repo, home)
+}
+
+/// Run `batten` in `dir` with the receipt store isolated under `home`, and
+/// repository discovery fenced to the test tmpdir — so a fixture that forgot
+/// `git init` fails loudly instead of resolving the real batten checkout and
+/// forging a genuine receipt into its `.git/batten-receipts/`.
+fn receipt_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Output {
+    batten()
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .output()
+        .expect("run batten receipt")
+}
+
+/// `receipt status <check>` → (exit code, stdout).
+fn receipt_status(dir: &std::path::Path, home: &std::path::Path, check: &str) -> (i32, String) {
+    let output = receipt_cmd(dir, home, &["receipt", "status", check]);
+    (
+        output.status.code().expect("exit code"),
+        String::from_utf8(output.stdout).expect("stdout is UTF-8"),
+    )
+}
+
+#[test]
+fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
+    let (repo, home) = receipt_fixture("receipt-triple");
+    let base = git_in(&repo, &["rev-parse", "origin/main"]);
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+
+    // Never recorded → missing, and the gate fails (exit 1, a violation).
+    let (code, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 1);
+    assert_eq!(line, format!("verify {head} missing\n"));
+
+    // Record is silent on success (§6: a clean run prints nothing).
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(
+        record.status.code(),
+        Some(0),
+        "record failed: {}",
+        String::from_utf8_lossy(&record.stderr)
+    );
+    assert!(record.stdout.is_empty(), "a clean record prints nothing");
+
+    // Valid, and byte-stable across runs (§6).
+    let (code, first) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 0);
+    assert_eq!(first, format!("verify {head} valid\n"));
+    let (_, second) = receipt_status(&repo, &home, "verify");
+    assert_eq!(first, second);
+
+    // The grandfathered compat file is exactly what ready-guard parses:
+    // `<check>.<head>` under the git dir, content = the recorded main SHA.
+    let compat = repo
+        .join(".git/batten-receipts")
+        .join(format!("verify.{head}"));
+    assert_eq!(fs::read_to_string(&compat).expect("compat receipt"), base);
+
+    // Amend: a new HEAD the check never ran against → stale-head.
+    git_in(
+        &repo,
+        &[
+            "commit",
+            "-q",
+            "--amend",
+            "--allow-empty",
+            "-m",
+            "work, amended",
+        ],
+    );
+    let amended = git_in(&repo, &["rev-parse", "HEAD"]);
+    assert_ne!(amended, head, "amend must move HEAD");
+    let (code, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 1);
+    assert_eq!(line, format!("verify {amended} stale-head\n"));
+
+    // Re-record, then a rebase-shaped move (a new commit) → stale-head again.
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(record.status.code(), Some(0));
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "more work"]);
+    let rebased = git_in(&repo, &["rev-parse", "HEAD"]);
+    let (code, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 1);
+    assert_eq!(line, format!("verify {rebased} stale-head\n"));
+
+    // Re-record at the new HEAD, then move origin/main out from under the
+    // receipt: HEAD still matches, the recorded main no longer does.
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(record.status.code(), Some(0));
+    git_in(&repo, &["update-ref", "refs/remotes/origin/main", &rebased]);
+    let (code, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 1);
+    assert_eq!(line, format!("verify {rebased} stale-main\n"));
+
+    // The canonical store is idempotent on identity: three records of one
+    // check are one receipt file, updated in place.
+    let store = home.join("data/batten/repo/receipts");
+    let receipts: Vec<_> = fs::read_dir(&store).expect("receipt store").collect();
+    assert_eq!(
+        receipts.len(),
+        1,
+        "one check, one receipt, updated in place"
+    );
+}
+
+#[test]
+fn receipt_identity_is_per_check() {
+    let (repo, home) = receipt_fixture("receipt-per-check");
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(record.status.code(), Some(0));
+    // A verify receipt says nothing about linear-check: identities are
+    // content-keyed per check, never shared.
+    let (code, line) = receipt_status(&repo, &home, "linear-check");
+    assert_eq!(code, 1);
+    assert_eq!(line, format!("linear-check {head} missing\n"));
+}
+
+#[test]
+fn a_receipt_from_another_checkout_reads_as_missing() {
+    let (repo, home) = receipt_fixture("receipt-foreign");
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(record.status.code(), Some(0));
+
+    // Clone to a different parent with the SAME directory basename, so the
+    // two checkouts share a state directory — the sharpest aliasing shape.
+    // The receipt records the git dir it was taken in, so here it must read
+    // as missing (per-checkout facts), never as valid or merely stale.
+    let elsewhere = repo.parent().expect("fixture parent").join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("create clone parent");
+    let repo_str = repo.to_str().expect("fixture path is UTF-8");
+    git_in(&elsewhere, &["clone", "-q", repo_str, "repo"]);
+    let clone = elsewhere.join("repo");
+    let (code, line) = receipt_status(&clone, &home, "verify");
+    assert_eq!(code, 1);
+    assert_eq!(line, format!("verify {head} missing\n"));
+}
+
+#[test]
+fn receipt_checkout_problems_are_usage_errors_never_verdicts() {
+    // Not a repository (discovery fenced by GIT_CEILING_DIRECTORIES): exit 2,
+    // and no verdict line — a checkout problem is not a verification answer.
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("receipt-no-repo");
+    let _ = fs::remove_dir_all(&root);
+    let plain = root.join("plain");
+    let home = root.join("home");
+    fs::create_dir_all(&plain).expect("create plain dir");
+    fs::create_dir_all(&home).expect("create home dir");
+    for verb in ["status", "record"] {
+        let output = receipt_cmd(&plain, &home, &["receipt", verb, "verify"]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "receipt {verb} outside a repo"
+        );
+        assert!(output.stdout.is_empty(), "no verdict outside a repo");
+    }
+
+    // An unresolvable origin/main is a checkout problem, not a stale receipt.
+    let (repo, home) = receipt_fixture("receipt-no-main");
+    git_in(&repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
+    let output = receipt_cmd(&repo, &home, &["receipt", "status", "verify"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+
+    // A check name that cannot be a filename component is refused outright.
+    let (repo, home) = receipt_fixture("receipt-bad-name");
+    let output = receipt_cmd(&repo, &home, &["receipt", "status", "../evil"]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn receipt_record_requires_the_policy_committed_at_head() {
+    // The statement's subject is a commit digest, so the policy digest must
+    // bind bytes from that commit: a batten.toml present only in the working
+    // tree is refused, never silently hashed.
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("receipt-no-policy");
+    let _ = fs::remove_dir_all(&root);
+    let repo = root.join("repo");
+    let home = root.join("home");
+    fs::create_dir_all(&repo).expect("create fixture repo");
+    fs::create_dir_all(&home).expect("create fixture home");
+    git_in(&repo, &["init", "-q"]);
+    git_in(&repo, &["config", "user.email", "t@example.com"]);
+    git_in(&repo, &["config", "user.name", "t"]);
+    fs::write(repo.join("README"), "no policy committed\n").expect("write file");
+    git_in(&repo, &["add", "README"]);
+    git_in(&repo, &["commit", "-q", "-m", "no policy"]);
+    git_in(&repo, &["branch", "-M", "main"]);
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    git_in(&repo, &["update-ref", "refs/remotes/origin/main", &head]);
+    fs::write(repo.join("batten.toml"), "version = 1\n").expect("write uncommitted policy");
+    let output = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn the_receipt_statement_is_in_toto_shaped_and_never_printed() {
+    let (repo, home) = receipt_fixture("receipt-shape");
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let base = git_in(&repo, &["rev-parse", "origin/main"]);
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(record.status.code(), Some(0));
+
+    // The stored statement uses the in-toto vocabulary: subject = digest.
+    let store = home.join("data/batten/repo/receipts");
+    let entry = fs::read_dir(&store)
+        .expect("receipt store")
+        .next()
+        .expect("one receipt")
+        .expect("readable entry");
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(entry.path()).expect("read receipt"))
+            .expect("receipt is JSON");
+    assert_eq!(value["_type"], "https://in-toto.io/Statement/v1");
+    assert_eq!(value["subject"][0]["digest"]["gitCommit"], head.as_str());
+    assert_eq!(value["predicate"]["check"], "verify");
+    assert_eq!(value["predicate"]["recordedMain"], base.as_str());
+    assert_eq!(value["predicate"]["conclusion"], "pass");
+    let digest = value["predicate"]["policyDigest"]["sha256"]
+        .as_str()
+        .expect("policy digest");
+    assert_eq!(digest.len(), 64);
+    assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+
+    // The status output is a pointer, never the payload (rule 4).
+    let (_, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(line, format!("verify {head} valid\n"));
 }
 
 #[test]

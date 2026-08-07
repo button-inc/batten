@@ -50,11 +50,17 @@ if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
 	exit 1
 fi
 
-receipts="$(git rev-parse --git-dir)/batten-receipts"
-mkdir -p "$receipts"
-# The receipt records WHICH main we were linear against, so a main that moves
-# afterwards invalidates it instead of silently still counting (see ready-guard).
-# `--git-dir` resolves per-worktree, so a receipt taken in one worktree cannot
-# authorise `gh pr ready` in another.
-printf '%s' "$main" >"$receipts/linear-check.$(git rev-parse HEAD)"
+# The receipt write is the binary's job (CLOUD-203). It records WHICH main we
+# were linear against, so a main that moves afterwards invalidates it instead
+# of silently still counting (see ready-guard), and it maintains the
+# grandfathered $GIT_DIR/batten-receipts/ compatibility layout — resolved
+# per-worktree, so a receipt taken in one worktree cannot authorise
+# `gh pr ready` in another. `set -e` above makes a failed record fail this
+# gate and leave no receipt. BATTEN_BIN exists so the bats suite can stub the
+# binary (bats must never build the workspace — the cargo target-dir lock is
+# deliberately serialised in hk) and so a caller with a prebuilt batten skips
+# the cargo round trip; the default does add workspace compilation to this
+# gate's failure domain.
+read -r -a batten_bin <<<"${BATTEN_BIN:-cargo run --quiet -p batten --}"
+"${batten_bin[@]}" receipt record linear-check
 echo "linear-check: HEAD is linear on origin/main ($main)"

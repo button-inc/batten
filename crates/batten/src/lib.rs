@@ -15,6 +15,7 @@ pub mod error;
 pub mod exit;
 pub mod hook;
 pub mod identity;
+pub mod receipt;
 pub mod resolve;
 pub mod rules;
 pub mod severity;
@@ -27,7 +28,7 @@ use std::path::Path;
 use anyhow::Result;
 use clap::CommandFactory;
 
-pub use cli::{Cli, Command, ConfigCommand, SpecFormat};
+pub use cli::{Cli, Command, ConfigCommand, ReceiptCommand, SpecFormat};
 pub use config::Config;
 pub use effect::Effect;
 pub use error::UsageError;
@@ -66,6 +67,12 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Some(Command::Config { command }) => run_config(&command, overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Hook { harness }) => run_hook(harness, out),
+        // The receipt verbs read their own git facts; the §8 config chain does
+        // not apply — a receipt records policy (as a digest), it never resolves it.
+        Some(Command::Receipt { command }) => match command {
+            ReceiptCommand::Record { check } => receipt::run_record(&check),
+            ReceiptCommand::Status { check } => receipt::run_status(&check, out),
+        },
     }
 }
 

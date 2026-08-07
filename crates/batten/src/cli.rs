@@ -63,6 +63,27 @@ pub enum Command {
         #[arg(long, value_enum)]
         harness: Harness,
     },
+    /// Verification receipts: SHA-keyed claims a named check passed, invalidated by git facts.
+    Receipt {
+        #[command(subcommand)]
+        command: ReceiptCommand,
+    },
+}
+
+/// Subcommands of `receipt`.
+#[derive(Debug, Subcommand)]
+#[non_exhaustive]
+pub enum ReceiptCommand {
+    /// Record that the named check concluded pass against the current HEAD.
+    Record {
+        /// The check whose conclusion is being recorded.
+        check: String,
+    },
+    /// Judge the named check's recorded receipt against HEAD and origin/main.
+    Status {
+        /// The check whose receipt is judged.
+        check: String,
+    },
 }
 
 /// Subcommands of `config`.

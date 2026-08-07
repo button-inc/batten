@@ -206,6 +206,7 @@ mod tests {
                 "check".to_owned(),
                 "config".to_owned(),
                 "config show".to_owned(),
+                "receipt status".to_owned(),
                 "spec".to_owned(),
             ]
         );

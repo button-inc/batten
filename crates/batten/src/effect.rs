@@ -89,6 +89,19 @@ fn table() -> BTreeMap<&'static str, Effect> {
         // unclassified rather than allowed to leak into the derived read-only
         // allowlist (CLOUD-202).
         ("hook", Effect::Unclassified),
+        // The `receipt` noun only dispatches, but its subtree carries a write
+        // verb; classifying it `read` would put a write-bearing subtree onto
+        // the derived allowlist for any consumer that treats entries as
+        // prefixes. Same fail-safe posture as `hook`: listed with a reason,
+        // never allowed to leak (CLOUD-203).
+        ("receipt", Effect::Unclassified),
+        // Creates state the caller can recreate by re-running the check.
+        ("receipt record", Effect::Write),
+        // Inspection only: fixed read-only git queries (`rev-parse`) plus a
+        // state-dir read. A `read` verb may run a fixed VCS query; what it must
+        // never reach is user-supplied code (CLOUD-170's invariant), and no
+        // configured command is reachable from this path.
+        ("receipt status", Effect::Read),
     ])
 }
 

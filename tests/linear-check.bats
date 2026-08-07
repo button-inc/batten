@@ -18,7 +18,18 @@ setup() {
 	GITDIR="$BATS_TEST_TMPDIR/gitdir"
 	mkdir -p "$STUB" "$GITDIR"
 	PATH="$STUB:$PATH"
-	export PATH GITDIR
+	# The receipt write is the batten binary's job (CLOUD-203), stubbed here
+	# unconditionally — every case, including the real-repo ones below: the
+	# default `cargo run` cannot resolve a workspace from a temp clone, and
+	# bats must never build the workspace anyway (hk keeps the cargo
+	# target-dir lock serialised by chaining the cargo steps). The stub
+	# records its invocation; the receipt bytes are asserted against the real
+	# binary in crates/batten/tests/cli.rs.
+	CALLS="$BATS_TEST_TMPDIR/batten-calls"
+	printf '#!/usr/bin/env bash\necho "$@" >>"%s"\n' "$CALLS" >"$STUB/batten-stub"
+	chmod +x "$STUB/batten-stub"
+	BATTEN_BIN="$STUB/batten-stub"
+	export PATH GITDIR BATTEN_BIN CALLS
 }
 
 # Writes a fake `git` whose subcommands are canned. `fetch_rc` decides whether
@@ -43,8 +54,6 @@ EOF
 	chmod +x "$STUB/git"
 }
 
-receipts() { echo "$GITDIR/batten-receipts"; }
-
 @test "a failed fetch exits non-zero instead of trusting the stale ref" {
 	stub_git 1
 	run "$CHECK"
@@ -57,16 +66,17 @@ receipts() { echo "$GITDIR/batten-receipts"; }
 	run "$CHECK"
 	[ "$status" -ne 0 ]
 	# The whole point: no receipt means ready-guard denies `gh pr ready` rather
-	# than honouring an attestation that was never earned.
-	[ ! -e "$(receipts)/linear-check.headsha" ]
+	# than honouring an attestation that was never earned. The binary is the
+	# only writer now, so "no receipt" means it was never invoked.
+	[ ! -e "$CALLS" ]
 }
 
-@test "a successful fetch on a linear HEAD passes and records which main" {
+@test "a successful fetch on a linear HEAD passes and records the receipt" {
 	stub_git 0 aaaa111 aaaa111
 	run "$CHECK"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"linear on origin/main"* ]]
-	[ "$(cat "$(receipts)/linear-check.headsha")" = aaaa111 ]
+	grep -q "receipt record linear-check" "$CALLS"
 }
 
 @test "a HEAD behind main is refused and leaves no receipt" {
@@ -74,7 +84,15 @@ receipts() { echo "$GITDIR/batten-receipts"; }
 	run "$CHECK"
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"not rebased on latest main"* ]]
-	[ ! -e "$(receipts)/linear-check.headsha" ]
+	[ ! -e "$CALLS" ]
+}
+
+@test "a failed receipt write fails the gate — set -e is what carries it" {
+	stub_git 0 aaaa111 aaaa111
+	printf '#!/usr/bin/env bash\nexit 1\n' >"$STUB/batten-stub"
+	run "$CHECK"
+	[ "$status" -ne 0 ]
+	[[ "$output" != *"linear on origin/main"* ]]
 }
 
 # --- checkout shapes -----------------------------------------------------------

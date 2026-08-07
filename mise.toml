@@ -233,11 +233,16 @@ if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mi
   echo "::error:: verify: commit-lint failed. No receipt written." >&2
   exit 1
 fi
-receipts="$(git rev-parse --git-dir)/batten-receipts"
-mkdir -p "$receipts"
-# Keyed to the exact commit verified: an amend or a rebase produces a new HEAD
-# and therefore no receipt, which is the point (see ready-guard).
-date -u +%FT%TZ >"$receipts/verify.$(git rev-parse HEAD)"
+# The receipt write is the binary's job (CLOUD-203): `batten receipt record`
+# keys the claim to the exact commit verified — an amend or a rebase produces a
+# new HEAD and therefore no receipt, which is the point (see ready-guard) — and
+# maintains the grandfathered $GIT_DIR/batten-receipts/ compatibility layout
+# those readers consume. Guarded like every step above: a receipt that cannot
+# be recorded must fail verify and leave no receipt.
+if ! cargo run --quiet -p batten -- receipt record verify; then
+  echo "::error:: verify: could not record the receipt. No receipt written." >&2
+  exit 1
+fi
 echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit-lint all pass"
 '''
 
