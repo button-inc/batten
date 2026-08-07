@@ -12,3 +12,17 @@ version = 1
 # The minimum Batten version permitted to read this file (semver). Parsed today;
 # the version gate that enforces it lands separately.
 min_batten_version = "0.0.0"
+
+# How strictly gates apply: "permissive", "standard" (the default), or "strict".
+# Policy-bearing, so the §8 raise-only rule governs it: an override may only
+# raise it. Overrides, highest precedence first:
+#
+#   --strictness <level>      the flag
+#   BATTEN_STRICTNESS=<level> the env var
+#   batten.local.toml         a git-ignored local file (may also *add* rules,
+#                             but never redefine one declared here)
+#
+# Anything that would lower strictness — or redefine a committed rule — is
+# refused with exit 2 rather than applied. Run `batten config show` to see the
+# effective config and which layer set each key.
+strictness = "standard"

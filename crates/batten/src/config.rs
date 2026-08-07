@@ -2,8 +2,9 @@
 //!
 //! Configuration is **one committed authority** — the repo `batten.toml` — plus
 //! raise-only overrides (env, flags, a git-ignored `batten.local.toml`). This
-//! module loads and validates the committed authority; the override layering and
-//! the raise-only clamp land on top of it (the clamp's gate is CLOUD-87).
+//! module loads and validates *one file*; [`crate::resolve`] layers the files
+//! and the overrides in the §8 precedence order and applies the raise-only
+//! clamp (the standalone config-lint predicate over that clamp is CLOUD-87).
 //!
 //! The surface is deliberately narrow (non-negotiable rule 6): the config is a
 //! typed struct with **no unknown keys** — a typo is an error, not a silently
@@ -15,6 +16,7 @@ use std::io;
 use std::path::Path;
 
 use anyhow::Result;
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
@@ -23,6 +25,37 @@ use crate::rules::Rule;
 /// The config schema version this build understands. A file declaring any other
 /// version is refused rather than partially interpreted.
 pub const SUPPORTED_VERSION: u32 = 1;
+
+/// The committed authority Batten reads: the repo `batten.toml` in the working
+/// directory. No upward walk, no `conf.d` merge (§8).
+pub const CONFIG_FILE: &str = "batten.toml";
+
+/// How strictly Batten applies its gates — the ordered, policy-bearing key the
+/// §8 raise-only rule is defined over.
+///
+/// The ordering **is** the policy semantics: `Permissive < Standard < Strict`,
+/// so "tighten" is the computable predicate `candidate >= current` rather than a
+/// judgement call. Derived `Ord` follows declaration order, which is why the
+/// variants are declared weakest-first; [`tests::strictness_orders_weakest_first`]
+/// pins that so a reordering cannot silently invert the clamp.
+///
+/// Resolution is this issue's deliverable (CLOUD-29); the verbs that *read* the
+/// resolved value attach as they land (`--fail-on-warning` is CLOUD-49).
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Deserialize, Serialize, ValueEnum,
+)]
+#[serde(rename_all = "snake_case")]
+#[clap(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Strictness {
+    /// Advisory: findings are reported without failing the run.
+    Permissive,
+    /// The default: a finding is a violation.
+    #[default]
+    Standard,
+    /// Everything `Standard` fails on, plus anything advisory.
+    Strict,
+}
 
 /// A parsed, validated `batten.toml`.
 ///
@@ -37,6 +70,12 @@ pub struct Config {
     /// enforcement lands with the `min_batten_version` gate (CLOUD-33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_batten_version: Option<String>,
+    /// How strictly the gates apply. Absent means "this file does not speak to
+    /// strictness", which is what lets [`crate::resolve`] attribute the
+    /// effective value to the layer that actually set it. Policy-bearing, so an
+    /// override may only raise it (§8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strictness: Option<Strictness>,
     /// The declarative rules run against the repository. Absent or empty means
     /// "no rules configured" and nothing is reported. Which of these a given
     /// verb admits is the §5 effect split: `check` runs only non-spawning kinds
@@ -109,6 +148,28 @@ mod tests {
     fn optional_fields_round_trip() {
         let config = parse("version = 1\nmin_batten_version = \"0.0.0\"\n", "test").unwrap();
         assert_eq!(config.min_batten_version.as_deref(), Some("0.0.0"));
+    }
+
+    #[test]
+    fn strictness_orders_weakest_first() {
+        // The raise-only clamp is `candidate >= current` over this ordering, so
+        // an accidental reordering of the variants would invert "tighten" into
+        // "weaken" without any other test noticing.
+        assert!(Strictness::Permissive < Strictness::Standard);
+        assert!(Strictness::Standard < Strictness::Strict);
+        assert_eq!(Strictness::default(), Strictness::Standard);
+    }
+
+    #[test]
+    fn strictness_round_trips_through_toml() {
+        let config = parse("version = 1\nstrictness = \"strict\"\n", "test").unwrap();
+        assert_eq!(config.strictness, Some(Strictness::Strict));
+    }
+
+    #[test]
+    fn unknown_strictness_value_is_a_usage_error() {
+        let err = parse("version = 1\nstrictness = \"whatever\"\n", "test").unwrap_err();
+        assert!(is_usage_error(&err));
     }
 
     #[test]

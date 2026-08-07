@@ -14,6 +14,7 @@ pub mod effect;
 pub mod error;
 pub mod exit;
 pub mod identity;
+pub mod resolve;
 pub mod rules;
 pub mod spec;
 pub mod state;
@@ -29,10 +30,7 @@ pub use config::Config;
 pub use effect::Effect;
 pub use error::UsageError;
 pub use exit::ExitCode;
-
-/// The committed authority Batten reads: the repo `batten.toml` in the current
-/// directory. No upward walk, no `conf.d` merge (§8).
-const CONFIG_FILE: &str = "batten.toml";
+pub use resolve::{Overrides, Resolved, Source};
 
 /// Execute a parsed [`Cli`], writing any data output to `out`, and return the
 /// [`ExitCode`] to hand back to the OS.
@@ -48,13 +46,19 @@ const CONFIG_FILE: &str = "batten.toml";
 /// Such errors map to [`ExitCode::Internal`] at the boundary; a *policy
 /// violation*, by contrast, is a normal return of [`ExitCode::Violation`].
 pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
-    let Cli { command } = cli;
+    let Cli {
+        strictness,
+        command,
+    } = cli;
+    // The flag layer of the §8 precedence chain; every config read in this run
+    // resolves through it, so a flag can never apply to one verb and not another.
+    let overrides = Overrides { strictness };
     match command {
         // With no subcommand, clap's default help has already been offered.
         None => Ok(ExitCode::Success),
-        Some(Command::Check) => run_rules(out, rules::run_static),
-        Some(Command::Enforce) => run_rules(out, rules::run_all),
-        Some(Command::Config { command }) => run_config(&command, out),
+        Some(Command::Check) => run_rules(out, overrides, rules::run_static),
+        Some(Command::Enforce) => run_rules(out, overrides, rules::run_all),
+        Some(Command::Config { command }) => run_config(&command, overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
     }
 }
@@ -71,9 +75,12 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
 /// [`ExitCode::Success`]; any finding exits [`ExitCode::Violation`].
 fn run_rules(
     out: &mut dyn Write,
+    overrides: Overrides,
     runner: fn(&[rules::Rule], &Path) -> Result<Vec<rules::Finding>>,
 ) -> Result<ExitCode> {
-    let config = config::load(Path::new(CONFIG_FILE))?;
+    // The *resolved* rule set, so a local override's added rules are gates a run
+    // actually applies rather than config the tool merely prints.
+    let config = resolve::resolve(Path::new("."), overrides)?;
     let findings = runner(&config.rules, Path::new("."))?;
     for finding in &findings {
         // Pointer only: location and the rule that fired, never the line text.
@@ -91,11 +98,16 @@ fn run_rules(
     }
 }
 
-fn run_config(command: &ConfigCommand, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_config(
+    command: &ConfigCommand,
+    overrides: Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     match command {
         ConfigCommand::Show => {
-            let config = config::load(Path::new(CONFIG_FILE))?;
-            // stdout is the answer: byte-stable JSON of the effective config.
+            let config = resolve::resolve(Path::new("."), overrides)?;
+            // stdout is the answer: byte-stable JSON of the effective config,
+            // with the layer that won each key alongside it (§8).
             let json = serde_json::to_string_pretty(&config)?;
             writeln!(out, "{json}")?;
             Ok(ExitCode::Success)

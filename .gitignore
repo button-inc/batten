@@ -34,3 +34,6 @@ CLAUDE.local.md
 !.serena/
 .serena/cache/
 .serena/project.local.yml
+
+# Raise-only local config override (§8) — never committed.
+batten.local.toml

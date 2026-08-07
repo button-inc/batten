@@ -12,10 +12,24 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::config::Strictness;
+
 /// Repo-agnostic policy engine that keeps "done" aligned with landed-and-verified work.
 #[derive(Debug, Parser)]
 #[command(name = "batten", version, about, long_about = None)]
 pub struct Cli {
+    /// Raise how strictly gates apply (an override may only tighten policy).
+    ///
+    /// The highest-precedence config layer (§8: flag > env > local file > repo
+    /// config > default), and still raise-only: it can tighten a gate for one
+    /// run, never disable one for it.
+    ///
+    /// `BATTEN_STRICTNESS` is the env equivalent, resolved by
+    /// [`crate::resolve`] as its own layer rather than by `clap`, so `config
+    /// show` can attribute the value to `env` or `flag` and not conflate them.
+    #[arg(long, global = true, value_enum)]
+    pub strictness: Option<Strictness>,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }

@@ -394,3 +394,174 @@ fn config_show_prints_the_effective_config() {
     assert_eq!(value["version"], 1);
     assert_eq!(value["min_batten_version"], "0.0.0");
 }
+
+/// Write a `batten.local.toml` beside an existing repo config.
+fn with_local_config(dir: &std::path::Path, contents: &str) {
+    fs::write(dir.join("batten.local.toml"), contents).expect("write batten.local.toml");
+}
+
+#[test]
+fn config_show_reports_the_layer_that_won_each_key() {
+    // §8: `config` prints the effective config *with sources*, so which layer
+    // set a key is an answer the tool gives, not one a reader reconstructs.
+    let dir = repo_with_config("config-sources", "version = 1\nstrictness = \"standard\"\n");
+    with_local_config(&dir, "version = 1\nstrictness = \"strict\"\n");
+    let output = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
+    assert_eq!(value["strictness"], "strict");
+    assert_eq!(value["sources"]["strictness"], "local-file");
+}
+
+#[test]
+fn config_precedence_runs_flag_over_env_over_local_over_repo() {
+    // The whole §8 chain in one invocation: each layer in turn tightens, and the
+    // reported source is always the highest layer that set the value.
+    let dir = repo_with_config("config-precedence", "version = 1\n");
+    with_local_config(&dir, "version = 1\nstrictness = \"standard\"\n");
+
+    let strictness_of = |args: &[&str], env: Option<&str>| -> (i32, serde_json::Value) {
+        let mut command = batten();
+        command.args(args).current_dir(&dir);
+        match env {
+            Some(value) => command.env("BATTEN_STRICTNESS", value),
+            // Inherited from the test runner's environment otherwise.
+            None => command.env_remove("BATTEN_STRICTNESS"),
+        };
+        let output = command.output().expect("run batten config show");
+        let code = output.status.code().expect("exit code");
+        let value = serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
+        (code, value)
+    };
+
+    let (code, local) = strictness_of(&["config", "show"], None);
+    assert_eq!(code, 0);
+    assert_eq!(local["strictness"], "standard");
+    assert_eq!(local["sources"]["strictness"], "local-file");
+
+    let (code, env) = strictness_of(&["config", "show"], Some("strict"));
+    assert_eq!(code, 0);
+    assert_eq!(env["strictness"], "strict");
+    assert_eq!(env["sources"]["strictness"], "env");
+
+    // A flag outranks the env var — here restating the same value, which the
+    // clamp accepts and re-attributes to the higher layer.
+    let (code, flag) = strictness_of(
+        &["--strictness", "strict", "config", "show"],
+        Some("strict"),
+    );
+    assert_eq!(code, 0);
+    assert_eq!(flag["sources"]["strictness"], "flag");
+}
+
+#[test]
+fn a_local_override_that_weakens_a_gate_is_rejected() {
+    // The raise-only clamp (§8), end to end: an uncommitted file may tighten
+    // policy, never lower it. Exit 2 — bad input, not a silently applied edit.
+    let dir = repo_with_config(
+        "config-weaken-local",
+        "version = 1\nstrictness = \"strict\"\n",
+    );
+    with_local_config(&dir, "version = 1\nstrictness = \"permissive\"\n");
+    let output = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("may only tighten"),
+        "the refusal must name the rule it enforces, got: {stderr}"
+    );
+}
+
+#[test]
+fn an_env_or_flag_override_that_weakens_a_gate_is_rejected() {
+    let dir = repo_with_config(
+        "config-weaken-flag",
+        "version = 1\nstrictness = \"strict\"\n",
+    );
+    for (label, args, env) in [
+        ("env", vec!["config", "show"], Some("permissive")),
+        (
+            "flag",
+            vec!["--strictness", "permissive", "config", "show"],
+            None,
+        ),
+    ] {
+        let mut command = batten();
+        command.args(&args).current_dir(&dir);
+        match env {
+            Some(value) => command.env("BATTEN_STRICTNESS", value),
+            None => command.env_remove("BATTEN_STRICTNESS"),
+        };
+        let output = command.output().expect("run batten config show");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "a weakening {label} override must be refused"
+        );
+    }
+}
+
+#[test]
+fn a_local_override_may_add_a_rule_but_not_redefine_one() {
+    let config = "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n";
+    let dir = repo_with_config("config-local-rules", config);
+    fs::write(dir.join("lib.rs"), "FIXME later\n").expect("write source");
+
+    // Adding a rule tightens policy, and the added gate really runs.
+    with_local_config(
+        &dir,
+        "version = 1\n\n[[rule]]\nid = \"no-fixme\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"FIXME\"\n",
+    );
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(1), "the added rule must fire");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "lib.rs:1 no-fixme\n"
+    );
+
+    // Redefining a committed rule could weaken it, so it is refused outright.
+    with_local_config(
+        &dir,
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"nothing/**\"\npattern = \"TODO\"\n",
+    );
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("may not redefine"),
+        "the refusal must name the redefinition"
+    );
+}
+
+#[test]
+fn the_committed_example_config_loads_over_the_binary() {
+    // DoD: `batten.example.toml` loads and round-trips — asserted against the
+    // shipped file itself, so an example that drifts from the schema fails here.
+    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.example.toml");
+    let contents = fs::read_to_string(&example).expect("read batten.example.toml");
+    let dir = repo_with_config("config-example", &contents);
+    let output = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .output()
+        .expect("run batten config show");
+    assert_eq!(output.status.code(), Some(0), "the example must load");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
+    assert_eq!(value["version"], 1);
+}
