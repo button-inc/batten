@@ -24,6 +24,14 @@ check-run is terminal), `land` (comment `/fast-forward`, block until merged or
 refused; depends on `ci-wait`, so a red PR cannot be landed). Background
 `ci-wait` and `land`.
 
+`ci-wait` polls conditionally: each request carries the previous ETag as
+`If-None-Match`, and a 304 costs nothing against the rate limit (measured: three
+consecutive 304s left `X-RateLimit-Used` unchanged). That is what pays for the
+5s interval — an unconditional poll had to stay slow to stay affordable, so the
+news arrived late. `X-Poll-Interval` is honoured as a floor when the server sends
+one. Never log these tasks through `tail`: it discards the end of the run, which
+is the part carrying the verdict.
+
 That's a rule, so it ships with mechanisms — three `PreToolUse` hooks wired in
 `.claude/settings.json`, each failing open on anything it can't parse:
 

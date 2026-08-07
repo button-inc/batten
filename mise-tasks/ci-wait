@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#MISE description="Block until every check-run on HEAD reaches a terminal state, then report conclusions (exit 1 if any check did not succeed)"
+#
+# Workflow-contract step 4: after `gh pr ready`, CI is confirmed by a continuous
+# poll, never by waiting on a webhook — webhooks drop successes, so silence is
+# never green. `land` depends on this task, so a red PR cannot be landed. Run it
+# backgrounded. Deliberately unbounded: the exit condition is "checks reached
+# terminal", which always happens, and a wall-clock timeout would only
+# reintroduce the VM-reap gap it was meant to close.
+#
+# The poll is conditional. Each request carries the previous response's ETag as
+# `If-None-Match`; when nothing has changed GitHub answers 304 Not Modified with
+# no body, and a 304 does not count against the rate limit. Measured here: three
+# consecutive conditional requests left `X-RateLimit-Used` unchanged. That is
+# what makes a short interval affordable — an unconditional 20s poll spent a
+# request every 20s to usually learn nothing, so the interval had to stay long
+# and the news arrived late. At 5s the merge follows CI by seconds, at no
+# rate-limit cost for the polls that find no change.
+#
+# X-Poll-Interval, when GitHub sends it, is a floor the server is asking for and
+# is honoured over the configured interval.
+set -uo pipefail
+
+sha="${SHA:-$(git rev-parse HEAD)}"
+interval="${CI_WAIT_INTERVAL:-5}"
+etag=""
+runs=""
+
+echo "ci-wait: polling check-runs for $sha (conditional, ${interval}s)"
+
+while :; do
+	args=(-i "repos/{owner}/{repo}/commits/$sha/check-runs")
+	[ -n "$etag" ] && args+=(-H "If-None-Match: $etag")
+	resp=$(gh api "${args[@]}" 2>/dev/null | tr -d '\r')
+
+	status=$(printf '%s' "$resp" | sed -n '1s@^HTTP/[0-9.]* \([0-9]*\).*@\1@p')
+	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
+	[ -n "$new_etag" ] && etag="$new_etag"
+
+	server_floor=$(printf '%s' "$resp" | sed -n 's/^[Xx]-[Pp]oll-[Ii]nterval: //p' | head -n1)
+	wait_for="$interval"
+	if [ -n "$server_floor" ] && [ "$server_floor" -gt "$interval" ] 2>/dev/null; then
+		wait_for="$server_floor"
+	fi
+
+	# 304: no body, nothing changed, keep the previous reading.
+	if [ "$status" != "304" ]; then
+		body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
+		runs=$(printf '%s' "$body" |
+			jq -r '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)"' 2>/dev/null) || runs=""
+	fi
+
+	# A check set that is entirely `skipped` is not an answer: those are the
+	# draft-era runs, or the real ones not yet registered. Require at least one
+	# graded conclusion before treating the set as terminal.
+	graded=$(printf '%s\n' "$runs" |
+		awk -F'\t' '$2=="success"||$2=="failure"||$2=="timed_out"||$2=="cancelled"||$2=="action_required"' | wc -l)
+	pending=$(printf '%s\n' "$runs" | awk -F'\t' 'NF && $1!="completed"' | wc -l)
+
+	if [ -n "$runs" ] && [ "$graded" -gt 0 ] && [ "$pending" -eq 0 ]; then
+		printf '%s\n' "$runs" | awk -F'\t' '{print $2"\t"$3}' | sort -u
+		if printf '%s\n' "$runs" | awk -F'\t' '$2!="success"&&$2!="neutral"&&$2!="skipped"{bad=1} END{exit !bad}'; then
+			echo "::error:: CI is not green on $sha — reproduce and fix locally." >&2
+			exit 1
+		fi
+		echo "ci-wait: all checks terminal and green on $sha"
+		exit 0
+	fi
+
+	sleep "$wait_for"
+done
