@@ -177,6 +177,49 @@ fn check_output_is_byte_stable_across_runs() {
 }
 
 #[test]
+fn enforce_runs_the_same_static_rules_as_check() {
+    // The effect split (CLOUD-170) changes which kinds each verb admits, never
+    // the reported result for an admissible kind.
+    let dir = repo_with_config(
+        "enforce-parity",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "fine\nTODO fix\n").expect("write source");
+    let check = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run check");
+    let enforce = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .output()
+        .expect("run enforce");
+    assert_eq!(check.status.code(), Some(1));
+    assert_eq!(enforce.status.code(), Some(1));
+    assert_eq!(check.stdout, enforce.stdout);
+}
+
+#[test]
+fn spec_marks_enforce_unclassified_and_check_read() {
+    // The emitted spec is what a mediator reads (§11), so the split must be
+    // visible there — not only in the internal table.
+    let output = batten().arg("spec").output().expect("run batten spec");
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("spec stdout is valid JSON");
+    let subs = value["subcommands"].as_array().expect("subcommands array");
+    let effect_of = |path: &str| -> String {
+        subs.iter()
+            .find(|node| node["path"] == path)
+            .and_then(|node| node["effect"].as_str())
+            .unwrap_or("<missing>")
+            .to_owned()
+    };
+    assert_eq!(effect_of("check"), "read");
+    assert_eq!(effect_of("enforce"), "unclassified");
+}
+
+#[test]
 fn check_unknown_rule_key_is_a_usage_error() {
     let dir = repo_with_config(
         "check-bad-rule",

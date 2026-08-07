@@ -24,8 +24,10 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 #[non_exhaustive]
 pub enum Command {
-    /// Run the configured rules against the repository.
+    /// Run the applicable read-only gates against the repository.
     Check,
+    /// Run every configured rule, including kinds that execute a configured command.
+    Enforce,
     /// Inspect configuration.
     Config {
         #[command(subcommand)]

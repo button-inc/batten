@@ -1,9 +1,17 @@
 //! The rule and check engine (CLOUD-12).
 //!
 //! A rule is a **declarative predicate over the repository**: it selects files
-//! with a `glob` and applies a `kind`-specific test to them. `batten check` runs
-//! every configured rule and maps the outcome onto the exit-code contract (§7) —
-//! a clean run exits `0`, any finding exits `1`.
+//! with a `glob` and applies a `kind`-specific test to them, mapping the outcome
+//! onto the exit-code contract (§7) — a clean run exits `0`, any finding `1`.
+//!
+//! **Two entry points, split by effect (§5, CLOUD-170).** [`run_static`] backs
+//! the `read`-effect `batten check` and admits only kinds that cannot spawn a
+//! process; [`run_all`] backs the unclassified `batten enforce` and admits
+//! every kind. The split is what keeps `check`'s `read` classification — and so
+//! the derived agent read-only allowlist — honest once a kind can execute a
+//! command declared in `batten.toml`. `check` **refuses** such a rule rather
+//! than skipping it, because a skipped gate that still exits `0` is the
+//! false-green Batten exists to catch.
 //!
 //! This module is the substrate the parent issue owns. It ships one static
 //! `kind` — [`RuleKind::Forbid`], a banned-shape literal check — and is shaped so
@@ -42,6 +50,30 @@ pub enum RuleKind {
     Forbid,
 }
 
+impl RuleKind {
+    /// Every kind the engine knows, so the spawn partition below is total.
+    ///
+    /// A new variant must be added here or [`tests::all_covers_every_kind`]
+    /// fails — which is what keeps [`RuleKind::spawns_processes`] from silently
+    /// defaulting a spawning kind to "safe".
+    pub const ALL: &'static [RuleKind] = &[RuleKind::Forbid];
+
+    /// Whether running this kind can execute a process declared in
+    /// `batten.toml`.
+    ///
+    /// This is the load-bearing predicate behind the §5 effect split
+    /// (CLOUD-170): a `read`-classified verb may only run kinds for which this
+    /// is `false`. It is stated per-kind rather than inferred, so adding a
+    /// spawning kind (the `command` kind, CLOUD-89) is a deliberate act that
+    /// automatically routes it away from the read-only surface.
+    #[must_use]
+    pub const fn spawns_processes(self) -> bool {
+        match self {
+            RuleKind::Forbid => false,
+        }
+    }
+}
+
 /// One declarative rule from `batten.toml`'s `[[rule]]` array.
 ///
 /// `deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard
@@ -78,6 +110,50 @@ pub struct Finding {
     pub line: usize,
 }
 
+/// The name of the verb that runs process-spawning rule kinds, quoted in the
+/// refusal [`run_static`] emits. Named once so the message and the surface
+/// cannot drift.
+pub const SPAWNING_VERB: &str = "batten enforce";
+
+/// Run only the rules that cannot spawn a process — the surface a `read`-effect
+/// verb is allowed to reach (house-style §5, CLOUD-170).
+///
+/// A configured rule whose kind *can* spawn is **refused loudly**, never
+/// silently skipped: a skipped gate that still exits `0` is exactly the
+/// false-green Batten exists to catch.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `2`) when any configured rule's kind spawns
+/// processes, naming [`SPAWNING_VERB`] as the verb that runs it, and for a
+/// malformed rule. An I/O failure propagates as an internal error (→ exit `3`).
+pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+    // Refuse before any work: the read-only surface must not even begin a run
+    // it cannot complete honestly.
+    for rule in rules {
+        if rule.kind.spawns_processes() {
+            return Err(UsageError::raise(format!(
+                "rule {}: this rule kind runs a configured command, which `batten check` \
+                 (a read-effect verb) will not do; run `{SPAWNING_VERB}` instead",
+                rule.id
+            )));
+        }
+    }
+    run(rules, root)
+}
+
+/// Run every configured rule, including process-spawning kinds.
+///
+/// This is the non-`read` surface: it may execute commands declared in
+/// `batten.toml`, so its verb is classified `unclassified` (§5).
+///
+/// # Errors
+///
+/// As [`run_static`], minus the spawning-kind refusal.
+pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+    run(rules, root)
+}
+
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
 /// findings sorted for byte-stability.
 ///
@@ -86,7 +162,7 @@ pub struct Finding {
 /// Returns a [`UsageError`] (→ exit `2`) for a malformed rule (e.g. an empty
 /// `glob`). An I/O failure while walking the tree propagates as an internal
 /// error (→ exit `3`).
-pub fn check(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+fn run(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
     let mut files = Vec::new();
     collect_files(root, root, &mut files)?;
     // A stable input order makes the finding order deterministic (§6).
@@ -305,7 +381,7 @@ mod tests {
         write(&dir, "src/a.rs", "ok line\nTODO here\nanother TODO\n");
         write(&dir, "README.md", "TODO in docs is ignored by the glob\n");
 
-        let findings = check(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
+        let findings = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
 
         assert_eq!(
             findings,
@@ -328,7 +404,7 @@ mod tests {
     fn clean_tree_yields_no_findings() {
         let dir = temp_dir("rules-forbid-clean");
         write(&dir, "src/a.rs", "all clear\n");
-        let findings = check(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
+        let findings = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
         assert!(findings.is_empty());
     }
 
@@ -339,8 +415,8 @@ mod tests {
         write(&dir, "a.rs", "TODO\n");
         write(&dir, "src/c.rs", "TODO\n");
         let rule = forbid("no-todo", "**/*.rs", "TODO");
-        let first = check(std::slice::from_ref(&rule), &dir).unwrap();
-        let second = check(std::slice::from_ref(&rule), &dir).unwrap();
+        let first = run_static(std::slice::from_ref(&rule), &dir).unwrap();
+        let second = run_static(std::slice::from_ref(&rule), &dir).unwrap();
         assert_eq!(first, second);
         // Sorted by path: a.rs, b.rs, src/c.rs.
         let paths: Vec<&str> = first.iter().map(|f| f.path.as_str()).collect();
@@ -352,7 +428,7 @@ mod tests {
         let dir = temp_dir("rules-skip-git");
         write(&dir, ".git/config", "TODO must not be read\n");
         write(&dir, "a.rs", "clean\n");
-        let findings = check(&[forbid("no-todo", "**", "TODO")], &dir).unwrap();
+        let findings = run_static(&[forbid("no-todo", "**", "TODO")], &dir).unwrap();
         assert!(findings.is_empty(), "the .git dir must be skipped");
     }
 
@@ -360,15 +436,77 @@ mod tests {
     fn non_utf8_file_never_matches() {
         let dir = temp_dir("rules-binary");
         fs::write(dir.join("blob.rs"), [0xff, 0xfe, 0x00]).unwrap();
-        let findings = check(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
+        let findings = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn all_covers_every_kind() {
+        // The spawn partition must be total. `ALL` is what the gate below
+        // iterates, so a kind missing from it would be silently untested —
+        // exactly how a spawning kind could slip onto the read-only surface.
+        // The match is exhaustive by the compiler; this asserts `ALL` agrees.
+        for kind in RuleKind::ALL {
+            match kind {
+                RuleKind::Forbid => {}
+            }
+        }
+        assert_eq!(
+            RuleKind::ALL.len(),
+            1,
+            "a new RuleKind must be added to RuleKind::ALL"
+        );
+    }
+
+    #[test]
+    fn the_read_only_surface_refuses_every_spawning_kind() {
+        // CLOUD-170's computable gate, stated over *every* kind rather than a
+        // named one: no kind that can spawn a process may run under
+        // `run_static` (the `read`-effect `check`). Vacuous while `forbid` is
+        // the only kind; it starts biting the moment CLOUD-89 adds `command`,
+        // which is the point — the invariant is in place before the risk is.
+        let dir = temp_dir("rules-spawn-gate");
+        write(&dir, "a.rs", "TODO\n");
+        for kind in RuleKind::ALL {
+            if !kind.spawns_processes() {
+                continue;
+            }
+            let rule = Rule {
+                id: "spawner".to_owned(),
+                kind: *kind,
+                glob: "**".to_owned(),
+                pattern: String::new(),
+            };
+            let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
+            assert!(
+                err.downcast_ref::<UsageError>().is_some(),
+                "a spawning kind must be refused as a usage error, not run"
+            );
+            assert!(
+                err.to_string().contains(SPAWNING_VERB),
+                "the refusal must name the verb that does run it"
+            );
+        }
+    }
+
+    #[test]
+    fn non_spawning_kinds_run_on_both_surfaces() {
+        // The split must not change *results* for admissible kinds — only which
+        // kinds are admissible. Otherwise the two verbs drift.
+        let dir = temp_dir("rules-both-surfaces");
+        write(&dir, "a.rs", "TODO\n");
+        let rule = forbid("no-todo", "**/*.rs", "TODO");
+        assert_eq!(
+            run_static(std::slice::from_ref(&rule), &dir).unwrap(),
+            run_all(std::slice::from_ref(&rule), &dir).unwrap()
+        );
     }
 
     #[test]
     fn empty_glob_is_a_usage_error() {
         let dir = temp_dir("rules-empty-glob");
         write(&dir, "a.rs", "TODO\n");
-        let err = check(&[forbid("bad", "", "TODO")], &dir).unwrap_err();
+        let err = run_static(&[forbid("bad", "", "TODO")], &dir).unwrap_err();
         assert!(err.downcast_ref::<UsageError>().is_some());
     }
 }

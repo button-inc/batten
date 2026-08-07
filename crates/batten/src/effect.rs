@@ -71,9 +71,17 @@ impl Serialize for Effect {
 /// entry here in the same change that adds it to the surface.
 fn table() -> BTreeMap<&'static str, Effect> {
     BTreeMap::from([
-        // `check` only inspects the tree and reports findings; it mutates nothing.
+        // `check` only inspects the tree and reports findings; it mutates
+        // nothing. It refuses to run any rule kind that spawns a process
+        // (`rules::run_static`), which is what keeps this `read` honest and
+        // this path off the process-spawning surface.
         ("check", Effect::Read),
         ("config", Effect::Read),
+        // `enforce` runs rule kinds that execute commands declared in
+        // `batten.toml`. Per §5 a command that runs user-supplied code is
+        // listed unclassified with a stated reason, never guessed — so it is
+        // excluded from the derived read-only allowlist by construction.
+        ("enforce", Effect::Unclassified),
         ("config show", Effect::Read),
         ("spec", Effect::Read),
     ])

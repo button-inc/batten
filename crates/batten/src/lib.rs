@@ -51,7 +51,8 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     match command {
         // With no subcommand, clap's default help has already been offered.
         None => Ok(ExitCode::Success),
-        Some(Command::Check) => run_check(out),
+        Some(Command::Check) => run_rules(out, rules::run_static),
+        Some(Command::Enforce) => run_rules(out, rules::run_all),
         Some(Command::Config { command }) => run_config(&command, out),
         Some(Command::Spec { format }) => run_spec(format, out),
     }
@@ -59,12 +60,20 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
 
 /// Run the configured rules against the current directory and report findings.
 ///
+/// `runner` selects which surface runs them — [`rules::run_static`] for the
+/// `read`-effect `check`, [`rules::run_all`] for the unclassified `enforce`
+/// (§5, CLOUD-170). Both report identically; only the admissible rule kinds
+/// differ, so the two verbs can never drift in output shape.
+///
 /// Output is pointer-only (non-negotiable rule 4): one `path:line rule-id` per
 /// finding, byte-stable and never the matched bytes. A clean run exits
 /// [`ExitCode::Success`]; any finding exits [`ExitCode::Violation`].
-fn run_check(out: &mut dyn Write) -> Result<ExitCode> {
+fn run_rules(
+    out: &mut dyn Write,
+    runner: fn(&[rules::Rule], &Path) -> Result<Vec<rules::Finding>>,
+) -> Result<ExitCode> {
     let config = config::load(Path::new(CONFIG_FILE))?;
-    let findings = rules::check(&config.rules, Path::new("."))?;
+    let findings = runner(&config.rules, Path::new("."))?;
     for finding in &findings {
         // Pointer only: location and the rule that fired, never the line text.
         writeln!(out, "{}:{} {}", finding.path, finding.line, finding.rule)?;

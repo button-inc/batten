@@ -210,4 +210,20 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn the_process_spawning_verb_is_never_read_only() {
+        // CLOUD-170's allowlist gate. `enforce` may execute commands declared
+        // in `batten.toml`; §5 lists user-supplied code as unclassified, so the
+        // derived agent allowlist must never advertise it as read-only. Asserted
+        // on the derivation itself rather than on the effect table, because the
+        // allowlist is the artifact an agent actually consumes.
+        let allowlist = read_only_allowlist(&spec());
+        assert!(
+            !allowlist.contains(&"enforce".to_owned()),
+            "the process-spawning verb leaked into the read-only allowlist: {allowlist:?}"
+        );
+        assert_eq!(effect_for("enforce"), Effect::Unclassified);
+        assert!(!effect_for("enforce").is_read_only());
+    }
 }

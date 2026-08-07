@@ -37,8 +37,10 @@ pub struct Config {
     /// enforcement lands with the `min_batten_version` gate (CLOUD-33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_batten_version: Option<String>,
-    /// The declarative rules `batten check` runs against the repository. Absent
-    /// or empty means "no rules configured"; `check` then has nothing to report.
+    /// The declarative rules run against the repository. Absent or empty means
+    /// "no rules configured" and nothing is reported. Which of these a given
+    /// verb admits is the §5 effect split: `check` runs only non-spawning kinds
+    /// and refuses the rest, `enforce` runs all of them (CLOUD-170).
     #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
 }
