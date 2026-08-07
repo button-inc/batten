@@ -1,31 +1,34 @@
 #!/usr/bin/env bats
 # The gate that ships with "verify and linear-check before readying".
 #
-# Readying starts CI, so the cost of a missed step is paid in CI minutes and a
-# red run on a fresh PR. The receipts make the precondition checkable instead of
-# remembered.
+# Readying starts CI, so a missed step is paid for in CI minutes and a red run on
+# a fresh PR. The receipts make the precondition checkable instead of remembered.
+#
+# Every case runs in a scratch repository built here, never in the working
+# clone. The first version read the clone's own HEAD and `origin/main`, which
+# passed locally and failed in CI, where a fresh checkout has no `origin/main`
+# ref at all — an environment-dependent test proves nothing about the guard.
 
 setup() {
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/ready-guard"
-	cd "$BATS_TEST_DIRNAME/.." || return 1
-	RECEIPTS="$(git rev-parse --git-dir)/batten-receipts"
-	HEAD_SHA="$(git rev-parse HEAD)"
-	MAIN_SHA="$(git rev-parse origin/main)"
-	# Stash any real receipts so the suite neither reads nor destroys them.
-	SAVED="$BATS_TEST_TMPDIR/saved"
-	[ -d "$RECEIPTS" ] && cp -r "$RECEIPTS" "$SAVED"
-	rm -rf "$RECEIPTS"
-}
+	REPO="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$REPO"
+	cd "$REPO" || return 1
 
-teardown() {
-	rm -rf "$RECEIPTS"
-	[ -d "$SAVED" ] && cp -r "$SAVED" "$RECEIPTS"
-	return 0
+	git init -q .
+	git config user.email t@example.com
+	git config user.name t
+	git commit -q --allow-empty -m "base"
+	MAIN_SHA="$(git rev-parse HEAD)"
+	git update-ref refs/remotes/origin/main "$MAIN_SHA"
+	git commit -q --allow-empty -m "work"
+	HEAD_SHA="$(git rev-parse HEAD)"
+	RECEIPTS="$REPO/.git/batten-receipts"
 }
 
 ready() { printf '{"tool_input":{"command":"%s"}}' "${1:-gh pr ready 42}" | "$GUARD"; }
 
-both_receipts() {
+receipts() {
 	mkdir -p "$RECEIPTS"
 	date -u +%FT%TZ >"$RECEIPTS/verify.$HEAD_SHA"
 	printf '%s' "${1:-$MAIN_SHA}" >"$RECEIPTS/linear-check.$HEAD_SHA"
@@ -45,23 +48,32 @@ both_receipts() {
 }
 
 @test "denies ready when the receipts belong to a different commit" {
-	# An amend or a rebase produces a new HEAD, so the old receipts must not count.
+	# An amend or a rebase produces a new HEAD, so old receipts must not carry over.
 	mkdir -p "$RECEIPTS"
-	date -u +%FT%TZ >"$RECEIPTS/verify.deadbeef"
-	printf '%s' "$MAIN_SHA" >"$RECEIPTS/linear-check.deadbeef"
+	date -u +%FT%TZ >"$RECEIPTS/verify.$MAIN_SHA"
+	printf '%s' "$MAIN_SHA" >"$RECEIPTS/linear-check.$MAIN_SHA"
 	run ready
 	[[ "$output" == *"deny"* ]]
 }
 
 @test "denies ready when main moved after linear-check ran" {
-	both_receipts "0000000000000000000000000000000000000000"
+	receipts "0000000000000000000000000000000000000000"
 	run ready
 	[[ "$output" == *"origin/main"* ]]
 	[[ "$output" == *"Rebase"* ]]
 }
 
 @test "allows ready when both receipts match this HEAD and this main" {
-	both_receipts
+	receipts
+	run ready
+	[ -z "$output" ]
+}
+
+@test "fails open where there is no origin/main ref" {
+	# A fresh CI checkout has no such ref. The guard is a local pre-flight, so it
+	# must not deny in an environment it cannot evaluate.
+	receipts
+	git update-ref -d refs/remotes/origin/main
 	run ready
 	[ -z "$output" ]
 }
