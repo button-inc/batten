@@ -100,7 +100,7 @@ name off `/mcp` rather than guessing.
 
 The **"Always" toggle on claude.ai does not fix this.** It governs claude.ai
 chats only. The one thing that crosses over from claude.ai is an organization's
-per-tool `ask`/`blocked` control, and it only *tightens*: a tool set to `ask`
+per-tool `ask`/`blocked` control, and it only _tightens_: a tool set to `ask`
 prompts on every call and a local allow rule cannot skip it, in any permission
 mode. Local auto-approval is only ever bought with a local allow rule.
 
