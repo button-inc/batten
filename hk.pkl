@@ -1,26 +1,33 @@
 // Git hooks for this repository, run by hk (https://hk.jdx.dev) — a single Rust
 // binary provisioned through mise (see mise.toml), no Node.js involved.
 //
-// Every step delegates to a mise task, so the hook, CI, and a local `mise run`
-// all execute byte-identical commands — mise.toml is the single source of truth.
+// Steps come from hk's own `Builtins` wherever one exists: upstream already
+// encodes the file selectors, batching, shebang detection and fix/check split
+// for these tools, and each builtin ships with its own tests. Repo-specific
+// steps — the gates that exist only here — are written out below. Where a
+// builtin's command needs our stricter flags, the command is overridden and
+// nothing else, so the selector logic still comes from upstream.
 //
 // Activation is per-clone and manual — creating this file does nothing until:
 //   hk install
 // is run once (see CONTRIBUTING.md). hk stores the hooks in .git/hooks.
 amends "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Builtins.pkl"
 
-// The commit gate — hk-version, fmt, clippy, test — defined once and shared by
-// two hooks:
+// The gate, defined once and shared by two hooks:
 //   - `pre-commit` runs it in fix mode on the way into a commit (stashes, applies
-//     fmt fixes).
+//     the fixers).
 //   - `check` runs it in check-only mode; CI drives it via `mise run hooks`
 //     (`hk check --all`) so the exact hook config is exercised on CI too, not
 //     just locally. If a step is misconfigured here, CI catches it.
 // clippy and the test build are both whole-workspace cargo compiles. Chaining
-// fmt -> lint -> test keeps exactly one cargo build holding the target-dir lock
-// at a time: parallel steps would only serialize on that lock while
-// oversubscribing the CPU. Each step also reads the formatted, then linted, tree.
+// cargo-fmt -> cargo-clippy -> test keeps exactly one cargo build holding the
+// target-dir lock at a time: parallel steps would only serialize on that lock
+// while oversubscribing the CPU. Each step also reads the formatted, then
+// linted, tree.
 local gate = new Mapping<String, Step> {
+    // --- repo-specific gates (no upstream builtin exists) ---------------------
+
     // Enforces the "revisit hk config" reminder as a runnable gate, not prose:
     // fails if hk's pinned version drifts between mise.toml and this file's
     // `amends` URL. Fires on any change to either file — which includes every
@@ -36,20 +43,21 @@ local gate = new Mapping<String, Step> {
     ["no-docs-tree"] {
         check = "mise run no-docs-tree"
     }
-    // mise-tasks/ holds real bash programs (the gh guard, its test, the GitHub
-    // preflight), so they get the same treatment as the Rust: a formatter with a
-    // fixer, then a linter, then the behavioural test. Globbed on mise-tasks/ so
-    // they never fire on a Rust-only commit.
-    ["shfmt"] {
-        glob = List("mise-tasks/*")
+
+    // --- shell: the mise-tasks/ programs and the bats suite -------------------
+
+    // The builtins match on shebang as well as extension, which is what the
+    // extensionless `mise-tasks/*` programs need — a hand-written glob would
+    // have to enumerate them.
+    ["shfmt"] = (Builtins.shfmt) {
         check_first = true
-        check = "mise run shfmt-check"
-        fix = "mise run shfmt"
     }
-    ["shellcheck"] {
+    ["shellcheck"] = (Builtins.shellcheck) {
         depends = List("shfmt")
-        glob = List("mise-tasks/*")
-        check = "mise run shellcheck"
+        // Upstream runs shellcheck at its default severity; this repo treats
+        // style-level findings as failures, the same posture as clippy's
+        // -D warnings.
+        check = "shellcheck --severity=style --external-sources {{files}}"
     }
     // The shell programs' test suite (bats), the counterpart to `test` for Rust.
     // The gh guard ships with its gate this way: the policy table must block
@@ -59,22 +67,31 @@ local gate = new Mapping<String, Step> {
         glob = List("mise-tasks/*", "tests/*.bats")
         check = "mise run test:bats"
     }
-    ["fmt"] {
-        glob = List("**/*.rs")
+
+    // --- workflows ------------------------------------------------------------
+
+    // actionlint catches workflow *mistakes* (bad `on:` keys, undefined matrix
+    // refs, shellcheck over `run:` blocks); zizmor, run separately in `verify`
+    // and CI, catches workflow *security* problems. They do not overlap.
+    ["actionlint"] = Builtins.actionlint
+
+    // --- rust ------------------------------------------------------------------
+
+    ["cargo-fmt"] = (Builtins.cargo_fmt) {
         // check_first: skip the fixer (a write pass) on the common case where the
         // tree is already formatted; only rewrite when it isn't. (fix mode only.)
         check_first = true
-        check = "mise run fmt-check"
-        fix = "mise run fmt"
     }
-    ["lint"] {
-        depends = List("fmt")
-        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
+    ["cargo-clippy"] = (Builtins.cargo_clippy) {
+        depends = List("cargo-fmt")
+        // Upstream lints the default target set at default severity. The
+        // workspace lints are only meaningful if every target is checked and a
+        // warning fails, so the command — and only the command — is ours.
         check = "mise run lint"
     }
     // Tests the whole workspace because a change in one crate can break another.
     ["test"] {
-        depends = List("lint")
+        depends = List("cargo-clippy")
         glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
         check = "mise run test:cargo"
     }
@@ -96,8 +113,8 @@ hooks {
         }
     }
     ["pre-commit"] {
-        // Check only what is staged, and never let fmt's fixer clobber unstaged
-        // work: hk stashes the working tree, runs the steps, then restores it via
+        // Check only what is staged, and never let a fixer clobber unstaged work:
+        // hk stashes the working tree, runs the steps, then restores it via
         // three-way merge. patch-file is faster than `git stash` and sidesteps
         // index-lock races. See https://hk.jdx.dev/environment_variables.
         stash = "patch-file"
@@ -105,6 +122,11 @@ hooks {
     }
     // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
     ["check"] {
+        steps = gate
+    }
+    // `hk fix --all`, what `mise run fmt` calls: run every fixer over the tree.
+    ["fix"] {
+        fix = true
         steps = gate
     }
 }

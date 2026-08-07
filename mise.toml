@@ -17,6 +17,7 @@ hk = "1.54.0"                 # git-hook runner (see hk.pkl)
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
 "aqua:mvdan/sh" = "3.12.0"    # shfmt
+"aqua:rhysd/actionlint" = "1.7.7"  # workflow mistakes (zizmor covers workflow security)
 zizmor = "1.29.0"            # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
 uv = "0.8"                    # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
@@ -64,12 +65,8 @@ NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.githu
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
 [tasks.fmt]
-description = "Format all code"
-run = "cargo fmt --all"
-
-[tasks.fmt-check]
-description = "Check formatting"
-run = "cargo fmt --all --check"
+description = "Run every fixer over the tree (rustfmt, shfmt) — hk owns the step list"
+run = "hk fix --all"
 
 [tasks.lint]
 description = "Clippy with warnings denied"
@@ -147,20 +144,6 @@ if [ -n "$tracked" ]; then
 fi
 echo "no-docs-tree: no committed docs/ tree"
 '''
-
-[tasks.shellcheck]
-description = "Lint the mise-tasks/ shell programs (shellcheck — clippy for bash)"
-# -x follows `source`d files; severity style keeps informational nits enforced,
-# matching how clippy runs here with -D warnings.
-run = "shellcheck --severity=style --shell=bash --external-sources mise-tasks/*"
-
-[tasks.shfmt]
-description = "Format the mise-tasks/ shell programs"
-run = "shfmt --write --indent 2 --case-indent --binary-next-line mise-tasks/"
-
-[tasks.shfmt-check]
-description = "Check shell formatting"
-run = "shfmt --diff --indent 2 --case-indent --binary-next-line mise-tasks/"
 
 [tasks."test:bats"]
 description = "Run the shell test suite (tests/*.bats) — cargo test for the mise-tasks/ programs"
