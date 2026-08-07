@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.16](https://github.com/button-inc/batten/compare/v0.0.15...v0.0.16) - 2026-08-07
+
+### Added
+
+- *(gate)* wire consumer #1 — batten check runs against its own repository
+
+### Fixed
+
+- *(cli)* bare invocation lists subcommands instead of exiting silently
+
+### Other
+
+- *(graph)* one authority per fact across the agent-facing doc graph
+- *(contract)* the public contract states what ships, and plans the rest
+
 ## [0.0.15](https://github.com/button-inc/batten/compare/v0.0.14...v0.0.15) - 2026-08-07
 
 ### Added
