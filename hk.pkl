@@ -51,6 +51,13 @@ local gate = new Mapping<String, Step> {
     glob = List("AGENTS.md", ".serena/memories/always/*.md")
     check = "mise run context-budget"
   }
+  // The macOS release artifacts are linked on Linux by zig with no Apple SDK.
+  // A dependency that links a system framework breaks that, and `cross-check`
+  // cannot see it because `cargo check` never links — so without this gate the
+  // first symptom is the release workflow failing after the tag is cut.
+  ["macos-link-check"] {
+    check = "mise run macos-link-check"
+  }
 
   // --- shell: the mise-tasks/ programs and the bats suite -------------------
 

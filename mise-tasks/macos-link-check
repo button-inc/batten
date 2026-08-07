@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#MISE description="Gate: no dependency that would need a real macOS SDK to link, which would break the SDK-free macOS release build"
+#
+# The macOS release artifacts are linked on Linux by zig, with no Apple SDK
+# present. That works only while nothing in the tree links a macOS *system
+# framework* (CoreFoundation, Security, …): such a crate needs SDKROOT pointing
+# at a genuine macOS SDK, which reintroduces both a toolchain dependency and
+# Apple's licensing question.
+#
+# The failure this prevents is a LATE one. `cross-check` runs `cargo check`,
+# which stops at codegen-to-metadata and never links, so it cannot see this
+# class of breakage at all — the first symptom would be the release workflow
+# failing after a tag was already cut. This gate moves that signal to the moment
+# the dependency is added.
+#
+# Predicate, over the dependency graph RESOLVED FOR macOS (`--filter-platform`),
+# so a macOS-only transitive dep is seen and a Linux-only one is not:
+#
+#   1. any package declaring a `links` key — the manifest's own statement that
+#      it links a native library, which is general and needs no list; plus
+#   2. a named set of crates that link Apple frameworks from a build script
+#      WITHOUT declaring `links`, which rule 1 cannot see.
+#
+# Rule 2 is a list and therefore incomplete by construction — a crate nobody has
+# listed slips past. That residual gap is closed by actually linking the target,
+# which `cross-check` does for the Darwin triples; this gate is the fast,
+# specific, early half of that pair, not a replacement for it.
+set -uo pipefail
+
+# The target whose resolved graph we inspect. Apple Silicon is the platform a
+# maintainer is most likely to run, and both Darwin triples share these deps.
+readonly TARGET=aarch64-apple-darwin
+
+# Crates that pull in an Apple system framework. Extend as new ones are met —
+# and when you do, prefer proving it with a link (cross-check) over trusting
+# this list.
+readonly FRAMEWORK_CRATES='^(security-framework|security-framework-sys|core-foundation|core-foundation-sys|native-tls|openssl-sys|cocoa|objc|objc2|system-configuration|system-configuration-sys)$'
+
+metadata=$(cargo metadata --format-version 1 --filter-platform "$TARGET" 2>/dev/null) || {
+	echo "::error:: macos-link-check: could not resolve the dependency graph for ${TARGET}" >&2
+	exit 1
+}
+
+findings=$(printf '%s' "$metadata" | python3 -c "
+import json, re, sys
+
+meta = json.load(sys.stdin)
+pattern = re.compile(sys.argv[1])
+for package in sorted(meta['packages'], key=lambda p: p['name']):
+    if package.get('links'):
+        print(f\"{package['name']} v{package['version']}: declares links={package['links']!r}\")
+    elif pattern.match(package['name']):
+        print(f\"{package['name']} v{package['version']}: links an Apple system framework\")
+" "$FRAMEWORK_CRATES") || {
+	echo "::error:: macos-link-check: could not inspect the dependency graph" >&2
+	exit 1
+}
+
+if [ -n "$findings" ]; then
+	echo "::error:: a dependency needs a real macOS SDK to link, which the SDK-free macOS release build cannot supply:" >&2
+	printf '%s\n' "$findings" | while IFS= read -r line; do printf '  %s\n' "$line" >&2; done
+	echo "Either drop it, feature-gate it off the default build (a rustls-style" >&2
+	echo "alternative usually exists), or accept an SDK and revisit how macOS is built." >&2
+	exit 1
+fi
+
+echo "macos-link-check: nothing in the ${TARGET} graph needs a macOS SDK to link"
