@@ -266,6 +266,19 @@ pub fn resolve_with_env(
     let local_path = dir.join(LOCAL_CONFIG_FILE);
     if local_path.exists() {
         let local = config::load(&local_path)?;
+        // The override layer honours `strictness` and `rule`; every other key
+        // belongs to the committed authority alone. Refuse the ones it cannot
+        // honour rather than parsing and dropping them — a setting that looks
+        // applied but isn't is the same failure `deny_unknown_fields` exists to
+        // prevent, and it is worse here because the key *is* valid in the file
+        // it was copied from.
+        if local.min_batten_version.is_some() {
+            return Err(UsageError::raise(format!(
+                "{LOCAL_CONFIG_FILE}: `min_batten_version` is set by the committed authority ({}) \
+                 only; an override may not restate it",
+                config::CONFIG_FILE,
+            )));
+        }
         if let Some(value) = local.strictness {
             strictness = strictness.raise(value, Source::LocalFile, LOCAL_CONFIG_FILE)?;
         }
@@ -287,11 +300,18 @@ pub fn resolve_with_env(
         }
     }
 
-    // Layer 3 — the environment.
+    // Layer 3 — the environment. An *empty* variable is "not set", not a bad
+    // value: `FOO= cmd`, and a CI that exports every knob unconditionally, both
+    // produce one. Distinguishing empty→default from present-but-invalid is the
+    // house style's stated position (§10), and the alternative is worse — a
+    // harmless empty export would fail every invocation.
     if let Some(name) = setting("strictness").env {
         if let Some(raw) = env(name) {
-            let value = parse_strictness(raw.trim(), name)?;
-            strictness = strictness.raise(value, Source::Env, name)?;
+            let raw = raw.trim();
+            if !raw.is_empty() {
+                let value = parse_strictness(raw, name)?;
+                strictness = strictness.raise(value, Source::Env, name)?;
+            }
         }
     }
 
@@ -465,6 +485,48 @@ mod tests {
         })
         .unwrap_err();
         assert!(is_usage_error(&err));
+    }
+
+    #[test]
+    fn an_empty_env_var_means_unset_not_invalid() {
+        // `BATTEN_STRICTNESS= batten check` and a CI that exports every knob
+        // unconditionally both produce an empty value. It must fall through to
+        // the layer below, not fail the run (§10: empty → default).
+        let dir = repo(
+            "resolve-env-empty",
+            "version = 1\nstrictness = \"strict\"\n",
+            None,
+        );
+        for raw in ["", "   "] {
+            let resolved = resolve_with_env(&dir, Overrides::default(), &|name| {
+                (name == "BATTEN_STRICTNESS").then(|| raw.to_owned())
+            })
+            .expect("an empty env var is not a bad value");
+            assert_eq!(resolved.strictness, Strictness::Strict);
+            assert_eq!(
+                resolved.sources["strictness"],
+                Source::RepoConfig,
+                "an empty override must not claim the key"
+            );
+        }
+    }
+
+    #[test]
+    fn the_local_file_may_not_restate_an_authority_only_key() {
+        // The override layer honours strictness and rules; anything else it
+        // parses must be refused, never parsed and dropped. A silently ignored
+        // `min_batten_version` would read as applied while doing nothing.
+        let dir = repo(
+            "resolve-local-authority-key",
+            "version = 1\nmin_batten_version = \"0.0.0\"\n",
+            Some("version = 1\nmin_batten_version = \"9.9.9\"\n"),
+        );
+        let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
+        assert!(is_usage_error(&err));
+        assert!(
+            err.to_string().contains("min_batten_version"),
+            "the refusal must name the key, got: {err}"
+        );
     }
 
     #[test]
