@@ -13,6 +13,7 @@ pub mod config;
 pub mod effect;
 pub mod error;
 pub mod exit;
+pub mod git;
 pub mod hook;
 pub mod identity;
 pub mod receipt;

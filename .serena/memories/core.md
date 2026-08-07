@@ -32,6 +32,11 @@ file itself for the "why", this is only the "where":
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file >
 repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   not hard-coded per field.
+- `git.rs` — the one repo-root primitive (CLOUD-34): the parent of git's
+  _common_ directory, so linked worktrees resolve to the main repository root.
+  Discovery env is scrubbed; outside-a-repo, bare, and submodule-interior
+  layouts raise `UsageError` rather than mis-root. All git plumbing flows
+  through here — the single-implementation assertion in its tests is the gate.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<repo-name>/`, CLOUD-23),
   via `etcetera`; repo-name derived at runtime, never baked in (rule 1).
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
