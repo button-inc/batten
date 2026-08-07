@@ -198,8 +198,19 @@ description = "Full local pre-flight — run this before marking any draft PR re
 shell = "bash -c"
 depends = ["ci", "cross-check", "darwin-link", "zizmor", "lock-check"]
 run = '''
-mise run linear-check
-BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint
+# A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
+# every step whose failure changes the verdict is guarded by hand. Unguarded,
+# a failed linear-check let this body run commit-lint against a stale
+# origin/main, write the receipt below, and print "fast-forward-green" — a
+# silent false green in the one gate that decides whether CI minutes get spent.
+if ! mise run linear-check; then
+  echo "::error:: verify: linear-check failed — not rebased on latest main. No receipt written." >&2
+  exit 1
+fi
+if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint; then
+  echo "::error:: verify: commit-lint failed. No receipt written." >&2
+  exit 1
+fi
 receipts="$(git rev-parse --git-dir)/batten-receipts"
 mkdir -p "$receipts"
 # Keyed to the exact commit verified: an amend or a rebase produces a new HEAD

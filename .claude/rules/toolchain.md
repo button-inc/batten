@@ -107,6 +107,14 @@ stale main to itself, passing, and writing a receipt `ready-guard` then honours
 `mise lock` unguarded, so a failed lock left a clean diff and the gate claiming
 "complete and current" about a file it never regenerated.
 
+A third instance was the caller, not a script: `verify`'s own body called
+`linear-check` and `commit-lint` unguarded, so a `main` that moved under the
+branch left it running commit-lint against a stale `BASE_SHA`, writing the
+receipt `ready-guard` honours, and printing `fast-forward-green` — `gh pr ready`
+allowed, and CI minutes spent, on work that failed its own pre-flight. Guarded
+now, with `tests/task-fail-closed.bats` asserting the body carries no bare `mise
+run` call and reaches its receipt write only past the guards.
+
 The rule: **a gate step that cannot run must exit non-zero and leave no
 receipt.** Prefer `if ! cmd; then echo "::error:: …" >&2; exit 1; fi` over a
 bare call. A task complex enough to need several of those belongs in
