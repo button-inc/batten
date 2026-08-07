@@ -28,14 +28,15 @@ pointer, don't fork the content.
 `.serena/memories/` is checked in: a shared surface read **on demand**, never
 auto-loaded. Read the matching one at its trigger; don't reconstruct the detail.
 
-| Memory                        | Read it when                                                                        |
-| ----------------------------- | ----------------------------------------------------------------------------------- |
-| `workflow/board-states`       | starting/finishing a `CLOUD-*` issue; reasoning about what is in flight             |
-| `github-access`               | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"                |
-| `github-rest-etiquette`       | writing a task that calls the GitHub API; diagnosing a 403/429/abuse response       |
-| `toolchain-and-hooks`         | pinning a tool, adding a task, touching `hk.pkl` or the gate                        |
-| `serena-setup`                | a Serena worktree/index misbehaves; changing `.serena/` config                      |
-| `prior-art-and-issue-hygiene` | surveying outside practice; adopting a tool or pattern; writing an issue or PR body |
+| Memory                         | Read it when                                                                        |
+| ------------------------------ | ----------------------------------------------------------------------------------- |
+| `workflow/board-states`        | starting/finishing a `CLOUD-*` issue; reasoning about what is in flight             |
+| `github-access`                | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"                |
+| `github-rest-etiquette`        | writing a task that calls the GitHub API; diagnosing a 403/429/abuse response       |
+| `toolchain-and-hooks`          | pinning a tool, adding a task, touching `hk.pkl` or the gate                        |
+| `serena-setup`                 | a Serena worktree/index misbehaves; changing `.serena/` config                      |
+| `prior-art-and-issue-hygiene`  | surveying outside practice; adopting a tool or pattern; writing an issue or PR body |
+| `connector-allowlist-recovery` | a connector's tools start prompting/denying, or reappear under a different name     |
 
 ## Autonomous workflow: commit, push, and land without asking
 
@@ -54,11 +55,10 @@ all the way to landed-and-verified is the default; stopping short to ask is the
 deviation. **The gates ARE your authorization and safety mechanism** — you run
 them yourself, and they halt you by _failing_, not by needing a blessing.
 
-- **You are pre-authorized to `git commit` without asking** — a local, reversible
-  act. Never ask "want me to commit?"; commit.
-- **Commit early and often.** The moment a coherent unit exists — a passing step,
-  a green refactor, a doc paragraph — commit it. A sprawling uncommitted tree is
-  the failure mode this override exists to kill.
+- **You are pre-authorized to `git commit` without asking** — local and
+  reversible. Never ask "want me to commit?"; commit, early and often. The moment
+  a coherent unit exists — a passing step, a green refactor, a doc paragraph —
+  commit it. A sprawling uncommitted tree is the failure this override kills.
 - Establish base state before the first commit of a session (`git fetch origin
 main`), and work on a short-lived branch, never authoring directly on `main`.
 - Carry the whole lifecycle without stopping between steps to report and wait —
