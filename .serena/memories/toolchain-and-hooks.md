@@ -191,3 +191,35 @@ The predicate is the **use**, not the value: a literal without a backslash is
 safe today and unsafe the moment someone adds one, and a variable's runtime
 content is invisible to any static check. `-v` for a plain value — compared with
 `==`, printed, counted — stays fine and is most of its use.
+
+## Never pipe a producer into an early-exiting `grep` under `pipefail`
+
+`producer | grep -q P` can report **failure on a match**. grep exits at the
+first hit; a producer still writing dies of SIGPIPE, and `pipefail` promotes 141
+to the pipeline's status. Same for `-l` (stops at the first matching file) and
+`-m N`.
+
+It is a **race**, and that is what makes it survive review: whether the producer
+is still writing when grep exits depends on output size and scheduling. Measured
+here on a two-commit `git log` range — 2 failures in 300 runs. A large producer
+loses nearly always; a small one loses rarely, passes every test written for it,
+and misfires months later.
+
+Two instances landed before the class was named, both failing toward the verdict
+nobody checks:
+
+- `landed-check` read `git log … | grep -q "$id"` and reported a **clean board**
+  over three issues whose refs were on `main`.
+- `issue-guard` asked the same way whether any commit names an issue, and
+  **denied `gh pr ready`** on a branch whose every commit carried
+  `Refs: CLOUD-186` — with a reason asserting the opposite of what it had found.
+  The guard blocked its own PR, and the deny was not reproducible afterwards.
+
+The fix needs no new tool: read the producer into a variable and match from a
+here-string — `x=$(producer); grep -q P <<<"$x"`. A here-string has no upstream
+process, so there is no status to promote.
+
+Mechanism: `mise run pipefail-grep-check` (in the shared hk `gate`), scoped to
+files that actually enable `pipefail` and to the early-exiting flags only — a
+`| grep` that consumes its whole input is honest. Flag clusters are judged by
+their letters (`-qxF` is `-q`), because an enumeration of spellings is what rots.

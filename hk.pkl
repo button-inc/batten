@@ -92,6 +92,16 @@ local gate = new Mapping<String, Step> {
     glob = List("mise-tasks/*", "*.sh")
     check = "mise run awk-regex-check"
   }
+  // `producer | grep -q P` under pipefail can report FAILURE on a match: grep
+  // exits at the first hit, a still-writing producer dies of SIGPIPE, and
+  // pipefail promotes 141. It is a race (2 in 300 runs on a two-commit range),
+  // so it passes review and passes tests. landed-check reported a clean board
+  // over three landed issues that way; issue-guard denied `gh pr ready` on a
+  // branch whose every commit carried Refs: CLOUD-186 — it blocked its own PR.
+  ["pipefail-grep-check"] {
+    glob = List("mise-tasks/*", "*.sh")
+    check = "mise run pipefail-grep-check"
+  }
   // Completeness of mise.lock, asked of the committed bytes. The old lock-check
   // asked it by running `mise lock` and diffing, which answers "did upstream
   // change" instead — and never removes or repairs an existing entry, so a

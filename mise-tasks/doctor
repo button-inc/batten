@@ -63,7 +63,7 @@ check="$(dirname "$0")/doctor-check"
 
 for target in "${targets[@]}"; do
 	installed=no
-	if rustup target list --installed | grep -qxF "$target"; then
+	if grep -qxF "$target" <<<"$(rustup target list --installed)"; then
 		installed=yes
 	fi
 	verdict="$("$check" "$rustlib" "$target" "$installed")"
@@ -90,7 +90,7 @@ for target in "${targets[@]}"; do
 		;;
 	esac
 
-	if rustup target add "$target" && rustup target list --installed | grep -qxF "$target"; then
+	if rustup target add "$target" && grep -qxF "$target" <<<"$(rustup target list --installed)"; then
 		echo "doctor: rust target $target installed"
 	else
 		echo "::error:: could not install rust target $target; cross-check/darwin-link will fail." >&2

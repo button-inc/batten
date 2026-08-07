@@ -42,7 +42,7 @@ while IFS= read -r f; do
 	case "$name" in
 	*.md) report "$f:0" "memory-name-shadowed (strips to ${name%.md})" ;;
 	esac
-	if ! printf '%s' "$name" | grep -qE '^[A-Za-z0-9_/-]+$'; then
+	if ! grep -qE '^[A-Za-z0-9_/-]+$' <<<"$name"; then
 		report "$f:0" "memory-name-unreferencable"
 	fi
 done < <(git ls-files "$memories/*.md" "$memories/**/*.md" | sort -u)

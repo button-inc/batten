@@ -59,7 +59,10 @@ cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || 
 # counts, so this is checked against the raw command before quotes are scrubbed.
 ISSUE_RE='CLOUD-[0-9]+'
 cmd_names_issue=0
-printf '%s' "$cmd" | grep -qiE "$ISSUE_RE" && cmd_names_issue=1
+# Here-string, never a pipe: under `set -o pipefail` a `producer | grep -q` takes
+# the producer's SIGPIPE status when grep exits early on the first hit, so the
+# MATCH reads as a failure. See the note above the git log read below.
+grep -qiE "$ISSUE_RE" <<<"$cmd" && cmd_names_issue=1
 
 # Quoted spans are neutralised so a commit message *mentioning* the command is
 # not the command — same treatment as gh-guard and ready-guard.
@@ -125,11 +128,19 @@ deny() {
 [ "$cmd_names_issue" = 1 ] && exit 0
 
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
-printf '%s' "$branch" | grep -qiE "$ISSUE_RE" && exit 0
+grep -qiE "$ISSUE_RE" <<<"$branch" && exit 0
 
 # Any commit on this branch that origin/main does not have.
+#
+# The log is read into a variable and matched from a here-string, NOT piped into
+# `grep -q`. Under `set -o pipefail` grep exits on its first hit, git log takes
+# SIGPIPE, and the pipeline's status becomes that signal — so a branch whose
+# commits DO name an issue was denied, with the reason claiming no commit named
+# one. This gate shipped with that bug and denied its own PR. Same family as the
+# false-clean board in `landed-check`.
 if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
-	git log --format='%B' origin/main..HEAD 2>/dev/null | grep -qiE "$ISSUE_RE" && exit 0
+	log=$(git log --format='%B' origin/main..HEAD 2>/dev/null || true)
+	grep -qiE "$ISSUE_RE" <<<"$log" && exit 0
 fi
 
 deny "Refused: this PR names no CLOUD-<n> issue — not in the branch \`$branch\`, not in any commit on it, not in the command. The board is this repo's observability surface: work that lands without an issue is invisible, and its follow-ups end up in a chat message that dies with the session.

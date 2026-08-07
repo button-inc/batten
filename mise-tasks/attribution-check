@@ -27,7 +27,7 @@ COORDINATE='https?://|package://|aqua:|ubi:|npm:|pipx:|github\.com|\.dev|submodu
 
 fail=0
 while IFS= read -r hit; do
-	printf '%s\n' "$hit" | grep -qE "$COORDINATE" && continue
+	grep -qE "$COORDINATE" <<<"$hit" && continue
 	[ "$fail" = 0 ] && echo "::error:: appeal-to-authority attribution found. State the rule and the evidence in this repo's terms instead (see mem:prior-art-and-issue-hygiene):" >&2
 	printf '  %s\n' "$hit" >&2
 	fail=1

@@ -89,7 +89,7 @@ status=0
 count=0
 while IFS= read -r tool; do
 	count=$((count + 1))
-	if ! printf '%s\n' "$declared" | grep -qxF "$tool"; then
+	if ! grep -qxF "$tool" <<<"$declared"; then
 		echo "::error:: $WORKFLOW installs '$tool', which is not a [tools] entry in $CONFIG. CI would skip it and fail later as 'command not found'." >&2
 		status=1
 	fi
