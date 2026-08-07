@@ -162,3 +162,32 @@ lesson: it sat in `.claude/rules/toolchain.md` — a vendor-specific file that
 that cannot read it will violate it — scoped to "these tasks", so it never
 generalised to `verify` or `ci`. Prose, in a file only one agent reads, about one
 task. Three reasons it failed, and rule 2 predicted all three.
+
+## Never hand awk a regex through `-v`
+
+The value is escape-processed by the assignment before awk sees it as a pattern,
+and what that does to a backslash is **undefined across implementations**: gawk
+strips `\(` to `(` with a warning, mawk keeps it. The same pattern is a literal
+paren on one machine and a capturing group on the other.
+
+`ready-lint` matched its §8 label that way. Green on mawk here, matching
+**nothing** on the gawk CI runner — so the clause that catches a blocker claimed
+without a relation went back to passing silently, and three tests that predated
+the change went red with it. **A gate that cannot match its own label does not
+fail; it passes.**
+
+Two consequences worth keeping:
+
+- **Local green is not evidence** when the two environments run different
+  implementations of the same tool. This machine has mawk; the runner has gawk,
+  and neither is wrong — the case is undefined.
+- The fix is a split, not a workaround: let `grep` find what the pattern matches,
+  and let awk work in **literal** patterns; or inline the regex in the awk
+  program, where no assignment processing happens.
+
+Mechanism: `mise run awk-regex-check` (in the shared hk `gate`) reports a `-v`
+name the program then uses in regex position — `~ name` or `match(…, name)`.
+The predicate is the **use**, not the value: a literal without a backslash is
+safe today and unsafe the moment someone adds one, and a variable's runtime
+content is invisible to any static check. `-v` for a plain value — compared with
+`==`, printed, counted — stays fine and is most of its use.

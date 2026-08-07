@@ -82,6 +82,16 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json")
     check = "mise run mcp-allow-check"
   }
+  // A pattern reaching awk through `-v` goes through assignment escape
+  // processing first, and what that does to a backslash is undefined across
+  // implementations — gawk strips it, mawk keeps it. ready-lint matched its §8
+  // label that way: green on mawk locally, matching NOTHING on the gawk runner,
+  // so the clause went back to passing silently and took three older tests with
+  // it. A gate that cannot match its own label does not fail, it passes.
+  ["awk-regex-check"] {
+    glob = List("mise-tasks/*", "*.sh")
+    check = "mise run awk-regex-check"
+  }
   // Completeness of mise.lock, asked of the committed bytes. The old lock-check
   // asked it by running `mise lock` and diffing, which answers "did upstream
   // change" instead — and never removes or repairs an existing entry, so a
