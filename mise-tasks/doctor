@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the provisioning mise does NOT own — the bats submodule and the rustup cross targets — is present and consistent. Repairs what it can."
+#
+# `mise install` provisions [tools] and nothing else. Two dependencies of the
+# lifecycle sit outside it, and both fail LATE and in someone else's name:
+#
+#   * bats lives in the tests/bats submodule (see mise.toml [env], which explains
+#     why it is vendored rather than pinned). A fresh clone that skipped
+#     `git submodule update --init` reaches `test:bats` and reports
+#     "bats: not found" — a missing checkout wearing a missing-tool costume.
+#   * the cross targets come from rustup, whose `add` is not idempotent against a
+#     half-installed component (see doctor-check). Surfaces as a rollback inside
+#     cross-check or darwin-link, minutes in, looking like a build failure.
+#
+# Neither is a code defect and neither is discoverable from the message it
+# prints, which is what makes them expensive: the first read of both is "the
+# branch broke something". `verify` depends on this task so the environment is
+# asserted BEFORE the long steps run, and the assertion is the same one in every
+# clone instead of a paragraph of setup prose nobody re-reads.
+#
+# It repairs rather than only reporting. These are provisioning steps with one
+# correct outcome — a checked-out submodule, an installed target — so a diagnosis
+# the caller must hand-translate into commands is just a slower version of the
+# fix. Repairs are idempotent and touch only the toolchain and the submodule,
+# never the working tree.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# The targets the LOCAL lifecycle needs: cross-check type-checks the Windows
+# triple, darwin-link links the Darwin one. CI's matrix additionally covers
+# x86_64-apple-darwin on its own runner; pulling a second std here would cost
+# every local verify a download the local tasks never use.
+read -r -a targets <<<"${DOCTOR_TARGETS:-x86_64-pc-windows-gnu ${DARWIN_TARGET:-aarch64-apple-darwin}}"
+
+status=0
+
+# --- the bats submodule -------------------------------------------------------
+
+if [ -x tests/bats/bin/bats ]; then
+	echo "doctor: bats submodule checked out"
+else
+	echo "doctor: tests/bats not checked out — running git submodule update --init"
+	git submodule update --init --recursive tests/bats
+	if [ -x tests/bats/bin/bats ]; then
+		echo "doctor: bats submodule checked out"
+	else
+		echo "::error:: tests/bats is still missing after submodule update; test:bats cannot run." >&2
+		status=1
+	fi
+fi
+
+# --- the rustup cross targets -------------------------------------------------
+
+rustlib="$(rustc --print sysroot)/lib/rustlib"
+check="$(dirname "$0")/doctor-check"
+
+for target in "${targets[@]}"; do
+	installed=no
+	if rustup target list --installed | grep -qxF "$target"; then
+		installed=yes
+	fi
+	verdict="$("$check" "$rustlib" "$target" "$installed")"
+
+	case "$verdict" in
+	ok)
+		echo "doctor: rust target $target installed"
+		continue
+		;;
+	stale)
+		# The residue is a partial install of a component rustup does not
+		# consider installed, so nothing can be depending on it. Dropping it is
+		# what makes the following `add` a clean install rather than a conflict.
+		echo "doctor: rust target $target is half-installed — purging the residue before reinstalling"
+		rustup target remove "$target" >/dev/null 2>&1 || true
+		rm -rf "${rustlib:?}/$target" "${rustlib:?}/manifest-rust-std-$target"
+		if [ -f "$rustlib/components" ]; then
+			grep -vxF "rust-std-$target" "$rustlib/components" >"$rustlib/components.doctor" || true
+			mv "$rustlib/components.doctor" "$rustlib/components"
+		fi
+		;;
+	missing)
+		echo "doctor: rust target $target missing — installing"
+		;;
+	esac
+
+	if rustup target add "$target" && rustup target list --installed | grep -qxF "$target"; then
+		echo "doctor: rust target $target installed"
+	else
+		echo "::error:: could not install rust target $target; cross-check/darwin-link will fail." >&2
+		status=1
+	fi
+done
+
+[ "$status" -eq 0 ] && echo "doctor: environment consistent"
+exit "$status"

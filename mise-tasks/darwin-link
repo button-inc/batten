@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #MISE description="Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
+#MISE depends=["doctor"]
 #
 # `cargo check` stops at codegen-to-metadata and never links, so it structurally
 # cannot see a dependency that pulls in a macOS system framework. The release

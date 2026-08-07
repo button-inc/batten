@@ -120,6 +120,9 @@ echo "lock-check: mise.lock is complete and current"
 
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
+# The `rustup target add` below is not idempotent against a half-installed
+# component; `doctor` is what makes it one.
+depends = ["doctor"]
 # The Darwin triples are NOT here: they get a stronger check — a real link — in
 # `darwin-link`, which runs as its own parallel CI job. Checking them here too
 # would be duplicate work on the critical path.
@@ -160,6 +163,10 @@ echo "no-docs-tree: no committed docs/ tree"
 
 [tasks."test:bats"]
 description = "Run the shell test suite (tests/*.bats) — cargo test for the mise-tasks/ programs"
+# bats comes from a submodule, not [tools], so a fresh clone has no bats and this
+# task reports "bats: not found" — which reads as a missing TOOL and sends the
+# reader to mise. `doctor` checks out the submodule instead.
+depends = ["doctor"]
 run = "bats --print-output-on-failure tests/*.bats"
 
 [tasks.hooks]
