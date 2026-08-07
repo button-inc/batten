@@ -1,0 +1,7 @@
+# Repo-wide shellcheck configuration. The gate runs at --severity=style, so a
+# suppression here is a deliberate decision, not noise reduction.
+
+# SC2030/SC2031: "modification of X is local to the subshell". bats runs every
+# assertion through `run`, which is a subshell by construction, so this fires on
+# correct test code and would push us to weaken the severity for the whole repo.
+disable=SC2030,SC2031

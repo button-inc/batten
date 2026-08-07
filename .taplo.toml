@@ -1,0 +1,16 @@
+# TOML formatting decisions. Without this file every one of these is taplo's
+# default by accident rather than by choice, and the first person to disagree
+# has nothing to point at.
+[formatting]
+# Keys stay in the order they were written: mise.toml groups tools and tasks by
+# meaning, and alphabetising would scatter each group's comments away from what
+# they explain.
+reorder_keys = false
+align_entries = false
+# Wide enough for the long `aqua:` pins and their trailing comments.
+column_width = 100
+array_trailing_comma = true
+array_auto_collapse = false
+allowed_blank_lines = 1
+indent_tables = false
+trailing_newline = true
