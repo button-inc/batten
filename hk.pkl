@@ -53,6 +53,16 @@ local gate = new Mapping<String, Step> {
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
+  // The checked-in memories are a graph navigated by mem: references, and the
+  // reference tooling's own check is advisory (always exits 0) — so a memory
+  // renamed without reference propagation, however it was renamed, dangles
+  // silently. This gates the edges: every mem:NAME in tracked markdown must
+  // resolve, every memory must be addressable by its own filename, and the
+  // graph root must exist (CLOUD-183).
+  ["memories-check"] {
+    glob = List("**/*.md")
+    check = "mise run memories-check"
+  }
   // An MCP allow rule that matches no tool name grants nothing and says nothing
   // about it — the only symptom is an approval prompt on every call, which
   // reads as harness behaviour rather than as a settings bug. This repo shipped
