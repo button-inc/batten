@@ -168,17 +168,17 @@ web sandbox; before claiming otherwise read `mem:github-access`.)
    stale" is not green.
 3. **Then `gh pr ready`** — the single event that triggers CI. A red run on a
    freshly-readied PR means step 2 was skipped.
-4. **Confirm CI green with a continuous background `gh` poll — never by waiting on
-   an event.** After readying, hold the session with a *single unbounded background
-   process* that polls `gh api …/commits/<sha>/check-runs` on an interval and exits
-   only when every check (including the `final` aggregate) reaches a terminal
-   state — **no timeout, no `MAX`/iteration cap, no reliance on webhook eventing or
-   the PR activity subscription.** Webhooks drop *successes* (an outage can drop
+4. **Confirm CI green with `mise run ci-wait`, backgrounded — never by waiting on
+   an event.** That task *is* the poll: a single unbounded loop over `gh api
+   …/commits/<sha>/check-runs` that exits only when every check reaches a terminal
+   state, non-zero if any is not green — **no timeout, no `MAX`/iteration cap, no
+   reliance on webhook eventing or the PR activity subscription.** Run it with
+   `run_in_background`; don't hand-roll the loop each session. Webhooks drop *successes* (an outage can drop
    them entirely), so silence is never green and the subscription must never be
    your CI signal. This backgrounded poll is the durability mechanism — not the
    banned *foreground* busy-poll, and not a "bounded run" to cap with a timeout: it
-   is bounded by CI *completing*, which always happens. On its exit, one
-   `get_check_runs` read for conclusions, then land. Red → step-2 miss: reproduce
+   is bounded by CI *completing*, which always happens. Its exit status and printed
+   conclusions are the signal; then land. Red → step-2 miss: reproduce
    and fix locally, don't iterate against CI. (Mechanics: `mem:github-access`.)
 5. **Land by `/fast-forward`** (never the merge button).
 6. **Never re-run CI on an already-tested SHA** — fast-forward means `main` takes

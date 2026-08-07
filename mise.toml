@@ -156,6 +156,35 @@ BASE_SHA="$main" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint
 echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit-lint all pass"
 '''
 
+[tasks.ci-wait]
+description = "Block until every check-run on HEAD reaches a terminal state, then report conclusions (exit 1 if any check did not succeed)"
+shell = "bash -c"
+# Workflow-contract step 4 (AGENTS.md): after `gh pr ready`, CI is confirmed by a
+# *continuous background poll*, never by waiting on a webhook — webhooks drop
+# successes, so silence is never green. Run this backgrounded; it re-invokes the
+# caller on exit. Deliberately unbounded: the exit condition is "checks reached
+# terminal", which always happens, and a wall-clock timeout would only
+# reintroduce the gap it was meant to close. Interval is tunable for tests.
+run = '''
+sha="${SHA:-$(git rev-parse HEAD)}"
+interval="${CI_WAIT_INTERVAL:-20}"
+echo "ci-wait: polling check-runs for $sha every ${interval}s"
+while :; do
+  runs=$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate \
+           --jq '.check_runs[] | "\(.status)\t\(.conclusion // "-")\t\(.name)"') || runs=""
+  if [ -n "$runs" ] && ! printf '%s\n' "$runs" | awk -F'\t' '$1!="completed"{found=1} END{exit !found}'; then
+    printf '%s\n' "$runs" | awk -F'\t' '{print $2"\t"$3}' | sort -u
+    if printf '%s\n' "$runs" | awk -F'\t' '$2!="success"&&$2!="neutral"&&$2!="skipped"{found=1} END{exit !found}'; then
+      echo "::error:: CI is not green on $sha — reproduce and fix locally (see AGENTS.md)." >&2
+      exit 1
+    fi
+    echo "ci-wait: all checks terminal and green on $sha"
+    exit 0
+  fi
+  sleep "$interval"
+done
+'''
+
 [tasks.commit-msg]
 description = "Validate one commit-message file is Conventional Commits"
 run = '''
