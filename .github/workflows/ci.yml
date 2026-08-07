@@ -35,6 +35,31 @@ jobs:
           # has no bats to run.
           submodules: true
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # Install only what this job's gates actually invoke, not the whole
+          # 18-tool dev set. Every job used to install everything, and `zig`
+          # (17.3s) finished last, so zig alone set the install wall clock in
+          # all four jobs — three of which never invoke it. Measured per-tool on
+          # run 31149330726: zig 17.3s, rust 13.9s, serena 6.7s, prettier 5.6s,
+          # node 4.7s, everything else under 3s.
+          #
+          # This list IS the `gate` mapping in hk.pkl plus `deny`: hk drives the
+          # steps; cargo-deny, shellcheck, shfmt, taplo, actionlint, pkl and
+          # prettier (which needs node) are the step commands; rust covers
+          # cargo-fmt/clippy/test and the `cargo metadata` in macos-link-check;
+          # jq is used at runtime by the gh-guard program that `test:bats`
+          # exercises. bats itself is the tests/bats submodule, not a tool.
+          #
+          # Kept out deliberately: zig and cargo-zigbuild (darwin-link only),
+          # zizmor (its own zizmor.yml workflow), and gh, release-plz, uv and
+          # serena, which back agent and release tasks that never run here.
+          # `mise run ci-tools-check` fails if a name here drifts from mise.toml.
+          #
+          # Kept on ONE line on purpose: `mise run ci-tools-check` reads these
+          # lists, and a single-line scalar is unambiguous to parse, where a
+          # YAML block scalar's continuation lines are not (several tool names
+          # here begin with `aqua:` and read as new keys).
+          install_args: rust hk aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq pkl node npm:prettier
       # Caching is left at its default (save on), which means each PR writes and
       # restores its OWN cache. That is safe without any `save-if` guard because
       # GitHub scopes a cache to the ref that created it: a `pull_request` run
@@ -52,10 +77,18 @@ jobs:
       #
       # What this does NOT fix: the first run of a new PR is still cold, because
       # only a cache on the base branch could warm it and nothing writes there.
-      # Warming from main needs a push-to-main trigger, which AGENTS.md forbids —
-      # that trade is CLOUD-176's open decision, not this change's to make.
+      # CLOUD-176 costed that warming and decided against it — a warm job per
+      # merge spends ~178s of job-time to save ~60s on one PR's first run, and
+      # runs 2..N (where the volume is) already restore the PR's own cache.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise run ci
+        env:
+          # `test:bats` depends on `doctor`, which by default also installs the
+          # rustup cross targets — two std downloads this job never uses, since
+          # cross-check and darwin-link are their own jobs. Set but empty means
+          # "assert the submodule, no rust targets"; unset would take the
+          # default pair.
+          DOCTOR_TARGETS: ""
 
   cross:
     name: cross
@@ -69,8 +102,16 @@ jobs:
           # has no bats to run.
           submodules: true
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # cross-check is `rustup target add` + `cargo check`; rust is the only
+          # tool it touches. See the ci job for why these lists are narrow.
+          install_args: rust
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: mise run cross-check
+        env:
+          # Only the triple cross-check type-checks. doctor's default pair would
+          # additionally pull the Darwin std, which darwin-link's own job owns.
+          DOCTOR_TARGETS: x86_64-pc-windows-gnu
 
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
   # needs an Apple SDK; this LINKS both Darwin targets, which is the only check
@@ -89,12 +130,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # zig supplies the Darwin linker and cargo-zigbuild drives cargo
+          # through it; rust is the compiler. Nothing else is invoked here —
+          # and this is the ONLY job that needs zig, the 17.3s pole the other
+          # jobs used to pay for nothing. See the ci job.
+          install_args: rust zig ubi:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A per-target key: the two legs build different artifacts and would
           # otherwise thrash one shared entry.
           key: ${{ matrix.target }}
       - run: mise run darwin-link ${{ matrix.target }}
+        env:
+          # Exactly the target being linked; doctor's default would also fetch
+          # the Windows std that cross-check's own job owns.
+          DOCTOR_TARGETS: ${{ matrix.target }}
 
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.

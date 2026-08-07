@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every tool named in a ci.yml install_args list is a real [tools] entry in mise.toml"
+#
+# CI installs a NARROW tool set per job (see .github/workflows/ci.yml): the `ci`
+# job takes the hk gate's tools, `cross` takes rust, `darwin-link` takes rust +
+# zig + cargo-zigbuild. That is the largest single CI speed-up available — every
+# job used to install all 18 tools, and zig (17.3s) set the wall clock in three
+# jobs that never invoke it.
+#
+# The cost of narrowing is a second place where tool names are written down, and
+# the failure mode is drift: rename or re-pin a tool in mise.toml and the
+# install_args list silently keeps the old name. `mise install` does NOT fail on
+# an unknown tool name, so the drift surfaces much later as "command not found"
+# in whichever step happened to need it — a missing TOOL wearing a missing-STEP
+# costume, which is the same class of late, misattributed failure `doctor`
+# exists to kill.
+#
+# This is that rule's mechanism (AGENTS.md non-negotiable 2): a computable
+# predicate over the two files, exit 0 or 1. It asserts NAMES resolve, which is
+# the half that can rot silently. It deliberately does not try to infer which
+# tools a job "should" need — that is a judgement, not a predicate, and the
+# comments in ci.yml carry the reasoning.
+#
+# Output is a pointer, never a payload (non-negotiable 4): the tool name and the
+# file it is missing from.
+set -uo pipefail
+
+# Both inputs are ARGUMENTS defaulting to the real files, for the same reason
+# doctor-check takes `installed` as an argument: the decision is the part worth
+# testing, and it only tests if the suite can point it at fixtures carrying
+# drift the real tree must never have.
+# `|| exit 1` rather than `set -e`: the checks below deliberately let non-zero
+# exits through (an empty `grep` is a real outcome here, not a fatal error), so
+# this script cannot take -e the way doctor does.
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+readonly WORKFLOW="${1:-.github/workflows/ci.yml}"
+readonly CONFIG="${2:-mise.toml}"
+
+for f in "$WORKFLOW" "$CONFIG"; do
+	if [ ! -f "$f" ]; then
+		echo "::error:: ci-tools-check: $f not found" >&2
+		exit 1
+	fi
+done
+
+# The [tools] table's keys, as mise sees them: everything from `[tools]` up to
+# the next table header, left of the `=`, unquoted. Comments and blanks drop out
+# because they carry no bare `key =`.
+declared=$(
+	awk '
+		/^\[tools\]/          { in_tools = 1; next }
+		/^\[/                 { in_tools = 0 }
+		in_tools && /^[^#]/ {
+			eq = index($0, "=")
+			if (eq == 0) next
+			key = substr($0, 1, eq - 1)
+			gsub(/^[ \t]+|[ \t]+$/, "", key)
+			gsub(/^"|"$/, "", key)
+			if (key != "") print key
+		}
+	' "$CONFIG"
+)
+
+if [ -z "$declared" ]; then
+	echo "::error:: ci-tools-check: no [tools] entries parsed from $CONFIG" >&2
+	exit 1
+fi
+
+# Every install_args value in the workflow, flattened to one tool name per line.
+# Each list is a one-line plain scalar, which ci.yml states and this relies on:
+# a YAML block scalar would need continuation-line tracking, and several tool
+# names begin with `aqua:` so they read as new keys under any such heuristic.
+requested=$(
+	awk '
+		/^[ \t]*install_args:/ {
+			sub(/^[ \t]*install_args:[ \t]*/, "")
+			print
+		}
+	' "$WORKFLOW" | tr -s '[:blank:]' '\n' | grep -v '^$' | sort -u
+)
+
+if [ -z "$requested" ]; then
+	echo "::error:: ci-tools-check: no install_args lists found in $WORKFLOW — CI would install the whole toolchain in every job" >&2
+	exit 1
+fi
+
+status=0
+count=0
+while IFS= read -r tool; do
+	count=$((count + 1))
+	if ! printf '%s\n' "$declared" | grep -qxF "$tool"; then
+		echo "::error:: $WORKFLOW installs '$tool', which is not a [tools] entry in $CONFIG. CI would skip it and fail later as 'command not found'." >&2
+		status=1
+	fi
+done <<<"$requested"
+
+if [ "$status" -eq 0 ]; then
+	echo "ci-tools-check: all $count tools named in $WORKFLOW are declared in $CONFIG"
+fi
+exit "$status"

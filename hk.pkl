@@ -37,6 +37,15 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", "mise.toml")
     check = "mise run hk-version"
   }
+  // CI installs a narrow, per-job tool set instead of the whole toolchain
+  // (ci.yml, install_args). That is worth ~10s per job, and its cost is a
+  // second place tool names are written down. `mise install` does not fail on
+  // an unknown name, so drift between the two files surfaces late as "command
+  // not found". This is that rule's mechanism: the names must resolve.
+  ["ci-tools-check"] {
+    glob = List(".github/workflows/ci.yml", "mise.toml")
+    check = "mise run ci-tools-check"
+  }
   // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
   // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
   // tracked. Research deliverables and evidence notes attach to the Linear

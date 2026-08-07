@@ -86,6 +86,32 @@ setup() {
 	[ "$output" = "missing" ]
 }
 
+# --- DOCTOR_TARGETS: which targets doctor is responsible for ------------------
+#
+# Driven against the real `doctor` rather than doctor-check, because the thing
+# under test is the parameter expansion, not the verdict. Safe to run for real:
+# with no targets there is no rustup work to do, and the submodule half is
+# idempotent.
+
+@test "an empty DOCTOR_TARGETS asks for no rust targets at all" {
+	# `-` and not `:-`. CI's `ci` job runs test:bats, which needs the submodule
+	# half and none of the rustup half — cross-check and darwin-link are their
+	# own jobs. With `:-` an empty value would silently take the default pair
+	# and download two std libs that job never uses.
+	DOCTOR_TARGETS="" run "$BATS_TEST_DIRNAME/../mise-tasks/doctor"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"bats submodule checked out"* ]]
+	[[ "$output" != *"rust target"* ]]
+}
+
+@test "an unset DOCTOR_TARGETS still takes the default pair" {
+	# The local lifecycle depends on this default; only an explicit empty value
+	# opts out.
+	run env -u DOCTOR_TARGETS "$BATS_TEST_DIRNAME/../mise-tasks/doctor"
+	[[ "$output" == *"x86_64-pc-windows-gnu"* ]]
+	[[ "$output" == *"aarch64-apple-darwin"* ]]
+}
+
 # --- usage --------------------------------------------------------------------
 
 @test "rejects a missing installed argument" {
