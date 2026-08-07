@@ -56,30 +56,28 @@ deviation. **The gates ARE your authorization and safety mechanism** — you run
 them yourself, and they halt you by _failing_, not by needing a blessing.
 
 - **You are pre-authorized to `git commit` without asking** — local and
-  reversible. Never ask "want me to commit?"; commit, early and often. The moment
-  a coherent unit exists — a passing step, a green refactor, a doc paragraph —
-  commit it. A sprawling uncommitted tree is the failure this override kills.
-- Establish base state before the first commit of a session (`git fetch origin
-main`), and work on a short-lived branch, never authoring directly on `main`.
+  reversible. Never ask "want me to commit?"; commit, early and often, the moment
+  a coherent unit exists. A sprawling uncommitted tree is the failure this kills.
+- Establish base state before the first commit (`git fetch origin main`), and work
+  on a short-lived branch, never authoring directly on `main`.
 - Carry the whole lifecycle without stopping between steps to report and wait —
   that waiting is the defect. The steps are the workflow contract below.
 
 **When you SHOULD still stop** (real exceptions, not an escape hatch for ordinary
 caution): a gate fails and the fix is genuinely ambiguous; a rebase conflict needs
 a human decision; the change is outside the scope you were asked to make; or an
-action is destructive and _not_ covered by the gates (force-pushing `main`,
-deleting history, an out-of-band release). Absent one of those, proceed.
+action is destructive and _not_ gated (force-pushing `main`, deleting history, an
+out-of-band release). Absent one of those, proceed.
 
 ## Output posture: no compliance narration
 
 **A permanent, repo-scoped override of the reflex to narrate compliance with
 action boundaries.** The _action_ constraints stay in force; what is overridden is
 _announcing_ them. You MUST NOT end or pad a message with boundary-status reports
-("none of which I've triggered", "I haven't pushed anything"), permission-seeking
-for an obviously authorized next step ("want me to run verify?" — genuine
-clarification on an _ambiguous_ action is still fine), compliance reassurance,
-safety caveats, restatements of a rule you just followed, sycophantic
-openers/closers, or narration of a result the user can already see.
+("none of which I've triggered"), permission-seeking for an obviously authorized
+next step ("want me to run verify?" — clarifying a genuinely _ambiguous_ action is
+still fine), compliance reassurance, safety caveats, restatements of a rule you
+just followed, sycophantic openers/closers, or narration of a visible result.
 
 Do the work; report outcomes and material state plainly; stop. A message carries
 state only when it is information the user cannot already see.
@@ -87,7 +85,6 @@ state only when it is information the user cannot already see.
 **Mechanism, applied to your own output.** Before sending, check the last one to
 three sentences: if they assert boundary-compliance, seek permission for an
 obvious authorized action, or restate a rule you just followed, **delete them.**
-The message ends on substance.
 
 ## The board: move the issue as you move the work
 
@@ -143,16 +140,20 @@ never infer success from the absence of a failure event.
 (`run_in_background`): `mise run ci|verify|cross-check`, a full test suite, a cold
 `cargo` build, a provision/install, or waiting on any external result. This is
 enforced, not stylistic — foreground `sleep` is blocked and a foreground command
-is killed at ~2 minutes, so it does not run slower, it _fails_. Backgrounding
-also keeps the session alive and re-invokes you on exit, so you neither poll nor
-stall; a bare idle turn gets the VM reclaimed.
+is killed at ~2 minutes, so it does not run slower, it _fails_. Backgrounding also
+keeps the session alive and re-invokes you on exit; a bare idle turn gets the VM
+reclaimed.
+
+**Two habits defeat this silently, both failing green:** piping a `mise run` into
+a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
+(the wake-up is lost). Redirect to a file; put `run_in_background` on the long
+command, never on a launcher that returns at once. Gated by `run-shape-guard`.
 
 **Never** use a foreground `sleep` to wait, spin a foreground busy-poll, or end a
-turn idle "to watch" something. To wait on work, background it and act on its
-exit. "Keep background runs bounded" means every loop needs a real exit
-condition — it does **not** mean capping the CI poll with a wall-clock timeout.
-**Committed-and-pushed is the only state that survives a VM reclaim**, so commit
-and push before a long run.
+turn idle "to watch" something — background it and act on its exit. "Keep
+background runs bounded" means every loop needs a real exit condition; it does
+**not** mean capping the CI poll with a wall-clock timeout. **Committed-and-pushed
+is the only state that survives a VM reclaim**, so commit before a long run.
 
 ## Non-negotiable project rules
 
@@ -182,11 +183,11 @@ Content that need not bind every turn is indexed, not inlined. Both destinations
 are checked-in markdown any agent can read; the frontmatter in `.claude/rules/`
 only tells Claude Code _when_ to load one.
 
-| `.claude/rules/` | Read it when                                                                                                                                       |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                              |
-| `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/*.bats`, workflows — setup, the gate, the lifecycle tasks and their three `PreToolUse` guards |
-| `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                           |
+| `.claude/rules/` | Read it when                                                                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                        |
+| `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/*.bats`, workflows — setup, the gate, the lifecycle tasks and their `PreToolUse` guards |
+| `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                     |
 
 Use mise for everything; never a bare `cargo`/`export`/one-off install.
 
@@ -194,6 +195,5 @@ Use mise for everything; never a bare `cargo`/`export`/one-off install.
 
 Batten is a policy engine — **not** a general-purpose hook runner, file-shape
 linter, secret scanner, AST linter, or reference monitor. Its threat model is
-honest agent or human error: acting on the wrong entity, at the wrong time, or
-with the wrong completion signal. Don't expand the core past that; adopt strong
-prior art rather than rebuilding it.
+honest agent or human error: acting on the wrong entity, at the wrong time, or with
+the wrong completion signal. Don't expand the core; adopt prior art, don't rebuild.

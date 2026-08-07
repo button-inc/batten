@@ -106,3 +106,45 @@ literal `mcp__<server>__` prefix and skips anything broader with a warning — a
 rule that reads as a grant and is not one. It deliberately does **not** demand a
 `claude_ai_` companion; an earlier version did, which encoded one host's naming
 as universal. A gate may only assert what it can verify from the repo.
+
+## A Bash call is a supervised process, not a terminal
+
+Its exit status and its lifetime are what the harness reads. Two habits destroy
+one each, and both then fail **green** — exit 0, plausible output — which is why
+they survive being noticed:
+
+- **`mise run <task> 2>&1 | tail -6`** exits with the pager's status, always 0.
+  This produced two confident "green" reports over failed runs in one session:
+  a formatting failure, and `linear-check` refusing a stale branch.
+- **`nohup mise run <task> >log 2>&1 &`** returns immediately. The harness records
+  the task complete, the work runs unsupervised, and the session loses the
+  wake-up it gets when the work actually exits — leaving only polling or an idle
+  turn, both forbidden, and an idle turn gets the VM reclaimed mid-run.
+
+One substitution underlies both: making the call return **small** (`| tail`) or
+**fast** (`nohup &`), at the cost of the two things that are actually the
+interface.
+
+The correct form keeps the status and lets the harness supervise:
+
+```
+mise run <task> >/tmp/<task>.log 2>&1; echo "EXIT=$?"; tail -20 /tmp/<task>.log
+```
+
+with `run_in_background` on the tool call itself for anything over ~2 minutes.
+`run_in_background` must wrap the long command, not a launcher that returns
+immediately — a wrapped launcher looks identical in the tool result and silently
+drops the re-invocation. A pager over a **file** is fine; over a **live task** it
+is not.
+
+Mechanism: `mise run run-shape-guard`, a `PreToolUse` hook, denies both shapes
+and names the correct one. Redirections (`2>&1`, `&>`) are stripped before the
+`&` test, since the recommended form contains one. Bypass:
+`BATTEN_RUN_SHAPE_BYPASS=1`.
+
+This rule existed as prose before it bound anything, and its placement is the
+lesson: it sat in `.claude/rules/toolchain.md` — a vendor-specific file that
+`mem:prior-art-and-issue-hygiene` says must not hold instructions, since agents
+that cannot read it will violate it — scoped to "these tasks", so it never
+generalised to `verify` or `ci`. Prose, in a file only one agent reads, about one
+task. Three reasons it failed, and rule 2 predicted all three.

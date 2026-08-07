@@ -1,0 +1,67 @@
+#!/usr/bin/env bats
+# Neutralising text that *describes* the shapes rather than performing them.
+#
+# Every case here is one the guard denied while it was being written. A guard
+# over command text has to distinguish a command from prose about a command, and
+# the places that prose actually appears are commit messages, issue bodies and
+# documentation heredocs — precisely where these shapes get written down.
+
+setup() {
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard"
+	cd "$BATS_TEST_DIRNAME/.." || return 1
+}
+
+guard() {
+	jq -nc --arg c "$1" '{tool_input: {command: $c}}' | "$GUARD"
+}
+
+denied() {
+	[[ "$1" == *'"deny"'* ]]
+}
+
+@test "a multi-line commit message quoting the shapes is not the shapes" {
+	# sed is line-based, so a quoted span opened on line 1 and closed on line 20
+	# left every line between it exposed. This is the commonest possible shape:
+	# a commit message explaining the very rule being added.
+	run guard 'git commit -q -m "feat: guard the run shapes
+
+  piped-verdict   mise run verify 2>&1 | tail -6 exits with tail status
+  orphaned-run    nohup mise run land >log 2>&1 & returns at once
+
+Both fail green."'
+	! denied "$output"
+}
+
+@test "a single-line quoted mention is still not the shape" {
+	run guard 'git commit -m "explain why mise run verify | tail hides the status"'
+	! denied "$output"
+}
+
+@test "a heredoc body naming the shapes is documentation" {
+	run guard 'mise run fmt; python3 - <<PY
+text = "detaching with nohup / & loses the wake-up"
+PY'
+	! denied "$output"
+}
+
+@test "a here-string does not open a skip that swallows the rest" {
+	# `<<<` is a here-STRING. Treating it as a heredoc opener would skip every
+	# following line, silently disabling the guard for the rest of the command.
+	run guard 'grep -q x <<<"$v"; mise run land &'
+	denied "$output"
+}
+
+@test "a real shape after a closed heredoc is still caught" {
+	run guard 'python3 - <<PY
+print("nohup and & described here")
+PY
+mise run verify 2>&1 | tail -5'
+	denied "$output"
+}
+
+@test "a real shape after a closed quoted span is still caught" {
+	run guard 'git commit -m "a message
+
+spanning lines"; mise run ci | tail -3'
+	denied "$output"
+}

@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#MISE description="PreToolUse hook body: deny a `mise run` piped into a pager, or launched with nohup/&, since both discard what the harness reads"
+#
+# Two shapes that report success while destroying the thing the harness consumes.
+# Both were used repeatedly in one session, and both fail GREEN — exit 0 with
+# plausible output — which is why noticing them twice did not stop them.
+#
+#   piped-verdict   `mise run verify 2>&1 | tail -6` exits with tail's status,
+#                   always 0. It produced two confident "green" reports over runs
+#                   that had failed: once on a formatting check, once on a stale
+#                   branch refusal.
+#   orphaned-run    `nohup mise run land >log 2>&1 & sleep 3; echo started`
+#                   returns immediately with the echo. The task is recorded
+#                   complete, the work runs unsupervised, and the session loses
+#                   its wake-up — leaving only polling or an idle turn, both
+#                   forbidden, and an idle turn gets the VM reclaimed mid-run.
+#
+# One root cause: treating a Bash call as a terminal that should print something
+# short, when it is a supervised process whose exit status and lifetime are the
+# interface. `| tail` makes the output small and drops the verdict; `nohup &`
+# makes the call return fast and drops the supervision.
+#
+# The rule already existed as prose, in a vendor-specific file, scoped to one
+# task — which is three reasons it never bound. This is its mechanism.
+#
+# What stays allowed, because it is the correct form: redirect to a file, let the
+# call carry the real exit status, and inspect the file in a separate command.
+# A pager over a FILE is fine; a pager over a live task is not.
+#
+# Fails OPEN on anything it cannot parse, and honours BATTEN_RUN_SHAPE_BYPASS=1.
+set -uo pipefail
+
+[ -n "${BATTEN_RUN_SHAPE_BYPASS:-}" ] && exit 0
+
+raw=$(cat) || exit 0
+cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
+[ -n "$cmd" ] || exit 0
+
+# Heredoc BODIES are dropped first, then quoted spans neutralised, so a commit
+# message, issue body or documentation paragraph *describing* these shapes is not
+# judged as one. Quote-scrubbing alone is not enough: a heredoc writing prose that
+# names `nohup`/`&` is unquoted text, and this guard denied exactly that on the
+# command that documented it.
+# A heredoc opener can appear anywhere on the line (`cat >> f <<EOF`), so this is
+# not anchored — an anchored version missed `cat >> tests/x.bats <<BATS` and the
+# guard denied the command writing its own test fixture. `<<<` is a here-STRING,
+# not a heredoc, and must not start a skip that never terminates.
+body=$(awk '
+	!inheredoc && /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?/ && !/<<</ {
+		line = $0
+		sub(/^.*<<-?[[:space:]]*/, "", line)
+		sub(/[^A-Za-z0-9_'"'"'"].*$/, "", line)
+		gsub(/['"'"'"]/, "", line)
+		if (line != "") { term = line; inheredoc = 1 }
+		print; next
+	}
+	inheredoc { if ($0 ~ "^[[:space:]]*" term "[[:space:]]*$") inheredoc = 0; next }
+	{ print }
+' <<<"$cmd")
+# -z, so a quoted span is neutralised across NEWLINES. sed is line-based by
+# default, which left the interior of every multi-line `git commit -m "…"`
+# exposed — and a commit message documenting these shapes is the single most
+# likely place to write them down. The guard denied exactly that.
+scrubbed=$(printf '%s' "$body" | sed -zE "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
+
+# Only `mise run <task>` is judged. `mise exec -- …` runs a program directly and
+# `git log | head` is ordinary read-only paging; neither carries a gate's verdict.
+grep -qE '(^|[^[:alnum:]_-])mise[[:space:]]+run[[:space:]]' <<<"$scrubbed" || exit 0
+
+deny() {
+	jq -n --arg r "$1" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $r
+    }
+  }'
+	exit 0
+}
+
+CORRECT='Redirect instead, so the call keeps the real exit status:
+
+  mise run <task> >/tmp/<task>.log 2>&1; echo "EXIT=$?"; tail -20 /tmp/<task>.log
+
+and pass run_in_background on the tool call itself for anything that can exceed
+~2 minutes. A pager over a FILE is fine; a pager over a live task is not.'
+
+# --- piped-verdict ----------------------------------------------------------
+# A pipe into a pager replaces the task's exit status with the pager's, which is
+# 0 whether the task passed or failed.
+if grep -qE '\|[[:space:]]*(tail|head)([[:space:]]|$)' <<<"$scrubbed"; then
+	deny "Refused: piping \`mise run\` into a pager discards the task's exit status — the command exits with the pager's, which is 0 whether the task passed or failed. This has already produced \"green\" reports over failed runs.
+
+$CORRECT
+
+Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
+fi
+
+# --- orphaned-run -----------------------------------------------------------
+# `nohup`, or a trailing `&` that is not `&&`, detaches the task from the tool
+# call. The call then returns immediately and the harness records it complete.
+# File-descriptor redirections contain a literal `&` (`2>&1`, `&>log`, `>&2`)
+# and are not background operators — the correct form uses one, so a naive `&`
+# test denies exactly the shape this guard recommends. Strip them first, then a
+# remaining `&` that is not `&&` is a real detach.
+no_redir=$(sed -E 's/[0-9]*>&[0-9-]+//g; s/&>>?//g' <<<"$scrubbed")
+if grep -qE '(^|[^[:alnum:]_-])nohup([[:space:]]|$)' <<<"$no_redir" ||
+	grep -qE '(^|[^&])&[[:space:]]*($|[^&])' <<<"$no_redir"; then
+	deny "Refused: detaching \`mise run\` with nohup or \`&\` orphans it from the tool call. The call returns immediately, the harness records the task complete, and the session loses the wake-up it would get when the work actually exits — leaving only polling or an idle turn, both of which the workflow contract forbids.
+
+Pass run_in_background on the tool call itself and let the command run in the foreground of that call; the harness re-invokes you on exit.
+
+$CORRECT
+
+Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
+fi
+
+exit 0

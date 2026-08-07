@@ -16,6 +16,10 @@
           {
             "type": "command",
             "command": "mise run issue-guard"
+          },
+          {
+            "type": "command",
+            "command": "mise run run-shape-guard"
           }
         ]
       },
