@@ -73,8 +73,8 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
 /// by `check` when a rule fires; because that needs source files placed beside
 /// the config, it is exercised in the dedicated `check_*` tests below rather than
 /// this config-only table. `Internal` (3) has no command that reaches it at this
-/// stage: its numeric contract is pinned in the `exit` unit tests (the `hook`
-/// exit-2-denies inversion is CLOUD-40).
+/// stage: its numeric contract is pinned in the `exit` unit tests. The `hook`
+/// exit-2-denies inversion is exercised by the `hook_*` tests below.
 #[test]
 fn exit_code_contract() {
     struct Case {

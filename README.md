@@ -42,12 +42,18 @@ richer per-agent behavior handled in thin shims.
 
 ## Scope and limits
 
-Batten is a policy engine, **not** a general-purpose hook runner, file-shape
-linter, secret scanner, AST linter, or reference monitor. Its threat model is
-honest agent or human error: acting on the wrong entity, at the wrong time, or
-with the wrong completion signal. It cannot reliably catch attacker- or
+Batten is a policy engine: it **evaluates** narrow content predicates and
+**wraps** linters, scanners, and hook runners as evidence sources — a rule kind
+exists to gate on a tool's verdict, never to replace the tool, so the boundary
+holds even as rule kinds grow. Its threat model is honest agent or human error:
+acting on the wrong entity, at the wrong time, or with the wrong completion
+signal — where "wrong entity" means a call's argument values, judged against
+committed, out-of-band config. It cannot reliably catch attacker- or
 error-chosen parameters of otherwise-permitted calls, harmful composition of
 individually legal steps, cross-session poisoning, or errors in its own spec.
+And a green check certifies exactly its predicates, nothing more: over-trusting
+it is the misuse cost of any gate that works, which is why review still gates
+release.
 
 ## Build and test
 
