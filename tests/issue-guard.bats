@@ -83,7 +83,8 @@ denied() {
 	local repo="$BATS_TEST_TMPDIR/repo"
 	git init -q "$repo"
 	cd "$repo" || return 1
-	git config user.email t@t; git config user.name t
+	git config user.email t@t
+	git config user.name t
 	git commit -q --allow-empty -m init
 	git checkout -q -b wenzowski/cloud-178-connector-names
 	run bash -c "jq -nc '{tool_input:{command:\"gh pr create --draft\"}}' | $GUARD"
@@ -94,7 +95,8 @@ denied() {
 	local repo="$BATS_TEST_TMPDIR/repo2"
 	git init -q "$repo"
 	cd "$repo" || return 1
-	git config user.email t@t; git config user.name t
+	git config user.email t@t
+	git config user.name t
 	git commit -q --allow-empty -m init
 	git branch -f main
 	git update-ref refs/remotes/origin/main main
@@ -110,7 +112,8 @@ Refs: CLOUD-178"
 	local repo="$BATS_TEST_TMPDIR/repo3"
 	git init -q "$repo"
 	cd "$repo" || return 1
-	git config user.email t@t; git config user.name t
+	git config user.email t@t
+	git config user.name t
 	git commit -q --allow-empty -m init
 	git branch -f main
 	git update-ref refs/remotes/origin/main main
