@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#MISE description="Gate: no issue sits In Progress while its commits are already on main (reads get_issue payloads on stdin)"
+#
+# CLOUD-186. The tracker's open-side automation moves an issue to In Progress
+# when a commit mentions it. That is not the same predicate as "work on this
+# issue began", and the difference is observable three ways in one session:
+#
+#   CLOUD-179  sat correctly in In Review; a later commit carrying its ref moved
+#              it BACK to In Progress. The work was continuing, not restarting.
+#   CLOUD-174  was moved to In Progress and left there after its work landed.
+#   CLOUD-191  was started by a commit that only DOCUMENTED the problem, so the
+#              board claimed someone was working it when nobody was.
+#
+# A commit can mention an issue to continue it, to document it, to cite it as
+# prior art, or to record a deferral. The automation cannot tell those apart, and
+# it only ever moves forward into In Progress — never out. So the column silently
+# understates every multi-PR issue, which under trunk-based development is most
+# of them.
+#
+# The predicate that IS computable, from git alone and with no tracker
+# credential: an issue in In Progress whose ref appears on `main` has landed, and
+# AGENTS.md defines landed-on-main as In Review.
+#
+# This does not claim the work is COMPLETE — that is the release question
+# (`released`, CLOUD-174) and a judgement this must not make. It claims only that
+# the column is behind the git history, which is a fact.
+#
+# Agents fetch, gates decide: the caller pipes `get_issue` payloads, same as
+# `graph-check` and `ready-lint`. Pointer-only output; byte-stable ordering.
+set -euo pipefail
+
+# Exit 2 is "I could not read the input", distinct from exit 1 "the board is
+# behind" — a caller piping the wrong thing must not look like a stale board.
+if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+	echo "::error:: stdin is empty; expected get_issue payloads" >&2
+	exit 2
+fi
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
+	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
+	exit 2
+fi
+
+# `main` must resolve, or every issue would look unlanded and the gate would
+# report a clean board it never checked — the silent false green this repo has
+# hit twice before.
+if ! git rev-parse --verify -q origin/main >/dev/null 2>&1; then
+	echo "::error:: origin/main does not resolve, so landedness cannot be judged. That is a checkout problem, not a clean board." >&2
+	exit 2
+fi
+
+# Read the log ONCE, into a variable. Not an optimisation — `git log … | grep -q`
+# under `set -o pipefail` reports failure even when the grep matches: grep exits
+# on the first hit, git log takes SIGPIPE, and the pipeline's status becomes that
+# signal. The gate then found nothing and reported a clean board, which is the
+# silent false green this repo keeps meeting in new disguises.
+log=$(git log --format='%B' origin/main 2>/dev/null || true)
+
+fail=0
+while IFS= read -r id; do
+	[ -n "$id" ] || continue
+	# Bounded on both sides so CLOUD-17 does not match CLOUD-179.
+	if grep -qE "(^|[^0-9A-Za-z-])$id([^0-9]|$)" <<<"$log"; then
+		[ "$fail" = 0 ] && echo "::error:: issues are In Progress while their commits are on main — landed is In Review (AGENTS.md):" >&2
+		echo "  $id  In Progress -> In Review" >&2
+		fail=1
+	fi
+done < <(jq -r '.[] | select(.status == "In Progress") | .id' <<<"$issues" | sort -u)
+
+[ "$fail" = 0 ] && echo "landed-check: no In Progress issue has commits on main"
+exit "$fail"

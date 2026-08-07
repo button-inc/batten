@@ -85,6 +85,13 @@ restate its count here), each failing open on anything it can't parse:
   whose cost is paid in CI minutes when it is skipped. Bypass:
   `BATTEN_READY_GUARD_BYPASS=1`.
 
+`mise run landed-check` is the third board gate on the same stdin pattern: an
+issue In Progress whose ref appears on `main` has landed, and landed is In
+Review. It exists because the tracker's open-side automation fires on "a commit
+mentions this issue", which is not "work began" — a commit can continue,
+document, cite or defer. It only ever moves forward into In Progress, so it
+dragged an issue back out of In Review and left two others stranded (CLOUD-186).
+
 `mise run gh-preflight` answers "does this token carry the claims our tasks
 need?" by probing the read endpoints and reporting each 403's
 `X-Accepted-GitHub-Permissions`; write claims are declared, never exercised. Run
