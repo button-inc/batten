@@ -114,10 +114,19 @@ jobs:
           DOCTOR_TARGETS: x86_64-pc-windows-gnu
 
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
-  # needs an Apple SDK; this LINKS both Darwin targets, which is the only check
-  # with no false negatives. One target per leg so the two run concurrently with
-  # each other AND with ci/cross — it is off the critical path, not on it, and
-  # the Darwin triples were removed from cross-check so nothing is done twice.
+  # needs an Apple SDK; this LINKS a Darwin target, which is the only check with
+  # no false negatives. It runs concurrently with ci/cross, and the Darwin
+  # triples were removed from cross-check so nothing is done twice.
+  #
+  # ONE target, not both. What this gate asserts — that nothing in the dependency
+  # graph pulls in an Apple SDK or system framework — is a property of the
+  # dependency graph, not of the word size, so linking aarch64 proves it. The
+  # x86_64 leg was a near-duplicate job sitting on the critical path, which is
+  # the same duplicate work the cross-check note above refuses. Coverage is not
+  # dropped, only moved later: release-artifacts.yml builds BOTH Darwin targets
+  # through zigbuild, so an x86_64-only linker problem still cannot reach a
+  # shipped artifact. The matrix stays rather than collapsing to a plain job, so
+  # restoring the second leg is a one-word change if the trade stops holding.
   darwin-link:
     name: darwin-link (${{ matrix.target }})
     if: ${{ github.event.pull_request.draft == false }}
@@ -126,7 +135,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+        target: [aarch64-apple-darwin]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
@@ -138,8 +147,8 @@ jobs:
           install_args: rust zig ubi:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # A per-target key: the two legs build different artifacts and would
-          # otherwise thrash one shared entry.
+          # A per-target key: a leg's artifacts are target-specific and would
+          # otherwise thrash a shared entry if the second leg is restored.
           key: ${{ matrix.target }}
       - run: mise run darwin-link ${{ matrix.target }}
         env:

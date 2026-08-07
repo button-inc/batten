@@ -28,9 +28,10 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # The targets the LOCAL lifecycle needs: cross-check type-checks the Windows
-# triple, darwin-link links the Darwin one. CI's matrix additionally covers
-# x86_64-apple-darwin on its own runner; pulling a second std here would cost
-# every local verify a download the local tasks never use.
+# triple, darwin-link links the Darwin one. This matches CI, whose darwin-link
+# matrix also carries aarch64 alone — x86_64-apple-darwin is linked in
+# release-artifacts.yml, where a real artifact is produced. Pulling a second
+# Darwin std here would cost every local verify a download nothing then uses.
 # `-` and not `:-`, so an explicitly EMPTY DOCTOR_TARGETS means "no rust targets
 # needed" rather than falling back to the default pair. CI's `ci` job wants
 # exactly that: it runs test:bats, which needs the submodule half of this task

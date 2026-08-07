@@ -11,10 +11,12 @@
 # only way that has no false negatives: link the thing. It either links or it
 # does not.
 #
-# Runs as its own CI job, one target per matrix leg, so the legs run concurrently
-# with each other AND with `ci`/`cross`. It is off the critical path, not on it —
-# and the Darwin triples were dropped from `cross-check` in the same change, so
-# nothing is checked twice.
+# Runs as its own CI job, concurrently with `ci` and `cross`, and the Darwin
+# triples were dropped from `cross-check` so nothing is checked twice. CI links
+# ONE target (aarch64): the property being asserted belongs to the dependency
+# graph, not the word size, so a second leg was duplicate work on the critical
+# path. release-artifacts.yml still builds both Darwin targets, so an
+# x86_64-only linker problem cannot reach a shipped artifact.
 set -euo pipefail
 
 target="${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}"
