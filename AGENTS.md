@@ -34,12 +34,13 @@ surface, read **on demand** (they are _not_ auto-loaded into context — anythin
 that must bind lives in this file, not a memory). Read the matching memory at its
 trigger; don't reconstruct the detail from scratch.
 
-| Memory                  | Read it when                                                           |
-| ----------------------- | ---------------------------------------------------------------------- |
-| `workflow/board-states` | starting/finishing a `CLOUD-*` issue; reasoning about what's in flight |
-| `github-access`         | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"   |
-| `toolchain-and-hooks`   | pinning a tool, adding a task, touching `hk.pkl` or the gate           |
-| `serena-setup`          | a Serena worktree/index misbehaves; changing `.serena/` config         |
+| Memory                        | Read it when                                                                                                      |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `workflow/board-states`       | starting/finishing a `CLOUD-*` issue; reasoning about what's in flight                                            |
+| `github-access`               | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"                                              |
+| `toolchain-and-hooks`         | pinning a tool, adding a task, touching `hk.pkl` or the gate                                                      |
+| `serena-setup`                | a Serena worktree/index misbehaves; changing `.serena/` config                                                    |
+| `prior-art-and-issue-hygiene` | surveying another project's practice; adopting an outside tool or pattern; writing a `CLOUD-*` issue or a PR body |
 
 ## Autonomous workflow: commit, push, and land without asking
 
