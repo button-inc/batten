@@ -165,6 +165,51 @@ if blockers_line=$(grep -iE "$BLOCKERS_LABEL" <<<"$block" | head -n1); then
 	done
 fi
 
+# --- deferral claims linked, not asserted ------------------------------------
+#
+# CLOUD-197. Same predicate as §8, applied to the other direction of dependency.
+# A block claiming an obligation is *someone else's* — "deferred to CLOUD-N",
+# "CLOUD-N owns this" — is asserting a hand-off the board does not know about
+# unless a relation records it. Prose alone lets an obligation be declared
+# somebody else's problem and then belong to nobody.
+#
+# Unlike §8 this is checked over the WHOLE description, not just the Ready
+# block: a deferral is most often written in Done, in an Open questions list, or
+# in an out-of-scope note, and those are exactly the places an obligation goes
+# to die.
+#
+# Claims, not mentions — the discipline §8 already establishes. "The same
+# failure shape as CLOUD-195" is a comparison, "split out of CLOUD-177" is
+# provenance, "see CLOUD-33" is a cross-reference; none hands anything off, and
+# flagging them would punish the cross-referencing that makes issues readable.
+# So a claim is a hand-off VERB immediately followed by an id, nothing looser.
+#
+# Any relation direction satisfies it. A deferral is not necessarily a blocker —
+# often the receiving issue is `relatedTo` — and demanding `blockedBy`
+# specifically would push authors to declare false dependencies to pass a lint.
+all_relations=$(jq -r '[.relations[]? | if type == "array" then .[]? else . end | .id? // empty] | join(" ")' <<<"$payload" 2>/dev/null || echo "")
+
+# The rendered and stored forms are one case once the mention markup is gone.
+plain=$(sed -E 's|</?issue[^>]*>||g' <<<"$description")
+
+DEFER_RE='(deferred?|deferring|defers) (it |that |this )?to|owned by|belongs to|left to|handed off to|handled by|tracked (separately )?(in|by|under)|moved? to|is now|remains'
+while IFS= read -r hit; do
+	[ -n "$hit" ] || continue
+	lineno=${hit%%:*}
+	text=${hit#*:}
+	# The id must follow the verb, not merely share a line with it: "CLOUD-9
+	# blocks this, deferred to CLOUD-10" defers only CLOUD-10.
+	# shellcheck disable=SC2013  # word-splitting is the point: ids are bare tokens
+	for cited in $(grep -oiE "($DEFER_RE)[^.]{0,40}?(CLOUD-[0-9]+)" <<<"$text" | grep -oE 'CLOUD-[0-9]+' | sort -u); do
+		# An issue may not defer to itself; that is a wording slip, not a hand-off.
+		[ "$cited" = "$id" ] && continue
+		case " $all_relations " in
+		*" $cited "*) ;;
+		*) report "$lineno" "deferral-cited-without-relation ($cited)" ;;
+		esac
+	done
+done < <(grep -niE "($DEFER_RE)[^.]{0,40}?CLOUD-[0-9]+" <<<"$plain" || true)
+
 if [ "$violations" -ne 0 ]; then
 	echo "::error:: ready-lint: $violations violation(s) in $id — not Ready" >&2
 	exit 1
