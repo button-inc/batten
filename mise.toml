@@ -34,12 +34,14 @@ uv = "0.8"               # fast Rust installer the pipx: backend uses to fetch S
 [env]
 CARGO_TERM_COLOR = "always"
 # bats comes from the tests/bats submodule, not a mise tool, and this is what
-# puts it on PATH — the same shape jdx's own repos use. Reason: the aqua package
-# is a GitHub *source archive*, and those are not byte-stable, so `mise lock`
-# records a checksum that a later download legitimately fails (CI hit exactly
-# that: "Checksum mismatch ... bats-core/archive/refs/tags/v1.14.0.tar.gz"). A
-# submodule pins the commit itself, so there is nothing to re-download or
-# re-hash. Run `git submodule update --init` once per clone.
+# puts it on PATH. A tool pin would be the obvious choice and is the wrong one:
+# the published package is a GitHub *source archive*, and those are not
+# byte-stable, so `mise lock` records a checksum a later download legitimately
+# fails (CI hit exactly that: "Checksum mismatch ...
+# bats-core/archive/refs/tags/v1.14.0.tar.gz"). A submodule pins the commit
+# itself, so there is nothing to re-download or re-hash. The rule generalises:
+# lock a binary artifact, vendor a source tree. Run `git submodule update
+# --init` once per clone.
 _.path = ["tests/bats/bin"]
 # Conventional Commits subject pattern, shared by the commit-msg hook and the CI
 # commit linter so there is exactly one definition of "valid commit".
