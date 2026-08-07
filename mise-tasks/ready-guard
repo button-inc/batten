@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#MISE description="PreToolUse hook body: deny `gh pr ready` unless verify and linear-check have both passed against this exact HEAD"
+#
+# Readying is the single event that starts CI, and it was the last step in the
+# lifecycle with nothing behind it — the contract said "verify green, then
+# linear-check, then ready" and relied on the agent remembering. A red run on a
+# freshly-readied PR is the symptom, and by then CI minutes are already spent.
+#
+# The predicate is a receipt, not a claim: `verify` and `linear-check` each write
+# one keyed to the HEAD they validated, and `linear-check`'s also records the
+# `origin/main` it was linear against. This denies the call unless both exist for
+# the current HEAD and that recorded `origin/main` still matches the local ref —
+# so an amended commit, a rebase, or a `main` that moved under you all invalidate
+# the receipt rather than silently passing.
+#
+# Receipts live in `.git/`, which is exactly right: they are per-clone facts
+# about work in progress, never shared, and a fresh clone starts with none.
+#
+# Reads nothing from the network — a PreToolUse hook must be fast, so it compares
+# against the `origin/main` ref already on disk. `linear-check` is what refreshes
+# that ref, and it is one of the two things being demanded here.
+#
+# Fails OPEN on anything it cannot parse, and honours BATTEN_READY_GUARD_BYPASS=1.
+set -uo pipefail
+
+[ -n "${BATTEN_READY_GUARD_BYPASS:-}" ] && exit 0
+
+raw=$(cat) || exit 0
+cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
+[ -n "$cmd" ] || exit 0
+
+# Only `gh ... pr ready`. Quoted spans are neutralised first so a commit message
+# naming the command is not the command.
+scrubbed=$(printf '%s' "$cmd" | sed -E "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
+is_ready=0
+while IFS= read -r seg; do
+	read -r -a toks <<<"$seg"
+	count=${#toks[@]}
+	i=0
+	while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+	[ "${toks[$i]:-}" = "gh" ] || continue
+	words=()
+	for t in "${toks[@]:$((i + 1))}"; do
+		case "$t" in -*) ;; *) words+=("$t") ;; esac
+	done
+	n=${#words[@]}
+	j=0
+	while [ "$((j + 1))" -lt "$n" ]; do
+		case "${words[$j]} ${words[$((j + 1))]}" in
+		"pr ready" | "pr ready-for-review") is_ready=1 ;;
+		esac
+		j=$((j + 1))
+	done
+done < <(printf '%s' "$scrubbed" | sed -E 's/(\&\&|\|\||[;|&])/\n/g')
+
+[ "$is_ready" = 1 ] || exit 0
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+head=$(git rev-parse HEAD 2>/dev/null) || exit 0
+receipts="$git_dir/batten-receipts"
+
+deny() {
+	jq -n --arg r "$1" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $r
+    }
+  }'
+	exit 0
+}
+
+[ -f "$receipts/verify.$head" ] ||
+	deny "Refused: no verify receipt for HEAD ${head:0:8}. Readying is the single event that starts CI, so it happens only after \`mise run verify\` is green against this exact commit — a red run on a freshly-readied PR means that step was skipped, and the CI minutes are already spent by then. Run \`mise run verify\` (background it), then retry. Bypass with BATTEN_READY_GUARD_BYPASS=1."
+
+recorded_main=$(cat "$receipts/linear-check.$head" 2>/dev/null) ||
+	deny "Refused: no linear-check receipt for HEAD ${head:0:8}. Run \`mise run linear-check\` immediately before readying — \`main\` moves constantly, and a branch that is not linear on the current \`main\` cannot fast-forward-land. Bypass with BATTEN_READY_GUARD_BYPASS=1."
+
+current_main=$(git rev-parse origin/main 2>/dev/null) || exit 0
+[ "$recorded_main" = "$current_main" ] ||
+	deny "Refused: the linear-check receipt for HEAD ${head:0:8} was taken against origin/main ${recorded_main:0:8}, but origin/main is now ${current_main:0:8}. Rebase, re-run \`mise run verify\`, then \`mise run linear-check\` again. Bypass with BATTEN_READY_GUARD_BYPASS=1."
+
+exit 0

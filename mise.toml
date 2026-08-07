@@ -186,6 +186,11 @@ if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
   echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
   exit 1
 fi
+receipts="$(git rev-parse --git-dir)/batten-receipts"
+mkdir -p "$receipts"
+# The receipt records WHICH main we were linear against, so a main that moves
+# afterwards invalidates it instead of silently still counting (see ready-guard).
+printf '%s' "$main" >"$receipts/linear-check.$(git rev-parse HEAD)"
 echo "linear-check: HEAD is linear on origin/main ($main)"
 '''
 
@@ -196,6 +201,11 @@ depends = ["ci", "cross-check", "darwin-link", "zizmor", "lock-check"]
 run = '''
 mise run linear-check
 BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint
+receipts="$(git rev-parse --git-dir)/batten-receipts"
+mkdir -p "$receipts"
+# Keyed to the exact commit verified: an amend or a rebase produces a new HEAD
+# and therefore no receipt, which is the point (see ready-guard).
+date -u +%FT%TZ >"$receipts/verify.$(git rev-parse HEAD)"
 echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit-lint all pass"
 '''
 

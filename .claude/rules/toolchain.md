@@ -47,6 +47,14 @@ That's a rule, so it ships with mechanisms — three `PreToolUse` hooks wired in
   references on rename. Bypass: `BATTEN_MEMORY_GUARD_BYPASS=1`.
 - `context-budget` gates AGENTS.md plus anything always-loaded against a token
   budget — what every agent pays every turn.
+- `ready-guard` denies `gh pr ready` unless `verify` and `linear-check` have both
+  passed against this exact HEAD. Each writes a receipt under
+  `.git/batten-receipts/` keyed to the commit it validated, and linear-check's
+  records the `origin/main` it was linear against — so an amend, a rebase, or a
+  `main` that moved all invalidate it instead of silently still counting.
+  Readying is the single event that starts CI, so this is the one precondition
+  whose cost is paid in CI minutes when it is skipped. Bypass:
+  `BATTEN_READY_GUARD_BYPASS=1`.
 
 `mise run gh-preflight` answers "does this token carry the claims our tasks
 need?" by probing the read endpoints and reporting each 403's

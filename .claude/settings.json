@@ -8,6 +8,10 @@
           {
             "type": "command",
             "command": "mise run gh-guard"
+          },
+          {
+            "type": "command",
+            "command": "mise run ready-guard"
           }
         ]
       },
