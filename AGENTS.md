@@ -180,7 +180,8 @@ web sandbox; before claiming otherwise read `mem:github-access`.)
    is bounded by CI *completing*, which always happens. Its exit status and printed
    conclusions are the signal; then land. Red → step-2 miss: reproduce
    and fix locally, don't iterate against CI. (Mechanics: `mem:github-access`.)
-5. **Land by `/fast-forward`** (never the merge button).
+5. **Land with `mise run land`** — it comments `/fast-forward` (never the merge
+   button) and blocks until the PR is merged or the bot refuses. Background it.
 6. **Never re-run CI on an already-tested SHA** — fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` CI triggers.
 
