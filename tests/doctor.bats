@@ -1,125 +1,79 @@
 #!/usr/bin/env bats
-# The gate that ships with `doctor` (AGENTS.md non-negotiable 2). The decision
-# under test is the one that cost a session: a rustup target whose FILES are on
-# disk while rustup does not consider it installed — the state that turns the
-# supposedly-idempotent `rustup target add` into a hard "detected conflict".
+# doctor's torn-install check (CLOUD-182): a mise tool version whose bin
+# symlinks point at a payload that no longer exists must be detected from the
+# ARTIFACTS — mise's own record says "installed" and `mise install` no-ops on
+# it, which is how a missing venv surfaced as "the MCP server never connected".
 #
-# Driven against fixture directories rather than a real toolchain, so the suite
-# can construct each residue shape (dir only, manifest only, components entry
-# only) that a partial install can leave. Every one of them collides with the
-# next `add`, so every one of them must read as stale.
+# The fixture installs tree and a stub `mise` isolate the check: DOCTOR_TARGETS
+# is set empty so the rustup half no-ops (that is what the `-` default exists
+# for), and the bats submodule half runs against the real checkout.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/doctor-check"
-	RUSTLIB="$BATS_TEST_TMPDIR/rustlib"
-	TARGET="aarch64-apple-darwin"
-	mkdir -p "$RUSTLIB"
-	printf 'rust-std-x86_64-unknown-linux-gnu\n' >"$RUSTLIB/components"
+	DOCTOR="$BATS_TEST_DIRNAME/../mise-tasks/doctor"
+	STUB="$BATS_TEST_TMPDIR/bin"
+	DATA="$BATS_TEST_TMPDIR/mise"
+	mkdir -p "$STUB" "$DATA/installs"
+	cat >"$STUB/mise" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >>"$BATS_TEST_TMPDIR/mise-calls"
+EOF
+	chmod +x "$STUB/mise"
+	PATH="$STUB:$PATH"
+	export PATH MISE_DATA_DIR="$DATA" DOCTOR_TARGETS=""
 }
 
-# --- ok: rustup has it, which is the only thing that makes a target usable -----
+healthy_tool() {
+	mkdir -p "$DATA/installs/some-tool/1.0/bin"
+	echo real >"$DATA/installs/some-tool/1.0/bin/tool"
+}
 
-@test "installed target with full residue is ok" {
-	mkdir -p "$RUSTLIB/$TARGET/lib"
-	touch "$RUSTLIB/manifest-rust-std-$TARGET"
-	printf 'rust-std-%s\n' "$TARGET" >>"$RUSTLIB/components"
-	run "$CHECK" "$RUSTLIB" "$TARGET" yes
+torn_tool() {
+	mkdir -p "$DATA/installs/pipx-thing/2.0/bin"
+	ln -s "$DATA/installs/pipx-thing/2.0/venv/bin/thing" \
+		"$DATA/installs/pipx-thing/2.0/bin/thing"
+}
+
+@test "a healthy installs tree passes untouched" {
+	healthy_tool
+	run "$DOCTOR"
 	[ "$status" -eq 0 ]
-	[ "$output" = "ok" ]
+	[[ "$output" == *"installs intact"* ]]
+	[ ! -e "$BATS_TEST_TMPDIR/mise-calls" ]
 }
 
-@test "installed target is ok even with no residue on disk" {
-	# rustup's answer is the truth; the files are what lie.
-	run "$CHECK" "$RUSTLIB" "$TARGET" yes
+@test "a broken bin symlink is torn: version dir removed, mise install re-run" {
+	healthy_tool
+	torn_tool
+	run "$DOCTOR"
 	[ "$status" -eq 0 ]
-	[ "$output" = "ok" ]
+	[[ "$output" == *"torn install"*"pipx-thing/2.0"* ]]
+	[ ! -d "$DATA/installs/pipx-thing/2.0" ]
+	# The healthy tool is untouched; only the torn version dir is removed.
+	[ -f "$DATA/installs/some-tool/1.0/bin/tool" ]
+	grep -qx "install" "$BATS_TEST_TMPDIR/mise-calls"
 }
 
-# --- missing: a plain add works ----------------------------------------------
-
-@test "absent target with no residue is missing" {
-	run "$CHECK" "$RUSTLIB" "$TARGET" no
+@test "a working symlink is not torn" {
+	mkdir -p "$DATA/installs/ok/3.0/bin" "$DATA/installs/ok/3.0/venv/bin"
+	echo real >"$DATA/installs/ok/3.0/venv/bin/ok"
+	ln -s "$DATA/installs/ok/3.0/venv/bin/ok" "$DATA/installs/ok/3.0/bin/ok"
+	run "$DOCTOR"
 	[ "$status" -eq 0 ]
-	[ "$output" = "missing" ]
+	[[ "$output" == *"installs intact"* ]]
+	[ -L "$DATA/installs/ok/3.0/bin/ok" ]
 }
 
-@test "another target's residue does not make this one stale" {
-	mkdir -p "$RUSTLIB/x86_64-pc-windows-gnu/lib"
-	touch "$RUSTLIB/manifest-rust-std-x86_64-pc-windows-gnu"
-	run "$CHECK" "$RUSTLIB" "$TARGET" no
-	[ "$status" -eq 0 ]
-	[ "$output" = "missing" ]
-}
-
-# --- stale: every residue shape that collides with `rustup target add` --------
-
-@test "target dir without rustup knowing is stale" {
-	mkdir -p "$RUSTLIB/$TARGET/lib"
-	touch "$RUSTLIB/$TARGET/lib/libaddr2line-ca30e0d5b6ed0ca3.rlib"
-	run "$CHECK" "$RUSTLIB" "$TARGET" no
-	[ "$status" -eq 0 ]
-	[ "$output" = "stale" ]
-}
-
-@test "leftover per-component manifest is stale" {
-	# The second conflict of the live failure: purging the lib dir alone left
-	# this behind, and the next add died on the manifest instead.
-	touch "$RUSTLIB/manifest-rust-std-$TARGET"
-	run "$CHECK" "$RUSTLIB" "$TARGET" no
-	[ "$status" -eq 0 ]
-	[ "$output" = "stale" ]
-}
-
-@test "components entry alone is stale" {
-	printf 'rust-std-%s\n' "$TARGET" >>"$RUSTLIB/components"
-	run "$CHECK" "$RUSTLIB" "$TARGET" no
-	[ "$status" -eq 0 ]
-	[ "$output" = "stale" ]
-}
-
-@test "components entry matches whole lines only" {
-	# A substring match would read rust-std-aarch64-apple-darwin-sim as residue
-	# for aarch64-apple-darwin and purge a target nobody asked about.
-	printf 'rust-std-%s-sim\n' "$TARGET" >>"$RUSTLIB/components"
-	run "$CHECK" "$RUSTLIB" "$TARGET" no
-	[ "$status" -eq 0 ]
-	[ "$output" = "missing" ]
-}
-
-# --- DOCTOR_TARGETS: which targets doctor is responsible for ------------------
-#
-# Driven against the real `doctor` rather than doctor-check, because the thing
-# under test is the parameter expansion, not the verdict. Safe to run for real:
-# with no targets there is no rustup work to do, and the submodule half is
-# idempotent.
-
-@test "an empty DOCTOR_TARGETS asks for no rust targets at all" {
-	# `-` and not `:-`. CI's `ci` job runs test:bats, which needs the submodule
-	# half and none of the rustup half — cross-check and darwin-link are their
-	# own jobs. With `:-` an empty value would silently take the default pair
-	# and download two std libs that job never uses.
-	DOCTOR_TARGETS="" run "$BATS_TEST_DIRNAME/../mise-tasks/doctor"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"bats submodule checked out"* ]]
-	[[ "$output" != *"rust target"* ]]
-}
-
-@test "an unset DOCTOR_TARGETS still takes the default pair" {
-	# The local lifecycle depends on this default; only an explicit empty value
-	# opts out.
-	run env -u DOCTOR_TARGETS "$BATS_TEST_DIRNAME/../mise-tasks/doctor"
-	[[ "$output" == *"x86_64-pc-windows-gnu"* ]]
-	[[ "$output" == *"aarch64-apple-darwin"* ]]
-}
-
-# --- usage --------------------------------------------------------------------
-
-@test "rejects a missing installed argument" {
-	run "$CHECK" "$RUSTLIB" "$TARGET"
-	[ "$status" -eq 2 ]
-}
-
-@test "rejects a non-boolean installed argument" {
-	run "$CHECK" "$RUSTLIB" "$TARGET" maybe
-	[ "$status" -eq 2 ]
+@test "a repair that leaves the tree broken exits non-zero" {
+	torn_tool
+	# A stub whose `install` recreates the torn state — reprovisioning failed.
+	cat >"$STUB/mise" <<EOF
+#!/usr/bin/env bash
+mkdir -p "$DATA/installs/pipx-thing/2.0/bin"
+ln -sf "$DATA/installs/pipx-thing/2.0/venv/bin/thing" \
+	"$DATA/installs/pipx-thing/2.0/bin/thing"
+EOF
+	chmod +x "$STUB/mise"
+	run "$DOCTOR"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"torn install remains after repair"* ]]
 }

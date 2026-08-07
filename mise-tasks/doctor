@@ -98,5 +98,43 @@ for target in "${targets[@]}"; do
 	fi
 done
 
+# --- torn mise installs (CLOUD-182) -------------------------------------------
+#
+# `mise install` trusts its own record: a version directory whose payload is
+# gone still counts as installed, `mise install` no-ops on it, and the first
+# symptom is an exec failure wearing someone else's name — measured here as
+# bin/serena a broken symlink into an absent venv while `mise ls` reported
+# 1.6.1, so the Serena MCP server silently never connected. Check the
+# ARTIFACTS, not the record: a bin entry that is a broken symlink marks that
+# tool version as torn. Repair by removing the version directory and re-running
+# `mise install`, which reprovisions whatever mise.toml says is missing — no
+# fragile mapping from a directory name back to tool syntax.
+installs="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
+broken_bins() { # bin symlinks whose target does not exist (portable: no -xtype)
+	find "$installs" -mindepth 4 -maxdepth 4 -path '*/bin/*' -type l 2>/dev/null |
+		while IFS= read -r link; do [ -e "$link" ] || printf '%s\n' "$link"; done
+}
+if [ -d "$installs" ]; then
+	torn=$(broken_bins | sed -E 's|/bin/[^/]+$||' | sort -u)
+	if [ -n "$torn" ]; then
+		while IFS= read -r vdir; do
+			echo "doctor: torn install (broken bin symlink) — removing $vdir"
+			rm -rf -- "$vdir"
+		done <<<"$torn"
+		echo "doctor: re-running mise install to reprovision"
+		if ! mise install; then
+			echo "::error:: mise install failed after removing torn installs" >&2
+			status=1
+		elif [ -n "$(broken_bins | head -n1)" ]; then
+			echo "::error:: torn install remains after repair: $(broken_bins | head -n1)" >&2
+			status=1
+		else
+			echo "doctor: torn installs reprovisioned"
+		fi
+	else
+		echo "doctor: mise installs intact (no broken bin symlinks)"
+	fi
+fi
+
 [ "$status" -eq 0 ] && echo "doctor: environment consistent"
 exit "$status"
