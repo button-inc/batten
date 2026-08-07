@@ -52,3 +52,35 @@ stays upstream. Hand-write a step only where no builtin exists; scope its `glob`
 so it only fires on relevant files, and put repo-specific logic in a `mise` task
 the step calls rather than inline. Adopt new `hk` release
 features (batching, caching, scheduling) when they'd tighten this.
+
+## The always-loaded context budget
+
+`mise run context-budget` fails when AGENTS.md plus anything declared
+always-load exceeds `BATTEN_CONTEXT_BUDGET` (default 6000) estimated tokens, at
+4 chars/token. Tokens, not lines: the cost is what every agent pays on every
+turn, and an exact count would need a tokenizer, a model-specific vocabulary and
+a network fetch — a budget gate that fails because a download failed is worse
+than one that is 10% out.
+
+The always-loaded set is AGENTS.md plus `.serena/memories/always/*.md`. That
+directory does not exist yet; creating one is a declaration that every session
+reads that memory, and it then costs exactly what an AGENTS.md section costs.
+Counting it here is the whole point — moving a section into a memory only
+reduces the tax if the memory is genuinely read at a trigger. Ordinary memories
+are not counted, because a session that never hits their trigger never pays for
+them.
+
+Over budget: cut, or move a section to a triggered memory (sorting rule in
+`mem:prior-art-and-issue-hygiene`). Raising the number is a decision, not a fix.
+
+## Memories go through the Serena tools, never a file write
+
+`.serena/memories/*.md` are ordinary files on disk, which makes editing them with
+Write/Edit easy and wrong: `write_memory` enforces a size ceiling and
+`rename_memory` rewrites `mem:` cross-references in the other memories, and a
+direct file write silently skips both. `mise run memory-guard` is a `PreToolUse`
+hook (wired in `.claude/settings.json`) that denies such a write and names the
+memory to pass to the Serena tool instead. It fails open on anything unparseable
+and honours `BATTEN_MEMORY_GUARD_BYPASS=1` — needed when the Serena MCP server is
+down, since otherwise a disconnected server would make memories unwritable by any
+means.

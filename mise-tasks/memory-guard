@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#MISE description="PreToolUse hook body: deny a direct file write to .serena/memories/ so memories go through the Serena tools"
+#
+# Serena's write_memory enforces a size ceiling and its rename tool rewrites
+# `mem:` references across the other memories. A direct Write/Edit to the file
+# silently skips both — the whole point of the memory layer becomes advisory the
+# moment it is edited as an ordinary file. (Every memory in this repo was written
+# that way before this guard existed, which is the failure it encodes.)
+#
+# Fails OPEN on anything it cannot parse, and on BATTEN_MEMORY_GUARD_BYPASS=1 —
+# needed when the Serena MCP server is down, since otherwise a disconnected
+# server would make memories unwritable by any means.
+set -uo pipefail
+
+[ -n "${BATTEN_MEMORY_GUARD_BYPASS:-}" ] && exit 0
+
+raw=$(cat) || exit 0
+path=$(printf '%s' "$raw" | jq -r '.tool_input.file_path // empty' 2>/dev/null) || exit 0
+[ -n "$path" ] || exit 0
+
+case "$path" in
+*.serena/memories/*) ;;
+*) exit 0 ;;
+esac
+
+name=${path##*.serena/memories/}
+name=${name%.md}
+
+jq -n --arg n "$name" '{
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "deny",
+    permissionDecisionReason: (
+      "Refused: memories are not ordinary files. Use the Serena tools — write_memory / edit_memory / rename_memory / delete_memory — with memory name \"" + $n +
+      "\". They enforce the size ceiling and rewrite `mem:` cross-references on rename, both of which a direct Write/Edit skips silently. If the Serena server is unavailable, set BATTEN_MEMORY_GUARD_BYPASS=1."
+    )
+  }
+}'

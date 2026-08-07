@@ -4,7 +4,21 @@
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "mise run gh-guard" }]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mise run gh-guard"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mise run memory-guard"
+          }
+        ]
       }
     ]
   },

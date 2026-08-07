@@ -230,6 +230,10 @@ done
 [tasks.land]
 description = "Land this branch's PR by commenting /fast-forward, then block until it is merged (or the fast-forward bot refuses)"
 shell = "bash -c"
+# Landing a red PR is now structurally impossible, not merely against the rules:
+# ci-wait must exit 0 first. It blocks until every check on HEAD is terminal, so
+# this also removes the "did I remember to wait?" step between the two.
+depends = ["ci-wait"]
 # The merge button is blocked on purpose (AGENTS.md, Commits and pull requests):
 # `main` only advances to a SHA that already passed CI. Commenting is the whole
 # landing action, but the *result* is asynchronous, so the naive form is a

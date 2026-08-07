@@ -85,7 +85,7 @@ main`, confirm you're not stale. Work on a short-lived branch, never authoring
    branch can't fast-forward-land. If `main` advanced, rebase and re-run verify,
    then re-check. Never ready a branch that isn't linear on the current `main`.
 6. `gh pr ready` — only once verify is green **and** the branch is linear.
-7. Land by commenting `/fast-forward` (never the merge button).
+7. `mise run land` — it depends on `ci-wait`, so a red PR cannot be landed.
 
 Execute these as one continuous flow; do not stop between steps to report and
 wait — that waiting is the defect.
@@ -290,6 +290,12 @@ need?" by probing the read endpoints and reporting each 403's
 `X-Accepted-GitHub-Permissions`; write claims are declared, never exercised. Run
 it in a fresh environment before concluding a task is broken — an under-scoped
 token otherwise surfaces as an unrelated 403 in whichever task runs first.
+
+Two more `PreToolUse` guards work the same way: `memory-guard` denies a direct
+Write/Edit to `.serena/memories/` (they go through the Serena tools, which
+enforce the size ceiling and rewrite `mem:` references on rename), and
+`context-budget` gates AGENTS.md plus anything always-loaded against a token
+budget — what every agent pays every turn. Detail: `mem:toolchain-and-hooks`.
 
 The `mise-tasks/` scripts are real programs and are held to it: `shfmt`,
 `shellcheck` and `test:bats` (bats, `tests/*.bats`) run in the same hk gate as the

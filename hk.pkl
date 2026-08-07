@@ -44,6 +44,13 @@ local gate = new Mapping<String, Step> {
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
+  // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
+  // rather than a style question. Counted with any memory declared always-load,
+  // since moving a section into one of those moves the cost without cutting it.
+  ["context-budget"] {
+    glob = List("AGENTS.md", ".serena/memories/always/*.md")
+    check = "mise run context-budget"
+  }
 
   // --- shell: the mise-tasks/ programs and the bats suite -------------------
 
