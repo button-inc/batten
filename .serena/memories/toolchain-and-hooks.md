@@ -84,3 +84,26 @@ memory to pass to the Serena tool instead. It fails open on anything unparseable
 and honours `BATTEN_MEMORY_GUARD_BYPASS=1` — needed when the Serena MCP server is
 down, since otherwise a disconnected server would make memories unwritable by any
 means.
+
+## MCP allow rules must name the tool prefix Claude Code actually sees
+
+`.claude/settings.json` `permissions.allow` is matched against the **tool name
+as exposed to the session**, and Linear reaches us under two different names:
+
+- Configured locally in Claude Code → `mcp__Linear__<tool>`.
+- Pulled in as a **claude.ai connector** → `mcp__claude_ai_Linear__<tool>`.
+
+So a lone `mcp__Linear` rule silently fails to cover the connector path and the
+CLI prompts for approval on every Linear call. Both prefixes are allowlisted;
+keep them in sync if the connector's display name changes, and read the exact
+name off `/mcp` rather than guessing.
+
+The **"Always" toggle on claude.ai does not fix this.** It governs claude.ai
+chats only. The one thing that crosses over from claude.ai is an organization's
+per-tool `ask`/`blocked` control, and it only *tightens*: a tool set to `ask`
+prompts on every call and a local allow rule cannot skip it, in any permission
+mode. Local auto-approval is only ever bought with a local allow rule.
+
+Allow rules also cannot glob the server segment — `mcp__*` and `mcp__claude_ai_*`
+are skipped with a warning. The wildcard is legal only after a literal
+`mcp__<server>__` prefix.

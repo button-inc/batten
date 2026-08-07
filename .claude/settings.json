@@ -31,7 +31,10 @@
       "Bash(git:*)",
       "Bash(gh:*)",
       "Bash(mise:*)",
-      "mcp__Linear"
+      "mcp__Linear",
+      "mcp__Linear__*",
+      "mcp__claude_ai_Linear__*",
+      "mcp__claude_ai_linear__*"
     ],
     "deny": [
       "mcp__Claude_Code_Remote__send_later",
