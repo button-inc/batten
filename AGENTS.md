@@ -282,7 +282,7 @@ hook (wired in `.claude/settings.json`) that DENIES `gh pr merge`, `gh pr checks
 `gh run watch`, and a hand-typed `/fast-forward` comment, naming the task to use
 instead. It fails open on anything it can't parse and honours
 `BATTEN_GH_GUARD_BYPASS=1`; the decision table is in `mise-tasks/gh-guard-check`
-and gated by `mise run gh-guard-test`. Reads (`gh pr view`/`list`/`create`, `gh
+and gated by `mise run test:bats`. Reads (`gh pr view`/`list`/`create`, `gh
 pr ready`, `gh api`, `gh run view`) are not blocked.
 
 `mise run gh-preflight` answers "does this token carry the claims our tasks

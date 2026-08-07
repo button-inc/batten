@@ -33,7 +33,7 @@ hk install        # install the git hooks into .git/hooks
 mise run test    # workspace tests
 mise run lint    # clippy, warnings denied
 mise run fmt     # format
-mise run ci      # everything CI runs (fmt-check + lint + test + deny)
+mise run ci      # everything CI runs (the hk gate + deny)
 mise tasks       # list them all
 ```
 
