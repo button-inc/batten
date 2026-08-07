@@ -27,10 +27,11 @@ check-run is terminal), `land` (comment `/fast-forward`, block until merged or
 refused; depends on `ci-wait`, so a red PR cannot be landed). Background
 `ci-wait` and `land`.
 
-Two board gates follow the agents-fetch-gates-decide pattern — each is a pure
+The board gates follow the agents-fetch-gates-decide pattern — each is a pure
 function of stdin (`get_issue` payloads piped in by the caller, since no tracker
 credential exists), so live runs need board data but their bats suites run
-unconditionally in the gate. `mise run ready-lint` validates an issue's Ready
+unconditionally in the gate. `mise-tasks/` is the authoritative list; don't
+restate a count here, which is how "three `PreToolUse` hooks" went stale. `mise run ready-lint` validates an issue's Ready
 block: only the clauses _present_ (restating all eight is forbidden by the DoR
 doc), anchored on label+tag pairs like `Commit / bump (§6)` because bare `(§N)`
 collides with house-style section references, holding §8 to `blockedBy` _claims_
@@ -85,7 +86,7 @@ restate its count here), each failing open on anything it can't parse:
   whose cost is paid in CI minutes when it is skipped. Bypass:
   `BATTEN_READY_GUARD_BYPASS=1`.
 
-`mise run landed-check` is the third board gate on the same stdin pattern: an
+`mise run landed-check` is a board gate on the same stdin pattern: an
 issue In Progress whose ref appears on `main` has landed, and landed is In
 Review. It exists because the tracker's open-side automation fires on "a commit
 mentions this issue", which is not "work began" — a commit can continue,
