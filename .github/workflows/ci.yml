@@ -22,6 +22,23 @@ concurrency:
 permissions:
   contents: read
 
+# Make the per-job `install_args` lists below actually binding.
+#
+# mise auto-installs missing tools when a task runs (task.run_auto_install) or
+# when `mise exec` needs one (exec_auto_install), both default true. With those
+# on, narrowing the install list moves the cost instead of removing it: measured
+# on run 31153705833, the `cross` job installed rust in 13s and then rebuilt the
+# whole toolchain — serena's 72 Python packages, node, zig, prettier — inside
+# `mise run cross-check`, which is why its work step went 21s -> 32s while the
+# install step shrank by the same amount. Net zero, plus the overhead.
+#
+# Off, a tool a job did not ask for is a hard "command not found" instead of a
+# silent re-download. That is the intended failure: `mise run ci-tools-check`
+# keeps the names honest, and this keeps the lists honest.
+env:
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
+
 jobs:
   ci:
     name: ci
