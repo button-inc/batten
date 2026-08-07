@@ -35,10 +35,26 @@ jobs:
           # has no bats to run.
           submodules: true
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      # Caching is left at its default (save on), which means each PR writes and
+      # restores its OWN cache. That is safe without any `save-if` guard because
+      # GitHub scopes a cache to the ref that created it: a `pull_request` run
+      # writes under `refs/pull/N/merge`, restorable only by re-runs of that same
+      # PR — never by another PR and never by main. Cross-PR poisoning is not
+      # something this workflow has to prevent; the platform already does.
+      #
+      # The previous `save-if: github.ref == 'refs/heads/main'` could never be
+      # true, because this workflow runs on `pull_request` only (see the header:
+      # main advances by fast-forward to already-tested commits, so it is
+      # deliberately not a trigger). The cache was therefore never written and
+      # every restore missed — the step was pure overhead while reading as though
+      # caching were handled. Measured cold on 6730729: ci 74s, cross 53s,
+      # darwin-link 66-75s, against ~7s for a warm local darwin link.
+      #
+      # What this does NOT fix: the first run of a new PR is still cold, because
+      # only a cache on the base branch could warm it and nothing writes there.
+      # Warming from main needs a push-to-main trigger, which AGENTS.md forbids —
+      # that trade is CLOUD-176's open decision, not this change's to make.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        # Only main writes the cache, so a PR cannot poison the cache other PRs restore.
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run ci
 
   cross:
@@ -54,8 +70,6 @@ jobs:
           submodules: true
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run cross-check
 
   # The macOS gate. `cargo check` never links, so it cannot see a dependency that
@@ -80,7 +94,6 @@ jobs:
           # A per-target key: the two legs build different artifacts and would
           # otherwise thrash one shared entry.
           key: ${{ matrix.target }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run darwin-link ${{ matrix.target }}
 
   # Single fan-in status. Point branch protection at `final` instead of
