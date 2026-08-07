@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+#MISE description="Which CLOUD-* issues did a release tag ship? Resolves refs from the tag's commit range; cross-checks piped board payloads for the ones still In Review"
+#
+# CLOUD-174. `Done` on this board means **released**, and Linear's GitHub
+# integration cannot supply that transition: it triggers on PR events, and "a
+# release tag now contains this commit" is not one. No setting fixes it — the
+# trigger does not exist. So the last transition of every issue was manual and
+# reliably forgotten; CLOUD-29 sat in In Review after shipping in v0.0.14.
+#
+# This is the predicate half. Per the issue's own split, the Linear write is the
+# *effect* and the extraction is the *predicate*, so what is gated and tested
+# here is "which refs did this tag ship, and which of them are still In Review".
+# The write stays with the caller, which is the agents-fetch-gates-decide shape
+# `graph-check` and `ready-lint` already use: no tracker credential exists, so an
+# agent pipes the board in and performs the moves this names.
+#
+# Source of truth is git — the tag's commit range. There is deliberately no
+# second list of what shipped.
+#
+#   mise run released v0.0.14                    # refs the tag shipped
+#   mise run released v0.0.14 < payloads.json    # …restricted to In Review issues
+#
+# Pointer-only (rule 4): identifiers and target state, never issue bodies. Output
+# is sorted, so re-running is byte-stable and diffable.
+#
+# Idempotent by construction: it reports, it does not mutate. Running it twice
+# against the same tag prints the same thing.
+set -euo pipefail
+
+tag="${1:-}"
+if [ -z "$tag" ]; then
+	echo "::error:: usage: mise run released <tag> [< get_issue payloads on stdin]" >&2
+	exit 2
+fi
+
+if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null 2>&1; then
+	echo "::error:: no such tag: $tag. A tag that does not exist is a caller error, not an empty release." >&2
+	exit 2
+fi
+
+# The range is "new in this tag": the previous tag reachable from it, exclusive.
+# `describe` walks the commit graph, so it answers "the release this one follows"
+# topologically. Creation date is the obvious alternative and is wrong — tags cut
+# seconds apart sort arbitrarily, which made this resolve to the whole history
+# and report every issue ever shipped as new in the latest tag.
+#
+# For the FIRST tag there is no predecessor, so the range is the whole history —
+# correct, since everything in it did ship there.
+prev=$(git describe --tags --abbrev=0 "$tag^" 2>/dev/null || true)
+if [ "$prev" = "$tag" ] || [ -z "$prev" ]; then
+	range="$tag"
+else
+	range="$prev..$tag"
+fi
+
+# The repo requires a CLOUD-<n> reference on the work (issue-guard), so commit
+# subjects and bodies are where the mapping lives. No parallel registry.
+refs=$(git log --format='%B' "$range" 2>/dev/null | grep -oE 'CLOUD-[0-9]+' | sort -u || true)
+
+if [ -z "$refs" ]; then
+	# A release of pure chore/release commits ships no issue. That is a clean
+	# outcome, not a failure — exiting non-zero would break the release path.
+	echo "released: $tag ($range) references no CLOUD-* issue"
+	exit 0
+fi
+
+# No stdin, or an empty one: report the refs and stop. This is the form that
+# answers "what did this tag ship?" without needing the board at all.
+if [ -t 0 ] || ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+	echo "released: $tag ($range) shipped:"
+	# shellcheck disable=SC2086  # word-splitting is the point: one id per line
+	printf '  %s\n' $refs
+	exit 0
+fi
+
+# With payloads, narrow to the issues this tag actually moves. Accept a JSON
+# array or a concatenated stream, the same shapes `graph-check` accepts.
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
+	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
+	exit 2
+fi
+
+movable=0
+skipped=0
+for ref in $refs; do
+	status=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .status' <<<"$issues" | head -n1)
+	# An issue this tag shipped but which was not piped in is not a finding: the
+	# caller chose the closure to judge, exactly as graph-check does.
+	[ -n "$status" ] || continue
+	if [ "$status" = "In Review" ]; then
+		echo "  $ref  In Review -> Done"
+		movable=$((movable + 1))
+	else
+		# Already Done, or somewhere else entirely. Reported, never touched —
+		# a state this does not understand is the caller's to reconcile.
+		echo "  $ref  $status (left alone)"
+		skipped=$((skipped + 1))
+	fi
+done
+
+echo "released: $tag ($range) — $movable to move, $skipped left alone"
