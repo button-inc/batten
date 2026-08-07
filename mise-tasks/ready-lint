@@ -137,7 +137,25 @@ fi
 # after the first blockedBy token are claims, and the span ends at a
 # blocks/relatedTo token or the line's end.
 BLOCKERS_LABEL='Blockers \((§|clause )8\)'
-if blockers_line=$(grep -iE "$BLOCKERS_LABEL" <<<"$block" | head -n1); then
+# The claim is not always ON the label line. The corpus's usual dialect is a
+# single-line bullet — "* **Blockers (§8):** none" — but a `### Blockers (§8)`
+# heading with the claim in the paragraph below is equally legitimate markdown,
+# and reading only the label line made every such issue pass this clause
+# VACUOUSLY. Observed: an issue claiming `blockedBy CLOUD-95` under a heading,
+# with no relation, passed clean.
+#
+# So take the label line plus the first paragraph after it, stopping at the next
+# heading or the blank line that ends that paragraph. Bounded on purpose: a
+# greedier span would swallow later sections and flag ids that assert nothing
+# about blocking.
+blockers_line=$(awk -v re="$BLOCKERS_LABEL" '
+	BEGIN { IGNORECASE = 1 }
+	!found && $0 ~ re { found = 1; print; next }
+	found && /^#/ { exit }
+	found && /^[[:space:]]*$/ { if (seen) exit; next }
+	found { seen = 1; print }
+' <<<"$block")
+if [ -n "$blockers_line" ]; then
 	# See the text a human sees. Linear serialises an issue mention as
 	# <issue id="…" href="…">CLOUD-N</issue>, so patterns written against the
 	# rendered form — "CLOUD-N (closed)" — never match the stored form, and an

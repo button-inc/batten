@@ -225,3 +225,77 @@ block() {
 	[ "$status" -eq 1 ]
 	[[ "$output" != *"$secret"* ]]
 }
+
+# --- the §8 span: the claim is not always on the label line -------------------
+#
+# The corpus dialect is a single-line bullet, and reading only that line made a
+# `### Blockers (§8)` heading with the claim in the paragraph below pass this
+# clause VACUOUSLY. Observed on a real issue: `blockedBy CLOUD-95` asserted under
+# a heading, no relation, reported clean.
+
+# A heading-dialect Ready block: $1 becomes the §8 paragraph.
+heading_block() {
+	cat <<-EOF
+		## Ready
+
+		Something needs doing.
+
+		### Blockers (§8)
+
+		$1
+
+		## Done
+
+		It works.
+	EOF
+}
+
+@test "a blocker claimed under a §8 HEADING with no relation is reported" {
+	payload "$(heading_block '`blockedBy` CLOUD-95 for the substrate.')"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"blocker-cited-without-relation (CLOUD-95)"* ]]
+}
+
+@test "the same claim with the relation present passes" {
+	payload "$(heading_block '`blockedBy` CLOUD-95 for the substrate.')" CLOUD-95
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a §8 heading claiming nothing is not a violation" {
+	payload "$(heading_block 'None.')"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "the span stops at the next heading, so a later section is not §8 text" {
+	# A greedier span would swallow Done and flag ids that assert no blocking.
+	payload "$(heading_block 'None.')"
+	lint
+	[[ "$output" != *"blocker-cited-without-relation"* ]]
+}
+
+@test "the span stops at the paragraph end, so a following paragraph is not the claim" {
+	local desc
+	desc=$(
+		cat <<-EOF
+			## Ready
+
+			Work.
+
+			### Blockers (§8)
+
+			None.
+
+			Separately, CLOUD-77 is where this eventually lives.
+
+			## Done
+
+			It works.
+		EOF
+	)
+	payload "$desc"
+	lint
+	[ "$status" -eq 0 ]
+}
