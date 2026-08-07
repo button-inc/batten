@@ -18,30 +18,21 @@ allow() {
 	[ "$status" -eq 0 ]
 }
 
-@test "the shipped bug: a local server rule with no connector companion is caught" {
+@test "a bare server rule with no connector companion passes — that is not this gate's claim" {
+	# An earlier version demanded a `mcp__claude_ai_<server>__*` companion. The
+	# exposed connector name is chosen per registration by the host (CLOUD-178),
+	# so the companion is inert in a web session and the name that would help is
+	# an account-specific UUID rule 1 keeps out of committed config. A gate may
+	# only assert what it can verify from the repo.
 	allow '["mcp__Linear"]'
-	run "$GATE" "$FIXTURE"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"mcp__claude_ai_Linear__*"* ]]
-}
-
-@test "the wildcard spelling of the same one-sided rule is caught too" {
-	allow '["mcp__Linear__*"]'
-	run "$GATE" "$FIXTURE"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"claude_ai_Linear"* ]]
-}
-
-@test "both spellings present is the passing state" {
-	allow '["mcp__Linear", "mcp__claude_ai_Linear__*"]'
 	run "$GATE" "$FIXTURE"
 	[ "$status" -eq 0 ]
 }
 
-@test "casing is preserved — a lowercase companion does not cover a capitalised server" {
-	allow '["mcp__Linear", "mcp__claude_ai_linear__*"]'
+@test "both spellings present is also fine" {
+	allow '["mcp__Linear", "mcp__claude_ai_Linear__*"]'
 	run "$GATE" "$FIXTURE"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 0 ]
 }
 
 @test "a connector-only allowlist needs no companion of its own" {

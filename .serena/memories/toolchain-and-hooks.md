@@ -85,38 +85,24 @@ and honours `BATTEN_MEMORY_GUARD_BYPASS=1` — needed when the Serena MCP server
 down, since otherwise a disconnected server would make memories unwritable by any
 means.
 
-## MCP allow rules must name the tool prefix Claude Code actually sees
+## MCP allow rules: gate only what the repo can verify
 
-`.claude/settings.json` `permissions.allow` is matched against the **tool name
-as exposed to the session**, and Linear reaches us under two different names:
+`permissions.allow` is matched against the tool name as exposed to the session,
+and a connector's exposed name is **chosen per registration episode by the
+host** — `mcp__Linear__*` at session start, `mcp__<uuid>__*` after a mid-session
+re-register, `mcp__claude_ai_Linear__*` in the local CLI. A rule naming one of
+those matches none of the others, and the failure is silent to the agent: the
+only symptom is an approval prompt on every call, which reads as harness
+behaviour. Measurements and the standing fix: CLOUD-178.
 
-- Configured locally in Claude Code → `mcp__Linear__<tool>`.
-- Pulled in as a **claude.ai connector** → `mcp__claude_ai_Linear__<tool>`.
+The account-specific names belong in **user-level** `~/.claude/settings.json`,
+never in the repo — rule 1 keeps consumer identifiers out of committed config,
+and a UUID is meaningless to any other clone.
 
-So a lone `mcp__Linear` rule silently fails to cover the connector path and the
-CLI prompts for approval on every Linear call. Both prefixes are allowlisted.
-The connector segment is `claude_ai_` plus the connector's **display name with
-its casing preserved** — the CLI's own built-in allowlist carries
-`mcp__claude_ai_Slack__slack_send_message`, and its scope resolver classes any
-server whose name starts with `claude_ai_` as connector-scoped. Don't infer the
-name from a Claude Code on the web session: cloud sessions receive connectors as
-explicit `--mcp-config` entries and name them differently (plain `mcp__Linear__*`,
-or a bare connector UUID), so that naming says nothing about the local CLI.
-
-Mechanism, not prose: `mise run mcp-allow-check` (wired into the shared hk
-`gate`, globbed on `.claude/settings.json`) **fails** when an allowed server has
-no companion `mcp__claude_ai_<server>__*` rule, or when an allow rule globs the
-server segment. A permission rule that matches no tool name grants nothing and
-reports nothing — the only symptom is a prompt on every call, which reads as
-harness behaviour rather than as a settings bug. That silence is what earns the
-gate.
-
-The **"Always" toggle on claude.ai does not fix this.** It governs claude.ai
-chats only. The one thing that crosses over from claude.ai is an organization's
-per-tool `ask`/`blocked` control, and it only _tightens_: a tool set to `ask`
-prompts on every call and a local allow rule cannot skip it, in any permission
-mode. Local auto-approval is only ever bought with a local allow rule.
-
-Allow rules also cannot glob the server segment — `mcp__*` and `mcp__claude_ai_*`
-are skipped with a warning. The wildcard is legal only after a literal
-`mcp__<server>__` prefix.
+So `mise run mcp-allow-check` (in the shared hk `gate`, globbed on
+`.claude/settings.json`) asserts only what is repo-verifiable: no allow rule
+globs the server segment, since the CLI accepts a tool-name glob only after a
+literal `mcp__<server>__` prefix and skips anything broader with a warning — a
+rule that reads as a grant and is not one. It deliberately does **not** demand a
+`claude_ai_` companion; an earlier version did, which encoded one host's naming
+as universal. A gate may only assert what it can verify from the repo.

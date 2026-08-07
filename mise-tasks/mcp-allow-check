@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
-#MISE description="Gate: every MCP allow rule in .claude/settings.json actually grants something — connector prefix covered, no unanchored glob"
+#MISE description="Gate: no MCP allow rule in .claude/settings.json is silently skipped by the CLI"
 #
-# The mechanism for a bug that shipped from this repo's own settings: the
-# allowlist carried `mcp__Linear`, Linear arrived as a claude.ai connector under
-# `mcp__claude_ai_Linear__<tool>`, the rule matched nothing, and the CLI asked
-# for approval on every call. Nothing failed — a permission rule that grants
-# nothing is silent by construction, which is what makes it worth a gate.
+# A permission rule that grants nothing is silent by construction: the only
+# symptom is an approval prompt on every call, which reads as harness behaviour
+# rather than as a settings bug. That silence is what earns a gate.
 #
-# Two predicates, both a pure function of the settings file:
+# One predicate, a pure function of the settings file:
 #
-#   connector-prefix-missing  an allowed server S (not already a connector) with
-#                             no companion `mcp__claude_ai_S__*` rule
-#   unanchored-allow-glob     an allow rule whose glob reaches the server
-#                             segment — the CLI skips these with a warning, so
-#                             they read as a grant and are not one
+#   unanchored-allow-glob  an allow rule whose glob reaches the server segment.
+#                          The CLI accepts a tool-name glob only after a literal
+#                          `mcp__<server>__` prefix; anything broader is skipped
+#                          with a warning, so it reads as a grant and is not one.
 #
-# The connector name is `claude_ai_` plus the connector's display name, casing
-# preserved. Deny rules are deliberately not checked: a deny may glob freely,
-# and a deny that over-matches fails closed rather than silently.
+# Deny rules are deliberately not checked: a deny may glob freely, and a deny
+# that over-matches fails closed rather than silently.
 #
 # Reads no network and no live MCP state — the settings file is the whole input,
 # so the same command answers the same way in a hook, on CI, and in a test.
@@ -72,17 +68,20 @@ while IFS= read -r rule; do
 	esac
 done < <(jq -r '.[]' <<<"$allows")
 
-# The shipped bug: a locally-configured server allowed, its claude.ai connector
-# spelling not. The two are different tool names and one rule cannot cover both.
-while IFS= read -r server; do
-	[ -n "$server" ] || continue
-	case "$server" in
-	claude_ai_*) continue ;;
-	esac
-	if ! grep -qx "$server" <<<"$(printf '%s\n' "$servers" | sed -n 's/^claude_ai_//p')"; then
-		report "mcp__$server — no companion \`mcp__claude_ai_${server}__*\` rule, so the claude.ai connector spelling of this server still prompts on every call"
-	fi
-done <<<"$servers"
+# NOT checked: whether an allowed server also has a `mcp__claude_ai_<server>__*`
+# companion. An earlier version demanded one, on the reasoning that a claude.ai
+# connector is exposed under that name — true of the local CLI, whose own
+# built-in allowlist carries `mcp__claude_ai_Slack__slack_send_message`.
+#
+# But CLOUD-178 measured the exposed name to be chosen per registration episode
+# by the host, not fixed: in Claude Code on the web, connectors arrive as
+# explicit `--mcp-config` entries and appear as `mcp__<server>__*`, and after a
+# mid-session re-register as `mcp__<uuid>__*`. So the companion this gate used
+# to demand is inert in a web session, and the name that would actually help is
+# an account-specific UUID that rule 1 keeps out of committed config.
+#
+# A gate may only assert what it can verify from the repo. The connector-name
+# question cannot be, and belongs in user-level settings — see CLOUD-178.
 
 [ "$fail" = 0 ] && echo "mcp-allow-check: every MCP allow rule in $settings names a tool it can match"
 exit "$fail"
