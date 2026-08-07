@@ -16,6 +16,7 @@ pub mod exit;
 pub mod identity;
 pub mod resolve;
 pub mod rules;
+pub mod severity;
 pub mod spec;
 pub mod state;
 
@@ -31,6 +32,7 @@ pub use effect::Effect;
 pub use error::UsageError;
 pub use exit::ExitCode;
 pub use resolve::{Overrides, Resolved, Source};
+pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 
 /// Execute a parsed [`Cli`], writing any data output to `out`, and return the
 /// [`ExitCode`] to hand back to the OS.
