@@ -40,10 +40,6 @@ report() {
 	fail=1
 }
 
-# The servers named by anchored MCP allow rules, in either accepted spelling:
-# `mcp__S` (bare) and `mcp__S__<tool-or-glob>`.
-servers=$(jq -r '.[] | select(startswith("mcp__")) | sub("^mcp__"; "") | sub("__.*$"; "")' <<<"$allows" | sort -u)
-
 while IFS= read -r rule; do
 	[ -n "$rule" ] || continue
 	case "$rule" in
