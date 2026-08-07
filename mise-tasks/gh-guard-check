@@ -31,6 +31,33 @@ for seg in "${segments[@]}"; do
 	# Skip a `VAR=value` env prefix.
 	i=0
 	while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+	# Look through wrapper programs so the EFFECTIVE program is judged, not the
+	# wrapper. `mise exec -- gh pr merge` is a gh call — and in the web sandbox
+	# the wrapper form is the only working form, so a guard that stops at the
+	# wrapper token sees none of the gh calls that matter. Known wrappers only;
+	# anything unrecognised keeps the fail-open posture.
+	while :; do
+		case "${toks[$i]:-}" in
+		env | command | nice | stdbuf | timeout | xargs | sudo | doas)
+			i=$((i + 1))
+			# The wrapper's own flags, env assignments, and bare numeric
+			# arguments (timeout's duration) precede the wrapped program.
+			while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[A-Za-z_][A-Za-z0-9_]*=|[0-9]) ]]; do i=$((i + 1)); done
+			;;
+		mise)
+			# Only `mise exec` / `mise x` run another program; `mise run` names a task.
+			case "${toks[$((i + 1))]:-}" in
+			exec | x)
+				i=$((i + 2))
+				# Tool pins (node@22), flags, and the `--` separator precede the program.
+				while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[^ ]*@) ]]; do i=$((i + 1)); done
+				;;
+			*) break ;;
+			esac
+			;;
+		*) break ;;
+		esac
+	done
 	[ "${toks[$i]:-}" = "gh" ] || continue
 
 	# Subcommand words with flags dropped. A value-taking flag leaves its VALUE

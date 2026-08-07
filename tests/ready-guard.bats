@@ -93,3 +93,16 @@ receipts() {
 	run bash -c "printf '%s' '{\"tool_input\":{\"command\":\"gh pr ready 42\"}}' | BATTEN_READY_GUARD_BYPASS=1 '$GUARD'"
 	[ -z "$output" ]
 }
+
+# --- wrappers: the effective program is judged, not the wrapper ---------------
+
+@test "denies a wrapped ready with no receipts" {
+	run ready 'mise exec -- gh pr ready 42'
+	[[ "$output" == *'"permissionDecision": "deny"'* ]]
+}
+
+@test "allows a wrapped ready when both receipts match" {
+	receipts
+	run ready 'mise exec -- gh pr ready 42'
+	[[ "$output" != *deny* ]]
+}

@@ -123,3 +123,31 @@ setup() {
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
 }
+
+# --- wrappers: the effective program is judged, not the wrapper ---------------
+
+@test "blocks gh pr merge behind mise exec" {
+	run "$CHECK" 'mise exec -- gh pr merge 42'
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"mise run land"* ]]
+}
+
+@test "blocks gh pr merge behind mise x with a tool pin" {
+	run "$CHECK" 'mise x node@22 gh pr merge 42'
+	[ "$status" -eq 1 ]
+}
+
+@test "blocks gh pr checks behind env and timeout" {
+	run "$CHECK" 'env GH_TOKEN=x timeout 30 gh pr checks 42'
+	[ "$status" -eq 1 ]
+}
+
+@test "allows mise run — a task name is not a wrapped program" {
+	run "$CHECK" 'mise run land'
+	[ "$status" -eq 0 ]
+}
+
+@test "allows a bare wrapper with nothing after it" {
+	run "$CHECK" 'mise exec --'
+	[ "$status" -eq 0 ]
+}
