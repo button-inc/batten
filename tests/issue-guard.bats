@@ -5,15 +5,30 @@
 # no issue created, and an existing CLOUD issue — carrying measurements that
 # contradicted the fix — never read. Every OTHER discipline in that session was
 # followed, and every one of those has a gate on a call the agent cannot avoid.
+#
+# Every case runs in a throwaway repo, never in this one. The first draft ran in
+# the real checkout and passed; the commit that added this guard put `Refs:
+# CLOUD-178` in its own message, the guard then correctly allowed, and every
+# deny case flipped red. A guard whose verdict reads live git state must be
+# tested against git state the test controls.
 
 setup() {
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/issue-guard"
-	cd "$BATS_TEST_DIRNAME/.." || return 1
+	# A repo with no issue reference anywhere: not in the branch, not in history.
+	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
+	git init -q "$REPO"
+	cd "$REPO" || return 1
+	git config user.email t@t
+	git config user.name t
+	git commit -q --allow-empty -m "chore: init"
+	git branch -f main
+	git update-ref refs/remotes/origin/main main
+	git checkout -q -b plain-branch
 }
 
 # Feed a PreToolUse payload the way Claude Code does.
-payload() {
-	jq -nc --arg c "$1" '{tool_input: {command: $c}}'
+guard() {
+	jq -nc --arg c "$1" '{tool_input: {command: $c}}' | "$GUARD"
 }
 
 denied() {
@@ -21,48 +36,74 @@ denied() {
 }
 
 @test "gh pr create with no issue anywhere is denied" {
-	run bash -c "payload() { jq -nc --arg c \"\$1\" '{tool_input:{command:\$c}}'; }; payload 'gh pr create --draft --title x' | $GUARD"
+	run guard 'gh pr create --draft --title x'
 	denied "$output"
 }
 
 @test "the denial says what to do, not merely that it refused" {
-	run bash -c "jq -nc '{tool_input:{command:\"gh pr create\"}}' | $GUARD"
+	run guard 'gh pr create'
 	[[ "$output" == *"Search the board"* ]]
 	[[ "$output" == *"BATTEN_ISSUE_GUARD_BYPASS"* ]]
 }
 
-@test "an issue named in the command body is enough" {
-	run bash -c "jq -nc '{tool_input:{command:\"gh pr create --body Fixes CLOUD-178\"}}' | $GUARD"
-	! denied "$output"
-}
-
 @test "gh pr ready is gated too — readying is what starts CI" {
-	run bash -c "jq -nc '{tool_input:{command:\"gh pr ready 99\"}}' | $GUARD"
+	run guard 'gh pr ready 99'
 	denied "$output"
 }
 
 @test "the wrapper form is judged, not the wrapper — mise exec is the sandbox's only form" {
-	run bash -c "jq -nc '{tool_input:{command:\"mise exec -- gh pr create --draft\"}}' | $GUARD"
+	run guard 'mise exec -- gh pr create --draft'
+	denied "$output"
+}
+
+@test "an issue named in the command body is enough" {
+	run guard 'gh pr create --body Fixes CLOUD-178'
+	! denied "$output"
+}
+
+@test "a branch naming the issue satisfies the guard without touching the command" {
+	# The convention Linear's own gitBranchName produces.
+	git checkout -q -b wenzowski/cloud-178-connector-names
+	run guard 'gh pr create --draft'
+	! denied "$output"
+}
+
+@test "a commit trailer naming the issue satisfies it, on a branch that does not" {
+	git commit -q --allow-empty -m "fix: a thing
+
+Refs: CLOUD-178"
+	run guard 'gh pr create --draft'
+	! denied "$output"
+}
+
+@test "an issue on main but not on this branch does not count" {
+	# The reference has to be in work this branch adds, or the guard would pass
+	# on any repo whose history has ever mentioned an issue.
+	git checkout -q main
+	git commit -q --allow-empty -m "chore: mentions CLOUD-999"
+	git update-ref refs/remotes/origin/main main
+	git checkout -q plain-branch
+	run guard 'gh pr create --draft'
 	denied "$output"
 }
 
 @test "an unrelated gh call is none of this guard's business" {
-	run bash -c "jq -nc '{tool_input:{command:\"gh pr view 99 --json state\"}}' | $GUARD"
+	run guard 'gh pr view 99 --json state'
 	! denied "$output"
 }
 
 @test "a non-gh command is not touched" {
-	run bash -c "jq -nc '{tool_input:{command:\"git push -u origin HEAD\"}}' | $GUARD"
+	run guard 'git push -u origin HEAD'
 	! denied "$output"
 }
 
 @test "a commit message merely mentioning the command is not the command" {
-	run bash -c "jq -nc '{tool_input:{command:\"git commit -m \\\"explain gh pr create in the docs\\\"\"}}' | $GUARD"
+	run guard 'git commit -m "explain gh pr create in the docs"'
 	! denied "$output"
 }
 
 @test "the bypass is honoured, because a PR sometimes precedes its issue" {
-	run bash -c "BATTEN_ISSUE_GUARD_BYPASS=1 jq -nc '{tool_input:{command:\"gh pr create\"}}' | BATTEN_ISSUE_GUARD_BYPASS=1 $GUARD"
+	BATTEN_ISSUE_GUARD_BYPASS=1 run guard 'gh pr create'
 	! denied "$output"
 }
 
@@ -77,48 +118,8 @@ denied() {
 	! denied "$output"
 }
 
-@test "a branch naming the issue satisfies the guard without touching the command" {
-	# The convention Linear's own gitBranchName produces:
-	# wenzowski/cloud-178-claudeai-connector-tools-flip...
-	local repo="$BATS_TEST_TMPDIR/repo"
-	git init -q "$repo"
-	cd "$repo" || return 1
-	git config user.email t@t
-	git config user.name t
-	git commit -q --allow-empty -m init
-	git checkout -q -b wenzowski/cloud-178-connector-names
-	run bash -c "jq -nc '{tool_input:{command:\"gh pr create --draft\"}}' | $GUARD"
+@test "outside a git repo it fails open rather than blocking every PR" {
+	cd "$BATS_TEST_TMPDIR" || return 1
+	run guard 'gh pr create --draft'
 	! denied "$output"
-}
-
-@test "a commit trailer naming the issue satisfies it, on a branch that does not" {
-	local repo="$BATS_TEST_TMPDIR/repo2"
-	git init -q "$repo"
-	cd "$repo" || return 1
-	git config user.email t@t
-	git config user.name t
-	git commit -q --allow-empty -m init
-	git branch -f main
-	git update-ref refs/remotes/origin/main main
-	git checkout -q -b some-branch-with-no-number
-	git commit -q --allow-empty -m "fix: a thing
-
-Refs: CLOUD-178"
-	run bash -c "jq -nc '{tool_input:{command:\"gh pr create --draft\"}}' | $GUARD"
-	! denied "$output"
-}
-
-@test "a branch and history with no issue at all is still denied inside a repo" {
-	local repo="$BATS_TEST_TMPDIR/repo3"
-	git init -q "$repo"
-	cd "$repo" || return 1
-	git config user.email t@t
-	git config user.name t
-	git commit -q --allow-empty -m init
-	git branch -f main
-	git update-ref refs/remotes/origin/main main
-	git checkout -q -b plain-branch
-	git commit -q --allow-empty -m "fix: no reference here"
-	run bash -c "jq -nc '{tool_input:{command:\"gh pr create --draft\"}}' | $GUARD"
-	denied "$output"
 }
