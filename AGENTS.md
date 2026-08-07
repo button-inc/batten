@@ -32,6 +32,7 @@ auto-loaded. Read the matching one at its trigger; don't reconstruct the detail.
 | ----------------------------- | ----------------------------------------------------------------------------------- |
 | `workflow/board-states`       | starting/finishing a `CLOUD-*` issue; reasoning about what is in flight             |
 | `github-access`               | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"                |
+| `github-rest-etiquette`       | writing a task that calls the GitHub API; diagnosing a 403/429/abuse response       |
 | `toolchain-and-hooks`         | pinning a tool, adding a task, touching `hk.pkl` or the gate                        |
 | `serena-setup`                | a Serena worktree/index misbehaves; changing `.serena/` config                      |
 | `prior-art-and-issue-hygiene` | surveying outside practice; adopting a tool or pattern; writing an issue or PR body |
