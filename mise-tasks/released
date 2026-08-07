@@ -25,6 +25,10 @@
 #
 # Idempotent by construction: it reports, it does not mutate. Running it twice
 # against the same tag prints the same thing.
+#
+# It needs TAGS, which a default CI checkout does not fetch — anything wiring
+# this into the release path must fetch them first, or every tag will look
+# absent.
 set -euo pipefail
 
 tag="${1:-}"
