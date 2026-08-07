@@ -113,8 +113,12 @@ fn run_hook(harness: hook::Harness, out: &mut dyn Write) -> Result<ExitCode> {
 /// differ, so the two verbs can never drift in output shape.
 ///
 /// Output is pointer-only (non-negotiable rule 4): one `path:line rule-id` per
-/// finding, byte-stable and never the matched bytes. A clean run exits
-/// [`ExitCode::Success`]; any finding exits [`ExitCode::Violation`].
+/// finding, byte-stable and never the matched bytes. The exit code consumes
+/// each finding's severity (CLOUD-61): a clean run exits [`ExitCode::Success`],
+/// any `deny` finding exits [`ExitCode::Violation`], and a `warn` finding is
+/// reported without failing the run — promoting it is `--fail-on-warning`'s
+/// job (CLOUD-49). Which severity produced a finding is the committed rule's
+/// declaration, looked up by the printed rule id.
 fn run_rules(
     out: &mut dyn Write,
     overrides: Overrides,
@@ -133,10 +137,12 @@ fn run_rules(
             None => writeln!(out, "{} {}", finding.path, finding.rule)?,
         }
     }
-    if findings.is_empty() {
-        Ok(ExitCode::Success)
-    } else {
+    // The severity axis reaches the exit contract exactly here: blocking is
+    // derived through the taxonomy table, never name-matched (CLOUD-168).
+    if rules::any_blocking(&findings) {
         Ok(ExitCode::Violation)
+    } else {
+        Ok(ExitCode::Success)
     }
 }
 

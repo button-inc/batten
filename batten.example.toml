@@ -32,11 +32,23 @@ strictness = "standard"
 
 # Rules are the output-producing half of the config: glob-selected, kind-typed
 # predicates over the repository, evaluated by `batten check`. A `forbid` rule
-# fails on any line containing its literal pattern, reported pointer-only as
-# `path:line rule-id`, exit 1. This one ships live so a copied config detects
+# fires on any line containing its literal pattern, reported pointer-only as
+# `path:line rule-id`. This one ships live so a copied config detects
 # something real on day one: a conflict marker that survived a botched merge.
+#
+# Two per-rule keys are deliberately separate axes (cargo-deny's model):
+#
+#   severity  what a match does — "deny" fails the run (exit 1), "warn" reports
+#             the finding without failing it, "allow" switches the rule off.
+#             Required on every rule: the default is stated explicitly here,
+#             with no implicit fallback — omitting it is refused with exit 2.
+#   scope     where the rule looks — "tree" is the whole working tree (the
+#             default). Scope is never severity: a severity value in the scope
+#             key (or the reverse) is refused with exit 2, not reinterpreted.
 [[rule]]
 id = "no-conflict-markers"
 kind = "forbid"
 glob = "**/*.rs"
 pattern = "<<<<<<< "
+severity = "deny"
+scope = "tree"

@@ -131,6 +131,22 @@ fn exit_code_contract() {
             config: None,
             expected: 2,
         },
+        Case {
+            name: "config show, rule omitting severity → usage (no implicit fallback)",
+            args: &["config", "show"],
+            config: Some(
+                "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\n",
+            ),
+            expected: 2,
+        },
+        Case {
+            name: "config show, severity token in the scope key → usage (scope ≠ severity)",
+            args: &["config", "show"],
+            config: Some(
+                "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"deny\"\nscope = \"deny\"\n",
+            ),
+            expected: 2,
+        },
     ];
 
     for (index, case) in cases.iter().enumerate() {
@@ -157,7 +173,7 @@ fn exit_code_contract() {
 fn check_clean_repo_exits_success() {
     let dir = repo_with_config(
         "check-clean",
-        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("lib.rs"), "all clear\n").expect("write source");
     let output = batten()
@@ -173,7 +189,7 @@ fn check_clean_repo_exits_success() {
 fn check_violation_exits_one_with_pointer_only_output() {
     let dir = repo_with_config(
         "check-violation",
-        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("lib.rs"), "fine\nTODO fix this\n").expect("write source");
     let output = batten()
@@ -195,7 +211,7 @@ fn check_violation_exits_one_with_pointer_only_output() {
 fn check_output_is_byte_stable_across_runs() {
     let dir = repo_with_config(
         "check-stable",
-        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("b.rs"), "TODO\n").expect("write b");
     fs::write(dir.join("a.rs"), "TODO\n").expect("write a");
@@ -218,7 +234,7 @@ fn enforce_runs_the_same_static_rules_as_check() {
     // the reported result for an admissible kind.
     let dir = repo_with_config(
         "enforce-parity",
-        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("lib.rs"), "fine\nTODO fix\n").expect("write source");
     let check = batten()
@@ -256,7 +272,7 @@ fn spec_marks_enforce_unclassified_and_check_read() {
 }
 
 /// A `batten.toml` carrying one command rule that always fails.
-const COMMAND_RULE_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"false\"\n";
+const COMMAND_RULE_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"false\"\nseverity = \"deny\"\nscope = \"tree\"\n";
 
 #[test]
 fn check_refuses_a_command_rule_rather_than_skipping_it() {
@@ -303,7 +319,7 @@ fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
 fn enforce_passes_when_the_command_exits_zero() {
     let dir = repo_with_config(
         "cmd-enforce-pass",
-        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"true\"\n",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"true\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("lib.rs"), "x\n").expect("write source");
     let output = batten()
@@ -319,7 +335,7 @@ fn enforce_passes_when_the_command_exits_zero() {
 fn enforce_missing_binary_is_a_usage_error() {
     let dir = repo_with_config(
         "cmd-enforce-missing",
-        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\n",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("lib.rs"), "x\n").expect("write source");
     let output = batten()
@@ -340,7 +356,7 @@ fn command_rule_with_no_glob_match_is_skipped_without_spawning() {
     // it were ever reached, so exit 0 proves nothing spawned.
     let dir = repo_with_config(
         "cmd-no-match",
-        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\n",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("notes.txt"), "x\n").expect("write source");
     let output = batten()
@@ -355,7 +371,7 @@ fn command_rule_with_no_glob_match_is_skipped_without_spawning() {
 fn check_unknown_rule_key_is_a_usage_error() {
     let dir = repo_with_config(
         "check-bad-rule",
-        "version = 1\n\n[[rule]]\nid = \"x\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"y\"\nbogus = true\n",
+        "version = 1\n\n[[rule]]\nid = \"x\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"y\"\nseverity = \"deny\"\nbogus = true\n",
     );
     let output = batten()
         .arg("check")
@@ -547,14 +563,14 @@ fn an_env_or_flag_override_that_weakens_a_gate_is_rejected() {
 
 #[test]
 fn a_local_override_may_add_a_rule_but_not_redefine_one() {
-    let config = "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n";
+    let config = "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n";
     let dir = repo_with_config("config-local-rules", config);
     fs::write(dir.join("lib.rs"), "FIXME later\n").expect("write source");
 
     // Adding a rule tightens policy, and the added gate really runs.
     with_local_config(
         &dir,
-        "version = 1\n\n[[rule]]\nid = \"no-fixme\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"FIXME\"\n",
+        "version = 1\n\n[[rule]]\nid = \"no-fixme\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"FIXME\"\nseverity = \"deny\"\n",
     );
     let output = batten()
         .arg("check")
@@ -570,7 +586,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     // Redefining a committed rule could weaken it, so it is refused outright.
     with_local_config(
         &dir,
-        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"nothing/**\"\npattern = \"TODO\"\n",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"nothing/**\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
     );
     let output = batten()
         .arg("check")
@@ -736,4 +752,200 @@ fn the_committed_example_config_loads_over_the_binary() {
         String::from_utf8_lossy(&output.stdout),
         "main.rs:1 no-conflict-markers\n"
     );
+}
+
+// --- The severity model (CLOUD-61): explicit defaults, scope ≠ severity, ---
+// --- and the exit contract consuming the deny/warn/allow vocabulary.     ---
+
+/// A one-rule config whose severity/scope lines are supplied by the test.
+fn severity_fixture(severity_and_scope: &str) -> String {
+    format!(
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
+         pattern = \"TODO\"\n{severity_and_scope}"
+    )
+}
+
+#[test]
+fn a_rule_omitting_severity_is_refused_with_a_named_key() {
+    // The explicit-defaults discipline over the binary: no implicit fallback
+    // exists, so the file simply does not parse — and the refusal names the
+    // missing key so the fix is mechanical.
+    let dir = repo_with_config("severity-omitted", &severity_fixture(""));
+    fs::write(dir.join("lib.rs"), "clean\n").expect("write source");
+    for args in [&["check"][..], &["config", "show"][..]] {
+        let output = batten()
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("run batten");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "omitted severity must be a usage error under {args:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("severity"),
+            "the refusal must name the missing key"
+        );
+    }
+}
+
+#[test]
+fn conflating_scope_and_severity_is_refused_in_both_directions() {
+    // Two independent keys, never conflated: each axis's vocabulary is rejected
+    // by the other key at parse time (exit 2), not reinterpreted.
+    for (name, lines) in [
+        ("scope-token-in-severity", "severity = \"tree\"\n"),
+        (
+            "severity-token-in-scope",
+            "severity = \"deny\"\nscope = \"deny\"\n",
+        ),
+        (
+            "severity-token-warn-in-scope",
+            "severity = \"deny\"\nscope = \"warn\"\n",
+        ),
+    ] {
+        let dir = repo_with_config(&format!("conflate-{name}"), &severity_fixture(lines));
+        let output = batten()
+            .args(["config", "show"])
+            .current_dir(&dir)
+            .output()
+            .expect("run batten config show");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{name}: a conflated key must be a usage error"
+        );
+    }
+}
+
+#[test]
+fn warn_findings_report_without_failing_the_run() {
+    // The middle rank of the exit contract: the finding is printed —
+    // pointer-only, same shape as any other — but the run succeeds. Promoting
+    // it to a failure is `--fail-on-warning`'s job (CLOUD-49), not the default's.
+    let dir = repo_with_config("severity-warn", &severity_fixture("severity = \"warn\"\n"));
+    fs::write(dir.join("lib.rs"), "TODO later\n").expect("write source");
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a warn finding must not fail the run"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "lib.rs:1 no-todo\n",
+        "the warn finding must still be reported"
+    );
+}
+
+#[test]
+fn an_allow_rule_is_configured_off() {
+    // The weakest rank: a match is not a finding at all — nothing printed,
+    // nothing failed. The rule stays committed and readable; only its effect is
+    // switched off, explicitly.
+    let dir = repo_with_config(
+        "severity-allow",
+        &severity_fixture("severity = \"allow\"\n"),
+    );
+    fs::write(dir.join("lib.rs"), "TODO later\n").expect("write source");
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        output.stdout.is_empty(),
+        "an allow rule must report nothing"
+    );
+}
+
+#[test]
+fn severity_and_scope_serialize_byte_stably_over_the_binary() {
+    // §6 over the emitted surface: the tokens `config show` prints are the
+    // pinned vocabulary, byte-for-byte, and identical across runs. The scope
+    // key is omitted in the input, so the emitted "tree" also proves the
+    // per-field-pinned default resolves explicitly rather than vanishing.
+    let dir = repo_with_config(
+        "severity-byte-stable",
+        &severity_fixture("severity = \"warn\"\n"),
+    );
+    let run = || {
+        batten()
+            .args(["config", "show"])
+            .current_dir(&dir)
+            .env_remove("BATTEN_STRICTNESS")
+            .output()
+            .expect("run batten config show")
+    };
+    let first = run();
+    assert_eq!(first.status.code(), Some(0));
+    let value: serde_json::Value =
+        serde_json::from_slice(&first.stdout).expect("config show stdout is JSON");
+    assert_eq!(value["rule"][0]["severity"], "warn");
+    assert_eq!(value["rule"][0]["scope"], "tree");
+    assert_eq!(
+        first.stdout,
+        run().stdout,
+        "identical input, identical bytes"
+    );
+}
+
+#[test]
+fn committed_rules_pin_severity_and_scope_explicitly() {
+    // Schema conformance over the shipped configs (consumer #1 discipline):
+    // every committed rule states both keys in the file itself — the explicit,
+    // per-field-pinned defaults — and the compiled binary accepts each file and
+    // re-emits only the pinned vocabulary.
+    for (label, file) in [
+        ("batten.toml", "../../batten.toml"),
+        ("batten.example.toml", "../../batten.example.toml"),
+    ] {
+        let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(file);
+        let contents = fs::read_to_string(&committed).expect("read committed config");
+
+        // The file text pins the keys — not merely the parsed result, which
+        // would also be satisfied by a default the file never wrote down.
+        let parsed: toml::Value = toml::from_str(&contents).expect("committed config is TOML");
+        let rules = parsed
+            .get("rule")
+            .and_then(toml::Value::as_array)
+            .expect("committed config declares rules");
+        assert!(!rules.is_empty(), "{label}: consumer #1 ships a live rule");
+        for rule in rules {
+            let id = rule.get("id").and_then(toml::Value::as_str).unwrap_or("?");
+            for key in ["severity", "scope"] {
+                assert!(
+                    rule.get(key).is_some(),
+                    "{label}: rule {id} must pin `{key}` explicitly"
+                );
+            }
+        }
+
+        // And the binary agrees: the file loads, and the emitted tokens are the
+        // byte-stable vocabulary — never a value outside it.
+        let dir = repo_with_config(&format!("conformance-{label}"), &contents);
+        let output = batten()
+            .args(["config", "show"])
+            .current_dir(&dir)
+            .env_remove("BATTEN_STRICTNESS")
+            .output()
+            .expect("run batten config show");
+        assert_eq!(output.status.code(), Some(0), "{label} must load");
+        let value: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("config show stdout is JSON");
+        for rule in value["rule"].as_array().expect("rules in output") {
+            let severity = rule["severity"].as_str().expect("severity token");
+            assert!(
+                ["allow", "warn", "deny"].contains(&severity),
+                "{label}: severity {severity:?} outside the vocabulary"
+            );
+            assert_eq!(rule["scope"], "tree", "{label}: scope token");
+        }
+    }
 }

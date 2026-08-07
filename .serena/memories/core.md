@@ -37,7 +37,10 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
   predicates over the repo. `run_static` (read-effect, no process spawn) backs
   `check`; `run_all` (every kind) backs `enforce`. `check` refuses a
-  command-executing rule rather than silently skipping it.
+  command-executing rule rather than silently skipping it. Each rule pins a
+  required `severity` (`RuleSeverity`, no implicit fallback) and a separate
+  `scope` (`RuleScope`, pinned default `tree`) — two axes that never conflate
+  (CLOUD-61); `any_blocking` is where severity meets the exit contract.
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
   wrapper-lookthrough command parser, and the policy tables, ported from the
   shell guards. Harness adapters decode/encode at the edges; the core is

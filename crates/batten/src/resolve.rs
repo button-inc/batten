@@ -440,9 +440,9 @@ mod tests {
     fn local_file_may_add_a_rule() {
         let dir = repo(
             "resolve-local-add-rule",
-            "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\n",
+            "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"deny\"\n",
             Some(
-                "version = 1\n\n[[rule]]\nid = \"b\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"y\"\n",
+                "version = 1\n\n[[rule]]\nid = \"b\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"y\"\nseverity = \"deny\"\n",
             ),
         );
         let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
@@ -455,9 +455,9 @@ mod tests {
     fn local_file_may_not_redefine_a_committed_rule() {
         let dir = repo(
             "resolve-local-redefine",
-            "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\n",
+            "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"deny\"\n",
             Some(
-                "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"nothing/**\"\npattern = \"x\"\n",
+                "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"nothing/**\"\npattern = \"x\"\nseverity = \"deny\"\n",
             ),
         );
         let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();

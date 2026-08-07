@@ -80,6 +80,12 @@ pub struct Config {
     /// "no rules configured" and nothing is reported. Which of these a given
     /// verb admits is the §5 effect split: `check` runs only non-spawning kinds
     /// and refuses the rest, `enforce` runs all of them (CLOUD-170).
+    ///
+    /// Every rule pins its `severity` explicitly — the key is required, with no
+    /// implicit fallback — and carries a separate `scope` key whose vocabulary
+    /// never conflates with severity's (CLOUD-61). Both disciplines are
+    /// enforced at parse time: omission or conflation is a usage error here,
+    /// never a value quietly assumed.
     #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
 }
@@ -237,5 +243,62 @@ mod tests {
         let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.example.toml");
         let config = load(&example).expect("batten.example.toml loads");
         assert_eq!(config.version, SUPPORTED_VERSION);
+    }
+
+    /// A well-formed rule table with the given `severity` and `scope` lines
+    /// spliced in, for the explicit-defaults and conflation cases below.
+    fn rule_config(severity_line: &str, scope_line: &str) -> String {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\n\
+             pattern = \"x\"\n{severity_line}{scope_line}"
+        )
+    }
+
+    #[test]
+    fn a_rule_with_explicit_severity_and_scope_parses() {
+        let config = parse(
+            &rule_config("severity = \"warn\"\n", "scope = \"tree\"\n"),
+            "test",
+        )
+        .unwrap();
+        assert_eq!(config.rules.len(), 1);
+        assert_eq!(
+            config.rules[0].severity,
+            crate::severity::RuleSeverity::Warn
+        );
+        assert_eq!(config.rules[0].scope, crate::rules::RuleScope::Tree);
+    }
+
+    #[test]
+    fn a_rule_omitting_severity_is_a_usage_error() {
+        // The explicit-defaults discipline (CLOUD-61): a committed rule states
+        // its severity or the file does not parse. No implicit fallback exists
+        // for the parser to fall into.
+        let err = parse(&rule_config("", "scope = \"tree\"\n"), "test").unwrap_err();
+        assert!(is_usage_error(&err));
+        assert!(
+            err.to_string().contains("severity"),
+            "the refusal must name the missing key, got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_severity_token_in_the_scope_key_is_a_usage_error() {
+        // Scope ≠ severity: the two keys' vocabularies never cross, so writing
+        // one axis's value into the other key is bad input, not a lenient read.
+        for token in ["deny", "warn", "allow"] {
+            let err = parse(
+                &rule_config("severity = \"deny\"\n", &format!("scope = \"{token}\"\n")),
+                "test",
+            )
+            .unwrap_err();
+            assert!(is_usage_error(&err), "scope = \"{token}\" must be refused");
+        }
+    }
+
+    #[test]
+    fn a_scope_token_in_the_severity_key_is_a_usage_error() {
+        let err = parse(&rule_config("severity = \"tree\"\n", ""), "test").unwrap_err();
+        assert!(is_usage_error(&err), "severity = \"tree\" must be refused");
     }
 }

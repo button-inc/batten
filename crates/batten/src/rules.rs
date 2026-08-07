@@ -2,7 +2,12 @@
 //!
 //! A rule is a **declarative predicate over the repository**: it selects files
 //! with a `glob` and applies a `kind`-specific test to them, mapping the outcome
-//! onto the exit-code contract (§7) — a clean run exits `0`, any finding `1`.
+//! onto the exit-code contract (§7) through the rule's `severity` (CLOUD-61) —
+//! a clean run exits `0`, any `deny` finding exits `1`, a `warn` finding is
+//! reported without failing the run, and an `allow` rule is configured off.
+//! `severity` is required per rule with no implicit fallback, and is a separate
+//! key from `scope` ([`RuleScope`]) — where a rule looks is never what a match
+//! does.
 //!
 //! **Two entry points, split by effect (§5, CLOUD-170).** [`run_static`] backs
 //! the `read`-effect `batten check` and admits only kinds that cannot spawn a
@@ -35,6 +40,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::severity::{self, ReportLevel, RuleSeverity};
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
 ///
@@ -84,6 +90,44 @@ impl RuleKind {
     }
 }
 
+/// Which file domain a rule evaluates over — *where a rule looks*, never what a
+/// match does (CLOUD-61).
+///
+/// Scope and severity are two independent keys on a [`Rule`], deliberately: the
+/// question "which files does this gate watch" and the question "what happens
+/// when it matches" ([`RuleSeverity`]) are different axes, and conflating them
+/// is the config bug this type makes inexpressible. Neither vocabulary
+/// deserializes as the other, so a severity token in the `scope` key (or the
+/// reverse) is a usage error (exit `2`), never a silent reinterpretation.
+///
+/// Marked `#[non_exhaustive]` like [`RuleKind`]: the git change-set / protected
+/// / unlanded domains (CLOUD-36, CLOUD-37) slot in as new variants without a
+/// breaking change. The default is pinned as data —
+/// [`tests::scope_default_is_pinned`] asserts it — so it is an explicit,
+/// per-field default rather than an implicit fallback buried in code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RuleScope {
+    /// The whole working tree: every file the walk yields. The only domain the
+    /// engine evaluates today, and the pinned default.
+    #[default]
+    Tree,
+}
+
+impl RuleScope {
+    /// Every scope the engine knows, so vocabulary tests stay total.
+    pub const ALL: &'static [RuleScope] = &[RuleScope::Tree];
+
+    /// The stable lowercase token used in config and machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RuleScope::Tree => "tree",
+        }
+    }
+}
+
 /// One declarative rule from `batten.toml`'s `[[rule]]` array.
 ///
 /// `deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard
@@ -102,6 +146,20 @@ pub struct Rule {
     /// repo-relative paths (`/`-separated). `**` matches any run of path
     /// segments, `*` and `?` match within a single segment.
     pub glob: String,
+    /// What a match does: `deny` fails the run, `warn` reports without failing
+    /// (until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the
+    /// rule off (cargo-deny's model, CLOUD-61).
+    ///
+    /// **Required, deliberately**: every committed rule states its severity
+    /// default explicitly, and there is no implicit fallback — omitting the key
+    /// is a usage error (exit `2`), never a silently assumed level.
+    pub severity: RuleSeverity,
+    /// Which file domain the rule evaluates over. Independent of `severity` —
+    /// scope says *where* the rule looks, severity says *what a match does* —
+    /// and neither key's vocabulary parses as the other's. Defaults to
+    /// [`RuleScope::Tree`], the pinned per-field default.
+    #[serde(default)]
+    pub scope: RuleScope,
     /// The literal substring a [`RuleKind::Forbid`] rule bans from matched
     /// files. Required by that kind, rejected by any other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -153,14 +211,22 @@ impl Rule {
     }
 }
 
-/// A single policy violation: the rule that fired and where, as a pointer only.
+/// A single policy finding: the rule that fired and where, as a pointer only.
 ///
 /// A finding never carries the matched bytes (non-negotiable rule 4) — only the
 /// rule id and a `path:line` location the caller can open.
+///
+/// The `severity` is the producing rule's — the value the exit contract
+/// consumes: a `deny` finding fails the run, a `warn` finding reports without
+/// failing it (CLOUD-49 promotes it). It rides along for that decision only; it
+/// is **never** an identity input (see [`crate::identity`] — re-rating a
+/// finding must not re-mint it).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Finding {
     /// The [`Rule::id`] that produced this finding.
     pub rule: String,
+    /// The producing rule's [`Rule::severity`], for the exit-contract decision.
+    pub severity: RuleSeverity,
     /// Where the violation is. A file-scoped kind reports the repo-relative
     /// path (`/`-separated); a rule-scoped kind — a command whose exit code
     /// condemns a whole batch rather than one line — reports the rule's `glob`,
@@ -255,6 +321,15 @@ fn run_rule(
         )));
     }
     rule.validate()?;
+    // An `allow` rule is configured off: a match is not a finding at all. It is
+    // still validated above — a malformed rule is a config error even when off,
+    // because "off" must never double as "unreadable" — but it matches nothing
+    // and (for a command kind) never spawns. Severity does not change which
+    // surface admits a rule: `run_static`'s spawning refusal fires first,
+    // regardless of severity, so the two axes stay independent.
+    if rule.severity == RuleSeverity::Allow {
+        return Ok(());
+    }
     let matched: Vec<&String> = files
         .iter()
         .filter(|path| glob_match(&rule.glob, path))
@@ -397,11 +472,26 @@ fn run_once(
     if !status.success() {
         findings.push(Finding {
             rule: rule.id.clone(),
+            severity: rule.severity,
             path: rule.glob.clone(),
             line: None,
         });
     }
     Ok(())
+}
+
+/// Whether a set of findings fails the run: does any finding's severity rank as
+/// a blocking [`ReportLevel::Fail`]?
+///
+/// The one place the rule axis is converted for the exit contract, derived
+/// through the severity taxonomy's own table ([`severity::row_for_rule`])
+/// rather than a name-match — a `warn` finding renders and does not block
+/// (until `--fail-on-warning` promotes it, CLOUD-49).
+#[must_use]
+pub fn any_blocking(findings: &[Finding]) -> bool {
+    findings
+        .iter()
+        .any(|finding| severity::row_for_rule(finding.severity).report == ReportLevel::Fail)
 }
 
 /// Emit a finding for every line of `rel_path` that contains the rule's literal
@@ -430,6 +520,7 @@ fn forbid_in_file(
         if line.contains(pattern) {
             findings.push(Finding {
                 rule: rule.id.clone(),
+                severity: rule.severity,
                 path: rel_path.to_owned(),
                 line: Some(index + 1),
             });
@@ -558,6 +649,8 @@ mod tests {
             id: id.to_owned(),
             kind: RuleKind::Forbid,
             glob: glob.to_owned(),
+            severity: RuleSeverity::Deny,
+            scope: RuleScope::Tree,
             pattern: Some(pattern.to_owned()),
             run: None,
         }
@@ -568,6 +661,8 @@ mod tests {
             id: id.to_owned(),
             kind: RuleKind::Command,
             glob: glob.to_owned(),
+            severity: RuleSeverity::Deny,
+            scope: RuleScope::Tree,
             pattern: None,
             run: Some(run.to_owned()),
         }
@@ -606,11 +701,13 @@ mod tests {
             vec![
                 Finding {
                     rule: "no-todo".to_owned(),
+                    severity: RuleSeverity::Deny,
                     path: "src/a.rs".to_owned(),
                     line: Some(2),
                 },
                 Finding {
                     rule: "no-todo".to_owned(),
+                    severity: RuleSeverity::Deny,
                     path: "src/a.rs".to_owned(),
                     line: Some(3),
                 },
@@ -693,6 +790,8 @@ mod tests {
                 id: "spawner".to_owned(),
                 kind: *kind,
                 glob: "**".to_owned(),
+                severity: RuleSeverity::Deny,
+                scope: RuleScope::Tree,
                 pattern: None,
                 run: Some("true".to_owned()),
             };
@@ -733,6 +832,7 @@ mod tests {
             fail,
             vec![Finding {
                 rule: "bad".to_owned(),
+                severity: RuleSeverity::Deny,
                 // Rule-scoped: the exit code condemns the batch, not a line.
                 path: "**/*.rs".to_owned(),
                 line: None,
@@ -832,6 +932,8 @@ mod tests {
                 id: "a".into(),
                 kind: RuleKind::Command,
                 glob: "**".into(),
+                severity: RuleSeverity::Deny,
+                scope: RuleScope::Tree,
                 pattern: None,
                 run: None,
             },
@@ -839,6 +941,8 @@ mod tests {
                 id: "b".into(),
                 kind: RuleKind::Command,
                 glob: "**".into(),
+                severity: RuleSeverity::Deny,
+                scope: RuleScope::Tree,
                 pattern: Some("x".into()),
                 run: Some("true".into()),
             },
@@ -846,6 +950,8 @@ mod tests {
                 id: "c".into(),
                 kind: RuleKind::Forbid,
                 glob: "**".into(),
+                severity: RuleSeverity::Deny,
+                scope: RuleScope::Tree,
                 pattern: None,
                 run: None,
             },
@@ -853,6 +959,8 @@ mod tests {
                 id: "d".into(),
                 kind: RuleKind::Forbid,
                 glob: "**".into(),
+                severity: RuleSeverity::Deny,
+                scope: RuleScope::Tree,
                 pattern: Some("x".into()),
                 run: Some("true".into()),
             },
@@ -873,5 +981,137 @@ mod tests {
         write(&dir, "a.rs", "TODO\n");
         let err = run_static(&[forbid("bad", "", "TODO")], &dir).unwrap_err();
         assert!(err.downcast_ref::<UsageError>().is_some());
+    }
+
+    #[test]
+    fn scope_default_is_pinned() {
+        // The per-field default, as data: `tree` is what an omitted `scope` key
+        // means, byte-stable in both directions. This is the "pinned" in
+        // "per-field-pinned default" — the fallback is a declared, tested value,
+        // never an accident of code.
+        assert_eq!(RuleScope::default(), RuleScope::Tree);
+        assert_eq!(RuleScope::default().as_str(), "tree");
+        for &scope in RuleScope::ALL {
+            let json = serde_json::to_string(&scope).unwrap();
+            assert_eq!(json, format!("\"{}\"", scope.as_str()));
+            assert_eq!(serde_json::from_str::<RuleScope>(&json).unwrap(), scope);
+        }
+        // `ALL` stays total: a new variant must extend it or this stops compiling.
+        for scope in RuleScope::ALL {
+            match scope {
+                RuleScope::Tree => {}
+            }
+        }
+    }
+
+    #[test]
+    fn severity_and_scope_vocabularies_do_not_cross() {
+        // The key separation, one layer below the config file: a severity token
+        // does not deserialize as a scope, nor a scope token as a severity, so
+        // conflating the two keys cannot even be *expressed* — it fails as a
+        // usage error at parse time rather than silently re-reading one axis as
+        // the other.
+        for &severity in RuleSeverity::ALL {
+            let token = format!("\"{}\"", severity.as_str());
+            assert!(
+                serde_json::from_str::<RuleScope>(&token).is_err(),
+                "severity token {token} must not parse as a scope"
+            );
+        }
+        for &scope in RuleScope::ALL {
+            let token = format!("\"{}\"", scope.as_str());
+            assert!(
+                serde_json::from_str::<RuleSeverity>(&token).is_err(),
+                "scope token {token} must not parse as a severity"
+            );
+        }
+    }
+
+    #[test]
+    fn an_allow_rule_is_configured_off() {
+        // `allow` means off: a match is not a finding at all, on both surfaces.
+        let dir = temp_dir("rules-allow-off");
+        write(&dir, "a.rs", "TODO\n");
+        let mut rule = forbid("no-todo", "**/*.rs", "TODO");
+        rule.severity = RuleSeverity::Allow;
+        assert!(
+            run_static(std::slice::from_ref(&rule), &dir)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            run_all(std::slice::from_ref(&rule), &dir)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_allow_rule_is_still_validated() {
+        // "Off" must never double as "unreadable": a malformed rule is a config
+        // error even at severity `allow`, so flipping a broken rule on can
+        // never be the moment its config first fails to parse.
+        let dir = temp_dir("rules-allow-validated");
+        write(&dir, "a.rs", "x\n");
+        let mut rule = forbid("broken", "**/*.rs", "x");
+        rule.severity = RuleSeverity::Allow;
+        rule.pattern = None;
+        let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
+    }
+
+    #[test]
+    fn an_allow_command_rule_never_spawns() {
+        // The missing binary would be a usage error if the spawn were reached,
+        // so a clean exit proves the `allow` skip happens before any process.
+        let dir = temp_dir("rules-allow-no-spawn");
+        write(&dir, "a.rs", "x\n");
+        let mut rule = command("off", "**/*.rs", "definitely-not-a-real-binary-xyz");
+        rule.severity = RuleSeverity::Allow;
+        assert!(
+            run_all(std::slice::from_ref(&rule), &dir)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn severity_never_changes_which_surface_admits_a_rule() {
+        // Scope ≠ severity, and severity ≠ effect either: the §5 spawning
+        // refusal on the read-only surface fires for a command rule at *every*
+        // severity, `allow` included. An axis that silently widened the read
+        // surface would conflate "what a match does" with "what may run".
+        let dir = temp_dir("rules-allow-still-refused");
+        write(&dir, "a.rs", "x\n");
+        for &severity in RuleSeverity::ALL {
+            let mut rule = command("spawner", "**/*.rs", "true");
+            rule.severity = severity;
+            let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
+            assert!(
+                err.downcast_ref::<UsageError>().is_some(),
+                "severity {} must not admit a spawning kind to `check`",
+                severity.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn warn_findings_report_without_blocking() {
+        // The middle rank end to end at the library layer: a `warn` finding is
+        // produced and carries its severity, and the exit-contract predicate
+        // says it does not block — that promotion is `--fail-on-warning`'s job
+        // (CLOUD-49), not the default's.
+        let dir = temp_dir("rules-warn-reports");
+        write(&dir, "a.rs", "TODO\n");
+        let mut rule = forbid("no-todo", "**/*.rs", "TODO");
+        rule.severity = RuleSeverity::Warn;
+        let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, RuleSeverity::Warn);
+        assert!(!any_blocking(&findings), "a warn finding must not block");
+
+        let deny = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
+        assert!(any_blocking(&deny), "a deny finding must block");
+        assert!(!any_blocking(&[]), "no findings, nothing blocks");
     }
 }

@@ -22,8 +22,15 @@ min_batten_version = "0.0.0"
 # A conflict marker reaching a source file means a botched merge landed. The
 # shape is unambiguous and no compiler catches it in every file type, which is
 # exactly the banned-shape case `forbid` exists for.
+#
+# `severity` (what a match does: "deny" fails the run, "warn" reports without
+# failing, "allow" switches the rule off) is required on every rule — the
+# default is stated here, never assumed. `scope` (where the rule looks) is a
+# separate key with its own vocabulary; "tree" is the whole working tree.
 [[rule]]
 id = "no-conflict-markers"
 kind = "forbid"
 glob = "crates/**/*.rs"
 pattern = "<<<<<<< "
+severity = "deny"
+scope = "tree"
