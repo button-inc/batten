@@ -94,6 +94,12 @@ run = "cargo test --workspace"
 description = "cargo-deny: licenses, advisories, sources"
 run = "cargo deny check"
 
+[tasks.batten-check]
+description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"
+# `cargo run` rather than an installed binary, so the gate always judges the
+# working tree's engine and config together — the pair that ships.
+run = "cargo run --quiet -p batten -- check"
+
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
 # Same tool + severity CI enforces. GH_TOKEN (set in [env]) enables the online

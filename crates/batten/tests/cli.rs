@@ -549,6 +549,42 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
 }
 
 #[test]
+fn the_committed_repo_config_gates_a_repository() {
+    // Consumer #1: the repo's own `batten.toml` must load, and its rule table
+    // must detect what it claims to — asserted over the shipped file, so config
+    // that drifts from the schema, or a rule that can never fire, fails here.
+    // The gate side (`mise run batten-check`, wired into hk) runs the same
+    // config against the real tree; this pins the config's behaviour.
+    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+
+    let dir = repo_with_config("config-committed", &contents);
+    // A file the committed no-conflict-markers rule must flag. The marker is
+    // assembled at runtime so this source file never carries the banned shape
+    // itself — the gate this test backs scans the whole tree, including here.
+    let marker = format!("{} HEAD\n", "<".repeat(7));
+    let src = dir.join("crates/x/src");
+    fs::create_dir_all(&src).expect("create fixture source tree");
+    fs::write(src.join("lib.rs"), marker).expect("write fixture source");
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the committed rule must fire on the shape it names"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "crates/x/src/lib.rs:1 no-conflict-markers\n",
+        "pointer-only finding, byte-stable"
+    );
+}
+
+#[test]
 fn the_committed_example_config_loads_over_the_binary() {
     // DoD: `batten.example.toml` loads and round-trips — asserted against the
     // shipped file itself, so an example that drifts from the schema fails here.

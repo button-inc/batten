@@ -189,6 +189,15 @@ local gate = new Mapping<String, Step> {
     glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
     check = "mise run test:cargo"
   }
+  // Consumer #1 in practice: the committed batten.toml, evaluated by the engine
+  // it configures, over this repository. No glob — any file can carry a
+  // violation, so the rule table applies to every commit. Chained after `test`
+  // for the same reason the cargo steps chain: exactly one cargo build holds
+  // the target-dir lock at a time.
+  ["batten-check"] {
+    depends = List("test")
+    check = "mise run batten-check"
+  }
 }
 
 // Report every failing step in one pass rather than stopping at the first —
