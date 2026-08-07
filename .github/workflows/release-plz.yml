@@ -51,3 +51,31 @@ jobs:
         run: git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
       - run: mise run release
       - run: mise run release-pr
+      # CLOUD-174. `Done` on this board means released, and Linear's GitHub
+      # integration cannot supply that transition — it triggers on PR events, and
+      # "a tag now contains this commit" is not one. So the list of issues a
+      # release finished had no home, and the move was reliably forgotten.
+      #
+      # Read-only on purpose: this is the "what would move" form, and it needs no
+      # credential. Performing the move needs a Linear token that does not exist
+      # yet; printing the list needs nothing, and puts it in the run summary
+      # instead of nowhere.
+      #
+      # Tags are available because the checkout above is fetch-depth 0. A default
+      # checkout has none, and every tag would look absent.
+      - name: Report which issues this release shipped
+        run: |
+          tag="$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1)"
+          if [ -z "$tag" ]; then
+            echo "No release tag at HEAD — this push shipped nothing." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "## Issues shipped by $tag"
+            echo
+            echo '```'
+            mise run released "$tag" </dev/null
+            echo '```'
+            echo
+            echo "Move any of these that are still In Review to Done."
+          } >>"$GITHUB_STEP_SUMMARY"
