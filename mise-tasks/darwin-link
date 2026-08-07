@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the macOS targets actually LINK from Linux, which is what proves no dependency needs an Apple SDK"
+#
+# `cargo check` stops at codegen-to-metadata and never links, so it structurally
+# cannot see a dependency that pulls in a macOS system framework. The release
+# build would be the first thing to notice — after a tag was already cut.
+#
+# `macos-link-check` catches the known framework crates early and cheaply, but it
+# reads a list and so is incomplete by construction. This closes that gap the
+# only way that has no false negatives: link the thing. It either links or it
+# does not.
+#
+# Runs as its own CI job, one target per matrix leg, so the legs run concurrently
+# with each other AND with `ci`/`cross`. It is off the critical path, not on it —
+# and the Darwin triples were dropped from `cross-check` in the same change, so
+# nothing is checked twice.
+set -euo pipefail
+
+target="${1:-${DARWIN_TARGET:-aarch64-apple-darwin}}"
+
+case "$target" in
+*-apple-darwin) ;;
+*)
+	echo "darwin-link: expected an *-apple-darwin target, got '${target}'" >&2
+	exit 1
+	;;
+esac
+
+rustup target add "$target"
+# zig supplies the Darwin linker; no Apple SDK is present, which is precisely the
+# condition this gate asserts the tree still builds under.
+cargo zigbuild --workspace --target "$target"
+echo "darwin-link: ${target} links with no macOS SDK"

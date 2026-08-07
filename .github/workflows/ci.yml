@@ -58,16 +58,43 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run cross-check
 
+  # The macOS gate. `cargo check` never links, so it cannot see a dependency that
+  # needs an Apple SDK; this LINKS both Darwin targets, which is the only check
+  # with no false negatives. One target per leg so the two run concurrently with
+  # each other AND with ci/cross — it is off the critical path, not on it, and
+  # the Darwin triples were removed from cross-check so nothing is done twice.
+  darwin-link:
+    name: darwin-link (${{ matrix.target }})
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-apple-darwin, x86_64-apple-darwin]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A per-target key: the two legs build different artifacts and would
+          # otherwise thrash one shared entry.
+          key: ${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: mise run darwin-link ${{ matrix.target }}
+
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
   final:
     name: final
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [ci, cross]
+    needs: [ci, cross, darwin-link]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Assert all required jobs passed
         run: |
-          echo "ci=${{ needs.ci.result }} cross=${{ needs.cross.result }}"
-          [ "${{ needs.ci.result }}" = "success" ] && [ "${{ needs.cross.result }}" = "success" ]
+          echo "ci=${{ needs.ci.result }} cross=${{ needs.cross.result }} darwin-link=${{ needs.darwin-link.result }}"
+          [ "${{ needs.ci.result }}" = "success" ] &&
+            [ "${{ needs.cross.result }}" = "success" ] &&
+            [ "${{ needs['darwin-link'].result }}" = "success" ]

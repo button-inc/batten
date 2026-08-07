@@ -24,8 +24,10 @@ pkl = "0.32.1"                        # evaluates hk.pkl as a check, not only wh
 # npm tool here, so node comes with it and nothing else depends on either.
 node = "24"
 "npm:prettier" = "3.6.2"
-zizmor = "1.29.0"        # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
-uv = "0.8"               # fast Rust installer the pipx: backend uses to fetch Serena
+zig = "0.16"                             # the linker for the macOS release build and the darwin-link gate: zig carries Darwin linker support, so Linux emits a Mach-O with no Apple SDK
+"ubi:rust-cross/cargo-zigbuild" = "0.23" # drives cargo through zig. Prebuilt via ubi, so its own MSRV (1.88) never constrains this repo's pinned 1.85
+zizmor = "1.29.0"                        # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
+uv = "0.8"                               # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
 # The pipx backend installs it with `uv` (present above), keeping the fast resolver.
@@ -118,8 +120,11 @@ echo "lock-check: mise.lock is complete and current"
 
 [tasks.cross-check]
 description = "Type-check for other targets from Linux (no macOS runner needed)"
+# The Darwin triples are NOT here: they get a stronger check — a real link — in
+# `darwin-link`, which runs as its own parallel CI job. Checking them here too
+# would be duplicate work on the critical path.
 run = '''
-for t in x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-gnu; do
+for t in x86_64-pc-windows-gnu; do
   rustup target add "$t"
   # `check` does codegen-to-metadata without linking, so it needs no target
   # linker or SDK — cross-platform compile coverage at Linux-runner cost.
@@ -187,7 +192,7 @@ echo "linear-check: HEAD is linear on origin/main ($main)"
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"
 shell = "bash -c"
-depends = ["ci", "cross-check", "zizmor", "lock-check"]
+depends = ["ci", "cross-check", "darwin-link", "zizmor", "lock-check"]
 run = '''
 mise run linear-check
 BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint
