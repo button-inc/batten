@@ -31,7 +31,7 @@
 # all a budget needs.
 set -uo pipefail
 
-budget="${BATTEN_CONTEXT_BUDGET:-6000}"
+budget="${BATTEN_CONTEXT_BUDGET:-3500}"
 
 # Everything the loader drops before the content reaches context.
 strip_unloaded() {
@@ -57,8 +57,10 @@ done < <(
 tokens=$((total_chars / 4))
 printf 'always-loaded context:%s\n' "$report"
 printf '  %-34s %4d lines  %6d chars  ~%5d tokens  (budget %d)\n' "TOTAL" "$total_lines" "$total_chars" "$tokens" "$budget"
-if [ "$total_lines" -gt "${BATTEN_CONTEXT_LINE_TARGET:-200}" ]; then
-	printf '  note: over the documented %d-line target for a CLAUDE.md — the file still loads in full, but adherence drops with length.\n' "${BATTEN_CONTEXT_LINE_TARGET:-200}"
+line_target="${BATTEN_CONTEXT_LINE_TARGET:-200}"
+if [ "$total_lines" -ge "$line_target" ]; then
+	echo "::error:: always-loaded context is $total_lines lines, at or over the documented $line_target-line target for a CLAUDE.md. Nothing is truncated — the file loads in full — but adherence drops with length. Move a section behind an index (see 'Where the rest lives')." >&2
+	exit 1
 fi
 
 if [ "$tokens" -gt "$budget" ]; then

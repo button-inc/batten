@@ -15,18 +15,26 @@ setup() {
 }
 
 @test "an HTML comment costs nothing, because the loader strips it" {
-	# The one construct that is already free must not be taxed by the gate.
+	# Measured on a fixture, never on the real AGENTS.md: an earlier version of
+	# this test appended to it and restored with `git checkout --`, which
+	# discards every uncommitted change to that file. Running the gate then ate
+	# whatever edit was in progress. A test may not mutate tracked working state.
+	mkdir -p .serena/memories/always
+	local fixture=".serena/memories/always/zz-comment-fixture.md"
 	local before after
+	printf 'x\n' >"$fixture"
 	before=$("$BUDGET" | grep -oE '[0-9]+ chars' | tail -1)
-	printf '\n<!-- a maintainer note, stripped before injection, %s -->\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" >>AGENTS.md
+	printf '<!-- %s -->\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" >>"$fixture"
 	after=$("$BUDGET" | grep -oE '[0-9]+ chars' | tail -1)
-	git checkout -- AGENTS.md
+	rm -f "$fixture"
+	rmdir .serena/memories/always 2>/dev/null || true
 	[ "$before" = "$after" ]
 }
 
-@test "the line count is reported against the documented 200-line target" {
-	run "$BUDGET"
-	[[ "$output" == *"lines"* ]]
+@test "the line target fails, it does not merely warn" {
+	BATTEN_CONTEXT_LINE_TARGET=1 run "$BUDGET"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"1-line target"* ]]
 }
 
 @test "an impossible budget fails, and says what to do about it" {
