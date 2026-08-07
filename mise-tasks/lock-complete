@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#MISE description="Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
+#
+# Replaces the completeness half of `lock-check`, which could not answer the
+# question it was named for. That gate ran `mise lock` (a remote round trip) and
+# rewrote the tracked lockfile, then diffed it — so its verdict was "did upstream
+# change since the last commit", not "is this file complete". Regenerate-and-diff
+# detects drift only: `mise lock` never removes or repairs an existing entry, so
+# a lockfile that is stably wrong passes forever. It did. `ubi:rust-cross/
+# cargo-zigbuild` carried one platform key, `linux-x64-cargo-zigbuild`, with a
+# checksum and no url — the exact partial entry lock-check's own comment names —
+# and lock-check reported "complete and current" over it on every run.
+#
+# This asks the completeness question directly, of the committed bytes:
+#
+#   unknown-platform-key   a platform key outside the set mise actually emits,
+#                          which is install-time residue rather than a lock
+#   required-not-installable  a required platform with no block, or a block
+#                          carrying no url to install from
+#
+# The url check is deliberately scoped to REQUIRED platforms. mise emits a
+# provenance-only stub for a platform upstream ships no artifact for — zizmor's
+# two musl entries are exactly that, and `mise lock` regenerates them — so
+# failing on every url-less block would fail this repo for a decision upstream
+# made. That is the same defect as the gate being replaced, one level down.
+# The distinguishing test is whether `mise lock` reproduces the entry: it does
+# for the musl stubs, and does not for the cargo-zigbuild key below.
+#
+# A tool with NO platform block is exempt, not a failure: the npm, pipx and
+# core:rust backends resolve at install time and lock no URLs at all. Partiality
+# is only meaningful for a tool that locks any platform.
+#
+# Currency — "would regenerating produce something different?" — is a question
+# about upstream, not about the commit, so it does not belong on the landing
+# path. It runs on a schedule instead (.github/workflows/lock-currency.yml).
+set -euo pipefail
+
+lockfile="${1:-mise.lock}"
+
+# The platform keys mise emits. Anything else in that position was written by an
+# install on some contributor's machine, not by a lock.
+KNOWN='linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl macos-x64 macos-arm64 windows-x64'
+
+# Where this repo's tools actually get installed: CI runners are ubuntu-latest
+# (linux-x64), agent sandboxes and arm runners are linux-arm64, contributors are
+# on Apple silicon. musl, macos-x64 and windows are welcome but not demanded —
+# upstream not shipping one of those is not this repo's defect.
+REQUIRED="${BATTEN_LOCK_PLATFORMS:-linux-x64 linux-arm64 macos-arm64}"
+
+if [ ! -f "$lockfile" ]; then
+	echo "::error:: $lockfile not found" >&2
+	exit 2
+fi
+
+fail=0
+report() {
+	[ "$fail" = 0 ] && echo "::error:: mise.lock has entries that cannot be installed from (see mem:toolchain-and-hooks):" >&2
+	printf '  %s\n' "$1" >&2
+	fail=1
+}
+
+# One record per tool: the tool name, then each platform key it locks and
+# whether that block carried a url. Pointer-only — no checksums, no URLs echoed.
+parsed=$(awk '
+	/^\[\[tools\./ {
+		if (tool != "") print "END\t" tool
+		line = $0
+		sub(/^\[\[tools\./, "", line); sub(/\]\]$/, "", line); gsub(/"/, "", line)
+		tool = line; print "TOOL\t" tool "\t" NR
+		platform = ""; next
+	}
+	/^\[tools\./ && /platforms\./ {
+		line = $0
+		# The key is the quoted "platforms.<name>" segment, whether or not the
+		# tool name itself is quoted.
+		if (match(line, /"platforms\.[^"]+"/)) {
+			platform = substr(line, RSTART + 11, RLENGTH - 12)
+			print "PLAT\t" tool "\t" platform "\t" NR
+		}
+		next
+	}
+	/^\[/ { platform = "" ; next }
+	/^url = / && platform != "" { print "URL\t" tool "\t" platform }
+	END { if (tool != "") print "END\t" tool }
+' "$lockfile")
+
+tools=$(awk -F'\t' '$1=="TOOL"{print $2"\t"$3}' <<<"$parsed")
+
+while IFS=$'\t' read -r tool toolline; do
+	[ -n "$tool" ] || continue
+	plats=$(awk -F'\t' -v t="$tool" '$1=="PLAT" && $2==t {print $3"\t"$4}' <<<"$parsed")
+	# No platform block at all: an npm/pipx/core backend that locks no URLs.
+	[ -n "$plats" ] || continue
+
+	known_seen=""
+	while IFS=$'\t' read -r plat platline; do
+		[ -n "$plat" ] || continue
+		if ! grep -qw -- "$plat" <<<"$KNOWN"; then
+			report "$lockfile:$platline: $tool — platform key \`$plat\` is not one mise emits; this is install-time residue, not a lock"
+			continue
+		fi
+		known_seen="$known_seen $plat"
+		# Only a REQUIRED platform must be installable; a url-less block for any
+		# other platform is mise recording that upstream ships no artifact there.
+		grep -qw -- "$plat" <<<"$REQUIRED" || continue
+		if ! awk -F'\t' -v t="$tool" -v p="$plat" '$1=="URL" && $2==t && $3==p {found=1} END{exit !found}' <<<"$parsed"; then
+			report "$lockfile:$platline: $tool — platform \`$plat\` has no url, so nothing can be installed from it"
+		fi
+	done <<<"$plats"
+
+	# Partiality is only meaningful once a tool locks at least one real platform.
+	[ -n "$known_seen" ] || continue
+	for want in $REQUIRED; do
+		grep -qw -- "$want" <<<"$known_seen" ||
+			report "$lockfile:$toolline: $tool — locked for other platforms but not \`$want\`, which this repo installs on"
+	done
+done <<<"$tools"
+
+[ "$fail" = 0 ] && echo "lock-complete: every locked tool in $lockfile installs on $REQUIRED"
+exit "$fail"

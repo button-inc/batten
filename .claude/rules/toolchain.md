@@ -107,6 +107,24 @@ stale main to itself, passing, and writing a receipt `ready-guard` then honours
 `mise lock` unguarded, so a failed lock left a clean diff and the gate claiming
 "complete and current" about a file it never regenerated.
 
+`lock-check` had a second, deeper defect that guarding could not reach, and it
+is the one to learn from: **a gate whose verdict comes from a remote API and a
+write is not testing the commit.** It fetched every tool's release metadata and
+rewrote the tracked lockfile, so it answered "did upstream change since this
+commit" — failing a branch for drift it did not cause, and leaving the rewrite
+in the tree for the next `git add -A`. Worse, regenerate-and-diff detects drift
+_only_: `mise lock` never removes or repairs an existing entry, so a stably
+wrong lockfile passes forever. One did — a `cargo-zigbuild` platform key with a
+checksum and no url, the exact partial entry the gate's own comment cited as its
+motivation. Its stated premise ("CI installs with `mise install --locked`") was
+false too; no workflow passes `--locked`.
+
+Split accordingly: `mise run lock-complete` is the pure gate (committed bytes
+only, no network, no write, `tests/lock-complete.bats`), and currency runs on a
+schedule in `.github/workflows/lock-currency.yml`. When writing a gate, ask
+which of the two it is — a property of the commit belongs in the gate, a
+property of the world belongs on a clock.
+
 A third instance was the caller, not a script: `verify`'s own body called
 `linear-check` and `commit-lint` unguarded, so a `main` that moved under the
 branch left it running commit-lint against a stale `BASE_SHA`, writing the

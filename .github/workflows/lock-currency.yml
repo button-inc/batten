@@ -1,0 +1,40 @@
+name: lock-currency
+
+# "Would regenerating mise.lock change it?" — a question about upstream, not
+# about any branch, so it runs on a clock rather than on the landing path.
+#
+# It used to run inside `mise run verify`, where it did two things a gate must
+# not: a remote round trip per tool (observed timing out for 30s and retrying),
+# and a write to the tracked lockfile. That made an unrelated upstream release
+# fail whichever change happened to be in flight, and left the rewrite in the
+# working tree for the next `git add -A` to sweep into an unrelated commit.
+#
+# Completeness — the question that IS a property of the commit — stayed behind
+# as `mise run lock-complete`, a pure gate over the committed bytes.
+#
+# Failure here is informational: it means new upstream releases exist, not that
+# anything is broken. Run `mise run lock-check` locally and commit the result.
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC — before the week's work, after the weekend's releases.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  lock-currency:
+    name: lock-currency
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      # The lockfile rewrite this performs is fine here and only here: the
+      # checkout is disposable, and no commit is being judged by it.
+      - run: mise run lock-check

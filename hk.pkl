@@ -62,6 +62,16 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json")
     check = "mise run mcp-allow-check"
   }
+  // Completeness of mise.lock, asked of the committed bytes. The old lock-check
+  // asked it by running `mise lock` and diffing, which answers "did upstream
+  // change" instead — and never removes or repairs an existing entry, so a
+  // stably-wrong lockfile passed forever. One did: a cargo-zigbuild platform key
+  // with a checksum and no url, which lock-check called "complete and current"
+  // on every run. Currency now runs on a schedule, off the landing path.
+  ["lock-complete"] {
+    glob = List("mise.lock", "mise.toml")
+    check = "mise run lock-complete"
+  }
   // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
   // rather than a style question. Counted with any memory declared always-load,
   // since moving a section into one of those moves the cost without cutting it.

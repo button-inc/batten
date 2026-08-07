@@ -101,13 +101,22 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 run = "zizmor --min-severity high .github/"
 
 [tasks.lock-check]
-description = "Assert mise.lock is complete and current — what CI installs with `mise install --locked`"
+description = "Currency only: would regenerating mise.lock change it? Runs on a schedule, never on the landing path — it fetches and it writes"
 shell = "bash -c"
-# CI installs tools with `mise install --locked`, which fails if the lockfile is
-# missing a URL for a tool on the runner's platform. `mise install` writes only a
-# partial entry, so a tool bump can pass locally yet break CI. Regenerate the lock
-# and fail if it changed: a clean diff means every tool has full per-platform
-# URLs, so the locked install cannot surprise CI.
+# What this actually answers is "has upstream changed since this commit", which
+# is a property of the world, not of the branch. It costs a remote round trip
+# per tool and REWRITES the tracked lockfile, so it belongs on a schedule
+# (.github/workflows/lock-currency.yml), not in `verify`.
+#
+# It does NOT answer completeness, though it used to claim to. Regenerate-and-
+# diff detects drift only: `mise lock` never removes or repairs an existing
+# entry, so a lockfile that is stably wrong passes forever. One did — a
+# cargo-zigbuild platform key carrying a checksum and no url, exactly the
+# partial entry this comment used to cite as the motivation. `mise run
+# lock-complete` asks that question of the committed bytes instead.
+#
+# The old comment also asserted "CI installs with `mise install --locked`".
+# It does not, and never did — no workflow passes --locked.
 run = '''
 # Fails closed: mise task bodies do not run under `set -e`, so an unguarded
 # `mise lock` that failed would leave mise.lock untouched, the diff below clean,
@@ -196,7 +205,14 @@ depends = ["hooks", "deny"]
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"
 shell = "bash -c"
-depends = ["ci", "cross-check", "darwin-link", "zizmor", "lock-check"]
+# lock-check is deliberately NOT here. It runs `mise lock` — a remote round
+# trip that rewrites the tracked lockfile — so its verdict is "did upstream
+# change since this commit", a property of the world rather than of the branch.
+# On the landing path that fails a change for drift it did not cause, and
+# leaves the mutation in the tree for the next `git add -A` to sweep up. The
+# completeness question it was named for is now `lock-complete`, a pure gate in
+# hk.pkl; currency runs on a schedule (.github/workflows/lock-currency.yml).
+depends = ["ci", "cross-check", "darwin-link", "zizmor"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand. Unguarded,
