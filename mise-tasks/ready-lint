@@ -148,14 +148,19 @@ BLOCKERS_LABEL='Blockers \((§|clause )8\)'
 # heading or the blank line that ends that paragraph. Bounded on purpose: a
 # greedier span would swallow later sections and flag ids that assert nothing
 # about blocking.
-blockers_line=$(awk -v re="$BLOCKERS_LABEL" '
-	BEGIN { IGNORECASE = 1 }
-	!found && $0 ~ re { found = 1; print; next }
-	found && /^#/ { exit }
-	found && /^[[:space:]]*$/ { if (seen) exit; next }
-	found { seen = 1; print }
-' <<<"$block")
-if [ -n "$blockers_line" ]; then
+# grep finds the label, awk takes the span. Splitting them is deliberate: a
+# dynamic regex passed through `awk -v` carries backslashes whose escape handling
+# is implementation-defined, and an earlier version that did so passed locally
+# and failed on the CI runner — silently, by matching nothing, so the clause went
+# back to being vacuous. The awk below uses only literal patterns.
+blockers_start=$(grep -niE "$BLOCKERS_LABEL" <<<"$block" | head -n1 | cut -d: -f1 || true)
+if [ -n "$blockers_start" ]; then
+	blockers_line=$(sed -n "${blockers_start},\$p" <<<"$block" | awk '
+		NR == 1 { print; next }
+		/^#/ { exit }
+		/^[[:space:]]*$/ { if (seen) exit; next }
+		{ seen = 1; print }
+	')
 	# See the text a human sees. Linear serialises an issue mention as
 	# <issue id="…" href="…">CLOUD-N</issue>, so patterns written against the
 	# rendered form — "CLOUD-N (closed)" — never match the stored form, and an
