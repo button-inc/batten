@@ -53,6 +53,15 @@ local gate = new Mapping<String, Step> {
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
+  // An MCP allow rule that matches no tool name grants nothing and says nothing
+  // about it — the only symptom is an approval prompt on every call, which
+  // reads as harness behaviour rather than as a settings bug. This repo shipped
+  // exactly that: `mcp__Linear` allowed, Linear arriving as a claude.ai
+  // connector under `mcp__claude_ai_Linear__*`, no rule matching either way.
+  ["mcp-allow-check"] {
+    glob = List(".claude/settings.json")
+    check = "mise run mcp-allow-check"
+  }
   // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
   // rather than a style question. Counted with any memory declared always-load,
   // since moving a section into one of those moves the cost without cutting it.

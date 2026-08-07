@@ -94,9 +94,22 @@ as exposed to the session**, and Linear reaches us under two different names:
 - Pulled in as a **claude.ai connector** → `mcp__claude_ai_Linear__<tool>`.
 
 So a lone `mcp__Linear` rule silently fails to cover the connector path and the
-CLI prompts for approval on every Linear call. Both prefixes are allowlisted;
-keep them in sync if the connector's display name changes, and read the exact
-name off `/mcp` rather than guessing.
+CLI prompts for approval on every Linear call. Both prefixes are allowlisted.
+The connector segment is `claude_ai_` plus the connector's **display name with
+its casing preserved** — the CLI's own built-in allowlist carries
+`mcp__claude_ai_Slack__slack_send_message`, and its scope resolver classes any
+server whose name starts with `claude_ai_` as connector-scoped. Don't infer the
+name from a Claude Code on the web session: cloud sessions receive connectors as
+explicit `--mcp-config` entries and name them differently (plain `mcp__Linear__*`,
+or a bare connector UUID), so that naming says nothing about the local CLI.
+
+Mechanism, not prose: `mise run mcp-allow-check` (wired into the shared hk
+`gate`, globbed on `.claude/settings.json`) **fails** when an allowed server has
+no companion `mcp__claude_ai_<server>__*` rule, or when an allow rule globs the
+server segment. A permission rule that matches no tool name grants nothing and
+reports nothing — the only symptom is a prompt on every call, which reads as
+harness behaviour rather than as a settings bug. That silence is what earns the
+gate.
 
 The **"Always" toggle on claude.ai does not fix this.** It governs claude.ai
 chats only. The one thing that crosses over from claude.ai is an organization's

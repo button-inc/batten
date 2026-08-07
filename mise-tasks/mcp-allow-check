@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every MCP allow rule in .claude/settings.json actually grants something — connector prefix covered, no unanchored glob"
+#
+# The mechanism for a bug that shipped from this repo's own settings: the
+# allowlist carried `mcp__Linear`, Linear arrived as a claude.ai connector under
+# `mcp__claude_ai_Linear__<tool>`, the rule matched nothing, and the CLI asked
+# for approval on every call. Nothing failed — a permission rule that grants
+# nothing is silent by construction, which is what makes it worth a gate.
+#
+# Two predicates, both a pure function of the settings file:
+#
+#   connector-prefix-missing  an allowed server S (not already a connector) with
+#                             no companion `mcp__claude_ai_S__*` rule
+#   unanchored-allow-glob     an allow rule whose glob reaches the server
+#                             segment — the CLI skips these with a warning, so
+#                             they read as a grant and are not one
+#
+# The connector name is `claude_ai_` plus the connector's display name, casing
+# preserved. Deny rules are deliberately not checked: a deny may glob freely,
+# and a deny that over-matches fails closed rather than silently.
+#
+# Reads no network and no live MCP state — the settings file is the whole input,
+# so the same command answers the same way in a hook, on CI, and in a test.
+set -euo pipefail
+
+settings="${1:-.claude/settings.json}"
+
+# A missing or unparseable settings file is not this gate's business to
+# adjudicate; pkl-check and the JSON tooling own that. Fail open, loudly enough
+# to not look like a pass we computed.
+if [ ! -f "$settings" ]; then
+	echo "mcp-allow-check: no $settings — nothing to check"
+	exit 0
+fi
+if ! allows=$(jq -e -c '[.permissions.allow // [] | .[] | select(type == "string")]' "$settings" 2>/dev/null); then
+	echo "::error:: $settings is not readable JSON with a permissions.allow list" >&2
+	exit 2
+fi
+
+fail=0
+report() {
+	[ "$fail" = 0 ] && echo "::error:: MCP allow rules that grant nothing (see mem:toolchain-and-hooks):" >&2
+	printf '  %s\n' "$1" >&2
+	fail=1
+}
+
+# The servers named by anchored MCP allow rules, in either accepted spelling:
+# `mcp__S` (bare) and `mcp__S__<tool-or-glob>`.
+servers=$(jq -r '.[] | select(startswith("mcp__")) | sub("^mcp__"; "") | sub("__.*$"; "")' <<<"$allows" | sort -u)
+
+while IFS= read -r rule; do
+	[ -n "$rule" ] || continue
+	case "$rule" in
+	mcp__*) ;;
+	*) continue ;;
+	esac
+	# Legal only after a literal `mcp__<server>__` prefix: the server segment
+	# must be glob-free so the rule names a server that was actually configured.
+	server=${rule#mcp__}
+	server=${server%%__*}
+	case "$server" in
+	*'*'*) report "$rule — the server segment cannot be a glob; the CLI skips this rule with a warning and it grants nothing" ;;
+	esac
+done < <(jq -r '.[]' <<<"$allows")
+
+# A bare `*` or `B*` in the tool position of a non-MCP rule is a different
+# question; this gate owns MCP only. But an allow list containing a top-level
+# unanchored glob is the same silent-grant failure, so name it.
+while IFS= read -r rule; do
+	case "$rule" in
+	'*') report "$rule — an unanchored allow glob is skipped with a warning; it auto-approves nothing" ;;
+	esac
+done < <(jq -r '.[]' <<<"$allows")
+
+# The shipped bug: a locally-configured server allowed, its claude.ai connector
+# spelling not. The two are different tool names and one rule cannot cover both.
+while IFS= read -r server; do
+	[ -n "$server" ] || continue
+	case "$server" in
+	claude_ai_*) continue ;;
+	esac
+	if ! grep -qx "$server" <<<"$(printf '%s\n' "$servers" | sed -n 's/^claude_ai_//p')"; then
+		report "mcp__$server — no companion \`mcp__claude_ai_${server}__*\` rule, so the claude.ai connector spelling of this server still prompts on every call"
+	fi
+done <<<"$servers"
+
+[ "$fail" = 0 ] && echo "mcp-allow-check: every MCP allow rule in $settings names a tool it can match"
+exit "$fail"
