@@ -47,11 +47,51 @@ capability, not a network block. Use a **classic PAT scoped `repo`** (bundles
 checks-read, so `--watch` works) or the MCP `get_check_runs` tool (carries the
 permission via App auth). Everything else the token is scoped for works off-proxy.
 
+## Provider outages — status page first, then poll for recovery
+When a hosted dependency misbehaves (jobs that never start, calls that hang/5xx,
+webhooks that don't arrive), read the provider's **public status page first**,
+before theorizing about tokens, scopes, proxies, or drafts. A platform incident is
+invisible from inside the repo but obvious on the status page. For GitHub, fetch
+`https://www.githubstatus.com/api/v2/summary.json` (per-component status + active
+incidents) — an Actions "major outage" explains zero workflow runs repo-wide far
+faster than auditing PR state. (During the Aug-2026 Actions outage, webhook
+triggers were throttled, so `ready`/`synchronize` events were *dropped, not
+queued* — they never replay, and CI only ran once a fresh push was made after
+recovery.)
+
+During a confirmed outage, **poll for recovery — do not wait on an event**: an
+outage has no "recovered" webhook, so waiting is a hang. This is the one deliberate
+exception to the event-driven CI rule. Poll **two** signals, since they fail
+independently: (1) the status-page component, and (2) the real endpoints
+(`actions/runs?branch=…`, `commits/<sha>/check-runs`) for your head SHA. The
+recovery team often leaves the advisory up for hours after service is actually
+restored, so an appearing run/check for your SHA is *stronger* proof than the
+advisory clearing — treat either as recovery. Run the poll as a **bounded
+background loop** (background `sleep` allowed, foreground killed) so it survives and
+re-invokes you; then re-trigger CI with a fresh push (the original events were
+dropped), confirm green, and land.
+
 ## Hygiene
 - `git` over `github.com` (clone/fetch/push/ls-remote) uses proxied git auth —
   leave it alone.
-- Confirming CI is **event-driven, not a poll**: after readying, wait on the
-  webhook event that wakes the session, then one `get_check_runs` fetch. No
-  `sleep`/settle loop.
+- Confirming CI: **one continuous background `gh` poll, no timeout, never
+  event-driven.** Do not wait on the webhook / PR activity subscription — in this
+  ephemeral cloud env a webhook can only wake a session that still exists, and an
+  idle wait gets the VM reclaimed within minutes (before CI finishes), so the event
+  has nothing to wake and the landing stalls forever; webhooks also drop *successes*
+  outright (proven during the Aug-2026 outage). Instead, right after readying/push,
+  launch a **single unbounded background process** that loops
+  `gh api …/commits/<sha>/check-runs` on an interval and exits *only* when every
+  check reaches a terminal state — **no `MAX`/iteration cap, no wall-clock
+  timeout** (a timeout just reintroduces the reap gap; the loop is already bounded
+  by CI completing). Poll the **`final`** aggregate, not just
+  `ci`/`cross`/`commit-lint` — it's the authoritative all-green signal. On the
+  process's exit it re-invokes you; read conclusions once, then land. Only the
+  *foreground* busy-poll/`sleep` is banned; a backgrounded poll is the durability
+  mechanism. Script gotchas that bit us: feed the JSON to `python3` via a pipe, not
+  a `<<'PY'` heredoc (the heredoc *is* stdin, so `sys.stdin` reads empty); and avoid
+  backslashes inside f-strings. (A superseded run shows `ci`/`cross` `cancelled` and
+  `final` `failure` from CI's concurrency `cancel-in-progress` — not a real failure,
+  just the old SHA dropped when you pushed a new head.)
 - Never echo a credential. Check presence with `${VAR:+SET}` — never a bare
   `$VAR` or a `${VAR:-…}` that expands the value into the transcript.

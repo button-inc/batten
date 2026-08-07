@@ -168,10 +168,18 @@ web sandbox; before claiming otherwise read `mem:github-access`.)
    stale" is not green.
 3. **Then `gh pr ready`** — the single event that triggers CI. A red run on a
    freshly-readied PR means step 2 was skipped.
-4. **Confirm CI reached green** — after readying, actively fetch the run's outcome
-   and report it. Webhooks deliver *failures* more reliably than *successes*, so
-   silence is not green; confirm with a direct `get_check_runs` fetch. Red → treat
-   as a step-2 miss: reproduce and fix locally, don't iterate against CI.
+4. **Confirm CI green with a continuous background `gh` poll — never by waiting on
+   an event.** After readying, hold the session with a *single unbounded background
+   process* that polls `gh api …/commits/<sha>/check-runs` on an interval and exits
+   only when every check (including the `final` aggregate) reaches a terminal
+   state — **no timeout, no `MAX`/iteration cap, no reliance on webhook eventing or
+   the PR activity subscription.** Webhooks drop *successes* (an outage can drop
+   them entirely), so silence is never green and the subscription must never be
+   your CI signal. This backgrounded poll is the durability mechanism — not the
+   banned *foreground* busy-poll, and not a "bounded run" to cap with a timeout: it
+   is bounded by CI *completing*, which always happens. On its exit, one
+   `get_check_runs` read for conclusions, then land. Red → step-2 miss: reproduce
+   and fix locally, don't iterate against CI. (Mechanics: `mem:github-access`.)
 5. **Land by `/fast-forward`** (never the merge button).
 6. **Never re-run CI on an already-tested SHA** — fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` CI triggers.
@@ -199,11 +207,17 @@ task held the VM through a 16-minute idle window and re-invoked the agent on
 exit, where a bare idle turn gets the VM reclaimed) and **re-invokes you on
 exit**, so you neither poll nor stall.
 
-**Never** use `sleep` to wait, spin a busy-poll, or end a turn idle "to watch"
-something. To wait on *work*, background it and act on its exit. To watch
-*external events* (a PR, CI), use the activity subscription. **Committed-and-
+**Never** use a *foreground* `sleep` to wait, spin a *foreground* busy-poll, or end
+a turn idle "to watch" something. To wait on *work*, background it and act on its
+exit. For CI, the wait **is** a continuous background `gh` poll (workflow contract
+step 4) — do **not** substitute the PR activity subscription as your CI signal;
+webhooks drop successes, so an event-only wait hangs until the VM is reaped.
+"Keep background runs bounded" means give every loop a real exit condition (never a
+runaway with none) — it does **not** mean cap the CI poll with a wall-clock
+timeout: a poll that exits when checks reach terminal is already bounded, by the
+work completing, and a timeout would just reintroduce the reap gap. **Committed-and-
 pushed is the only state that survives a VM reclaim** (a resume re-clones onto a
-fresh VM) — commit/push before a long run, and keep background runs bounded.
+fresh VM) — commit/push before a long run.
 
 ## Non-negotiable project rules
 
