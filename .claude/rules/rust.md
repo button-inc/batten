@@ -22,15 +22,6 @@ These load when you touch Rust; they do not need to be in context otherwise.
 
 ## Layout
 
-```
-crates/batten/
-  src/main.rs   thin binary: parse → run → exit status
-  src/lib.rs    library entry (`run`), module tree
-  src/cli.rs    clap command surface (empty tree at scaffold stage)
-  src/exit.rs   the exit-code contract
-  tests/cli.rs  end-to-end tests over the compiled binary
-```
-
-This tree is the scaffold-era skeleton; the crate has grown past it. The full
-per-module map — every `src/*.rs` file, what it owns, and where its rationale
-doc comment lives — is `mem:core`, which is kept current instead of this tree.
+The per-module map — every `src/*.rs` file, what it owns, and where its
+rationale doc comment lives — is `mem:core`, kept current instead of a tree
+restated here.

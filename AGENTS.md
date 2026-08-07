@@ -79,24 +79,21 @@ next step ("want me to run verify?" — clarifying a genuinely _ambiguous_ actio
 still fine), compliance reassurance, safety caveats, restatements of a rule you
 just followed, sycophantic openers/closers, or narration of a visible result.
 
-Do the work; report outcomes and material state plainly; stop. A message carries
-state only when it is information the user cannot already see.
-
-**Mechanism, applied to your own output.** Before sending, check the last one to
-three sentences: if they assert boundary-compliance, seek permission for an
-obvious authorized action, or restate a rule you just followed, **delete them.**
+Do the work; report outcomes and material state plainly; stop. **Mechanism:**
+before sending, check the last one to three sentences — if they assert
+boundary-compliance, seek permission, or restate a rule, **delete them.**
 
 ## The board: move the issue as you move the work
 
 The Linear board is the observability surface. **The state transition IS how
 others know** — there is no separate "tell people." Move the `CLOUD-*` issue in
 lockstep: **Todo** = the ready queue (the issue's Ready block is satisfied —
-"Ready" is that block of text, not a status); **In Progress** = pulled, assign
-yourself in the same move; **In Review** = landed on `main`, since per
-[trunk-based development][tbd] we review after merge and keep unreviewed paths
-out of released behaviour with feature flags, never by withholding the merge;
-**Done** = released. The Ready-vs-Todo trap and the gate gap:
-`mem:workflow/board-states`.
+"Ready" is that block, not a status); **In Progress** = pulled, assign yourself
+in the same move; **In Review** = landed on `main` — [trunk-based
+development][tbd] reviews after merge, unreviewed paths stay behind feature
+flags, never a withheld merge; **Done** = the [dor-dod] Done definition holds
+(landed by fast-forward, CI green; release mapping: CLOUD-192). The
+Ready-vs-Todo trap and the gate gap: `mem:workflow/board-states`.
 
 [tbd]: https://trunkbaseddevelopment.com/
 
@@ -120,11 +117,10 @@ otherwise read `mem:github-access`.)
 3. **`mise run linear-check`, then `gh pr ready`** — readying is the single event
    that triggers CI. A red run on a freshly-readied PR means step 2 was skipped.
 4. **`mise run land`, backgrounded.** It depends on `ci-wait`, which polls
-   check-runs until every one is terminal — **no timeout, no iteration cap, and
-   never the PR activity subscription**: webhooks drop _successes_, so silence is
-   never green and an event-only wait hangs until the VM is reaped. The poll is
-   bounded by CI completing, which always happens; a wall-clock timeout would
-   only reintroduce that gap. Red → step-2 miss: reproduce and fix locally.
+   check-runs until every one is terminal — **no timeout, no iteration cap,
+   never the PR activity subscription**: webhooks drop _successes_, so silence
+   is never green and an event-only wait hangs until the VM is reaped. The poll
+   is bounded by CI completing. Red → step-2 miss: reproduce and fix locally.
 5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 
@@ -137,11 +133,11 @@ never infer success from the absence of a failure event.
 ## Background the slow path; never block the foreground
 
 **Any command that can exceed ~2 minutes goes to the background**
-(`run_in_background`): `mise run ci|verify|cross-check`, a full test suite, a cold
-`cargo` build, a provision/install, or waiting on any external result. This is
-enforced, not stylistic — foreground `sleep` is blocked and a foreground command
-is killed at ~2 minutes, so it does not run slower, it _fails_. Backgrounding also
-keeps the session alive and re-invokes you on exit; a bare idle turn gets the VM
+(`run_in_background`): `mise run ci|verify|cross-check`, a full test suite, a
+cold `cargo` build, a provision/install, or waiting on any external result.
+Enforced, not stylistic — foreground `sleep` is blocked and a foreground command
+is killed at ~2 minutes, so it does not run slower, it _fails_. Backgrounding
+keeps the session alive and re-invokes you on exit; an idle turn gets the VM
 reclaimed.
 
 **Two habits defeat this silently, both failing green:** piping a `mise run` into
@@ -168,9 +164,11 @@ is the only state that survives a VM reclaim**, so commit before a long run.
    code, never a model classification. _(Spec: house-style §0.3, §5.)_
 4. **Output is a pointer, never the payload.** Checks over sensitive content emit
    a count, `path:line`, or boolean — never the content itself. _(house-style §6.)_
-5. **Keep configuration narrow.** One committed authority plus raise-only
+5. **Exit codes and output follow the one contract** — byte-stable output, the
+   `0/1/2/3` exit table, the deliberate `hook` inversion. _(house-style §6–§7.)_
+6. **Keep configuration narrow.** One committed authority plus raise-only
    overrides, no directory walk, no `conf.d` merge (house-style §8). Don't widen it.
-6. **Research goes to Linear, not a repo `docs/` tree.** Research deliverables and
+7. **Research goes to Linear, not a repo `docs/` tree.** Research deliverables and
    evidence notes (literature runs, per-claim verdicts) attach to the Linear issue
    they back — the repo carries code and its close-in config, not research prose.
    Don't create a `docs/` folder. Enforced by the `no-docs-tree` gate (`mise run

@@ -14,8 +14,10 @@
 //! # The layer each axis owns
 //!
 //! * [`RuleSeverity`] (`deny`/`warn`/`allow`, cargo-deny's model; CLOUD-61) is
-//!   **config-time rule severity**: what fails a check. It is authored in
-//!   `batten.toml` per rule, with an explicit default and no implicit fallback.
+//!   **config-time rule severity**: what fails a check. It will be authored in
+//!   `batten.toml` per rule with an explicit default and no implicit fallback —
+//!   not yet: `Rule` carries no severity field, so writing one today is a
+//!   schema error (CLOUD-61 owns the wiring).
 //! * [`AdvisoryTier`] (`warning`/`caution`/`advisory`; CLOUD-80) is **required
 //!   response latency**: how fast an advisory must be answered. Latency is the
 //!   *only* axis it keys on — any other reading of these three words is a

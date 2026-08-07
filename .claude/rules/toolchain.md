@@ -51,8 +51,9 @@ news arrived late. The sleep is not what sets the pace: the round trip is ~470ms
 not today. Never pipe these into a pager: it discards the verdict AND the exit status
 (`mem:toolchain-and-hooks`, "A Bash call is a supervised process").
 
-That's a rule, so it ships with mechanisms — three `PreToolUse` hooks wired in
-`.claude/settings.json`, each failing open on anything it can't parse:
+That's a rule, so it ships with mechanisms — the `PreToolUse` hooks wired in
+`.claude/settings.json` (the settings file is the authoritative list; don't
+restate its count here), each failing open on anything it can't parse:
 
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision

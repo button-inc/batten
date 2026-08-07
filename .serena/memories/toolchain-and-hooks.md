@@ -56,7 +56,7 @@ features (batching, caching, scheduling) when they'd tighten this.
 ## The always-loaded context budget
 
 `mise run context-budget` fails when AGENTS.md plus anything declared
-always-load exceeds `BATTEN_CONTEXT_BUDGET` (default 6000) estimated tokens, at
+always-load exceeds `BATTEN_CONTEXT_BUDGET` (default 3500) estimated tokens, at
 4 chars/token. Tokens, not lines: the cost is what every agent pays on every
 turn, and an exact count would need a tokenizer, a model-specific vocabulary and
 a network fetch — a budget gate that fails because a download failed is worse
