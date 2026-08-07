@@ -1,0 +1,103 @@
+name: release-artifacts
+
+# Build the distributable binaries and attach them to the GitHub release.
+#
+# Until this existed, every release shipped ZERO assets: `mise run release` is
+# `release-plz release`, which tags and creates the release entry but never
+# builds. `cross-check` runs `cargo check` for the non-Linux targets — codegen to
+# metadata, no linking — so it proves the code compiles but produces nothing
+# runnable. This workflow is what makes a release installable, which is what
+# dogfooding Batten as consumer #1 requires (house-style §12).
+#
+# Each job runs `mise run dist <target>`, the SAME command a maintainer runs
+# locally, so the archive CI uploads is the archive you can reproduce.
+#
+# TRIGGER: `release: published` fires because release-plz authenticates with
+# RELEASE_PLZ_TOKEN (a PAT), not the default GITHUB_TOKEN — releases created by
+# GITHUB_TOKEN deliberately do not trigger other workflows. If that secret is
+# ever removed, this workflow stops firing silently; use the workflow_dispatch
+# below to recover, and see the same note in release-plz.yml.
+
+on:
+  release:
+    types: [published]
+  # Recovery: re-run against an existing tag (a dropped trigger, a failed matrix
+  # leg). Uploading is idempotent — `gh release upload --clobber` replaces.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and upload to (e.g. v0.0.15)
+        required: true
+        type: string
+
+concurrency:
+  # Keyed by tag, so two releases never race to upload to the same one; not
+  # cancel-in-progress, because a half-uploaded release is worse than a slow one.
+  group: release-artifacts-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dist:
+    name: dist (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: write # upload assets to the release
+      id-token: write # sign the provenance statement
+      attestations: write # record the attestation
+    strategy:
+      # One target's failure must not cancel the others: a partial release we can
+      # top up beats no release at all.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # macos-latest is Apple silicon, so aarch64 is the native build and
+          # x86_64 is a cross-build — both are first-class Rust targets there and
+          # need no SDK beyond the runner's own.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          # msvc, not the gnu triple `cross-check` type-checks: gnu is what a
+          # LINUX host can check without MSVC libs, msvc is what Windows users
+          # actually want. The check target and the shipped target differ on
+          # purpose, for that reason.
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # Build the tagged commit, never whatever main has drifted to since.
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+      # cache: false — a release build must not restore a shared cache. zizmor
+      # flags cache-poisoning as high severity precisely on artifact-publishing
+      # workflows: a poisoned cache entry would end up inside a signed binary,
+      # and the attestation would faithfully attest to the compromised build.
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          cache: false
+      - name: Add the Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Build and archive
+        id: dist
+        shell: bash
+        # `dist` emits archive=/binary= KEY=VALUE lines, so the per-target
+        # binary suffix is decided in one place and never re-derived here.
+        run: mise run dist "${{ matrix.target }}" >>"$GITHUB_OUTPUT"
+      # Attest the BINARY rather than the archive: the provenance should bind to
+      # the executable a user runs, so repackaging cannot launder it (§12 — a
+      # trust engine must exceed the ordinary distribution bar, not match it).
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ steps.dist.outputs.binary }}
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: gh release upload "$TAG" "${{ steps.dist.outputs.archive }}" --clobber

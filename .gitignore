@@ -37,3 +37,6 @@ CLAUDE.local.md
 
 # Raise-only local config override (§8) — never committed.
 batten.local.toml
+
+# Distribution archives built by `mise run dist` — never committed (CLOUD-173).
+/dist/
