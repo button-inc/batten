@@ -13,6 +13,7 @@ pub mod config;
 pub mod effect;
 pub mod error;
 pub mod exit;
+pub mod identity;
 pub mod rules;
 pub mod spec;
 pub mod state;
