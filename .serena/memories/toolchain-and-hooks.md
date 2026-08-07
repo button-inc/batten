@@ -137,8 +137,22 @@ immediately — a wrapped launcher looks identical in the tool result and silent
 drops the re-invocation. A pager over a **file** is fine; over a **live task** it
 is not.
 
-Mechanism: `mise run run-shape-guard`, a `PreToolUse` hook, denies both shapes
-and names the correct one. Redirections (`2>&1`, `&>`) are stripped before the
+Two mechanisms, at different layers. `mise run run-shape-guard`, a `PreToolUse`
+hook, denies both shapes and names the correct one — a fast path with a good
+error message, and inherently incomplete, since it recognises _shapes_ and
+`| grep -c`, `| wc -l`, `; true` or a wrapper script all escape it.
+
+`mise run verified` is the invariant underneath: it answers "is HEAD verified?"
+from the **receipt** `verify` already wrote, never from a remembered exit status,
+so no idiom present or future can fool it. `verify` writes that receipt only
+after its guarded steps pass, so a run that failed — or whose status a pipe
+swallowed — leaves none. `land` depends on it, closing the gap where
+`ready-guard` covered `gh pr ready` but nothing covered landing. Receipts are
+keyed to the exact commit and live under `--git-dir`, so an amend, a rebase, or a
+`main` that moved all invalidate them, and one worktree cannot vouch for another.
+
+The receipt existed long before anything read it, which is the shape of the
+lesson: an artifact recording the truth is sensor without a gate (rule 2). Redirections (`2>&1`, `&>`) are stripped before the
 `&` test, since the recommended form contains one. Bypass:
 `BATTEN_RUN_SHAPE_BYPASS=1`.
 

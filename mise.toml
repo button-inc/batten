@@ -241,7 +241,14 @@ shell = "bash -c"
 # Landing a red PR is now structurally impossible, not merely against the rules:
 # ci-wait must exit 0 first. It blocks until every check on HEAD is terminal, so
 # this also removes the "did I remember to wait?" step between the two.
-depends = ["ci-wait"]
+#
+# `verified` is a dependency for the same reason, one layer earlier. `ready-guard`
+# gates `gh pr ready` on the receipts, but landing had no such precondition, so a
+# branch readied by any other route could still be landed on a verdict nobody
+# checked. The predicate reads the receipt keyed to HEAD rather than a remembered
+# exit status, so no idiom that swallows one — a pipe, a `; true`, a wrapper
+# script — can present as verified.
+depends = ["verified", "ci-wait"]
 # The merge button is blocked on purpose (AGENTS.md, Commits and pull requests):
 # `main` only advances to a SHA that already passed CI. Commenting is the whole
 # landing action, but the *result* is asynchronous, so the naive form is a
