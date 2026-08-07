@@ -96,7 +96,12 @@ Two things this does NOT cover, both observed rather than assumed:
 - **The merge-side transition did not fire.** #100 merged and CLOUD-178 stayed
   In Progress; its state history shows only the one transition. Landing still
   needs checking, and In Review / Done may need configuring on the integration
-  side before that half can be trusted.
+  side before that half can be trusted. One exception, measured on CLOUD-61
+  (#129): a PR body carrying `Closes CLOUD-<n>` makes the integration complete
+  the issue on merge — overshooting In Review straight to Done, which is wrong
+  while the release has not shipped. Write `Refs:`/plain mentions in PR bodies,
+  never `Closes`, and check the state after landing; the fix is a hand-move
+  back to In Review (the board must be true).
 - **Prefer the tracker's own branch name.** Each issue exposes a `gitBranchName`
   (`<user>/cloud-178-<slug>`); a branch named that way carries the key from the
   first push, before any commit message does.
