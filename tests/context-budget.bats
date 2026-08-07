@@ -14,6 +14,21 @@ setup() {
 	[[ "$output" == *"AGENTS.md"* ]]
 }
 
+@test "an HTML comment costs nothing, because the loader strips it" {
+	# The one construct that is already free must not be taxed by the gate.
+	local before after
+	before=$("$BUDGET" | grep -oE '[0-9]+ chars' | tail -1)
+	printf '\n<!-- a maintainer note, stripped before injection, %s -->\n' "$(head -c 400 /dev/zero | tr '\0' 'x')" >>AGENTS.md
+	after=$("$BUDGET" | grep -oE '[0-9]+ chars' | tail -1)
+	git checkout -- AGENTS.md
+	[ "$before" = "$after" ]
+}
+
+@test "the line count is reported against the documented 200-line target" {
+	run "$BUDGET"
+	[[ "$output" == *"lines"* ]]
+}
+
 @test "an impossible budget fails, and says what to do about it" {
 	BATTEN_CONTEXT_BUDGET=1 run "$BUDGET"
 	[ "$status" -eq 1 ]

@@ -14,6 +14,16 @@
 #     memory there is a declaration that every session reads it, and it then
 #     costs exactly what an AGENTS.md section costs.
 #
+# Measured on the content that actually loads. Block-level HTML comments are
+# stripped from a CLAUDE.md before it is injected, so a maintainer note costs
+# nothing and must not count here; YAML frontmatter is stripped too. Counting raw
+# bytes would tax the one construct that is already free.
+#
+# Two numbers, because the vendor guidance and the real cost are different
+# things: lines against the documented target of 200 per CLAUDE.md (over that,
+# adherence drops — the file still loads in full, nothing is truncated), and
+# estimated tokens against the budget, which is what every agent actually pays.
+#
 # Tokens are estimated at 4 chars/token. It is an approximation, deliberately:
 # an exact count needs a tokenizer, a model-specific vocabulary and a network
 # fetch, and a budget gate that can fail because a download failed is worse than
@@ -23,13 +33,22 @@ set -uo pipefail
 
 budget="${BATTEN_CONTEXT_BUDGET:-6000}"
 
+# Everything the loader drops before the content reaches context.
+strip_unloaded() {
+	perl -0777 -pe 's/^---\n.*?\n---\n//s; s/^<!--.*?-->\n?//gms' "$1"
+}
+
 total_chars=0
+total_lines=0
 report=""
 while IFS= read -r f; do
 	[ -f "$f" ] || continue
-	c=$(wc -c <"$f" | tr -d ' ')
+	loaded=$(strip_unloaded "$f")
+	c=$(printf '%s' "$loaded" | wc -c | tr -d ' ')
+	l=$(printf '%s\n' "$loaded" | wc -l | tr -d ' ')
 	total_chars=$((total_chars + c))
-	report+=$(printf '\n  %-40s %6d chars  ~%5d tokens' "$f" "$c" "$((c / 4))")
+	total_lines=$((total_lines + l))
+	report+=$(printf '\n  %-34s %4d lines %6d chars  ~%5d tokens' "$f" "$l" "$c" "$((c / 4))")
 done < <(
 	echo "AGENTS.md"
 	ls .serena/memories/always/*.md 2>/dev/null
@@ -37,7 +56,10 @@ done < <(
 
 tokens=$((total_chars / 4))
 printf 'always-loaded context:%s\n' "$report"
-printf '  %-40s %6d chars  ~%5d tokens  (budget %d)\n' "TOTAL" "$total_chars" "$tokens" "$budget"
+printf '  %-34s %4d lines  %6d chars  ~%5d tokens  (budget %d)\n' "TOTAL" "$total_lines" "$total_chars" "$tokens" "$budget"
+if [ "$total_lines" -gt "${BATTEN_CONTEXT_LINE_TARGET:-200}" ]; then
+	printf '  note: over the documented %d-line target for a CLAUDE.md — the file still loads in full, but adherence drops with length.\n' "${BATTEN_CONTEXT_LINE_TARGET:-200}"
+fi
 
 if [ "$tokens" -gt "$budget" ]; then
 	cat >&2 <<EOF
