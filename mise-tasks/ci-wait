@@ -14,15 +14,19 @@
 # consecutive conditional requests left `X-RateLimit-Used` unchanged. That is
 # what makes a short interval affordable — an unconditional 20s poll spent a
 # request every 20s to usually learn nothing, so the interval had to stay long
-# and the news arrived late. At 5s the merge follows CI by seconds, at no
-# rate-limit cost for the polls that find no change.
+# and the news arrived late.
 #
-# X-Poll-Interval, when GitHub sends it, is a floor the server is asking for and
-# is honoured over the configured interval.
+# Measured against this endpoint: ~260ms network round trip warm, ~130ms of `gh`
+# process startup, ~470ms for the whole conditional call. The sleep is therefore
+# not what sets the pace — the round trip is — and a 1s interval gives a ~1.5s
+# cycle, roughly 40 requests a minute against a secondary limit measured in
+# hundreds of points per minute. The endpoint sends no X-Poll-Interval today; if
+# it ever starts, that value is the server asking for a floor and wins over the
+# configured interval.
 set -uo pipefail
 
 sha="${SHA:-$(git rev-parse HEAD)}"
-interval="${CI_WAIT_INTERVAL:-5}"
+interval="${CI_WAIT_INTERVAL:-1}"
 etag=""
 runs=""
 

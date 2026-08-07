@@ -27,9 +27,11 @@ refused; depends on `ci-wait`, so a red PR cannot be landed). Background
 `ci-wait` polls conditionally: each request carries the previous ETag as
 `If-None-Match`, and a 304 costs nothing against the rate limit (measured: three
 consecutive 304s left `X-RateLimit-Used` unchanged). That is what pays for the
-5s interval — an unconditional poll had to stay slow to stay affordable, so the
-news arrived late. `X-Poll-Interval` is honoured as a floor when the server sends
-one. Never log these tasks through `tail`: it discards the end of the run, which
+1s interval — an unconditional poll had to stay slow to stay affordable, so the
+news arrived late. The sleep is not what sets the pace: the round trip is ~470ms
+(~260ms network, ~130ms `gh` startup), so the real cycle is ~1.5s.
+`X-Poll-Interval` is honoured as a floor if the endpoint ever sends one; it does
+not today. Never log these tasks through `tail`: it discards the end of the run, which
 is the part carrying the verdict.
 
 That's a rule, so it ships with mechanisms — three `PreToolUse` hooks wired in
