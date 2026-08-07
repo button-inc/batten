@@ -36,6 +36,29 @@ local gate = new Mapping<String, Step> {
     ["no-docs-tree"] {
         check = "mise run no-docs-tree"
     }
+    // mise-tasks/ holds real bash programs (the gh guard, its test, the GitHub
+    // preflight), so they get the same treatment as the Rust: a formatter with a
+    // fixer, then a linter, then the behavioural test. Globbed on mise-tasks/ so
+    // they never fire on a Rust-only commit.
+    ["shfmt"] {
+        glob = List("mise-tasks/*")
+        check_first = true
+        check = "mise run shfmt-check"
+        fix = "mise run shfmt"
+    }
+    ["shellcheck"] {
+        depends = List("shfmt")
+        glob = List("mise-tasks/*")
+        check = "mise run shellcheck"
+    }
+    // The shell programs' test suite (bats), the counterpart to `test` for Rust.
+    // The gh guard ships with its gate this way: the policy table must block
+    // exactly the hand-rolled shapes and nothing else (non-negotiable 2).
+    ["test:bats"] {
+        depends = List("shellcheck")
+        glob = List("mise-tasks/*", "tests/*.bats")
+        check = "mise run test:bats"
+    }
     ["fmt"] {
         glob = List("**/*.rs")
         // check_first: skip the fixer (a write pass) on the common case where the
@@ -53,9 +76,13 @@ local gate = new Mapping<String, Step> {
     ["test"] {
         depends = List("lint")
         glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
-        check = "mise run test"
+        check = "mise run test:cargo"
     }
 }
+
+// Report every failing step in one pass rather than stopping at the first —
+// one `mise run ci` should surface the whole list, not one failure at a time.
+fail_fast = false
 
 hooks {
     // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).

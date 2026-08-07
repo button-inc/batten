@@ -12,7 +12,13 @@ hk = "1.54.0"                 # git-hook runner (see hk.pkl)
 "aqua:cli/cli" = "2.97"       # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
 "aqua:EmbarkStudios/cargo-deny" = "0.20"  # dependency license/advisory policy (deny.toml)
 "aqua:release-plz/release-plz" = "0.3"    # conventional-commit-driven semver + changelog
-zizmor = "1.29.0"             # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
+"aqua:jqlang/jq" = "1.7"      # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
+# mise-tasks/ holds real bash programs, so they get the same lint+format
+# treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
+"aqua:koalaman/shellcheck" = "0.11.0"
+"aqua:mvdan/sh" = "3.12.0"    # shfmt
+"aqua:bats-core/bats-core" = "1.14.0"  # bats — the shell test framework (tests/*.bats)
+zizmor = "1.29.0"            # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
 uv = "0.8"                    # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
@@ -63,7 +69,11 @@ description = "Clippy with warnings denied"
 run = "cargo clippy --all-targets --all-features -- -D warnings"
 
 [tasks.test]
-description = "Run the workspace test suite"
+description = "Run every test suite — Rust and shell"
+depends = ["test:cargo", "test:bats"]
+
+[tasks."test:cargo"]
+description = "Run the Rust workspace test suite"
 run = "cargo test --workspace"
 
 [tasks.deny]
@@ -129,6 +139,32 @@ if [ -n "$tracked" ]; then
   exit 1
 fi
 echo "no-docs-tree: no committed docs/ tree"
+'''
+
+[tasks.shellcheck]
+description = "Lint the mise-tasks/ shell programs (shellcheck — clippy for bash)"
+# -x follows `source`d files; severity style keeps informational nits enforced,
+# matching how clippy runs here with -D warnings.
+run = "shellcheck --severity=style --shell=bash --external-sources mise-tasks/*"
+
+[tasks.shfmt]
+description = "Format the mise-tasks/ shell programs"
+run = "shfmt --write --indent 2 --case-indent --binary-next-line mise-tasks/"
+
+[tasks.shfmt-check]
+description = "Check shell formatting"
+run = "shfmt --diff --indent 2 --case-indent --binary-next-line mise-tasks/"
+
+[tasks."test:bats"]
+description = "Run the shell test suite (tests/*.bats) — cargo test for the mise-tasks/ programs"
+shell = "bash -c"
+# The aqua package ships bats' source tree, so the runnable sits one directory
+# deeper than the install root and never lands on PATH. Resolve it through `mise
+# where` rather than pinning the extracted directory's name, which embeds a commit
+# sha and changes on every version bump.
+run = '''
+root=$(mise where "aqua:bats-core/bats-core")
+exec "$root"/*/bin/bats --print-output-on-failure tests/
 '''
 
 [tasks.hooks]

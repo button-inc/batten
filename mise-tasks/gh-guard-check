@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#MISE description="The pure decision behind gh-guard: print a redirect and exit 1 if a command hand-rolls a gh call this repo routes through a task"
+#
+# Prose alone ("use `mise run land`, don't hand-roll it") is feedforward only — a
+# rule needs a mechanism (AGENTS.md non-negotiable 2). This is that mechanism,
+# split from the hook wrapper so the policy table is directly callable and
+# directly testable (`mise run gh-guard-test`).
+#
+# A file task, not a `run` string in mise.toml: those are Tera-templated, where
+# `${#arr[@]}` reads as an unterminated `{#` comment.
+#
+# Precise by construction. Only segments whose *program* is `gh` are inspected;
+# quoted spans are neutralised first, so `git commit -m "gh pr merge"` is not a
+# command; and blocked shapes match as an ADJACENT verb pair, so an interposed
+# flag value (`gh -R o/r pr merge`) still matches while `gh pr view merge-fix`
+# does not. Anything unrecognised is ALLOWED — a guard must never be the reason a
+# session cannot proceed.
+set -uo pipefail
+
+cmd="${1:-}"
+[ -n "$cmd" ] || exit 0
+
+# Neutralise quoted spans, then split on shell separators.
+scrubbed=$(printf '%s' "$cmd" | sed -E "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
+mapfile -t segments < <(printf '%s' "$scrubbed" | sed -E 's/(\&\&|\|\||[;|&])/\n/g')
+
+for seg in "${segments[@]}"; do
+  read -r -a toks <<<"$seg"
+  count=${#toks[@]}
+  # Skip a `VAR=value` env prefix.
+  i=0
+  while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+  [ "${toks[$i]:-}" = "gh" ] || continue
+
+  # Subcommand words with flags dropped. A value-taking flag leaves its VALUE
+  # behind, but the pairs below are adjacent, so that never hides a real match.
+  words=()
+  for t in "${toks[@]:$((i + 1))}"; do
+    case "$t" in -*) ;; *) words+=("$t") ;; esac
+  done
+
+  n=${#words[@]}
+  j=0
+  while [ "$((j + 1))" -lt "$n" ]; do
+    case "${words[$j]} ${words[$((j + 1))]}" in
+      "pr merge")
+        echo "Refused: \`gh pr merge\` is blocked — it (like the merge button) rewrites commits under new SHAs, discarding the exact objects CI tested. Use \`mise run land\`, which comments /fast-forward so main advances to this branch's already-passed commits. Bypass with BATTEN_GH_GUARD_BYPASS=1."
+        exit 1
+        ;;
+      "pr comment")
+        # Only a comment carrying the landing directive; an ordinary `gh pr
+        # comment` is not the lifecycle. Tested against the ORIGINAL command,
+        # since the directive lives inside the quoted --body that was scrubbed.
+        [[ "$cmd" == *fast-forward* ]] || {
+          j=$((j + 1))
+          continue
+        }
+        echo "Refused: commenting /fast-forward by hand only STARTS the merge — it does not wait for it, and the usual pairing with a guessed \`sleep\` reports before the merge lands. Use \`mise run land\` (backgrounded): it comments, then blocks until the PR is MERGED or the fast-forward bot refuses. Bypass with BATTEN_GH_GUARD_BYPASS=1."
+        exit 1
+        ;;
+      "pr checks" | "run watch")
+        echo "Refused: hand-watching CI is the ad-hoc shape \`mise run ci-wait\` replaces. It polls check-runs for HEAD until every one is terminal, prints their conclusions, and exits non-zero unless all are green — with no timeout to reintroduce the VM-reap gap. Background it. (\`gh pr view\`/\`list\`/\`create\`, \`gh pr ready\`, \`gh api\`, \`gh run view\` are NOT blocked.) Bypass with BATTEN_GH_GUARD_BYPASS=1."
+        exit 1
+        ;;
+    esac
+    j=$((j + 1))
+  done
+done
+exit 0

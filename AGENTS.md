@@ -267,6 +267,31 @@ CI, hk, and your shell run byte-identical commands. Detail (task list, hk gate
 design, keeping hooks fast): `mem:toolchain-and-hooks`. Serena semantic tools are
 auto-wired via `.mcp.json`; setup/worktree detail: `mem:serena-setup`.
 
+## The lifecycle tasks, and the guard that enforces them
+
+The PR lifecycle is encapsulated, not retyped: `mise run linear-check` (is HEAD
+fast-forwardable?), `ci-wait` (block until every check-run is terminal), `land`
+(comment `/fast-forward`, block until merged or refused). Background `ci-wait` and
+`land`.
+
+That's a rule, so it ships with a mechanism: `mise run gh-guard` is a `PreToolUse`
+hook (wired in `.claude/settings.json`) that DENIES `gh pr merge`, `gh pr checks`,
+`gh run watch`, and a hand-typed `/fast-forward` comment, naming the task to use
+instead. It fails open on anything it can't parse and honours
+`BATTEN_GH_GUARD_BYPASS=1`; the decision table is in `mise-tasks/gh-guard-check`
+and gated by `mise run gh-guard-test`. Reads (`gh pr view`/`list`/`create`, `gh
+pr ready`, `gh api`, `gh run view`) are not blocked.
+
+`mise run gh-preflight` answers "does this token carry the claims our tasks
+need?" by probing the read endpoints and reporting each 403's
+`X-Accepted-GitHub-Permissions`; write claims are declared, never exercised. Run
+it in a fresh environment before concluding a task is broken — an under-scoped
+token otherwise surfaces as an unrelated 403 in whichever task runs first.
+
+The `mise-tasks/` scripts are real programs and are held to it: `shfmt`,
+`shellcheck` and `test:bats` (bats, `tests/*.bats`) run in the same hk gate as the
+Rust steps. `mise run test` is the aggregate over `test:cargo` + `test:bats`.
+
 ## Before you commit
 
 The `hk` pre-commit hook runs `mise run fmt/lint/test`; commit-msg runs `mise run

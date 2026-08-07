@@ -39,6 +39,35 @@ checksum = "sha256:975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf8
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz"
 url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471599057"
 
+[[tools."aqua:bats-core/bats-core"]]
+version = "1.14.0"
+backend = "aqua:bats-core/bats-core"
+
+[tools."aqua:bats-core/bats-core"."platforms.linux-arm64"]
+url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz"
+url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.14.0"
+
+[tools."aqua:bats-core/bats-core"."platforms.linux-arm64-musl"]
+url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz"
+url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.14.0"
+
+[tools."aqua:bats-core/bats-core"."platforms.linux-x64"]
+checksum = "blake3:1d7a380fda62b0b29912cc23e6a8f4214fd66da05de67d17e1fb37120ee9b40e"
+url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz"
+url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.14.0"
+
+[tools."aqua:bats-core/bats-core"."platforms.linux-x64-musl"]
+url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz"
+url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.14.0"
+
+[tools."aqua:bats-core/bats-core"."platforms.macos-arm64"]
+url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz"
+url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.14.0"
+
+[tools."aqua:bats-core/bats-core"."platforms.macos-x64"]
+url = "https://github.com/bats-core/bats-core/archive/refs/tags/v1.14.0.tar.gz"
+url_api = "https://api.github.com/repos/bats-core/bats-core/tarball/v1.14.0"
+
 [[tools."aqua:cli/cli"]]
 version = "2.97.0"
 backend = "aqua:cli/cli"
@@ -84,6 +113,123 @@ checksum = "sha256:35d7fe05c4dd1411ffda1e73dfc7c6f44b75c936ca51fa6595c657fdc0350
 url = "https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_windows_amd64.zip"
 url_api = "https://api.github.com/repos/cli/cli/releases/assets/496108319"
 provenance = "github-attestations"
+
+[[tools."aqua:jqlang/jq"]]
+version = "1.7"
+backend = "aqua:jqlang/jq"
+
+[tools."aqua:jqlang/jq"."platforms.linux-arm64"]
+checksum = "sha256:ab57ee39075db4a23f899d396ecef3c6e58f6aada35bfee472468210bd126940"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux-arm64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/124890209"
+
+[tools."aqua:jqlang/jq"."platforms.linux-arm64-musl"]
+checksum = "sha256:ab57ee39075db4a23f899d396ecef3c6e58f6aada35bfee472468210bd126940"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux-arm64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/124890209"
+
+[tools."aqua:jqlang/jq"."platforms.linux-x64"]
+checksum = "sha256:2f312b9587b1c1eddf3a53f9a0b7d276b9b7b94576c85bda22808ca950569716"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux-amd64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/124890211"
+
+[tools."aqua:jqlang/jq"."platforms.linux-x64-musl"]
+checksum = "sha256:2f312b9587b1c1eddf3a53f9a0b7d276b9b7b94576c85bda22808ca950569716"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-linux-amd64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/124890211"
+
+[tools."aqua:jqlang/jq"."platforms.macos-arm64"]
+checksum = "sha256:b8d313fd4f3bd8a0b338b9ddd1c006fccf9312dc609a20d2d6e4bad964aa99f9"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-macos-arm64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/124890230"
+
+[tools."aqua:jqlang/jq"."platforms.macos-x64"]
+checksum = "sha256:4b4568fb5c6cbb8f1a8f640ff601c6d2bbecf9fa8f2cf796c7482e7054a01c41"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-macos-amd64"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/124890229"
+
+[tools."aqua:jqlang/jq"."platforms.windows-x64"]
+checksum = "sha256:2e9cc54d0a5d098e2007decec1dbb3c555ca2f5aabded7aec907fe0ffe401aab"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7/jq-windows-amd64.exe"
+url_api = "https://api.github.com/repos/jqlang/jq/releases/assets/124890231"
+
+[[tools."aqua:koalaman/shellcheck"]]
+version = "0.11.0"
+backend = "aqua:koalaman/shellcheck"
+
+[tools."aqua:koalaman/shellcheck"."platforms.linux-arm64"]
+checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
+
+[tools."aqua:koalaman/shellcheck"."platforms.linux-arm64-musl"]
+checksum = "sha256:12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056934"
+
+[tools."aqua:koalaman/shellcheck"."platforms.linux-x64"]
+checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
+
+[tools."aqua:koalaman/shellcheck"."platforms.linux-x64-musl"]
+checksum = "sha256:8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942"
+
+[tools."aqua:koalaman/shellcheck"."platforms.macos-arm64"]
+checksum = "sha256:56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.aarch64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056932"
+
+[tools."aqua:koalaman/shellcheck"."platforms.macos-x64"]
+checksum = "sha256:3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.darwin.x86_64.tar.xz"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056930"
+
+[tools."aqua:koalaman/shellcheck"."platforms.windows-x64"]
+checksum = "sha256:8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e"
+url = "https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip"
+url_api = "https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056944"
+
+[[tools."aqua:mvdan/sh"]]
+version = "3.12.0"
+backend = "aqua:mvdan/sh"
+
+[tools."aqua:mvdan/sh"."platforms.linux-arm64"]
+checksum = "sha256:5f3fe3fa6a9f766e6a182ba79a94bef8afedafc57db0b1ad32b0f67fae971ba4"
+url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_arm64"
+url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490141"
+
+[tools."aqua:mvdan/sh"."platforms.linux-arm64-musl"]
+checksum = "sha256:5f3fe3fa6a9f766e6a182ba79a94bef8afedafc57db0b1ad32b0f67fae971ba4"
+url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_arm64"
+url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490141"
+
+[tools."aqua:mvdan/sh"."platforms.linux-x64"]
+checksum = "sha256:d9fbb2a9c33d13f47e7618cf362a914d029d02a6df124064fff04fd688a745ea"
+url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_amd64"
+url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490140"
+
+[tools."aqua:mvdan/sh"."platforms.linux-x64-musl"]
+checksum = "sha256:d9fbb2a9c33d13f47e7618cf362a914d029d02a6df124064fff04fd688a745ea"
+url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_linux_amd64"
+url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490140"
+
+[tools."aqua:mvdan/sh"."platforms.macos-arm64"]
+checksum = "sha256:d903802e0ce3ecbc82b98512f55ba370b0d37a93f3f78de394f5b657052b33dd"
+url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_darwin_arm64"
+url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490132"
+
+[tools."aqua:mvdan/sh"."platforms.macos-x64"]
+checksum = "sha256:c31548693de6584e6164b7ed5fbb7b4a083f2d937ca94b4e0ddf59aa461a85e4"
+url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_darwin_amd64"
+url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490139"
+
+[tools."aqua:mvdan/sh"."platforms.windows-x64"]
+checksum = "sha256:c8bda517ba1c640ce4a715c0fa665439ddbe4357ba5e9b77b0e51e70e2b9c94b"
+url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_windows_amd64.exe"
+url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490128"
 
 [[tools."aqua:release-plz/release-plz"]]
 version = "0.3.160"
