@@ -8,8 +8,8 @@
 //! Two properties are load-bearing:
 //!
 //! * **Precedence is declared as data.** [`SETTINGS`] states, per key, its env
-//!   var, its flag, and whether it is policy-bearing; the resolver *reads that
-//!   table* rather than hard-coding names, so the layering is inspectable
+//!   var and its flag; the resolver *reads that table* rather than hard-coding
+//!   the names, so the layering is inspectable
 //!   instead of being resolution logic buried in the binary. Order is
 //!   `flag > env > local file > repo config > default` — exactly the [`Source`]
 //!   declaration order.
@@ -86,21 +86,24 @@ pub struct SettingSpec {
     pub env: Option<&'static str>,
     /// The command-line flag that overrides it, if any.
     pub long_flag: Option<&'static str>,
-    /// Whether the key is policy-bearing, and so subject to the raise-only
-    /// clamp. A non-policy key layers by plain precedence.
-    pub raise_only: bool,
 }
 
 /// The declared layering for every overridable key.
 ///
 /// The resolver reads the env var and flag names *from here*, so this table is
 /// the definition rather than documentation of one.
+///
+/// Every key here is policy-bearing and so subject to the raise-only clamp;
+/// there is deliberately no per-key "is this policy-bearing" flag, because a
+/// flag no code path reads is the declared-but-unenforced drift a policy engine
+/// exists to prevent. A key that layers by plain precedence reintroduces the
+/// distinction in the change that first needs it — together with the branch
+/// that consults it.
 pub const SETTINGS: &[SettingSpec] = &[
     SettingSpec {
         key: "strictness",
         env: Some("BATTEN_STRICTNESS"),
         long_flag: Some("--strictness"),
-        raise_only: true,
     },
     SettingSpec {
         // Rules layer additively: the local file may add a rule, never redefine
@@ -109,7 +112,6 @@ pub const SETTINGS: &[SettingSpec] = &[
         key: "rule",
         env: None,
         long_flag: None,
-        raise_only: true,
     },
 ];
 
