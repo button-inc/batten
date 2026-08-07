@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every mem: reference in tracked markdown resolves to a real memory, and every memory is addressable by its name (CLOUD-183)"
+#
+# The checked-in memories are a knowledge graph navigated by mem: references,
+# and nothing gated its edges: the reference tooling's own integrity check is
+# advisory by construction (read-only, always exits 0), and its rename command
+# is the only thing that keeps referrers in sync — so a `git mv` of a memory,
+# or any direct write, silently orphans every reference to it. A graph whose
+# edges can dangle silently is prose pretending to be structure (rule 2).
+#
+# A pure function of the tracked tree: no tool dependency, so it gates the
+# damage no matter what performed the rename. The reference syntax
+# (mem: + [A-Za-z0-9_/-]) is restated from the tooling's matcher HERE AND ONLY
+# HERE — if upstream's syntax changes, this is the one line to update.
+set -euo pipefail
+
+cd "${MEMCHECK_ROOT:-$(git rev-parse --show-toplevel)}"
+memories=".serena/memories"
+
+violations=0
+report() { # pointer-only: file:line rule-id (name)
+	echo "$1 $2" >&2
+	violations=$((violations + 1))
+}
+
+# --- graph root ---------------------------------------------------------------
+#
+# The reference model makes mem:core the discovery entry point; a graph with no
+# root is only findable by directory listing.
+[ -f "$memories/core.md" ] || report "$memories/core.md:0" "memory-root-missing"
+
+# --- name bijection -----------------------------------------------------------
+#
+# A memory must be addressable AS WRITTEN. The tooling silently strips a
+# trailing .md from names, so foo.md.md lists as "foo.md" and can never be
+# addressed by its own filename; charset outside [A-Za-z0-9_/-] cannot be
+# referenced at all, since the reference matcher stops at the first foreign
+# character.
+while IFS= read -r f; do
+	name="${f#"$memories"/}"
+	name="${name%.md}"
+	case "$name" in
+	*.md) report "$f:0" "memory-name-shadowed (strips to ${name%.md})" ;;
+	esac
+	if ! printf '%s' "$name" | grep -qE '^[A-Za-z0-9_/-]+$'; then
+		report "$f:0" "memory-name-unreferencable"
+	fi
+done < <(git ls-files "$memories/*.md" "$memories/**/*.md" | sort -u)
+
+# --- stale references ---------------------------------------------------------
+#
+# Every mem:NAME in tracked markdown must resolve — AGENTS.md and the rule
+# files reference memories too, so the whole tracked tree is scanned, not only
+# the memories. memory_maintenance.md is excluded as a referrer: it is the
+# shipped convention template, and its examples reference memories that
+# deliberately do not exist here (the tooling's own scanner excludes it too).
+while IFS=: read -r file line ref; do
+	[ -n "$ref" ] || continue
+	name="${ref#mem:}"
+	[ -f "$memories/$name.md" ] || report "$file:$line" "mem-ref-stale ($name)"
+	# CHANGELOG.md is excluded with the template: release-plz owns it, so a stale
+	# reference there could only be fixed by hand-editing a generated file.
+done < <(git ls-files '*.md' ':!:tests/bats' ':!:CHANGELOG.md' |
+	grep -vxF "$memories/memory_maintenance.md" |
+	xargs -r grep -noE 'mem:[A-Za-z0-9_/-]+' /dev/null 2>/dev/null | sort -u)
+
+if [ "$violations" -ne 0 ]; then
+	echo "::error:: memories-check: $violations violation(s) — the memory graph has dangling edges" >&2
+	exit 1
+fi
+echo "memories-check: memory graph coherent"
