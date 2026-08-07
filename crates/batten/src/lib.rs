@@ -76,7 +76,12 @@ fn run_rules(
     let findings = runner(&config.rules, Path::new("."))?;
     for finding in &findings {
         // Pointer only: location and the rule that fired, never the line text.
-        writeln!(out, "{}:{} {}", finding.path, finding.line, finding.rule)?;
+        // A rule-scoped finding (no line) prints its pointer without one rather
+        // than inventing a line number it does not have.
+        match finding.line {
+            Some(line) => writeln!(out, "{}:{} {}", finding.path, line, finding.rule)?,
+            None => writeln!(out, "{} {}", finding.path, finding.rule)?,
+        }
     }
     if findings.is_empty() {
         Ok(ExitCode::Success)

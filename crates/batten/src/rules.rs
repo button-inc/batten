@@ -13,10 +13,10 @@
 //! than skipping it, because a skipped gate that still exits `0` is the
 //! false-green Batten exists to catch.
 //!
-//! This module is the substrate the parent issue owns. It ships one static
-//! `kind` — [`RuleKind::Forbid`], a banned-shape literal check — and is shaped so
-//! further kinds slot in as new [`RuleKind`] variants with one match arm each
-//! (the dynamic `command` kind is CLOUD-89). Two properties are load-bearing and
+//! Two kinds ship: [`RuleKind::Forbid`], a static banned-shape literal check,
+//! and [`RuleKind::Command`], the dynamic escape hatch that runs a configured
+//! command and reads its exit code as the predicate. Further kinds slot in as
+//! new variants with one match arm each. Two properties are load-bearing and
 //! preserved by every kind added later:
 //!
 //! * **Pointer-only output** (non-negotiable rule 4): a finding is a
@@ -48,6 +48,15 @@ pub enum RuleKind {
     /// A static banned shape: every line of a matched file that contains the
     /// literal `pattern` is a finding. The check is inspection-only.
     Forbid,
+    /// A dynamic check: run the `run` template and treat its exit code as the
+    /// predicate — `0` passes, non-zero is a violation. The sanctioned escape
+    /// hatch for rules no static shape can express.
+    ///
+    /// It is an **exit-code predicate, not a judge** (CLOUD-93): the command's
+    /// output is never parsed for meaning. Because it executes a process
+    /// declared in `batten.toml`, it runs only on the non-`read` surface (§5,
+    /// CLOUD-170).
+    Command,
 }
 
 impl RuleKind {
@@ -56,7 +65,7 @@ impl RuleKind {
     /// A new variant must be added here or [`tests::all_covers_every_kind`]
     /// fails — which is what keeps [`RuleKind::spawns_processes`] from silently
     /// defaulting a spawning kind to "safe".
-    pub const ALL: &'static [RuleKind] = &[RuleKind::Forbid];
+    pub const ALL: &'static [RuleKind] = &[RuleKind::Forbid, RuleKind::Command];
 
     /// Whether running this kind can execute a process declared in
     /// `batten.toml`.
@@ -70,6 +79,7 @@ impl RuleKind {
     pub const fn spawns_processes(self) -> bool {
         match self {
             RuleKind::Forbid => false,
+            RuleKind::Command => true,
         }
     }
 }
@@ -92,8 +102,55 @@ pub struct Rule {
     /// repo-relative paths (`/`-separated). `**` matches any run of path
     /// segments, `*` and `?` match within a single segment.
     pub glob: String,
-    /// The literal substring a [`RuleKind::Forbid`] rule bans from matched files.
-    pub pattern: String,
+    /// The literal substring a [`RuleKind::Forbid`] rule bans from matched
+    /// files. Required by that kind, rejected by any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    /// The command template a [`RuleKind::Command`] rule runs. Required by that
+    /// kind, rejected by any other.
+    ///
+    /// Split on whitespace into `program` plus arguments and executed
+    /// **directly — never through a shell**, so what runs is exactly what a
+    /// reviewer reads (§9: rules "name a command already on the operator's
+    /// PATH"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the
+    /// matched paths; omit it and the command self-discovers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+}
+
+impl Rule {
+    /// Validate that the per-kind fields present match the declared `kind`.
+    ///
+    /// The struct is flat (a `#[serde(flatten)]` enum would silently defeat
+    /// `deny_unknown_fields`), so the kind/field agreement that a tagged enum
+    /// would give for free is asserted here instead — and a field belonging to
+    /// another kind is an *error*, never ignored, so a rule can never half-apply.
+    fn validate(&self) -> anyhow::Result<()> {
+        let (required, extra) = match self.kind {
+            RuleKind::Forbid => (self.pattern.is_some(), self.run.is_some().then_some("run")),
+            RuleKind::Command => (
+                self.run.is_some(),
+                self.pattern.is_some().then_some("pattern"),
+            ),
+        };
+        let (needs, kind) = match self.kind {
+            RuleKind::Forbid => ("pattern", "forbid"),
+            RuleKind::Command => ("run", "command"),
+        };
+        if !required {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"{kind}\" requires `{needs}`",
+                self.id
+            )));
+        }
+        if let Some(extra) = extra {
+            return Err(UsageError::raise(format!(
+                "rule {}: `{extra}` is not valid for kind \"{kind}\"",
+                self.id
+            )));
+        }
+        Ok(())
+    }
 }
 
 /// A single policy violation: the rule that fired and where, as a pointer only.
@@ -104,10 +161,15 @@ pub struct Rule {
 pub struct Finding {
     /// The [`Rule::id`] that produced this finding.
     pub rule: String,
-    /// The repo-relative path of the offending file (`/`-separated).
+    /// Where the violation is. A file-scoped kind reports the repo-relative
+    /// path (`/`-separated); a rule-scoped kind — a command whose exit code
+    /// condemns a whole batch rather than one line — reports the rule's `glob`,
+    /// which is the tightest honest pointer available for it.
     pub path: String,
-    /// The 1-based line number of the offending line.
-    pub line: usize,
+    /// The 1-based line number of the offending line, when the kind locates one.
+    /// `None` for a rule-scoped finding.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
 }
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
@@ -192,13 +254,152 @@ fn run_rule(
             rule.id
         )));
     }
-    let matched = files.iter().filter(|path| glob_match(&rule.glob, path));
+    rule.validate()?;
+    let matched: Vec<&String> = files
+        .iter()
+        .filter(|path| glob_match(&rule.glob, path))
+        .collect();
+    // The glob is a gate before it is an argv source (§4 "cheap when
+    // irrelevant"): no match means the rule is skipped entirely — for a command
+    // rule, without ever spawning.
+    if matched.is_empty() {
+        return Ok(());
+    }
     match rule.kind {
         RuleKind::Forbid => {
             for path in matched {
                 forbid_in_file(rule, root, path, findings)?;
             }
         }
+        RuleKind::Command => command_rule(rule, root, &matched, findings)?,
+    }
+    Ok(())
+}
+
+/// The argument a `run` template uses to mark where the matched paths go.
+pub const FILES_PLACEHOLDER: &str = "{{files}}";
+
+/// The upper bound, in bytes, on the matched paths handed to one invocation.
+///
+/// Kept well under every platform's real argv limit (Windows' ~32 KiB command
+/// line is the tightest), so a large match set is split across independent
+/// invocations instead of overflowing. Batching is invisible to the predicate:
+/// a non-zero exit in *any* batch is a violation.
+pub const MAX_FILES_BYTES: usize = 16_384;
+
+/// Run a [`RuleKind::Command`] rule over its matched paths.
+///
+/// If the template contains [`FILES_PLACEHOLDER`], the paths are substituted at
+/// that position, batched under [`MAX_FILES_BYTES`]; otherwise the command runs
+/// once and self-discovers its own inputs (the glob still gated it).
+fn command_rule(
+    rule: &Rule,
+    root: &Path,
+    matched: &[&String],
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<()> {
+    let template = rule.run.as_deref().ok_or_else(|| {
+        UsageError::raise(format!("rule {}: kind \"command\" requires `run`", rule.id))
+    })?;
+    let tokens: Vec<&str> = template.split_whitespace().collect();
+    let Some((program, args)) = tokens.split_first() else {
+        return Err(UsageError::raise(format!(
+            "rule {}: `run` must not be empty",
+            rule.id
+        )));
+    };
+
+    if !args.contains(&FILES_PLACEHOLDER) {
+        // Self-discovering form: one invocation, no paths passed.
+        run_once(rule, root, program, args, &[], findings)?;
+        return Ok(());
+    }
+
+    for batch in batches(matched) {
+        run_once(rule, root, program, args, &batch, findings)?;
+    }
+    Ok(())
+}
+
+/// Split `matched` into groups whose joined byte length stays under
+/// [`MAX_FILES_BYTES`]. Order is preserved, so batching is deterministic and the
+/// resulting findings stay byte-stable (§6).
+fn batches<'a>(matched: &[&'a String]) -> Vec<Vec<&'a str>> {
+    let mut batches = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    let mut bytes = 0usize;
+    for path in matched {
+        let len = path.len() + 1;
+        // Always place at least one path per batch, so a single path longer
+        // than the bound still runs rather than looping forever.
+        if !current.is_empty() && bytes + len > MAX_FILES_BYTES {
+            batches.push(std::mem::take(&mut current));
+            bytes = 0;
+        }
+        current.push(path.as_str());
+        bytes += len;
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
+}
+
+/// Spawn one invocation, substituting `files` for [`FILES_PLACEHOLDER`], and
+/// record a finding if it exits non-zero.
+///
+/// A command that cannot run at all (missing binary, not executable) is a
+/// *config* error (exit `2`), never a silent pass — the failure mode that would
+/// turn a broken gate into a false green.
+fn run_once(
+    rule: &Rule,
+    root: &Path,
+    program: &str,
+    args: &[&str],
+    files: &[&str],
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<()> {
+    let mut expanded: Vec<&str> = Vec::with_capacity(args.len() + files.len());
+    for arg in args {
+        if *arg == FILES_PLACEHOLDER {
+            expanded.extend_from_slice(files);
+        } else {
+            expanded.push(arg);
+        }
+    }
+
+    let status = std::process::Command::new(program)
+        .args(&expanded)
+        .current_dir(root)
+        // The predicate is the exit code alone; the command's own streams are
+        // not parsed for meaning (CLOUD-93) and are not surfaced here — a
+        // bounded, pointer-only drain is the advisory subsystem's job (CLOUD-82).
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    let status = match status {
+        Ok(status) => status,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(UsageError::raise(format!(
+                "rule {}: cannot run `{program}`: not found on PATH",
+                rule.id
+            )));
+        }
+        Err(err) => {
+            return Err(UsageError::raise(format!(
+                "rule {}: cannot run `{program}`: {err}",
+                rule.id
+            )));
+        }
+    };
+
+    if !status.success() {
+        findings.push(Finding {
+            rule: rule.id.clone(),
+            path: rule.glob.clone(),
+            line: None,
+        });
     }
     Ok(())
 }
@@ -219,12 +420,18 @@ fn forbid_in_file(
     let Ok(text) = String::from_utf8(contents) else {
         return Ok(());
     };
+    let Some(pattern) = rule.pattern.as_deref() else {
+        return Err(UsageError::raise(format!(
+            "rule {}: kind \"forbid\" requires `pattern`",
+            rule.id
+        )));
+    };
     for (index, line) in text.lines().enumerate() {
-        if line.contains(&rule.pattern) {
+        if line.contains(pattern) {
             findings.push(Finding {
                 rule: rule.id.clone(),
                 path: rel_path.to_owned(),
-                line: index + 1,
+                line: Some(index + 1),
             });
         }
     }
@@ -351,7 +558,18 @@ mod tests {
             id: id.to_owned(),
             kind: RuleKind::Forbid,
             glob: glob.to_owned(),
-            pattern: pattern.to_owned(),
+            pattern: Some(pattern.to_owned()),
+            run: None,
+        }
+    }
+
+    fn command(id: &str, glob: &str, run: &str) -> Rule {
+        Rule {
+            id: id.to_owned(),
+            kind: RuleKind::Command,
+            glob: glob.to_owned(),
+            pattern: None,
+            run: Some(run.to_owned()),
         }
     }
 
@@ -389,12 +607,12 @@ mod tests {
                 Finding {
                     rule: "no-todo".to_owned(),
                     path: "src/a.rs".to_owned(),
-                    line: 2,
+                    line: Some(2),
                 },
                 Finding {
                     rule: "no-todo".to_owned(),
                     path: "src/a.rs".to_owned(),
-                    line: 3,
+                    line: Some(3),
                 },
             ]
         );
@@ -448,12 +666,12 @@ mod tests {
         // The match is exhaustive by the compiler; this asserts `ALL` agrees.
         for kind in RuleKind::ALL {
             match kind {
-                RuleKind::Forbid => {}
+                RuleKind::Forbid | RuleKind::Command => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            1,
+            2,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }
@@ -475,7 +693,8 @@ mod tests {
                 id: "spawner".to_owned(),
                 kind: *kind,
                 glob: "**".to_owned(),
-                pattern: String::new(),
+                pattern: None,
+                run: Some("true".to_owned()),
             };
             let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
             assert!(
@@ -500,6 +719,152 @@ mod tests {
             run_static(std::slice::from_ref(&rule), &dir).unwrap(),
             run_all(std::slice::from_ref(&rule), &dir).unwrap()
         );
+    }
+
+    #[test]
+    fn command_exit_zero_passes_and_non_zero_is_a_violation() {
+        let dir = temp_dir("cmd-exit");
+        write(&dir, "a.rs", "x\n");
+        let pass = run_all(&[command("ok", "**/*.rs", "true")], &dir).unwrap();
+        assert!(pass.is_empty(), "exit 0 must pass");
+
+        let fail = run_all(&[command("bad", "**/*.rs", "false")], &dir).unwrap();
+        assert_eq!(
+            fail,
+            vec![Finding {
+                rule: "bad".to_owned(),
+                // Rule-scoped: the exit code condemns the batch, not a line.
+                path: "**/*.rs".to_owned(),
+                line: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_glob_matching_nothing_never_spawns() {
+        // §4 "cheap when irrelevant": the glob gates before it feeds argv. The
+        // canary is a command that would fail loudly if it ever ran — a missing
+        // binary is a usage error, so reaching the spawn would surface here.
+        let dir = temp_dir("cmd-no-match");
+        write(&dir, "a.txt", "x\n");
+        let findings = run_all(
+            &[command(
+                "never",
+                "**/*.rs",
+                "definitely-not-a-real-binary-xyz",
+            )],
+            &dir,
+        )
+        .unwrap();
+        assert!(
+            findings.is_empty(),
+            "an unmatched glob must skip, not spawn"
+        );
+    }
+
+    #[test]
+    fn missing_binary_is_a_usage_error_not_a_silent_pass() {
+        let dir = temp_dir("cmd-missing-bin");
+        write(&dir, "a.rs", "x\n");
+        let err = run_all(
+            &[command(
+                "gone",
+                "**/*.rs",
+                "definitely-not-a-real-binary-xyz",
+            )],
+            &dir,
+        )
+        .unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a command that cannot run is a config error (exit 2), never a pass"
+        );
+    }
+
+    #[test]
+    fn files_placeholder_receives_the_matched_paths() {
+        // `test -e <path>` succeeds only if the path was actually substituted
+        // and resolves relative to the run root, so this asserts interpolation
+        // rather than merely that something ran.
+        let dir = temp_dir("cmd-files");
+        write(&dir, "present.rs", "x\n");
+        let findings = run_all(&[command("subst", "**/*.rs", "test -e {{files}}")], &dir).unwrap();
+        assert!(findings.is_empty(), "the matched path must reach the argv");
+    }
+
+    #[test]
+    fn a_template_without_the_placeholder_runs_once_and_self_discovers() {
+        // Three matches, no placeholder: the command still runs exactly once.
+        // `false` fails every time it runs, so one finding proves one spawn.
+        let dir = temp_dir("cmd-self-discover");
+        write(&dir, "a.rs", "x\n");
+        write(&dir, "b.rs", "x\n");
+        write(&dir, "c.rs", "x\n");
+        let findings = run_all(&[command("once", "**/*.rs", "false")], &dir).unwrap();
+        assert_eq!(findings.len(), 1, "self-discovering form runs once");
+    }
+
+    #[test]
+    fn matched_paths_are_batched_under_the_argv_bound() {
+        // Every batch stays under the documented bound, and batching preserves
+        // order — the property that keeps findings byte-stable (§6).
+        let paths: Vec<String> = (0..2000).map(|i| format!("src/file-{i:04}.rs")).collect();
+        let refs: Vec<&String> = paths.iter().collect();
+        let batches = batches(&refs);
+        assert!(batches.len() > 1, "a large match set must split");
+        for batch in &batches {
+            let bytes: usize = batch.iter().map(|p| p.len() + 1).sum();
+            assert!(bytes <= MAX_FILES_BYTES, "batch overflows the argv bound");
+        }
+        let flattened: Vec<&str> = batches.concat();
+        let expected: Vec<&str> = paths.iter().map(String::as_str).collect();
+        assert_eq!(flattened, expected, "batching must preserve order");
+    }
+
+    #[test]
+    fn a_kind_only_accepts_its_own_fields() {
+        // The flat-struct tension: without a tagged enum, kind/field agreement
+        // is asserted here. A field from another kind is an error, never ignored.
+        let dir = temp_dir("cmd-schema");
+        write(&dir, "a.rs", "x\n");
+        let cases = [
+            Rule {
+                id: "a".into(),
+                kind: RuleKind::Command,
+                glob: "**".into(),
+                pattern: None,
+                run: None,
+            },
+            Rule {
+                id: "b".into(),
+                kind: RuleKind::Command,
+                glob: "**".into(),
+                pattern: Some("x".into()),
+                run: Some("true".into()),
+            },
+            Rule {
+                id: "c".into(),
+                kind: RuleKind::Forbid,
+                glob: "**".into(),
+                pattern: None,
+                run: None,
+            },
+            Rule {
+                id: "d".into(),
+                kind: RuleKind::Forbid,
+                glob: "**".into(),
+                pattern: Some("x".into()),
+                run: Some("true".into()),
+            },
+        ];
+        for rule in cases {
+            let id = rule.id.clone();
+            let err = run_all(std::slice::from_ref(&rule), &dir).unwrap_err();
+            assert!(
+                err.downcast_ref::<UsageError>().is_some(),
+                "rule {id}: mismatched kind/fields must be a usage error"
+            );
+        }
     }
 
     #[test]

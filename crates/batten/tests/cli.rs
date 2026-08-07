@@ -219,6 +219,102 @@ fn spec_marks_enforce_unclassified_and_check_read() {
     assert_eq!(effect_of("enforce"), "unclassified");
 }
 
+/// A `batten.toml` carrying one command rule that always fails.
+const COMMAND_RULE_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"false\"\n";
+
+#[test]
+fn check_refuses_a_command_rule_rather_than_skipping_it() {
+    // The CLOUD-170 split, end to end: the read-effect verb must refuse (exit
+    // 2) — never exit 0 having quietly skipped the gate.
+    let dir = repo_with_config("cmd-check-refuses", COMMAND_RULE_CONFIG);
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "check must refuse a spawning rule kind"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("batten enforce"),
+        "the refusal must point at the verb that runs it, got: {stderr}"
+    );
+}
+
+#[test]
+fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
+    let dir = repo_with_config("cmd-enforce-runs", COMMAND_RULE_CONFIG);
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a non-zero command exit is a violation"
+    );
+    // Rule-scoped pointer: no invented line number, and never the command output.
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "**/*.rs dyn\n");
+}
+
+#[test]
+fn enforce_passes_when_the_command_exits_zero() {
+    let dir = repo_with_config(
+        "cmd-enforce-pass",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"true\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn enforce_missing_binary_is_a_usage_error() {
+    let dir = repo_with_config(
+        "cmd-enforce-missing",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a command that cannot run is a config error, never a silent pass"
+    );
+}
+
+#[test]
+fn command_rule_with_no_glob_match_is_skipped_without_spawning() {
+    // The glob gates first (§4): the missing binary would be a usage error if
+    // it were ever reached, so exit 0 proves nothing spawned.
+    let dir = repo_with_config(
+        "cmd-no-match",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\n",
+    );
+    fs::write(dir.join("notes.txt"), "x\n").expect("write source");
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(output.status.code(), Some(0));
+}
+
 #[test]
 fn check_unknown_rule_key_is_a_usage_error() {
     let dir = repo_with_config(

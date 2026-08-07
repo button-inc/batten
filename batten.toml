@@ -15,3 +15,15 @@ version = 1
 # Minimum Batten version permitted to read this file. Parsed now; enforcement
 # lands with the min_batten_version gate (see the project board).
 min_batten_version = "0.0.0"
+
+# Batten gates this repository with its own engine — consumer #1 in practice,
+# not just in principle. Each rule below runs under `batten check`.
+
+# A conflict marker reaching a source file means a botched merge landed. The
+# shape is unambiguous and no compiler catches it in every file type, which is
+# exactly the banned-shape case `forbid` exists for.
+[[rule]]
+id = "no-conflict-markers"
+kind = "forbid"
+glob = "crates/**/*.rs"
+pattern = "<<<<<<< "
