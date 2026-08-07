@@ -53,3 +53,31 @@ frontier and WIP count as a by-product. What remains manual is only the
 _fetch_: no tracker credential exists, so an agent pipes the board in; the
 verdict is the gate's alone. Attach every landed PR to its issue — the
 attachment is what makes the In Review predicate true.
+
+## The board moves itself — supply the key, don't perform the transition
+
+The tracker's GitHub integration performs the state transitions from the issue
+identifier appearing in a branch name, PR title, or commit message. Measured
+here: a commit carrying `Refs: CLOUD-178` moved that issue Todo -> In Progress,
+set its assignee, and attached the PR, with no write call from the session.
+
+So an agent hand-moving the board is doing work that is already automated, and
+doing it the fragile way. A state change is a tracker write, and a write can be
+denied mid-session when the connector re-registers under a name no allow rule
+matches (CLOUD-178) — which is exactly how a session lost the ability to update
+the board for three landed PRs. An identifier in a commit travels in git, where
+nothing can deny it.
+
+`mise run issue-guard` is what guarantees the key exists: it denies `gh pr
+create` and `gh pr ready` unless a `CLOUD-<n>` appears in the branch, a commit,
+or the command.
+
+Two things this does NOT cover, both observed rather than assumed:
+
+- **The merge-side transition did not fire.** #100 merged and CLOUD-178 stayed
+  In Progress; its state history shows only the one transition. Landing still
+  needs checking, and In Review / Done may need configuring on the integration
+  side before that half can be trusted.
+- **Prefer the tracker's own branch name.** Each issue exposes a `gitBranchName`
+  (`<user>/cloud-178-<slug>`); a branch named that way carries the key from the
+  first push, before any commit message does.

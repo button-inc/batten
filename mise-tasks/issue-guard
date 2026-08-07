@@ -27,6 +27,17 @@
 # blocks landing is also what forces the search — at the one moment in the
 # lifecycle that cannot be routed around.
 #
+# What that identifier actually buys, which is more than traceability: the
+# tracker's own GitHub integration consumes it and performs the state
+# transitions itself. Measured here — a commit carrying `Refs: CLOUD-178` moved
+# that issue Todo -> In Progress, set its assignee, and attached the PR, with no
+# write call from the session at all. So the agent's job is not to move the
+# issue; it is to supply the key the automation keys on, which is exactly what
+# this gate requires. Hand-moving the board is redundant work that also fails in
+# a way supplying a branch name does not: a state change is a tracker write, and
+# a write can be denied mid-session when the connector re-registers under a
+# different name (CLOUD-178). The key travels in git, where nothing can deny it.
+#
 # What this does NOT gate, stated rather than left as an unmet obligation:
 # whether outstanding items actually get written to the issue. That is not a
 # computable predicate over any artifact the repo can see. The compensating
