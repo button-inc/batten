@@ -19,6 +19,14 @@ set -euo pipefail
 readonly BIN=batten
 readonly OUT_DIR=dist
 
+# cargo or cross (cross-rs). `cross` runs the build in a per-target Docker image
+# that already carries that target's linker and sysroot, which is what makes a
+# LINUX host able to produce aarch64 and musl and Windows binaries without a
+# native runner for each. `rustup target add` alone only installs the standard
+# library — the linker is the part that actually blocks a cross-build, which is
+# why this indirection exists at all.
+BUILD_TOOL="${DIST_BUILD_TOOL:-cargo}"
+
 usage() {
 	cat >&2 <<-EOF
 		usage: mise run dist <target>
@@ -89,7 +97,14 @@ main() {
 	# --locked so a release build resolves the exact dependency versions the
 	# lockfile pins; a release that silently floated a dependency is not the
 	# artifact CI tested.
-	cargo build --locked --profile dist --target "$target" --bin "$BIN" >&2
+	case "$BUILD_TOOL" in
+	cargo | cross) ;;
+	*)
+		echo "dist: DIST_BUILD_TOOL must be cargo or cross, got '${BUILD_TOOL}'" >&2
+		return 1
+		;;
+	esac
+	"$BUILD_TOOL" build --locked --profile dist --target "$target" --bin "$BIN" >&2
 
 	local built="target/${target}/dist/${bin_name}"
 	if [ ! -f "$built" ]; then

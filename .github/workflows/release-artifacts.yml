@@ -9,6 +9,20 @@ name: release-artifacts
 # runnable. This workflow is what makes a release installable, which is what
 # dogfooding Batten as consumer #1 requires (house-style §12).
 #
+# EVERY LEG RUNS ON ubuntu-latest, deliberately. GitHub bills macOS runners at
+# 10x and Windows at 2x on a private repo; this workflow uses neither. Non-native
+# targets are built with `cross` (cross-rs), which runs the compile inside a
+# per-target Docker image that already carries that target's linker and sysroot.
+# `rustup target add` alone installs only the standard library — the linker is
+# what actually blocks a cross-build, which is the whole reason cross exists.
+#
+# NO macOS ARTIFACT IS PRODUCED, and that is a known gap, not an oversight.
+# Darwin is the one target no container can supply: linking it needs Apple's SDK,
+# which is not redistributable, so there is no Linux-hosted path to a macOS
+# binary. The only options are a macOS runner or a third-party runner provider —
+# a spending decision for the maintainers, recorded on CLOUD-173, not something
+# this workflow should quietly start incurring.
+#
 # Each job runs `mise run dist <target>`, the SAME command a maintainer runs
 # locally, so the archive CI uploads is the archive you can reproduce.
 #
@@ -42,7 +56,7 @@ permissions:
 jobs:
   dist:
     name: dist (${{ matrix.target }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: write # upload assets to the release
@@ -54,26 +68,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          # macos-latest is Apple silicon, so aarch64 is the native build and
-          # x86_64 is a cross-build — both are first-class Rust targets there and
-          # need no SDK beyond the runner's own.
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: macos-latest
-            target: x86_64-apple-darwin
-          # msvc, not the gnu triple `cross-check` type-checks: gnu is what a
-          # LINUX host can check without MSVC libs, msvc is what Windows users
-          # actually want. The check target and the shipped target differ on
-          # purpose, for that reason.
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+          # The host target: no container needed, so no cross.
+          - target: x86_64-unknown-linux-gnu
+            build-tool: cargo
+          - target: aarch64-unknown-linux-gnu
+            build-tool: cross
+          # musl gives the statically linked binary §12 asks for — it runs on any
+          # Linux regardless of glibc version, which is what makes a single
+          # downloadable binary actually portable.
+          - target: x86_64-unknown-linux-musl
+            build-tool: cross
+          - target: aarch64-unknown-linux-musl
+            build-tool: cross
+          # The gnu triple, not msvc: gnu is what a Linux host can link (and what
+          # `cross-check` already type-checks), so Windows costs no 2x-billed
+          # runner. msvc would be the more native choice for Windows users, but
+          # it can only be linked on Windows — revisit if that trade stops paying.
+          - target: x86_64-pc-windows-gnu
+            build-tool: cross
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Build the tagged commit, never whatever main has drifted to since.
           ref: ${{ inputs.tag || github.event.release.tag_name }}
+          persist-credentials: false
       # cache: false — a release build must not restore a shared cache. zizmor
       # flags cache-poisoning as high severity precisely on artifact-publishing
       # workflows: a poisoned cache entry would end up inside a signed binary,
@@ -81,13 +99,21 @@ jobs:
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
         with:
           cache: false
+      - name: Install cross
+        if: matrix.build-tool == 'cross'
+        uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2
+        with:
+          tool: cross
       - name: Add the Rust target
+        if: matrix.build-tool == 'cargo'
         run: rustup target add ${{ matrix.target }}
       - name: Build and archive
         id: dist
         shell: bash
         # `dist` emits archive=/binary= KEY=VALUE lines, so the per-target
         # binary suffix is decided in one place and never re-derived here.
+        env:
+          DIST_BUILD_TOOL: ${{ matrix.build-tool }}
         run: mise run dist "${{ matrix.target }}" >>"$GITHUB_OUTPUT"
       # Attest the BINARY rather than the archive: the provenance should bind to
       # the executable a user runs, so repackaging cannot launder it (§12 — a
