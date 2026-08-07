@@ -8,11 +8,47 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
 
 fn batten() -> Command {
     Command::new(env!("CARGO_BIN_EXE_batten"))
+}
+
+/// Run `batten hook --harness <harness>` with `payload` piped to stdin.
+///
+/// The ambient bypass var is removed so a developer's shell can never flip a
+/// deny case; the `bypass` flag sets it explicitly for the case that wants it.
+fn run_hook(harness: &str, payload: &str, bypass: bool) -> Output {
+    let mut command = batten();
+    command
+        .args(["hook", "--harness", harness])
+        .env_remove("BATTEN_GH_GUARD_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if bypass {
+        command.env("BATTEN_GH_GUARD_BYPASS", "1");
+    }
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// A Claude Code `PreToolUse` payload wrapping one Bash command.
+fn claude_payload(command: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": command }
+    })
+    .to_string()
 }
 
 /// Create a fresh temp directory under the test target dir containing a
@@ -546,6 +582,68 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
         String::from_utf8_lossy(&output.stderr).contains("may not redefine"),
         "the refusal must name the redefinition"
     );
+}
+
+#[test]
+fn hook_denies_a_blocked_shape_in_the_harness_channel() {
+    // The claude-code adapter answers in the host's JSON decision object with
+    // exit 0 — the channel the production shell guards already use. The
+    // wrapper form is the load-bearing case: judging the wrapper token instead
+    // of the effective program is the bug class CLOUD-181 hardened against.
+    let output = run_hook(
+        "claude-code",
+        &claude_payload("mise exec -- gh pr merge 42"),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"permissionDecision\":\"deny\""),
+        "got: {stdout}"
+    );
+    assert!(
+        stdout.contains("mise run land"),
+        "the deny must name the redirect"
+    );
+}
+
+#[test]
+fn hook_allows_reads_and_quoted_lookalikes_silently() {
+    for command in ["gh pr view 42", "git commit -m \"gh pr merge\""] {
+        let output = run_hook("claude-code", &claude_payload(command), false);
+        assert_eq!(output.status.code(), Some(0), "command: {command}");
+        assert!(
+            output.stdout.is_empty(),
+            "an allow emits nothing: {command}"
+        );
+    }
+}
+
+#[test]
+fn hook_fails_open_on_an_undecodable_payload() {
+    // A guard must never be the reason a session cannot proceed: junk on stdin
+    // is an allow, not an error.
+    let output = run_hook("claude-code", "not json at all", false);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn hook_honours_the_bypass_hatch() {
+    let output = run_hook("claude-code", &claude_payload("gh pr merge 42"), true);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn hook_exit_code_harness_denies_with_exit_2() {
+    // The §7 inversion, at the hook layer only: under `hook` exit 2 denies,
+    // with the reason on stderr — the neutral channel for a host whose only
+    // decision vocabulary is an exit status.
+    let output = run_hook("exit-code", &claude_payload("gh pr merge 42"), false);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Refused"));
 }
 
 #[test]

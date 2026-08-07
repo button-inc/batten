@@ -84,6 +84,11 @@ fn table() -> BTreeMap<&'static str, Effect> {
         ("enforce", Effect::Unclassified),
         ("config show", Effect::Read),
         ("spec", Effect::Read),
+        // `hook` adjudicates another tool's call: its own execution only reads
+        // stdin and config, but its *decision* mediates writes, so it is listed
+        // unclassified rather than allowed to leak into the derived read-only
+        // allowlist (CLOUD-202).
+        ("hook", Effect::Unclassified),
     ])
 }
 

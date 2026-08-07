@@ -13,6 +13,7 @@ pub mod config;
 pub mod effect;
 pub mod error;
 pub mod exit;
+pub mod hook;
 pub mod identity;
 pub mod resolve;
 pub mod rules;
@@ -20,7 +21,7 @@ pub mod severity;
 pub mod spec;
 pub mod state;
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::Result;
@@ -64,6 +65,43 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Some(Command::Enforce) => run_rules(out, overrides, rules::run_all),
         Some(Command::Config { command }) => run_config(&command, overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
+        Some(Command::Hook { harness }) => run_hook(harness, out),
+    }
+}
+
+/// Adjudicate one mediated call read from stdin (CLOUD-202).
+///
+/// Fail open at every boundary — unreadable stdin, an undecodable payload, an
+/// envelope with no command all allow: a guard must never be the reason a
+/// session cannot proceed. The bypass env var is the same hatch the shell
+/// guards honour, resolved here at the boundary so the core stays pure.
+///
+/// The deny channel is per-harness: the Claude Code adapter answers in the
+/// host's JSON decision object (exit 0); the neutral exit-code adapter is the
+/// §7 inversion — exit 2 denies, with the reason on stderr via the usage-error
+/// path, which is the one sanctioned stderr boundary.
+fn run_hook(harness: hook::Harness, out: &mut dyn Write) -> Result<ExitCode> {
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        return Ok(ExitCode::Success);
+    }
+    let bypass = std::env::var_os("BATTEN_GH_GUARD_BYPASS").is_some_and(|v| !v.is_empty());
+    let Some(envelope) = hook::decode(harness, &raw) else {
+        return Ok(ExitCode::Success);
+    };
+    match hook::adjudicate(&envelope, bypass) {
+        hook::Decision::Allow => Ok(ExitCode::Success),
+        hook::Decision::Deny(reason) => match harness {
+            hook::Harness::ClaudeCode => {
+                writeln!(
+                    out,
+                    "{}",
+                    hook::encode_claude_deny(&envelope.event, &reason)?
+                )?;
+                Ok(ExitCode::Success)
+            }
+            hook::Harness::ExitCode => Err(UsageError::raise(reason)),
+        },
     }
 }
 

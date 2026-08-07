@@ -13,6 +13,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::Strictness;
+use crate::hook::Harness;
 
 /// Repo-agnostic policy engine that keeps "done" aligned with landed-and-verified work.
 #[derive(Debug, Parser)]
@@ -55,6 +56,12 @@ pub enum Command {
         /// The output format for the spec.
         #[arg(long, value_enum, default_value_t = SpecFormat::Json)]
         format: SpecFormat,
+    },
+    /// Adjudicate a mediated tool call read from stdin (under this verb, exit 2 denies).
+    Hook {
+        /// The harness whose payload to decode and whose decision channel to answer in.
+        #[arg(long, value_enum)]
+        harness: Harness,
     },
 }
 

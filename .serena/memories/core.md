@@ -38,6 +38,11 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   predicates over the repo. `run_static` (read-effect, no process spawn) backs
   `check`; `run_all` (every kind) backs `enforce`. `check` refuses a
   command-executing rule rather than silently skipping it.
+- `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
+  wrapper-lookthrough command parser, and the policy tables, ported from the
+  shell guards. Harness adapters decode/encode at the edges; the core is
+  harness-blind and fail-open, and the §7 exit-2-denies inversion lives in the
+  exit-code adapter only.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do.
