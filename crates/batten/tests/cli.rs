@@ -617,4 +617,25 @@ fn the_committed_example_config_loads_over_the_binary() {
     assert_eq!(output.status.code(), Some(0), "the example must load");
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
     assert_eq!(value["version"], 1);
+
+    // A copied example must be able to produce a finding — a template whose
+    // every rule can never fire teaches a new consumer that clean output means
+    // nothing. Same runtime-assembled marker discipline as the repo-config test.
+    let marker = format!("{} HEAD\n", "<".repeat(7));
+    fs::write(dir.join("main.rs"), marker).expect("write fixture source");
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the example's shipped rule must fire on the shape it names"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "main.rs:1 no-conflict-markers\n"
+    );
 }

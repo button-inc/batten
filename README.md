@@ -6,7 +6,9 @@ and refuses to let unlanded work appear finished — enforcing one repository's
 policy consistently at the pre-commit layer, in CI, and at an agent's tool call.
 
 > **Status:** early scaffold. The command surface is being filled in against the
-> project plan; see [Roadmap](#roadmap).
+> project plan; see [Roadmap](#roadmap). The crate is not yet published and the
+> repository is private, so there is no public install path yet — distribution
+> is a recorded, deferred decision on the project board.
 
 ## Why
 
@@ -31,8 +33,9 @@ richer per-agent behavior handled in thin shims.
   reused (the agent read-only allowlist is _derived_ from those annotations).
 - **Narrow configuration.** A two-layer TOML model — a repo file plus env and
   flag overrides — with no upward walk and no `conf.d` merge surface.
-- **Zero-config by default.** `check` works on built-in defaults; `init` is
-  opt-in; `doctor` provides `--json` and a documented exit-code table.
+- **Zero-config by default** _(planned — CLOUD-70, CLOUD-66)_: `check` on
+  built-in defaults, opt-in `init`, and a `doctor` with `--json`. Today `check`
+  requires a `batten.toml` in the working directory.
 - **Gates are computable predicates, not model judgements.**
 - **Consumer #1 is Batten itself** — its own checked-in `batten.toml` runs
   against its own repository.
@@ -49,9 +52,13 @@ individually legal steps, cross-session poisoning, or errors in its own spec.
 ## Build and test
 
 ```bash
-cargo build --workspace
-cargo test --workspace
+mise install     # the pinned toolchain — see CONTRIBUTING.md for one-time setup
+mise run ci      # the same gate CI runs
 ```
+
+Everything goes through [mise](mise.toml) tasks so local runs, git hooks, and
+CI execute byte-identical commands; [CONTRIBUTING.md](CONTRIBUTING.md) has the
+per-clone setup and the task tour.
 
 ## Exit-code contract
 
@@ -60,10 +67,10 @@ cargo test --workspace
 | `0`  | Success — check passed or nothing to report              |
 | `1`  | Policy violation (the invocation itself was well-formed) |
 | `2`  | Usage error (bad flags, unreadable config)               |
-| `70` | Internal error — Batten could not complete the check     |
+| `3`  | Internal error — Batten could not complete the check     |
 
-The `hook` subcommand deliberately inverts part of this contract so that exit
-`2` **denies** a mediated tool call.
+The planned `hook` subcommand (CLOUD-40) deliberately inverts part of this
+contract so that exit `2` **denies** a mediated tool call.
 
 ## Roadmap
 

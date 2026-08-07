@@ -38,9 +38,10 @@ mise tasks       # list them all
 ```
 
 The `hk` pre-commit hook runs the same tasks, and the commit-msg hook enforces
-Conventional Commits. CI runs on Linux only; cross-platform compilation is
-covered by `mise run cross-check` (`cargo check` for macOS/Windows targets — no
-macOS runner needed). Please run `mise run ci` locally before opening a PR.
+Conventional Commits. CI runs on Linux only; cross-platform coverage splits in
+two: `mise run cross-check` type-checks the Windows target, and `mise run
+darwin-link` really links the macOS targets (zig, no macOS runner needed).
+Please run `mise run ci` locally before opening a PR.
 
 ## Commits and pull requests
 

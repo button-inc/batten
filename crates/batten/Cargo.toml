@@ -10,7 +10,7 @@ homepage.workspace = true
 authors.workspace = true
 readme = "../../README.md"
 categories = ["command-line-utilities", "development-tools"]
-keywords = ["policy", "ci", "git", "hooks", "agents"]
+keywords = ["policy", "ci"]
 
 [[bin]]
 name = "batten"

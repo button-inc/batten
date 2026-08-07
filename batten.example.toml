@@ -23,6 +23,20 @@ min_batten_version = "0.0.0"
 #                             but never redefine one declared here)
 #
 # Anything that would lower strictness — or redefine a committed rule — is
-# refused with exit 2 rather than applied. Run `batten config show` to see the
-# effective config and which layer set each key.
+# refused with exit 2 rather than applied. The value committed here is also the
+# floor: an override naming a level below it (or below the "standard" default
+# when this key is absent) is refused, so "permissive" only takes effect when
+# this file itself declares it. Run `batten config show` to see the effective
+# config and which layer set each key.
 strictness = "standard"
+
+# Rules are the output-producing half of the config: glob-selected, kind-typed
+# predicates over the repository, evaluated by `batten check`. A `forbid` rule
+# fails on any line containing its literal pattern, reported pointer-only as
+# `path:line rule-id`, exit 1. This one ships live so a copied config detects
+# something real on day one: a conflict marker that survived a botched merge.
+[[rule]]
+id = "no-conflict-markers"
+kind = "forbid"
+glob = "**/*.rs"
+pattern = "<<<<<<< "
