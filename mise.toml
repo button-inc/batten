@@ -210,7 +210,11 @@ echo "ci-wait: polling check-runs for $sha every ${interval}s"
 while :; do
   runs=$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --paginate \
            --jq '.check_runs[] | "\(.status)\t\(.conclusion // "-")\t\(.name)"') || runs=""
-  if [ -n "$runs" ] && ! printf '%s\n' "$runs" | awk -F'\t' '$1!="completed"{found=1} END{exit !found}'; then
+  # A check set that is entirely `skipped` is not green: it is the draft-era
+  # runs, or the real ones not yet registered. Require at least one success
+  # before treating the set as an answer, and keep polling otherwise.
+  graded=$(printf '%s\n' "$runs" | awk -F'\t' '$2=="success"||$2=="failure"||$2=="timed_out"||$2=="cancelled"||$2=="action_required"' | wc -l)
+  if [ -n "$runs" ] && [ "$graded" -gt 0 ] && ! printf '%s\n' "$runs" | awk -F'\t' '$1!="completed"{found=1} END{exit !found}'; then
     printf '%s\n' "$runs" | awk -F'\t' '{print $2"\t"$3}' | sort -u
     if printf '%s\n' "$runs" | awk -F'\t' '$2!="success"&&$2!="neutral"&&$2!="skipped"{found=1} END{exit !found}'; then
       echo "::error:: CI is not green on $sha — reproduce and fix locally (see AGENTS.md)." >&2
