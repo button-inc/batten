@@ -51,7 +51,10 @@ while IFS= read -r seg; do
 		esac
 		j=$((j + 1))
 	done
-done < <(printf '%s' "$scrubbed" | sed -E 's/(\&\&|\|\||[;|&])/\n/g')
+	# printf '%s\n', not '%s': without the trailing newline `read` returns false on
+	# the final segment and the loop body never runs for it — for a single-segment
+	# command that means the whole guard silently allows everything.
+done < <(printf '%s\n' "$scrubbed" | sed -E 's/(\&\&|\|\||[;|&])/\n/g')
 
 [ "$is_ready" = 1 ] || exit 0
 
