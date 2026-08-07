@@ -30,3 +30,7 @@ crates/batten/
   src/exit.rs   the exit-code contract
   tests/cli.rs  end-to-end tests over the compiled binary
 ```
+
+This tree is the scaffold-era skeleton; the crate has grown past it. The full
+per-module map — every `src/*.rs` file, what it owns, and where its rationale
+doc comment lives — is `mem:core`, which is kept current instead of this tree.
