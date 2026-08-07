@@ -72,3 +72,10 @@ setup() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"usage: mise run dist"* ]]
 }
+
+@test "an unknown build tool is refused before anything is compiled" {
+	cd "${BATS_TEST_DIRNAME}/.." || return 1
+	DIST_BUILD_TOOL=bogus run "$DIST" x86_64-unknown-linux-gnu
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"must be cargo, cross, or zigbuild"* ]]
+}

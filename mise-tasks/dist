@@ -19,12 +19,20 @@ set -euo pipefail
 readonly BIN=batten
 readonly OUT_DIR=dist
 
-# cargo or cross (cross-rs). `cross` runs the build in a per-target Docker image
-# that already carries that target's linker and sysroot, which is what makes a
-# LINUX host able to produce aarch64 and musl and Windows binaries without a
-# native runner for each. `rustup target add` alone only installs the standard
-# library — the linker is the part that actually blocks a cross-build, which is
-# why this indirection exists at all.
+# How to invoke the compiler for a target: cargo, cross, or zigbuild.
+#
+# `rustup target add` installs only the standard library; the LINKER is what
+# actually blocks a cross-build, so each non-native target needs one supplied:
+#
+#   cargo     the host target — the system linker already works.
+#   cross     (cross-rs) builds inside a per-target container carrying that
+#             target's linker and sysroot. Used for the other Linux targets and
+#             for Windows.
+#   zigbuild  (cargo-zigbuild) uses zig as the linker. zig ships the Darwin
+#             linker support, so a LINUX host can emit a Mach-O binary with no
+#             Apple SDK and no macOS runner — and zig writes the ad-hoc code
+#             signature that Apple Silicon requires before it will exec an
+#             arm64 binary at all.
 BUILD_TOOL="${DIST_BUILD_TOOL:-cargo}"
 
 usage() {
@@ -98,13 +106,14 @@ main() {
 	# lockfile pins; a release that silently floated a dependency is not the
 	# artifact CI tested.
 	case "$BUILD_TOOL" in
-	cargo | cross) ;;
+	# cargo-zigbuild replaces the `build` verb rather than wrapping it.
+	zigbuild) cargo zigbuild --locked --profile dist --target "$target" --bin "$BIN" >&2 ;;
+	cargo | cross) "$BUILD_TOOL" build --locked --profile dist --target "$target" --bin "$BIN" >&2 ;;
 	*)
-		echo "dist: DIST_BUILD_TOOL must be cargo or cross, got '${BUILD_TOOL}'" >&2
+		echo "dist: DIST_BUILD_TOOL must be cargo, cross, or zigbuild, got '${BUILD_TOOL}'" >&2
 		return 1
 		;;
 	esac
-	"$BUILD_TOOL" build --locked --profile dist --target "$target" --bin "$BIN" >&2
 
 	local built="target/${target}/dist/${bin_name}"
 	if [ ! -f "$built" ]; then

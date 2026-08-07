@@ -9,19 +9,23 @@ name: release-artifacts
 # runnable. This workflow is what makes a release installable, which is what
 # dogfooding Batten as consumer #1 requires (house-style §12).
 #
-# EVERY LEG RUNS ON ubuntu-latest, deliberately. GitHub bills macOS runners at
-# 10x and Windows at 2x on a private repo; this workflow uses neither. Non-native
-# targets are built with `cross` (cross-rs), which runs the compile inside a
-# per-target Docker image that already carries that target's linker and sysroot.
-# `rustup target add` alone installs only the standard library — the linker is
-# what actually blocks a cross-build, which is the whole reason cross exists.
+# EVERY LEG RUNS ON ubuntu-latest, deliberately — macOS included. GitHub bills
+# macOS runners at 10x and Windows at 2x on a private repo; this workflow uses
+# neither. `rustup target add` installs only the standard library, so each
+# non-native target needs a LINKER supplied, which is what the two wrappers do:
 #
-# NO macOS ARTIFACT IS PRODUCED, and that is a known gap, not an oversight.
-# Darwin is the one target no container can supply: linking it needs Apple's SDK,
-# which is not redistributable, so there is no Linux-hosted path to a macOS
-# binary. The only options are a macOS runner or a third-party runner provider —
-# a spending decision for the maintainers, recorded on CLOUD-173, not something
-# this workflow should quietly start incurring.
+#   cross     builds inside a per-target container carrying that target's
+#             linker and sysroot (the other Linux targets, and Windows).
+#   zigbuild  uses zig as the linker. zig carries Darwin linker support, so a
+#             Linux host emits a real Mach-O with no Apple SDK involved — and
+#             writes the ad-hoc code signature Apple Silicon requires before it
+#             will exec an arm64 binary at all.
+#
+# Verified on this repo before adopting: both Darwin targets link from Linux and
+# produce `Mach-O 64-bit arm64/x86_64 executable` carrying LC_CODE_SIGNATURE.
+# The caveat to watch is dependency drift — a crate that links a system framework
+# (CoreFoundation, Security) would need SDKROOT and a real macOS SDK, which is
+# where the Apple licensing question returns. Nothing in the tree does today.
 #
 # Each job runs `mise run dist <target>`, the SAME command a maintainer runs
 # locally, so the archive CI uploads is the archive you can reproduce.
@@ -86,6 +90,11 @@ jobs:
           # it can only be linked on Windows — revisit if that trade stops paying.
           - target: x86_64-pc-windows-gnu
             build-tool: cross
+          # Darwin via zig. No macOS runner, no Apple SDK.
+          - target: aarch64-apple-darwin
+            build-tool: zigbuild
+          - target: x86_64-apple-darwin
+            build-tool: zigbuild
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -104,8 +113,17 @@ jobs:
         uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2
         with:
           tool: cross
+      # Prebuilt, so cargo-zigbuild's own MSRV (newer than the toolchain this
+      # repo pins) never constrains the build.
+      - name: Install zig and cargo-zigbuild
+        if: matrix.build-tool == 'zigbuild'
+        uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2
+        with:
+          tool: zig,cargo-zigbuild
+      # cross supplies its target's std inside the container; the other two link
+      # against a rustup-installed one on the host.
       - name: Add the Rust target
-        if: matrix.build-tool == 'cargo'
+        if: matrix.build-tool != 'cross'
         run: rustup target add ${{ matrix.target }}
       - name: Build and archive
         id: dist
