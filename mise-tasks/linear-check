@@ -23,12 +23,28 @@
 # a broken precondition is worse than no gate, so the fetch now fails closed.
 set -euo pipefail
 
-if ! git fetch -q origin main; then
+# `git fetch origin main` is not enough, and it fails in the direction the
+# fail-closed check above cannot see: in a single-branch clone it exits 0 while
+# updating no remote-tracking ref at all. Measured on a fresh `git clone --depth
+# 1`: fetch exits 0, `git rev-parse origin/main` exits 128. The clone configures
+# a fetch refspec covering only its own branch, so `main` is never written; a
+# shallow clone additionally rejects the update ("shallow roots are not allowed
+# to be updated"). Depth is not the cause — `--depth 1 --no-single-branch` has
+# `origin/main`. Deepen first, then name the refspec explicitly so the ref every
+# line below reads is the one just fetched.
+if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+	git fetch -q --no-tags --unshallow origin 2>/dev/null ||
+		git fetch -q --no-tags --deepen=1000 origin 2>/dev/null || true
+fi
+if ! git fetch -q --no-tags origin "+refs/heads/main:refs/remotes/origin/main"; then
 	echo "::error:: could not fetch origin/main, so linearity is unverifiable. Refusing to pass on a stale ref — re-run when the network is back." >&2
 	exit 1
 fi
 
-main=$(git rev-parse origin/main)
+if ! main=$(git rev-parse origin/main 2>/dev/null); then
+	echo "::error:: fetched, but origin/main still does not resolve. That is a checkout problem, not a rebase problem — do not read it as 'not rebased'." >&2
+	exit 1
+fi
 if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
 	echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
 	exit 1

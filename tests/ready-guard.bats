@@ -6,8 +6,11 @@
 #
 # Every case runs in a scratch repository built here, never in the working
 # clone. The first version read the clone's own HEAD and `origin/main`, which
-# passed locally and failed in CI, where a fresh checkout has no `origin/main`
-# ref at all — an environment-dependent test proves nothing about the guard.
+# passed locally and failed in CI. The cause is single-branch cloning, not
+# shallowness or sparseness: `git clone --depth 1` has no `origin/main`, while
+# `--depth 1 --no-single-branch` does, because the configured fetch refspec
+# covers only the cloned branch. An environment-dependent test proves nothing
+# about the guard.
 
 setup() {
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/ready-guard"
@@ -70,8 +73,9 @@ receipts() {
 }
 
 @test "fails open where there is no origin/main ref" {
-	# A fresh CI checkout has no such ref. The guard is a local pre-flight, so it
-	# must not deny in an environment it cannot evaluate.
+	# A single-branch checkout has no such ref. The guard is a local pre-flight,
+	# so it must not deny in an environment it cannot evaluate — `linear-check`
+	# is what resolves main there, and it is one of the things being demanded.
 	receipts
 	git update-ref -d refs/remotes/origin/main
 	run ready

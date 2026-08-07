@@ -19,7 +19,10 @@ CI, hk, and your shell run byte-identical commands. Per clone: `mise install`,
 
 ## The lifecycle tasks
 
-`mise run linear-check` (is HEAD fast-forwardable?), `ci-wait` (block until every
+`mise run linear-check` (is HEAD fast-forwardable? — it fetches with an explicit
+`+refs/heads/main:refs/remotes/origin/main` refspec and deepens a shallow clone
+first, because a single-branch clone's configured refspec covers only its own
+branch and `git fetch origin main` would silently update nothing), `ci-wait` (block until every
 check-run is terminal), `land` (comment `/fast-forward`, block until merged or
 refused; depends on `ci-wait`, so a red PR cannot be landed). Background
 `ci-wait` and `land`.
