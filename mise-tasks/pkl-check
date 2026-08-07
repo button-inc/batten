@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 #MISE description="Evaluate the .pkl files given as arguments, so a malformed hk.pkl fails at check time rather than when a hook tries to run"
 #
-# Wraps `pkl eval` for one reason: pkl runs on the JVM, which reads its own trust
-# store and not the system one. Behind the egress proxy in the Claude Code web
-# sandbox that means every `amends "package://github.com/..."` fails the SSL
-# handshake ("unable to find valid certification path"), which looks like a
-# broken config file rather than a missing CA. Pass the proxy's bundle when it is
-# present; off-sandbox and in CI there is none and this is a plain `pkl eval`.
+# Wraps `pkl eval` for one reason: pkl ships a built-in CA certificate bundle and
+# does not consult the system trust store, so installing a CA system-wide has no
+# effect on it — `--ca-certificates` is the only way in, and it *replaces* the
+# built-in set rather than adding to it. Behind a TLS-intercepting egress proxy
+# (the Claude Code web sandbox), every `amends "package://..."` therefore fails
+# the handshake with "unable to find valid certification path", which reads as a
+# broken config file rather than a missing CA. Pass the proxy's bundle when one
+# is present; off-sandbox and in CI there is none and this is a plain `pkl eval`.
+#
+# `pkl --version` reports `native`: these are GraalVM native-image builds, and the
+# bundled truststore is baked in at build time.
 set -euo pipefail
 
 ca_args=()
