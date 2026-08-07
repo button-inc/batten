@@ -64,6 +64,17 @@ That's a rule, so it ships with mechanisms — three `PreToolUse` hooks wired in
   references on rename. Bypass: `BATTEN_MEMORY_GUARD_BYPASS=1`.
 - `context-budget` gates AGENTS.md plus anything always-loaded against a token
   budget — what every agent pays every turn.
+- `issue-guard` denies `gh pr create` and `gh pr ready` unless the work names a
+  `CLOUD-<n>` issue — in the branch, in a commit on it, or in the command. The
+  board rule was prose, and prose is feedforward only: a session followed every
+  gated discipline and skipped every ungated one, landing three PRs with no
+  issue moved and an existing issue (carrying measurements that contradicted the
+  fix) never read. You cannot name an issue you have not looked up, so the gate
+  that blocks landing is what forces the search. It does NOT gate whether
+  outstanding items reach the issue — not computable over any artifact the repo
+  can see; the compensating control is that a durable home now always exists.
+  Bypass: `BATTEN_ISSUE_GUARD_BYPASS=1`, for a PR that genuinely precedes its
+  issue.
 - `ready-guard` denies `gh pr ready` unless `verify` and `linear-check` have both
   passed against this exact HEAD. Each writes a receipt under
   `.git/batten-receipts/` keyed to the commit it validated, and linear-check's

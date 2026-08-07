@@ -12,6 +12,10 @@
           {
             "type": "command",
             "command": "mise run ready-guard"
+          },
+          {
+            "type": "command",
+            "command": "mise run issue-guard"
           }
         ]
       },
