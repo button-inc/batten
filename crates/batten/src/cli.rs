@@ -16,7 +16,10 @@ use crate::config::Strictness;
 
 /// Repo-agnostic policy engine that keeps "done" aligned with landed-and-verified work.
 #[derive(Debug, Parser)]
-#[command(name = "batten", version, about, long_about = None)]
+// arg_required_else_help: a bare invocation lists the subcommands and never
+// performs a default action (§2). clap renders the listing on its error path
+// (stderr, exit 2), so stdout stays the answer channel.
+#[command(name = "batten", version, about, long_about = None, arg_required_else_help = true)]
 pub struct Cli {
     /// Raise how strictly gates apply (an override may only tighten policy).
     ///

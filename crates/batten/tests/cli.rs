@@ -54,10 +54,10 @@ fn exit_code_contract() {
 
     let cases = [
         Case {
-            name: "no subcommand → success",
+            name: "no subcommand → usage (subcommand listing offered)",
             args: &[],
             config: None,
-            expected: 0,
+            expected: 2,
         },
         Case {
             name: "spec → success",
@@ -545,6 +545,23 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("may not redefine"),
         "the refusal must name the redefinition"
+    );
+}
+
+#[test]
+fn bare_invocation_lists_subcommands() {
+    // §2: bare invocation lists subcommands and never performs a default
+    // action. clap renders the listing on its error path — stderr, exit 2 —
+    // so a script can never mistake the listing for a successful run's answer.
+    let output = batten().output().expect("run batten");
+    assert_eq!(output.status.code(), Some(2));
+    let listing = String::from_utf8_lossy(&output.stderr);
+    for verb in ["check", "enforce", "config", "spec"] {
+        assert!(listing.contains(verb), "the listing must name `{verb}`");
+    }
+    assert!(
+        output.stdout.is_empty(),
+        "stdout is the answer channel; a bare invocation has no answer"
     );
 }
 

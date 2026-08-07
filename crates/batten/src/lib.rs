@@ -56,7 +56,9 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     // resolves through it, so a flag can never apply to one verb and not another.
     let overrides = Overrides { strictness };
     match command {
-        // With no subcommand, clap's default help has already been offered.
+        // Unreachable in practice: `arg_required_else_help` has clap offer the
+        // subcommand listing (exit 2) before parse returns. Kept total — the
+        // workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
         Some(Command::Check) => run_rules(out, overrides, rules::run_static),
         Some(Command::Enforce) => run_rules(out, overrides, rules::run_all),
