@@ -1,26 +1,36 @@
 #!/usr/bin/env bash
 #MISE description="Evaluate the .pkl files given as arguments, so a malformed hk.pkl fails at check time rather than when a hook tries to run"
 #
-# Wraps `pkl eval` for one reason: pkl ships a built-in CA certificate bundle and
-# does not consult the system trust store, so installing a CA system-wide has no
-# effect on it — `--ca-certificates` is the only way in, and it *replaces* the
-# built-in set rather than adding to it. Behind a TLS-intercepting egress proxy
-# (the Claude Code web sandbox), every `amends "package://..."` therefore fails
-# the handshake with "unable to find valid certification path", which reads as a
-# broken config file rather than a missing CA. Pass the proxy's bundle when one
-# is present; off-sandbox and in CI there is none and this is a plain `pkl eval`.
+# Wraps `pkl eval` for one reason, and only on a cold cache: resolving an
+# `amends "package://..."` is a network fetch, and pkl carries its own CA bundle
+# rather than consulting the system trust store. Behind the TLS-intercepting
+# egress proxy the handshake fails with "unable to find valid certification path"
+# — which reads as a broken config file rather than a proxy problem. Once the
+# package is in ~/.pkl/cache there is no request at all, which is why the failure
+# looks intermittent.
 #
-# `pkl --version` reports `native`: these are GraalVM native-image builds, and the
-# bundled truststore is baked in at build time.
-set -euo pipefail
+# Measured here, deleting ~/.pkl/cache before EVERY run (a warm cache silently
+# turns the next command into a no-op that looks like a pass — the first pass of
+# this measurement got exactly that wrong):
+#
+#   pkl eval                                  -> SSL handshake failure
+#   SSL_CERT_FILE=<bundle> pkl eval           -> same failure; pkl ignores it
+#   pkl eval --http-no-proxy github.com       -> same failure; no direct route out
+#   pkl eval --ca-certificates <bundle>       -> OK
+#
+# So the CA flag is the only route, not a preference. Note it *replaces* pkl's
+# built-in trust bundle rather than adding to it, so it is passed only when a
+# bundle is actually present: off-sandbox and in CI there is none, and this is a
+# plain `pkl eval` against pkl's own roots.
+set -uo pipefail
 
-ca_args=()
 for ca in "${SSL_CERT_FILE:-}" /root/.ccr/ca-bundle.crt; do
 	if [ -n "$ca" ] && [ -f "$ca" ]; then
-		ca_args=(--ca-certificates "$ca")
-		break
+		pkl eval --ca-certificates "$ca" "$@" >/dev/null
+		echo "pkl-check: $# file(s) evaluate cleanly (trusting $ca)"
+		exit 0
 	fi
 done
 
-pkl eval "${ca_args[@]}" "$@" >/dev/null
+pkl eval "$@" >/dev/null
 echo "pkl-check: $# file(s) evaluate cleanly"
