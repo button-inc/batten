@@ -121,6 +121,37 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
+@test "a closed blocker in Linear's rendered-mention form is exempt" {
+	# Linear stores mentions as <issue …>CLOUD-N</issue>, so the (closed)
+	# exemption must survive the markup between the id and the marker — an
+	# exemption that only matches plain-text fixtures is dead code in production.
+	local d
+	d=$(block '* **Blockers (§8).** `blockedBy` <issue id="abc" href="https://linear.app/x/issue/CLOUD-21/slug">CLOUD-21</issue> (closed).')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a rendered-mention blockedBy claim without a relation is still flagged" {
+	# Stripping mention markup must not hide true positives.
+	local d
+	d=$(block '* **Blockers (§8).** `blockedBy` <issue id="abc" href="https://linear.app/x/issue/CLOUD-29/slug">CLOUD-29</issue> (loader).')
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"blocker-cited-without-relation (CLOUD-29)"* ]]
+}
+
+@test "a cross-reference after the claim sentence is not a claim" {
+	# The claim span is one sentence; a trailing parenthetical cross-reference
+	# asserts nothing about blocking.
+	local d
+	d=$(block '* **Blockers (§8).** `blockedBy` CLOUD-29 (loader). Grows in coverage as the tree fills (CLOUD-27).')
+	payload "$d" CLOUD-29
+	lint
+	[ "$status" -eq 0 ]
+}
+
 @test "a bump disagreeing with its commit type is reported" {
 	local d
 	d=$(block '* **Commit / bump (§6).** `feat` → **patch**.')

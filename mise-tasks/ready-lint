@@ -138,7 +138,17 @@ fi
 # blocks/relatedTo token or the line's end.
 BLOCKERS_LABEL='Blockers \((§|clause )8\)'
 if blockers_line=$(grep -iE "$BLOCKERS_LABEL" <<<"$block" | head -n1); then
-	claim=$(grep -oiE 'blockedBy.*' <<<"$blockers_line" | head -n1 || true)
+	# See the text a human sees. Linear serialises an issue mention as
+	# <issue id="…" href="…">CLOUD-N</issue>, so patterns written against the
+	# rendered form — "CLOUD-N (closed)" — never match the stored form, and an
+	# exemption tested only on plain-text fixtures is dead code in production.
+	# Stripping the markup first makes the rendered and stored forms one case.
+	blockers_text=$(sed -E 's|</?issue[^>]*>||g' <<<"$blockers_line")
+	claim=$(grep -oiE 'blockedBy.*' <<<"$blockers_text" | head -n1 || true)
+	# A claim is one sentence. The §8 bullet legitimately carries trailing
+	# cross-references — "Grows in coverage as the tree fills (CLOUD-N)" — that
+	# assert nothing about blocking, so the claim span ends at the sentence.
+	claim="${claim%%. *}"
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 	claim=$(sed -E 's/`?[Bb]locks`?[^A-Za-z].*//; s/`?[Rr]elatedTo`?.*//' <<<"$claim")
 	# No blockedBy token — "None.", "no blockers", or pure cross-references —
