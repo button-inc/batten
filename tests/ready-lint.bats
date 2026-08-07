@@ -90,6 +90,37 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
+@test "a relatedTo mention on the §8 line is not a claim" {
+	# Correct prose cross-references the other relation directions; only ids
+	# after the blockedBy token are held against the board. Flagging a
+	# relatedTo mention would punish exactly the precision §8 asks for.
+	local d
+	d=$(block '* **Blockers (§8).** `blockedBy` CLOUD-29 (loader). `relatedTo` CLOUD-37 — the two share a representation but neither strictly blocks the other.')
+	payload "$d" CLOUD-29
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a house-style (§6) cross-reference is not the commit clause" {
+	# The §N namespace is overloaded: Ready blocks cite house-style sections as
+	# bare (§6)/(§7). Only the "Commit / bump (§6)" label is the clause.
+	local d
+	d=$(block '* Output is byte-stable and records the promoted disposition (§6).')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "§6 none is an explicit, valid no-commit declaration" {
+	# A Linear-only or board-side change lands no commit; demanding a type
+	# there would force a lie into the block.
+	local d
+	d=$(block '* **Commit / bump (§6).** none — Linear-only, no code change, no semver bump.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
 @test "a bump disagreeing with its commit type is reported" {
 	local d
 	d=$(block '* **Commit / bump (§6).** `feat` → **patch**.')

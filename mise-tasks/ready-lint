@@ -85,14 +85,24 @@ fi
 
 # --- §6 commit type and bump must agree --------------------------------------
 #
+# Anchored on the LABEL + tag pair, never on a bare "(§6)": the §N namespace is
+# overloaded — Ready blocks also cite house-style sections as "(§6)"/"per §8",
+# where §6 means the output contract, not this clause. Only a line carrying the
+# "Commit / bump (§6)" label is the clause; a bare (§6) in prose is a
+# cross-reference and none of this gate's business.
+#
 # The type set is not restated here: CONVENTIONAL_RE is exported by mise.toml
 # [env] and is already shared by the commit-msg hook and the CI commit linter.
 # One definition, three consumers.
-if bump_line=$(grep -iE '\(§6\)|\(clause 6\)' <<<"$block" | head -n1); then
+BUMP_LABEL='Commit / bump \((§|clause )6\)'
+if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 	type=$(grep -oiE '`(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)`?!?' <<<"$bump_line" | head -n1 | tr -d '`!' | tr '[:upper:]' '[:lower:]' || true)
 	breaking=$(grep -cE '!|BREAKING CHANGE' <<<"$bump_line" || true)
-	declared=$(grep -oiE 'major|minor|patch|no bump' <<<"$bump_line" | head -n1 | tr '[:upper:]' '[:lower:]' || true)
+	# "none" is a valid explicit answer — a Linear-only or repo-config change
+	# lands no commit at all, and demanding a type there would force a lie.
+	declared=$(grep -oiE 'major|minor|patch|no bump|none' <<<"$bump_line" | head -n1 | tr '[:upper:]' '[:lower:]' || true)
+	[ "$declared" = "none" ] && declared="no bump"
 
 	case "$type" in
 	feat) expected="minor" ;;
@@ -103,9 +113,12 @@ if bump_line=$(grep -iE '\(§6\)|\(clause 6\)' <<<"$block" | head -n1); then
 	[ "$breaking" != 0 ] && expected="major"
 
 	if [ -z "$type" ]; then
-		report "$(line_of '\(§6\)|\(clause 6\)')" "commit-type-missing"
+		# An explicit no-commit declaration needs no type; silence does.
+		if [ "$declared" != "no bump" ]; then
+			report "$(line_of "$BUMP_LABEL")" "commit-type-missing"
+		fi
 	elif [ -n "$declared" ] && [ "$declared" != "$expected" ]; then
-		report "$(line_of '\(§6\)|\(clause 6\)')" "bump-disagrees-with-type (${type} implies ${expected})"
+		report "$(line_of "$BUMP_LABEL")" "bump-disagrees-with-type (${type} implies ${expected})"
 	fi
 fi
 
@@ -113,25 +126,33 @@ fi
 #
 # The highest-value rule here, and the only one prose cannot fake. Clause 8 says
 # a dependency must be an explicit `blockedBy` relation "so refinement can
-# proceed without silently pre-deciding the blocker". A block citing CLOUD-N in
-# its §8 bullet while carrying no such relation is asserting a dependency the
-# board does not know about — which is exactly the failure the clause names.
-if blockers_line=$(grep -iE '\*\*Blockers \(§8\)|\*\*Blockers \(clause 8\)' <<<"$block" | head -n1); then
-	# "None"/"no blockers" is a valid, explicit answer — don't hunt for ids in it.
-	if ! grep -qiE '\bnone\b|no blockers' <<<"$blockers_line"; then
-		# `blocks` citations are the opposite direction and carry no obligation
-		# here, so only the text up to any "blocks" clause is scanned.
-		claim=${blockers_line%%\`blocks\`*}
-		for cited in $(grep -oE 'CLOUD-[0-9]+[^.]*' <<<"$claim" | grep -oE 'CLOUD-[0-9]+|\(closed\)' | tr '\n' ' ' | sed 's/CLOUD-\([0-9]*\) (closed)/ /g' | grep -oE 'CLOUD-[0-9]+' | sort -u); do
-			# A blocker explicitly noted as closed is history, not a live claim:
-			# Linear drops the relation when the dependency resolves, so demanding
-			# one would fail every correctly-refined issue whose blocker landed.
-			case " $relations " in
-			*" $cited "*) ;;
-			*) report "$(line_of '\*\*Blockers \(§8\)|\*\*Blockers \(clause 8\)')" "blocker-cited-without-relation ($cited)" ;;
-			esac
-		done
-	fi
+# proceed without silently pre-deciding the blocker". A block CLAIMING blockedBy
+# CLOUD-N while carrying no such relation is asserting a dependency the board
+# does not know about — which is exactly the failure the clause names.
+#
+# Claims, not mentions. A well-formed §8 bullet also cross-references the other
+# relation directions — "`relatedTo` CLOUD-37 — the two share a representation
+# but neither strictly blocks the other" is CORRECT prose whose board relation
+# is relatedTo, and flagging it would punish precision. So only ids in the span
+# after the first blockedBy token are claims, and the span ends at a
+# blocks/relatedTo token or the line's end.
+BLOCKERS_LABEL='Blockers \((§|clause )8\)'
+if blockers_line=$(grep -iE "$BLOCKERS_LABEL" <<<"$block" | head -n1); then
+	claim=$(grep -oiE 'blockedBy.*' <<<"$blockers_line" | head -n1 || true)
+	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+	claim=$(sed -E 's/`?[Bb]locks`?[^A-Za-z].*//; s/`?[Rr]elatedTo`?.*//' <<<"$claim")
+	# No blockedBy token — "None.", "no blockers", or pure cross-references —
+	# means nothing is claimed, so there is nothing to hold the board to.
+	# shellcheck disable=SC2013  # word-splitting is the point: ids are bare tokens
+	for cited in $(sed -E 's/CLOUD-[0-9]+ \(closed\)//g' <<<"$claim" | grep -oE 'CLOUD-[0-9]+' | sort -u); do
+		# A blocker explicitly noted as closed is history, not a live claim:
+		# Linear drops the relation when the dependency resolves, so demanding
+		# one would fail every correctly-refined issue whose blocker landed.
+		case " $relations " in
+		*" $cited "*) ;;
+		*) report "$(line_of "$BLOCKERS_LABEL")" "blocker-cited-without-relation ($cited)" ;;
+		esac
+	done
 fi
 
 if [ "$violations" -ne 0 ]; then
