@@ -12,6 +12,7 @@
 //   hk install
 // is run once (see CONTRIBUTING.md). hk stores the hooks in .git/hooks.
 amends "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Config.pkl"
+
 import "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Builtins.pkl"
 
 // The gate, defined once and shared by two hooks:
@@ -26,75 +27,106 @@ import "package://github.com/jdx/hk/releases/download/v1.54.0/hk@1.54.0#/Builtin
 // while oversubscribing the CPU. Each step also reads the formatted, then
 // linted, tree.
 local gate = new Mapping<String, Step> {
-    // --- repo-specific gates (no upstream builtin exists) ---------------------
+  // --- repo-specific gates (no upstream builtin exists) ---------------------
 
-    // Enforces the "revisit hk config" reminder as a runnable gate, not prose:
-    // fails if hk's pinned version drifts between mise.toml and this file's
-    // `amends` URL. Fires on any change to either file — which includes every
-    // hk version bump, the moment to re-check this config (see AGENTS.md).
-    ["hk-version"] {
-        glob = List("hk.pkl", "mise.toml")
-        check = "mise run hk-version"
-    }
-    // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
-    // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
-    // tracked. Research deliverables and evidence notes attach to the Linear
-    // issue; the repo carries code and its close-in config, not research prose.
-    ["no-docs-tree"] {
-        check = "mise run no-docs-tree"
-    }
+  // Enforces the "revisit hk config" reminder as a runnable gate, not prose:
+  // fails if hk's pinned version drifts between mise.toml and this file's
+  // `amends` URL. Fires on any change to either file — which includes every
+  // hk version bump, the moment to re-check this config (see AGENTS.md).
+  ["hk-version"] {
+    glob = List("hk.pkl", "mise.toml")
+    check = "mise run hk-version"
+  }
+  // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
+  // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
+  // tracked. Research deliverables and evidence notes attach to the Linear
+  // issue; the repo carries code and its close-in config, not research prose.
+  ["no-docs-tree"] {
+    check = "mise run no-docs-tree"
+  }
 
-    // --- shell: the mise-tasks/ programs and the bats suite -------------------
+  // --- shell: the mise-tasks/ programs and the bats suite -------------------
 
-    // The builtins match on shebang as well as extension, which is what the
-    // extensionless `mise-tasks/*` programs need — a hand-written glob would
-    // have to enumerate them.
-    ["shfmt"] = (Builtins.shfmt) {
-        check_first = true
-    }
-    ["shellcheck"] = (Builtins.shellcheck) {
-        depends = List("shfmt")
-        // Upstream runs shellcheck at its default severity; this repo treats
-        // style-level findings as failures, the same posture as clippy's
-        // -D warnings.
-        check = "shellcheck --severity=style --external-sources {{files}}"
-    }
-    // The shell programs' test suite (bats), the counterpart to `test` for Rust.
-    // The gh guard ships with its gate this way: the policy table must block
-    // exactly the hand-rolled shapes and nothing else (non-negotiable 2).
-    ["test:bats"] {
-        depends = List("shellcheck")
-        glob = List("mise-tasks/*", "tests/*.bats")
-        check = "mise run test:bats"
-    }
+  // The builtins match on shebang as well as extension, which is what the
+  // extensionless `mise-tasks/*` programs need — a hand-written glob would
+  // have to enumerate them.
+  ["shfmt"] = (Builtins.shfmt) {
+    check_first = true
+  }
+  ["shellcheck"] = (Builtins.shellcheck) {
+    depends = List("shfmt")
+    // Upstream runs shellcheck at its default severity; this repo treats
+    // style-level findings as failures, the same posture as clippy's
+    // -D warnings.
+    check = "shellcheck --severity=style --external-sources {{files}}"
+  }
+  // The shell programs' test suite (bats), the counterpart to `test` for Rust.
+  // The gh guard ships with its gate this way: the policy table must block
+  // exactly the hand-rolled shapes and nothing else (non-negotiable 2).
+  ["test:bats"] {
+    depends = List("shellcheck")
+    glob = List("mise-tasks/*", "tests/*.bats")
+    check = "mise run test:bats"
+  }
 
-    // --- workflows ------------------------------------------------------------
+  // --- config formats ----------------------------------------------------
 
-    // actionlint catches workflow *mistakes* (bad `on:` keys, undefined matrix
-    // refs, shellcheck over `run:` blocks); zizmor, run separately in `verify`
-    // and CI, catches workflow *security* problems. They do not overlap.
-    ["actionlint"] = Builtins.actionlint
+  // mise.toml is the most-edited file in the repo and had no formatter, so
+  // hand edits drifted in spacing and key order. taplo lints it (duplicate
+  // keys, bad syntax) and formats it.
+  ["taplo"] = Builtins.taplo
+  ["taplo-format"] = (Builtins.taplo_format) {
+    depends = List("taplo")
+    check_first = true
+  }
+  // `pkl eval` is the only thing that proves this file is valid. Without it a
+  // malformed hk.pkl surfaces when a hook tries to run — the worst possible
+  // moment — rather than at check time.
+  ["pkl"] = (Builtins.pkl) {
+    // Command overridden to route through pkl-check, which supplies the
+    // proxy CA the JVM needs in the web sandbox; upstream's file selector is
+    // unchanged.
+    check = "mise run pkl-check {{files}}"
+  }
+  ["pkl-format"] = (Builtins.pkl_format) {
+    depends = List("pkl")
+    check_first = true
+  }
+  // Markdown only. prettier also handles JS/CSS/YAML/JSON, none of which this
+  // repo has by hand — pointing it at the workflows would churn files that
+  // actionlint and zizmor already own.
+  ["prettier"] = (Builtins.prettier) {
+    glob = List("**/*.md")
+    check_first = true
+  }
 
-    // --- rust ------------------------------------------------------------------
+  // --- workflows ------------------------------------------------------------
 
-    ["cargo-fmt"] = (Builtins.cargo_fmt) {
-        // check_first: skip the fixer (a write pass) on the common case where the
-        // tree is already formatted; only rewrite when it isn't. (fix mode only.)
-        check_first = true
-    }
-    ["cargo-clippy"] = (Builtins.cargo_clippy) {
-        depends = List("cargo-fmt")
-        // Upstream lints the default target set at default severity. The
-        // workspace lints are only meaningful if every target is checked and a
-        // warning fails, so the command — and only the command — is ours.
-        check = "mise run lint"
-    }
-    // Tests the whole workspace because a change in one crate can break another.
-    ["test"] {
-        depends = List("cargo-clippy")
-        glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
-        check = "mise run test:cargo"
-    }
+  // actionlint catches workflow *mistakes* (bad `on:` keys, undefined matrix
+  // refs, shellcheck over `run:` blocks); zizmor, run separately in `verify`
+  // and CI, catches workflow *security* problems. They do not overlap.
+  ["actionlint"] = Builtins.actionlint
+
+  // --- rust ------------------------------------------------------------------
+
+  ["cargo-fmt"] = (Builtins.cargo_fmt) {
+    // check_first: skip the fixer (a write pass) on the common case where the
+    // tree is already formatted; only rewrite when it isn't. (fix mode only.)
+    check_first = true
+  }
+  ["cargo-clippy"] = (Builtins.cargo_clippy) {
+    depends = List("cargo-fmt")
+    // Upstream lints the default target set at default severity. The
+    // workspace lints are only meaningful if every target is checked and a
+    // warning fails, so the command — and only the command — is ours.
+    check = "mise run lint"
+  }
+  // Tests the whole workspace because a change in one crate can break another.
+  ["test"] {
+    depends = List("cargo-clippy")
+    glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
+    check = "mise run test:cargo"
+  }
 }
 
 // Report every failing step in one pass rather than stopping at the first —
@@ -102,31 +134,31 @@ local gate = new Mapping<String, Step> {
 fail_fast = false
 
 hooks {
-    // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
-    // PRs land by fast-forward, so every commit reaches main with its original
-    // SHA and must be conventional for release-plz to compute semver correctly.
-    ["commit-msg"] {
-        steps {
-            ["conventional-commit"] {
-                check = "mise run commit-msg {{commit_msg_file}}"
-            }
-        }
+  // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
+  // PRs land by fast-forward, so every commit reaches main with its original
+  // SHA and must be conventional for release-plz to compute semver correctly.
+  ["commit-msg"] {
+    steps {
+      ["conventional-commit"] {
+        check = "mise run commit-msg {{commit_msg_file}}"
+      }
     }
-    ["pre-commit"] {
-        // Check only what is staged, and never let a fixer clobber unstaged work:
-        // hk stashes the working tree, runs the steps, then restores it via
-        // three-way merge. patch-file is faster than `git stash` and sidesteps
-        // index-lock races. See https://hk.jdx.dev/environment_variables.
-        stash = "patch-file"
-        steps = gate
-    }
-    // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
-    ["check"] {
-        steps = gate
-    }
-    // `hk fix --all`, what `mise run fmt` calls: run every fixer over the tree.
-    ["fix"] {
-        fix = true
-        steps = gate
-    }
+  }
+  ["pre-commit"] {
+    // Check only what is staged, and never let a fixer clobber unstaged work:
+    // hk stashes the working tree, runs the steps, then restores it via
+    // three-way merge. patch-file is faster than `git stash` and sidesteps
+    // index-lock races. See https://hk.jdx.dev/environment_variables.
+    stash = "patch-file"
+    steps = gate
+  }
+  // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
+  ["check"] {
+    steps = gate
+  }
+  // `hk fix --all`, what `mise run fmt` calls: run every fixer over the tree.
+  ["fix"] {
+    fix = true
+    steps = gate
+  }
 }

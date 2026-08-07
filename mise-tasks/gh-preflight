@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#MISE alias="ghp"
 #MISE description="Probe the GitHub read endpoints this repo's tasks call, and declare the write claims they need — run it before trusting any GitHub result in a fresh environment"
 #
 # Why this is a command and not a comment.

@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#MISE description="Evaluate the .pkl files given as arguments, so a malformed hk.pkl fails at check time rather than when a hook tries to run"
+#
+# Wraps `pkl eval` for one reason: pkl runs on the JVM, which reads its own trust
+# store and not the system one. Behind the egress proxy in the Claude Code web
+# sandbox that means every `amends "package://github.com/..."` fails the SSL
+# handshake ("unable to find valid certification path"), which looks like a
+# broken config file rather than a missing CA. Pass the proxy's bundle when it is
+# present; off-sandbox and in CI there is none and this is a plain `pkl eval`.
+set -euo pipefail
+
+ca_args=()
+for ca in "${SSL_CERT_FILE:-}" /root/.ccr/ca-bundle.crt; do
+	if [ -n "$ca" ] && [ -f "$ca" ]; then
+		ca_args=(--ca-certificates "$ca")
+		break
+	fi
+done
+
+pkl eval "${ca_args[@]}" "$@" >/dev/null
+echo "pkl-check: $# file(s) evaluate cleanly"

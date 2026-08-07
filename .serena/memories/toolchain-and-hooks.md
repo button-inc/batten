@@ -5,6 +5,7 @@ or the pre-commit/CI gate, or bumping the pinned `hk` version. AGENTS.md carries
 the "use mise for everything" rule and the task list; this is the detail.
 
 ## mise is the single source
+
 Install/pin every dev tool via `[tools]` (never a one-off brew/cargo install or
 system binary); read/set env via `[env]` (never ad-hoc exports); run every
 repeatable command as a `[tasks]` task via `mise run` (never bare `cargo …` or a
@@ -15,6 +16,7 @@ Common tasks: `mise run test | lint | fmt | ci | cross-check`; `mise tasks` list
 all. `mise run ci` = fmt-check + lint + test + deny (exactly what CI runs).
 
 ## Keep the hooks fast — hk.pkl is living config
+
 The pre-commit hook runs on every commit, so its latency is a constant tax.
 Whenever you touch the hooks, add a task the hook runs, or bump `hk` in
 `mise.toml`, re-check the hook is still optimal.
@@ -26,6 +28,7 @@ must move together on every bump — that failure lands you back in this config
 when there may be new features to adopt.
 
 Three hk features are the baseline — keep them:
+
 - **`stash = "patch-file"`** — hooks check exactly what's staged; fixers never
   clobber unstaged work (faster than `git stash`, no index-lock races).
 - **`check_first`** on fixer steps (e.g. `fmt`) — skip the write pass when clean.

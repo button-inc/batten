@@ -8,18 +8,24 @@
 
 [tools]
 rust = { version = "1.85.0", components = "rustfmt,clippy" }
-hk = "1.54.0"                 # git-hook runner (see hk.pkl)
-"aqua:cli/cli" = "2.97"       # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
-"aqua:EmbarkStudios/cargo-deny" = "0.20"  # dependency license/advisory policy (deny.toml)
-"aqua:release-plz/release-plz" = "0.3"    # conventional-commit-driven semver + changelog
-"aqua:jqlang/jq" = "1.7"      # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
+hk = "1.54.0"                                                # git-hook runner (see hk.pkl)
+"aqua:cli/cli" = "2.97"                                      # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
+"aqua:EmbarkStudios/cargo-deny" = "0.20"                     # dependency license/advisory policy (deny.toml)
+"aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
+"aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
 # mise-tasks/ holds real bash programs, so they get the same lint+format
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
-"aqua:mvdan/sh" = "3.12.0"    # shfmt
-"aqua:rhysd/actionlint" = "1.7.7"  # workflow mistakes (zizmor covers workflow security)
-zizmor = "1.29.0"            # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
-uv = "0.8"                    # fast Rust installer the pipx: backend uses to fetch Serena
+"aqua:mvdan/sh" = "3.12.0"            # shfmt
+"aqua:rhysd/actionlint" = "1.7.7"     # workflow mistakes (zizmor covers workflow security)
+"aqua:tamasfe/taplo" = "0.10.0"       # TOML lint + format — mise.toml is edited constantly
+pkl = "0.32.1"                        # evaluates hk.pkl as a check, not only when hk runs it
+# prettier formats the Markdown (AGENTS.md, CONTRIBUTING.md). It is the one
+# npm tool here, so node comes with it and nothing else depends on either.
+node = "24"
+"npm:prettier" = "3.6.2"
+zizmor = "1.29.0"        # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
+uv = "0.8"               # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
 # The pipx backend installs it with `uv` (present above), keeping the fast resolver.
@@ -121,7 +127,7 @@ done
 
 [tasks.hk-version]
 description = "Gate: hk's version is pinned identically in mise.toml and hk.pkl (amends URL). A bump to one without the other is the moment to revisit the hook config."
-shell = "bash -c"   # uses grep -oE + cut; keep off /bin/sh for consistency
+shell = "bash -c" # uses grep -oE + cut; keep off /bin/sh for consistency
 run = '''
 mise_v=$(grep -E '^hk = ' mise.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
 pkl_v=$(grep -oE 'hk@[0-9]+\.[0-9]+\.[0-9]+' hk.pkl | head -n1 | cut -d@ -f2)
@@ -258,7 +264,7 @@ head -n1 "{{arg(name="file")}}" | grep -Eq "$CONVENTIONAL_RE" \
 
 [tasks.commit-lint]
 description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits"
-shell = "bash -c"   # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
+shell = "bash -c" # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
 run = '''
 fail=0
 for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do

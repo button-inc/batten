@@ -3,6 +3,6 @@
 # GitHub tags + releases only, driven by Conventional Commits.
 
 [workspace]
-publish = false            # do not publish to any cargo registry
-git_release_enable = true  # create a GitHub release when the version changes
+publish = false           # do not publish to any cargo registry
+git_release_enable = true # create a GitHub release when the version changes
 git_tag_enable = true

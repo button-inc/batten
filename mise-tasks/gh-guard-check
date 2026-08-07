@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#MISE alias="ghc"
 #MISE description="The pure decision behind gh-guard: print a redirect and exit 1 if a command hand-rolls a gh call this repo routes through a task"
 #
 # Prose alone ("use `mise run land`, don't hand-roll it") is feedforward only — a

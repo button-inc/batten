@@ -1,6 +1,6 @@
 # Batten
 
-Batten is a repo-agnostic **policy engine** that keeps *"done"* aligned with
+Batten is a repo-agnostic **policy engine** that keeps _"done"_ aligned with
 landed-and-verified work. It gates what gets written, proves what was verified,
 and refuses to let unlanded work appear finished — enforcing one repository's
 policy consistently at the pre-commit layer, in CI, and at an agent's tool call.
@@ -10,7 +10,7 @@ policy consistently at the pre-commit layer, in CI, and at an agent's tool call.
 
 ## Why
 
-Repo-config-driven permission hooks that can gate an agent's tool call *before*
+Repo-config-driven permission hooks that can gate an agent's tool call _before_
 execution are new, and earlier tooling was built for humans at commit time
 rather than agents operating mid-trajectory. Batten's scarce property is
 **agent-neutrality**: different harnesses expose different hook contracts and
@@ -28,7 +28,7 @@ richer per-agent behavior handled in thin shims.
   harness.
 - **The CLI is data.** A single usage spec is the source of truth for
   completions, man pages, and markdown, and effects are annotated once and
-  reused (the agent read-only allowlist is *derived* from those annotations).
+  reused (the agent read-only allowlist is _derived_ from those annotations).
 - **Narrow configuration.** A two-layer TOML model — a repo file plus env and
   flag overrides — with no upward walk and no `conf.d` merge surface.
 - **Zero-config by default.** `check` works on built-in defaults; `init` is
@@ -55,12 +55,12 @@ cargo test --workspace
 
 ## Exit-code contract
 
-| Code | Meaning |
-| ---- | ------- |
-| `0`  | Success — check passed or nothing to report |
+| Code | Meaning                                                  |
+| ---- | -------------------------------------------------------- |
+| `0`  | Success — check passed or nothing to report              |
 | `1`  | Policy violation (the invocation itself was well-formed) |
-| `2`  | Usage error (bad flags, unreadable config) |
-| `70` | Internal error — Batten could not complete the check |
+| `2`  | Usage error (bad flags, unreadable config)               |
+| `70` | Internal error — Batten could not complete the check     |
 
 The `hook` subcommand deliberately inverts part of this contract so that exit
 `2` **denies** a mediated tool call.

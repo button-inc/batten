@@ -26,14 +26,14 @@ version = 2
 # are allowed in the dependency tree so the project stays open-sourceable. (MIT
 # and the BSD/ISC family below cover dependencies, not Batten's own license.)
 allow = [
-    "MIT",
-    "Apache-2.0",
-    "Apache-2.0 WITH LLVM-exception",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "Unicode-3.0",
-    "Zlib",
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
 ]
 # The allow-list above is a deliberately broader, pre-approved set of permissive
 # licenses than the current tree happens to pull in. Don't warn when an allowed
