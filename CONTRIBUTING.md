@@ -21,6 +21,7 @@ and git hooks run through [`hk`](https://hk.jdx.dev) (see `hk.pkl`). Once:
 
 ```bash
 mise install     # provision the pinned Rust toolchain and hk
+git submodule update --init  # tests/bats — the shell test runner
 hk install        # install the git hooks into .git/hooks
 ```
 

@@ -17,7 +17,6 @@ hk = "1.54.0"                 # git-hook runner (see hk.pkl)
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
 "aqua:mvdan/sh" = "3.12.0"    # shfmt
-"aqua:bats-core/bats-core" = "1.14.0"  # bats — the shell test framework (tests/*.bats)
 zizmor = "1.29.0"            # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
 uv = "0.8"                    # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
@@ -27,6 +26,14 @@ uv = "0.8"                    # fast Rust installer the pipx: backend uses to fe
 
 [env]
 CARGO_TERM_COLOR = "always"
+# bats comes from the tests/bats submodule, not a mise tool, and this is what
+# puts it on PATH — the same shape jdx's own repos use. Reason: the aqua package
+# is a GitHub *source archive*, and those are not byte-stable, so `mise lock`
+# records a checksum that a later download legitimately fails (CI hit exactly
+# that: "Checksum mismatch ... bats-core/archive/refs/tags/v1.14.0.tar.gz"). A
+# submodule pins the commit itself, so there is nothing to re-download or
+# re-hash. Run `git submodule update --init` once per clone.
+_.path = ["tests/bats/bin"]
 # Conventional Commits subject pattern, shared by the commit-msg hook and the CI
 # commit linter so there is exactly one definition of "valid commit".
 CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
@@ -157,15 +164,7 @@ run = "shfmt --diff --indent 2 --case-indent --binary-next-line mise-tasks/"
 
 [tasks."test:bats"]
 description = "Run the shell test suite (tests/*.bats) — cargo test for the mise-tasks/ programs"
-shell = "bash -c"
-# The aqua package ships bats' source tree, so the runnable sits one directory
-# deeper than the install root and never lands on PATH. Resolve it through `mise
-# where` rather than pinning the extracted directory's name, which embeds a commit
-# sha and changes on every version bump.
-run = '''
-root=$(mise where "aqua:bats-core/bats-core")
-exec "$root"/*/bin/bats --print-output-on-failure tests/
-'''
+run = "bats --print-output-on-failure tests/*.bats"
 
 [tasks.hooks]
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"

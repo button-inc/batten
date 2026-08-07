@@ -260,7 +260,8 @@ fresh VM) — commit/push before a long run.
 ## Setup
 
 Toolchain pinned with [`mise`](https://mise.jdx.dev); hooks via
-[`hk`](https://hk.jdx.dev). Once per clone: `mise install` then `hk install`.
+[`hk`](https://hk.jdx.dev). Once per clone: `mise install`, `git submodule update
+--init` (bats, in `tests/bats`), then `hk install`.
 **Use mise for everything** — tools via `[tools]`, env via `[env]`, commands as
 `[tasks]` run with `mise run`; never a bare `cargo`/`export`/one-off install. So
 CI, hk, and your shell run byte-identical commands. Detail (task list, hk gate
