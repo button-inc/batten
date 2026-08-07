@@ -72,6 +72,25 @@ nothing can deny it.
 create` and `gh pr ready` unless a `CLOUD-<n>` appears in the branch, a commit,
 or the command.
 
+### This applies to transitions ONLY — never to issue content
+
+The caution above is about **state**: a column change, automated by the
+integration and fragile to perform by hand. It says nothing about **content** —
+acceptance criteria, a Ready block, a measurement, a recorded decision, a
+deferred obligation. Nothing automates content, the Definition of Ready makes
+authoring it the agent's job, and writing it is part of doing the work rather
+than a permission-bearing act.
+
+Conflating the two is a live failure mode, not a hypothetical: an agent read
+"don't perform the transition" as "tracker writes need permission", stopped short
+of an edit its own issue required, and asked (CLOUD-197). **Write content
+freely; let the key move the state.**
+
+The caution about transitions also has limits. When the automation demonstrably
+has not fired — the merge side does not today — performing the move by hand is
+correct, not a violation. The rule is that the board must be true, and an
+automation that did not run is not an excuse for a board that is wrong.
+
 Two things this does NOT cover, both observed rather than assumed:
 
 - **The merge-side transition did not fire.** #100 merged and CLOUD-178 stayed
