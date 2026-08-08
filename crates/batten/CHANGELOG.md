@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.29](https://github.com/button-inc/batten/compare/v0.0.28...v0.0.29) - 2026-08-08
+
+### Added
+
+- *(config)* name policy smells with `batten config lint` (CLOUD-87)
+
 ## [0.0.28](https://github.com/button-inc/batten/compare/v0.0.27...v0.0.28) - 2026-08-08
 
 ### Added
