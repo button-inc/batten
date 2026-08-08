@@ -152,20 +152,100 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
-@test "a bump disagreeing with its commit type is reported" {
+# --- §6 arrows are version-dependent ------------------------------------------
+#
+# This repo is 0.0.x, so the SemVer arrows do not fire: release-plz bumps the
+# patch whatever the type says (measured on CLOUD-226 — a `feat!` with a BREAKING
+# CHANGE footer released as v0.0.23). The amended clause therefore asks for the
+# honest type plus "patch until 0.1.0", and the pair below pins both directions:
+# the honest declaration passes, the retired arrow is the violation.
+
+@test "feat to patch agrees below 0.1.0" {
 	local d
-	d=$(block '* **Commit / bump (§6).** `feat` → **patch**.')
+	d=$(block '* **Commit / bump (§6).** `feat` → **patch** until `0.1.0`.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a bump promising the retired arrow is reported below 0.1.0" {
+	local d
+	d=$(block '* **Commit / bump (§6).** `feat` → **minor**.')
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type (feat implies patch below 0.1.0)"* ]]
+}
+
+@test "a breaking change promising major is reported below 0.1.0" {
+	# The measured case: v0.0.23 shipped a feat! as a patch, so an issue promising
+	# major promises something the tool will not do.
+	local d
+	d=$(block '* **Commit / bump (§6).** `feat!` → **major** (BREAKING CHANGE footer).')
 	payload "$d"
 	lint
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"bump-disagrees-with-type"* ]]
 }
 
-@test "feat to minor agrees" {
+@test "a breaking change declaring patch agrees below 0.1.0" {
 	local d
-	d=$(block '* **Commit / bump (§6).** `feat` → **minor**.')
+	d=$(block '* **Commit / bump (§6).** `feat!` → **patch** until `0.1.0`; the changelog still marks it breaking.')
 	payload "$d"
 	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a no-bump type does not collapse to patch below 0.1.0" {
+	# A ci/chore-only change releases nothing at any version. Folding it into the
+	# patch regime would demand a bump the tool never produces.
+	local d
+	d=$(block '* **Commit / bump (§6).** `ci` → **no bump**.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+# Copies the lint next to a synthetic workspace root so the ≥0.1.0 regime is
+# exercised through the real code path rather than an env override — a gate's own
+# facts must not have a bypass surface.
+lint_at_version() {
+	local v="$1"
+	mkdir -p "$BATS_TEST_TMPDIR/root/mise-tasks"
+	printf '[workspace.package]\nversion = "%s"\n' "$v" >"$BATS_TEST_TMPDIR/root/Cargo.toml"
+	cp "$LINT" "$BATS_TEST_TMPDIR/root/mise-tasks/ready-lint"
+	run bash -c "'$BATS_TEST_TMPDIR/root/mise-tasks/ready-lint' <'$PAYLOAD'"
+}
+
+@test "the arrows fire again at 0.1.0 and above" {
+	payload "$(block '* **Commit / bump (§6).** `feat` → **minor**.')"
+	lint_at_version 1.2.3
+	[ "$status" -eq 0 ]
+}
+
+@test "patch under a released version is the disagreement" {
+	payload "$(block '* **Commit / bump (§6).** `feat` → **patch**.')"
+	lint_at_version 1.2.3
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type (feat implies minor)"* ]]
+}
+
+@test "an unreadable workspace version exits 2, not a guessed verdict" {
+	# Guessing either regime manufactures a violation or launders one, so a gate
+	# that cannot establish its own regime must refuse to answer.
+	payload "$(block '* **Commit / bump (§6).** `feat` → **patch**.')"
+	mkdir -p "$BATS_TEST_TMPDIR/noroot/mise-tasks"
+	cp "$LINT" "$BATS_TEST_TMPDIR/noroot/mise-tasks/ready-lint"
+	run bash -c "'$BATS_TEST_TMPDIR/noroot/mise-tasks/ready-lint' <'$PAYLOAD'"
+	[ "$status" -eq 2 ]
+}
+
+@test "an issue with no §6 clause needs no workspace version" {
+	# The version is read inside the clause, so a §6-less body lints anywhere.
+	payload "$(block '* **Blockers (§8).** None.')"
+	mkdir -p "$BATS_TEST_TMPDIR/bare/mise-tasks"
+	cp "$LINT" "$BATS_TEST_TMPDIR/bare/mise-tasks/ready-lint"
+	run bash -c "'$BATS_TEST_TMPDIR/bare/mise-tasks/ready-lint' <'$PAYLOAD'"
 	[ "$status" -eq 0 ]
 }
 

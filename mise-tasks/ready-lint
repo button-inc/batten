@@ -94,8 +94,40 @@ fi
 # The type set is not restated here: CONVENTIONAL_RE is exported by mise.toml
 # [env] and is already shared by the commit-msg hook and the CI commit linter.
 # One definition, three consumers.
+#
+# WHICH ARROWS FIRE DEPENDS ON THE VERSION. §6 was amended (2026-08-07) after
+# CLOUD-226 measured a `feat!` carrying a BREAKING CHANGE footer releasing as
+# v0.0.23: Cargo gives 0.0.x no compatibility guarantee, so release-plz bumps the
+# patch whatever the type says. feat→minor and !→major are real only at 0.1.0 and
+# above, and below it an issue promising one states something the tool will not
+# do — which is what the clause now forbids. So the gate reads the regime out of
+# the commit it is linting rather than hardcoding one set of arrows. Enforcing the
+# retired set is not a neutral staleness: it made the honest declaration
+# ("`feat` — patch until 0.1.0") the *failing* one, so the gate and the document
+# it gates demanded opposite bytes.
 BUMP_LABEL='Commit / bump \((§|clause )6\)'
 if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
+	# Read lazily, inside the clause: an issue with no §6 clause needs no version,
+	# and demanding one would break linting a payload from outside a checkout.
+	#
+	# The version is a property of this tree, not of the world — no network, no
+	# registry lookup — which is what keeps this a gate on the commit rather than
+	# a currency check (see .claude/rules/toolchain.md on that split).
+	root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+	# The range ends at the next table header — sed searches the end pattern from
+	# the line after the start, so `/^\[/` cannot re-match the opening line. A
+	# looser end let the span run through [workspace.dependencies], where a `version
+	# = "…"` key would have been read as the crate's.
+	crate_version=$(sed -n '/^\[workspace\.package\]/,/^\[/p' "$root/Cargo.toml" 2>/dev/null |
+		grep -m1 -E '^version = "' | cut -d'"' -f2 || true)
+	# A gate that cannot establish its own regime must not guess: guessing either
+	# way manufactures a violation or launders one. Exit 2 is already this
+	# script's "I could not read what I was given", and an unrunnable gate exiting
+	# non-zero is the rule from toolchain.md.
+	if [ -z "$crate_version" ]; then
+		echo "::error:: cannot read the workspace version from $root/Cargo.toml — §6 needs it to know which SemVer arrows fire" >&2
+		exit 2
+	fi
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 	type=$(grep -oiE '`(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)`?!?' <<<"$bump_line" | head -n1 | tr -d '`!' | tr '[:upper:]' '[:lower:]' || true)
 	breaking=$(grep -cE '!|BREAKING CHANGE' <<<"$bump_line" || true)
@@ -112,13 +144,27 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	esac
 	[ "$breaking" != 0 ] && expected="major"
 
+	# Below 0.1.0 every release-worthy type collapses to a patch. "no bump" does
+	# not collapse: a `ci`/`chore`-only change releases nothing at any version, so
+	# folding it into patch would demand a bump the tool never produces — the same
+	# error in the other direction.
+	why=""
+	case "$crate_version" in
+	0.0.*)
+		if [ -n "$expected" ] && [ "$expected" != "no bump" ]; then
+			expected="patch"
+			why=" below 0.1.0"
+		fi
+		;;
+	esac
+
 	if [ -z "$type" ]; then
 		# An explicit no-commit declaration needs no type; silence does.
 		if [ "$declared" != "no bump" ]; then
 			report "$(line_of "$BUMP_LABEL")" "commit-type-missing"
 		fi
 	elif [ -n "$declared" ] && [ "$declared" != "$expected" ]; then
-		report "$(line_of "$BUMP_LABEL")" "bump-disagrees-with-type (${type} implies ${expected})"
+		report "$(line_of "$BUMP_LABEL")" "bump-disagrees-with-type (${type} implies ${expected}${why})"
 	fi
 fi
 
