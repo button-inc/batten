@@ -11,6 +11,12 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
+# Supersede, don't accumulate — see the note in zizmor.yml. A lap rebases and
+# pushes; without this the superseded SHA's lint runs to completion unread.
+concurrency:
+  group: commit-lint-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 

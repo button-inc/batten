@@ -147,6 +147,16 @@ local gate = new Mapping<String, Step> {
     glob = List("mise.lock", "mise.toml")
     check = "mise run lock-complete"
   }
+  // CI minutes are metered and this sandbox is not, so the workflow contract's
+  // promise — CI confirms what a local run already proved — has to be a gate
+  // and not prose. Three properties over the committed text: no job runs on a
+  // draft, every PR workflow supersedes its own runs, and every task CI runs is
+  // one `verify` runs. zizmor.yml violated the first two for its whole life,
+  // which also meant re-drafting a red PR did not stop the spend (CLOUD-240).
+  ["ci-local-parity"] {
+    glob = List(".github/workflows/*.yml", "mise.toml")
+    check = "mise run ci-local-parity"
+  }
   // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
   // rather than a style question. Counted with any memory declared always-load,
   // since moving a section into one of those moves the cost without cutting it.

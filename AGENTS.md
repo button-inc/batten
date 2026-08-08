@@ -118,12 +118,12 @@ toolchain _does_ run in the web sandbox — read `mem:github-access` before doub
    branch is rebased on current `origin/main`. "Green but stale" is not green.
 3. **`mise run linear-check`, then `gh pr ready`** — readying is the single event
    that triggers CI. A red run on a freshly-readied PR means step 2 was skipped.
-4. **`mise run land`, backgrounded.** It drives the whole landing loop — refused
-   → it rebases, re-verifies and retries, stopping only at a conflict — via
-   `ci-wait`, which polls check-runs until every one is terminal: **no timeout,
-   no iteration cap, never the PR activity subscription**, since webhooks drop
-   _successes_, so silence is never green and an event-only wait hangs until the
-   VM is reaped. Bounded by CI completing. Red → step-2 miss, fix locally.
+4. **`mise run land`, backgrounded.** It drives the whole loop: rebase →
+   `verify` → push → wait → `/fast-forward` → lap. The wait races `ci-wait`
+   (conditional check-run poll — **no timeout, no cap, never the PR webhook**,
+   which drops _successes_) against `main-watch`, so a run `main` has already
+   voided is not paid out. It stops for three things only: a rebase conflict, a
+   failed `verify`, or red CI — over which it re-drafts the PR, closing the tap.
 5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 

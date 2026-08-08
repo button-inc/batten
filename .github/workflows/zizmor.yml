@@ -15,6 +15,14 @@ on:
   pull_request:
     paths: [".github/workflows/**"]
 
+# Supersede, don't accumulate. Without this a push that rebases the branch left
+# the previous SHA's run to completion for a verdict nobody would read — the
+# same waste `ci.yml` already refuses, and the reason `land` can cancel a doomed
+# run simply by pushing the next one.
+concurrency:
+  group: zizmor-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions: {}
 
 env:
@@ -27,6 +35,11 @@ env:
 jobs:
   zizmor:
     name: zizmor
+    # Draft = still being verified locally; no CI. Every other PR-triggered job
+    # carries this and this one did not, so a draft that touched a workflow
+    # still spent a runner on every push — and re-drafting a red PR, the whole
+    # point of which is to close the tap, left this workflow still running.
+    if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

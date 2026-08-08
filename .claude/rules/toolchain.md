@@ -43,6 +43,24 @@ wall clock on a wait; the `verify`/`verified`/`ci-wait` calls are per-lap in the
 body rather than `#MISE depends`, because a dependency runs once and a loop needs
 them every time round.
 
+**A lap's wait is a race, and the economies are gated.** CI minutes are metered;
+this sandbox is not. So the wait runs `ci-wait` ("is this SHA green") alongside
+`main-watch` ("is this SHA still landable"), and whichever answers first decides
+— the moment `main` advances, the run in flight is already waste, and the push
+the next lap makes cancels it through the workflows' `concurrency:
+cancel-in-progress`, which is why nothing calls `gh run cancel`. `main-watch`
+polls conditionally like `ci-wait`, so a quiet `main` costs no rate limit; that
+is what makes a second poller affordable at all. A lap whose HEAD still carries a
+`verify` receipt re-proves nothing, and a **red run re-drafts the PR** — CI skips
+drafts, so that is the only thing that stops the next push buying another run
+while you fix it locally; the next lap readies it again. `mise run
+ci-local-parity` (in the hk `gate`) holds the three properties that make CI a
+confirmation rather than a discovery: no job runs on a draft, every
+`pull_request` workflow supersedes its own runs, and every task CI runs is one
+`verify` runs. `zizmor.yml` broke the first two for its whole life, so a draft
+that touched a workflow still spent a runner and re-drafting did not close the
+tap (CLOUD-240).
+
 Two defects got it here (CLOUD-235, then CLOUD-238), and the second is the
 instructive one. First the refusal was invisible — the predicate's history is in
 the task's own header. Second, restoring the signal and still _exiting_ on a

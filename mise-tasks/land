@@ -19,9 +19,10 @@
 # per-lap rather than declared as `#MISE depends`, because a dependency runs
 # once and a loop needs them every time round.
 #
-# **The only stop is a rebase that CONFLICTS.** Everything else in a lap is
-# mechanical, so this runs unattended and halts exactly at the one step that
-# needs a decision (AGENTS.md, "When you SHOULD still stop") — which is also the
+# **The stops are the three things bash cannot reason about**: a rebase that
+# CONFLICTS, a local `verify` that fails, and a CI run that comes back red on a
+# branch whose `verify` was green. Everything else in a lap is mechanical, so
+# this runs unattended and halts exactly at the steps that need a decision (AGENTS.md, "When you SHOULD still stop") — which is also the
 # step frequent lapping keeps small. CLOUD-238: ending the lap and leaving the
 # caller to rebase and retry was only half the design. Measured over one
 # session, every refusal arrived out-of-band and was handled by hand, and from
@@ -50,6 +51,28 @@
 # not prose, which is the only kind of thing a gate may decide on. The task then
 # claimed for months to have an exit condition it did not have, and polled
 # forever the first time a refusal arrived.
+#
+# A lap's wait is a RACE between two answers (CLOUD-240). `ci-wait` answers "is
+# this SHA green"; `main-watch` answers "is this SHA still landable". The moment
+# `main` advances, the run in flight is already waste — its verdict cannot be
+# used and the bot will refuse — so waiting it out to be told what is already
+# knowable is the expensive way to learn nothing. Whichever answers first
+# decides, and a `main-watch` win simply starts the next lap. The push that lap
+# makes cancels the doomed run through the workflows' `concurrency:
+# cancel-in-progress`, so nothing here cancels a run by hand.
+#
+# Two more economies, both from the same premise — a runner is metered and this
+# sandbox is not:
+#
+#   * A lap whose HEAD already carries a `verify` receipt does not re-run
+#     `verify`. A refusal with an unmoved `main` changes no bytes, and the
+#     receipt is keyed to the exact commit, so re-proving it is work with a
+#     known answer.
+#   * A red CI converts the PR back to DRAFT before stopping. CI does not run on
+#     drafts, so this closes the tap while the failure is diagnosed locally;
+#     left ready, the next push from any source starts another run over a
+#     failure nobody has fixed yet. `land` readies it again on the lap that
+#     follows, which is the single event that spends the one confirming run.
 #
 # The poll is deliberately unbounded, like `ci-wait`: the fix for a hang is an
 # exit condition that can actually fire, never a wall-clock timeout, which would
@@ -81,6 +104,19 @@ die() {
 	exit 1
 }
 
+# Stopping on a red run without closing the tap is a leak this exists to plug:
+# CI skips drafts, so re-drafting is what stops the next push — from any source
+# — spending another runner on a failure nobody has fixed yet.
+redraft() {
+	gh pr ready "$pr" --undo >/dev/null 2>&1 &&
+		echo "land: re-drafted #$pr — CI does not run on drafts, so nothing more is spent until this is fixed locally"
+}
+
+# `set -m` gives each background job its own process group, so `kill -- -PID`
+# reaches the whole tree (mise -> the task -> gh/sleep). Without it the loser of
+# the race is orphaned and keeps polling for the rest of the session.
+set -m
+
 [ "$branch" != "main" ] || die "refusing to land from main — work happens on a short-lived branch."
 
 lap=0
@@ -100,18 +136,72 @@ while :; do
 		fi
 	fi
 
-	# --- prove the rebased tree, every lap: the SHA is new, so the receipt is
-	# --- gone and "green but stale" is not green ---
-	mise run verify ||
-		die "verify failed on $(git rev-parse --short HEAD). Reproduce and fix locally; CI is not where you discover this."
-	mise run verified || die "no verify receipt for HEAD — something swallowed verify's verdict."
+	# --- prove the tree, unless this exact commit already carries the proof ---
+	#
+	# `verified` reads the receipt keyed to this exact HEAD, which also carries
+	# the `origin/main` it was linear against — so an amend, a rebase, or a main
+	# that moved all invalidate it. When it still holds, nothing has changed and
+	# re-running `verify` would spend minutes reaching a known answer.
+	if mise run verified; then
+		echo "land: lap $lap — HEAD already carries a verify receipt; not re-proving it"
+	else
+		mise run verify ||
+			die "verify failed on $(git rev-parse --short HEAD). Reproduce and fix locally; CI is not where you discover this."
+		mise run verified || die "no verify receipt for HEAD — something swallowed verify's verdict."
+	fi
 
 	git push --force-with-lease -u origin "$branch" ||
 		die "push rejected. Someone else moved the branch; look before forcing."
 
 	sha="$(git rev-parse HEAD)"
-	mise run ci-wait ||
-		die "CI is red on $sha. A red run on a verified branch means verify and CI disagree — fix the mismatch."
+	base_main="$(git rev-parse origin/main)"
+
+	# Readying is the single event that starts CI, so it happens here — once the
+	# tree is proven and pushed, never earlier. A PR left as a draft by an
+	# earlier red run is readied again here, which is what resumes the loop.
+	if [ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+		gh pr ready "$pr" >/dev/null 2>&1 ||
+			die "could not mark #$pr ready for review, so CI would never start."
+		echo "land: lap $lap — readied #$pr, which is what starts the one confirming CI run"
+	fi
+
+	# --- race the two answers: green, or no longer landable ---
+	rc_ci="$(mktemp)"
+	rc_main="$(mktemp)"
+	: >"$rc_ci"
+	: >"$rc_main"
+	(
+		mise run ci-wait
+		echo $? >"$rc_ci"
+	) &
+	ci_pid=$!
+	(
+		mise run main-watch "$base_main" >/dev/null 2>&1
+		echo $? >"$rc_main"
+	) &
+	main_pid=$!
+	wait -n
+	kill -- -"$ci_pid" -"$main_pid" 2>/dev/null
+	wait 2>/dev/null
+	ci_rc="$(cat "$rc_ci" 2>/dev/null)"
+	main_rc="$(cat "$rc_main" 2>/dev/null)"
+	rm -f "$rc_ci" "$rc_main"
+
+	if [ -z "$ci_rc" ] && [ "$main_rc" = "0" ]; then
+		echo "land: lap $lap — main moved under ${sha:0:8} before CI finished; that run's verdict is void. Lapping early rather than paying it out."
+		continue
+	fi
+	if [ -n "$ci_rc" ] && [ "$ci_rc" != "0" ]; then
+		redraft
+		die "CI is red on $sha. A red run on a verified branch means verify and CI disagree — fix the mismatch locally, then run land again."
+	fi
+	if [ -z "$ci_rc" ]; then
+		# Neither answered (a killed ci-wait with no main movement). Lap rather
+		# than guess: the next lap re-reads the checks, and an already-green SHA
+		# is answered from the existing check-runs without spending a new run.
+		echo "land: lap $lap — no verdict from the wait; re-reading on the next lap"
+		continue
+	fi
 
 	# --- ask for the merge, then read the answer ---
 	#

@@ -19,6 +19,13 @@
 # it is where the next LAP begins. So the discipline here is coverage of every
 # way a lap can end — and of lapping itself, asserted by a second full attempt
 # rather than by a message about one.
+#
+# CLOUD-240 added the economies, and they are asserted as SPEND, not as
+# messages: a lap whose HEAD already carries a receipt runs no `verify`; a lap
+# whose `main` moved never waits out the doomed run; a red run leaves the PR a
+# draft, which is the only thing that stops the next push buying another one.
+# So the `mise` stub models the receipt rather than a fixed exit status — the
+# skip is only real if `verified` answers from what `verify` actually left.
 
 setup() {
 	LAND="$BATS_TEST_DIRNAME/../mise-tasks/land"
@@ -68,8 +75,13 @@ nth() {
 case "\$sub" in
   "pr comment")
     echo "\$all" >>"$BATS_TEST_TMPDIR/comments"; echo commented ;;
+  "pr ready")
+    echo "\$all" >>"$BATS_TEST_TMPDIR/ready"; echo readied ;;
   "pr view")
-    emit "\$(nth state)" ;;
+    case "\$all" in
+      *isDraft*) printf '%s' "\$(cat "$BATS_TEST_TMPDIR/isdraft")" ;;
+      *)         emit "\$(nth state)" ;;
+    esac ;;
   api*)
     case "\$url" in
       # The truth the old implementation got wrong: the bot's run is not here.
@@ -81,6 +93,8 @@ esac
 EOF
 	chmod +x "$STUB/gh"
 	rm -f "$BATS_TEST_TMPDIR/runs.calls" "$BATS_TEST_TMPDIR/state.calls"
+	: >"$BATS_TEST_TMPDIR/ready"
+	printf 'false' >"$BATS_TEST_TMPDIR/isdraft"
 }
 
 # `git` is stubbed too, and each step of a lap that can fail reads its exit
@@ -110,21 +124,42 @@ EOF
 	chmod +x "$STUB/git"
 }
 
-# `mise` records the tasks a lap runs and succeeds, unless a case names one to
-# fail. `verify`, `verified` and `ci-wait` are called per-lap by the task rather
-# than declared as dependencies, which is exactly what the lapping cases assert.
+# `mise` records the tasks a lap runs. It is not a fixed exit status: `verify`
+# WRITES the receipt and `verified` reads it, so "an already-proven HEAD is not
+# re-proven" is asserted against the real mechanism rather than against a stub
+# that was told the answer. `main-watch` blocks forever by default, because a
+# quiet `main` losing the race is the normal case; a case that wants it to win
+# says so, and says on which lap.
 stub_mise() {
 	cat >"$STUB/mise" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"$BATS_TEST_TMPDIR/misecalls"
 rc="$BATS_TEST_TMPDIR/rc.mise.\$2"
 [ ! -f "\$rc" ] || exit "\$(cat "\$rc")"
+case "\$2" in
+  verify)   : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
+  verified) [ -f "$BATS_TEST_TMPDIR/receipt" ] || exit 1; exit 0 ;;
+  ci-wait)  [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
+  main-watch)
+    n=\$(cat "$BATS_TEST_TMPDIR/mw.calls" 2>/dev/null || echo 0)
+    n=\$((n + 1)); echo "\$n" >"$BATS_TEST_TMPDIR/mw.calls"
+    wins=\$(cat "$BATS_TEST_TMPDIR/mw.wins" 2>/dev/null || echo 0)
+    [ "\$n" -le "\$wins" ] || { while :; do sleep 1; done; }
+    exit 0 ;;
+esac
 exit 0
 EOF
 	chmod +x "$STUB/mise"
+	rm -f "$BATS_TEST_TMPDIR/receipt" "$BATS_TEST_TMPDIR/mw.calls" \
+		"$BATS_TEST_TMPDIR/mw.wins" "$BATS_TEST_TMPDIR/ci-wait.slow"
 }
 
 fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.$1"; }
+already_verified() { : >"$BATS_TEST_TMPDIR/receipt"; }
+is_draft() { printf 'true' >"$BATS_TEST_TMPDIR/isdraft"; }
+ci_is_slow() { : >"$BATS_TEST_TMPDIR/ci-wait.slow"; }
+main_moves_on_lap() { echo "$1" >"$BATS_TEST_TMPDIR/mw.wins"; }
+ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
 task_fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.$1"; }
 not_linear() { echo 1 >"$BATS_TEST_TMPDIR/rc.linear"; }
 comments() { wc -l <"$BATS_TEST_TMPDIR/comments" | tr -d ' '; }
@@ -165,7 +200,11 @@ workflow_runs() {
 	[[ "$output" == *"the fast-forward bot refused (failure)"* ]]
 	[[ "$output" == *"Lapping: rebase, re-verify, retry"* ]]
 	[ "$(comments)" -eq 2 ]
-	[ "$(grep -c '^run verify$' "$BATS_TEST_TMPDIR/misecalls")" -eq 2 ]
+	# And lap 2 re-proves nothing: the rebase was a no-op, so lap 1's receipt
+	# still keys to this exact HEAD. Re-running `verify` there would be work
+	# with a known answer (CLOUD-240).
+	[ "$(grep -c '^run verify$' "$BATS_TEST_TMPDIR/misecalls")" -eq 1 ]
+	[[ "$output" == *"already carries a verify receipt"* ]]
 }
 
 @test "a cancelled run is a refusal too, not just a failure" {
@@ -341,13 +380,75 @@ workflow_runs() {
 	[ "$(comments)" -eq 0 ]
 }
 
+@test "an already-proven HEAD is not proven again" {
+	# `verified` reads the receipt keyed to this exact commit, so when it still
+	# holds nothing has changed. Local time is free, but this is also what keeps
+	# a lap from being expensive enough to be worth avoiding.
+	already_verified
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"already carries a verify receipt"* ]]
+	! grep -q '^run verify$' "$BATS_TEST_TMPDIR/misecalls"
+	grep -q '^run verified$' "$BATS_TEST_TMPDIR/misecalls"
+}
+
+@test "main moving mid-wait starts the next lap instead of paying out the run" {
+	# The moment main advances, this SHA cannot fast-forward: the run in flight
+	# is already waste and every remaining second of it is billed. So the wait
+	# is a RACE, and main-watch winning is a lap, not a failure. Asserted by the
+	# lap happening while ci-wait would still have been running.
+	ci_is_slow
+	main_moves_on_lap 1
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"main moved under"* ]]
+	[[ "$output" == *"Lapping early"* ]]
+	# Lap 1 never asked for the merge; lap 2 did, once.
+	[ "$(comments)" -eq 1 ]
+}
+
+@test "a red CI re-drafts the PR before stopping" {
+	# CI does not run on drafts, so this is the only thing that stops the next
+	# push — from any source — buying another run over a failure nobody has
+	# fixed yet. Stopping without it leaves the tap open.
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CI is red"* ]]
+	[[ "$output" == *"re-drafted"* ]]
+	[[ "$(ready_calls)" == *"--undo"* ]]
+}
+
+@test "a draft PR is readied, which is the event that spends the run" {
+	# Readying is what starts CI, so it happens once the tree is proven and
+	# pushed and never earlier — and it is how a PR re-drafted by an earlier red
+	# run resumes the loop without a human.
+	is_draft
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"readied #150"* ]]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+}
+
+@test "nothing is readied when the PR is already ready" {
+	# Re-readying a ready PR is a no-op to GitHub but a lie in the log, and the
+	# lie is the one that matters: it reads as a second run being started.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ ! -s "$BATS_TEST_TMPDIR/ready" ]
+}
+
 @test "every way a lap can end is exercised above" {
 	# The property that would have caught the dead branch: an exit nothing
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 9 ] || {
-		echo "land has $stops stopping conditions; this suite covers 9."
+	[ "$stops" -eq 10 ] || {
+		echo "land has $stops stopping conditions; this suite covers 10."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}

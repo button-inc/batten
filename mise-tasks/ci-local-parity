@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#MISE description="Gate: CI spends nothing an agent could have spent for free — no job on a draft, every PR workflow supersedes its own runs, and every task CI runs is one `verify` runs"
+#
+# CI minutes are metered; this sandbox is not. The workflow contract already
+# promises that "CI runs the same `mise` tasks you run locally; one it runs that
+# you can't is a bug" — and promised it in prose only, which is feedforward with
+# no sensor. Three properties make that promise true, and all three are
+# computable over the committed text alone: no network, no run history, no
+# judgement.
+#
+#   1. NO JOB RUNS ON A DRAFT. Draft means "still being verified locally", and
+#      it is also the lever a red run pulls: `land` re-drafts the PR so nothing
+#      further is spent while the failure is diagnosed. A single job missing the
+#      guard defeats both. `zizmor.yml` was that job — it triggers on any PR
+#      touching a workflow, so every push to a draft that edited one spent a
+#      runner, and re-drafting did not close the tap (CLOUD-240).
+#
+#   2. EVERY PR WORKFLOW SUPERSEDES ITS OWN RUNS. A landing lap rebases and
+#      pushes; without `cancel-in-progress` the superseded SHA's run is paid out
+#      in full for a verdict nobody reads. `ci.yml` had this; the other two did
+#      not — which is also what lets `land` cancel a doomed run by simply
+#      pushing the next one, rather than calling `gh run cancel`.
+#
+#   3. EVERY TASK CI RUNS IS ONE `verify` RUNS. Otherwise CI is where a failure
+#      is DISCOVERED rather than confirmed, and the discovery costs a runner and
+#      a round trip that a free local run would have caught.
+#
+# Scoped to `pull_request`-triggered workflows: a scheduled or release workflow
+# is not on the landing path and none of the three properties apply to it.
+set -uo pipefail
+
+workflows="${PARITY_WORKFLOWS:-.github/workflows}"
+manifest="${PARITY_MANIFEST:-mise.toml}"
+fail=0
+
+problem() {
+	echo "::error:: ci-local-parity: $*" >&2
+	fail=1
+}
+
+# `[tasks.verify]`'s own block: its `depends` list plus its body. A task named
+# in either is one an agent runs locally before readying.
+verify_block=$(awk '/^\[tasks\.verify\]/{p=1;next} /^\[/{p=0} p' "$manifest")
+if [ -z "$verify_block" ]; then
+	problem "no [tasks.verify] in $manifest, so there is nothing to compare CI against."
+	exit 1
+fi
+
+checked=0
+for wf in "$workflows"/*.yml; do
+	[ -e "$wf" ] || continue
+	# The trigger list is the two-space-indented block under `on:`. Read into a
+	# variable first: `grep -q` exits on the first match, and under `pipefail` a
+	# producer killed by that SIGPIPE makes the pipeline report failure on a
+	# MATCH — the inversion `pipefail-grep-check` exists to catch.
+	triggers=$(awk '/^on:/{p=1;next} /^[a-z]/{p=0} p' "$wf")
+	grep -q '^  pull_request:' <<<"$triggers" || continue
+	checked=$((checked + 1))
+
+	grep -q 'cancel-in-progress: true' "$wf" ||
+		problem "$wf triggers on pull_request but never supersedes its own runs — add a concurrency group with cancel-in-progress: true, or a lap pays out the run it just made obsolete."
+
+	# Every job's block, from its two-space key to the next one, must carry the
+	# draft guard somewhere in it.
+	ungated=$(awk '
+		/^jobs:/ { injobs = 1; next }
+		injobs && /^[a-z]/ { injobs = 0 }
+		injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+			if (job != "" && !guarded) print job
+			job = $1; sub(":", "", job); guarded = 0
+		}
+		injobs && /github\.event\.pull_request\.draft == false/ { guarded = 1 }
+		END { if (job != "" && !guarded) print job }
+	' "$wf")
+	if [ -n "$ungated" ]; then
+		while IFS= read -r job; do
+			problem "$wf job '$job' runs on a draft PR — add: if: \${{ github.event.pull_request.draft == false }}"
+		done <<<"$ungated"
+	fi
+
+	# `mise run <task>` in the STEPS, not in the prose. These files carry long
+	# comments that name tasks to explain why they are absent, and a plain grep
+	# read those as spend — a gate that fires on its own documentation is a gate
+	# people delete. So: `run:` scalars and the bodies of `run: |` blocks only.
+	# The task name only, too; trailing arguments (a matrix target, say) are the
+	# job's business, not this gate's.
+	steps=$(awk '
+		inblock && index($0, indent) != 1 && NF { inblock = 0 }
+		inblock { print; next }
+		/^[[:space:]]*-?[[:space:]]*run:[[:space:]]*[|>]/ {
+			match($0, /^[[:space:]]*/)
+			indent = substr($0, 1, RLENGTH) "  "
+			inblock = 1; next
+		}
+		/^[[:space:]]*-?[[:space:]]*run:/ { print }
+	' "$wf")
+	while IFS= read -r task; do
+		[ -n "$task" ] || continue
+		grep -q -- "$task" <<<"$verify_block" ||
+			problem "$wf runs \`mise run $task\`, which \`mise run verify\` does not — CI would be where that failure is discovered, and discovery costs a runner."
+	done < <(printf '%s\n' "$steps" | grep -oE 'mise run [a-z][a-z0-9:_-]*' | awk '{print $3}' | sort -u)
+done
+
+if [ "$checked" -eq 0 ]; then
+	problem "no pull_request-triggered workflow found under $workflows — either the path is wrong or the landing path is untested."
+fi
+
+[ "$fail" -eq 0 ] || exit 1
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, and running nothing verify does not"

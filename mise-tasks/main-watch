@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#MISE description="Block until origin/main advances past a given SHA (conditional poll — a quiet main costs no rate limit)"
+#
+# The other half of a landing lap's wait. `ci-wait` answers "is this SHA green";
+# this answers "is this SHA still landable". They are raced, because the moment
+# `main` advances, the branch stops being a direct descendant and the CI run in
+# flight is already waste — its verdict cannot be used, the fast-forward bot
+# will refuse, and every remaining second of that run is billed. Waiting it out
+# to be told what is already knowable is the expensive way to learn nothing.
+#
+# So `land` starts this alongside `ci-wait` and takes whichever answers first.
+# A win here is not a failure: it means lap early, rebase onto the main that
+# moved, and push — and that push cancels the doomed run through the workflows'
+# `concurrency: cancel-in-progress`, which is why no `gh run cancel` is needed
+# here. This task never writes anything.
+#
+# The poll is conditional, exactly as `ci-wait` is: each request carries the
+# previous response's ETag as `If-None-Match`, and GitHub answers 304 with no
+# body and no rate-limit charge when the ref has not moved. That is what makes a
+# second watcher affordable at all — an unconditional poll would double the
+# request cost of every lap to usually learn nothing. `git/ref/heads/main` is
+# used rather than `commits/main` because the body is a single ref object: the
+# smallest response that answers the question.
+#
+# Deliberately unbounded, like `ci-wait`: the exit condition is "main moved",
+# and the caller races it against a wait that always terminates, so a `main`
+# that never moves simply loses the race. A wall-clock cap here would turn a
+# quiet main into a spurious lap, which costs a whole CI run.
+#
+# `set -e` is off on purpose: this is a poll, and a transient `gh` failure must
+# cost one iteration rather than abort the landing.
+set -uo pipefail
+
+base="${1:-${MAIN_WATCH_BASE:-$(git rev-parse origin/main)}}"
+interval="${MAIN_WATCH_INTERVAL:-5}"
+etag=""
+
+if [ -z "$base" ]; then
+	echo "::error:: main-watch: no base SHA to compare against." >&2
+	exit 1
+fi
+
+echo "main-watch: watching main for movement past ${base:0:8} (conditional, ${interval}s)"
+
+while :; do
+	args=(-i "repos/{owner}/{repo}/git/ref/heads/main")
+	[ -n "$etag" ] && args+=(-H "If-None-Match: $etag")
+	resp=$(gh api "${args[@]}" 2>/dev/null | tr -d '\r')
+
+	status=$(printf '%s' "$resp" | sed -n '1s@^HTTP/[0-9.]* \([0-9]*\).*@\1@p')
+	new_etag=$(printf '%s' "$resp" | sed -n 's/^[Ee][Tt]ag: //p' | head -n1)
+	[ -n "$new_etag" ] && etag="$new_etag"
+
+	server_floor=$(printf '%s' "$resp" | sed -n 's/^[Xx]-[Pp]oll-[Ii]nterval: //p' | head -n1)
+	wait_for="$interval"
+	if [ -n "$server_floor" ] && [ "$server_floor" -gt "$interval" ] 2>/dev/null; then
+		wait_for="$server_floor"
+	fi
+
+	# 304: the ref is byte-identical to the last reading, so there is nothing to
+	# compare — skip straight to the sleep rather than parsing an empty body.
+	if [ "$status" != "304" ]; then
+		body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
+		head=$(printf '%s' "$body" | jq -r '.object.sha // empty' 2>/dev/null)
+		if [ -n "$head" ] && [ "$head" != "$base" ]; then
+			echo "main-watch: main moved ${base:0:8} -> ${head:0:8}"
+			exit 0
+		fi
+	fi
+
+	sleep "$wait_for"
+done
