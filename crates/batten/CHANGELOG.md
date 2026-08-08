@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.34](https://github.com/button-inc/batten/compare/v0.0.33...v0.0.34) - 2026-08-08
+
+### Fixed
+
+- *(check)* an unreadable working authority is the maximal weakening, not an abort
+- *(lint)* keep the key trust located a weakening by, so dedup cannot swallow one
+
 ## [0.0.33](https://github.com/button-inc/batten/compare/v0.0.32...v0.0.33) - 2026-08-08
 
 ### Added
