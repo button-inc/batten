@@ -60,3 +60,23 @@ print('registered')
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"toolchain provisioned"* ]]
 }
+
+@test "the install is lockfile-free — provisioning must not dirty the tracked lock" {
+	# CLOUD-223: `[settings] lockfile = true` plus a cold ubi install appends a
+	# platform key `mise lock` cannot produce and `lock-complete` rejects, so
+	# every session began dirty and the residue was committed twice. Currency is
+	# lock-currency.yml's job, on a schedule; provisioning is a pure install.
+	run grep -qE 'MISE_LOCKFILE=false[[:space:]]+mise install' "$HOOK"
+	[ "$status" -eq 0 ]
+}
+
+@test "running the hook leaves the tracked lockfile untouched" {
+	# The end-to-end version of the assertion above, and the one that would have
+	# caught the original defect: the suite itself runs this hook.
+	local before after
+	before=$(git -C "$BATS_TEST_DIRNAME/.." status --porcelain -- mise.lock)
+	run env CLAUDE_PROJECT_DIR="$BATS_TEST_DIRNAME/.." "$HOOK"
+	[ "$status" -eq 0 ]
+	after=$(git -C "$BATS_TEST_DIRNAME/.." status --porcelain -- mise.lock)
+	[ "$before" = "$after" ]
+}
