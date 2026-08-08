@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.31](https://github.com/button-inc/batten/compare/v0.0.30...v0.0.31) - 2026-08-08
+
+### Added
+
+- *(doctor)* add the post-install self-check and render the exit table (CLOUD-66)
+
 ## [0.0.30](https://github.com/button-inc/batten/compare/v0.0.29...v0.0.30) - 2026-08-08
 
 ### Added
