@@ -82,8 +82,46 @@ KNOWN='linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl macos-x64 macos-arm
 REQUIRED="${BATTEN_LOCK_PLATFORMS:-linux-x64 linux-arm64 macos-arm64}"
 
 fail=0
+
+# lockfile-writes-enabled: mise.toml must not re-enable install-time lockfile
+# writes. Every residue key this gate rejects was written by an install, so the
+# gate is only half a mechanism while any `mise install` can produce one — and
+# the per-caller opt-out this repo tried first (MISE_LOCKFILE=false in the
+# session-start hook) cannot reach a caller it does not own, which is exactly
+# how a sandbox's own provisioning kept dirtying the tree afterwards. `[settings]
+# lockfile = false` denies the write to everyone; this is what keeps it false.
+#
+# Read from the index for the same reason the lockfile is (CLOUD-227), and
+# skipped in fixture mode, where the argument names the bytes under test.
+if [ "$#" -eq 0 ]; then
+	# A repo with no staged mise.toml has no setting to enforce, and `git show`
+	# exits non-zero there — which under `pipefail` would abort this gate on the
+	# lockfile question it was actually asked. Read it in its own step so that
+	# absence is a value, not a failure.
+	settings=$(git show :mise.toml 2>/dev/null || true)
+	enabled=$(printf '%s\n' "$settings" | awk '
+		/^\[settings\]/ { in_settings = 1; next }
+		/^\[/           { in_settings = 0 }
+		in_settings && /^[[:space:]]*lockfile[[:space:]]*=[[:space:]]*(true|1)[[:space:]]*$/ {
+			print NR
+		}
+	')
+	if [ -n "$enabled" ]; then
+		echo "::error:: mise.toml re-enables install-time lockfile writes, so any \`mise install\` can write the residue this gate rejects (CLOUD-223):" >&2
+		echo "  mise.toml:$enabled: [settings] lockfile — set it false; the scheduled \`lock-check\` opts back in with MISE_LOCKFILE=true" >&2
+		fail=1
+	fi
+fi
+
+# `reported` tracks this clause's own header, separately from `fail` — which any
+# earlier clause may already have set, and did once: keying the header off `fail`
+# silently swallowed it and left these pointers printing under no heading.
+reported=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: mise.lock has entries that cannot be installed from (see mem:toolchain-and-hooks):" >&2
+	if [ "$reported" = 0 ]; then
+		echo "::error:: mise.lock has entries that cannot be installed from (see mem:toolchain-and-hooks):" >&2
+		reported=1
+	fi
 	printf '  %s\n' "$1" >&2
 	fail=1
 }

@@ -50,22 +50,26 @@ step() { # step <label> <cmd...>
 # mise install is the load-bearing one: it is what makes `mise exec` in
 # .mcp.json a pure exec rather than an implicit install.
 #
-# MISE_LOCKFILE=false makes it a PURE install (CLOUD-223). `[settings] lockfile
-# = true` in mise.toml means a cold install of `ubi:rust-cross/cargo-zigbuild`
-# appends `platforms.linux-x64-cargo-zigbuild` — platform plus the exe name,
-# checksum, no url — to the tracked lockfile. `mise lock` cannot produce that
-# key (measured: it locks 0 platform entries for the ubi backend, all 7
-# skipped), so it is install residue rather than a lock, and `mise run
-# lock-complete` rejects it by name. Every session therefore opened with a dirty
-# tree and a red gate no branch had caused, and it got committed twice: 17b8436,
-# reverted by 3bee7d2, then a7cef00 on a branch named for unrelated work. Warm
-# installs never rewrite it, so the cost looked intermittent.
+# MISE_LOCKFILE=false makes it a PURE install (CLOUD-223). A cold install of
+# `ubi:rust-cross/cargo-zigbuild` otherwise appends
+# `platforms.linux-x64-cargo-zigbuild` — platform plus the exe name, checksum,
+# no url — to the tracked lockfile. `mise lock` cannot produce that key
+# (measured: it locks 0 platform entries for the ubi backend, all 7 skipped), so
+# it is install residue rather than a lock, and `mise run lock-complete` rejects
+# it by name. Every session therefore opened with a dirty tree and a red gate no
+# branch had caused, and it got committed twice: 17b8436, reverted by 3bee7d2,
+# then a7cef00 on a branch named for unrelated work. Warm installs never rewrite
+# it, so the cost looked intermittent.
+#
+# The authority is now `[settings] lockfile = false` in mise.toml, which denies
+# the write to EVERY caller — including the sandbox's own provisioning, which
+# runs before this hook and so kept dirtying the tree after the per-caller fix
+# landed. This line is the belt to that suspenders: it keeps the install pure
+# even where the setting is overridden by an ambient MISE_LOCKFILE. Asserted by
+# tests/session-start.bats.
 #
 # Provisioning has no business writing the lockfile at all: currency is owned by
 # .github/workflows/lock-currency.yml, on a schedule, off the landing path.
-# Measured: with this set, a cold install of that tool leaves `git status
-# --porcelain` empty. Asserted by tests/session-start.bats — dropping it puts
-# the dirtying back.
 step mise-install env MISE_LOCKFILE=false mise install
 # bats lives in tests/bats; `mise run test:bats` cannot run without it.
 step submodules git submodule update --init --recursive

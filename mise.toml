@@ -148,7 +148,13 @@ run = '''
 # `mise lock` that failed would leave mise.lock untouched, the diff below clean,
 # and this gate reporting "complete and current" about a file it never
 # regenerated — the same silent false-green class as the fetch in linear-check.
-if ! mise lock; then
+# The single sanctioned lockfile writer, so it says so. Measured on mise
+# 2026.8.2: `mise lock` writes regardless of `[settings] lockfile`, so this
+# assignment is not what makes the regeneration work — it is the declaration
+# that this task, alone in the repo, is allowed to write the file that
+# `[settings] lockfile = false` denies to everything else (CLOUD-223). It also
+# holds the currency job upright if a later mise gates `lock` on the setting.
+if ! MISE_LOCKFILE=true mise lock; then
   echo "::error:: \`mise lock\` failed, so the lockfile could not be regenerated and its currency is unverified. Refusing to pass." >&2
   exit 1
 fi
@@ -370,4 +376,24 @@ description = "Tag and publish a GitHub release when the version changed"
 run = "release-plz release --git-token ${GITHUB_TOKEN:?}"
 
 [settings]
-lockfile = true
+# OFF, so that installing is never a write (CLOUD-223). With it on, any cold
+# `mise install` appends install residue to the tracked lockfile — a
+# `platforms.<platform>-<exe>` key carrying a checksum and no url, which `mise
+# lock` can neither produce nor repair and `mise run lock-complete` rejects by
+# name. The session-start hook was taught to install with MISE_LOCKFILE=false,
+# and that fixed exactly one caller: the sandbox's own provisioning runs before
+# the hook, so a session still opened on a dirty tree. A per-caller opt-out
+# cannot cover callers this repo does not own.
+#
+# Measured, cold data/cache/state dirs, this tool alone: with the setting true a
+# `mise install` grew the lockfile by 163 bytes and produced exactly one
+# `linux-x64-cargo-zigbuild` key; with it false the file was byte-identical
+# afterwards and the key was absent.
+#
+# Inverting it does: the default is now "no writer", and the one writer that
+# should touch the lockfile opts in — `[tasks.lock-check]` sets MISE_LOCKFILE=true
+# for its `mise lock`, on the schedule that owns currency
+# (.github/workflows/lock-currency.yml), against a disposable checkout. Nothing
+# on the landing path writes at all. Gated by `mise run lock-complete`, which
+# fails if this is ever set back to true.
+lockfile = false

@@ -168,3 +168,63 @@ scratch_repo() {
 	run bash -c "cd '$BATS_TEST_TMPDIR/bare' && '$GATE'"
 	[ "$status" -eq 2 ]
 }
+
+# --- lockfile-writes-enabled (CLOUD-223) ---------------------------------
+#
+# The residue clauses above are only half a mechanism while any `mise install`
+# can write a residue key. This is the other half: the setting that permits the
+# write must stay off, and off in the INDEX, so the verdict is a property of the
+# commit rather than of whatever the machine's config happens to say.
+
+stage_settings() {
+	printf '[settings]\nlockfile = %s\n' "$1" >"$REPO/mise.toml"
+	git -C "$REPO" add mise.toml
+}
+
+@test "mise.toml re-enabling lockfile writes is a violation" {
+	scratch_repo
+	stage_settings true
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"install-time lockfile writes"* ]]
+	[[ "$output" == *"mise.toml:2:"* ]]
+}
+
+@test "lockfile = false passes, and the lockfile clauses keep their own header" {
+	scratch_repo
+	stage_settings false
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+
+	# Both clauses failing at once: the setting must not swallow the header the
+	# residue pointers print under, which keying it off `fail` would have done.
+	stage_settings true
+	printf '[tools.t."platforms.linux-x64-t"]\nchecksum = "blake3:abc"\n\n' >>"$LOCK"
+	git -C "$REPO" add mise.lock
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"install-time lockfile writes"* ]]
+	[[ "$output" == *"cannot be installed from"* ]]
+	[[ "$output" == *"install-time residue"* ]]
+}
+
+@test "a lockfile key outside [settings] is not the setting" {
+	scratch_repo
+	printf '[tools]\nlockfile = true\n' >"$REPO/mise.toml"
+	git -C "$REPO" add mise.toml
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
+@test "fixture mode does not consult mise.toml at all" {
+	scratch_repo
+	stage_settings true
+
+	# An explicit path names the bytes under test; the setting belongs to the
+	# repo the gate runs in, which a fixture run makes no claim about.
+	run bash -c "cd '$REPO' && '$GATE' '$LOCK'"
+	[ "$status" -eq 0 ]
+}
