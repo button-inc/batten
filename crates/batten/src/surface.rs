@@ -341,6 +341,14 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[],
     },
+    // Complements `--config-from` rather than replacing it (CLOUD-87): that
+    // makes a weakening *ineffective*, this makes it *visible*.
+    CommandDecl {
+        path: "config lint",
+        about: "Report policy smells in batten.toml (any smell is a violation)",
+        effect: Effect::Read,
+        flags: &[],
+    },
     CommandDecl {
         path: "spec",
         about: "Print the tool's own command spec",

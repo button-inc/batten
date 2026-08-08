@@ -55,6 +55,44 @@ pub fn load_base(dir: &Path, reference: &str) -> Result<Config> {
     config::parse(&text, &format!("{reference}:{}", config::CONFIG_FILE))
 }
 
+/// What kind of weakening a [`Weakening`] is, as a stable identifier.
+///
+/// The id is the *name* a report keys on, so it is declared once here rather
+/// than reconstructed from the key path's shape — parsing `rule[x].severity`
+/// back into a category would make the identifier depend on formatting.
+/// `config lint` (CLOUD-87) emits these as its base-ref smell ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum WeakeningKind {
+    /// The effective `strictness` floor dropped.
+    StrictnessLowered,
+    /// A committed `fail_on_warning = true` was turned off.
+    PromotionDisabled,
+    /// A `protected` entry is gone.
+    ProtectedRemoved,
+    /// An `unlanded` entry is gone.
+    UnlandedRemoved,
+    /// A whole rule is gone.
+    RuleRemoved,
+    /// A rule survives at a lower severity rank.
+    SeverityLowered,
+}
+
+impl WeakeningKind {
+    /// The stable, lowercase identifier used in machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            WeakeningKind::StrictnessLowered => "strictness-lowered",
+            WeakeningKind::PromotionDisabled => "promotion-disabled",
+            WeakeningKind::ProtectedRemoved => "protected-removed",
+            WeakeningKind::UnlandedRemoved => "unlanded-removed",
+            WeakeningKind::RuleRemoved => "rule-removed",
+            WeakeningKind::SeverityLowered => "severity-lowered",
+        }
+    }
+}
+
 /// One key the working tree weakened relative to the base ref.
 ///
 /// Pointer-only by construction (non-negotiable rule 4): a key path and two
@@ -68,14 +106,22 @@ pub struct Weakening {
     pub base: String,
     /// The working tree's value, as a stable token.
     pub working: String,
+    /// Which kind of weakening this is, as a stable identifier.
+    pub kind: WeakeningKind,
 }
 
 impl Weakening {
-    fn new(key: impl Into<String>, base: impl Into<String>, working: impl Into<String>) -> Self {
+    fn new(
+        kind: WeakeningKind,
+        key: impl Into<String>,
+        base: impl Into<String>,
+        working: impl Into<String>,
+    ) -> Self {
         Weakening {
             key: key.into(),
             base: base.into(),
             working: working.into(),
+            kind,
         }
     }
 
@@ -122,6 +168,7 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     );
     if working_strictness < base_strictness {
         found.push(Weakening::new(
+            WeakeningKind::StrictnessLowered,
             "strictness",
             strictness_token(base_strictness),
             strictness_token(working_strictness),
@@ -131,18 +178,25 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // `false < true` is the ordering "tighten" is defined over for the promotion
     // setting, exactly as `resolve` clamps it.
     if base.fail_on_warning.unwrap_or(false) && !working.fail_on_warning.unwrap_or(false) {
-        found.push(Weakening::new("fail_on_warning", "true", "false"));
+        found.push(Weakening::new(
+            WeakeningKind::PromotionDisabled,
+            "fail_on_warning",
+            "true",
+            "false",
+        ));
     }
 
     // A guarded path that stops being guarded is the headline case: it is how a
     // branch would make its own files editable without the gate noticing.
     found.extend(removed_entries(
+        WeakeningKind::ProtectedRemoved,
         &base.protected,
         &working.protected,
         "protected",
     ));
     // Same shape: a path no longer declared unlanded stops being flagged.
     found.extend(removed_entries(
+        WeakeningKind::UnlandedRemoved,
         &base.unlanded,
         &working.unlanded,
         "unlanded",
@@ -157,11 +211,16 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 }
 
 /// Entries present in `base` and absent from `working`, as weakenings of `key`.
-fn removed_entries(base: &[String], working: &[String], key: &str) -> Vec<Weakening> {
+fn removed_entries(
+    kind: WeakeningKind,
+    base: &[String],
+    working: &[String],
+    key: &str,
+) -> Vec<Weakening> {
     let present: BTreeSet<&str> = working.iter().map(String::as_str).collect();
     base.iter()
         .filter(|entry| !present.contains(entry.as_str()))
-        .map(|entry| Weakening::new(format!("{key}[{entry}]"), "present", "absent"))
+        .map(|entry| Weakening::new(kind, format!("{key}[{entry}]"), "present", "absent"))
         .collect()
 }
 
@@ -176,6 +235,7 @@ fn rule_weakenings(base: &[Rule], working: &[Rule]) -> Vec<Weakening> {
         .filter_map(|rule| {
             match working.iter().find(|other| other.id == rule.id) {
                 None => Some(Weakening::new(
+                    WeakeningKind::RuleRemoved,
                     format!("rule[{}]", rule.id),
                     "present",
                     "absent",
@@ -183,6 +243,7 @@ fn rule_weakenings(base: &[Rule], working: &[Rule]) -> Vec<Weakening> {
                 // Severity's rank *is* its ordering (CLOUD-61): `allow < warn <
                 // deny`, so "lowered" is a comparison rather than a name match.
                 Some(other) if other.severity < rule.severity => Some(Weakening::new(
+                    WeakeningKind::SeverityLowered,
                     format!("rule[{}].severity", rule.id),
                     severity_token(rule.severity),
                     severity_token(other.severity),
@@ -229,7 +290,12 @@ mod tests {
         let working = parse("version = 1\nstrictness = \"permissive\"\n");
         assert_eq!(
             weakenings(&base, &working),
-            vec![Weakening::new("strictness", "strict", "permissive")]
+            vec![Weakening::new(
+                WeakeningKind::StrictnessLowered,
+                "strictness",
+                "strict",
+                "permissive"
+            )]
         );
     }
 
@@ -248,7 +314,12 @@ mod tests {
         let working = parse("version = 1\n");
         assert_eq!(
             weakenings(&base, &working),
-            vec![Weakening::new("strictness", "strict", "standard")]
+            vec![Weakening::new(
+                WeakeningKind::StrictnessLowered,
+                "strictness",
+                "strict",
+                "standard"
+            )]
         );
     }
 
@@ -258,7 +329,12 @@ mod tests {
         let working = parse("version = 1\nprotected = [\"a\"]\n");
         assert_eq!(
             weakenings(&base, &working),
-            vec![Weakening::new("protected[b]", "present", "absent")]
+            vec![Weakening::new(
+                WeakeningKind::ProtectedRemoved,
+                "protected[b]",
+                "present",
+                "absent"
+            )]
         );
     }
 
@@ -284,7 +360,12 @@ mod tests {
         let working = parse("version = 1\n");
         assert_eq!(
             weakenings(&base, &working),
-            vec![Weakening::new("rule[r]", "present", "absent")]
+            vec![Weakening::new(
+                WeakeningKind::RuleRemoved,
+                "rule[r]",
+                "present",
+                "absent"
+            )]
         );
     }
 
@@ -294,7 +375,12 @@ mod tests {
         let working = parse(&format!("version = 1\n{}", rule("r", "warn")));
         assert_eq!(
             weakenings(&base, &working),
-            vec![Weakening::new("rule[r].severity", "deny", "warn")]
+            vec![Weakening::new(
+                WeakeningKind::SeverityLowered,
+                "rule[r].severity",
+                "deny",
+                "warn"
+            )]
         );
     }
 
@@ -318,7 +404,12 @@ mod tests {
         let working = parse("version = 1\nfail_on_warning = false\n");
         assert_eq!(
             weakenings(&base, &working),
-            vec![Weakening::new("fail_on_warning", "true", "false")]
+            vec![Weakening::new(
+                WeakeningKind::PromotionDisabled,
+                "fail_on_warning",
+                "true",
+                "false",
+            )]
         );
     }
 
@@ -343,7 +434,12 @@ mod tests {
 
     #[test]
     fn the_line_is_a_pointer_never_the_config_bytes() {
-        let weakening = Weakening::new("rule[no-todo].severity", "deny", "warn");
+        let weakening = Weakening::new(
+            WeakeningKind::SeverityLowered,
+            "rule[no-todo].severity",
+            "deny",
+            "warn",
+        );
         assert_eq!(
             weakening.line(),
             "batten.toml:rule[no-todo].severity deny→warn"

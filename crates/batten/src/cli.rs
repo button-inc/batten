@@ -105,6 +105,8 @@ pub enum ReceiptCommand {
 pub enum ConfigCommand {
     /// Print the effective configuration.
     Show,
+    /// Report policy smells in `batten.toml`.
+    Lint,
 }
 
 /// Subcommands of `generate`.
@@ -175,6 +177,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             .subcommand()
             .and_then(|(name, _)| match name {
                 "show" => Some(ConfigCommand::Show),
+                "lint" => Some(ConfigCommand::Lint),
                 _ => None,
             })
             .map(|command| Command::Config { command }),

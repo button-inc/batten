@@ -43,11 +43,17 @@ _batten() {
             batten__subcmd__config,help)
                 cmd="batten__subcmd__config__subcmd__help"
                 ;;
+            batten__subcmd__config,lint)
+                cmd="batten__subcmd__config__subcmd__lint"
+                ;;
             batten__subcmd__config,show)
                 cmd="batten__subcmd__config__subcmd__show"
                 ;;
             batten__subcmd__config__subcmd__help,help)
                 cmd="batten__subcmd__config__subcmd__help__subcmd__help"
+                ;;
+            batten__subcmd__config__subcmd__help,lint)
+                cmd="batten__subcmd__config__subcmd__help__subcmd__lint"
                 ;;
             batten__subcmd__config__subcmd__help,show)
                 cmd="batten__subcmd__config__subcmd__help__subcmd__show"
@@ -93,6 +99,9 @@ _batten() {
                 ;;
             batten__subcmd__help,spec)
                 cmd="batten__subcmd__help__subcmd__spec"
+                ;;
+            batten__subcmd__help__subcmd__config,lint)
+                cmd="batten__subcmd__help__subcmd__config__subcmd__lint"
                 ;;
             batten__subcmd__help__subcmd__config,show)
                 cmd="batten__subcmd__help__subcmd__config__subcmd__show"
@@ -178,7 +187,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config)
-            opts="-h --strictness --fail-on-warning --config-from --help show help"
+            opts="-h --strictness --fail-on-warning --config-from --help show lint help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -200,7 +209,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__help)
-            opts="show help"
+            opts="show lint help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -227,6 +236,20 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__config__subcmd__help__subcmd__lint)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__config__subcmd__help__subcmd__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -234,6 +257,28 @@ _batten() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__config__subcmd__lint)
+            opts="-h --strictness --fail-on-warning --config-from --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -440,8 +485,22 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__config)
-            opts="show"
+            opts="show lint"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__config__subcmd__lint)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

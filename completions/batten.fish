@@ -53,21 +53,29 @@ complete -c batten -n "__fish_batten_using_subcommand enforce" -l config-from -d
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s J -l json -d 'Emit findings as byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show lint help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
-complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
-complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -s h -l help -d 'Print help (see more with \'--help\')'
-complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -f -a "show" -d 'Print the effective configuration'
-complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show lint help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show lint help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show lint help" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show lint help" -f -a "show" -d 'Print the effective configuration'
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show lint help" -f -a "lint" -d 'Report policy smells in batten.toml (any smell is a violation)'
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show lint help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
+standard\t'The default: a finding is a violation'
+strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "show" -d 'Print the effective configuration'
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "lint" -d 'Report policy smells in batten.toml (any smell is a violation)'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand spec" -l format -d 'The output format for the spec' -r -f -a "json\t'Byte-stable JSON — the agent-facing contract (§6)'"
 complete -c batten -n "__fish_batten_using_subcommand spec" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
@@ -146,6 +154,7 @@ complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_
 complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce config spec generate hook receipt help" -f -a "receipt" -d 'Verification receipts: SHA-keyed claims a named check passed, invalidated by git facts'
 complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce config spec generate hook receipt help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "show" -d 'Print the effective configuration'
+complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from config" -f -a "lint" -d 'Report policy smells in batten.toml (any smell is a violation)'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from generate" -f -a "completions" -d 'Emit the shell completion script for one shell'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from generate" -f -a "schema" -d 'Emit the JSON Schema for batten.toml, derived from the config types'
 complete -c batten -n "__fish_batten_using_subcommand help; and __fish_seen_subcommand_from receipt" -f -a "record" -d 'Record that the named check concluded pass against the current HEAD'

@@ -16,6 +16,7 @@ pub mod exit;
 pub mod git;
 pub mod hook;
 pub mod identity;
+pub mod lint;
 pub mod receipt;
 pub mod resolve;
 pub mod rules;
@@ -288,6 +289,20 @@ fn run_config(
             let json = serde_json::to_string_pretty(&config)?;
             writeln!(out, "{json}")?;
             Ok(ExitCode::Success)
+        }
+        // The alarm beside `--config-from`'s control (CLOUD-87): a smell is a
+        // verdict about the *config*, so any smell is a Violation — the same
+        // code a rule finding returns, because it is the same kind of answer.
+        // An unparseable config is a Usage error, raised by the loader.
+        ConfigCommand::Lint => {
+            let smells = lint::run(Path::new("."), overrides.config_from.as_deref())?;
+            for smell in &smells {
+                writeln!(out, "{}", smell.line_text())?;
+            }
+            // The count is stated even at zero: silence would be
+            // indistinguishable from "the lint did not run".
+            writeln!(out, "config-lint: {} smell(s)", smells.len())?;
+            Ok(ExitCode::verdict(!smells.is_empty()))
         }
     }
 }

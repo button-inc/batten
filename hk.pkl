@@ -89,6 +89,15 @@ local gate = new Mapping<String, Step> {
   // their valid config is invalid, or waves through one `batten check` refuses.
   // Nothing in the Rust build reads the committed file, so only this diff can
   // notice (CLOUD-33).
+  // Consumer #1: the lint Batten ships, run against the config Batten is gated
+  // by. A policy engine whose own policy gates nothing is the failure this
+  // project exists to make impossible — and it is exactly the kind that hides,
+  // because the config parses, the schema validates and `batten check` exits 0
+  // over a rule set that has been switched off (CLOUD-87).
+  ["config-lint"] {
+    glob = List("batten.toml", "crates/batten/src/lint.rs", "crates/batten/src/trust.rs")
+    check = "mise run config-lint"
+  }
   ["schema-check"] {
     glob =
       List(

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#MISE description="Gate: batten.toml carries no policy smell — a set declared and empty, a rule switched off (CLOUD-87)"
+#
+# Consumer #1 in practice, not just in principle: the lint Batten ships is run
+# against the config Batten itself is gated by. A policy engine whose own policy
+# gates nothing is the failure this whole project exists to make impossible, and
+# it is exactly the kind that hides — the config parses, the schema validates,
+# `batten check` exits 0, and every one of those is true of a rule set that has
+# been switched off.
+#
+# Deliberately the single-tree class only. The base-ref comparison smells need a
+# trusted ref, and which ref that is belongs to the *caller* (CI passes
+# `--config-from origin/main`); baking one in here would make a local run's
+# verdict depend on whatever `origin/main` happens to be, which is a property of
+# the world rather than of the commit — the split `lock-check` had to learn.
+set -euo pipefail
+
+cd "${CONFIG_LINT_ROOT:-$(git rev-parse --show-toplevel)}"
+
+# `cargo run` rather than an installed binary, so the gate always judges the
+# working tree's engine and config together — the pair that ships.
+if ! output=$(cargo run --quiet -p batten -- config lint 2>&1); then
+	# The binary already emits pointer-only lines (`batten.toml:<line> <id>`);
+	# pass them through rather than re-deriving a message here.
+	echo "$output" >&2
+	echo "::error:: config-lint: batten.toml carries a policy smell" >&2
+	exit 1
+fi
+# The binary's last line is already the `config-lint: N smell(s)` summary;
+# echoing it verbatim keeps one wording rather than two that can disagree.
+echo "${output##*$'\n'}"

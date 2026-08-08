@@ -46,6 +46,16 @@ file itself for the "why", this is only the "where":
   that text to the model as the deny reason, where `batten: ` reads as a crash.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys,
   required `version`). Layering across sources is `resolve.rs`, not here.
+- `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_
+  config can still carry. Complements `trust.rs` rather than replacing it —
+  `--config-from` makes a weakening ineffective, this makes it visible. Two
+  classes: single-tree (a set declared and empty, a rule at `severity = "allow"`)
+  located by `toml::Spanned` so each smell carries a line, and base-ref smells
+  that reuse `trust::weakenings` and its `WeakeningKind` ids, so there is one
+  definition of "weakened". **Absent is not empty**: a key the config never
+  mentions is not a smell, or the lint would fire on every minimal config; the
+  deletion of a populated set is caught by the base-ref class instead. Any smell
+  is exit 2; an unparseable config is exit 1.
 - `trust.rs` — house-style §8 config trust (CLOUD-31): `load_base` reads the
   committed authority from a git ref via `git::show`, so `--config-from` loads
   policy out of band of the change under review and a branch cannot lower the
