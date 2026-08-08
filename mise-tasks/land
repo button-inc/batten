@@ -142,7 +142,13 @@ while :; do
 	# the `origin/main` it was linear against — so an amend, a rebase, or a main
 	# that moved all invalidate it. When it still holds, nothing has changed and
 	# re-running `verify` would spend minutes reaching a known answer.
-	if mise run verified; then
+	#
+	# Asked as a QUESTION, so its output is dropped: `verified` is a gate, and a
+	# gate answering "no receipt" says so with an `::error::`. Here a no is the
+	# ordinary answer — the commit was just made — and printing it on every
+	# successful landing is how `::error::` stops meaning anything. The same call
+	# below is a GUARD, where a no really is the failure, and it keeps its voice.
+	if mise run verified >/dev/null 2>&1; then
 		echo "land: lap $lap — HEAD already carries a verify receipt; not re-proving it"
 	else
 		mise run verify ||

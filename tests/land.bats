@@ -135,10 +135,20 @@ stub_mise() {
 #!/usr/bin/env bash
 echo "\$*" >>"$BATS_TEST_TMPDIR/misecalls"
 rc="$BATS_TEST_TMPDIR/rc.mise.\$2"
-[ ! -f "\$rc" ] || exit "\$(cat "\$rc")"
+if [ -f "\$rc" ]; then
+  echo "::error:: \$2 failed" >&2
+  exit "\$(cat "\$rc")"
+fi
 case "\$2" in
   verify)   : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
-  verified) [ -f "$BATS_TEST_TMPDIR/receipt" ] || exit 1; exit 0 ;;
+  verified)
+    if [ ! -f "$BATS_TEST_TMPDIR/receipt" ]; then
+      # $(verified) is a gate: a missing receipt is a failure and it SAYS so.
+      # Modelling that is what makes the quiet-success property meaningful.
+      echo "::error:: HEAD is NOT verified — no verify receipt for this commit." >&2
+      exit 1
+    fi
+    exit 0 ;;
   ci-wait)  [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
   main-watch)
     n=\$(cat "$BATS_TEST_TMPDIR/mw.calls" 2>/dev/null || echo 0)
@@ -440,6 +450,33 @@ workflow_runs() {
 	run "$LAND"
 	[ "$status" -eq 0 ]
 	[ ! -s "$BATS_TEST_TMPDIR/ready" ]
+}
+
+@test "a landing that succeeds says nothing that reads as a failure" {
+	# The property that would have caught CLOUD-245. The suite asserted the
+	# messages it WANTED and never that the success path was quiet, so a probe
+	# whose ordinary answer is an `::error::` shipped and printed one on every
+	# green landing. A reader who sees `::error::` on success learns to skim it,
+	# and the next one that matters is skimmed too.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"::error::"* ]] || {
+		echo "a green landing emitted an ::error:: line:"
+		printf '%s\n' "$output" | grep '::error::'
+		return 1
+	}
+}
+
+@test "the receipt guard still has its voice when it is the real failure" {
+	# The same call, asked as a guard rather than a probe: after a green
+	# `verify`, no receipt means something swallowed the verdict. Silencing both
+	# call sites would trade one defect for a worse one.
+	task_fails verified
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"::error::"* ]]
+	[[ "$output" == *"receipt"* ]]
 }
 
 @test "every way a lap can end is exercised above" {
