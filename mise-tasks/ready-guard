@@ -66,6 +66,15 @@ while IFS= read -r seg; do
 		esac
 	done
 	[ "${toks[$i]:-}" = "gh" ] || continue
+	# `gh pr ready --undo` is the INVERSE action: it converts a PR back to draft,
+	# which stops CI rather than starting it. Flags are stripped below so the verb
+	# can be matched positionally, which made `--undo` invisible and got the guard
+	# denying the one call that can only ever *save* CI minutes — including the
+	# one `land` now makes when it bails, so a retry push costs nothing.
+	has_undo=0
+	for t in "${toks[@]:$((i + 1))}"; do
+		[ "$t" = "--undo" ] && has_undo=1
+	done
 	words=()
 	for t in "${toks[@]:$((i + 1))}"; do
 		case "$t" in -*) ;; *) words+=("$t") ;; esac
@@ -74,7 +83,7 @@ while IFS= read -r seg; do
 	j=0
 	while [ "$((j + 1))" -lt "$n" ]; do
 		case "${words[$j]} ${words[$((j + 1))]}" in
-		"pr ready" | "pr ready-for-review") is_ready=1 ;;
+		"pr ready" | "pr ready-for-review") [ "$has_undo" = 1 ] || is_ready=1 ;;
 		esac
 		j=$((j + 1))
 	done

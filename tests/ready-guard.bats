@@ -106,3 +106,18 @@ receipts() {
 	run ready 'mise exec -- gh pr ready 42'
 	[[ "$output" != *deny* ]]
 }
+
+@test "gh pr ready --undo is the inverse action and is never gated" {
+	# `--undo` converts a PR back to draft, which stops CI rather than starting
+	# it, so a verify receipt is beside the point. The guard denied it because
+	# flags are stripped before the verb is matched — and that blocked the one
+	# call that can only save CI minutes, including the one `land` makes when it
+	# bails so the retry push is free.
+	run ready 'gh pr ready 167 --undo'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a plain gh pr ready is still gated" {
+	run ready 'gh pr ready 167'
+	[[ "$output" == *'"deny"'* ]]
+}
