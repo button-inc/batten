@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.30](https://github.com/button-inc/batten/compare/v0.0.29...v0.0.30) - 2026-08-08
+
+### Added
+
+- *(config)* publish the two new tables in the JSON Schema
+- *(tables)* count suppression markers and type mutating verbs, from config
+- *(git)* decide merged-ness by patch identity, never by reachability
+
+### Other
+
+- *(git)* pin what cumulative evidence claims, and the fast-forward shape
+
 ## [0.0.29](https://github.com/button-inc/batten/compare/v0.0.28...v0.0.29) - 2026-08-08
 
 ### Added
