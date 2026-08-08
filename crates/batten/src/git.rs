@@ -21,25 +21,350 @@
 //! root as the common dir's parent is only sound when that directory is a
 //! `<root>/.git`. If a consumer ever needs those layouts, the escalation path
 //! is `git worktree list --porcelain`, not more `parent()` arithmetic.
+//!
+//! # Merged-ness (CLOUD-36)
+//!
+//! This module is also where "did this work land?" is answered, because every
+//! `git` process the crate spawns is spawned here — `no_second_git_invoker`
+//! below is the gate that keeps a second git-touching module, and therefore a
+//! second answer to *landed*, from appearing.
+//!
+//! **The answer is content, never reachability.** Every reachability test —
+//! asking whether a commit is an ancestor of the target, or which branches
+//! contain it — keys on the commit SHA, and every one of them answers "not
+//! landed" about a branch that was rebased, squashed, or cherry-picked on its
+//! way to `main`. On a fast-forward trunk that is the *normal* way work lands.
+//! A false *not landed* on work that did land is silently wrong rather than
+//! loudly broken, and it is the failure class Batten exists to catch. So
+//! [`landing`] compares **patch identity** — `git patch-id --stable` over each
+//! change — and, for the squash case that per-commit identity cannot see, the
+//! patch identity of the branch's cumulative diff.
+//!
+//! Reachability appears in exactly one role: *selecting* which commits to hash.
+//! It never produces a verdict. Every [`Verdict::Landed`] is backed by an
+//! [`Evidence`] naming the target commit whose patch identity matched, and the
+//! type offers no way to spell a landed verdict while holding no evidence.
+//! [`no_ancestry_decides_merged_ness`] is the source-level gate.
+//!
+//! Two consequences worth stating, because neither is obvious:
+//!
+//! * **A negative answer is bounded, and says so.** The target is searched over
+//!   a [`Window`] of commits, so the honest negative is
+//!   [`Verdict::NotLandedWithinWindow`] with [`Scan::target_truncated`] — never
+//!   a bare "no". The type refuses to assert an absence it did not prove,
+//!   because *that* absence is the dangerous direction.
+//! * **`git cherry` is deliberately not used**, despite being git's own
+//!   patch-id equivalence tool. Its upstream limit defaults to the merge base,
+//!   so a branch that was cherry-picked to the target and *then* synced with it
+//!   has its own landing fall outside the search — and `git cherry` reports the
+//!   work as unlanded. It also reports only `+`/`-`, which cannot populate
+//!   [`Evidence`]. The technique is adopted; the command is not.
+//!
+//! [`no_ancestry_decides_merged_ness`]: tests::no_ancestry_decides_merged_ness
 
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
 
 use crate::error::UsageError;
 
-/// Environment variables that override git's repository discovery. Scrubbed
-/// from the child so resolution depends on `start` and the filesystem, never
-/// on ambient state.
-const DISCOVERY_OVERRIDES: [&str; 5] = [
-    "GIT_DIR",
-    "GIT_COMMON_DIR",
-    "GIT_WORK_TREE",
-    "GIT_CEILING_DIRECTORIES",
-    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+/// Environment variables that point git at a *different* repository. Scrubbed
+/// from every child this module spawns, so an ambient `GIT_DIR` — a hook
+/// context, a wrapping git command — can never make a query answer about some
+/// other checkout than the directory it was handed.
+const DISCOVERY_REDIRECTS: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+
+/// Environment variables that *fence* git's upward search rather than
+/// redirecting it. [`repo_root`] scrubs these too, because its answer must be a
+/// function of `start` and the filesystem alone; a plain [`query`] leaves them
+/// in place, since a caller that fenced discovery on purpose (a test pinning a
+/// fixture inside a tmpdir) is relying on the fence to fail loudly.
+const DISCOVERY_FENCES: [&str; 2] = ["GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"];
+
+/// Environment variables that change the bytes a diff produces. Scrubbed
+/// alongside the discovery redirects, because a patch identity computed under
+/// an ambient `GIT_EXTERNAL_DIFF` is not comparable with one computed without.
+const DIFF_ENV: [&str; 2] = ["GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS"];
+
+/// Config pinned on every patch-identity computation.
+///
+/// A patch identity is only comparable against another produced the same way,
+/// so nothing that shapes the diff may be left to config. `-c` rather than
+/// blanking `GIT_CONFIG_GLOBAL`, because the values that break comparability
+/// can also live in the repository's own `.git/config`, which no environment
+/// variable neutralises — and blanking global config would disturb credential
+/// and transport settings that are none of this module's business.
+///
+/// `diff.renames` is the load-bearing one: it defaults to *true* for the
+/// porcelain `git diff` used on the cumulative side and *false* for plumbing.
+/// Unpinned, the two sides silently disagree about any commit that renames a
+/// file, and a real landing goes unrecognised.
+const DIFF_CONFIG: [&str; 20] = [
+    "-c",
+    "diff.renames=false",
+    "-c",
+    "diff.algorithm=myers",
+    "-c",
+    "diff.indentHeuristic=true",
+    "-c",
+    "diff.context=3",
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+    "-c",
+    "diff.relative=false",
+    "-c",
+    "diff.ignoreSubmodules=none",
+    "-c",
+    "core.quotePath=true",
+    "-c",
+    "color.ui=false",
 ];
+
+/// Diff flags pinned alongside [`DIFF_CONFIG`].
+///
+/// `--binary` is not an optimisation: without it a binary change renders as
+/// `Binary files a/x and b/x differ` — identical text for *any* two changes to
+/// the same path, so two unrelated binary edits would share a patch identity
+/// and one would be reported as the other's landing. The cost is that a binary
+/// patch body is zlib output, deterministic for a given zlib but not guaranteed
+/// across zlib builds; a stability caveat is the right trade against a wrong
+/// answer.
+const DIFF_FLAGS: [&str; 6] = [
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-renames",
+    "-U3",
+    "--binary",
+];
+
+/// A `git patch-id --stable` hash: the identity of a change's *content*,
+/// independent of the commit that carries it.
+///
+/// Two commits with the same `PatchId` make the same change to the same paths,
+/// whatever their SHA, author, message, date, or parents — which is precisely
+/// what makes a rebased, amended, or cherry-picked commit recognisable after it
+/// lands under a new SHA.
+///
+/// Not a content address: git's normalisation drops whitespace and hunk line
+/// numbers, so a whitespace-only difference collides. That biases toward
+/// reporting work as landed, which is the safe direction for a primitive whose
+/// failure class is a false *not landed*.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct PatchId(String);
+
+impl PatchId {
+    /// Parse one lowercase-hex id as `git patch-id` prints it — 40 hex digits
+    /// in a SHA-1 repository, 64 in a SHA-256 one. Anything else is refused, so
+    /// a parsing slip can never manufacture an equality.
+    fn parse(text: &str) -> Result<Self> {
+        let ok = matches!(text.len(), 40 | 64)
+            && text
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f'));
+        if ok {
+            Ok(Self(text.to_owned()))
+        } else {
+            bail!("`git patch-id` printed {text:?}, which is not a patch identity")
+        }
+    }
+
+    /// The hash in git's own lowercase hex form.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for PatchId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// How far back on the target [`landing`] looks for a matching change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Window(NonZeroUsize);
+
+impl Window {
+    /// The default search depth: 1000 commits of the target.
+    ///
+    /// Chosen as "further back than any review cycle, short of a full-history
+    /// scan". The two directions are not symmetric — a window that is too small
+    /// yields the dangerous verdict, a window that is too large costs one
+    /// longer `git log` — so the default is generous and a caller may widen it.
+    /// A landing older than the window is reported as
+    /// [`Verdict::NotLandedWithinWindow`], never as a proven absence.
+    pub const DEFAULT: Self = Self(match NonZeroUsize::new(1000) {
+        Some(commits) => commits,
+        // Unreachable — 1000 is not zero — but the lints forbid a panicking
+        // path, and a const `match` keeps this total.
+        None => NonZeroUsize::MIN,
+    });
+
+    /// A window of `commits` target commits. Non-zero by type: a zero window
+    /// would search nothing and report every branch unlanded.
+    #[must_use]
+    pub const fn of(commits: NonZeroUsize) -> Self {
+        Self(commits)
+    }
+
+    /// The depth, as git's `--max-count` takes it.
+    #[must_use]
+    pub const fn commits(self) -> usize {
+        self.0.get()
+    }
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// What made one change count as landed. Every variant that means "landed"
+/// names the target commit that carries it — there is no way to record a
+/// landing without the proof of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Evidence {
+    /// A commit on the target makes the identical change.
+    PatchId {
+        /// The target commit carrying it.
+        target_commit: String,
+        /// The identity both sides share.
+        patch_id: PatchId,
+    },
+    /// A commit on the target makes the branch's *cumulative* change — the
+    /// squash-merge shape, where no individual commit survived the merge and
+    /// so none of them matches on its own.
+    Squash {
+        /// The squashed commit on the target.
+        target_commit: String,
+        /// The identity of the branch's whole diff.
+        patch_id: PatchId,
+    },
+    /// The commit changes nothing, so there is nothing of it to land.
+    NoContent,
+}
+
+impl Evidence {
+    /// The target commit this evidence points at, or `None` for
+    /// [`Evidence::NoContent`], which points at nothing.
+    #[must_use]
+    pub fn target_commit(&self) -> Option<&str> {
+        match self {
+            Evidence::PatchId { target_commit, .. } | Evidence::Squash { target_commit, .. } => {
+                Some(target_commit)
+            }
+            Evidence::NoContent => None,
+        }
+    }
+}
+
+/// The landing verdict for a branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Verdict {
+    /// Every commit that changes anything is accounted for on the target.
+    Landed,
+    /// Some commits landed and some did not.
+    PartiallyLanded,
+    /// The branch's net change against the target is empty, so there is no
+    /// unlanded work — an empty commit, a change and its revert, or a branch
+    /// the target has already absorbed entirely.
+    NothingToLand,
+    /// No match was found **within the window searched**. Named for what it
+    /// proves: this is an unproven absence, not an absence. A consumer
+    /// rendering it must say so, and [`Scan::target_truncated`] says whether
+    /// older history went unexamined.
+    NotLandedWithinWindow,
+}
+
+/// What [`landing`] actually looked at, so a negative verdict can be read for
+/// how much it proves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Scan {
+    /// The resolved full SHA of the target.
+    pub target_commit: String,
+    /// The resolved full SHA of the head.
+    pub head_commit: String,
+    /// How many target commits were hashed.
+    pub target_commits_scanned: usize,
+    /// The window filled: older target history was **not** examined, so a
+    /// negative verdict is unproven rather than false.
+    pub target_truncated: bool,
+    /// The head-side window filled: the branch has more commits than were
+    /// examined.
+    pub head_truncated: bool,
+    /// The window this scan used.
+    pub window: Window,
+}
+
+/// One head-side commit and what became of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct CommitLanding {
+    /// Full SHA on the head side.
+    pub commit: String,
+    /// `None` for a commit whose diff is empty: `git patch-id` emits nothing
+    /// for an empty patch, and an absent identity must never be matched against
+    /// another absent identity.
+    pub patch_id: Option<PatchId>,
+    /// The proof this commit's change is on the target, or `None`.
+    pub evidence: Option<Evidence>,
+}
+
+/// The result of [`landing`]: pointer-only — SHAs and identities, never file
+/// content — and byte-stable for identical repository state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct Landing {
+    /// The verdict, derived from the evidence below and nothing else.
+    pub verdict: Verdict,
+    /// Head-side commits, oldest first — the fixed reporting order.
+    pub commits: Vec<CommitLanding>,
+    /// The patch identity of the whole branch; `None` when its cumulative diff
+    /// is empty.
+    pub cumulative: Option<PatchId>,
+    /// Branch-level proof: `Some` when the cumulative change landed as one
+    /// commit on the target (a squash merge).
+    pub cumulative_evidence: Option<Evidence>,
+    /// What was examined to reach the verdict.
+    pub scanned: Scan,
+}
+
+impl Landing {
+    /// Whether the branch has no unlanded content — [`Verdict::Landed`] or
+    /// [`Verdict::NothingToLand`]. A branch with nothing to land is not
+    /// unlanded work, and a consumer that only matched `Landed` would report a
+    /// fast-forwarded branch as outstanding.
+    #[must_use]
+    pub const fn is_landed(&self) -> bool {
+        matches!(self.verdict, Verdict::Landed | Verdict::NothingToLand)
+    }
+
+    /// The head-side commits with no proof on the target — the pointer a
+    /// consumer surfaces for a negative verdict.
+    #[must_use]
+    pub fn unlanded(&self) -> Vec<&str> {
+        self.commits
+            .iter()
+            .filter(|commit| commit.evidence.is_none())
+            .map(|commit| commit.commit.as_str())
+            .collect()
+    }
+}
 
 /// Resolve the root of the repository containing `start`: the working-tree
 /// directory whose `.git` is the repository's *common* directory.
@@ -67,10 +392,8 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
             start.display()
         )));
     }
-    let mut command = Command::new("git");
+    let mut command = command(start);
     command
-        .arg("-C")
-        .arg(start)
         // Option order is load-bearing twice over: output lines mirror option
         // order, and `--path-format` applies only to the options after it (an
         // unqualified `--git-common-dir` prints a cwd-relative path).
@@ -80,7 +403,10 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
             "--path-format=absolute",
             "--git-common-dir",
         ]);
-    for var in DISCOVERY_OVERRIDES {
+    // The fences are scrubbed here and only here: this answer must be a
+    // function of `start` and the filesystem, whereas a caller that fenced
+    // discovery on purpose is relying on a plain `query` to fail loudly.
+    for var in DISCOVERY_FENCES {
         command.env_remove(var);
     }
     let output = command
@@ -159,16 +485,15 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
             dir.display()
         )));
     }
-    let mut command = Command::new("git");
+    let mut command = command(dir);
     // `--` is not accepted after a `rev:path` argument; the single token is
     // already unambiguous to git, and refusing a `reference` that looks like an
     // option is the caller's business (a leading `-` simply fails below).
-    command
-        .arg("-C")
-        .arg(dir)
-        .arg("show")
-        .arg(format!("{reference}:{path}"));
-    for var in DISCOVERY_OVERRIDES {
+    command.arg("show").arg(format!("{reference}:{path}"));
+    // A trust boundary answers about *this* repository or it is not one, so the
+    // fences are scrubbed here too — the same rule `repo_root` follows, and a
+    // stricter one than a plain `query` needs.
+    for var in DISCOVERY_FENCES {
         command.env_remove(var);
     }
     let output = command
@@ -183,6 +508,326 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
         )));
     }
     String::from_utf8(output.stdout).with_context(|| format!("decode {reference}:{path} as UTF-8"))
+}
+
+/// The `git` child every query in this module is built from: `-C dir`, with
+/// the redirect variables scrubbed so the answer is about the directory it was
+/// handed and not about whatever repository the ambient environment names.
+fn command(dir: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(dir);
+    for var in DISCOVERY_REDIRECTS {
+        command.env_remove(var);
+    }
+    command
+}
+
+/// Run a fixed, read-only `git` query in `dir` and return its trimmed stdout.
+///
+/// The one git-plumbing entry point for the rest of the crate — `receipt.rs`
+/// called a private copy of this before CLOUD-36 collapsed them, and
+/// `no_second_git_invoker` is what keeps a third from appearing.
+///
+/// # Errors
+///
+/// A non-zero exit is the *expected* bad-checkout condition and raises a
+/// [`UsageError`] (exit `1`) carrying `refusal` — git's own stderr is
+/// version-dependent prose and never reaches the caller, so the message stays
+/// deterministic. Failing to run `git` at all, or output that is not UTF-8, is
+/// an internal error (exit `3`).
+pub fn query(dir: &Path, args: &[&str], refusal: &str) -> Result<String> {
+    let bytes = query_bytes(dir, args, refusal)?;
+    let stdout = String::from_utf8(bytes)
+        .map_err(|_| UsageError::raise(format!("`git {}` output is not valid UTF-8", args.join(" "))))?;
+    Ok(stdout.trim_end_matches(['\r', '\n']).to_owned())
+}
+
+/// [`query`] without the UTF-8 requirement, for output that may carry raw
+/// pathnames or file content.
+///
+/// # Errors
+///
+/// As [`query`], minus the decoding failure.
+pub fn query_bytes(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<u8>> {
+    let output = command(dir)
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .with_context(|| format!("run `git {}`", args.join(" ")))?;
+    if !output.status.success() {
+        return Err(UsageError::raise(refusal));
+    }
+    Ok(output.stdout)
+}
+
+/// Resolve `rev` to the full SHA of a commit.
+///
+/// `--verify` yields exactly one line or a failure; the `^{commit}` peel
+/// refuses a tag, tree, or blob rather than going on to diff something
+/// meaningless; `--end-of-options` stops a rev that happens to look like a flag
+/// from being read as one.
+fn resolve_commit(dir: &Path, rev: &str, role: &str) -> Result<String> {
+    query(
+        dir,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{rev}^{{commit}}"),
+        ],
+        &format!("{role} {rev:?} does not resolve to a commit in this repository"),
+    )
+}
+
+/// Enumerate commits, newest first, under the fixed selection this module uses
+/// everywhere: topological order (commit-date order can reorder commits that
+/// share a timestamp), no merges, capped by the window.
+///
+/// Merges are excluded deliberately, not incidentally: a merge has no patch of
+/// its own, and the commits it brings in are separately enumerated here. That
+/// stays true only while this stays a full walk — adding `--first-parent` would
+/// make everything merged in invisible, which is a silent false *not landed*.
+fn rev_list(dir: &Path, window: Window, range: &str) -> Result<Vec<String>> {
+    let max = format!("--max-count={}", window.commits());
+    let out = query(
+        dir,
+        &[
+            "rev-list",
+            "--topo-order",
+            "--no-merges",
+            &max,
+            "--end-of-options",
+            range,
+        ],
+        &format!("cannot enumerate commits for {range:?}"),
+    )?;
+    Ok(out.lines().map(ToOwned::to_owned).collect())
+}
+
+/// Run a diff-producing `git` command and pipe it through
+/// `git patch-id --stable`, returning the `(identity, commit)` pairs in the
+/// order git emitted them.
+///
+/// One pipeline, two processes, whatever the window: `git log -p` labels each
+/// patch with its `commit <sha>` line, which is exactly what makes `patch-id`
+/// print the commit alongside the identity. The alternative — hashing each
+/// commit in its own `git` invocation — is a process per commit for the same
+/// answer.
+///
+/// `--stable` is not the default: `git patch-id` computes an *unstable* id
+/// unless asked, and an unstable id depends on the order files appear in the
+/// diff.
+fn patch_ids(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<(PatchId, String)>> {
+    let mut producer = command(dir);
+    producer
+        .args(DIFF_CONFIG)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    for var in DIFF_ENV {
+        producer.env_remove(var);
+    }
+    let mut producer = producer
+        .spawn()
+        .with_context(|| format!("run `git {}`", args.join(" ")))?;
+    let Some(patches) = producer.stdout.take() else {
+        bail!("`git {}` produced no stdout pipe", args.join(" "));
+    };
+    // Nothing is written to a child's stdin here, so there is no pipe-buffer
+    // deadlock to guard against: git writes patches straight into `patch-id`
+    // and only the (small) identity list comes back to this process.
+    let output = command(dir)
+        .args(["patch-id", "--stable"])
+        .stdin(Stdio::from(patches))
+        .stderr(Stdio::null())
+        .output()
+        .context("run `git patch-id --stable`")?;
+    let produced = producer.wait().context("wait for the diff to finish")?;
+    if !produced.success() {
+        return Err(UsageError::raise(refusal));
+    }
+    if !output.status.success() {
+        bail!("`git patch-id --stable` failed");
+    }
+    let stdout =
+        String::from_utf8(output.stdout).context("decode `git patch-id` output as UTF-8")?;
+    let mut ids = Vec::new();
+    for line in stdout.lines() {
+        let mut fields = line.split_whitespace();
+        let (Some(id), Some(commit)) = (fields.next(), fields.next()) else {
+            bail!("`git patch-id` printed an unparseable line");
+        };
+        ids.push((PatchId::parse(id)?, commit.to_owned()));
+    }
+    Ok(ids)
+}
+
+/// The patch identity of every commit reachable by `range`, keyed for lookup.
+///
+/// When two commits share an identity — a revert and a re-apply, a change
+/// cherry-picked twice — the **oldest** wins, so the evidence names the actual
+/// landing rather than a later copy of it. `git log` walks newest-first, so
+/// overwriting on each insert leaves the oldest in place.
+fn patch_id_index(dir: &Path, window: Window, range: &str) -> Result<BTreeMap<PatchId, String>> {
+    let max = format!("--max-count={}", window.commits());
+    let mut args = vec!["log", "-p", "--topo-order", "--no-merges", "--root", &max];
+    args.extend(DIFF_FLAGS);
+    args.extend(["--end-of-options", range]);
+    let mut index = BTreeMap::new();
+    for (id, commit) in patch_ids(dir, &args, &format!("cannot read commits for {range:?}"))? {
+        index.insert(id, commit);
+    }
+    Ok(index)
+}
+
+/// The patch identity of the branch's whole change: `git diff target...head`,
+/// which diffs the head against the point the two histories diverged.
+///
+/// Three dots, never two: a two-dot diff also carries the *inverse* of
+/// everything that landed on the target since the branch left it, so it could
+/// never equal a squashed commit no matter how faithfully the work landed.
+///
+/// `None` when the diff is empty — `git patch-id` prints nothing for an empty
+/// patch, and an absent identity must never compare equal to another absent
+/// identity.
+fn cumulative_patch_id(dir: &Path, target: &str, head: &str) -> Result<Option<PatchId>> {
+    let range = format!("{target}...{head}");
+    let mut args = vec!["diff"];
+    args.extend(DIFF_FLAGS);
+    args.extend(["--end-of-options", &range]);
+    let ids = patch_ids(
+        dir,
+        &args,
+        "the target and the head have no common history, so there is no branch content to compare",
+    )?;
+    Ok(ids.into_iter().next().map(|(id, _)| id))
+}
+
+/// Decide whether the work on `head` has landed on `target`, by the identity of
+/// the *changes* rather than by reachability.
+///
+/// A rebased-and-landed branch, a squash-merged branch, and a cherry-picked
+/// commit are all reported as landed, because all three leave the same change
+/// on the target under a different SHA with no reachability path back to the
+/// original. See the module documentation for why the opposite answer is the
+/// one that has to be got right.
+///
+/// Deterministic and byte-stable for a fixed repository state, target, head,
+/// and window: fixed command lines with every diff knob pinned, fixed ordering,
+/// no dependence on ambient environment or user config. Reads refs as they are
+/// on disk — it writes nothing, prints nothing, and fetches nothing, so a stale
+/// `origin/main` is the caller's problem to refresh (agents fetch, gates
+/// decide).
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1` at a consumer boundary) when `target` or
+/// `head` does not resolve to a commit, when `repo` is not inside a repository,
+/// or when the two commits share no history. Returns an internal error when
+/// `git` cannot be run or prints output this module cannot parse.
+pub fn landing(repo: &Path, target: &str, head: &str, window: Window) -> Result<Landing> {
+    let target_commit = resolve_commit(repo, target, "target")?;
+    let head_commit = resolve_commit(repo, head, "head")?;
+
+    let target_commits = rev_list(repo, window, &target_commit)?;
+    let target_index = patch_id_index(repo, window, &target_commit)?;
+
+    let range = format!("{target_commit}..{head_commit}");
+    let head_commits = rev_list(repo, window, &range)?;
+    let head_index = patch_id_index(repo, window, &range)?;
+    // `patch_id_index` is keyed by identity for target lookups; the head side
+    // needs the inverse, and building it here keeps one pipeline per side.
+    let head_ids: BTreeMap<&str, &PatchId> = head_index
+        .iter()
+        .map(|(id, commit)| (commit.as_str(), id))
+        .collect();
+
+    // Oldest first: the reporting order is fixed, and `rev-list` walks newest
+    // first.
+    let commits: Vec<CommitLanding> = head_commits
+        .iter()
+        .rev()
+        .map(|commit| {
+            let patch_id = head_ids.get(commit.as_str()).map(|id| (*id).clone());
+            let evidence = match &patch_id {
+                // An empty diff has nothing to land, and — critically — no
+                // identity to match, so it can never pair with another empty
+                // commit on the target.
+                None => Some(Evidence::NoContent),
+                Some(id) => target_index.get(id).map(|target_commit| Evidence::PatchId {
+                    target_commit: target_commit.clone(),
+                    patch_id: id.clone(),
+                }),
+            };
+            CommitLanding {
+                commit: commit.clone(),
+                patch_id,
+                evidence,
+            }
+        })
+        .collect();
+
+    // Computed unconditionally, never short-circuited: a field whose presence
+    // depends on an early return is not byte-stable for identical input.
+    let cumulative = cumulative_patch_id(repo, &target_commit, &head_commit)?;
+    let cumulative_evidence = cumulative.as_ref().and_then(|id| {
+        target_index.get(id).map(|target_commit| Evidence::Squash {
+            target_commit: target_commit.clone(),
+            patch_id: id.clone(),
+        })
+    });
+
+    let verdict = verdict(&commits, cumulative.as_ref(), cumulative_evidence.as_ref());
+    Ok(Landing {
+        verdict,
+        commits,
+        cumulative,
+        cumulative_evidence,
+        scanned: Scan {
+            target_commit,
+            head_commit,
+            target_commits_scanned: target_commits.len(),
+            target_truncated: target_commits.len() >= window.commits(),
+            head_truncated: head_commits.len() >= window.commits(),
+            window,
+        },
+    })
+}
+
+/// Derive the verdict from the evidence and nothing else.
+///
+/// This is the only place a [`Verdict`] is constructed, which is what makes the
+/// module-level promise structural rather than aspirational: a landed verdict
+/// cannot be reached without an [`Evidence`] value, and every `Evidence` that
+/// means landed carries the target commit that proves it.
+fn verdict(
+    commits: &[CommitLanding],
+    cumulative: Option<&PatchId>,
+    cumulative_evidence: Option<&Evidence>,
+) -> Verdict {
+    // Checked first: a branch whose net change is empty has no unlanded work,
+    // whether that is an empty commit, a change and its revert, or a branch the
+    // target already contains outright.
+    if cumulative.is_none() {
+        return Verdict::NothingToLand;
+    }
+    let accounted = commits
+        .iter()
+        .filter(|commit| commit.evidence.is_some())
+        .count();
+    if accounted == commits.len() {
+        Verdict::Landed
+    } else if cumulative_evidence.is_some() {
+        // No individual commit survived the merge, but the branch's whole
+        // change is on the target as one commit. Per-commit evidence stays
+        // `None`, because none of them individually landed — the report must
+        // not lie about how.
+        Verdict::Landed
+    } else if accounted > 0 {
+        Verdict::PartiallyLanded
+    } else {
+        Verdict::NotLandedWithinWindow
+    }
 }
 
 #[cfg(test)]
@@ -214,7 +859,7 @@ mod tests {
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null");
-        for var in DISCOVERY_OVERRIDES {
+        for var in DISCOVERY_REDIRECTS.iter().chain(DISCOVERY_FENCES.iter()) {
             command.env_remove(var);
         }
         let output = command.output().expect("run git");
@@ -387,5 +1032,175 @@ mod tests {
             definitions, 1,
             "exactly one repo_root implementation may exist (git.rs)"
         );
+    }
+
+    /// Read every `src/*.rs`, optionally skipping this module.
+    fn crate_sources(skip_self: bool) -> Vec<(PathBuf, String)> {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut sources = Vec::new();
+        for entry in fs::read_dir(src).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension() != Some(OsStr::new("rs")) {
+                continue;
+            }
+            if skip_self && path.file_name() == Some(OsStr::new("git.rs")) {
+                continue;
+            }
+            let source = fs::read_to_string(&path).unwrap();
+            sources.push((path, source));
+        }
+        // `read_dir` order is filesystem-defined; a gate's failure message must
+        // not depend on it.
+        sources.sort_by(|a, b| a.0.cmp(&b.0));
+        sources
+    }
+
+    #[test]
+    fn no_ancestry_decides_merged_ness() {
+        // The gate that ships with the rule (CLOUD-36): merged-ness is decided
+        // by patch identity, never by reachability. Unlike the repo-root gate
+        // above, this one scans *this file too* — the decision logic lives
+        // here, so exempting it would gut the gate.
+        //
+        // Scope is `src/` only, deliberately: `tests/primitives.rs` must run a
+        // reachability query, because the keystone fixture proves ancestry gets
+        // the answer wrong on the exact input where this primitive gets it
+        // right.
+        //
+        // The list forbids precisely the *reachability-answer* surface and
+        // leaves every range form (`..`, `...`, `rev-list`, `--not`) legal —
+        // selecting which commits to hash is allowed, deciding with the result
+        // is not. Smuggling a reachability verdict past this means hand-writing
+        // a graph walk, which is a different and far more visible change.
+        // Tokens are assembled so this test's own source is not a match, and so
+        // that prose may still say "the merge base" with a space.
+        let forbidden = [
+            ["merge", "-base"].concat(),
+            ["merge", "_base"].concat(),
+            ["is", "-ancestor"].concat(),
+            ["is", "_ancestor"].concat(),
+            ["--con", "tains"].concat(),
+            ["--ancestry", "-path"].concat(),
+        ];
+        for (path, source) in crate_sources(false) {
+            for token in &forbidden {
+                assert!(
+                    !source.contains(token),
+                    "{}: contains {token:?}; merged-ness is decided by patch identity, never by \
+                     reachability (CLOUD-36) — a rebased landing is invisible to ancestry",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_second_git_invoker_exists() {
+        // The gate that makes the receipt.rs migration stick (CLOUD-36): every
+        // `git` process the crate spawns is spawned through this module, so
+        // there is one place where the discovery scrub, the pinned diff config,
+        // and the usage-vs-internal error split are decided.
+        //
+        // Precise by construction: rules.rs and hook.rs spawn *user-configured*
+        // programs through a variable program name and are untouched by this —
+        // what is forbidden is naming `git` as a literal program elsewhere.
+        let needle = ["Command::new(\"", "git\")"].concat();
+        for (path, source) in crate_sources(true) {
+            assert!(
+                !source.contains(needle.as_str()),
+                "{}: spawns git directly; call git::query so the environment scrub and the \
+                 usage-vs-internal split stay in one place (CLOUD-36)",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_patch_id_is_hex_of_a_hash_length() {
+        assert!(PatchId::parse(&"a".repeat(40)).is_ok(), "SHA-1 repository");
+        assert!(PatchId::parse(&"0".repeat(64)).is_ok(), "SHA-256 repository");
+        // A parsing slip must never manufacture an equality between two
+        // truncated or non-hex ids.
+        assert!(PatchId::parse("").is_err());
+        assert!(PatchId::parse(&"a".repeat(39)).is_err());
+        assert!(PatchId::parse(&"g".repeat(40)).is_err());
+        assert!(PatchId::parse(&"A".repeat(40)).is_err(), "lowercase only");
+    }
+
+    #[test]
+    fn the_verdict_is_derived_from_evidence_alone() {
+        let id = PatchId::parse(&"a".repeat(40)).unwrap();
+        let landed = |evidence: Option<Evidence>| CommitLanding {
+            commit: "c".repeat(40),
+            patch_id: Some(id.clone()),
+            evidence,
+        };
+        let proof = Evidence::PatchId {
+            target_commit: "t".repeat(40),
+            patch_id: id.clone(),
+        };
+
+        // An empty net change is settled before anything else: there is no
+        // unlanded work, whatever the individual commits did.
+        assert_eq!(verdict(&[], None, None), Verdict::NothingToLand);
+        assert_eq!(
+            verdict(&[landed(None)], None, None),
+            Verdict::NothingToLand,
+            "a change and its revert leave nothing to land"
+        );
+
+        assert_eq!(
+            verdict(&[landed(Some(proof.clone()))], Some(&id), None),
+            Verdict::Landed
+        );
+        assert_eq!(
+            verdict(&[landed(None)], Some(&id), None),
+            Verdict::NotLandedWithinWindow,
+            "a negative names the window it searched, never a proven absence"
+        );
+        assert_eq!(
+            verdict(&[landed(Some(proof.clone())), landed(None)], Some(&id), None),
+            Verdict::PartiallyLanded
+        );
+        // The squash path: no commit matched individually, but the branch's
+        // whole change is on the target.
+        let squash = Evidence::Squash {
+            target_commit: "s".repeat(40),
+            patch_id: id.clone(),
+        };
+        assert_eq!(
+            verdict(&[landed(None), landed(None)], Some(&id), Some(&squash)),
+            Verdict::Landed
+        );
+    }
+
+    #[test]
+    fn a_window_cannot_be_empty_and_defaults_generously() {
+        // The asymmetry, pinned: too small a window is a false "not landed",
+        // too large is a slower `git log`.
+        assert_eq!(Window::DEFAULT.commits(), 1000);
+        assert_eq!(Window::default(), Window::DEFAULT);
+        assert_eq!(Window::of(NonZeroUsize::MIN).commits(), 1);
+    }
+
+    #[test]
+    fn evidence_that_means_landed_always_names_a_target_commit() {
+        // The structural half of "no verdict without proof": the only variant
+        // that names nothing is the one that means nothing landed.
+        let id = PatchId::parse(&"a".repeat(40)).unwrap();
+        let target = "t".repeat(40);
+        for evidence in [
+            Evidence::PatchId {
+                target_commit: target.clone(),
+                patch_id: id.clone(),
+            },
+            Evidence::Squash {
+                target_commit: target.clone(),
+                patch_id: id,
+            },
+        ] {
+            assert_eq!(evidence.target_commit(), Some(target.as_str()));
+        }
+        assert_eq!(Evidence::NoContent.target_commit(), None);
     }
 }

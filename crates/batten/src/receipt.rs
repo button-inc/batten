@@ -50,8 +50,9 @@
 //! * **Git facts come from fixed, read-only plumbing queries** (`git
 //!   rev-parse`, `git show HEAD:batten.toml`). A read-effect verb may run a
 //!   fixed VCS query; what it must never reach is user-supplied code
-//!   (CLOUD-170's actual invariant). These private helpers migrate to the
-//!   shared git-primitives module once it lands.
+//!   (CLOUD-170's actual invariant). These run through [`crate::git::query`],
+//!   the one git-plumbing entry point (CLOUD-36) — the private copies this
+//!   module used to carry are gone, and a source-level gate keeps them gone.
 //! * **`policyDigest` hashes the policy committed at HEAD** (`git show
 //!   HEAD:batten.toml`), never working-tree bytes: the statement's subject is
 //!   a commit digest, so every byte it binds must come from that commit.
@@ -241,7 +242,8 @@ struct RepoFacts {
 }
 
 fn repo_facts() -> Result<RepoFacts> {
-    let git_dir = git_query(
+    let git_dir = git::query(
+        Path::new("."),
         &["rev-parse", "--absolute-git-dir"],
         "not a git repository, so there is no HEAD to key a receipt to",
     )?;
@@ -253,11 +255,13 @@ fn repo_facts() -> Result<RepoFacts> {
         .to_str()
         .ok_or_else(|| UsageError::raise("the repository root is not valid UTF-8"))?
         .to_owned();
-    let head = git_query(
+    let head = git::query(
+        Path::new("."),
         &["rev-parse", "HEAD"],
         "HEAD does not resolve, so there is no commit to key a receipt to",
     )?;
-    let main = git_query(
+    let main = git::query(
+        Path::new("."),
         &["rev-parse", "origin/main"],
         "origin/main does not resolve, so currency cannot be judged. This is a checkout problem, not a verification failure",
     )?;
@@ -267,34 +271,6 @@ fn repo_facts() -> Result<RepoFacts> {
         git_dir,
         repo_root,
     })
-}
-
-/// Run a fixed, read-only `git` query and return its trimmed stdout.
-///
-/// A non-zero exit is the *expected* bad-checkout condition and maps to
-/// [`UsageError`] with `refusal` as the reason; only failing to run `git` at
-/// all is an internal error.
-fn git_query(args: &[&str], refusal: &str) -> Result<String> {
-    let bytes = git_query_bytes(args, refusal)?;
-    let stdout = String::from_utf8(bytes).map_err(|_| {
-        UsageError::raise(format!(
-            "`git {}` output is not valid UTF-8",
-            args.join(" ")
-        ))
-    })?;
-    Ok(stdout.trim_end_matches(['\r', '\n']).to_owned())
-}
-
-fn git_query_bytes(args: &[&str], refusal: &str) -> Result<Vec<u8>> {
-    let output = std::process::Command::new("git")
-        .args(args)
-        .stderr(std::process::Stdio::null())
-        .output()
-        .with_context(|| format!("run `git {}`", args.join(" ")))?;
-    if !output.status.success() {
-        return Err(UsageError::raise(refusal));
-    }
-    Ok(output.stdout)
 }
 
 /// Validate a check name for use as an identity field and a filename
@@ -383,7 +359,8 @@ fn rfc3339_utc(unix_seconds: u64) -> String {
 pub fn run_record(check: &str) -> Result<ExitCode> {
     validate_check_name(check)?;
     let facts = repo_facts()?;
-    let policy = git_query_bytes(
+    let policy = git::query_bytes(
+        Path::new("."),
         &["show", "HEAD:batten.toml"],
         "batten.toml is not committed at HEAD, so there is no policy to digest",
     )?;
