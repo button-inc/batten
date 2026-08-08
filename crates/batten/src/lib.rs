@@ -23,6 +23,7 @@ pub mod severity;
 pub mod spec;
 pub mod state;
 pub mod surface;
+pub mod trust;
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -54,6 +55,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     let Cli {
         strictness,
         fail_on_warning,
+        config_from,
         command,
     } = cli;
     // The flag layer of the §8 precedence chain; every config read in this run
@@ -61,15 +63,16 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     let overrides = Overrides {
         strictness,
         fail_on_warning,
+        config_from,
     };
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
-        Some(Command::Check { json }) => run_rules(out, overrides, rules::run_static, json),
-        Some(Command::Enforce { json }) => run_rules(out, overrides, rules::run_all, json),
-        Some(Command::Config { command }) => run_config(&command, overrides, out),
+        Some(Command::Check { json }) => run_rules(out, &overrides, rules::run_static, json),
+        Some(Command::Enforce { json }) => run_rules(out, &overrides, rules::run_all, json),
+        Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Generate { command }) => run_generate(&command, out),
         Some(Command::Hook { harness }) => run_hook(harness, out),
@@ -146,7 +149,21 @@ struct FindingView<'a> {
 #[derive(Debug, serde::Serialize)]
 struct CheckReport<'a> {
     fail_on_warning: bool,
+    /// The keys the working tree weakened relative to `--config-from`'s ref.
+    /// Absent when the run did not name one, so the field's presence says
+    /// "a base ref was compared" rather than "nothing was weakened".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_delta: Option<Vec<DeltaView<'a>>>,
     findings: Vec<FindingView<'a>>,
+}
+
+/// One weakened key in the `-J` payload, the same pointer the human channel
+/// prints, split into its parts so a consumer need not parse the arrow.
+#[derive(Debug, serde::Serialize)]
+struct DeltaView<'a> {
+    key: &'a str,
+    base: &'a str,
+    working: &'a str,
 }
 
 /// Run the configured rules against the current directory and report findings.
@@ -168,21 +185,46 @@ struct CheckReport<'a> {
 /// that promotion: a warn finding prints either way, and only the verdict moves.
 fn run_rules(
     out: &mut dyn Write,
-    overrides: Overrides,
+    overrides: &Overrides,
     runner: fn(&[rules::Rule], &Path) -> Result<Vec<rules::Finding>>,
     json: bool,
 ) -> Result<ExitCode> {
     // The *resolved* rule set, so a local override's added rules are gates a run
     // actually applies rather than config the tool merely prints. The promotion
     // setting comes off the same resolution, so one §8 chain decides both.
+    let base_ref = overrides.config_from.as_deref();
     let config = resolve::resolve(Path::new("."), overrides)?;
     let findings = runner(&config.rules, Path::new("."))?;
+
+    // The working-tree-vs-base delta, computed only when a base ref was named.
+    // It is *reporting*, not a verdict: the exit code below comes from the rules
+    // as evaluated against the base config, which is what makes the gate
+    // un-loweable. Turning a weakening into a violation on its own is `config
+    // lint`'s job (CLOUD-87), which reuses this same comparison.
+    let delta = match base_ref {
+        Some(reference) => {
+            let base = trust::load_base(Path::new("."), reference)?;
+            let working = config::load(&Path::new(".").join(config::CONFIG_FILE))?;
+            Some(trust::weakenings(&base, &working))
+        }
+        None => None,
+    };
     if json {
         // A data channel emits its document unconditionally — including the
         // empty one for a clean run. "Prints nothing when clean" (§6) is the
         // human channel's contract; JSON that is sometimes absent is unparseable.
         let report = CheckReport {
             fail_on_warning: config.fail_on_warning,
+            config_delta: delta.as_ref().map(|weakenings| {
+                weakenings
+                    .iter()
+                    .map(|weakening| DeltaView {
+                        key: &weakening.key,
+                        base: &weakening.base,
+                        working: &weakening.working,
+                    })
+                    .collect()
+            }),
             findings: findings
                 .iter()
                 .map(|finding| FindingView {
@@ -199,6 +241,21 @@ fn run_rules(
         };
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
+        // The delta precedes the findings and is summarised by a line naming the
+        // ref and the count, so a reader sees "judged against origin/main, 2
+        // keys weakened" before the findings that judgement produced. Emitted
+        // only under `--config-from`, so a run without one keeps stdout exactly
+        // the findings it has always been.
+        if let (Some(weakenings), Some(reference)) = (delta.as_ref(), base_ref) {
+            for weakening in weakenings {
+                writeln!(out, "{}", weakening.line())?;
+            }
+            writeln!(
+                out,
+                "config-from {reference}: {} weakened",
+                weakenings.len()
+            )?;
+        }
         for finding in &findings {
             // Pointer only: location and the rule that fired, never the line
             // text. A rule-scoped finding (no line) prints its pointer without
@@ -220,7 +277,7 @@ fn run_rules(
 
 fn run_config(
     command: &ConfigCommand,
-    overrides: Overrides,
+    overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {

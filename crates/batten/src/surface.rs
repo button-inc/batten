@@ -56,6 +56,45 @@ pub enum ValueDecl {
     },
 }
 
+/// A flag's `BATTEN_`-prefixed environment equivalent (§3), and which mechanism
+/// reads it.
+///
+/// One enum rather than a name plus a boolean, so "declared but read by nobody"
+/// and "read by both" are states that cannot be written down. That matters:
+/// `--config-from` shipped with `BATTEN_CONFIG_FROM` declared and read nowhere,
+/// and only an end-to-end test noticed (CLOUD-31). A decorative declaration
+/// documents an override that silently does nothing.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum EnvDecl {
+    /// The flag has no environment equivalent.
+    None,
+    /// `clap` applies the variable itself.
+    ///
+    /// For a flag that selects *behaviour* rather than a config value —
+    /// `--config-from` names where the authority is read from, and there is no
+    /// precedence layer to attribute it to.
+    Clap(&'static str),
+    /// [`crate::resolve`] layers the variable as its own §8 precedence layer.
+    ///
+    /// For a policy-bearing key (`--strictness`, `--fail-on-warning`): env and
+    /// flag must reach the resolver as *distinct* layers, or `config show` could
+    /// not attribute a value to one rather than the other, and the raise-only
+    /// clamp would compare a layer against itself.
+    Layered(&'static str),
+}
+
+impl EnvDecl {
+    /// The variable's name, whoever reads it.
+    #[must_use]
+    pub const fn name(&self) -> Option<&'static str> {
+        match self {
+            EnvDecl::None => None,
+            EnvDecl::Clap(name) | EnvDecl::Layered(name) => Some(*name),
+        }
+    }
+}
+
 /// One argument of one command, declared as data.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -68,14 +107,9 @@ pub struct FlagDecl {
     pub short: Option<char>,
     /// The one-line human summary.
     pub help: &'static str,
-    /// The `BATTEN_`-prefixed environment equivalent (§3), if the flag has one.
-    ///
-    /// Declared here so the layering is inspectable even when, as with
-    /// `--strictness`, the value is resolved by [`crate::resolve`] as its own
-    /// precedence layer rather than folded into the flag by `clap` — which is
-    /// what lets `config show` attribute a value to `env` or `flag` and not
-    /// conflate them.
-    pub env: Option<&'static str>,
+    /// The flag's `BATTEN_`-prefixed environment equivalent (§3), and **who
+    /// applies it**.
+    pub env: EnvDecl,
     /// Whether the flag applies to the whole invocation rather than one verb.
     pub global: bool,
     /// Whether this is a positional argument rather than a flag.
@@ -94,7 +128,7 @@ impl FlagDecl {
             long: None,
             short: None,
             help,
-            env: None,
+            env: EnvDecl::None,
             global: false,
             positional: true,
             required: true,
@@ -114,7 +148,7 @@ impl FlagDecl {
             long: Some(long),
             short: None,
             help,
-            env: None,
+            env: EnvDecl::None,
             global: false,
             positional: false,
             required: true,
@@ -138,7 +172,7 @@ impl FlagDecl {
             long: Some(long),
             short: None,
             help,
-            env: None,
+            env: EnvDecl::None,
             global: false,
             positional: false,
             required: false,
@@ -174,7 +208,7 @@ const STRICTNESS: FlagDecl = FlagDecl {
     long: Some("strictness"),
     short: None,
     help: "Raise how strictly gates apply (an override may only tighten policy)",
-    env: Some("BATTEN_STRICTNESS"),
+    env: EnvDecl::Layered("BATTEN_STRICTNESS"),
     global: true,
     positional: false,
     required: false,
@@ -199,11 +233,30 @@ const FAIL_ON_WARNING: FlagDecl = FlagDecl {
     long: Some("fail-on-warning"),
     short: None,
     help: "Promote a warn-severity finding to a violation (an override may only turn this on)",
-    env: Some("BATTEN_FAIL_ON_WARNING"),
+    env: EnvDecl::Layered("BATTEN_FAIL_ON_WARNING"),
     global: true,
     positional: false,
     required: false,
     value: ValueDecl::Bool,
+};
+
+/// `--config-from <ref>`, the config trust boundary (CLOUD-31).
+///
+/// Reads the committed authority from a git ref instead of the working tree, so
+/// a branch that edits `batten.toml` cannot lower the bar it is judged by.
+/// Global because it selects *which* config the whole run resolves from —
+/// scoping it per verb would let one verb be judged by the base and another by
+/// the working tree in the same invocation.
+const CONFIG_FROM: FlagDecl = FlagDecl {
+    id: "config_from",
+    long: Some("config-from"),
+    short: None,
+    help: "Read the committed config from a git ref (e.g. origin/main) instead of the working tree",
+    env: EnvDecl::Clap("BATTEN_CONFIG_FROM"),
+    global: true,
+    positional: false,
+    required: false,
+    value: ValueDecl::Str,
 };
 
 /// `-J`/`--json`, declared **per data-emitting command** (§6).
@@ -215,7 +268,7 @@ const JSON: FlagDecl = FlagDecl {
     long: Some("json"),
     short: Some('J'),
     help: "Emit findings as byte-stable JSON instead of pointer lines",
-    env: None,
+    env: EnvDecl::None,
     global: false,
     positional: false,
     required: false,
@@ -247,7 +300,7 @@ pub const ROOT: CommandDecl = CommandDecl {
     path: "",
     about: "Repo-agnostic policy engine that keeps \"done\" aligned with landed-and-verified work.",
     effect: Effect::Ask,
-    flags: &[STRICTNESS, FAIL_ON_WARNING],
+    flags: &[STRICTNESS, FAIL_ON_WARNING, CONFIG_FROM],
 };
 
 /// The command tree: every subcommand, with its summary, effect, and flags.
@@ -418,6 +471,11 @@ fn arg_of(decl: &FlagDecl) -> Arg {
         // A global arg may not also be required; the declarations honour that
         // and `tests::a_global_flag_is_never_required` holds it shut.
         arg = arg.global(decl.global).required(decl.required);
+        // Only a `Clap` env is applied here; a `Layered` one must reach the
+        // resolver as its own layer instead.
+        if let EnvDecl::Clap(name) = decl.env {
+            arg = arg.env(name);
+        }
     }
     match decl.value {
         ValueDecl::Bool => arg.action(ArgAction::SetTrue),
@@ -557,6 +615,33 @@ mod tests {
                      they are the emitted spec's `name`",
                     decl.path,
                     flag.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_declared_env_is_actually_read() {
+        // A declared-but-unread env var is the drift this design exists to
+        // remove: it documents an override that silently does nothing, and the
+        // only symptom is a user whose `BATTEN_*` export is ignored. Measured
+        // on `--config-from`, which declared `BATTEN_CONFIG_FROM` and read it
+        // nowhere until an E2E test caught it (CLOUD-31).
+        //
+        // `EnvDecl` makes "declared and read by nobody" unrepresentable for the
+        // clap half; this covers the other half — a `Layered` name the resolver
+        // does not actually have a row for.
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            for flag in decl.flags {
+                let EnvDecl::Layered(env) = flag.env else {
+                    continue;
+                };
+                assert!(
+                    crate::resolve::SETTINGS
+                        .iter()
+                        .any(|setting| setting.env == Some(env)),
+                    "{}: {env} is declared Layered but no SETTINGS row reads it",
+                    decl.path
                 );
             }
         }

@@ -134,7 +134,7 @@ _batten() {
 
     case "${cmd}" in
         batten)
-            opts="-h -V --strictness --fail-on-warning --help --version check enforce config spec generate hook receipt help"
+            opts="-h -V --strictness --fail-on-warning --config-from --help --version check enforce config spec generate hook receipt help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -142,6 +142,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -152,7 +156,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__check)
-            opts="-J -h --json --strictness --fail-on-warning --help"
+            opts="-J -h --json --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -160,6 +164,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -170,7 +178,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config)
-            opts="-h --strictness --fail-on-warning --help show help"
+            opts="-h --strictness --fail-on-warning --config-from --help show help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -178,6 +186,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -230,7 +242,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__show)
-            opts="-h --strictness --fail-on-warning --help"
+            opts="-h --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -238,6 +250,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -248,7 +264,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__enforce)
-            opts="-J -h --json --strictness --fail-on-warning --help"
+            opts="-J -h --json --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -256,6 +272,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -266,7 +286,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate)
-            opts="-h --strictness --fail-on-warning --help completions schema help"
+            opts="-h --strictness --fail-on-warning --config-from --help completions schema help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -274,6 +294,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -284,7 +308,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__completions)
-            opts="-h --shell --strictness --fail-on-warning --help"
+            opts="-h --shell --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -296,6 +320,10 @@ _batten() {
                     ;;
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -362,7 +390,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__schema)
-            opts="-h --strictness --fail-on-warning --help"
+            opts="-h --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -370,6 +398,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -576,7 +608,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__hook)
-            opts="-h --harness --strictness --fail-on-warning --help"
+            opts="-h --harness --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -590,6 +622,10 @@ _batten() {
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
                     return 0
                     ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -598,7 +634,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__receipt)
-            opts="-h --strictness --fail-on-warning --help record status help"
+            opts="-h --strictness --fail-on-warning --config-from --help record status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -606,6 +642,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -672,7 +712,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__receipt__subcmd__record)
-            opts="-h --strictness --fail-on-warning --help"
+            opts="-h --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -680,6 +720,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -690,7 +734,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__receipt__subcmd__status)
-            opts="-h --strictness --fail-on-warning --help"
+            opts="-h --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -698,6 +742,10 @@ _batten() {
             case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)
@@ -708,7 +756,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__spec)
-            opts="-h --format --strictness --fail-on-warning --help"
+            opts="-h --format --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -720,6 +768,10 @@ _batten() {
                     ;;
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
                 *)

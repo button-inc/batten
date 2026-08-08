@@ -29,7 +29,9 @@ expect_used = "warn"
 
 [workspace.dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+# `env`: a flag whose env equivalent is applied by clap rather than layered by
+# the §8 resolver (`--config-from`) needs Arg::env (CLOUD-31).
+clap = { version = "4", features = ["derive", "env"] }
 # Shell completions, derived from the same `clap::Command` tree the parser is
 # built from (CLOUD-27) — so a committed script cannot describe a surface the
 # binary does not have.

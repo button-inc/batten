@@ -133,6 +133,58 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Read a tracked file's contents at a git ref, without touching the working
+/// tree (`git show <reference>:<path>`).
+///
+/// This is the trust boundary behind `--config-from` (CLOUD-31): policy is read
+/// from a ref a pull request cannot edit, so a working-tree change that relaxes
+/// the rules cannot lower the bar it is judged by. It reads and never writes,
+/// which is what keeps the calling verb `read`.
+///
+/// `path` is repo-relative and `/`-separated, as git addresses blobs. The
+/// discovery environment is scrubbed for the same reason [`repo_root`] scrubs
+/// it: an ambient `GIT_DIR` would answer from some *other* repository, and a
+/// trust boundary that can be redirected by an environment variable is not one.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the ref does not exist, the path
+/// is absent at that ref, or the object is not a readable file — all bad input
+/// naming a ref this binary cannot honour, never a policy verdict. Returns an
+/// internal error when git itself cannot run or emits non-UTF-8.
+pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
+    if !dir.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    let mut command = Command::new("git");
+    // `--` is not accepted after a `rev:path` argument; the single token is
+    // already unambiguous to git, and refusing a `reference` that looks like an
+    // option is the caller's business (a leading `-` simply fails below).
+    command
+        .arg("-C")
+        .arg(dir)
+        .arg("show")
+        .arg(format!("{reference}:{path}"));
+    for var in DISCOVERY_OVERRIDES {
+        command.env_remove(var);
+    }
+    let output = command
+        .output()
+        .with_context(|| format!("run `git show {reference}:{path}`"))?;
+    if !output.status.success() {
+        // git's stderr distinguishes "unknown revision" from "path does not
+        // exist in that revision" in version-dependent prose. One deterministic
+        // message instead, naming both halves so the operator can tell which.
+        return Err(UsageError::raise(format!(
+            "cannot read {path} at {reference}: no such ref, or the path is absent there"
+        )));
+    }
+    String::from_utf8(output.stdout).with_context(|| format!("decode {reference}:{path} as UTF-8"))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

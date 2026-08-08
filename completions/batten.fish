@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_batten_global_optspecs
-    string join \n strictness= fail-on-warning h/help V/version
+    string join \n strictness= fail-on-warning config-from= h/help V/version
 end
 
 function __fish_batten_needs_command
@@ -27,6 +27,7 @@ end
 complete -c batten -n "__fish_batten_needs_command" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_needs_command" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_needs_command" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_needs_command" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_needs_command" -s V -l version -d 'Print version'
@@ -41,18 +42,21 @@ complete -c batten -n "__fish_batten_needs_command" -f -a "help" -d 'Print this 
 complete -c batten -n "__fish_batten_using_subcommand check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand check" -s J -l json -d 'Emit findings as byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand check" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand enforce" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s J -l json -d 'Emit findings as byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show help" -f -a "show" -d 'Print the effective configuration'
@@ -60,6 +64,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_see
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from help" -f -a "show" -d 'Print the effective configuration'
@@ -68,11 +73,13 @@ complete -c batten -n "__fish_batten_using_subcommand spec" -l format -d 'The ou
 complete -c batten -n "__fish_batten_using_subcommand spec" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand spec" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand spec" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand spec" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions schema help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions schema help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions schema help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions schema help" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions schema help" -f -a "completions" -d 'Emit the shell completion script for one shell'
@@ -86,11 +93,13 @@ zsh\t''"
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from completions" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from schema" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand generate; and __fish_seen_subcommand_from help" -f -a "completions" -d 'Emit the shell completion script for one shell'
@@ -101,11 +110,13 @@ exit-code\t'The neutral core contract: envelope in, decision as exit code out â€
 complete -c batten -n "__fish_batten_using_subcommand hook" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand hook" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand hook" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand hook" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from record status help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from record status help" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from record status help" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from record status help" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_seen_subcommand_from record status help" -f -a "record" -d 'Record that the named check concluded pass against the current HEAD'
@@ -114,11 +125,13 @@ complete -c batten -n "__fish_batten_using_subcommand receipt; and not __fish_se
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from record" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
+complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from status" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand receipt; and __fish_seen_subcommand_from help" -f -a "record" -d 'Record that the named check concluded pass against the current HEAD'

@@ -35,6 +35,9 @@ pub struct Cli {
     /// [`crate::resolve`]. Raise-only and with no negative form, so a committed
     /// `true` cannot be turned off for a run.
     pub fail_on_warning: bool,
+    /// `--config-from <ref>`, when passed: read the committed authority from
+    /// this git ref instead of the working tree (CLOUD-31).
+    pub config_from: Option<String>,
     /// The chosen command, or `None` for a bare invocation.
     pub command: Option<Command>,
 }
@@ -150,6 +153,7 @@ fn from_matches(matches: &ArgMatches) -> Cli {
         // of where on the command line it appeared.
         strictness: matches.get_one::<Strictness>("strictness").copied(),
         fail_on_warning: matches.get_flag("fail_on_warning"),
+        config_from: matches.get_one::<String>("config_from").cloned(),
         command: matches.subcommand().and_then(command_of),
     }
 }

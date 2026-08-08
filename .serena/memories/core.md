@@ -46,6 +46,14 @@ file itself for the "why", this is only the "where":
   that text to the model as the deny reason, where `batten: ` reads as a crash.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys,
   required `version`). Layering across sources is `resolve.rs`, not here.
+- `trust.rs` — house-style §8 config trust (CLOUD-31): `load_base` reads the
+  committed authority from a git ref via `git::show`, so `--config-from` loads
+  policy out of band of the change under review and a branch cannot lower the
+  bar it is judged by. `weakenings` is the base-vs-working comparison — the same
+  monotonicity the raise-only clamp uses, so narrowing `scope` is tightening and
+  is not reported. Pointer-only `Weakening`s (key path + two verdict tokens),
+  sorted so the report is byte-stable. `config lint` (CLOUD-87) reuses both
+  rather than growing a second trusted-load path.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file >
 repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   not hard-coded per field.

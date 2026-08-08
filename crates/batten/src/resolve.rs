@@ -140,7 +140,7 @@ fn setting(key: &str) -> &'static SettingSpec {
 }
 
 /// The flag layer: values supplied on the command line, highest precedence.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Overrides {
     /// `--strictness`, when passed.
     pub strictness: Option<Strictness>,
@@ -148,6 +148,12 @@ pub struct Overrides {
     /// so this layer is raise-only by construction: `true` raises, absent says
     /// nothing and lets a lower layer keep the key.
     pub fail_on_warning: bool,
+    /// `--config-from <ref>`, when passed. Not a *value* override like the two
+    /// above: it selects **where the committed authority is read from** (a git
+    /// ref instead of the working tree), leaving the §8 precedence chain
+    /// untouched — env, flag and local-file overrides still stack on top under
+    /// the same raise-only clamp (CLOUD-31).
+    pub config_from: Option<String>,
 }
 
 /// The effective configuration, plus the layer that won each key.
@@ -296,8 +302,24 @@ fn parse_strictness(raw: &str, origin: &str) -> Result<Strictness> {
 /// Returns a [`UsageError`] (→ exit `1`) when the committed authority is
 /// missing or invalid, when the local file is invalid, or when any override
 /// would weaken a policy-bearing key.
-pub fn resolve(dir: &Path, overrides: Overrides) -> Result<Resolved> {
+pub fn resolve(dir: &Path, overrides: &Overrides) -> Result<Resolved> {
     resolve_with_env(dir, overrides, &|name| std::env::var(name).ok())
+}
+
+/// Load the committed authority — layer 1 of the §8 chain.
+///
+/// Required: there is no upward walk to fall back on, and a missing authority is
+/// bad input, not an empty policy.
+///
+/// Under `--config-from`, it is read from a git ref rather than the working
+/// tree — same layer, same precedence, different source. That is the whole trust
+/// mechanism: policy loads out of band of the change under review, so a branch
+/// cannot relax the rules it is judged by (CLOUD-31).
+fn authority(dir: &Path, config_from: Option<&str>) -> Result<config::Config> {
+    match config_from {
+        Some(reference) => crate::trust::load_base(dir, reference),
+        None => config::load(&dir.join(config::CONFIG_FILE)),
+    }
 }
 
 /// [`resolve`], with the env layer supplied by `env` so it is testable without
@@ -308,12 +330,10 @@ pub fn resolve(dir: &Path, overrides: Overrides) -> Result<Resolved> {
 /// As [`resolve`].
 pub fn resolve_with_env(
     dir: &Path,
-    overrides: Overrides,
+    overrides: &Overrides,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Resolved> {
-    // Layer 1 — the committed authority. Required: there is no upward walk to
-    // fall back on, and a missing authority is bad input, not an empty policy.
-    let repo = config::load(&dir.join(config::CONFIG_FILE))?;
+    let repo = authority(dir, overrides.config_from.as_deref())?;
 
     // Layer 0 — the compiled-in default, overwritten by anything above it.
     let mut strictness = Layered {
@@ -499,7 +519,7 @@ mod tests {
         // The `sources` map and SETTINGS must agree: a key the resolver reports
         // but does not declare would have undocumented precedence.
         let dir = repo("resolve-keys", "version = 1\n", None);
-        let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         for key in resolved.sources.keys() {
             assert!(
                 SETTINGS.iter().any(|spec| &spec.key == key),
@@ -512,7 +532,7 @@ mod tests {
     #[test]
     fn default_wins_when_no_layer_speaks() {
         let dir = repo("resolve-default", "version = 1\n", None);
-        let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Standard);
         assert_eq!(resolved.sources["strictness"], Source::Default);
     }
@@ -524,7 +544,7 @@ mod tests {
             "version = 1\nstrictness = \"permissive\"\n",
             None,
         );
-        let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Permissive);
         assert_eq!(resolved.sources["strictness"], Source::RepoConfig);
     }
@@ -536,7 +556,7 @@ mod tests {
             "version = 1\nstrictness = \"standard\"\n",
             Some("version = 1\nstrictness = \"strict\"\n"),
         );
-        let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Strict);
         assert_eq!(resolved.sources["strictness"], Source::LocalFile);
     }
@@ -549,7 +569,7 @@ mod tests {
             "version = 1\nstrictness = \"strict\"\n",
             Some("version = 1\nstrictness = \"permissive\"\n"),
         );
-        let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(
             err.to_string().contains("may only tighten"),
@@ -566,7 +586,7 @@ mod tests {
                 "version = 1\n\n[[rule]]\nid = \"b\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"y\"\nseverity = \"deny\"\n",
             ),
         );
-        let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         let ids: Vec<&str> = resolved.rules.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b"], "an added rule tightens policy");
         assert_eq!(resolved.sources["rule"], Source::LocalFile);
@@ -581,7 +601,7 @@ mod tests {
                 "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"nothing/**\"\npattern = \"x\"\nseverity = \"deny\"\n",
             ),
         );
-        let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(err.to_string().contains("may not redefine"), "got: {err}");
     }
@@ -593,7 +613,7 @@ mod tests {
             "version = 1\nstrictness = \"permissive\"\n",
             Some("version = 1\nstrictness = \"standard\"\n"),
         );
-        let strict = resolve_with_env(&dir, Overrides::default(), &|name| {
+        let strict = resolve_with_env(&dir, &Overrides::default(), &|name| {
             (name == "BATTEN_STRICTNESS").then(|| "strict".to_owned())
         })
         .unwrap();
@@ -601,7 +621,7 @@ mod tests {
         assert_eq!(strict.sources["strictness"], Source::Env);
 
         // …and it still cannot go below the local file's floor.
-        let err = resolve_with_env(&dir, Overrides::default(), &|name| {
+        let err = resolve_with_env(&dir, &Overrides::default(), &|name| {
             (name == "BATTEN_STRICTNESS").then(|| "permissive".to_owned())
         })
         .unwrap_err();
@@ -619,7 +639,7 @@ mod tests {
             None,
         );
         for raw in ["", "   "] {
-            let resolved = resolve_with_env(&dir, Overrides::default(), &|name| {
+            let resolved = resolve_with_env(&dir, &Overrides::default(), &|name| {
                 (name == "BATTEN_STRICTNESS").then(|| raw.to_owned())
             })
             .expect("an empty env var is not a bad value");
@@ -642,7 +662,7 @@ mod tests {
             "version = 1\nmin_batten_version = \"0.0.0\"\n",
             Some("version = 1\nmin_batten_version = \"9.9.9\"\n"),
         );
-        let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(
             err.to_string().contains("min_batten_version"),
@@ -653,7 +673,7 @@ mod tests {
     #[test]
     fn unknown_env_value_is_a_usage_error() {
         let dir = repo("resolve-env-bad", "version = 1\n", None);
-        let err = resolve_with_env(&dir, Overrides::default(), &|name| {
+        let err = resolve_with_env(&dir, &Overrides::default(), &|name| {
             (name == "BATTEN_STRICTNESS").then(|| "loose".to_owned())
         })
         .unwrap_err();
@@ -666,7 +686,7 @@ mod tests {
         let env = |name: &str| (name == "BATTEN_STRICTNESS").then(|| "standard".to_owned());
         let resolved = resolve_with_env(
             &dir,
-            Overrides {
+            &Overrides {
                 strictness: Some(Strictness::Strict),
                 ..Overrides::default()
             },
@@ -678,7 +698,7 @@ mod tests {
 
         let err = resolve_with_env(
             &dir,
-            Overrides {
+            &Overrides {
                 strictness: Some(Strictness::Permissive),
                 ..Overrides::default()
             },
@@ -693,12 +713,12 @@ mod tests {
         // The one setting, resolved once, reachable from every layer §8 declares
         // — and attributed to the layer that actually set it.
         let off = repo("fow-default", "version = 1\n", None);
-        let resolved = resolve_with_env(&off, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&off, &Overrides::default(), &no_env).unwrap();
         assert!(!resolved.fail_on_warning, "unset means off");
         assert_eq!(resolved.sources["fail_on_warning"], Source::Default);
 
         let committed = repo("fow-repo", "version = 1\nfail_on_warning = true\n", None);
-        let resolved = resolve_with_env(&committed, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&committed, &Overrides::default(), &no_env).unwrap();
         assert!(resolved.fail_on_warning);
         assert_eq!(resolved.sources["fail_on_warning"], Source::RepoConfig);
 
@@ -707,11 +727,11 @@ mod tests {
             "version = 1\n",
             Some("version = 1\nfail_on_warning = true\n"),
         );
-        let resolved = resolve_with_env(&local, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&local, &Overrides::default(), &no_env).unwrap();
         assert!(resolved.fail_on_warning);
         assert_eq!(resolved.sources["fail_on_warning"], Source::LocalFile);
 
-        let resolved = resolve_with_env(&off, Overrides::default(), &|name| {
+        let resolved = resolve_with_env(&off, &Overrides::default(), &|name| {
             (name == "BATTEN_FAIL_ON_WARNING").then(|| "true".to_owned())
         })
         .unwrap();
@@ -720,7 +740,7 @@ mod tests {
 
         let resolved = resolve_with_env(
             &off,
-            Overrides {
+            &Overrides {
                 fail_on_warning: true,
                 ..Overrides::default()
             },
@@ -741,7 +761,7 @@ mod tests {
             "version = 1\nfail_on_warning = true\n",
             Some("version = 1\nfail_on_warning = false\n"),
         );
-        let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(
             err.to_string().contains("fail_on_warning")
@@ -754,7 +774,7 @@ mod tests {
             "version = 1\nfail_on_warning = true\n",
             None,
         );
-        let err = resolve_with_env(&committed, Overrides::default(), &|name| {
+        let err = resolve_with_env(&committed, &Overrides::default(), &|name| {
             (name == "BATTEN_FAIL_ON_WARNING").then(|| "false".to_owned())
         })
         .unwrap_err();
@@ -762,7 +782,7 @@ mod tests {
 
         // Restating the committed value is not a weakening: it is accepted and
         // re-attributed, exactly as a restated `strictness` is.
-        let resolved = resolve_with_env(&committed, Overrides::default(), &|name| {
+        let resolved = resolve_with_env(&committed, &Overrides::default(), &|name| {
             (name == "BATTEN_FAIL_ON_WARNING").then(|| "true".to_owned())
         })
         .unwrap();
@@ -779,7 +799,7 @@ mod tests {
             "version = 1\n",
             Some("version = 1\nfail_on_warning = false\n"),
         );
-        let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert!(!resolved.fail_on_warning);
         assert_eq!(resolved.sources["fail_on_warning"], Source::LocalFile);
     }
@@ -794,7 +814,7 @@ mod tests {
             None,
         );
         for raw in ["", "   "] {
-            let resolved = resolve_with_env(&dir, Overrides::default(), &|name| {
+            let resolved = resolve_with_env(&dir, &Overrides::default(), &|name| {
                 (name == "BATTEN_FAIL_ON_WARNING").then(|| raw.to_owned())
             })
             .expect("an empty env var is not a bad value");
@@ -809,7 +829,7 @@ mod tests {
         // read as `true` would be a gate whose state nobody can predict.
         let dir = repo("fow-env-bad", "version = 1\n", None);
         for raw in ["1", "0", "yes", "TRUE", "on"] {
-            let err = resolve_with_env(&dir, Overrides::default(), &|name| {
+            let err = resolve_with_env(&dir, &Overrides::default(), &|name| {
                 (name == "BATTEN_FAIL_ON_WARNING").then(|| raw.to_owned())
             })
             .unwrap_err();
@@ -828,7 +848,7 @@ mod tests {
         let parent = repo("resolve-no-walk", "version = 1\n", None);
         let child = parent.join("child");
         fs::create_dir_all(&child).unwrap();
-        let err = resolve_with_env(&child, Overrides::default(), &no_env).unwrap_err();
+        let err = resolve_with_env(&child, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(err.to_string().contains("no config found"), "got: {err}");
     }
@@ -841,7 +861,7 @@ mod tests {
             "version = 1\n",
             Some("version = 1\nbogus = true\n"),
         );
-        let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
     }
 
@@ -849,8 +869,8 @@ mod tests {
     fn resolution_is_byte_stable() {
         // §6: the same input yields the same bytes, sources map included.
         let dir = repo("resolve-stable", "version = 1\n", None);
-        let first = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
-        let second = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        let first = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        let second = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(
             serde_json::to_string(&first).unwrap(),
             serde_json::to_string(&second).unwrap()
