@@ -1,14 +1,35 @@
 #!/usr/bin/env bash
-#MISE description="Land this branch's PR by commenting /fast-forward, then block until it is merged (or the fast-forward bot refuses)"
-#MISE depends=["verified", "ci-wait"]
+#MISE description="Land this branch's PR: rebase, verify, push, wait for CI, /fast-forward — lapping until it merges or a rebase conflicts"
 #
-# Workflow-contract step 4. `verified` and `ci-wait` are dependencies, not
-# advice: `ready-guard` gates `gh pr ready` on the receipts, but landing had no
-# such precondition, so a branch readied by any other route could still be
-# landed on a verdict nobody checked. `verified` reads the receipt keyed to this
-# exact HEAD — which also carries the `origin/main` it was linear against, so
-# there is no second linearity check here; a second copy would be a second
-# authority. `ci-wait` makes landing a red PR structurally impossible.
+# Workflow-contract step 4, and it drives the WHOLE loop rather than one lap of
+# it. `main` advances constantly, so the fast-forward bot refuses the moment
+# this branch stops being a direct descendant. That refusal is the design
+# working: each lap rebases onto a little more landed work, so conflicts arrive
+# one small resolvable increment at a time instead of accumulating until a
+# branch cannot land at all.
+#
+# A lap is fetch → rebase → `verify` → `verified` → push → `ci-wait` →
+# `/fast-forward` → read the answer, and a refusal simply starts the next one.
+# Every lap re-verifies and re-waits because a rebase mints a new SHA and the
+# receipts keyed to the old one are gone — that is the loop, not a re-run of an
+# already-tested commit. `verified` reads the receipt keyed to this exact HEAD,
+# which also carries the `origin/main` it was linear against, so there is no
+# second linearity check here; a second copy would be a second authority.
+# `ci-wait` makes landing a red PR structurally impossible. Both are called
+# per-lap rather than declared as `#MISE depends`, because a dependency runs
+# once and a loop needs them every time round.
+#
+# **The only stop is a rebase that CONFLICTS.** Everything else in a lap is
+# mechanical, so this runs unattended and halts exactly at the one step that
+# needs a decision (AGENTS.md, "When you SHOULD still stop") — which is also the
+# step frequent lapping keeps small. CLOUD-238: ending the lap and leaving the
+# caller to rebase and retry was only half the design. Measured over one
+# session, every refusal arrived out-of-band and was handled by hand, and from
+# that the agent inferred landing was "a race I keep losing" and began batching
+# rebase→verify→push→land into one command to close the window — optimising
+# against the design, since batching removes no refusal and only makes each lap
+# bigger. A loop a caller has to notice is a loop a caller will eventually
+# mis-model, so the task laps itself and the inference has nowhere to start.
 #
 # The merge button is blocked on purpose: `main` only advances to a SHA that
 # already passed CI. Commenting is the whole landing action, but the *result* is
@@ -30,59 +51,109 @@
 # claimed for months to have an exit condition it did not have, and polled
 # forever the first time a refusal arrived.
 #
-# Deliberately unbounded, like `ci-wait`: the fix for a hang is an exit condition
-# that can actually fire, never a wall-clock timeout, which would only
-# reintroduce the VM-reap gap. Run it backgrounded.
+# The poll is deliberately unbounded, like `ci-wait`: the fix for a hang is an
+# exit condition that can actually fire, never a wall-clock timeout, which would
+# only reintroduce the VM-reap gap. `LAND_MAX_LAPS` bounds the number of LAPS
+# instead — a runaway backstop, not a timeout on any wait: hitting it means
+# `main` is moving faster than a lap takes, which is a real condition a human
+# should see. Run it backgrounded; several laps are normal and each costs a CI
+# run, which is the price of the design, not waste.
 #
 # `set -e` is off on purpose: this is a poll, and a transient `gh` failure must
 # cost one iteration rather than abort the landing. Every command whose failure
 # would change the verdict is guarded by hand instead.
 set -uo pipefail
 
+cd "${LAND_ROOT:-$(git rev-parse --show-toplevel)}" || exit 1
+
 pr="${PR:-$(gh pr view --json number --jq .number)}"
 if [ -z "$pr" ]; then
 	echo "::error:: no pull request for this branch, so there is nothing to land." >&2
 	exit 1
 fi
-sha="$(git rev-parse HEAD)"
+branch="${LAND_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 interval="${LAND_INTERVAL:-10}"
 workflow="${LAND_WORKFLOW:-fast-forward.yml}"
+max_laps="${LAND_MAX_LAPS:-8}"
 
-# Stamped BEFORE commenting, so a run that predates this attempt — an earlier
-# landing of this same PR, refused and since rebased — can never be mistaken for
-# a verdict on this one. Exported for the `--jq` filter below, rather than
-# interpolated into it, so a value can never be read as jq syntax.
-SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-export SINCE
+die() {
+	echo "::error:: land: $*" >&2
+	exit 1
+}
 
-gh pr comment "$pr" --body "/fast-forward"
-echo "land: commented /fast-forward on #$pr ($sha); waiting for the merge"
+[ "$branch" != "main" ] || die "refusing to land from main — work happens on a short-lived branch."
 
+lap=0
 while :; do
-	state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null)
-	if [ -n "$state" ] && [ "$state" != "OPEN" ]; then
-		git fetch -q origin main
-		echo "land: PR #$pr is $state; origin/main is now $(git rev-parse --short origin/main)"
-		[ "$state" = "MERGED" ] || exit 1
-		exit 0
+	lap=$((lap + 1))
+	[ "$lap" -le "$max_laps" ] ||
+		die "still not linear after $max_laps laps; main is moving faster than a lap takes. Look before lapping again."
+
+	# --- be a direct descendant of origin/main, or stop for the one decision ---
+	git fetch -q origin main ||
+		die "cannot fetch origin/main; read mem:github-access before concluding the network is blocked."
+	if ! git merge-base --is-ancestor origin/main HEAD; then
+		echo "land: lap $lap — rebasing onto $(git rev-parse --short origin/main)"
+		if ! git rebase origin/main; then
+			git rebase --abort 2>/dev/null
+			die "rebase onto origin/main conflicts. This is the one step the loop cannot do for you — resolve it and run land again. Lapping often is what keeps this small."
+		fi
 	fi
 
-	# Newest first, so `first` is the most recent matching run. An
-	# `issue_comment` run carries no branch of ours to filter on — its
-	# `head_branch` is the default branch — so the window is the timestamp
-	# above. A concurrent refusal on the same PR would be reported as ours;
-	# that is the conservative direction, since the alternative is the hang
-	# this condition exists to end.
-	refused=$(gh api "repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=20" \
-		--jq '[.workflow_runs[]?
+	# --- prove the rebased tree, every lap: the SHA is new, so the receipt is
+	# --- gone and "green but stale" is not green ---
+	mise run verify ||
+		die "verify failed on $(git rev-parse --short HEAD). Reproduce and fix locally; CI is not where you discover this."
+	mise run verified || die "no verify receipt for HEAD — something swallowed verify's verdict."
+
+	git push --force-with-lease -u origin "$branch" ||
+		die "push rejected. Someone else moved the branch; look before forcing."
+
+	sha="$(git rev-parse HEAD)"
+	mise run ci-wait ||
+		die "CI is red on $sha. A red run on a verified branch means verify and CI disagree — fix the mismatch."
+
+	# --- ask for the merge, then read the answer ---
+	#
+	# Stamped BEFORE commenting, so a run that predates this lap — an earlier
+	# lap of this same PR, refused and since rebased — can never be mistaken
+	# for a verdict on this one. Exported for the `--jq` filter below, rather
+	# than interpolated into it, so a value can never be read as jq syntax.
+	# Now that the task laps by itself the window is load-bearing twice over:
+	# without it, lap 2 would read lap 1's refusal and abandon its own attempt
+	# instantly, turning the old hang into a livelock.
+	SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	export SINCE
+
+	gh pr comment "$pr" --body "/fast-forward"
+	echo "land: lap $lap — commented /fast-forward on #$pr ($sha); waiting for the merge"
+
+	refused=""
+	while :; do
+		state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null)
+		if [ -n "$state" ] && [ "$state" != "OPEN" ]; then
+			git fetch -q origin main
+			echo "land: PR #$pr is $state after $lap lap(s); origin/main is now $(git rev-parse --short origin/main)"
+			[ "$state" = "MERGED" ] || die "PR #$pr is $state — closed without merging."
+			exit 0
+		fi
+
+		# Newest first, so `first` is the most recent matching run. An
+		# `issue_comment` run carries no branch of ours to filter on — its
+		# `head_branch` is the default branch — so the window is the
+		# timestamp above. A concurrent refusal on the same PR would be
+		# read as ours; that is the conservative direction, since the
+		# alternative is the hang this condition exists to end.
+		refused=$(gh api "repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=20" \
+			--jq '[.workflow_runs[]?
                        | select(.created_at >= env.SINCE)
                        | select(.status == "completed")
                        | select(.conclusion != "success" and .conclusion != "skipped")
                        | .conclusion] | first // empty' 2>/dev/null)
-	if [ -n "$refused" ]; then
-		echo "::error:: the fast-forward bot refused ($refused) — the branch is probably no longer linear on main. Rebase, re-verify, retry." >&2
-		exit 1
-	fi
+		[ -z "$refused" ] || break
 
-	sleep "$interval"
+		sleep "$interval"
+	done
+
+	echo "land: lap $lap — the fast-forward bot refused ($refused); main moved under the branch. Lapping: rebase, re-verify, retry."
 done

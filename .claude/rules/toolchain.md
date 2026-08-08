@@ -23,9 +23,37 @@ CI, hk, and your shell run byte-identical commands. Per clone: `mise install`,
 `+refs/heads/main:refs/remotes/origin/main` refspec and deepens a shallow clone
 first, because a single-branch clone's configured refspec covers only its own
 branch and `git fetch origin main` would silently update nothing), `ci-wait` (block until every
-check-run is terminal), `land` (comment `/fast-forward`, block until merged or
-refused; depends on `ci-wait`, so a red PR cannot be landed). Background
+check-run is terminal), `land` (drive the branch to merged; it runs `verify`,
+`verified` and `ci-wait` per lap, so a red PR cannot be landed). Background
 `ci-wait` and `land`.
+
+**Landing is a loop, and `land` drives the whole loop.** `main` advances
+constantly, so the fast-forward bot refuses the moment your branch stops being a
+direct descendant. That refusal is the design working: each lap rebases onto a
+little more landed work, so conflicts arrive one small resolvable increment at a
+time, and batching them is how a branch diverges until it cannot land at all. A
+lap is fetch → rebase → `verify` → `verified` → push → `ci-wait` →
+`/fast-forward` → read the answer, and a refusal starts the next lap by itself.
+Every lap re-verifies and re-waits because a rebase mints a new SHA and the
+receipts keyed to the old one are gone. Expect several; a lap costs one CI run
+and that is the price of the design, not waste. **The only stop is a rebase that
+conflicts** — the one step needing a decision, and exactly the step frequent laps
+keep small. `LAND_MAX_LAPS` (8) is a runaway backstop on the lap COUNT, never a
+wall clock on a wait; the `verify`/`verified`/`ci-wait` calls are per-lap in the
+body rather than `#MISE depends`, because a dependency runs once and a loop needs
+them every time round.
+
+Two defects got it here (CLOUD-235, then CLOUD-238), and the second is the
+instructive one. First the refusal was invisible — the predicate's history is in
+the task's own header. Second, restoring the signal and still _exiting_ on a
+refusal was only half the design: with every refusal arriving out-of-band and a
+linear-looking 5-step contract, an agent inferred landing was "a race I keep
+losing" and began batching rebase→verify→push→land into one command to close the
+window — optimising _against_ the design, since batching removes no refusal and
+only makes each lap bigger. **A loop a caller has to notice is a loop a caller
+will eventually mis-model**, so the task laps itself and the inference has
+nowhere to start. `tests/land.bats` covers every way a lap can end, with a count
+assertion, so an unexercised path cannot go dead again.
 
 The board gates follow the agents-fetch-gates-decide pattern — each is a pure
 function of stdin (`get_issue` payloads piped in by the caller, since no tracker
