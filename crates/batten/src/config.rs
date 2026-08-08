@@ -220,6 +220,12 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // too: `batten.local.toml` may add verb rows, and a raise-only override that
     // adds an inert one has still written something that cannot mean anything.
     crate::verbs::validate(&config.verbs)?;
+    // And the marker table, for the identical reason in the identical shape
+    // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
+    // them up and nobody checked the sibling, so an empty `token` — which
+    // matches every line of every file — still loaded clean. The completeness
+    // test below is what stops the next table arriving orphaned the same way.
+    crate::markers::validate(&config.markers)?;
     Ok(config)
 }
 
@@ -359,6 +365,94 @@ mod tests {
 
     use super::*;
     use crate::error::UsageError;
+
+    /// Tables whose entries are proven well formed at load, and the call in
+    /// [`parse_ungated`] that does it. Deleting a call fails the test below.
+    const VALIDATED_AT_LOAD: &[(&str, &str)] = &[
+        ("verbs", "crate::verbs::validate("),
+        ("markers", "crate::markers::validate("),
+    ];
+
+    /// Tables proven well formed somewhere else, each with the reason. Listing
+    /// an exemption is the point: a reader sees the justification rather than
+    /// an absence, which is what an orphaned validator looks like.
+    const VALIDATED_BY_ITS_RUNNER: &[(&str, &str)] = &[(
+        "rules",
+        "Rule::validate fires in rules::run_rule when the rule is evaluated, not at load",
+    )];
+
+    #[test]
+    fn every_typed_config_table_has_a_validation_call_site() {
+        // The class behind CLOUD-242 and CLOUD-253: a validator whose only
+        // caller is its own tests refuses nothing, while a doc comment, a PR
+        // body and a passing test all say it does. Both tables shipped in one
+        // commit; the first fix wired up one of them, and nothing here noticed
+        // the other for a day. One reviewed list per destiny plus this
+        // completeness check is the idiom `effect.rs` and `RuleKind::ALL`
+        // already use — a new table must be classified or this fails.
+        //
+        // A `Vec<String>` field is a glob list with no typed entry to validate,
+        // so it is exempt by its element type rather than by a third hand-kept
+        // list that could itself go stale.
+        let source = include_str!("config.rs");
+        let struct_body = {
+            let start = source
+                .find("pub struct Config {")
+                .expect("Config is declared here");
+            let rest = &source[start..];
+            &rest[..rest.find("\n}").expect("the struct closes")]
+        };
+        let parse_body = {
+            let start = source
+                .find("fn parse_ungated")
+                .expect("the shared parse body is declared here");
+            let rest = &source[start..];
+            &rest[..rest.find("\n}").expect("the function closes")]
+        };
+
+        let mut seen = Vec::new();
+        for line in struct_body.lines() {
+            let Some(rest) = line.trim().strip_prefix("pub ") else {
+                continue;
+            };
+            let Some((field, element)) = rest.split_once(": Vec<") else {
+                continue;
+            };
+            if element.starts_with("String") {
+                continue;
+            }
+            seen.push(field);
+
+            let at_load = VALIDATED_AT_LOAD.iter().find(|(name, _)| *name == field);
+            let by_runner = VALIDATED_BY_ITS_RUNNER
+                .iter()
+                .any(|(name, _)| *name == field);
+            assert!(
+                at_load.is_some() != by_runner,
+                "config table `{field}` is in neither list (or both). Say where its entries \
+                 are proven well formed: at load, or by the runner that evaluates them. A \
+                 table nothing validates is a refusal that cannot fire (CLOUD-253)."
+            );
+            if let Some((_, call)) = at_load {
+                assert!(
+                    parse_body.contains(call),
+                    "config table `{field}` is listed as validated at load, but \
+                     `parse_ungated` does not call `{call}`."
+                );
+            }
+        }
+
+        assert!(
+            !seen.is_empty(),
+            "the struct scan must actually find tables"
+        );
+        for (name, _) in VALIDATED_AT_LOAD.iter().chain(VALIDATED_BY_ITS_RUNNER) {
+            assert!(
+                seen.contains(name),
+                "`{name}` is listed but is no longer a Config table; drop the stale entry."
+            );
+        }
+    }
 
     fn is_usage_error(err: &anyhow::Error) -> bool {
         err.downcast_ref::<UsageError>().is_some()

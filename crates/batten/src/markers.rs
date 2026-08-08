@@ -152,6 +152,36 @@ fn scannable(read: io::Result<String>, path: &str) -> Result<Option<String>> {
     }
 }
 
+/// Validate a whole table, and refuse a duplicate `id`.
+///
+/// Called at config load ([`crate::config`]), which is the point: before
+/// CLOUD-253 the only caller was [`find`], and `find` had no caller in `src/`,
+/// so every refusal below was a refusal that could not fire. A validator
+/// reachable only from its own tests is prose (non-negotiable rule 2) — the
+/// same defect CLOUD-242 fixed in the verb table, which shipped in the same
+/// commit as this one and was corrected without it.
+///
+/// Two rows under one `id` are refused for the reason the two fields are
+/// separate axes at all: `id` is the name a count is reported under, so a
+/// duplicate makes a count that answers no question — is it one marker
+/// re-spelled, or two the author wanted counted apart?
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) for a malformed or duplicated entry.
+pub fn validate(table: &[Marker]) -> Result<()> {
+    for (index, entry) in table.iter().enumerate() {
+        entry.validate()?;
+        if table[..index].iter().any(|prior| prior.id == entry.id) {
+            return Err(UsageError::raise(format!(
+                "marker {}: declared twice; an id is the name one count is reported under",
+                entry.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Find every occurrence of every marker under `root`.
 ///
 /// Hits come back sorted by `(path, line, marker)` — the same pointer tuple
@@ -170,9 +200,7 @@ fn scannable(read: io::Result<String>, path: &str) -> Result<Option<String>> {
 /// internal error (→ exit `3`) when the tree cannot be walked or a file cannot
 /// be read.
 pub fn find(root: &Path, markers: &[Marker]) -> Result<Vec<Hit>> {
-    for marker in markers {
-        marker.validate()?;
-    }
+    validate(markers)?;
     // Cheap when irrelevant (house-style §4): no markers configured means no
     // tree walk at all.
     if markers.is_empty() {

@@ -760,6 +760,47 @@ fn verbs_are_partitioned_by_the_one_effect_vocabulary() {
 }
 
 #[test]
+fn a_marker_that_cannot_be_counted_is_refused_at_load() {
+    // The sibling of the verb table, and the sibling of its defect (CLOUD-253):
+    // both shipped in one commit, CLOUD-242 wired one of them into `parse`, and
+    // this one kept a validator whose only caller was `markers::find` — which
+    // has no caller in `src/` at all. Every refusal below could not fire.
+    //
+    // Asserted through `parse` for the same reason that fix names: reaching past
+    // it to call the validator by hand proves the validator works while hiding
+    // that loading never invokes it, which is how a green suite certified a
+    // refusal production never performed.
+    let empty_token = "version = 1\n\n[[marker]]\nid = \"waiver\"\ntoken = \"\"\n";
+    let err = batten::config::parse(empty_token, "fixture").unwrap_err();
+    assert!(
+        err.downcast_ref::<UsageError>().is_some(),
+        "an empty token matches every line of every file"
+    );
+
+    let empty_id = "version = 1\n\n[[marker]]\nid = \"\"\ntoken = \"WAIVED\"\n";
+    let err = batten::config::parse(empty_id, "fixture").unwrap_err();
+    assert!(err.downcast_ref::<UsageError>().is_some());
+
+    let empty_glob = "version = 1\n\n[[marker]]\nid = \"w\"\ntoken = \"WAIVED\"\nglob = \"\"\n";
+    let err = batten::config::parse(empty_glob, "fixture").unwrap_err();
+    assert!(
+        err.downcast_ref::<UsageError>().is_some(),
+        "an empty glob reads as everywhere and selects nothing"
+    );
+
+    // Two rows under one id make a count that answers no question.
+    let twice = "version = 1\n\n[[marker]]\nid = \"w\"\ntoken = \"A\"\n\n[[marker]]\nid = \"w\"\ntoken = \"B\"\n";
+    let err = batten::config::parse(twice, "fixture").unwrap_err();
+    assert!(err.downcast_ref::<UsageError>().is_some());
+
+    // The other direction, so the refusal is not merely "any marker table
+    // fails": a well-formed table still loads.
+    let valid = "version = 1\n\n[[marker]]\nid = \"w\"\ntoken = \"WAIVED\"\n";
+    let config = batten::config::parse(valid, "fixture").expect("a valid marker table loads");
+    assert_eq!(config.markers.len(), 1);
+}
+
+#[test]
 fn a_verb_table_that_would_be_inert_is_refused_at_load() {
     // A `read` row in the mutating-verb table matches nothing while reading as
     // covered. Refused at parse, never kept.
