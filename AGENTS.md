@@ -116,8 +116,8 @@ toolchain _does_ run in the web sandbox — read `mem:github-access` before doub
    iterate at zero CI cost.
 2. **`mise run verify` green before readying.** It mirrors CI and asserts the
    branch is rebased on current `origin/main`. "Green but stale" is not green.
-3. **`mise run linear-check`, then `gh pr ready`** — readying is the single event
-   that triggers CI. A red run on a freshly-readied PR means step 2 was skipped.
+3. **`mise run linear-check`.** Don't ready by hand: `land` readies, after its
+   push, and a ready spent before that buys only draft-era skips (CLOUD-247).
 4. **`mise run land`, backgrounded.** It drives the whole loop: rebase →
    `verify` → push → wait → `/fast-forward` → lap. The wait races `ci-wait`
    (conditional check-run poll — **no timeout, no cap, never the PR webhook**,

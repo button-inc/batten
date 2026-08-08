@@ -20,6 +20,11 @@
 # way a lap can end — and of lapping itself, asserted by a second full attempt
 # rather than by a message about one.
 #
+# CLOUD-247 made this task the ONLY readier, and on the honest condition: a head
+# with no GRADED check-run, not a PR that happens to be a draft. A push made while
+# draft leaves a complete `skipped` set that readying afterwards does not replace,
+# so no confirming run is ever spent and `ci-wait` polls forever — correctly.
+#
 # CLOUD-240 added the economies, and they are asserted as SPEND, not as
 # messages: a lap whose HEAD already carries a receipt runs no `verify`; a lap
 # whose `main` moved never waits out the doomed run; a red run leaves the PR a
@@ -76,7 +81,11 @@ case "\$sub" in
   "pr comment")
     echo "\$all" >>"$BATS_TEST_TMPDIR/comments"; echo commented ;;
   "pr ready")
-    echo "\$all" >>"$BATS_TEST_TMPDIR/ready"; echo readied ;;
+    echo "\$all" >>"$BATS_TEST_TMPDIR/ready"
+    case "\$all" in
+      *--undo*) [ ! -f "$BATS_TEST_TMPDIR/rc.undo" ] || exit 1 ;;
+    esac
+    echo readied ;;
   "pr view")
     case "\$all" in
       *isDraft*) printf '%s' "\$(cat "$BATS_TEST_TMPDIR/isdraft")" ;;
@@ -84,8 +93,11 @@ case "\$sub" in
     esac ;;
   api*)
     case "\$url" in
-      # The truth the old implementation got wrong: the bot's run is not here.
-      *commits/*check-runs*) emit '{"check_runs":[]}' ;;
+      # The bot's run is still not here — that is the truth the original
+      # implementation got wrong. What IS here is the head's CI check set,
+      # which is what decides whether a confirming run was ever spent
+      # (CLOUD-247), so a case can script it.
+      *commits/*check-runs*) emit "\$(cat "$BATS_TEST_TMPDIR/checkruns")" ;;
       *actions/workflows/*)  emit "\$(nth runs)" ;;
       *)                     emit '{}' ;;
     esac ;;
@@ -95,6 +107,7 @@ EOF
 	rm -f "$BATS_TEST_TMPDIR/runs.calls" "$BATS_TEST_TMPDIR/state.calls"
 	: >"$BATS_TEST_TMPDIR/ready"
 	printf 'false' >"$BATS_TEST_TMPDIR/isdraft"
+	head_checks_empty
 }
 
 # `git` is stubbed too, and each step of a lap that can fail reads its exit
@@ -172,6 +185,12 @@ EOF
 fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.$1"; }
 already_verified() { : >"$BATS_TEST_TMPDIR/receipt"; }
 is_draft() { printf 'true' >"$BATS_TEST_TMPDIR/isdraft"; }
+# The head's CI check set. "Graded" is `ci-wait`'s list of real conclusions;
+# an all-`skipped` set is the draft-era one, which is not an answer.
+head_checks() { printf '%s' "$1" >"$BATS_TEST_TMPDIR/checkruns"; }
+head_checks_empty() { head_checks '{"check_runs":[]}'; }
+head_is_graded() { head_checks '{"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'; }
+head_is_all_skipped() { head_checks '{"check_runs":[{"name":"ci","status":"completed","conclusion":"skipped"}]}'; }
 ci_is_slow() { : >"$BATS_TEST_TMPDIR/ci-wait.slow"; }
 # A lap makes TWO `main-watch` calls: one racing `ci-wait`, one racing the
 # fast-forward answer (CLOUD-246). Each is counted under its own role, so a
@@ -179,6 +198,7 @@ ci_is_slow() { : >"$BATS_TEST_TMPDIR/ci-wait.slow"; }
 main_moves_on_lap() { echo "$1" >"$BATS_TEST_TMPDIR/mw.ci.wins"; }
 main_moves_during_answer_wait() { echo "$1" >"$BATS_TEST_TMPDIR/mw.answer.wins"; }
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
+undo_fails() { : >"$BATS_TEST_TMPDIR/rc.undo"; }
 task_fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.$1"; }
 not_linear() { echo 1 >"$BATS_TEST_TMPDIR/rc.linear"; }
 comments() { wc -l <"$BATS_TEST_TMPDIR/comments" | tr -d ' '; }
@@ -452,13 +472,31 @@ workflow_runs() {
 	[[ "$(ready_calls)" != *"--undo"* ]]
 }
 
-@test "nothing is readied when the PR is already ready" {
-	# Re-readying a ready PR is a no-op to GitHub but a lie in the log, and the
-	# lie is the one that matters: it reads as a second run being started.
+@test "nothing is readied when the head already carries a graded run" {
+	# Re-readying is a no-op to GitHub but a lie in the log, and worse it buys a
+	# second CI run for a SHA that already has one — step 5 of the contract. The
+	# graded head is what makes "already ready" mean "already answered": without
+	# it, a ready PR whose head has no real run is the stall, not the no-op.
+	head_is_graded
 	pr_state MERGED
 	run "$LAND"
 	[ "$status" -eq 0 ]
 	[ ! -s "$BATS_TEST_TMPDIR/ready" ]
+}
+
+@test "a ready PR whose head carries only skipped runs has its ready re-fired" {
+	# THE STALL (CLOUD-247), measured on #177. A push made while the PR was a
+	# draft leaves a complete `skipped` set on the head; readying afterwards
+	# produced no new run, and `ci-wait` then polled forever — correctly, since
+	# an all-skipped set is not an answer. Nothing was broken at either end and
+	# no confirming run was ever spent. Only `--undo` re-emits
+	# `ready_for_review`, so that is what the lap must do.
+	head_is_all_skipped
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$(ready_calls)" == *"--undo"* ]]
+	[[ "$output" == *"readied #150"* ]]
 }
 
 @test "a landing that succeeds says nothing that reads as a failure" {
@@ -549,13 +587,25 @@ workflow_runs() {
 	[[ "$output" == *"is MERGED"* ]]
 }
 
+@test "a re-draft that fails stops the lap rather than waiting on a run nobody started" {
+	# The `--undo` is what re-emits `ready_for_review`; if it cannot happen the
+	# confirming run never starts, and polling on would be waiting for something
+	# that is not coming — the exact shape this whole area keeps producing.
+	head_is_all_skipped
+	undo_fails
+	pr_state OPEN
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"could not re-draft"* ]]
+}
+
 @test "every way a lap can end is exercised above" {
 	# The property that would have caught the dead branch: an exit nothing
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 10 ] || {
-		echo "land has $stops stopping conditions; this suite covers 10."
+	[ "$stops" -eq 11 ] || {
+		echo "land has $stops stopping conditions; this suite covers 11."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
