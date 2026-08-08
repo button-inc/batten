@@ -55,7 +55,22 @@ report() {
 # on the board, so it is recognised here only to be REPORTED — accepting both
 # silently is what lets drift accumulate, and nothing lints today, so the cost of
 # converging is at its minimum.
-ready_start=$(grep -niE '^\*\*Refinement — Ready|^## Ready' <<<"$description" | head -n1 | cut -d: -f1 || true)
+#
+# TWO OPENERS, because a parent and a leaf carry different things. A leaf opens
+# `**Refinement — Ready (…)**` and states its own specializations. A parent opens
+# `## Refinement gate` and points at the gate for its children — which is the
+# gate document's own vocabulary for an epic ("link this document from an epic as
+# the refinement gate for its children rather than copying the lists into each
+# issue"). Matching only the leaf form reported `no-ready-block` on every
+# correctly-refined epic on the board, which is the worst kind of false negative:
+# it would have pushed authors to rename a heading the spec prescribes, purely to
+# satisfy a lint. Measured on CLOUD-7 — identical content passes under the leaf
+# opener and fails under the parent's.
+#
+# The anchors stay tight: a heading or a bold run at the start of a line, never
+# the bare word in prose, so a body that merely discusses refinement is still
+# blockless.
+ready_start=$(grep -niE '^\*\*Refinement|^#{2,3} +Refinement|^#{2,3} +Ready' <<<"$description" | head -n1 | cut -d: -f1 || true)
 if [ -z "$ready_start" ]; then
 	echo "$id:0 no-ready-block" >&2
 	exit 1

@@ -286,6 +286,67 @@ lint_at_version() {
 	[[ "$output" == *"no-ready-block"* ]]
 }
 
+# --- the parent dialect: `## Refinement gate` ---------------------------------
+#
+# The gate document tells an epic to "link this document from an epic as the
+# refinement gate for its children rather than copying the lists into each
+# issue", so a parent's block opens with that heading rather than the leaf's
+# `**Refinement — Ready (…)**`. Recognising only the leaf form reported
+# no-ready-block on every correctly-refined epic — a false negative that would
+# have pushed authors to rename a heading the spec prescribes.
+
+# An epic-dialect body: $1 becomes the body of the refinement-gate section.
+epic_block() {
+	cat <<-EOF
+		Foundational setup for the crate and the command surface.
+
+		---
+
+		## Refinement gate
+
+		Children of this epic are gated by the project-level Definition of Ready & Done.
+
+		$1
+	EOF
+}
+
+@test "a parent's refinement-gate heading is a Ready block" {
+	payload "$(epic_block '* **Source of truth (§1).** The command spec compiled into the binary.')"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a deeper refinement-gate heading is a Ready block too" {
+	payload "$(epic_block '* **Source of truth (§1).** One artifact.' | sed 's/^## Refinement gate/### Refinement gate/')"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "clauses inside a parent block are still checked" {
+	# The opener must locate a span the clause rules actually run over — otherwise
+	# recognising the heading would trade one vacuous pass for another.
+	payload "$(epic_block '* **Commit / bump (§6).** `feat` → **minor**.')"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type"* ]]
+}
+
+@test "a parent's §8 claim is held to the board like a leaf's" {
+	payload "$(epic_block '* **Blockers (§8).** `blockedBy` CLOUD-6 (the pre-implementation blockers).')"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"blocker-cited-without-relation (CLOUD-6)"* ]]
+}
+
+@test "prose merely discussing refinement is not a Ready block" {
+	# The anchors stay tight: a heading or a bold run at line start, never the
+	# bare word mid-sentence.
+	payload 'This needs refinement before anyone pulls it. Refinement is pending.'
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no-ready-block"* ]]
+}
+
 @test "unparseable stdin exits 2, not 1" {
 	# A caller piping the wrong thing must not look like a failing issue.
 	echo 'not json' >"$BATS_TEST_TMPDIR/bad"
