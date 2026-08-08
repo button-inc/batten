@@ -104,6 +104,23 @@ rule scoped to two tasks miss every other task (`mem:toolchain-and-hooks`). When
 behavioural rule is written, state the predicate; a list of instances is a
 worked example, never the rule.
 
+It recurred, which is the part worth recording. AGENTS.md carried this insight in
+its output-posture paragraph and, three paragraphs earlier, a closed list of "four
+disguises a punt wears". A fifth shape — offering an action the same file already
+pre-authorizes — was not among the four, so the list read as inapplicable and the
+punt went through. **A fix applied to one paragraph is not applied to the
+document**: when a predicate replaces a list, sweep every list in the file stating
+the same kind of rule, or the next instance escapes through the one you left.
+
+Two more from that incident. **An exception must say what it obliges instead** —
+"out of scope" licensed not fixing and terminated there, so a real defect was
+reported into chat, which stores nothing; an exception that ends the action
+without naming a destination routes the finding to the only channel left. And
+**the same substitution recurs one layer up**: `gh-guard` correctly refused a
+hand-typed `/fast-forward` and named `mise run land`, then was satisfied by `mise
+run land` wrapped in a bespoke retry loop invented on the spot. Re-deciding how
+the workflow is _shaped_ crosses no tool boundary, so no guard can see it.
+
 No gate is available for this one: a `PreToolUse` hook sees tool calls, not
 assistant prose, and no exit code attaches to a sentence. Every other guard here
 works because what it judges crosses a tool boundary. Recorded rather than
