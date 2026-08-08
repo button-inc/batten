@@ -608,8 +608,15 @@ workflow_runs() {
 	# exits on its own — which every case here must let it do, because `set -m`
 	# puts each watcher in its own process group and a `timeout` kill of the
 	# parent would leave one holding this suite's stdout open.
+	#
+	# Several OPEN reads, not one (CLOUD-256). The poll reads the PR state
+	# BEFORE it checks the watcher's result file, and `pr_state OPEN MERGED`
+	# makes MERGED sticky from the second read — so the backgrounded
+	# `main-watch` had exactly one interval to fork, exec and write, and lost
+	# that race once inside a full gate run. The case is about WHICH exit fires,
+	# not about how fast a fork completes; the assertions below are unchanged.
 	main_moves_during_answer_wait 1
-	pr_state OPEN MERGED
+	pr_state OPEN OPEN OPEN OPEN MERGED
 	workflow_runs runs.last
 	run "$LAND"
 	[ "$status" -eq 0 ]
