@@ -22,6 +22,9 @@ _batten() {
             batten,config)
                 cmd="batten__subcmd__config"
                 ;;
+            batten,doctor)
+                cmd="batten__subcmd__doctor"
+                ;;
             batten,enforce)
                 cmd="batten__subcmd__enforce"
                 ;;
@@ -81,6 +84,9 @@ _batten() {
                 ;;
             batten__subcmd__help,config)
                 cmd="batten__subcmd__help__subcmd__config"
+                ;;
+            batten__subcmd__help,doctor)
+                cmd="batten__subcmd__help__subcmd__doctor"
                 ;;
             batten__subcmd__help,enforce)
                 cmd="batten__subcmd__help__subcmd__enforce"
@@ -143,7 +149,7 @@ _batten() {
 
     case "${cmd}" in
         batten)
-            opts="-h -V --strictness --fail-on-warning --config-from --help --version check enforce config spec generate hook receipt help"
+            opts="-h -V --strictness --fail-on-warning --config-from --help --version check enforce config spec doctor generate hook receipt help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -289,6 +295,28 @@ _batten() {
         batten__subcmd__config__subcmd__show)
             opts="-h --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__doctor)
+            opts="-J -h --json --strictness --fail-on-warning --config-from --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
@@ -457,7 +485,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help)
-            opts="check enforce config spec generate hook receipt help"
+            opts="check enforce config spec doctor generate hook receipt help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -515,6 +543,20 @@ _batten() {
         batten__subcmd__help__subcmd__config__subcmd__show)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__doctor)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi

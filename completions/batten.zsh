@@ -144,6 +144,19 @@ strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'-J[Emit findings as byte-stable JSON instead of pointer lines]' \
+'--json[Emit findings as byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (generate)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -354,6 +367,10 @@ esac
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(doctor)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (generate)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__generate_commands" \
@@ -426,6 +443,7 @@ _batten_commands() {
 'enforce:Run every configured rule, including kinds that execute a configured command' \
 'config:Inspect configuration' \
 'spec:Print the tool'\''s own command spec' \
+'doctor:Diagnose whether Batten can run in this repository' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
@@ -480,6 +498,11 @@ _batten__subcmd__config__subcmd__lint_commands() {
 _batten__subcmd__config__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'batten config show commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__doctor_commands] )) ||
+_batten__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten doctor commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__enforce_commands] )) ||
 _batten__subcmd__enforce_commands() {
@@ -536,6 +559,7 @@ _batten__subcmd__help_commands() {
 'enforce:Run every configured rule, including kinds that execute a configured command' \
 'config:Inspect configuration' \
 'spec:Print the tool'\''s own command spec' \
+'doctor:Diagnose whether Batten can run in this repository' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
@@ -565,6 +589,11 @@ _batten__subcmd__help__subcmd__config__subcmd__lint_commands() {
 _batten__subcmd__help__subcmd__config__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'batten help config show commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__doctor_commands] )) ||
+_batten__subcmd__help__subcmd__doctor_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help doctor commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__enforce_commands] )) ||
 _batten__subcmd__help__subcmd__enforce_commands() {

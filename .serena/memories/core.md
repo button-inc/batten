@@ -39,6 +39,16 @@ file itself for the "why", this is only the "where":
   `0` clean/allow, `1` usage, `2` the policy verdict — a `check` violation and a
   `hook` deny alike — `3` internal. The numbering makes fail-open structural, and
   a unit test asserts no failure code equals the deny code.
+- `doctor.rs` — `batten doctor` (CLOUD-66), house-style §12's post-install
+  self-check: can Batten do its job in this repository? Diagnoses only — it
+  **never returns exit 2**, because every failure it can report (config absent,
+  invalid, unresolvable; not a repository) is the config-or-usage class, and a
+  harness must not read "this checkout is misconfigured" as a deny. That is why
+  `config lint` is deliberately _not_ a diagnostic: a smell is exit 2 there, and
+  folding it in would answer the same question two ways. Checks report a stable
+  reason id, never the error text, so `--json` is byte-stable and carries no
+  filesystem path. Distinct from `mise-tasks/doctor`, which gates this repo's own
+  provisioning.
 - `error.rs` — two typed carriers the binary boundary downcasts on: `UsageError`
   → `ExitCode::Usage` (1) for expected bad-input vs. an internal failure, and
   `Denial` → `ExitCode::Violation` (2), the mediation verdict travelling to the

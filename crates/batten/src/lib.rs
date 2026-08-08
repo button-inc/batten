@@ -10,6 +10,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod doctor;
 pub mod effect;
 pub mod error;
 pub mod exit;
@@ -77,6 +78,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Some(Command::Enforce { json }) => run_rules(out, &overrides, rules::run_all, json),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
+        Some(Command::Doctor { json }) => run_doctor(json, out),
         Some(Command::Generate { command }) => run_generate(&command, out),
         Some(Command::Hook { harness }) => run_hook(harness, out),
         // The receipt verbs read their own git facts; the §8 config chain does
@@ -307,6 +309,32 @@ fn run_config(
             Ok(ExitCode::verdict(!smells.is_empty()))
         }
     }
+}
+
+/// Diagnose whether Batten can run here (CLOUD-66).
+///
+/// The exit code comes from [`doctor::Report::code`], whose range excludes
+/// [`ExitCode::Violation`] by construction: a diagnostic never renders a policy
+/// verdict, so a mediating harness can never read "this checkout is
+/// misconfigured" as a deny (§7).
+fn run_doctor(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let report = doctor::diagnose(Path::new("."));
+    if json {
+        // A data channel emits its document unconditionally, including for a
+        // healthy repository: JSON that is sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        for check in &report.checks {
+            writeln!(out, "{}", check.line())?;
+        }
+        let failed = report.checks.iter().filter(|check| !check.ok).count();
+        writeln!(
+            out,
+            "doctor: {} check(s), {failed} failed",
+            report.checks.len()
+        )?;
+    }
+    Ok(report.code())
 }
 
 fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {

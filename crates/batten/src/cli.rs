@@ -66,6 +66,11 @@ pub enum Command {
         /// The output format for the spec.
         format: SpecFormat,
     },
+    /// Diagnose whether Batten can run in this repository.
+    Doctor {
+        /// Emit the diagnosis as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
     /// Emit an artifact derived from the command spec.
     Generate {
         /// The chosen sub-verb.
@@ -184,6 +189,9 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "spec" => matches
             .get_one::<SpecFormat>("format")
             .map(|format| Command::Spec { format: *format }),
+        "doctor" => Some(Command::Doctor {
+            json: flag(matches, "json"),
+        }),
         "generate" => matches
             .subcommand()
             .and_then(|(name, matches)| match name {

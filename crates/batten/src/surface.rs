@@ -365,6 +365,15 @@ pub const SURFACE: &[CommandDecl] = &[
     // refreshes a committed artifact is the caller's (`mise run completions`),
     // never the binary's. That is what makes `read` structurally honest here
     // rather than a promise about behaviour.
+    // The designated post-install self-check (§12). Diagnoses whether Batten can
+    // do its job here; it never renders a policy verdict, which is why `config
+    // lint` is not one of its diagnostics (CLOUD-66).
+    CommandDecl {
+        path: "doctor",
+        about: "Diagnose whether Batten can run in this repository",
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     CommandDecl {
         path: "generate",
         about: "Emit artifacts derived from the command spec, on stdout",
@@ -539,6 +548,10 @@ pub fn command() -> Command {
     let root = Command::new("batten")
         .version(env!("CARGO_PKG_VERSION"))
         .about(ROOT.about)
+        // The §7 table, rendered from `ExitCode`'s own variants rather than
+        // re-typed here, so `--help` and the binary can never disagree about
+        // what a code means (CLOUD-66).
+        .after_help(format!("Exit codes:\n{}", crate::exit::table()))
         .arg_required_else_help(true);
     let root = ROOT
         .flags

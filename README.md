@@ -72,14 +72,16 @@ per-clone setup and the task tour.
 
 ## Exit-code contract
 
-One table, total, with no per-verb exception.
+One table, total, with no per-verb exception. `batten --help` prints the same
+table, and each meaning below is asserted against the binary's own rendering, so
+this section cannot drift from the codes the binary returns.
 
-| Code | Meaning                                                           |
-| ---- | ----------------------------------------------------------------- |
-| `0`  | Success — check passed, nothing to report, mediated call allowed  |
-| `1`  | Usage or config error (bad flags, unreadable config)              |
-| `2`  | Policy verdict — a violation found, or a mediated call **denied** |
-| `3`  | Internal error — Batten could not complete the check              |
+| Code | Meaning                                                 |
+| ---- | ------------------------------------------------------- |
+| `0`  | clean — nothing to report; a mediated call is allowed   |
+| `1`  | config or usage error — fail loud, do not block         |
+| `2`  | policy verdict — a violation, or a mediated call denied |
+| `3`  | internal error — fail loud, do not block                |
 
 The numbering is chosen so the mediation channel needs no translation: hosts
 with a pre-tool hook read `0` as allow, `2` as deny with stderr as the reason,
@@ -92,6 +94,12 @@ The channel varies by harness even though the number does not: a host whose
 only decision channel is process status is denied by exit `2`, while a host
 that reads an in-band decision document is denied by that document with exit
 `0`.
+
+`batten doctor` is the post-install self-check: it reports whether Batten can
+run in this repository, with `--json` for a byte-stable machine reading. It is a
+_diagnostic_, so it never returns `2` — every failure it can report is the
+config-or-usage class, and a harness must never read "this checkout is
+misconfigured" as a policy denial.
 
 ## Roadmap
 

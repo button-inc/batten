@@ -53,6 +53,33 @@ impl ExitCode {
     /// same [`ExitCode::Violation`] a `deny` finding returns, because it is the
     /// same kind of answer: a policy verdict. Promotion changes which findings
     /// block, never which code a blocking run reports.
+    /// Every code in the contract, in numeric order.
+    ///
+    /// The totality source for [`table`]: a new variant that is not added here
+    /// fails [`tests::the_rendered_table_covers_every_code`], so a code cannot
+    /// be minted without being documented.
+    pub const ALL: [ExitCode; 4] = [
+        ExitCode::Success,
+        ExitCode::Usage,
+        ExitCode::Violation,
+        ExitCode::Internal,
+    ];
+
+    /// The one-line meaning this code carries in the §7 table.
+    ///
+    /// Declared once, here, beside the numeric value — the rendered table and
+    /// any documentation of it are *derived* from this, so a code's meaning
+    /// cannot be described one way in the binary and another in the README.
+    #[must_use]
+    pub const fn meaning(self) -> &'static str {
+        match self {
+            ExitCode::Success => "clean — nothing to report; a mediated call is allowed",
+            ExitCode::Usage => "config or usage error — fail loud, do not block",
+            ExitCode::Violation => "policy verdict — a violation, or a mediated call denied",
+            ExitCode::Internal => "internal error — fail loud, do not block",
+        }
+    }
+
     #[must_use]
     pub const fn verdict(blocking: bool) -> Self {
         if blocking {
@@ -61,6 +88,22 @@ impl ExitCode {
             ExitCode::Success
         }
     }
+}
+
+/// The §7 exit-code table, rendered from [`ExitCode::ALL`].
+///
+/// This is what "documented" means here: the table a reader sees is *generated*
+/// from the same variants the binary returns, so the two cannot disagree. A
+/// hand-written second copy is exactly the drift this project exists to prevent
+/// — and it is not hypothetical, since renumbering the table (CLOUD-226) left
+/// every issue body that had restated it silently wrong.
+#[must_use]
+pub fn table() -> String {
+    ExitCode::ALL
+        .iter()
+        .map(|code| format!("  {}  {}", code.code(), code.meaning()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 impl From<ExitCode> for std::process::ExitCode {
@@ -94,6 +137,34 @@ mod tests {
         for (code, raw) in CONTRACT {
             assert_eq!(code.code(), raw, "{code:?} must map to exit {raw}");
         }
+    }
+
+    #[test]
+    fn the_rendered_table_covers_every_code() {
+        // The totality gate behind "documented": every variant must appear in
+        // the rendered table with its number and its meaning, so a new code
+        // cannot be added without documenting it.
+        let rendered = table();
+        for code in ExitCode::ALL {
+            assert!(
+                rendered.contains(&format!("  {}  {}", code.code(), code.meaning())),
+                "{code:?} is missing from the rendered table:\n{rendered}"
+            );
+        }
+        assert_eq!(
+            rendered.lines().count(),
+            ExitCode::ALL.len(),
+            "the table must have exactly one line per code"
+        );
+    }
+
+    #[test]
+    fn every_code_has_a_distinct_meaning() {
+        let mut meanings: Vec<&str> = ExitCode::ALL.iter().map(|c| c.meaning()).collect();
+        meanings.sort_unstable();
+        let total = meanings.len();
+        meanings.dedup();
+        assert_eq!(meanings.len(), total, "two codes share a meaning");
     }
 
     #[test]

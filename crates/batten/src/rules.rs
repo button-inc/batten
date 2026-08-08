@@ -178,6 +178,24 @@ pub struct Rule {
 }
 
 impl Rule {
+    /// The program a [`RuleKind::Command`] rule invokes: the first
+    /// whitespace-separated token of [`Rule::run`].
+    ///
+    /// Shared rather than re-split at each caller, so `doctor`'s PATH probe
+    /// (CLOUD-66) and the runner below can never disagree about which token is
+    /// the program — a probe that checked a different word than the one executed
+    /// would report health about the wrong binary.
+    ///
+    /// `None` for any other kind, and for a `run` with no tokens (which the
+    /// runner refuses as a usage error).
+    #[must_use]
+    pub fn program(&self) -> Option<&str> {
+        if self.kind != RuleKind::Command {
+            return None;
+        }
+        self.run.as_deref()?.split_whitespace().next()
+    }
+
     /// Validate that the per-kind fields present match the declared `kind`.
     ///
     /// The struct is flat (a `#[serde(flatten)]` enum would silently defeat
