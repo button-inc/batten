@@ -229,6 +229,26 @@ fn token(strictness: Strictness) -> String {
         .map_or_else(|| "unknown".to_owned(), |v| v.get_name().to_owned())
 }
 
+/// The env layer for one key: its variable name and the value that variable
+/// carries, or `None` when this layer does not speak to the key.
+///
+/// An **empty** variable is "not set", not a bad value: `FOO= cmd`, and a CI
+/// that exports every knob unconditionally, both produce one. Filtering that
+/// here rather than in each key's parser is what keeps empty→default (§10) a
+/// single rule instead of one every new setting has to remember.
+fn env_layer(key: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
+    let name = setting(key).env?;
+    let raw = env(name)?;
+    let trimmed = raw.trim();
+    (!trimmed.is_empty()).then(|| (name, trimmed.to_owned()))
+}
+
+/// The flag that overrides one key, falling back to `default` for a key the
+/// table declares no flag for.
+fn flag_name(key: &str, default: &'static str) -> &'static str {
+    setting(key).long_flag.unwrap_or(default)
+}
+
 /// The token a boolean key is written as in config, env, and messages.
 ///
 /// TOML's own boolean literals, so the `batten.toml` key, the env var, and a
@@ -347,8 +367,13 @@ pub fn resolve_with_env(
             )));
         }
         if let Some(value) = local.strictness {
-            strictness =
-                strictness.raise(value, Source::LocalFile, LOCAL_CONFIG_FILE, "strictness", token)?;
+            strictness = strictness.raise(
+                value,
+                Source::LocalFile,
+                LOCAL_CONFIG_FILE,
+                "strictness",
+                token,
+            )?;
         }
         if let Some(value) = local.fail_on_warning {
             // The raise-only clause this issue's acceptance names directly: a
@@ -384,30 +409,20 @@ pub fn resolve_with_env(
     // produce one. Distinguishing empty→default from present-but-invalid is the
     // house style's stated position (§10), and the alternative is worse — a
     // harmless empty export would fail every invocation.
-    if let Some(name) = setting("strictness").env {
-        if let Some(raw) = env(name) {
-            let raw = raw.trim();
-            if !raw.is_empty() {
-                let value = parse_strictness(raw, name)?;
-                strictness = strictness.raise(value, Source::Env, name, "strictness", token)?;
-            }
-        }
+    if let Some((name, raw)) = env_layer("strictness", env) {
+        let value = parse_strictness(&raw, name)?;
+        strictness = strictness.raise(value, Source::Env, name, "strictness", token)?;
     }
-    if let Some(name) = setting("fail_on_warning").env {
-        if let Some(raw) = env(name) {
-            let raw = raw.trim();
-            if !raw.is_empty() {
-                let value = parse_bool(raw, name, "fail_on_warning")?;
-                fail_on_warning =
-                    fail_on_warning.raise(value, Source::Env, name, "fail_on_warning", bool_token)?;
-            }
-        }
+    if let Some((name, raw)) = env_layer("fail_on_warning", env) {
+        let value = parse_bool(&raw, name, "fail_on_warning")?;
+        fail_on_warning =
+            fail_on_warning.raise(value, Source::Env, name, "fail_on_warning", bool_token)?;
     }
 
     // Layer 4 — the command line, highest precedence and still raise-only: a
     // flag may tighten a gate for one run, never disable one for it.
     if let Some(value) = overrides.strictness {
-        let flag = setting("strictness").long_flag.unwrap_or("--strictness");
+        let flag = flag_name("strictness", "--strictness");
         strictness = strictness.raise(value, Source::Flag, flag, "strictness", token)?;
     }
     if overrides.fail_on_warning {
@@ -415,9 +430,7 @@ pub fn resolve_with_env(
         // express "off", so the clamp has nothing to refuse. Routed through
         // `raise` anyway so the attribution to `flag` follows the same path as
         // every other layer rather than a bespoke assignment.
-        let flag = setting("fail_on_warning")
-            .long_flag
-            .unwrap_or("--fail-on-warning");
+        let flag = flag_name("fail_on_warning", "--fail-on-warning");
         fail_on_warning =
             fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
@@ -728,11 +741,16 @@ mod tests {
         let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(
-            err.to_string().contains("fail_on_warning") && err.to_string().contains("may only tighten"),
+            err.to_string().contains("fail_on_warning")
+                && err.to_string().contains("may only tighten"),
             "the refusal must name the key and say why, got: {err}"
         );
 
-        let committed = repo("fow-weaken-env", "version = 1\nfail_on_warning = true\n", None);
+        let committed = repo(
+            "fow-weaken-env",
+            "version = 1\nfail_on_warning = true\n",
+            None,
+        );
         let err = resolve_with_env(&committed, Overrides::default(), &|name| {
             (name == "BATTEN_FAIL_ON_WARNING").then(|| "false".to_owned())
         })
@@ -767,7 +785,11 @@ mod tests {
     fn an_empty_fail_on_warning_env_var_means_unset_not_invalid() {
         // Same §10 position as strictness: an unconditional CI export of every
         // knob must not fail the run, and must not claim the key either.
-        let dir = repo("fow-env-empty", "version = 1\nfail_on_warning = true\n", None);
+        let dir = repo(
+            "fow-env-empty",
+            "version = 1\nfail_on_warning = true\n",
+            None,
+        );
         for raw in ["", "   "] {
             let resolved = resolve_with_env(&dir, Overrides::default(), &|name| {
                 (name == "BATTEN_FAIL_ON_WARNING").then(|| raw.to_owned())

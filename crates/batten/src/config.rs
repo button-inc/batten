@@ -215,7 +215,10 @@ mod tests {
         assert_eq!(config.fail_on_warning, Some(true));
         let off = parse("version = 1\nfail_on_warning = false\n", "test").unwrap();
         assert_eq!(off.fail_on_warning, Some(false));
-        assert_eq!(parse("version = 1\n", "test").unwrap().fail_on_warning, None);
+        assert_eq!(
+            parse("version = 1\n", "test").unwrap().fail_on_warning,
+            None
+        );
     }
 
     #[test]
@@ -224,8 +227,8 @@ mod tests {
         // merely looks like one is bad input, not a value to coerce. This is the
         // same typing discipline `version = "1"` is held to above.
         for value in ["\"true\"", "1", "\"yes\""] {
-            let err = parse(&format!("version = 1\nfail_on_warning = {value}\n"), "test")
-                .unwrap_err();
+            let err =
+                parse(&format!("version = 1\nfail_on_warning = {value}\n"), "test").unwrap_err();
             assert!(
                 is_usage_error(&err),
                 "fail_on_warning = {value} must be refused"

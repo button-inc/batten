@@ -86,7 +86,11 @@ fn a_warn_finding_is_clean_by_default_and_a_violation_when_promoted() {
     assert_eq!(default.status.code(), Some(0), "a warn finding is clean");
 
     let promoted = run(&dir, &["check", "--fail-on-warning"], None);
-    assert_eq!(promoted.status.code(), Some(2), "…and promotable to a violation");
+    assert_eq!(
+        promoted.status.code(),
+        Some(2),
+        "…and promotable to a violation"
+    );
 
     // Reporting is untouched by the promotion: the finding prints identically
     // either way, so turning the setting on cannot change *what* was found.
@@ -137,7 +141,11 @@ fn a_committed_on_cannot_be_turned_off_by_a_lower_precedence_source() {
         Some("version = 1\nfail_on_warning = false\n"),
     );
     let refused = run(&with_local, &["check"], None);
-    assert_eq!(refused.status.code(), Some(1), "a weakening is a usage error");
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "a weakening is a usage error"
+    );
     let message = stderr(&refused);
     assert!(
         message.contains("fail_on_warning") && message.contains("may only tighten"),
@@ -174,20 +182,12 @@ fn only_the_middle_rank_is_promoted() {
     // has no finding to promote and the run stays clean — the setting can never
     // turn a disabled rule into a gate. A `deny` rule blocks either way, so no
     // error-severity finding is *required* for a promotion to happen.
-    let allowed = repo(
-        "fow-allow-rank",
-        &config("", "allow"),
-        None,
-    );
+    let allowed = repo("fow-allow-rank", &config("", "allow"), None);
     let output = run(&allowed, &["check", "--fail-on-warning"], None);
     assert_eq!(output.status.code(), Some(0), "an allow rule stays off");
     assert_eq!(stdout(&output), "", "…and reports nothing");
 
-    let denied = repo(
-        "fow-deny-rank",
-        &config("", "deny"),
-        None,
-    );
+    let denied = repo("fow-deny-rank", &config("", "deny"), None);
     for args in [&["check"][..], &["check", "--fail-on-warning"][..]] {
         assert_eq!(
             run(&denied, args, None).status.code(),
@@ -274,7 +274,10 @@ fn json_records_the_promoted_disposition_and_is_byte_stable() {
         stdout(&promoted),
         stdout(&run(&dir, &["check", "-J"], Some("true")))
     );
-    assert_eq!(stdout(&unset), stdout(&run(&dir, &["check", "--json"], None)));
+    assert_eq!(
+        stdout(&unset),
+        stdout(&run(&dir, &["check", "--json"], None))
+    );
 
     // A clean run still emits its document: JSON that is sometimes absent is
     // unparseable, so the empty answer is `findings: []`, not no output.
@@ -315,6 +318,21 @@ fn config_show_reports_the_setting_and_the_layer_that_won_it() {
     assert_eq!(json["sources"]["fail_on_warning"], "default");
 }
 
+/// Walk an emitted `batten spec` tree, collecting every command path that
+/// declares a `fail_on_warning` flag and every command path in the surface.
+fn walk_spec(node: &serde_json::Value, promotion_flags: &mut Vec<String>, verbs: &mut Vec<String>) {
+    let path = node["path"].as_str().unwrap_or_default().to_owned();
+    for flag in node["flags"].as_array().into_iter().flatten() {
+        if flag["name"] == "fail_on_warning" {
+            promotion_flags.push(path.clone());
+        }
+    }
+    verbs.push(path);
+    for sub in node["subcommands"].as_array().into_iter().flatten() {
+        walk_spec(sub, promotion_flags, verbs);
+    }
+}
+
 #[test]
 fn there_is_exactly_one_promotion_knob_and_exec_is_not_a_consumer() {
     // The scope boundary, asserted on the emitted surface itself (§11).
@@ -331,21 +349,8 @@ fn there_is_exactly_one_promotion_knob_and_exec_is_not_a_consumer() {
     let spec: serde_json::Value =
         serde_json::from_str(&stdout(&run(&dir, &["spec"], None))).expect("valid spec JSON");
 
-    fn walk(node: &serde_json::Value, promotion_flags: &mut Vec<String>, verbs: &mut Vec<String>) {
-        let path = node["path"].as_str().unwrap_or_default().to_owned();
-        for flag in node["flags"].as_array().into_iter().flatten() {
-            if flag["name"] == "fail_on_warning" {
-                promotion_flags.push(path.clone());
-            }
-        }
-        verbs.push(path);
-        for sub in node["subcommands"].as_array().into_iter().flatten() {
-            walk(sub, promotion_flags, verbs);
-        }
-    }
-
     let (mut promotion_flags, mut verbs) = (Vec::new(), Vec::new());
-    walk(&spec, &mut promotion_flags, &mut verbs);
+    walk_spec(&spec, &mut promotion_flags, &mut verbs);
 
     // A global clap arg is attached to every command it is visible on, so the
     // check is on the *name*: there is one promotion setting, and no verb
@@ -358,10 +363,15 @@ fn there_is_exactly_one_promotion_knob_and_exec_is_not_a_consumer() {
         .iter()
         .filter(|path| path.contains("fail-on-warning") || path.contains("promote"))
         .collect();
-    assert!(strays.is_empty(), "no verb may own a promotion knob: {strays:?}");
+    assert!(
+        strays.is_empty(),
+        "no verb may own a promotion knob: {strays:?}"
+    );
 
     assert!(
-        !verbs.iter().any(|path| path == "exec" || path.starts_with("exec ")),
+        !verbs
+            .iter()
+            .any(|path| path == "exec" || path.starts_with("exec ")),
         "`batten exec` has landed (CLOUD-117): replace this tripwire with the real \
          assertion that an exec output match fails regardless of fail_on_warning"
     );
