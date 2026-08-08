@@ -197,10 +197,12 @@ while :; do
 	# event. `graded` is `ci-wait`'s own list, and deliberately so: "is this set
 	# an answer" has one definition, and a second copy here that drifted would
 	# put this task back to waiting on runs that will never be graded.
+	readied=0
 	if [ "$(graded_runs "$sha")" = "0" ] &&
 		[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
 		gh pr ready "$pr" >/dev/null 2>&1 ||
 			die "could not mark #$pr ready for review, so CI would never start."
+		readied=1
 		echo "land: lap $lap — readied #$pr before pushing, so the push's own event is the one confirming run"
 	fi
 
@@ -216,7 +218,16 @@ while :; do
 	# what actually emits a fresh `ready_for_review` on an unchanged head
 	# (`ready-guard` permits the undo since CLOUD-237). Guarded on the ref not
 	# moving, so a lap that did push never pays for a second event.
-	if [ "$(git rev-parse "origin/$branch")" = "$remote_before" ] &&
+	#
+	# And guarded on `readied`, because the two conditions otherwise overlap: a
+	# DRAFT on an unchanged head satisfies both, and the lap readied and then
+	# immediately re-drafted and readied again — the second `ready_for_review`
+	# cancelling the run the first started, through the same
+	# `cancel-in-progress` this task relies on elsewhere (CLOUD-255). `--undo`
+	# is for a PR that is ALREADY ready; a draft has a cheaper way to emit the
+	# event and has just used it.
+	if [ "$readied" = 0 ] &&
+		[ "$(git rev-parse "origin/$branch")" = "$remote_before" ] &&
 		[ "$(graded_runs "$sha")" = "0" ]; then
 		gh pr ready "$pr" --undo >/dev/null 2>&1 ||
 			die "could not re-draft #$pr to re-fire the ready that starts CI."

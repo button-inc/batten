@@ -520,6 +520,25 @@ workflow_runs() {
 	[[ "$output" == *"re-fired the ready"* ]]
 }
 
+@test "a DRAFT whose push moves nothing readies once, not once and then again" {
+	# CLOUD-255. The two ready blocks were not mutually exclusive: a draft on an
+	# unchanged head with only skipped runs satisfies both, so the lap readied,
+	# then re-drafted and readied again. The first `ready_for_review` starts a
+	# run and the second cancels it through `cancel-in-progress` — a runner spent
+	# and thrown away, by the task whose whole premise is that runners are
+	# metered. `--undo` exists to emit that event on a PR that is ALREADY ready;
+	# a draft has a cheaper way and has just used it. The case above ran with the
+	# default non-draft PR, which is why this shape went unexercised.
+	is_draft
+	push_moves_nothing
+	head_is_all_skipped
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ "$(grep -c . "$BATS_TEST_TMPDIR/ready")" -eq 1 ]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+}
+
 @test "THE RACE: the ready precedes the push, so one event carries the run" {
 	# CLOUD-254, measured on #182. Pushing first and readying after puts two
 	# webhooks in the same instant and the same `concurrency: ci-<ref>` group:
