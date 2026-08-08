@@ -207,7 +207,11 @@ fn a_severity_lowered_against_the_base_ref_is_a_smell() {
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         stdout(&output),
-        "batten.toml:0 severity-lowered\nconfig-lint: 1 smell(s)\n"
+        // The key path, not `:0`. `trust` located this weakening precisely and
+        // the conversion now keeps that location, so the pointer names the key
+        // that was lowered and matches what `check --config-from` prints for the
+        // same finding (CLOUD-233).
+        "batten.toml:rule[no-todo].severity severity-lowered\nconfig-lint: 1 smell(s)\n"
     );
 }
 
@@ -338,4 +342,69 @@ fn this_repositorys_own_config_is_clean() {
         "this repository's batten.toml has a smell: {}",
         stdout(&output)
     );
+}
+
+// --- one weakening, one pointer, whichever verb reports it --------------------
+//
+// CLOUD-233. `config lint` and `check --config-from` reuse one comparison, so
+// they must agree on where a weakening *is*. They did not: this verb substituted
+// `:0` for the key `trust` had already computed, which pointed nowhere and — since
+// a smell's identity was `(line, id)` — made two weakenings of one kind compare
+// equal, so `dedup` silently dropped all but the first.
+
+#[test]
+fn two_rules_lowered_in_one_edit_are_both_reported() {
+    // The count is the sharp end: under-reporting a weakening is worse than
+    // mislocating it, and no test asserted cardinality before this one.
+    let repo = pr_fixture(
+        "lint-two-lowerings",
+        &format!("version = 1{}{}", rule("one", "deny"), rule("two", "deny")),
+        &format!("version = 1{}{}", rule("one", "warn"), rule("two", "warn")),
+    );
+    let output = lint(&repo, &["--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:rule[one].severity severity-lowered\n\
+         batten.toml:rule[two].severity severity-lowered\n\
+         config-lint: 2 smell(s)\n",
+        "both lowerings, each under its own key"
+    );
+}
+
+#[test]
+fn the_two_verbs_agree_on_where_a_weakening_is() {
+    // The assertion that would have caught this, and which neither verb's own
+    // suite can express alone: the pointer half of each line must match, so a
+    // caller can join a smell to the weakening it came from.
+    let repo = pr_fixture(
+        "lint-pointer-joinable",
+        &format!("version = 1{}", rule("no-todo", "deny")),
+        &format!("version = 1{}", rule("no-todo", "warn")),
+    );
+    let lint_out = stdout(&lint(&repo, &["--config-from", "origin/main"]));
+
+    let check = batten()
+        .args(["check", "--config-from", "origin/main"])
+        .current_dir(&repo)
+        .env_remove("BATTEN_CONFIG_FROM")
+        .output()
+        .expect("run batten check");
+    let check_out = String::from_utf8_lossy(&check.stdout).into_owned();
+
+    // The pointer is everything up to the first space; the trailing token differs
+    // by verb on purpose — one names the smell, the other the verdict transition.
+    let pointer = |text: &str| -> String {
+        text.lines()
+            .find(|line| line.starts_with("batten.toml:"))
+            .and_then(|line| line.split_whitespace().next())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_eq!(
+        pointer(&lint_out),
+        pointer(&check_out),
+        "lint: {lint_out}check: {check_out}"
+    );
+    assert_eq!(pointer(&lint_out), "batten.toml:rule[no-todo].severity");
 }

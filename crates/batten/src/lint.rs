@@ -34,6 +34,7 @@
 //! caught, but by the base-ref comparison, where it is a weakening rather than a
 //! smell.
 
+use std::fmt;
 use std::path::Path;
 
 use anyhow::Result;
@@ -44,29 +45,64 @@ use crate::config::{self, Config};
 use crate::severity::RuleSeverity;
 use crate::trust;
 
+/// Where in `batten.toml` a smell sits.
+///
+/// Two shapes, because a config has two kinds of location and collapsing them
+/// into one is what made a weakening's pointer point nowhere (CLOUD-233):
+///
+/// * A **single-tree** smell is a span in the working file, so a line is its
+///   natural location and `toml::Spanned` supplies it.
+/// * A **base-ref weakening** is a *key*. [`trust`] has already located it
+///   precisely, and for a key the working tree removed there is no line to
+///   have — which is why substituting `0` threw away the only location the
+///   pointer ever carried, and why two weakenings of one kind then compared
+///   equal and one was silently dropped by `dedup`.
+///
+/// [`Ord`] is derived, so ordering is total and deterministic: lines first, in
+/// numeric order, then keys lexicographically. That is what keeps the report
+/// byte-stable for identical input (§6).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum Where {
+    /// The 1-based line the smell sits on, in the working `batten.toml`.
+    Line(usize),
+    /// The key path, exactly as `batten.toml` addresses it
+    /// (`rule[no-todo].severity`, `protected[crates/**]`).
+    Key(String),
+}
+
+impl fmt::Display for Where {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Where::Line(line) => write!(f, "{line}"),
+            Where::Key(key) => write!(f, "{key}"),
+        }
+    }
+}
+
 /// One policy smell, located in `batten.toml`.
 ///
 /// Pointer-only by construction (non-negotiable rule 4): a location and a stable
 /// identifier, never the config bytes that produced it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Smell {
-    /// The 1-based line the smell sits on, or `0` when the config has no
-    /// location for it — a *removed* rule has no line in the file it is missing
-    /// from. `path:0` is the same "no line" convention the shell gates use.
-    pub line: usize,
+    /// Where the smell sits — a line in the working file, or the key path.
+    pub at: Where,
     /// The stable, lowercase smell identifier.
     pub id: &'static str,
 }
 
 impl Smell {
     /// The pointer line this smell renders as (§6), without a trailing newline:
-    /// `batten.toml:<line> <smell-id>`.
+    /// `batten.toml:<line-or-key> <smell-id>`.
     ///
     /// Exactly a finding's `path:line rule-id` shape, so a caller that already
-    /// parses `check` output needs no second parser.
+    /// parses `check` output needs no second parser. For a base-ref weakening
+    /// the location half is the same key path [`trust::Weakening::line`] prints,
+    /// so one weakening has one pointer whichever verb reports it.
     #[must_use]
     pub fn line_text(&self) -> String {
-        format!("{}:{} {}", config::CONFIG_FILE, self.line, self.id)
+        format!("{}:{} {}", config::CONFIG_FILE, self.at, self.id)
     }
 }
 
@@ -116,7 +152,7 @@ fn line_of(text: &str, offset: usize) -> usize {
 /// one, only the single-tree smells are computable and the base-ref class is
 /// simply absent rather than silently reported as clean.
 ///
-/// Sorted by `(line, id)` so the report is byte-stable for identical input (§6).
+/// Sorted by `(at, id)` so the report is byte-stable for identical input (§6).
 ///
 /// # Errors
 ///
@@ -144,7 +180,7 @@ pub fn smells(text: &str, source: &str, base: Option<&Config>) -> Result<Vec<Sme
             continue;
         }
         found.push(Smell {
-            line: line_of(text, spanned.span().start),
+            at: Where::Line(line_of(text, spanned.span().start)),
             id,
         });
     }
@@ -155,18 +191,23 @@ pub fn smells(text: &str, source: &str, base: Option<&Config>) -> Result<Vec<Sme
     for rule in &located.rules {
         if rule.severity == RuleSeverity::Allow {
             found.push(Smell {
-                line: line_of(text, rule.id.span().start),
+                at: Where::Line(line_of(text, rule.id.span().start)),
                 id: RULE_DISABLED,
             });
         }
     }
 
-    // The base-ref class, reusing the one definition of "weakened". These have
-    // no line in the working file when the thing is *gone* from it, so they
-    // report `:0` rather than inventing a location.
+    // The base-ref class, reusing the one definition of "weakened" — and its
+    // location. A weakening arrives from `trust` already carrying the key path
+    // it applies to, so the conversion keeps it rather than substituting a line
+    // number the working file may not have: `rule[no-todo].severity` locates a
+    // lowered severity exactly, and `protected[crates/**]` locates a removed
+    // entry exactly *because* a key path does not depend on the key still being
+    // in the file. Keeping the key is also what makes two weakenings of one kind
+    // distinct, so the `dedup` below can no longer swallow the second (CLOUD-233).
     if let Some(base) = base {
         found.extend(trust::weakenings(base, &config).into_iter().map(|w| Smell {
-            line: 0,
+            at: Where::Key(w.key),
             id: w.kind.as_str(),
         }));
     }
@@ -253,7 +294,11 @@ mod tests {
         let text = "version = 1\n\nprotected = []\n";
         let found = smells(text, "test", None).unwrap();
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].line, 3, "the line the key is written on");
+        assert_eq!(
+            found[0].at,
+            Where::Line(3),
+            "the line the key is written on"
+        );
         assert_eq!(found[0].line_text(), "batten.toml:3 empty-protected-set");
     }
 
@@ -268,6 +313,65 @@ mod tests {
         let ids: Vec<&str> = found.iter().map(|smell| smell.id).collect();
         assert!(ids.contains(&"protected-removed"), "got: {ids:?}");
         assert!(ids.contains(&"strictness-lowered"), "got: {ids:?}");
+    }
+
+    #[test]
+    fn each_weakening_keeps_the_key_trust_located_it_by() {
+        // The pointer half of CLOUD-233: a weakening arrives already located, and
+        // the conversion must not trade that key for a line number the working
+        // file may not even have. `batten.toml:0` pointed nowhere.
+        let base = config::parse("version = 1\nprotected = [\"a\"]\n", "base").unwrap();
+        let found = smells("version = 1\n", "test", Some(&base)).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].at, Where::Key("protected[a]".to_owned()));
+        assert_eq!(
+            found[0].line_text(),
+            "batten.toml:protected[a] protected-removed"
+        );
+    }
+
+    #[test]
+    fn two_weakenings_of_one_kind_both_survive_dedup() {
+        // The counting half of CLOUD-233, and the assertion whose absence let the
+        // defect ship: `Smell` identity used to be `(line, id)` with every
+        // weakening given line 0, so two rules lowered in one edit compared equal
+        // and `dedup` discarded the second. The verb then reported one smell for
+        // two weakenings — the more a config was weakened, the more was swallowed.
+        let rule = |id: &str, severity: &str| {
+            format!(
+                "[[rule]]\nid = \"{id}\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"x\"\nseverity = \"{severity}\"\nscope = \"tree\"\n"
+            )
+        };
+        let base = config::parse(
+            &format!(
+                "version = 1\n{}{}",
+                rule("one", "deny"),
+                rule("two", "deny")
+            ),
+            "base",
+        )
+        .unwrap();
+        let working = format!(
+            "version = 1\n{}{}",
+            rule("one", "warn"),
+            rule("two", "warn")
+        );
+        let found = smells(&working, "test", Some(&base)).unwrap();
+        let lowered: Vec<&Smell> = found
+            .iter()
+            .filter(|smell| smell.id == "severity-lowered")
+            .collect();
+        assert_eq!(lowered.len(), 2, "both lowerings survive: {found:?}");
+        assert_eq!(
+            lowered
+                .iter()
+                .map(|smell| smell.line_text())
+                .collect::<Vec<_>>(),
+            vec![
+                "batten.toml:rule[one].severity severity-lowered",
+                "batten.toml:rule[two].severity severity-lowered",
+            ]
+        );
     }
 
     #[test]
