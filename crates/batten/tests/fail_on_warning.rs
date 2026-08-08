@@ -41,16 +41,18 @@ const WARN_POINTER: &str = "lib.rs:2 no-todo\n";
 /// and optionally a `batten.local.toml`.
 fn repo(name: &str, config: &str, local: Option<&str>) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
+    // Start from an empty directory, not merely a present one. Clearing the
+    // local override alone was not enough: the rule globs `**/*.rs`, so ANY
+    // stray source file an earlier run left behind becomes an extra finding,
+    // and every assertion here that indexes `findings[0]` reads the wrong one.
+    // Measured — a discarded branch whose fixture wrote `a.rs` into these same
+    // scratch dirs turned this suite red without a line of it changing.
+    let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create temp repo dir");
     fs::write(dir.join("batten.toml"), config).expect("write batten.toml");
     fs::write(dir.join("lib.rs"), "fine\nTODO fix this\n").expect("write source");
-    let local_path = dir.join("batten.local.toml");
-    match local {
-        Some(contents) => fs::write(&local_path, contents).expect("write batten.local.toml"),
-        // A file left by an earlier run would silently change the case.
-        None => {
-            let _ = fs::remove_file(&local_path);
-        }
+    if let Some(contents) = local {
+        fs::write(dir.join("batten.local.toml"), contents).expect("write batten.local.toml");
     }
     dir
 }
