@@ -432,6 +432,9 @@ components = "clippy,rustfmt"
 version = "0.23.0"
 backend = "ubi:rust-cross/cargo-zigbuild"
 
+[tools."ubi:rust-cross/cargo-zigbuild"."platforms.linux-x64-cargo-zigbuild"]
+checksum = "blake3:a23c66f592b7676d3170e859db52f25a27fb29d44df2d7c393704059fe8af2d9"
+
 [[tools.uv]]
 version = "0.8.24"
 backend = "aqua:astral-sh/uv"
