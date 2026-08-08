@@ -19,7 +19,7 @@ use crate::hook::Harness;
 #[derive(Debug, Parser)]
 // arg_required_else_help: a bare invocation lists the subcommands and never
 // performs a default action (§2). clap renders the listing on its error path
-// (stderr, exit 2), so stdout stays the answer channel.
+// (stderr, exit 1), so stdout stays the answer channel.
 #[command(name = "batten", version, about, long_about = None, arg_required_else_help = true)]
 pub struct Cli {
     /// Raise how strictly gates apply (an override may only tighten policy).
@@ -57,7 +57,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = SpecFormat::Json)]
         format: SpecFormat,
     },
-    /// Adjudicate a mediated tool call read from stdin (under this verb, exit 2 denies).
+    /// Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract).
     Hook {
         /// The harness whose payload to decode and whose decision channel to answer in.
         #[arg(long, value_enum)]

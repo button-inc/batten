@@ -19,9 +19,9 @@
 //! **Posture: fail open.** Unreadable stdin, unparseable JSON, an envelope with
 //! no command — all resolve to [`Decision::Allow`]. A guard must never be the
 //! reason a session cannot proceed; the escape hatch (`BATTEN_GH_GUARD_BYPASS`)
-//! is honoured exactly as the shell guard honours it. The exit-code contract
-//! inversion (§7: under `hook`, exit `2` denies) lives at this layer only, in
-//! [`Harness::exit_code_for`].
+//! is honoured exactly as the shell guard honours it. Fail-open needs no care
+//! here beyond the returns below: §7 spends `2` on the policy verdict alone, so
+//! neither code a Batten failure can produce is one a host reads as a deny.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -36,8 +36,8 @@ pub enum Harness {
     /// `0` — the channel the production shell guards already use.
     ClaudeCode,
     /// The neutral core contract: envelope in, decision as exit code out —
-    /// `0` allow, `2` deny (reason on stderr). The §7 inversion, for any host
-    /// whose only decision channel is an exit status.
+    /// `0` allow, `2` deny (reason on stderr), for any host whose only decision
+    /// channel is an exit status. Both codes are the §7 table's, unmodified.
     ExitCode,
 }
 

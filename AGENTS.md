@@ -166,8 +166,9 @@ is the only state that survives a VM reclaim**, so commit before a long run.
    code, never a model classification. _(Spec: house-style §0.3, §5.)_
 4. **Output is a pointer, never the payload.** Checks over sensitive content emit
    a count, `path:line`, or boolean — never the content itself. _(house-style §6.)_
-5. **Exit codes and output follow the one contract** — byte-stable output, the
-   `0/1/2/3` exit table, the deliberate `hook` inversion. _(house-style §6–§7.)_
+5. **Exit codes and output follow the one contract** — byte-stable output and the
+   `0/1/2/3` exit table, with no per-verb exception: `2` is the policy verdict
+   everywhere, a `check` violation and a `hook` deny alike. _(house-style §6–§7.)_
 6. **Keep configuration narrow.** One committed authority plus raise-only
    overrides, no directory walk, no `conf.d` merge (house-style §8). Don't widen it.
 7. **Research goes to Linear, not a repo `docs/` tree.** Research deliverables and

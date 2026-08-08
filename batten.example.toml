@@ -23,7 +23,7 @@ min_batten_version = "0.0.0"
 #                             but never redefine one declared here)
 #
 # Anything that would lower strictness — or redefine a committed rule — is
-# refused with exit 2 rather than applied. The value committed here is also the
+# refused with exit 1 rather than applied. The value committed here is also the
 # floor: an override naming a level below it (or below the "standard" default
 # when this key is absent) is refused, so "permissive" only takes effect when
 # this file itself declares it. Run `batten config show` to see the effective
@@ -38,13 +38,13 @@ strictness = "standard"
 #
 # Two per-rule keys are deliberately separate axes (cargo-deny's model):
 #
-#   severity  what a match does — "deny" fails the run (exit 1), "warn" reports
+#   severity  what a match does — "deny" fails the run (exit 2), "warn" reports
 #             the finding without failing it, "allow" switches the rule off.
 #             Required on every rule: the default is stated explicitly here,
-#             with no implicit fallback — omitting it is refused with exit 2.
+#             with no implicit fallback — omitting it is refused with exit 1.
 #   scope     where the rule looks — "tree" is the whole working tree (the
 #             default). Scope is never severity: a severity value in the scope
-#             key (or the reverse) is refused with exit 2, not reinterpreted.
+#             key (or the reverse) is refused with exit 1, not reinterpreted.
 [[rule]]
 id = "no-conflict-markers"
 kind = "forbid"

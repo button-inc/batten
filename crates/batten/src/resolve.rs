@@ -15,7 +15,7 @@
 //!   declaration order.
 //! * **Overrides are raise-only.** For a policy-bearing key an override may only
 //!   *tighten*, never weaken: raising [`Strictness`] is accepted, lowering it is
-//!   a [`UsageError`] (→ exit `2`), and the local file may only *add* rules —
+//!   a [`UsageError`] (→ exit `1`), and the local file may only *add* rules —
 //!   redefining a committed rule is refused, so the worst an uncommitted file can
 //!   do is make a gate stricter. This extends §5's `max_effect` invariant to the
 //!   config layer, which is what keeps config the trust boundary even with a
@@ -219,7 +219,7 @@ fn parse_strictness(raw: &str, origin: &str) -> Result<Strictness> {
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] (→ exit `2`) when the committed authority is
+/// Returns a [`UsageError`] (→ exit `1`) when the committed authority is
 /// missing or invalid, when the local file is invalid, or when any override
 /// would weaken a policy-bearing key.
 pub fn resolve(dir: &Path, overrides: Overrides) -> Result<Resolved> {

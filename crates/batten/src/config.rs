@@ -95,7 +95,7 @@ pub struct Config {
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] (→ exit `2`) for a malformed file, an unknown key,
+/// Returns a [`UsageError`] (→ exit `1`) for a malformed file, an unknown key,
 /// or an unsupported [`Config::version`]. These are bad *input*, not internal
 /// failures.
 pub fn parse(text: &str, source: &str) -> Result<Config> {
@@ -114,7 +114,7 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] (→ exit `2`) when the file is missing, malformed,
+/// Returns a [`UsageError`] (→ exit `1`) when the file is missing, malformed,
 /// carries an unknown key, or declares an unsupported version. A non-`NotFound`
 /// I/O failure propagates as an internal error (→ exit `3`).
 pub fn load(path: &Path) -> Result<Config> {
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn malformed_toml_is_a_usage_error() {
-        // A syntactic parse failure is bad input (→ exit 2), not an internal error.
+        // A syntactic parse failure is bad input (→ exit 1), not an internal error.
         let err = parse("version = = 1\n", "test").unwrap_err();
         assert!(is_usage_error(&err), "malformed TOML must be a usage error");
     }

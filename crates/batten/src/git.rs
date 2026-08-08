@@ -52,7 +52,7 @@ const DISCOVERY_OVERRIDES: [&str; 5] = [
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] (exit `2` at the consumer boundary) when `start`
+/// Returns a [`UsageError`] (exit `1` at the consumer boundary) when `start`
 /// is not a directory, is not inside a git repository, or is inside a layout
 /// with no derivable working-tree root (a bare repository, a submodule
 /// interior, a separate git dir). Returns an internal error when git itself

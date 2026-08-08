@@ -98,7 +98,7 @@ impl RuleKind {
 /// when it matches" ([`RuleSeverity`]) are different axes, and conflating them
 /// is the config bug this type makes inexpressible. Neither vocabulary
 /// deserializes as the other, so a severity token in the `scope` key (or the
-/// reverse) is a usage error (exit `2`), never a silent reinterpretation.
+/// reverse) is a usage error (exit `1`), never a silent reinterpretation.
 ///
 /// Marked `#[non_exhaustive]` like [`RuleKind`]: the git change-set / protected
 /// / unlanded domains (CLOUD-36, CLOUD-37) slot in as new variants without a
@@ -152,7 +152,7 @@ pub struct Rule {
     ///
     /// **Required, deliberately**: every committed rule states its severity
     /// default explicitly, and there is no implicit fallback — omitting the key
-    /// is a usage error (exit `2`), never a silently assumed level.
+    /// is a usage error (exit `1`), never a silently assumed level.
     pub severity: RuleSeverity,
     /// Which file domain the rule evaluates over. Independent of `severity` —
     /// scope says *where* the rule looks, severity says *what a match does* —
@@ -252,7 +252,7 @@ pub const SPAWNING_VERB: &str = "batten enforce";
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] (→ exit `2`) when any configured rule's kind spawns
+/// Returns a [`UsageError`] (→ exit `1`) when any configured rule's kind spawns
 /// processes, naming [`SPAWNING_VERB`] as the verb that runs it, and for a
 /// malformed rule. An I/O failure propagates as an internal error (→ exit `3`).
 pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
@@ -287,7 +287,7 @@ pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] (→ exit `2`) for a malformed rule (e.g. an empty
+/// Returns a [`UsageError`] (→ exit `1`) for a malformed rule (e.g. an empty
 /// `glob`). An I/O failure while walking the tree propagates as an internal
 /// error (→ exit `3`).
 fn run(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
@@ -424,7 +424,7 @@ fn batches<'a>(matched: &[&'a String]) -> Vec<Vec<&'a str>> {
 /// record a finding if it exits non-zero.
 ///
 /// A command that cannot run at all (missing binary, not executable) is a
-/// *config* error (exit `2`), never a silent pass — the failure mode that would
+/// *config* error (exit `1`), never a silent pass — the failure mode that would
 /// turn a broken gate into a false green.
 fn run_once(
     rule: &Rule,
@@ -877,7 +877,7 @@ mod tests {
         .unwrap_err();
         assert!(
             err.downcast_ref::<UsageError>().is_some(),
-            "a command that cannot run is a config error (exit 2), never a pass"
+            "a command that cannot run is a config error (exit 1), never a pass"
         );
     }
 

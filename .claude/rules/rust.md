@@ -17,8 +17,9 @@ These load when you touch Rust; they do not need to be in context otherwise.
   compiled binary (`crates/batten/tests/cli.rs`) for anything a consumer depends
   on — exit codes, output shape, flag handling.
 - Branch on the named `ExitCode` variants in `crates/batten/src/exit.rs`, never
-  integer literals. The `hook` layer inverts part of the contract so exit `2`
-  denies a mediated call; that inversion lives with the hook layer only.
+  integer literals. One table, no per-verb exception: `2` is the policy verdict
+  everywhere — a `check` violation and a `hook` deny alike — and `1`/`3` are the
+  only codes a Batten failure produces, so no failure path can block a call.
 
 ## Layout
 

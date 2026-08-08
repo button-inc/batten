@@ -69,12 +69,14 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
 /// path is exercised without leaking config between cases.
 ///
 /// Coverage spans the codes reachable today — `Success` (0) for well-formed runs
-/// and `Usage` (2) for malformed input or bad config. `Violation` (1) is reached
-/// by `check` when a rule fires; because that needs source files placed beside
-/// the config, it is exercised in the dedicated `check_*` tests below rather than
-/// this config-only table. `Internal` (3) has no command that reaches it at this
-/// stage: its numeric contract is pinned in the `exit` unit tests. The `hook`
-/// exit-2-denies inversion is exercised by the `hook_*` tests below.
+/// and `Usage` (1) for malformed input or bad config, including the two clap
+/// renders `--help` (an answer, 0) and an unknown flag (1). `Violation` (2) is
+/// reached by `check` when a rule fires; because that needs source files placed
+/// beside the config, it is exercised in the dedicated `check_*` tests below
+/// rather than this config-only table, and by `hook` in the `hook_*` tests —
+/// the same code, since §7 has no per-verb exception. `Internal` (3) has no
+/// command that reaches it at this stage: its numeric contract is pinned in the
+/// `exit` unit tests.
 #[test]
 fn exit_code_contract() {
     struct Case {
@@ -93,7 +95,19 @@ fn exit_code_contract() {
             name: "no subcommand → usage (subcommand listing offered)",
             args: &[],
             config: None,
-            expected: 2,
+            expected: 1,
+        },
+        Case {
+            name: "--help → success (help is an answer, not clap's exit 2)",
+            args: &["--help"],
+            config: None,
+            expected: 0,
+        },
+        Case {
+            name: "--version → success",
+            args: &["--version"],
+            config: None,
+            expected: 0,
         },
         Case {
             name: "spec → success",
@@ -111,25 +125,25 @@ fn exit_code_contract() {
             name: "unknown flag → usage",
             args: &["--nope"],
             config: None,
-            expected: 2,
+            expected: 1,
         },
         Case {
             name: "config show, unsupported version → usage",
             args: &["config", "show"],
             config: Some("version = 2\n"),
-            expected: 2,
+            expected: 1,
         },
         Case {
             name: "config show, unknown key → usage",
             args: &["config", "show"],
             config: Some("version = 1\nbogus = true\n"),
-            expected: 2,
+            expected: 1,
         },
         Case {
             name: "config show, missing config → usage",
             args: &["config", "show"],
             config: None,
-            expected: 2,
+            expected: 1,
         },
         Case {
             name: "config show, rule omitting severity → usage (no implicit fallback)",
@@ -137,7 +151,7 @@ fn exit_code_contract() {
             config: Some(
                 "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\n",
             ),
-            expected: 2,
+            expected: 1,
         },
         Case {
             name: "config show, severity token in the scope key → usage (scope ≠ severity)",
@@ -145,7 +159,7 @@ fn exit_code_contract() {
             config: Some(
                 "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"deny\"\nscope = \"deny\"\n",
             ),
-            expected: 2,
+            expected: 1,
         },
     ];
 
@@ -186,7 +200,7 @@ fn check_clean_repo_exits_success() {
 }
 
 #[test]
-fn check_violation_exits_one_with_pointer_only_output() {
+fn check_violation_exits_two_with_pointer_only_output() {
     let dir = repo_with_config(
         "check-violation",
         "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
@@ -197,7 +211,7 @@ fn check_violation_exits_one_with_pointer_only_output() {
         .current_dir(&dir)
         .output()
         .expect("run batten check");
-    assert_eq!(output.status.code(), Some(1), "a finding is a violation");
+    assert_eq!(output.status.code(), Some(2), "a finding is a violation");
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Pointer only: the location and rule id, never the offending line text.
     assert_eq!(stdout, "lib.rs:2 no-todo\n");
@@ -247,8 +261,8 @@ fn enforce_runs_the_same_static_rules_as_check() {
         .current_dir(&dir)
         .output()
         .expect("run enforce");
-    assert_eq!(check.status.code(), Some(1));
-    assert_eq!(enforce.status.code(), Some(1));
+    assert_eq!(check.status.code(), Some(2));
+    assert_eq!(enforce.status.code(), Some(2));
     assert_eq!(check.stdout, enforce.stdout);
 }
 
@@ -277,7 +291,7 @@ const COMMAND_RULE_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind =
 #[test]
 fn check_refuses_a_command_rule_rather_than_skipping_it() {
     // The CLOUD-170 split, end to end: the read-effect verb must refuse (exit
-    // 2) — never exit 0 having quietly skipped the gate.
+    // 1, a usage error) — never exit 0 having quietly skipped the gate.
     let dir = repo_with_config("cmd-check-refuses", COMMAND_RULE_CONFIG);
     fs::write(dir.join("lib.rs"), "x\n").expect("write source");
     let output = batten()
@@ -287,7 +301,7 @@ fn check_refuses_a_command_rule_rather_than_skipping_it() {
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
-        Some(2),
+        Some(1),
         "check must refuse a spawning rule kind"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -308,7 +322,7 @@ fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
-        Some(1),
+        Some(2),
         "a non-zero command exit is a violation"
     );
     // Rule-scoped pointer: no invented line number, and never the command output.
@@ -345,7 +359,7 @@ fn enforce_missing_binary_is_a_usage_error() {
         .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
-        Some(2),
+        Some(1),
         "a command that cannot run is a config error, never a silent pass"
     );
 }
@@ -380,7 +394,7 @@ fn check_unknown_rule_key_is_a_usage_error() {
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
-        Some(2),
+        Some(1),
         "an unknown rule key is usage"
     );
 }
@@ -513,7 +527,7 @@ fn config_precedence_runs_flag_over_env_over_local_over_repo() {
 #[test]
 fn a_local_override_that_weakens_a_gate_is_rejected() {
     // The raise-only clamp (§8), end to end: an uncommitted file may tighten
-    // policy, never lower it. Exit 2 — bad input, not a silently applied edit.
+    // policy, never lower it. Exit 1 — bad input, not a silently applied edit.
     let dir = repo_with_config(
         "config-weaken-local",
         "version = 1\nstrictness = \"strict\"\n",
@@ -524,7 +538,7 @@ fn a_local_override_that_weakens_a_gate_is_rejected() {
         .current_dir(&dir)
         .output()
         .expect("run batten config show");
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("may only tighten"),
@@ -555,7 +569,7 @@ fn an_env_or_flag_override_that_weakens_a_gate_is_rejected() {
         let output = command.output().expect("run batten config show");
         assert_eq!(
             output.status.code(),
-            Some(2),
+            Some(1),
             "a weakening {label} override must be refused"
         );
     }
@@ -577,7 +591,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
         .current_dir(&dir)
         .output()
         .expect("run batten check");
-    assert_eq!(output.status.code(), Some(1), "the added rule must fire");
+    assert_eq!(output.status.code(), Some(2), "the added rule must fire");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
         "lib.rs:1 no-fixme\n"
@@ -593,7 +607,7 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
         .current_dir(&dir)
         .output()
         .expect("run batten check");
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("may not redefine"),
         "the refusal must name the redefinition"
@@ -653,22 +667,54 @@ fn hook_honours_the_bypass_hatch() {
 
 #[test]
 fn hook_exit_code_harness_denies_with_exit_2() {
-    // The §7 inversion, at the hook layer only: under `hook` exit 2 denies,
-    // with the reason on stderr — the neutral channel for a host whose only
-    // decision vocabulary is an exit status.
+    // The one contract, unmodified: 2 is the policy verdict, so a deny needs
+    // no translation. The reason goes to stderr — the neutral channel for a
+    // host whose only decision vocabulary is an exit status.
     let output = run_hook("exit-code", &claude_payload("gh pr merge 42"), false);
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Refused"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Refused"), "got: {stderr}");
+    // A verdict is an answer, not a crash. The host hands this text back to the
+    // model as the deny reason, so it must not wear the binary's error prefix.
+    assert!(
+        !stderr.starts_with("batten:"),
+        "a deny reason is unprefixed, got: {stderr}"
+    );
+}
+
+#[test]
+fn no_failure_path_can_deny_a_mediated_call() {
+    // Fail-open, asserted at the exit code rather than trusted to `run_hook`'s
+    // branches: the ways `hook` can fail must all produce a code every harness
+    // reads as non-blocking. A `2` from any of these would silently convert a
+    // broken guard into one that blocks every tool call it mediates.
+    let cases = [
+        ("undecodable payload", "not json at all"),
+        ("empty stdin", ""),
+        ("well-formed JSON, no command", "{}"),
+        ("wrong-shaped tool_input", r#"{"tool_input":{"command":42}}"#),
+    ];
+    for harness in ["claude-code", "exit-code"] {
+        for (name, payload) in cases {
+            let output = run_hook(harness, payload, false);
+            assert_ne!(
+                output.status.code(),
+                Some(2),
+                "{harness}: {name} must never deny"
+            );
+        }
+    }
 }
 
 #[test]
 fn bare_invocation_lists_subcommands() {
     // §2: bare invocation lists subcommands and never performs a default
-    // action. clap renders the listing on its error path — stderr, exit 2 —
-    // so a script can never mistake the listing for a successful run's answer.
+    // action. clap renders the listing on its error path — stderr, exit 1, a
+    // usage error — so a script can never mistake the listing for a successful
+    // run's answer, nor a bare invocation for a policy verdict.
     let output = batten().output().expect("run batten");
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
     let listing = String::from_utf8_lossy(&output.stderr);
     for verb in ["check", "enforce", "config", "spec", "receipt"] {
         assert!(listing.contains(verb), "the listing must name `{verb}`");
@@ -755,9 +801,9 @@ fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
     let base = git_in(&repo, &["rev-parse", "origin/main"]);
     let head = git_in(&repo, &["rev-parse", "HEAD"]);
 
-    // Never recorded → missing, and the gate fails (exit 1, a violation).
+    // Never recorded → missing, and the gate fails (exit 2, a violation).
     let (code, line) = receipt_status(&repo, &home, "verify");
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert_eq!(line, format!("verify {head} missing\n"));
 
     // Record is silent on success (§6: a clean run prints nothing).
@@ -799,7 +845,7 @@ fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
     let amended = git_in(&repo, &["rev-parse", "HEAD"]);
     assert_ne!(amended, head, "amend must move HEAD");
     let (code, line) = receipt_status(&repo, &home, "verify");
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert_eq!(line, format!("verify {amended} stale-head\n"));
 
     // Re-record, then a rebase-shaped move (a new commit) → stale-head again.
@@ -808,7 +854,7 @@ fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
     git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "more work"]);
     let rebased = git_in(&repo, &["rev-parse", "HEAD"]);
     let (code, line) = receipt_status(&repo, &home, "verify");
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert_eq!(line, format!("verify {rebased} stale-head\n"));
 
     // Re-record at the new HEAD, then move origin/main out from under the
@@ -817,7 +863,7 @@ fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
     assert_eq!(record.status.code(), Some(0));
     git_in(&repo, &["update-ref", "refs/remotes/origin/main", &rebased]);
     let (code, line) = receipt_status(&repo, &home, "verify");
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert_eq!(line, format!("verify {rebased} stale-main\n"));
 
     // The canonical store is idempotent on identity: three records of one
@@ -840,7 +886,7 @@ fn receipt_identity_is_per_check() {
     // A verify receipt says nothing about linear-check: identities are
     // content-keyed per check, never shared.
     let (code, line) = receipt_status(&repo, &home, "linear-check");
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert_eq!(line, format!("linear-check {head} missing\n"));
 }
 
@@ -861,13 +907,13 @@ fn a_receipt_from_another_checkout_reads_as_missing() {
     git_in(&elsewhere, &["clone", "-q", repo_str, "repo"]);
     let clone = elsewhere.join("repo");
     let (code, line) = receipt_status(&clone, &home, "verify");
-    assert_eq!(code, 1);
+    assert_eq!(code, 2);
     assert_eq!(line, format!("verify {head} missing\n"));
 }
 
 #[test]
 fn receipt_checkout_problems_are_usage_errors_never_verdicts() {
-    // Not a repository (discovery fenced by GIT_CEILING_DIRECTORIES): exit 2,
+    // Not a repository (discovery fenced by GIT_CEILING_DIRECTORIES): exit 1,
     // and no verdict line — a checkout problem is not a verification answer.
     let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("receipt-no-repo");
     let _ = fs::remove_dir_all(&root);
@@ -879,7 +925,7 @@ fn receipt_checkout_problems_are_usage_errors_never_verdicts() {
         let output = receipt_cmd(&plain, &home, &["receipt", verb, "verify"]);
         assert_eq!(
             output.status.code(),
-            Some(2),
+            Some(1),
             "receipt {verb} outside a repo"
         );
         assert!(output.stdout.is_empty(), "no verdict outside a repo");
@@ -889,13 +935,13 @@ fn receipt_checkout_problems_are_usage_errors_never_verdicts() {
     let (repo, home) = receipt_fixture("receipt-no-main");
     git_in(&repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
     let output = receipt_cmd(&repo, &home, &["receipt", "status", "verify"]);
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
 
     // A check name that cannot be a filename component is refused outright.
     let (repo, home) = receipt_fixture("receipt-bad-name");
     let output = receipt_cmd(&repo, &home, &["receipt", "status", "../evil"]);
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
 }
 
 #[test]
@@ -920,7 +966,7 @@ fn receipt_record_requires_the_policy_committed_at_head() {
     git_in(&repo, &["update-ref", "refs/remotes/origin/main", &head]);
     fs::write(repo.join("batten.toml"), "version = 1\n").expect("write uncommitted policy");
     let output = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
-    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.status.code(), Some(1));
 }
 
 #[test]
@@ -983,7 +1029,7 @@ fn the_committed_repo_config_gates_a_repository() {
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
-        Some(1),
+        Some(2),
         "the committed rule must fire on the shape it names"
     );
     assert_eq!(
@@ -1023,7 +1069,7 @@ fn the_committed_example_config_loads_over_the_binary() {
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
-        Some(1),
+        Some(2),
         "the example's shipped rule must fire on the shape it names"
     );
     assert_eq!(
@@ -1058,7 +1104,7 @@ fn a_rule_omitting_severity_is_refused_with_a_named_key() {
             .expect("run batten");
         assert_eq!(
             output.status.code(),
-            Some(2),
+            Some(1),
             "omitted severity must be a usage error under {args:?}"
         );
         assert!(
@@ -1071,7 +1117,7 @@ fn a_rule_omitting_severity_is_refused_with_a_named_key() {
 #[test]
 fn conflating_scope_and_severity_is_refused_in_both_directions() {
     // Two independent keys, never conflated: each axis's vocabulary is rejected
-    // by the other key at parse time (exit 2), not reinterpreted.
+    // by the other key at parse time (exit 1), not reinterpreted.
     for (name, lines) in [
         ("scope-token-in-severity", "severity = \"tree\"\n"),
         (
@@ -1091,7 +1137,7 @@ fn conflating_scope_and_severity_is_refused_in_both_directions() {
             .expect("run batten config show");
         assert_eq!(
             output.status.code(),
-            Some(2),
+            Some(1),
             "{name}: a conflated key must be a usage error"
         );
     }

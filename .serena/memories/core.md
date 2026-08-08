@@ -23,10 +23,15 @@ file itself for the "why", this is only the "where":
   `effect.rs` at runtime into byte-stable JSON (`batten spec`); completions/docs
   derive from this, never hand-duplicated.
 - `exit.rs` — the `ExitCode` contract (stable numeric values); branch on named
-  variants, never integer literals. `hook` subcommand inverts part of this —
-  documented there, not here.
-- `error.rs` — `UsageError`, the typed error that maps to `ExitCode::Usage` (2)
-  for expected bad-input vs. an internal failure.
+  variants, never integer literals. One table, no per-verb exception (CLOUD-226):
+  `0` clean/allow, `1` usage, `2` the policy verdict — a `check` violation and a
+  `hook` deny alike — `3` internal. The numbering makes fail-open structural, and
+  a unit test asserts no failure code equals the deny code.
+- `error.rs` — two typed carriers the binary boundary downcasts on: `UsageError`
+  → `ExitCode::Usage` (1) for expected bad-input vs. an internal failure, and
+  `Denial` → `ExitCode::Violation` (2), the mediation verdict travelling to the
+  one place allowed to write stderr. A `Denial` prints *unprefixed*: a host hands
+  that text to the model as the deny reason, where `batten: ` reads as a crash.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys,
   required `version`). Layering across sources is `resolve.rs`, not here.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file >
@@ -49,8 +54,9 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
   wrapper-lookthrough command parser, and the policy tables, ported from the
   shell guards. Harness adapters decode/encode at the edges; the core is
-  harness-blind and fail-open, and the §7 exit-2-denies inversion lives in the
-  exit-code adapter only.
+  harness-blind and fail-open. What varies per harness is the *channel* a deny
+  travels over, never the number: the exit-code adapter denies with `2`, the
+  claude-code adapter with a `permissionDecision` document and exit `0`.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do.

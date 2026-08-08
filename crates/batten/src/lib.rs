@@ -32,7 +32,7 @@ use clap::CommandFactory;
 pub use cli::{Cli, Command, ConfigCommand, ReceiptCommand, SpecFormat};
 pub use config::Config;
 pub use effect::Effect;
-pub use error::UsageError;
+pub use error::{Denial, UsageError};
 pub use exit::ExitCode;
 pub use resolve::{Overrides, Resolved, Source};
 pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
@@ -60,8 +60,8 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     let overrides = Overrides { strictness };
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
-        // subcommand listing (exit 2) before parse returns. Kept total — the
-        // workspace lints forbid panicking on a reachable path.
+        // subcommand listing (a usage error, exit 1) before parse returns. Kept
+        // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
         Some(Command::Check) => run_rules(out, overrides, rules::run_static),
         Some(Command::Enforce) => run_rules(out, overrides, rules::run_all),
@@ -84,10 +84,11 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
 /// session cannot proceed. The bypass env var is the same hatch the shell
 /// guards honour, resolved here at the boundary so the core stays pure.
 ///
-/// The deny channel is per-harness: the Claude Code adapter answers in the
-/// host's JSON decision object (exit 0); the neutral exit-code adapter is the
-/// §7 inversion — exit 2 denies, with the reason on stderr via the usage-error
-/// path, which is the one sanctioned stderr boundary.
+/// The deny channel is per-harness — the number is not. The Claude Code adapter
+/// answers in the host's JSON decision object (exit 0), where the document *is*
+/// the deny; the neutral exit-code adapter denies with [`ExitCode::Violation`],
+/// the same code a `check` violation returns, carrying its reason to stderr
+/// through [`Denial`] so the write stays at the binary boundary.
 fn run_hook(harness: hook::Harness, out: &mut dyn Write) -> Result<ExitCode> {
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {
@@ -108,7 +109,7 @@ fn run_hook(harness: hook::Harness, out: &mut dyn Write) -> Result<ExitCode> {
                 )?;
                 Ok(ExitCode::Success)
             }
-            hook::Harness::ExitCode => Err(UsageError::raise(reason)),
+            hook::Harness::ExitCode => Err(Denial::raise(reason)),
         },
     }
 }

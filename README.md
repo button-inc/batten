@@ -72,15 +72,26 @@ per-clone setup and the task tour.
 
 ## Exit-code contract
 
-| Code | Meaning                                                  |
-| ---- | -------------------------------------------------------- |
-| `0`  | Success — check passed or nothing to report              |
-| `1`  | Policy violation (the invocation itself was well-formed) |
-| `2`  | Usage error (bad flags, unreadable config)               |
-| `3`  | Internal error — Batten could not complete the check     |
+One table, total, with no per-verb exception.
 
-The `hook` subcommand deliberately inverts part of this contract so that exit
-`2` **denies** a mediated tool call.
+| Code | Meaning                                                                     |
+| ---- | --------------------------------------------------------------------------- |
+| `0`  | Success — check passed, nothing to report, mediated call allowed            |
+| `1`  | Usage or config error (bad flags, unreadable config)                        |
+| `2`  | Policy verdict — a violation found, or a mediated call **denied**           |
+| `3`  | Internal error — Batten could not complete the check                        |
+
+The numbering is chosen so the mediation channel needs no translation: hosts
+with a pre-tool hook read `0` as allow, `2` as deny with stderr as the reason,
+and anything else as "the hook itself failed, let the call through". A deny and
+a violation share a code because they are the same kind of answer, and
+**failing open is structural** — the only codes a Batten failure can produce
+are ones every harness already treats as non-blocking.
+
+The channel varies by harness even though the number does not: a host whose
+only decision channel is process status is denied by exit `2`, while a host
+that reads an in-band decision document is denied by that document with exit
+`0`.
 
 ## Roadmap
 
