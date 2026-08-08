@@ -693,7 +693,10 @@ fn no_failure_path_can_deny_a_mediated_call() {
         ("undecodable payload", "not json at all"),
         ("empty stdin", ""),
         ("well-formed JSON, no command", "{}"),
-        ("wrong-shaped tool_input", r#"{"tool_input":{"command":42}}"#),
+        (
+            "wrong-shaped tool_input",
+            r#"{"tool_input":{"command":42}}"#,
+        ),
     ];
     for harness in ["claude-code", "exit-code"] {
         for (name, payload) in cases {

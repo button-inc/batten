@@ -74,12 +74,12 @@ per-clone setup and the task tour.
 
 One table, total, with no per-verb exception.
 
-| Code | Meaning                                                                     |
-| ---- | --------------------------------------------------------------------------- |
-| `0`  | Success — check passed, nothing to report, mediated call allowed            |
-| `1`  | Usage or config error (bad flags, unreadable config)                        |
-| `2`  | Policy verdict — a violation found, or a mediated call **denied**           |
-| `3`  | Internal error — Batten could not complete the check                        |
+| Code | Meaning                                                           |
+| ---- | ----------------------------------------------------------------- |
+| `0`  | Success — check passed, nothing to report, mediated call allowed  |
+| `1`  | Usage or config error (bad flags, unreadable config)              |
+| `2`  | Policy verdict — a violation found, or a mediated call **denied** |
+| `3`  | Internal error — Batten could not complete the check              |
 
 The numbering is chosen so the mediation channel needs no translation: hosts
 with a pre-tool hook read `0` as allow, `2` as deny with stderr as the reason,

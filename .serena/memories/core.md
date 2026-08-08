@@ -30,7 +30,7 @@ file itself for the "why", this is only the "where":
 - `error.rs` — two typed carriers the binary boundary downcasts on: `UsageError`
   → `ExitCode::Usage` (1) for expected bad-input vs. an internal failure, and
   `Denial` → `ExitCode::Violation` (2), the mediation verdict travelling to the
-  one place allowed to write stderr. A `Denial` prints *unprefixed*: a host hands
+  one place allowed to write stderr. A `Denial` prints _unprefixed_: a host hands
   that text to the model as the deny reason, where `batten: ` reads as a crash.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys,
   required `version`). Layering across sources is `resolve.rs`, not here.
@@ -54,7 +54,7 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
   wrapper-lookthrough command parser, and the policy tables, ported from the
   shell guards. Harness adapters decode/encode at the edges; the core is
-  harness-blind and fail-open. What varies per harness is the *channel* a deny
+  harness-blind and fail-open. What varies per harness is the _channel_ a deny
   travels over, never the number: the exit-code adapter denies with `2`, the
   claude-code adapter with a `permissionDecision` document and exit `0`.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
