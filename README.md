@@ -14,11 +14,15 @@ policy consistently at the pre-commit layer, in CI, and at an agent's tool call.
 
 Repo-config-driven permission hooks that can gate an agent's tool call _before_
 execution are new, and earlier tooling was built for humans at commit time
-rather than agents operating mid-trajectory. Batten's scarce property is
-**agent-neutrality**: different harnesses expose different hook contracts and
-decision vocabularies, and Batten provides a neutral translation layer — a
-normalized stdin JSON envelope, a block decision returned via exit code, and any
-richer per-agent behavior handled in thin shims.
+rather than agents operating mid-trajectory. The hook layer itself is
+deliberately boring: the major harnesses have converged on one wire shape — a
+JSON payload on stdin, a block returned as exit code `2`, a JSON verdict on
+stdout — so Batten's normalized envelope and thin per-host shims are cheap
+insurance against divergence, not the product. What no existing tool occupies
+is the layer behind the hook: one policy engine rendering the same verdict from
+the same committed config at the pre-commit layer, in CI, and at an agent's
+tool call, with completion predicates — landed, verified, CI-green — as
+first-class rules.
 
 ## Design principles
 
@@ -75,8 +79,8 @@ per-clone setup and the task tour.
 | `2`  | Usage error (bad flags, unreadable config)               |
 | `3`  | Internal error — Batten could not complete the check     |
 
-The planned `hook` subcommand (CLOUD-40) deliberately inverts part of this
-contract so that exit `2` **denies** a mediated tool call.
+The `hook` subcommand deliberately inverts part of this contract so that exit
+`2` **denies** a mediated tool call.
 
 ## Roadmap
 
