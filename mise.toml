@@ -153,8 +153,9 @@ for t in x86_64-pc-windows-gnu; do
   # Guarded because task bodies do not run under `set -e`: with more than one
   # triple in the list, a failed target install would otherwise be masked by a
   # later iteration's exit status and this gate would pass having checked less
-  # than it claims.
-  if ! rustup target add "$t"; then
+  # than it claims. Routed through target-ensure so a concurrent toolchain
+  # mutator queues on the lock instead of colliding inside rustup (CLOUD-220).
+  if ! mise run target-ensure "$t"; then
     echo "::error:: could not install target $t, so its type-check did not run." >&2
     exit 1
   fi
@@ -194,8 +195,14 @@ echo "no-docs-tree: no committed docs/ tree"
 description = "Run the shell test suite (tests/*.bats) — cargo test for the mise-tasks/ programs"
 # bats comes from a submodule, not [tools], so a fresh clone has no bats and this
 # task reports "bats: not found" — which reads as a missing TOOL and sends the
-# reader to mise. `doctor` checks out the submodule instead.
-depends = ["doctor"]
+# reader to mise. `doctor` checks out the submodule instead. Only the submodule
+# half: this dependency re-runs doctor in whatever process invokes test:bats,
+# and when that is hk's test:bats step it is a CHILD mise process — task-node
+# dedup is per-process, so a full doctor here raced the outer DAG's doctor
+# inside `rustup target add` and both rolled back (CLOUD-220). The targets are
+# owned by the tasks that need them (cross-check, darwin-link), each routed
+# through the target-ensure lock.
+depends = ["doctor --no-targets"]
 run = "bats --print-output-on-failure tests/*.bats"
 
 [tasks.hooks]

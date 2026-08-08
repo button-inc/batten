@@ -36,7 +36,12 @@ cd "$(git rev-parse --show-toplevel)"
 # needed" rather than falling back to the default pair. CI's `ci` job wants
 # exactly that: it runs test:bats, which needs the submodule half of this task
 # and none of the rustup half, since cross-check and darwin-link are their own
-# jobs. With `:-` there is no way to ask for zero targets.
+# jobs. With `:-` there is no way to ask for zero targets. `--no-targets` is
+# the same request as a CLI flag, so a task dependency can ask for it without
+# reaching through the environment (test:bats does, in mise.toml).
+if [ "${1:-}" = "--no-targets" ]; then
+	DOCTOR_TARGETS=""
+fi
 read -r -a targets <<<"${DOCTOR_TARGETS-x86_64-pc-windows-gnu ${DARWIN_TARGET:-aarch64-apple-darwin}}"
 
 status=0
@@ -57,42 +62,17 @@ else
 fi
 
 # --- the rustup cross targets -------------------------------------------------
+#
+# The classify/purge/add sequence lives in `target-ensure`, which serializes
+# every toolchain mutation behind one per-toolchain lock (CLOUD-220): a second
+# doctor — hk's test:bats step re-runs this task in a child mise process, which
+# dedupes task nodes only within one process — or a concurrent darwin-link
+# queues there instead of colliding with this one inside `rustup target add`.
 
-rustlib="$(rustc --print sysroot)/lib/rustlib"
-check="$(dirname "$0")/doctor-check"
+ensure="$(dirname "$0")/target-ensure"
 
 for target in "${targets[@]}"; do
-	installed=no
-	if grep -qxF "$target" <<<"$(rustup target list --installed)"; then
-		installed=yes
-	fi
-	verdict="$("$check" "$rustlib" "$target" "$installed")"
-
-	case "$verdict" in
-	ok)
-		echo "doctor: rust target $target installed"
-		continue
-		;;
-	stale)
-		# The residue is a partial install of a component rustup does not
-		# consider installed, so nothing can be depending on it. Dropping it is
-		# what makes the following `add` a clean install rather than a conflict.
-		echo "doctor: rust target $target is half-installed — purging the residue before reinstalling"
-		rustup target remove "$target" >/dev/null 2>&1 || true
-		rm -rf "${rustlib:?}/$target" "${rustlib:?}/manifest-rust-std-$target"
-		if [ -f "$rustlib/components" ]; then
-			grep -vxF "rust-std-$target" "$rustlib/components" >"$rustlib/components.doctor" || true
-			mv "$rustlib/components.doctor" "$rustlib/components"
-		fi
-		;;
-	missing)
-		echo "doctor: rust target $target missing — installing"
-		;;
-	esac
-
-	if rustup target add "$target" && grep -qxF "$target" <<<"$(rustup target list --installed)"; then
-		echo "doctor: rust target $target installed"
-	else
+	if ! "$ensure" "$target"; then
 		echo "::error:: could not install rust target $target; cross-check/darwin-link will fail." >&2
 		status=1
 	fi

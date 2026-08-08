@@ -29,7 +29,11 @@ case "$target" in
 	;;
 esac
 
-rustup target add "$target"
+# Through the lock, not a bare `rustup target add`: a concurrent doctor (the
+# outer verify DAG's, or the one hk's test:bats step spawns in a child mise
+# process) would otherwise collide inside rustup and both would roll back
+# (CLOUD-220).
+"$(dirname "$0")/target-ensure" "$target"
 # zig supplies the Darwin linker; no Apple SDK is present, which is precisely the
 # condition this gate asserts the tree still builds under.
 cargo zigbuild --workspace --target "$target"

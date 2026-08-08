@@ -26,6 +26,16 @@ setup() {
 	[ "$output" -eq 0 ]
 }
 
+@test "it mutates the toolchain only through the target-ensure lock" {
+	# A bare `rustup target add` here raced the concurrent doctor and both
+	# rolled back (CLOUD-220); the sweep in target-ensure.bats holds the whole
+	# task layer to one live call site, this pins the script that regressed.
+	run bash -c "grep -v '^[[:space:]]*#' '$LINK' | grep -c 'rustup target add'"
+	[ "$output" -eq 0 ]
+	run bash -c "grep -v '^[[:space:]]*#' '$LINK' | grep -c 'target-ensure'"
+	[ "$output" -ge 1 ]
+}
+
 @test "it does not build the optimized profile" {
 	# Linking is what is under test; an LTO release build would prove nothing
 	# extra and would put this leg over the CI critical path it must hide under.

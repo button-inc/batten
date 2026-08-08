@@ -63,6 +63,23 @@ torn_tool() {
 	[ -L "$DATA/installs/ok/3.0/bin/ok" ]
 }
 
+@test "--no-targets is the CLI spelling of an empty DOCTOR_TARGETS: rustup untouched" {
+	# test:bats depends on `doctor --no-targets` (mise.toml): the child mise
+	# process needs only the submodule half, and a full doctor there raced the
+	# outer DAG's inside `rustup target add` (CLOUD-220). Assert the flag keeps
+	# doctor entirely off the toolchain even when the env asks for targets.
+	cat >"$STUB/rustup" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >>"$BATS_TEST_TMPDIR/rustup-calls"
+EOF
+	chmod +x "$STUB/rustup"
+	healthy_tool
+	run env DOCTOR_TARGETS=ignored "$DOCTOR" --no-targets
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"bats submodule checked out"* ]]
+	[ ! -e "$BATS_TEST_TMPDIR/rustup-calls" ]
+}
+
 @test "a repair that leaves the tree broken exits non-zero" {
 	torn_tool
 	# A stub whose `install` recreates the torn state — reprovisioning failed.

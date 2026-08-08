@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+#MISE description="Effect: ensure one rustup target is installed — classify, purge residue, add, behind a per-toolchain lock so concurrent callers queue instead of colliding"
+#
+# rustup has no cross-process lock: two concurrent `target add` calls each see
+# the other's half-written component tree, report "detected conflict", and both
+# roll back — the target ends up NOT installed and the gate goes red on a clean
+# tree (CLOUD-220). Serializing here, in the single effect task every call site
+# routes through, is what makes target installation behave like the idempotent
+# operation rustup documents. The decision half stays in `doctor-check` (pure,
+# testable without a toolchain); this script is the effect half.
+#
+# The lock lives inside the sysroot it protects: each toolchain gets its own
+# lock, a toolchain swap cannot deadlock on a stale path, and the fd is
+# released by the kernel on process death — no cleanup path to get wrong. The
+# installed-check runs INSIDE the critical section so a caller that queued
+# behind the winner re-reads fresh state and no-ops instead of re-installing.
+#
+# Output is pointer-only (triple + verdict). rustup's download spew is
+# captured; on failure exactly one ::error:: line carries the triple and
+# rustup's last line, never the backtrace.
+set -euo pipefail
+
+target="${1:?usage: target-ensure <triple>}"
+
+if ! command -v flock >/dev/null 2>&1; then
+	echo "::error:: target-ensure: flock not found, cannot serialize toolchain mutation; refusing to race." >&2
+	exit 1
+fi
+
+rustlib="$(rustc --print sysroot)/lib/rustlib"
+check="$(dirname "$0")/doctor-check"
+
+mkdir -p "$rustlib"
+exec 9>"$rustlib/.batten-target-lock"
+if ! flock -w "${TARGET_LOCK_TIMEOUT:-600}" 9; then
+	echo "::error:: target-ensure: timed out waiting for the toolchain lock ($target)." >&2
+	exit 1
+fi
+
+installed=no
+if grep -qxF "$target" <<<"$(rustup target list --installed)"; then
+	installed=yes
+fi
+verdict="$("$check" "$rustlib" "$target" "$installed")"
+
+case "$verdict" in
+ok)
+	echo "target-ensure: rust target $target already installed"
+	exit 0
+	;;
+stale)
+	# Residue is a partial install of a component rustup does not consider
+	# installed, so nothing can be depending on it. Dropping it is what makes
+	# the following `add` a clean install rather than a conflict.
+	echo "target-ensure: rust target $target is half-installed — purging the residue before reinstalling"
+	rustup target remove "$target" >/dev/null 2>&1 || true
+	rm -rf "${rustlib:?}/$target" "${rustlib:?}/manifest-rust-std-$target"
+	if [ -f "$rustlib/components" ]; then
+		grep -vxF "rust-std-$target" "$rustlib/components" >"$rustlib/components.target-ensure" || true
+		mv "$rustlib/components.target-ensure" "$rustlib/components"
+	fi
+	;;
+missing)
+	echo "target-ensure: rust target $target missing — installing"
+	;;
+esac
+
+if ! out="$(rustup target add "$target" 2>&1)"; then
+	echo "::error:: target-ensure: could not install rust target $target — ${out##*$'\n'}" >&2
+	exit 1
+fi
+if ! grep -qxF "$target" <<<"$(rustup target list --installed)"; then
+	echo "::error:: target-ensure: rust target $target still absent after add." >&2
+	exit 1
+fi
+echo "target-ensure: rust target $target installed"
