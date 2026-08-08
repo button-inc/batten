@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#MISE description="Land this branch's PR by commenting /fast-forward, then block until it is merged (or the fast-forward bot refuses)"
+#MISE depends=["verified", "ci-wait"]
+#
+# Workflow-contract step 4. `verified` and `ci-wait` are dependencies, not
+# advice: `ready-guard` gates `gh pr ready` on the receipts, but landing had no
+# such precondition, so a branch readied by any other route could still be
+# landed on a verdict nobody checked. `verified` reads the receipt keyed to this
+# exact HEAD — which also carries the `origin/main` it was linear against, so
+# there is no second linearity check here; a second copy would be a second
+# authority. `ci-wait` makes landing a red PR structurally impossible.
+#
+# The merge button is blocked on purpose: `main` only advances to a SHA that
+# already passed CI. Commenting is the whole landing action, but the *result* is
+# asynchronous, so the naive form is a comment plus a guessed `sleep`, which
+# either reports too early or wastes time. Poll instead, with two exit
+# conditions so it cannot hang: the PR reaches a terminal state, or the
+# fast-forward workflow concludes anything but success.
+#
+# CLOUD-235 — the refusal condition used to be dead code, and the shape of the
+# mistake is worth keeping: it filtered `commits/$sha/check-runs` for a run named
+# `fast-forward`, where `$sha` is the PR head. But the bot triggers on
+# `issue_comment`, and an `issue_comment` run attaches its check-run to the
+# DEFAULT-BRANCH TIP, never to the PR head — two SHAs that differ by
+# construction before a landing, so the filter always returned empty. (The
+# workflow also grants no `checks: write`, so it could not have created one on
+# any SHA.) A refusal is a PR comment plus a failed workflow-run conclusion, and
+# nothing else. So the verdict is read from the run's `conclusion`: an exit code,
+# not prose, which is the only kind of thing a gate may decide on. The task then
+# claimed for months to have an exit condition it did not have, and polled
+# forever the first time a refusal arrived.
+#
+# Deliberately unbounded, like `ci-wait`: the fix for a hang is an exit condition
+# that can actually fire, never a wall-clock timeout, which would only
+# reintroduce the VM-reap gap. Run it backgrounded.
+#
+# `set -e` is off on purpose: this is a poll, and a transient `gh` failure must
+# cost one iteration rather than abort the landing. Every command whose failure
+# would change the verdict is guarded by hand instead.
+set -uo pipefail
+
+pr="${PR:-$(gh pr view --json number --jq .number)}"
+if [ -z "$pr" ]; then
+	echo "::error:: no pull request for this branch, so there is nothing to land." >&2
+	exit 1
+fi
+sha="$(git rev-parse HEAD)"
+interval="${LAND_INTERVAL:-10}"
+workflow="${LAND_WORKFLOW:-fast-forward.yml}"
+
+# Stamped BEFORE commenting, so a run that predates this attempt — an earlier
+# landing of this same PR, refused and since rebased — can never be mistaken for
+# a verdict on this one. Exported for the `--jq` filter below, rather than
+# interpolated into it, so a value can never be read as jq syntax.
+SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export SINCE
+
+gh pr comment "$pr" --body "/fast-forward"
+echo "land: commented /fast-forward on #$pr ($sha); waiting for the merge"
+
+while :; do
+	state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null)
+	if [ -n "$state" ] && [ "$state" != "OPEN" ]; then
+		git fetch -q origin main
+		echo "land: PR #$pr is $state; origin/main is now $(git rev-parse --short origin/main)"
+		[ "$state" = "MERGED" ] || exit 1
+		exit 0
+	fi
+
+	# Newest first, so `first` is the most recent matching run. An
+	# `issue_comment` run carries no branch of ours to filter on — its
+	# `head_branch` is the default branch — so the window is the timestamp
+	# above. A concurrent refusal on the same PR would be reported as ours;
+	# that is the conservative direction, since the alternative is the hang
+	# this condition exists to end.
+	refused=$(gh api "repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=20" \
+		--jq '[.workflow_runs[]?
+                       | select(.created_at >= env.SINCE)
+                       | select(.status == "completed")
+                       | select(.conclusion != "success" and .conclusion != "skipped")
+                       | .conclusion] | first // empty' 2>/dev/null)
+	if [ -n "$refused" ]; then
+		echo "::error:: the fast-forward bot refused ($refused) — the branch is probably no longer linear on main. Rebase, re-verify, retry." >&2
+		exit 1
+	fi
+
+	sleep "$interval"
+done

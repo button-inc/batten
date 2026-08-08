@@ -279,51 +279,6 @@ fi
 echo "verify: fast-forward-green — rebased on latest main, ci + cross + commit-lint all pass"
 '''
 
-[tasks.land]
-description = "Land this branch's PR by commenting /fast-forward, then block until it is merged (or the fast-forward bot refuses)"
-shell = "bash -c"
-# Landing a red PR is now structurally impossible, not merely against the rules:
-# ci-wait must exit 0 first. It blocks until every check on HEAD is terminal, so
-# this also removes the "did I remember to wait?" step between the two.
-#
-# `verified` is a dependency for the same reason, one layer earlier. `ready-guard`
-# gates `gh pr ready` on the receipts, but landing had no such precondition, so a
-# branch readied by any other route could still be landed on a verdict nobody
-# checked. The predicate reads the receipt keyed to HEAD rather than a remembered
-# exit status, so no idiom that swallows one — a pipe, a `; true`, a wrapper
-# script — can present as verified.
-depends = ["verified", "ci-wait"]
-# The merge button is blocked on purpose (AGENTS.md, Commits and pull requests):
-# `main` only advances to a SHA that already passed CI. Commenting is the whole
-# landing action, but the *result* is asynchronous, so the naive form is a
-# comment plus a guessed `sleep` — which either reports too early or wastes time.
-# Poll instead, with two exit conditions so it can never hang: the PR reaches a
-# terminal state, or the fast-forward bot's own check-run comes back failed.
-# Run it backgrounded like ci-wait.
-run = '''
-pr="${PR:-$(gh pr view --json number --jq .number)}"
-sha="$(git rev-parse HEAD)"
-interval="${LAND_INTERVAL:-10}"
-gh pr comment "$pr" --body "/fast-forward"
-echo "land: commented /fast-forward on #$pr ($sha); waiting for the merge"
-while :; do
-  state=$(gh pr view "$pr" --json state --jq .state)
-  if [ "$state" != "OPEN" ]; then
-    git fetch -q origin main
-    echo "land: PR #$pr is $state; origin/main is now $(git rev-parse --short origin/main)"
-    [ "$state" = "MERGED" ] || exit 1
-    exit 0
-  fi
-  refused=$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" \
-              --jq '.check_runs[] | select(.name=="fast-forward" and .status=="completed" and .conclusion!="success" and .conclusion!="skipped") | .conclusion' | head -n1)
-  if [ -n "$refused" ]; then
-    echo "::error:: the fast-forward bot refused ($refused) — the branch is probably no longer linear on main. Rebase, re-verify, retry." >&2
-    exit 1
-  fi
-  sleep "$interval"
-done
-'''
-
 [tasks.commit-msg]
 description = "Validate one commit-message file is Conventional Commits"
 run = '''
