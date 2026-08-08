@@ -111,6 +111,36 @@ if [ "$#" -eq 0 ]; then
 		echo "  mise.toml:$enabled: [settings] lockfile — set it false; the scheduled \`lock-check\` opts back in with MISE_LOCKFILE=true" >&2
 		fail=1
 	fi
+
+	# workflow-unlocked-install: the other half of that setting. `lockfile =
+	# false` turns off the whole lockfile feature, not only the write, so
+	# mise-action's `mise install --locked` fails outright with "locked mode
+	# requires lockfile to be enabled" — measured on every job of run
+	# 31243967285. A workflow therefore has to set MISE_LOCKFILE itself, and one
+	# that forgets does not fail loudly: mise-action only passes `--locked` when
+	# it detects a lockfile, so the job installs UNLOCKED and goes green. That is
+	# a checksum check silently dropped, which is exactly the class this gate
+	# exists for.
+	wf_missing=""
+	while IFS= read -r wf; do
+		[ -n "$wf" ] || continue
+		body=$(git show ":$wf" 2>/dev/null || true)
+		case $body in
+		*mise-action*) ;;
+		*) continue ;;
+		esac
+		case $body in
+		*MISE_LOCKFILE*) ;;
+		*) wf_missing="$wf_missing $wf" ;;
+		esac
+	done <<<"$(git ls-files '.github/workflows/*.yml' 2>/dev/null || true)"
+	if [ -n "$wf_missing" ]; then
+		echo "::error:: a workflow installs with mise-action but does not set MISE_LOCKFILE, so it installs UNLOCKED and passes (CLOUD-223):" >&2
+		for wf in $wf_missing; do
+			echo "  $wf: add \`MISE_LOCKFILE: \"true\"\` to the workflow's env" >&2
+		done
+		fail=1
+	fi
 fi
 
 # `reported` tracks this clause's own header, separately from `fail` — which any

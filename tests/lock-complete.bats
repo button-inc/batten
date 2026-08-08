@@ -228,3 +228,38 @@ stage_settings() {
 	run bash -c "cd '$REPO' && '$GATE' '$LOCK'"
 	[ "$status" -eq 0 ]
 }
+
+@test "a workflow using mise-action without MISE_LOCKFILE is caught" {
+	scratch_repo
+	stage_settings false
+	mkdir -p "$REPO/.github/workflows"
+	printf 'jobs:\n  a:\n    steps:\n      - uses: jdx/mise-action@abc\n' >"$REPO/.github/workflows/w.yml"
+	git -C "$REPO" add .github/workflows/w.yml
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"installs UNLOCKED"* ]]
+	[[ "$output" == *".github/workflows/w.yml"* ]]
+}
+
+@test "the same workflow with MISE_LOCKFILE set passes" {
+	scratch_repo
+	stage_settings false
+	mkdir -p "$REPO/.github/workflows"
+	printf 'env:\n  MISE_LOCKFILE: "true"\njobs:\n  a:\n    steps:\n      - uses: jdx/mise-action@abc\n' >"$REPO/.github/workflows/w.yml"
+	git -C "$REPO" add .github/workflows/w.yml
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
+@test "a workflow that does not use mise-action needs nothing" {
+	scratch_repo
+	stage_settings false
+	mkdir -p "$REPO/.github/workflows"
+	printf 'jobs:\n  a:\n    steps:\n      - run: echo hi\n' >"$REPO/.github/workflows/w.yml"
+	git -C "$REPO" add .github/workflows/w.yml
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}

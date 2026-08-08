@@ -14,6 +14,13 @@ on:
 permissions:
   contents: read
 
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). A runner
+  # should install locked, and its checkout is disposable, so a write here
+  # costs nothing; the clone being protected is a developer's.
+  MISE_LOCKFILE: "true"
+
 jobs:
   commit-lint:
     name: commit-lint

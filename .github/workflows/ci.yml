@@ -38,6 +38,17 @@ permissions:
 env:
   MISE_TASK_RUN_AUTO_INSTALL: "false"
   MISE_EXEC_AUTO_INSTALL: "false"
+  # `[settings] lockfile` is false so that no install can write the tracked
+  # lockfile (CLOUD-223) — but that setting governs the whole lockfile feature,
+  # not just the write, and mise-action installs with `--locked` whenever a
+  # lockfile exists. Left alone, every job here dies on "locked mode requires
+  # lockfile to be enabled". Turning it back on for CI is the right boundary and
+  # not a concession: a locked install is exactly what a runner should do, and a
+  # write here lands in a disposable checkout that is never committed from. The
+  # property being protected is that a DEVELOPER's clone is never dirtied.
+  # Every workflow using mise-action must set this; `mise run lock-complete`
+  # fails if one does not.
+  MISE_LOCKFILE: "true"
 
 jobs:
   ci:
