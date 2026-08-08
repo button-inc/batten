@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.35](https://github.com/button-inc/batten/compare/v0.0.34...v0.0.35) - 2026-08-08
+
+### Fixed
+
+- *(config)* validate the verb table at load, where nothing validated it at all
+- *(markers)* tell "not UTF-8" apart from "cannot be read", as the contract says
+
 ## [0.0.34](https://github.com/button-inc/batten/compare/v0.0.33...v0.0.34) - 2026-08-08
 
 ### Fixed
