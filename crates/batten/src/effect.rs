@@ -20,7 +20,7 @@
 //!   passed command is listed [`Effect::Unclassified`] with a stated reason, not
 //!   guessed.
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 /// The declared effect of a command, carried on its [`crate::surface`] row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +39,30 @@ pub enum Effect {
 }
 
 impl Effect {
+    /// Every effect, so anything that ranges over the vocabulary is derived
+    /// rather than re-typed — the parse in [`Effect::from_token`] and the
+    /// coverage test both read this, so adding a variant cannot leave one of
+    /// them behind.
+    pub const ALL: &'static [Effect] = &[
+        Effect::Read,
+        Effect::Write,
+        Effect::Destructive,
+        Effect::Unclassified,
+        Effect::Ask,
+    ];
+
+    /// The effect named by `token`, or `None` if it names none.
+    ///
+    /// Derived from [`Effect::ALL`] and [`Effect::as_str`], so the accepted
+    /// spellings are exactly the emitted ones by construction.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Effect> {
+        Effect::ALL
+            .iter()
+            .copied()
+            .find(|effect| effect.as_str() == token)
+    }
+
     /// The stable lowercase token used in machine output.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -66,24 +90,49 @@ impl Serialize for Effect {
     }
 }
 
+impl<'de> Deserialize<'de> for Effect {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let token = String::deserialize(deserializer)?;
+        Effect::from_token(&token).ok_or_else(|| {
+            let known: Vec<&str> = Effect::ALL.iter().map(|effect| effect.as_str()).collect();
+            de::Error::custom(format!(
+                "unknown effect {token:?}; expected one of {}",
+                known.join(", ")
+            ))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn only_read_is_read_only() {
+        // Derived from ALL rather than a re-typed list, so a variant added
+        // without a decision about the allowlist fails here instead of
+        // defaulting into it.
         assert!(Effect::Read.is_read_only());
-        for effect in [
-            Effect::Write,
-            Effect::Destructive,
-            Effect::Unclassified,
-            Effect::Ask,
-        ] {
+        for effect in Effect::ALL.iter().copied().filter(|e| *e != Effect::Read) {
             assert!(
                 !effect.is_read_only(),
                 "{} leaked into read-only",
                 effect.as_str()
             );
         }
+    }
+
+    #[test]
+    fn every_effect_round_trips_through_its_token() {
+        // The vocabulary has one authority: what `as_str` emits is exactly what
+        // `from_token` accepts, and `ALL` is what makes both total. A new
+        // variant missing from `ALL` fails here rather than becoming a config
+        // value nothing can parse.
+        for effect in Effect::ALL.iter().copied() {
+            assert_eq!(Effect::from_token(effect.as_str()), Some(effect));
+        }
+        assert_eq!(Effect::ALL.len(), 5, "add the new variant to ALL");
+        assert_eq!(Effect::from_token("nonsense"), None);
+        assert_eq!(Effect::from_token("Read"), None, "lowercase tokens only");
     }
 }

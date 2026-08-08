@@ -17,6 +17,7 @@ pub mod git;
 pub mod hook;
 pub mod identity;
 pub mod lint;
+pub mod markers;
 pub mod receipt;
 pub mod resolve;
 pub mod rules;
@@ -25,6 +26,7 @@ pub mod spec;
 pub mod state;
 pub mod surface;
 pub mod trust;
+pub mod verbs;
 
 use std::io::{Read, Write};
 use std::path::Path;

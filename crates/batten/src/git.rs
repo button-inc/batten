@@ -642,8 +642,8 @@ fn patch_ids(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<(PatchId, S
         .stderr(Stdio::null())
         .output()
         .context("run `git patch-id --stable`")?;
-    let produced = producer.wait().context("wait for the diff to finish")?;
-    if !produced.success() {
+    let diffed = producer.wait().context("wait for the diff to finish")?;
+    if !diffed.success() {
         return Err(UsageError::raise(refusal));
     }
     if !output.status.success() {

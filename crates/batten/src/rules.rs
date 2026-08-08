@@ -292,10 +292,7 @@ pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
 /// `glob`). An I/O failure while walking the tree propagates as an internal
 /// error (→ exit `3`).
 fn run(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
-    let mut files = Vec::new();
-    collect_files(root, root, &mut files)?;
-    // A stable input order makes the finding order deterministic (§6).
-    files.sort();
+    let files = tree_files(root)?;
 
     let mut findings = Vec::new();
     for rule in rules {
@@ -542,6 +539,24 @@ fn forbid_in_file(
 /// Recursively collect repo-relative file paths under `dir`, `/`-separated and
 /// skipping the `.git` directory. `root` is the walk origin the paths are made
 /// relative to.
+/// Every file under `root`, as sorted repo-relative `/`-separated paths — the
+/// one tree walk the crate has.
+///
+/// Sorted, so any pass over it is deterministic (§6), and `.git` is skipped:
+/// the object store is never policy input. A second walker would be a second
+/// answer to "what does Batten look at", which is the divergence
+/// [`crate::markers`] reuses this to avoid.
+///
+/// # Errors
+///
+/// An I/O failure while walking propagates as an internal error (→ exit `3`).
+pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
+    let mut files = Vec::new();
+    collect_files(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> anyhow::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;

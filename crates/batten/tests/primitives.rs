@@ -519,6 +519,204 @@ fn the_answer_is_byte_stable_and_independent_of_where_the_repo_lives() {
     assert_eq!(first.cumulative, there.cumulative);
 }
 
+// --- counted suppression markers, driven by config ---------------------------
+
+/// A fixture `batten.toml` declaring markers and verbs, parsed through the real
+/// loader.
+///
+/// Every assertion below reads its vocabulary out of *this text* and never out
+/// of a literal in the test body — which is the whole point: if the tables were
+/// baked into the crate, changing this fixture would not change the answers.
+const TABLES: &str = r#"
+version = 1
+
+[[marker]]
+id = "waiver"
+token = "POLICY-WAIVER"
+
+[[marker]]
+id = "scoped-waiver"
+token = "SCOPED-WAIVER"
+glob = "src/**/*.txt"
+
+[[verb]]
+verb = "obliterate"
+effect = "destructive"
+redirect = "use the write surface"
+
+[[verb]]
+verb = "clobber"
+effect = "write"
+"#;
+
+fn tables() -> batten::config::Config {
+    batten::config::parse(TABLES, "fixture batten.toml").expect("fixture config parses")
+}
+
+#[test]
+fn suppression_marker_counts_come_from_config_not_from_the_crate() {
+    let config = tables();
+    let repo = repo("markers-counted");
+    // The tokens written into the tree are read out of the parsed config, so
+    // this fixture cannot pass against a crate that hardcodes its own.
+    let waiver = &config.markers[0];
+    let scoped = &config.markers[1];
+
+    repo.write(
+        "src/a.txt",
+        &format!("clean\n{} first\nclean\n{} second\n", waiver.token, waiver.token),
+    );
+    repo.write("src/b.txt", &format!("{} here\n", scoped.token));
+    // Outside the scoped marker's glob: the whole-tree marker sees it, the
+    // scoped one must not.
+    repo.write(
+        "elsewhere.txt",
+        &format!("{} {}\n", waiver.token, scoped.token),
+    );
+
+    let hits = batten::markers::find(&repo.dir, &config.markers).expect("scan for markers");
+    let counts = batten::markers::counts(&config.markers, &hits);
+    assert_eq!(
+        counts.get(&waiver.id),
+        Some(&3),
+        "two occurrences in one file plus one elsewhere"
+    );
+    assert_eq!(
+        counts.get(&scoped.id),
+        Some(&1),
+        "the glob narrows the scoped marker to src/"
+    );
+}
+
+#[test]
+fn marker_hits_are_pointers_and_never_the_matched_line() {
+    // Non-negotiable rule 4: a suppression comment is exactly the kind of text
+    // that quotes the thing being suppressed.
+    let config = tables();
+    let repo = repo("markers-pointer-only");
+    let secret = "the-line-body-nobody-should-see";
+    repo.write(
+        "src/a.txt",
+        &format!("{} {secret}\n", config.markers[0].token),
+    );
+
+    let hits = batten::markers::find(&repo.dir, &config.markers).expect("scan for markers");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].path, "src/a.txt");
+    assert_eq!(hits[0].line, 1);
+    assert_eq!(hits[0].marker, config.markers[0].id);
+    let rendered = format!("{hits:?}");
+    assert!(
+        !rendered.contains(secret),
+        "a hit must carry path:line and the marker id, never the bytes"
+    );
+}
+
+#[test]
+fn marker_scanning_is_byte_stable_and_skips_binaries() {
+    let config = tables();
+    let repo = repo("markers-stable");
+    let token = &config.markers[0].token;
+    for name in ["src/z.txt", "src/a.txt", "src/m.txt"] {
+        repo.write(name, &format!("{token}\n{token}\n"));
+    }
+    // A binary file cannot hold a marker an author typed, and must not abort
+    // the scan either.
+    repo.write_bytes("src/blob.txt", &[0u8, 159, 146, 150]);
+
+    let first = batten::markers::find(&repo.dir, &config.markers).expect("scan");
+    let second = batten::markers::find(&repo.dir, &config.markers).expect("scan again");
+    assert_eq!(first, second, "identical tree, identical hits");
+    assert_eq!(first.len(), 6);
+    let order: Vec<(&str, usize)> = first
+        .iter()
+        .map(|hit| (hit.path.as_str(), hit.line))
+        .collect();
+    let mut sorted = order.clone();
+    sorted.sort_unstable();
+    assert_eq!(order, sorted, "hits come back sorted by path then line");
+}
+
+#[test]
+fn no_markers_configured_finds_nothing() {
+    // Cheap when irrelevant (house-style §4), and a repo with no marker config
+    // must not be reported as suppression-free-by-accident either — zero
+    // markers configured means zero counts, and `counts` says so explicitly.
+    let repo = repo("markers-none");
+    repo.write("a.txt", "anything at all\n");
+    assert!(
+        batten::markers::find(&repo.dir, &[])
+            .expect("scan")
+            .is_empty()
+    );
+    assert!(batten::markers::counts(&[], &[]).is_empty());
+}
+
+// --- the mutating-verb table, driven by config -------------------------------
+
+#[test]
+fn the_mutating_verb_table_is_config_driven() {
+    let config = tables();
+    batten::verbs::validate(&config.verbs).expect("the fixture table is well formed");
+
+    // Both verbs are known only because the fixture config declares them.
+    let destructive = &config.verbs[0];
+    let write = &config.verbs[1];
+    assert_eq!(
+        batten::verbs::classify(&config.verbs, &destructive.verb),
+        Some(destructive)
+    );
+    assert_eq!(
+        batten::verbs::classify(&config.verbs, &write.verb),
+        Some(write)
+    );
+    assert_eq!(
+        destructive.redirect.as_deref(),
+        Some("use the write surface"),
+        "the deny message's redirect is declared beside the verb, not in the crate"
+    );
+}
+
+#[test]
+fn an_undeclared_program_is_not_classified_as_mutating() {
+    let config = tables();
+    assert_eq!(
+        batten::verbs::classify(&config.verbs, "a-program-the-config-never-named"),
+        None,
+        "absence of information, which a consumer reads conservatively (§5)"
+    );
+}
+
+#[test]
+fn verbs_are_partitioned_by_the_one_effect_vocabulary() {
+    // The severity axis is house-style §5's, not a second one minted here, so
+    // `destructive` here means what it means everywhere else in the tool.
+    let config = tables();
+    let destructive =
+        batten::verbs::with_effect(&config.verbs, batten::effect::Effect::Destructive);
+    let write = batten::verbs::with_effect(&config.verbs, batten::effect::Effect::Write);
+    assert_eq!(destructive.len(), 1);
+    assert_eq!(write.len(), 1);
+    assert_ne!(destructive[0].verb, write[0].verb);
+}
+
+#[test]
+fn a_verb_table_that_would_be_inert_is_refused_at_load() {
+    // A `read` row in the mutating-verb table matches nothing while reading as
+    // covered. Refused at parse or validation, never kept.
+    let inert = "version = 1\n\n[[verb]]\nverb = \"x\"\neffect = \"read\"\n";
+    let config = batten::config::parse(inert, "fixture").expect("the effect token itself is valid");
+    let err = batten::verbs::validate(&config.verbs).unwrap_err();
+    assert!(err.downcast_ref::<UsageError>().is_some());
+
+    let unknown = "version = 1\n\n[[verb]]\nverb = \"x\"\neffect = \"nonsense\"\n";
+    let err = batten::config::parse(unknown, "fixture").unwrap_err();
+    assert!(
+        err.downcast_ref::<UsageError>().is_some(),
+        "an effect outside the vocabulary is bad config, not an internal failure"
+    );
+}
+
 // --- composition with the primitives that already landed ---------------------
 
 #[test]
@@ -542,4 +740,70 @@ fn state_paths_resolve_through_the_one_repo_root_finder() {
         !state.starts_with(&repo.dir),
         "state lives out of tree, so a checkout stays clean"
     );
+}
+
+#[test]
+fn the_acceptance_runner_is_the_landed_rule_engine() {
+    // "The acceptance runner" in CLOUD-36's list is not new code: an acceptance
+    // item is a named command with an exit code and no classification step, and
+    // that is the `command` rule kind on the engine CLOUD-12 landed (CLOUD-47
+    // was cancelled as subsumed). This asserts the composition rather than
+    // minting a second runner — the read-effect half runs the non-spawning
+    // kinds and *refuses* the rest loudly, which is what keeps a skipped gate
+    // from exiting 0.
+    let config = batten::config::parse(
+        "version = 1\n\n[[rule]]\nid = \"acceptance\"\nkind = \"command\"\nglob = \"**/*.txt\"\n\
+         run = \"true\"\nseverity = \"deny\"\n",
+        "fixture",
+    )
+    .expect("fixture config parses");
+    let repo = repo("acceptance-runner");
+    repo.write("a.txt", "content\n");
+
+    let err = batten::rules::run_static(&config.rules, &repo.dir).unwrap_err();
+    assert!(
+        err.downcast_ref::<UsageError>().is_some(),
+        "the read-effect surface refuses a spawning rule loudly, never skips it"
+    );
+    assert!(
+        batten::rules::run_all(&config.rules, &repo.dir)
+            .expect("the spawning surface runs it")
+            .is_empty(),
+        "an acceptance item that exits 0 produces no finding"
+    );
+}
+
+#[test]
+fn the_crate_bakes_in_no_consumer_vocabulary() {
+    // Non-negotiable rule 1, over the whole library: every token this fixture
+    // config declares is a consumer's word, and a grep of `crates/batten/src`
+    // for any of them must return zero hits. The tables are config; the core
+    // knows only their shape.
+    let config = tables();
+    let vocabulary: Vec<String> = config
+        .markers
+        .iter()
+        .map(|marker| marker.token.clone())
+        .chain(config.verbs.iter().map(|verb| verb.verb.clone()))
+        .collect();
+
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut scanned = 0;
+    for entry in fs::read_dir(&src).expect("read src/") {
+        let path = entry.expect("read dir entry").path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+            continue;
+        }
+        scanned += 1;
+        let source = fs::read_to_string(&path).expect("read source");
+        for token in &vocabulary {
+            assert!(
+                !source.contains(token),
+                "{}: contains the consumer token {token:?}; consumer-specific tables live in \
+                 batten.toml, never in crates/batten (non-negotiable rule 1)",
+                path.display()
+            );
+        }
+    }
+    assert!(scanned > 0, "the grep must actually have read the crate");
 }

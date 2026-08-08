@@ -131,6 +131,17 @@ pub struct Config {
     /// `protected`, and the sets must never be collapsed (CLOUD-37).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unlanded: Vec<String>,
+    /// The mutating-verb table (CLOUD-36): which programs change the world, in
+    /// the one §5 effect vocabulary. Consumer-specific by nature, so it lives
+    /// here and never in the crate (non-negotiable rule 1); the type and its
+    /// lookup are [`crate::verbs`].
+    #[serde(default, rename = "verb", skip_serializing_if = "Vec::is_empty")]
+    pub verbs: Vec<crate::verbs::MutatingVerb>,
+    /// The suppression markers to count (CLOUD-36). Which comment shape waves
+    /// a rule through is a property of the repository being gated, never of
+    /// Batten; the type and the counting are [`crate::markers`].
+    #[serde(default, rename = "marker", skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<crate::markers::Marker>,
 }
 
 /// Parse and validate a `batten.toml` from `text`, attributing errors to
