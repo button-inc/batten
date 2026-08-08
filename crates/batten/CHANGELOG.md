@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.22](https://github.com/button-inc/batten/compare/v0.0.21...v0.0.22) - 2026-08-08
+
+### Added
+
+- *(git)* resolve the repo root via the common-dir finder
+
+### Fixed
+
+- *(receipt)* derive the state dir from the common-dir root, not the worktree
+
 ## [0.0.21](https://github.com/button-inc/batten/compare/v0.0.20...v0.0.21) - 2026-08-08
 
 ### Other
