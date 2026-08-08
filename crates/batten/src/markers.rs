@@ -34,6 +34,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io;
 use std::path::Path;
 
 use anyhow::Result;
@@ -113,6 +114,44 @@ pub struct Hit {
     pub marker: String,
 }
 
+/// What an attempted read of a candidate file means.
+///
+/// `Ok(Some(text))` is text to scan, `Ok(None)` is a file legitimately skipped,
+/// and `Err` is a read that failed and must not be reported as zero markers.
+///
+/// The two `Err` cases are the whole point, and collapsing them is what this
+/// module's doc contract forbids in as many words:
+///
+/// * **Not UTF-8** is a skip. A repository legitimately holds binaries, and a
+///   marker is by definition text an author typed, so there is nothing to look
+///   for and nothing to complain about.
+/// * **Anything else** — a permission denial, an I/O failure, a path that raced
+///   away — propagates. Counting zero markers in a file nobody could open is the
+///   false-clean answer this module exists not to give.
+///
+/// A separate function rather than a `match` inside the walk because the
+/// classification *is* the thing that was wrong, and inline it could only be
+/// tested by producing a genuinely unreadable file — which a suite running as
+/// root cannot do, since root ignores the permission bits. As a function taking
+/// the `io::Result`, every branch is reachable from a synthesized error
+/// (CLOUD-241).
+///
+/// # Errors
+///
+/// Returns an internal error (→ exit `3`) when the read failed for any reason
+/// other than the bytes not being UTF-8 — an I/O failure is Batten's own
+/// failure, not bad input, so it may not claim `1` and never `2`.
+fn scannable(read: io::Result<String>, path: &str) -> Result<Option<String>> {
+    match read {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => Ok(None),
+        Err(err) => {
+            Err(anyhow::Error::new(err)
+                .context(format!("cannot read {path} for suppression markers")))
+        }
+    }
+}
+
 /// Find every occurrence of every marker under `root`.
 ///
 /// Hits come back sorted by `(path, line, marker)` — the same pointer tuple
@@ -148,8 +187,7 @@ pub fn find(root: &Path, markers: &[Marker]) -> Result<Vec<Hit>> {
         if selecting.is_empty() {
             continue;
         }
-        let Ok(text) = fs::read_to_string(root.join(&path)) else {
-            // Not UTF-8, or not readable as text: no marker can be in it.
+        let Some(text) = scannable(fs::read_to_string(root.join(&path)), &path)? else {
             continue;
         };
         for (index, line) in text.lines().enumerate() {
@@ -216,6 +254,95 @@ mod tests {
                 "a malformed marker is bad config, not an internal failure"
             );
         }
+    }
+
+    /// A scratch tree in the system temp dir, cleared first so a stray file from
+    /// an earlier run cannot decide a verdict.
+    ///
+    /// `CARGO_TARGET_TMPDIR` is only set for integration targets, and the pid
+    /// keys the path so a concurrent run of this suite cannot collide with it.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-markers-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_are_skipped_not_refused() {
+        // The half that must NOT change: a repository legitimately holds
+        // binaries, and a marker is text an author typed, so there is nothing to
+        // look for and nothing to complain about.
+        let dir = scratch("markers-not-utf8");
+        fs::write(dir.join("binary.bin"), [0xff_u8, 0xfe, 0x00, 0x01]).expect("write binary");
+        fs::write(dir.join("code.rs"), "A\n").expect("write text");
+        let hits = find(&dir, &[marker("m", "A")]).expect("a binary file is not an error");
+        assert_eq!(
+            hits.len(),
+            1,
+            "the marker in the readable file is still found"
+        );
+        assert_eq!(hits[0].path, "code.rs");
+    }
+
+    #[test]
+    fn the_two_read_failures_are_classified_apart() {
+        // The decision that was wrong, tested where every branch is reachable.
+        // Not UTF-8 is a skip:
+        let skipped = scannable(
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "stream did not contain valid UTF-8",
+            )),
+            "binary.bin",
+        )
+        .expect("not UTF-8 is a skip, not an error");
+        assert!(skipped.is_none());
+
+        // Everything else propagates, and names the path it could not read.
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::NotFound,
+            io::ErrorKind::Other,
+        ] {
+            let err = scannable(Err(io::Error::new(kind, "nope")), "locked.rs")
+                .expect_err("an unreadable file is not a zero count");
+            assert!(
+                err.downcast_ref::<UsageError>().is_none(),
+                "an I/O failure is Batten's own failure (exit 3), not bad input (exit 1)"
+            );
+            assert!(
+                format!("{err:#}").contains("locked.rs"),
+                "the error names the path: {err:#}"
+            );
+        }
+
+        // And readable text is scanned.
+        let text = scannable(Ok("A\n".to_owned()), "code.rs").expect("readable");
+        assert_eq!(text.as_deref(), Some("A\n"));
+    }
+
+    #[test]
+    fn an_unreadable_file_propagates_through_the_walk() {
+        // The end-to-end companion to the classifier test. Root ignores the
+        // permission bits, so on a root-run suite the condition cannot be
+        // created; the premise is asserted rather than the conclusion, because
+        // passing regardless would be its own false-clean answer.
+        let dir = scratch("markers-unreadable");
+        let unreadable = dir.join("locked.rs");
+        fs::write(&unreadable, "A\n").expect("write file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
+                .expect("drop the permission bits");
+        }
+        if fs::read_to_string(&unreadable).is_ok() {
+            return;
+        }
+        let err = find(&dir, &[marker("m", "A")]).expect_err("an unreadable file is not clean");
+        assert!(format!("{err:#}").contains("locked.rs"), "got: {err:#}");
     }
 
     #[test]
