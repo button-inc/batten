@@ -284,8 +284,15 @@ mod tests {
         // mise-tasks/ are process bootstrap owned elsewhere, not the library
         // primitive, so the scan covers the crate's Rust sources only.
         //
+        // What is forbidden is *root resolution*, not git access: a module may
+        // ask git for a SHA or the git dir (receipt.rs does), and collapsing
+        // those onto shared primitives is CLOUD-36's charter. The tokens below
+        // are the ways a second root finder gets written — `--show-toplevel`
+        // above all, which answers with a linked worktree's own toplevel and
+        // is the divergence this issue exists to eliminate.
+        //
         // Two predicates with different scopes:
-        // - git plumbing tokens are forbidden in src/*.rs outside this file
+        // - the resolver tokens are forbidden in src/*.rs outside this file
         //   (tests/*.rs may spawn git to build fixtures; a fixture is not a
         //   resolver);
         // - the resolver is defined exactly once across src AND tests (a
@@ -295,12 +302,10 @@ mod tests {
         // a definition (the same trick state.rs plays with its baked literal).
         let needle = ["fn repo", "_root"].concat();
         let forbidden = [
-            "Command::new(\"git\")",
-            "rev-parse",
             "show-toplevel",
+            "show-cdup",
             "git-common-dir",
             "git_common_dir",
-            "show-cdup",
             "git2::",
             "gix::",
         ];
@@ -319,7 +324,8 @@ mod tests {
                 for token in forbidden {
                     assert!(
                         !source.contains(token),
-                        "{}: contains {token:?}; git plumbing lives only in git.rs (CLOUD-34)",
+                        "{}: contains {token:?}; repo-root resolution lives only in git.rs — \
+                         call git::repo_root instead (CLOUD-34)",
                         path.display()
                     );
                 }

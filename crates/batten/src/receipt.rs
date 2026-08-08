@@ -65,7 +65,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
-use crate::{identity, state};
+use crate::{git, identity, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
 const STATEMENT_TYPE: &str = "https://in-toto.io/Statement/v1";
@@ -245,10 +245,14 @@ fn repo_facts() -> Result<RepoFacts> {
         &["rev-parse", "--absolute-git-dir"],
         "not a git repository, so there is no HEAD to key a receipt to",
     )?;
-    let repo_root = git_query(
-        &["rev-parse", "--show-toplevel"],
-        "the repository has no working tree, so no state directory can be derived",
-    )?;
+    // Through the one repo-root primitive (CLOUD-34), never a second toplevel
+    // query: a toplevel answers with the *worktree's* own root, so a receipt
+    // written from a linked worktree would key itself to a different state
+    // directory than the same repository's main checkout.
+    let repo_root = git::repo_root(Path::new("."))?
+        .to_str()
+        .ok_or_else(|| UsageError::raise("the repository root is not valid UTF-8"))?
+        .to_owned();
     let head = git_query(
         &["rev-parse", "HEAD"],
         "HEAD does not resolve, so there is no commit to key a receipt to",
