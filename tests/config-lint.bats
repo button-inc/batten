@@ -72,3 +72,18 @@ setup() {
 	run "$CHECK"
 	[ "$status" -eq 0 ]
 }
+
+@test "the rationale claims no caller that grep cannot find" {
+	# CLOUD-236 / CLOUD-198. The header used to assert "CI passes
+	# `--config-from origin/main`" as fact while no caller passed it, which is the
+	# worst place to put a false claim: it told a reader the base-ref class was
+	# covered. Truth-reconciliation only sticks if it is a gate, so this is the
+	# gate — if a future edit re-asserts a caller, it must also create one.
+	if grep -qE '(CI|ci) passes .*--config-from' "$CHECK"; then
+		run grep -rqE -- '--config-from' "$REPO/.github" "$REPO/mise.toml" "$REPO/hk.pkl"
+		[ "$status" -eq 0 ] || {
+			echo "the rationale claims a --config-from caller; none exists" >&2
+			false
+		}
+	fi
+}

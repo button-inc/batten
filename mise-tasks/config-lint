@@ -9,10 +9,25 @@
 # been switched off.
 #
 # Deliberately the single-tree class only. The base-ref comparison smells need a
-# trusted ref, and which ref that is belongs to the *caller* (CI passes
-# `--config-from origin/main`); baking one in here would make a local run's
-# verdict depend on whatever `origin/main` happens to be, which is a property of
-# the world rather than of the commit — the split `lock-check` had to learn.
+# trusted ref, and which ref that is belongs to the *caller*; baking one in here
+# would make a local run's verdict depend on whatever `origin/main` happens to be,
+# which is a property of the world rather than of the commit — the split
+# `lock-check` had to learn.
+#
+# NOT ARMED YET, and this comment used to imply otherwise: it named a CI caller
+# for the flag when no caller existed anywhere. A gate's own rationale stating a
+# false fact about the system is the CLOUD-198 class, and this was the most
+# misleading place for one — a reader checking whether the base-ref class was
+# covered found a parenthetical telling them it was. The measurement and the
+# wording it replaced are recorded on CLOUD-236 rather than re-quoted here, since
+# quoting the claim is indistinguishable from making it.
+#
+# Arming it is CLOUD-236 and needs a decision first, not just a workflow step:
+# `config lint` makes any smell a Violation (2) and smells carry no severity, so
+# a blocking CI step would fail every PR that legitimately relaxes policy — a
+# retired rule reports `rule-removed` — with no waiver to pass through.
+# `tests/config-lint.bats` holds this comment to the tree: it may not claim a
+# caller that grep cannot find.
 set -euo pipefail
 
 cd "${CONFIG_LINT_ROOT:-$(git rev-parse --show-toplevel)}"
