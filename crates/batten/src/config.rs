@@ -88,6 +88,28 @@ pub struct Config {
     /// never a value quietly assumed.
     #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
+    /// The paths policy applies to, as an **ordered include/exclude list**: a
+    /// plain glob includes, a `!`-prefixed glob excludes, and an exclude beats
+    /// an include (CLOUD-37). Absent or empty means the set is empty — nothing
+    /// is in scope — not "everything", because a set that silently defaults to
+    /// universal membership is the widening a policy engine must never do.
+    ///
+    /// Not to be confused with [`Rule::scope`] ([`crate::rules::RuleScope`]),
+    /// which is a per-rule axis saying *where a rule looks*. The two share a
+    /// token and nothing else; their vocabularies never cross, exactly as
+    /// severity's three axes do not (see [`crate::severity`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+    /// Paths whose modification is guarded. A plain include set — no `!`
+    /// entries — evaluated independently of [`Config::scope`] and
+    /// [`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected: Vec<String>,
+    /// Paths whose work is not yet landed. A plain include set, evaluated
+    /// independently of the other two: a path may be `unlanded` without being
+    /// `protected`, and the sets must never be collapsed (CLOUD-37).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unlanded: Vec<String>,
 }
 
 /// Parse and validate a `batten.toml` from `text`, attributing errors to

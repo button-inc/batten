@@ -30,6 +30,24 @@ min_batten_version = "0.0.0"
 # config and which layer set each key.
 strictness = "standard"
 
+# The three path sets policy is defined over. They overlap in practice but are
+# three independent evaluators: a path's membership in each is computed from that
+# key's list alone, and no membership is ever derived from another set's.
+#
+#   scope      the paths policy applies to, as an ordered include/exclude list.
+#              A "!" prefix marks an exclude (gitignore's spelling) and an
+#              exclude beats an overlapping include, whatever the order.
+#   protected  paths whose modification is guarded. A plain include set.
+#   unlanded   paths whose work is not yet landed. A plain include set.
+#
+# A "!" entry in protected or unlanded is refused with exit 1 rather than read as
+# a literal glob — only scope carries exclude semantics. An absent key is the
+# *empty* set, never "everything": defaulting to universal membership would widen
+# policy silently, and widening is the one direction that must never be implicit.
+scope = ["**", "!target/**"]
+protected = ["batten.toml", ".github/workflows/**"]
+unlanded = []
+
 # Rules are the output-producing half of the config: glob-selected, kind-typed
 # predicates over the repository, evaluated by `batten check`. A `forbid` rule
 # fires on any line containing its literal pattern, reported pointer-only as

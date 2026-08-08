@@ -3,7 +3,7 @@
 //! A rule is a **declarative predicate over the repository**: it selects files
 //! with a `glob` and applies a `kind`-specific test to them, mapping the outcome
 //! onto the exit-code contract (§7) through the rule's `severity` (CLOUD-61) —
-//! a clean run exits `0`, any `deny` finding exits `1`, a `warn` finding is
+//! a clean run exits `0`, any `deny` finding exits `2`, a `warn` finding is
 //! reported without failing the run, and an `allow` rule is configured off.
 //! `severity` is required per rule with no implicit fallback, and is a separate
 //! key from `scope` ([`RuleScope`]) — where a rule looks is never what a match
@@ -561,6 +561,130 @@ fn rel_to_slash(rel: &Path) -> String {
         .join("/")
 }
 
+/// The marker that turns a glob into an exclude inside an ordered
+/// include/exclude list: gitignore's `!` prefix, so a reader who knows one knows
+/// the other.
+const EXCLUDE_PREFIX: char = '!';
+
+/// One glob evaluator over repo-relative, `/`-separated paths.
+///
+/// A set answers exactly one question — *is this path a member?* — from its own
+/// list and nothing else. Two sets built from two lists share no state, so
+/// membership in each is computed independently (CLOUD-37). That independence is
+/// the whole point: `scope`, `protected` and `unlanded` overlap in practice but
+/// are not the same set, and collapsing them changes policy silently.
+///
+/// **An exclude beats an include.** Membership is `any include matches AND no
+/// exclude matches`, so the outcome does not depend on the order the patterns
+/// were written in — the strongest reading of "excludes win", and the one that
+/// makes evaluation deterministic and order-stable for identical config (§6).
+///
+/// An empty include list makes the set empty. Absent config is *not* read as
+/// "everything": a set that silently defaults to universal membership is a
+/// widening, and widening is the one direction a policy engine may never drift.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PathSet {
+    includes: Vec<String>,
+    excludes: Vec<String>,
+}
+
+impl PathSet {
+    /// Build the ordered include/exclude set the `scope` key declares: a plain
+    /// glob includes, a `!`-prefixed glob excludes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a `!` with no glob after it —
+    /// an exclude that excludes nothing is a typo, not an empty instruction.
+    pub fn scope(patterns: &[String]) -> anyhow::Result<Self> {
+        let mut set = PathSet {
+            includes: Vec::new(),
+            excludes: Vec::new(),
+        };
+        for pattern in patterns {
+            match pattern.strip_prefix(EXCLUDE_PREFIX) {
+                Some("") => {
+                    return Err(UsageError::raise(
+                        "scope: `!` must be followed by a glob".to_owned(),
+                    ));
+                }
+                Some(rest) => set.excludes.push(rest.to_owned()),
+                None => set.includes.push(pattern.clone()),
+            }
+        }
+        Ok(set)
+    }
+
+    /// Build a plain include set from `key`'s list.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a `!`-prefixed entry. Only
+    /// `scope` carries exclude semantics, so a `!` here would either be read as
+    /// a literal glob or silently dropped — and a pattern the author believes
+    /// excludes a path while the engine treats it as an include is precisely the
+    /// silent policy change this issue exists to prevent. Refuse instead.
+    pub fn includes(key: &str, patterns: &[String]) -> anyhow::Result<Self> {
+        for pattern in patterns {
+            if pattern.starts_with(EXCLUDE_PREFIX) {
+                return Err(UsageError::raise(format!(
+                    "{key}: `{pattern}` — only `scope` takes `!` excludes; {key} is a plain \
+                     include set"
+                )));
+            }
+        }
+        Ok(PathSet {
+            includes: patterns.to_vec(),
+            excludes: Vec::new(),
+        })
+    }
+
+    /// Whether `path` is a member of this set, computed from this set's lists
+    /// alone.
+    #[must_use]
+    pub fn contains(&self, path: &str) -> bool {
+        self.includes
+            .iter()
+            .any(|pattern| glob_match(pattern, path))
+            && !self
+                .excludes
+                .iter()
+                .any(|pattern| glob_match(pattern, path))
+    }
+}
+
+/// The three sets Batten's policy is defined over, each parsed from its own list
+/// in `batten.toml` (CLOUD-37).
+///
+/// Grouped for construction only. Nothing here consults another field: a path's
+/// membership in `scope`, in `protected`, and in `unlanded` are three separate
+/// answers, and no code may derive one from another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sets {
+    /// The paths policy applies to — the one ordered include/exclude set.
+    pub scope: PathSet,
+    /// The paths whose modification is guarded.
+    pub protected: PathSet,
+    /// The paths whose work is not yet landed.
+    pub unlanded: PathSet,
+}
+
+impl Sets {
+    /// Build all three evaluators from a parsed config.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) when a list is malformed — a bare
+    /// `!` in `scope`, or a `!` entry in an include-only key.
+    pub fn from_config(config: &crate::config::Config) -> anyhow::Result<Self> {
+        Ok(Sets {
+            scope: PathSet::scope(&config.scope)?,
+            protected: PathSet::includes("protected", &config.protected)?,
+            unlanded: PathSet::includes("unlanded", &config.unlanded)?,
+        })
+    }
+}
+
 /// Match a `/`-separated glob against a `/`-separated path.
 ///
 /// `**` matches any run of path segments (including none); within a segment `*`
@@ -1113,5 +1237,143 @@ mod tests {
         let deny = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
         assert!(any_blocking(&deny), "a deny finding must block");
         assert!(!any_blocking(&[]), "no findings, nothing blocks");
+    }
+
+    /// The three-set fixture (CLOUD-37), written as the config it is.
+    ///
+    /// Deliberately overlapping and deliberately not nested: `src/**` is in
+    /// scope, `src/generated/**` is excluded from it, `src/api.rs` is protected,
+    /// and `src/draft.rs` is unlanded but *not* protected — the case the
+    /// acceptance names, and the one a collapsed set gets wrong.
+    const SETS_FIXTURE: &str = "\
+version = 1
+scope = [\"src/**\", \"!src/generated/**\"]
+protected = [\"src/api.rs\", \"migrations/**\"]
+unlanded = [\"src/draft.rs\", \"src/generated/**\"]
+";
+
+    fn sets(text: &str) -> Sets {
+        let config = crate::config::parse(text, "test").unwrap();
+        Sets::from_config(&config).unwrap()
+    }
+
+    #[test]
+    fn three_independent_evaluators_exist() {
+        // (a) Three sets, each answering from its own list alone. Every
+        // assertion below is a path where at least two of the three disagree —
+        // if any pair were collapsed, one of these flips.
+        let sets = sets(SETS_FIXTURE);
+
+        // In scope, protected, not unlanded.
+        assert!(sets.scope.contains("src/api.rs"));
+        assert!(sets.protected.contains("src/api.rs"));
+        assert!(!sets.unlanded.contains("src/api.rs"));
+
+        // Protected but out of scope: `migrations/**` is in no scope include.
+        assert!(!sets.scope.contains("migrations/001.sql"));
+        assert!(sets.protected.contains("migrations/001.sql"));
+        assert!(!sets.unlanded.contains("migrations/001.sql"));
+
+        // Unlanded and excluded from scope: membership in one says nothing
+        // about the other, in either direction.
+        assert!(!sets.scope.contains("src/generated/api.rs"));
+        assert!(sets.unlanded.contains("src/generated/api.rs"));
+        assert!(!sets.protected.contains("src/generated/api.rs"));
+    }
+
+    #[test]
+    fn a_path_in_unlanded_but_not_protected_is_classified_by_each_set() {
+        // (b) The acceptance's named case, stated as three independent answers
+        // about one path. A single collapsed set cannot produce this row.
+        let sets = sets(SETS_FIXTURE);
+        assert!(sets.unlanded.contains("src/draft.rs"), "unlanded: yes");
+        assert!(!sets.protected.contains("src/draft.rs"), "protected: no");
+        assert!(sets.scope.contains("src/draft.rs"), "scope: yes");
+    }
+
+    #[test]
+    fn an_exclude_beats_an_include_inside_scope() {
+        // (c) `src/generated/api.rs` matches the `src/**` include and the
+        // `!src/generated/**` exclude. The exclude wins.
+        let sets = sets(SETS_FIXTURE);
+        assert!(sets.scope.contains("src/a.rs"), "a plain include matches");
+        assert!(
+            !sets.scope.contains("src/generated/api.rs"),
+            "an exclude must beat an overlapping include"
+        );
+
+        // …and it wins from either position in the list, so "excludes win" is a
+        // property of the set rather than an artifact of authoring order.
+        let reversed =
+            PathSet::scope(&["!src/generated/**".to_owned(), "src/**".to_owned()]).unwrap();
+        assert!(!reversed.contains("src/generated/api.rs"));
+        assert!(reversed.contains("src/a.rs"));
+    }
+
+    #[test]
+    fn evaluation_is_deterministic_for_identical_config() {
+        // (d) Same config, same paths, same answers — twice over, across
+        // separately-built evaluators, so nothing is carried between runs.
+        let paths = [
+            "src/a.rs",
+            "src/api.rs",
+            "src/draft.rs",
+            "src/generated/api.rs",
+            "migrations/001.sql",
+            "README.md",
+        ];
+        let first = sets(SETS_FIXTURE);
+        let second = sets(SETS_FIXTURE);
+        assert_eq!(first, second, "identical config builds identical sets");
+        for path in paths {
+            assert_eq!(first.scope.contains(path), second.scope.contains(path));
+            assert_eq!(
+                first.protected.contains(path),
+                second.protected.contains(path)
+            );
+            assert_eq!(
+                first.unlanded.contains(path),
+                second.unlanded.contains(path)
+            );
+            // Repeating a query on one evaluator is stable too: `contains` is a
+            // pure function of the set, with no memo to go stale.
+            assert_eq!(first.scope.contains(path), first.scope.contains(path));
+        }
+    }
+
+    #[test]
+    fn an_absent_list_is_the_empty_set_never_everything() {
+        // The widening a default must never perform: no `scope` key means
+        // nothing is in scope, not that every path is.
+        let sets = sets("version = 1\n");
+        for path in ["src/a.rs", "README.md", ""] {
+            assert!(!sets.scope.contains(path));
+            assert!(!sets.protected.contains(path));
+            assert!(!sets.unlanded.contains(path));
+        }
+    }
+
+    #[test]
+    fn an_exclude_in_an_include_only_key_is_a_usage_error() {
+        // Only `scope` carries exclude semantics. A `!` elsewhere would read as
+        // an exclude to its author and as an include to the engine, so it is
+        // refused rather than reinterpreted.
+        for key in ["protected", "unlanded"] {
+            let text = format!("version = 1\n{key} = [\"!src/**\"]\n");
+            let config = crate::config::parse(&text, "test").unwrap();
+            let err = Sets::from_config(&config).unwrap_err();
+            assert!(err.downcast_ref::<UsageError>().is_some());
+            assert!(
+                err.to_string().contains(key),
+                "the refusal must name the key, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_bare_exclude_marker_is_a_usage_error() {
+        let config = crate::config::parse("version = 1\nscope = [\"!\"]\n", "test").unwrap();
+        let err = Sets::from_config(&config).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
     }
 }
