@@ -112,6 +112,20 @@ redraft() {
 		echo "land: re-drafted #$pr — CI does not run on drafts, so nothing more is spent until this is fixed locally"
 }
 
+# "Does this SHA carry an answer yet?" — the conclusions `ci-wait` grades, so
+# the two agree by construction on what counts as one. Absent from the remote,
+# or unreachable, reads as 0: a SHA with no runs is exactly the one that needs
+# the event, and the caller's other guards decide whether to spend it.
+graded_runs() {
+	local n
+	n=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" \
+		--jq '[.check_runs[]?
+                       | select(.conclusion == "success" or .conclusion == "failure"
+                             or .conclusion == "timed_out" or .conclusion == "cancelled"
+                             or .conclusion == "action_required")] | length' 2>/dev/null) || n=0
+	echo "${n:-0}"
+}
+
 # `set -m` gives each background job its own process group, so `kill -- -PID`
 # reaches the whole tree (mise -> the task -> gh/sleep). Without it the loser of
 # the race is orphaned and keeps polling for the rest of the session.
@@ -156,47 +170,59 @@ while :; do
 		mise run verified || die "no verify receipt for HEAD — something swallowed verify's verdict."
 	fi
 
+	sha="$(git rev-parse HEAD)"
+	remote_before="$(git rev-parse "origin/$branch" 2>/dev/null || echo none)"
+
+	# Readying is the single event that starts CI, and it happens BEFORE the
+	# push. This task is the ONLY readier; the workflow contract's step 3 used to
+	# ready as well, which is CLOUD-247.
+	#
+	# The order is the load-bearing part (CLOUD-254). Pushing first and readying
+	# after puts two webhooks in the same instant and the same
+	# `concurrency: ci-<ref>` group: the `synchronize` event carries
+	# `draft: true`, so its run evaluates `if: !draft` and every job is
+	# `skipped`, and the `ready_for_review` run does not survive beside it under
+	# `cancel-in-progress`. The head ends up carrying a complete set of skipped
+	# runs and no graded one, and `ci-wait` polls forever — correctly, since a
+	# graded conclusion is what stops draft-era skips reading as green. On #182
+	# both events are stamped 22:14:20Z and exactly one run exists, skipped.
+	# Readying first makes the push's own `synchronize` the confirming run: one
+	# event, carrying `draft: false`, with nothing to contend with.
+	#
+	# The condition is "this SHA has no graded check-run", not "the PR is a
+	# draft" — a head that already carries a graded set must not buy a second run
+	# for a SHA that has one, which is step 5 of the contract. Before the push
+	# the SHA is usually absent from the remote and the query 404s, which reads
+	# as zero: exactly right, since a SHA with no runs is the one that needs the
+	# event. `graded` is `ci-wait`'s own list, and deliberately so: "is this set
+	# an answer" has one definition, and a second copy here that drifted would
+	# put this task back to waiting on runs that will never be graded.
+	if [ "$(graded_runs "$sha")" = "0" ] &&
+		[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
+		gh pr ready "$pr" >/dev/null 2>&1 ||
+			die "could not mark #$pr ready for review, so CI would never start."
+		echo "land: lap $lap — readied #$pr before pushing, so the push's own event is the one confirming run"
+	fi
+
 	git push --force-with-lease -u origin "$branch" ||
 		die "push rejected. Someone else moved the branch; look before forcing."
 
-	sha="$(git rev-parse HEAD)"
 	base_main="$(git rev-parse origin/main)"
 
-	# Readying is the single event that starts CI, so it happens here — once the
-	# tree is proven and pushed, never earlier. This task is the ONLY readier;
-	# the workflow contract's step 3 used to ready as well, which is the defect
-	# below (CLOUD-247).
-	#
-	# The condition is "this SHA has no graded check-run", not "the PR is a
-	# draft". Those differ in exactly the case that stalled #177: a push made
-	# while the PR was a draft leaves a complete set of `skipped` runs on the
-	# head, and readying afterwards produced no new run. `ci-wait` then polls
-	# forever — correctly, since it requires a graded conclusion before calling a
-	# set terminal, which is what stops draft-era skips reading as green. So
-	# nothing was broken at either end; no confirming run was ever spent.
-	#
-	# `graded` is `ci-wait`'s own list, and deliberately so: "is this set an
-	# answer" has one definition, and a second copy here that drifted would put
-	# this task back to waiting on runs that will never be graded.
-	#
-	# A PR that is already ready is re-fired through `--undo`, which is what
-	# actually emits a fresh `ready_for_review` (`ready-guard` permits the undo
-	# since CLOUD-237). Guarded by the same predicate rather than done
-	# unconditionally: a head that already carries a graded set must not buy a
-	# second run for a SHA that has one, which is step 5 of the contract.
-	graded=$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" \
-		--jq '[.check_runs[]?
-                       | select(.conclusion == "success" or .conclusion == "failure"
-                             or .conclusion == "timed_out" or .conclusion == "cancelled"
-                             or .conclusion == "action_required")] | length' 2>/dev/null)
-	if [ "${graded:-0}" = "0" ]; then
-		if [ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" != "true" ]; then
-			gh pr ready "$pr" --undo >/dev/null 2>&1 ||
-				die "could not re-draft #$pr to re-fire the ready that starts CI."
-		fi
+	# A push that moved nothing emitted no `synchronize`, so nothing started a
+	# run — and if the head carries only draft-era skips there is no answer to
+	# wait for either. This is the #177 shape, and it is the one case that still
+	# needs the `--undo` re-fire: converting back to draft and readying again is
+	# what actually emits a fresh `ready_for_review` on an unchanged head
+	# (`ready-guard` permits the undo since CLOUD-237). Guarded on the ref not
+	# moving, so a lap that did push never pays for a second event.
+	if [ "$(git rev-parse "origin/$branch")" = "$remote_before" ] &&
+		[ "$(graded_runs "$sha")" = "0" ]; then
+		gh pr ready "$pr" --undo >/dev/null 2>&1 ||
+			die "could not re-draft #$pr to re-fire the ready that starts CI."
 		gh pr ready "$pr" >/dev/null 2>&1 ||
 			die "could not mark #$pr ready for review, so CI would never start."
-		echo "land: lap $lap — readied #$pr, which is what starts the one confirming CI run"
+		echo "land: lap $lap — the push moved nothing and $(git rev-parse --short "$sha") carries no graded run; re-fired the ready"
 	fi
 
 	# --- race the two answers: green, or no longer landable ---

@@ -82,8 +82,10 @@ case "\$sub" in
     echo "\$all" >>"$BATS_TEST_TMPDIR/comments"; echo commented ;;
   "pr ready")
     echo "\$all" >>"$BATS_TEST_TMPDIR/ready"
+    echo "ready" >>"$BATS_TEST_TMPDIR/calls"
     case "\$all" in
       *--undo*) [ ! -f "$BATS_TEST_TMPDIR/rc.undo" ] || exit 1 ;;
+      *)        [ ! -f "$BATS_TEST_TMPDIR/rc.ready" ] || exit 1 ;;
     esac
     echo readied ;;
   "pr view")
@@ -106,6 +108,7 @@ EOF
 	chmod +x "$STUB/gh"
 	rm -f "$BATS_TEST_TMPDIR/runs.calls" "$BATS_TEST_TMPDIR/state.calls"
 	: >"$BATS_TEST_TMPDIR/ready"
+	: >"$BATS_TEST_TMPDIR/calls"
 	printf 'false' >"$BATS_TEST_TMPDIR/isdraft"
 	head_checks_empty
 }
@@ -118,11 +121,18 @@ stub_git() {
 	for step in fetch linear rebase push; do
 		echo 0 >"$BATS_TEST_TMPDIR/rc.$step"
 	done
+	# The remote branch ref is modelled, not assumed: `land` compares it across
+	# the push to tell "this lap emitted a synchronize event" from "this lap
+	# moved nothing", and those two take different paths (CLOUD-254). A
+	# successful push advances it to HEAD, exactly as a real one does.
+	echo staleremote >"$BATS_TEST_TMPDIR/remote_ref"
 	cat >"$STUB/git" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"$BATS_TEST_TMPDIR/gitlog"
 case "\$*" in
   "rev-parse HEAD")              echo cafe1234cafe1234 ;;
+  "rev-parse origin/main")       echo ma1nma1nma1nma1n ;;
+  "rev-parse origin/"*)          cat "$BATS_TEST_TMPDIR/remote_ref" ;;
   "rev-parse --abbrev-ref HEAD") cat "$BATS_TEST_TMPDIR/branch" ;;
   "rev-parse --short"*)          echo abc1234 ;;
   "rev-parse --show-toplevel")   echo "$BATS_TEST_TMPDIR" ;;
@@ -130,7 +140,11 @@ case "\$*" in
   "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.linear")" ;;
   "rebase --abort")              exit 0 ;;
   "rebase"*)                     exit "\$(cat "$BATS_TEST_TMPDIR/rc.rebase")" ;;
-  "push"*)                       exit "\$(cat "$BATS_TEST_TMPDIR/rc.push")" ;;
+  "push"*)
+    echo "push" >>"$BATS_TEST_TMPDIR/calls"
+    rc=\$(cat "$BATS_TEST_TMPDIR/rc.push")
+    [ "\$rc" != 0 ] || echo cafe1234cafe1234 >"$BATS_TEST_TMPDIR/remote_ref"
+    exit "\$rc" ;;
   *)                             exit 0 ;;
 esac
 EOF
@@ -198,7 +212,13 @@ ci_is_slow() { : >"$BATS_TEST_TMPDIR/ci-wait.slow"; }
 main_moves_on_lap() { echo "$1" >"$BATS_TEST_TMPDIR/mw.ci.wins"; }
 main_moves_during_answer_wait() { echo "$1" >"$BATS_TEST_TMPDIR/mw.answer.wins"; }
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
+# The push leaves the remote ref where it was, so no `synchronize` event fires
+# and nothing starts a run — the one shape that still needs the `--undo`.
+push_moves_nothing() { echo cafe1234cafe1234 >"$BATS_TEST_TMPDIR/remote_ref"; }
+# The interleaved record of the two calls whose ORDER is the defect.
+call_order() { tr '\n' ' ' <"$BATS_TEST_TMPDIR/calls"; }
 undo_fails() { : >"$BATS_TEST_TMPDIR/rc.undo"; }
+ready_fails() { : >"$BATS_TEST_TMPDIR/rc.ready"; }
 task_fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.$1"; }
 not_linear() { echo 1 >"$BATS_TEST_TMPDIR/rc.linear"; }
 comments() { wc -l <"$BATS_TEST_TMPDIR/comments" | tr -d ' '; }
@@ -492,11 +512,43 @@ workflow_runs() {
 	# no confirming run was ever spent. Only `--undo` re-emits
 	# `ready_for_review`, so that is what the lap must do.
 	head_is_all_skipped
+	push_moves_nothing
 	pr_state MERGED
 	run "$LAND"
 	[ "$status" -eq 0 ]
 	[[ "$(ready_calls)" == *"--undo"* ]]
-	[[ "$output" == *"readied #150"* ]]
+	[[ "$output" == *"re-fired the ready"* ]]
+}
+
+@test "THE RACE: the ready precedes the push, so one event carries the run" {
+	# CLOUD-254, measured on #182. Pushing first and readying after puts two
+	# webhooks in the same instant and the same `concurrency: ci-<ref>` group:
+	# the `synchronize` carries `draft: true` so its run skips every job, and the
+	# `ready_for_review` run does not survive beside it under
+	# `cancel-in-progress`. Both events are stamped 22:14:20Z on #182 and exactly
+	# one run exists, skipped — the head carries no graded run and `ci-wait`
+	# polls forever. Readying FIRST makes the push's own event the confirming
+	# run. Asserted on the order, because both calls happen either way and only
+	# the order decides whether a run is ever created.
+	is_draft
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$(call_order)" == "ready push"* ]]
+	[[ "$output" == *"before pushing"* ]]
+}
+
+@test "a lap that pushed does not also buy a second event" {
+	# The re-fire is guarded on the ref NOT moving. A lap that pushed already
+	# emitted the `synchronize` that starts the run; converting to draft and back
+	# on top of it would spend a second runner for one SHA — step 5 of the
+	# contract — and re-drafting mid-run is how the first one gets cancelled.
+	is_draft
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+	[ "$(grep -c ready "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
 }
 
 @test "a landing that succeeds says nothing that reads as a failure" {
@@ -592,6 +644,7 @@ workflow_runs() {
 	# confirming run never starts, and polling on would be waiting for something
 	# that is not coming — the exact shape this whole area keeps producing.
 	head_is_all_skipped
+	push_moves_nothing
 	undo_fails
 	pr_state OPEN
 	run "$LAND"
@@ -599,13 +652,27 @@ workflow_runs() {
 	[[ "$output" == *"could not re-draft"* ]]
 }
 
+@test "a ready that fails stops before the push rather than pushing into silence" {
+	# The ready now precedes the push (CLOUD-254), so a ready that cannot happen
+	# is caught while nothing has been published yet. Pushing on past it would
+	# put a commit on a draft PR that no event will ever grade — the stall this
+	# whole area keeps producing, reached from the other side.
+	is_draft
+	ready_fails
+	pr_state OPEN
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"could not mark #150 ready"* ]]
+	[[ "$(call_order)" != *push* ]]
+}
+
 @test "every way a lap can end is exercised above" {
 	# The property that would have caught the dead branch: an exit nothing
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 11 ] || {
-		echo "land has $stops stopping conditions; this suite covers 11."
+	[ "$stops" -eq 12 ] || {
+		echo "land has $stops stopping conditions; this suite covers 12."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
