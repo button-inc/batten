@@ -67,11 +67,17 @@ file itself for the "why", this is only the "where":
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file >
 repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   not hard-coded per field.
-- `git.rs` — the one repo-root primitive (CLOUD-34): the parent of git's
-  _common_ directory, so linked worktrees resolve to the main repository root.
-  Discovery env is scrubbed; outside-a-repo, bare, and submodule-interior
-  layouts raise `UsageError` rather than mis-root. All git plumbing flows
-  through here — the single-implementation assertion in its tests is the gate.
+- `git.rs` — the one repo-root primitive (CLOUD-34) and the one merged-ness
+  answer (CLOUD-36). `repo_root` is the parent of git's _common_ directory, so
+  linked worktrees resolve to the main repository root; outside-a-repo, bare,
+  and submodule-interior layouts raise `UsageError` rather than mis-root.
+  `landing` decides whether work landed by **patch identity, never
+  reachability** — a rebased, squashed, or cherry-picked branch is recognised,
+  which no ancestry test manages — and a negative is `NotLandedWithinWindow`
+  carrying the scan it did, never a bare no. All git plumbing flows through
+  `query`/`query_bytes` here; three source-level gates in its tests hold the
+  line (one repo-root resolver, no reachability verdict in `src/`, no second
+  literal `git` invoker).
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<repo-name>/`, CLOUD-23),
   via `etcetera`; repo-name derived at runtime, never baked in (rule 1).
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
@@ -87,6 +93,16 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   harness-blind and fail-open. What varies per harness is the _channel_ a deny
   travels over, never the number: the exit-code adapter denies with `2`, the
   claude-code adapter with a `permissionDecision` document and exit `0`.
+- `markers.rs` — counted suppression markers (CLOUD-36): how many times policy
+  was waved through, and where. Tokens are config, never crate constants (rule
+  1); hits are pointer-only (`path:line` + marker id, rule 4) and `counts`
+  reports every configured marker including zero, so "none now" stays
+  distinguishable from "not measured". Reuses `rules::tree_files`.
+- `verbs.rs` — the mutating-verb table (CLOUD-36): which programs change the
+  world, config-driven (rule 1) and typed by `effect.rs`'s one §5 vocabulary
+  rather than a second severity axis. Each verb carries its own redirect for the
+  refusal contract. Table and lookup only — crossing it with the protected path
+  set is CLOUD-96's gate, and the sets are CLOUD-37's.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do.
@@ -107,10 +123,15 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
 
 ## Tests
 
-`crates/batten/tests/cli.rs` — the only integration suite: end-to-end over the
-_compiled_ binary (`CARGO_BIN_EXE_batten`), asserting exit codes and output
-shape consumers depend on. Prefer adding here over unit tests for anything
-behavioral (`.claude/rules/rust.md`). Non-Rust tests (`mise-tasks/*` scripts,
+`crates/batten/tests/cli.rs` — end-to-end over the _compiled_ binary
+(`CARGO_BIN_EXE_batten`), asserting exit codes and output shape consumers
+depend on. Prefer adding here over unit tests for anything behavioral
+(`.claude/rules/rust.md`).
+
+`crates/batten/tests/primitives.rs` — the CLOUD-9 core primitives over the
+_library_ surface, since they mint no subcommand and the fixture suite is their
+gate (Option A). Carries the hermetic git fixture builder and the keystone: a
+rebased-and-landed branch is merged though `--is-ancestor` says otherwise. Non-Rust tests (`mise-tasks/*` scripts,
 gates) live under `tests/*.bats`, run via `mise run test:bats`.
 
 ## Self-consumption
