@@ -53,6 +53,16 @@ local gate = new Mapping<String, Step> {
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
+  // The other half of the same non-negotiable: an adopted practice is justified
+  // on this repo's terms, not by who else does it (mem:prior-art-and-issue-
+  // hygiene). The task existed with its full decision table and bats suite and
+  // was wired to nothing, so the rule it enforces was prose and its green suite
+  // measured only itself — the shape CLOUD-242 and CLOUD-253 hit inside the
+  // library, here at the task layer (CLOUD-216). No glob, like batten-check:
+  // any tracked file can carry an appeal, so the scan judges the whole tree.
+  ["attribution-check"] {
+    check = "mise run attribution-check"
+  }
   // The checked-in memories are a graph navigated by mem: references, and the
   // reference tooling's own check is advisory (always exits 0) — so a memory
   // renamed without reference propagation, however it was renamed, dangles

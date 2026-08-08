@@ -15,6 +15,18 @@ setup() {
 	[ "$status" -eq 0 ]
 }
 
+@test "the gate is wired: hk.pkl declares a step that runs this task" {
+	# The defect this suite could not see (CLOUD-216): every case below passed
+	# while nothing invoked the task, so the suite measured itself and the rule
+	# stayed prose. Asserted on the step block rather than a bare grep, because
+	# the surrounding comment names the task too — a comment is not a call site.
+	run awk '/^  \["attribution-check"\] \{$/ { found = 1; next }
+	         found && /mise run attribution-check/ { print "wired"; exit }
+	         found && /^  \}$/ { exit }' hk.pkl
+	[ "$status" -eq 0 ]
+	[ "$output" = "wired" ]
+}
+
 @test "a tool pin naming its publisher is a coordinate, not an appeal" {
 	# A surveyed source is also a dependency we address by name. If these tripped
 	# the gate it would fire on every workflow and pin, and be turned off within a
