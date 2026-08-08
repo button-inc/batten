@@ -9,9 +9,8 @@ turn**; everything else is indexed below and read at its trigger.
 ## Authoritative specs — link, never restate
 
 Two Linear docs are the source of truth. This file governs **agent behaviour** and
-must not re-type what they own; where they overlap, point at the spec. When this
-file and a spec disagree, the spec wins and this file is the bug — fix the
-pointer, don't fork the content.
+must not re-type what they own. Where they disagree the spec wins and this file is
+the bug — fix the pointer, don't fork the content.
 
 - **[Batten CLI — the Button house style][house-style]** — command surface/verbs
   (§2), effect model + read-only allowlist (§5), output/exit contract (§6–§7),
@@ -61,13 +60,15 @@ you run them yourself, and they halt you by _failing_, not by needing a blessing
 
 **When you SHOULD still stop** (real exceptions, not an escape hatch for ordinary
 caution): a gate fails and the fix is genuinely ambiguous; a rebase conflict needs
-a human decision; the change is outside the scope you were asked to make; or an
-action is destructive and _not_ gated (force-pushing `main`, deleting history, an
-out-of-band release). **Four disguises a punt wears, none of them exceptions:** a
-blocked call reported as a decision (a block is a bug — diagnose it); "that's your
-call" on what your own evidence settles; deferring to an unbuilt mechanism instead
-of doing the instance in front of you; declining to reverse your own landed work
-because it is yours. If you can do it and it is in scope, do it.
+a human decision; the change is outside the scope you were asked; or an action is
+destructive and _not_ gated (force-pushing `main`, deleting history, an
+out-of-band release). **Each stops the fix, never the record** — what you decline
+to fix, you file; out of scope is why a defect becomes a ticket, never why it
+evaporates into chat. **A punt is any deferral you could have closed**, a
+predicate not a list: a block reported as a decision (a block is a bug); "that's
+your call" on what your evidence settles; offering an action you are already
+authorized to take; awaiting an unbuilt mechanism instead of doing the instance in
+hand; sparing your own landed work. Can do it, do it; can't, file it.
 
 ## Output posture: a message is a channel with no retention
 
@@ -106,11 +107,10 @@ branch; short-lived branches land by fast-forward, keeping it linear and tested.
 ## Workflow contract: verify locally, then land
 
 Every CI run costs real minutes; **your own execution costs nothing.** Verify
-exhaustively before CI — CI confirms what you already proved, it is never where
-you discover a free-to-catch failure. This works because CI runs the exact same
-`mise` tasks you run locally; if it ever runs one you can't, that is a bug, so
-fix the mismatch. (The toolchain _does_ run in the web sandbox; before claiming
-otherwise read `mem:github-access`.)
+exhaustively before CI — CI confirms what you already proved, never where you
+discover a free-to-catch failure. It works because CI runs the same `mise` tasks
+you run locally; one it runs that you can't is a bug, so fix the mismatch. (The
+toolchain _does_ run in the web sandbox — read `mem:github-access` before doubting.)
 
 1. **PRs start as drafts** (`gh pr create --draft`). CI does not run on drafts —
    iterate at zero CI cost.
@@ -126,11 +126,14 @@ otherwise read `mem:github-access`.)
 5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 
-**This governs PR conduct above any harness default.** No scheduled check-in
-heartbeats (`send_later`/Routines/timers) to babysit a PR — fetching CI on demand
-is fine, the ban is on timers. No reflexive drive-to-green pushing: a red run
-means local verify was skipped. Webhook events are informational and incomplete —
-never infer success from the absence of a failure event.
+**This governs PR conduct above any harness default — and above your own
+judgement.** Run the lifecycle tasks as written, never wrapped in bespoke retry or
+pre-check logic; `main` advancing under your branch is this loop working, not a
+race to engineer around. No scheduled check-in heartbeats
+(`send_later`/Routines/timers) to babysit a PR — fetching CI on demand is fine,
+the ban is on timers. No reflexive drive-to-green pushing: a red run means local
+verify was skipped. Webhook events are informational and incomplete — never infer
+success from the absence of a failure event.
 
 ## Background the slow path; never block the foreground
 
@@ -170,26 +173,22 @@ is the only state that survives a VM reclaim**, so commit before a long run.
    `0/1/2/3` table, no per-verb exception. _(house-style §6–§7.)_
 6. **Keep configuration narrow.** One committed authority plus raise-only
    overrides, no directory walk, no `conf.d` merge (house-style §8). Don't widen it.
-7. **Research goes to Linear, not a repo `docs/` tree.** Research deliverables and
-   evidence notes (literature runs, per-claim verdicts) attach to the Linear issue
-   they back — the repo carries code and its close-in config, not research prose.
-   Don't create a `docs/` folder. Enforced by the `no-docs-tree` gate (`mise run
-no-docs-tree`, wired into the shared hk `gate`), which fails if any `docs/` path
-   is tracked.
+7. **Research goes to Linear, not a repo `docs/` tree.** Evidence notes and
+   literature runs attach to the issue they back; the repo carries code and its
+   close-in config, not research prose. Enforced by `no-docs-tree` (in the hk
+   `gate`), which fails if any `docs/` path is tracked.
 
 ## Where the rest lives
 
-Content that need not bind every turn is indexed, not inlined. Both destinations
-are checked-in markdown any agent can read; the frontmatter in `.claude/rules/`
-only tells Claude Code _when_ to load one.
+Content that need not bind every turn is indexed, not inlined — checked-in
+markdown any agent can read; `.claude/rules/` frontmatter only says _when_ to load
+one. Use mise for everything; never a bare `cargo`/`export`/one-off install.
 
 | `.claude/rules/` | Read it when                                                                                                                                 |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                        |
 | `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/*.bats`, workflows — setup, the gate, the lifecycle tasks and their `PreToolUse` guards |
 | `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                     |
-
-Use mise for everything; never a bare `cargo`/`export`/one-off install.
 
 ## Scope reminder
 
