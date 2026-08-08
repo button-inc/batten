@@ -83,8 +83,8 @@ noting"), self-indicting every time. Boundary reports, permission-seeking on an
 authorized step (clarifying an _ambiguous_ action is fine), compliance
 reassurance, restating a rule you just followed, sycophancy and narrating a
 visible result fail the same test. **It is a predicate, not a list**: enumeration
-is why the previous version did not hold, and no gate is possible — hooks see
-tool calls, not prose (CLOUD-200).
+is why the previous version did not hold. CLOUD-200's blindness was
+`PreToolUse`-only: `stop-guard` now kicks a hedged flag once (CLOUD-248).
 
 ## The board: move the issue as you move the work
 

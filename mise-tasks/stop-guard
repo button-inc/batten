@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+#MISE description="Stop hook body: hand the turn one bounded re-prompt when its final message carries the output-posture tell AGENTS.md names"
+#
+# Wired from .claude/settings.json. Thin by design — the decision lives in
+# `stop-posture-check`, where it is unit-tested by `tests/stop-posture-check.bats`.
+#
+# **Exactly once, with no state file.** The Stop payload carries
+# `stop_hook_active`, false on the first Stop of a turn and true on the invocation
+# caused by a previous Stop continuation. Returning early when it is true bounds
+# this to one kick per turn, deterministically. Measured on two live probes: two
+# invocations, false then true, then the turn ended. The launcher's own Stop hook
+# (~/.claude/stop-hook-git-check.sh) uses the identical guard, so this is the
+# established pattern here rather than a new invention. The harness also caps
+# consecutive continuations at 8, which is a backstop, not the mechanism.
+#
+# **Why `additionalContext` and not exit 2.** Three channels reach the model and
+# all three were verified by probe. `additionalContext` is documented as non-error
+# feedback that continues the conversation, and the transcript labels it "Stop hook
+# feedback" with no hook-error notice. That matters twice over: the launcher hook
+# already owns the exit-2 channel at this boundary, so two hooks both exiting 2
+# would stack error notices on one turn; and CLOUD-97 and CLOUD-219 each recorded
+# the same decision independently — "detection and self-clearing, never a hard
+# deny", because pausing mid-task is legitimate and blocking done punishes correct
+# behaviour. One bounded nudge is not a deny: the turn ends after it either way.
+#
+# The check is invoked by path rather than through `mise run`, the way
+# `graph-check` calls `ready-lint`, because this fires at every turn end and a
+# mise startup per turn is pure latency. Measured: ~28ms by path.
+#
+# Fails OPEN on anything it cannot read or parse, and on BATTEN_STOP_GUARD_BYPASS.
+# A malformed stdout on exit 0 also fails open harness-side (verified by probe),
+# so the failure modes agree in both directions.
+set -uo pipefail
+
+[ -n "${BATTEN_STOP_GUARD_BYPASS:-}" ] && exit 0
+
+raw=$(cat) || exit 0
+
+# The recursion bound, before any work. `// empty` rather than a bare read: a
+# payload jq cannot parse must fall through to allow, and comparing the literal
+# string "true" makes an absent or garbage field non-blocking by construction —
+# the inverse spelling (`!= "true" && proceed`) is what let a proposed version run
+# its predicate on unparseable stdin.
+active=$(printf '%s' "$raw" | jq -r '.stop_hook_active // empty' 2>/dev/null) || exit 0
+[ "$active" = "true" ] && exit 0
+
+# The turn's final response text, handed over directly — so this hook never opens
+# `transcript_path` and no session content is read beyond the message already
+# being judged.
+msg=$(printf '%s' "$raw" | jq -r '.last_assistant_message // empty' 2>/dev/null) || exit 0
+[ -n "$msg" ] || exit 0
+
+check="$(dirname -- "${BASH_SOURCE[0]}")/stop-posture-check"
+[ -x "$check" ] || exit 0
+
+reason=$(printf '%s' "$msg" | "$check") && exit 0
+[ -n "$reason" ] || exit 0
+
+jq -n --arg r "$reason" '{
+  hookSpecificOutput: {
+    hookEventName: "Stop",
+    additionalContext: $r
+  }
+}'
