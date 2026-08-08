@@ -204,7 +204,11 @@ fn a_rebased_and_landed_branch_is_merged_though_ancestry_says_otherwise() {
     assert!(landing.unlanded().is_empty());
     assert_eq!(landing.commits.len(), 1);
     assert_eq!(
-        landing.commits[0].evidence.as_ref().unwrap().target_commit(),
+        landing.commits[0]
+            .evidence
+            .as_ref()
+            .unwrap()
+            .target_commit(),
         Some(landed_as.as_str()),
         "the verdict names the commit on main that carries the change"
     );
@@ -342,6 +346,54 @@ fn a_branch_that_changes_nothing_has_nothing_to_land() {
 }
 
 #[test]
+fn a_branch_the_target_already_contains_has_nothing_to_land() {
+    // The fast-forward shape: `main` was advanced to the branch, so nothing on
+    // it is outstanding. `NothingToLand` rather than `Landed` — there is no
+    // *unlanded* content to have evidence about — and `is_landed()` accepts it,
+    // which is why a consumer must not match on `Landed` alone.
+    let repo = seeded("landed-fast-forward");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.write("f.txt", "the work\n");
+    repo.commit("feat: the work");
+    repo.git(&["checkout", "-q", "main"]);
+    repo.git(&["merge", "-q", "--ff-only", "feature"]);
+
+    let landing = repo.landing("main", "feature");
+    assert_eq!(landing.verdict, Verdict::NothingToLand);
+    assert!(landing.is_landed());
+    assert!(landing.commits.is_empty());
+    assert!(landing.unlanded().is_empty());
+}
+
+#[test]
+fn cumulative_evidence_means_one_commit_over_there_not_a_squash_ritual() {
+    // The field is "the branch's whole change is a single commit on the
+    // target", which a one-commit branch satisfies trivially. Pinned because a
+    // consumer reading it as "someone ran a squash merge" would be wrong here,
+    // and the per-commit evidence is what actually answers that.
+    let repo = seeded("landed-cumulative-single");
+    repo.git(&["checkout", "-q", "-b", "feature"]);
+    repo.write("f.txt", "the work\n");
+    let original = repo.commit("feat: the work");
+    repo.git(&["checkout", "-q", "main"]);
+    let landed_as = repo.replay(&original);
+
+    let landing = repo.landing("main", "feature");
+    assert_eq!(landing.verdict, Verdict::Landed);
+    assert_eq!(
+        landing
+            .cumulative_evidence
+            .as_ref()
+            .and_then(Evidence::target_commit),
+        Some(landed_as.as_str())
+    );
+    assert!(
+        landing.commits[0].evidence.is_some(),
+        "the commit survived intact, which is the question `evidence` answers"
+    );
+}
+
+#[test]
 fn a_change_and_its_revert_leave_nothing_to_land() {
     let repo = seeded("landed-reverted");
     repo.git(&["checkout", "-q", "-b", "feature"]);
@@ -376,7 +428,11 @@ fn work_that_landed_through_a_merge_commit_is_still_merged() {
     let landing = repo.landing("main", "feature");
     assert_eq!(landing.verdict, Verdict::Landed);
     assert_eq!(
-        landing.commits[0].evidence.as_ref().unwrap().target_commit(),
+        landing.commits[0]
+            .evidence
+            .as_ref()
+            .unwrap()
+            .target_commit(),
         Some(on_pr.as_str()),
         "the evidence is the side commit, not the merge"
     );
@@ -564,7 +620,10 @@ fn suppression_marker_counts_come_from_config_not_from_the_crate() {
 
     repo.write(
         "src/a.txt",
-        &format!("clean\n{} first\nclean\n{} second\n", waiver.token, waiver.token),
+        &format!(
+            "clean\n{} first\nclean\n{} second\n",
+            waiver.token, waiver.token
+        ),
     );
     repo.write("src/b.txt", &format!("{} here\n", scoped.token));
     // Outside the scoped marker's glob: the whole-tree marker sees it, the

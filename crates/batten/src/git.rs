@@ -337,8 +337,14 @@ pub struct Landing {
     /// The patch identity of the whole branch; `None` when its cumulative diff
     /// is empty.
     pub cumulative: Option<PatchId>,
-    /// Branch-level proof: `Some` when the cumulative change landed as one
-    /// commit on the target (a squash merge).
+    /// Branch-level proof: `Some` when the branch's whole change is on the
+    /// target as a *single* commit.
+    ///
+    /// That is the squash-merge shape, and it is also trivially true of a
+    /// one-commit branch that landed intact — so this is "the whole change is
+    /// one commit over there", not "someone ran a squash merge". A consumer
+    /// that wants to know whether the individual commits survived should read
+    /// [`CommitLanding::evidence`], which answers exactly that.
     pub cumulative_evidence: Option<Evidence>,
     /// What was examined to reach the verdict.
     pub scanned: Scan,
@@ -537,8 +543,12 @@ fn command(dir: &Path) -> Command {
 /// an internal error (exit `3`).
 pub fn query(dir: &Path, args: &[&str], refusal: &str) -> Result<String> {
     let bytes = query_bytes(dir, args, refusal)?;
-    let stdout = String::from_utf8(bytes)
-        .map_err(|_| UsageError::raise(format!("`git {}` output is not valid UTF-8", args.join(" "))))?;
+    let stdout = String::from_utf8(bytes).map_err(|_| {
+        UsageError::raise(format!(
+            "`git {}` output is not valid UTF-8",
+            args.join(" ")
+        ))
+    })?;
     Ok(stdout.trim_end_matches(['\r', '\n']).to_owned())
 }
 
@@ -1118,7 +1128,10 @@ mod tests {
     #[test]
     fn a_patch_id_is_hex_of_a_hash_length() {
         assert!(PatchId::parse(&"a".repeat(40)).is_ok(), "SHA-1 repository");
-        assert!(PatchId::parse(&"0".repeat(64)).is_ok(), "SHA-256 repository");
+        assert!(
+            PatchId::parse(&"0".repeat(64)).is_ok(),
+            "SHA-256 repository"
+        );
         // A parsing slip must never manufacture an equality between two
         // truncated or non-hex ids.
         assert!(PatchId::parse("").is_err());
@@ -1159,7 +1172,11 @@ mod tests {
             "a negative names the window it searched, never a proven absence"
         );
         assert_eq!(
-            verdict(&[landed(Some(proof.clone())), landed(None)], Some(&id), None),
+            verdict(
+                &[landed(Some(proof.clone())), landed(None)],
+                Some(&id),
+                None
+            ),
             Verdict::PartiallyLanded
         );
         // The squash path: no commit matched individually, but the branch's
