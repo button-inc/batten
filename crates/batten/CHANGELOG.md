@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.23](https://github.com/button-inc/batten/compare/v0.0.22...v0.0.23) - 2026-08-08
+
+### Added
+
+- [**breaking**] one exit table — 2 is the policy verdict, so hook has nothing to invert
+
+### Other
+
+- keep the always-loaded exit-contract rule inside the context budget
+
 ## [0.0.22](https://github.com/button-inc/batten/compare/v0.0.21...v0.0.22) - 2026-08-08
 
 ### Added
