@@ -13,15 +13,27 @@ file itself for the "why", this is only the "where":
 - `main.rs` — binary boundary: parse → `lib::run` → exit status. Only place
   `print*!`/stderr writes are allowed.
 - `lib.rs` — library entry point (`run`), declares the module tree.
-- `cli.rs` — the `clap` command surface (`Cli`, `Command`, `ConfigCommand`,
-  `SpecFormat`). Verbs today: `check`, `enforce`, `config show`, `spec`. Adding
-  a verb requires an `effect.rs` table entry in the same change (enforced by a
-  completeness test in `spec.rs`).
-- `effect.rs` — the house-style §5 effect table (`read`/`write`/`destructive`/
-  `unclassified`), keyed by full command path. Absence = `Ask`, never `Read`.
-- `spec.rs` — house-style §11: introspects the live `clap::Command` tree +
-  `effect.rs` at runtime into byte-stable JSON (`batten spec`); completions/docs
-  derive from this, never hand-duplicated.
+- `surface.rs` — house-style §11, CLOUD-27: the command tree declared **once**,
+  as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each
+  flag's env equivalent, so §8 precedence is inspectable data). `command()`
+  builds the live `clap::Command` from it, and `effect_for` resolves the §5
+  effect model off the same rows, so the parser, the emitted spec, the derived
+  allowlist and the completions cannot disagree. Absence = `Ask`, never `Read`.
+- `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the
+  typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an
+  exhaustive `match` rather than a lookup on strings. Verbs today: `check`,
+  `enforce`, `config show`, `spec`, `generate completions`, `hook`,
+  `receipt record|status`. Adding a verb is a `surface.rs` row plus the arm
+  here; a row without an arm fails `cli.rs`'s `every_leaf_verb_dispatches`.
+- `effect.rs` — the house-style §5 effect _vocabulary_ (`read`/`write`/
+  `destructive`/`unclassified`/`ask`) and its stable tokens. The classification
+  itself lives on each `surface.rs` row, not in a second table keyed by the
+  same paths.
+- `spec.rs` — house-style §11: introspects the live `clap::Command` tree plus
+  the `surface.rs` effect rows at runtime into byte-stable JSON (`batten spec`),
+  and derives the read-only allowlist from the same walk. Completions derive
+  from this too — `batten generate completions` emits them on stdout and
+  `completions-check` diffs the committed copy byte-for-byte (DoR §4).
 - `exit.rs` — the `ExitCode` contract (stable numeric values); branch on named
   variants, never integer literals. One table, no per-verb exception (CLOUD-226):
   `0` clean/allow, `1` usage, `2` the policy verdict — a `check` violation and a

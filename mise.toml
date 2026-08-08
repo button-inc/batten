@@ -100,6 +100,20 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # working tree's engine and config together — the pair that ships.
 run = "cargo run --quiet -p batten -- check"
 
+[tasks.completions]
+description = "Regenerate the committed shell completions from the command surface"
+# The binary emits on stdout only, so `generate` stays a read-effect verb (§5)
+# and the redirect that refreshes the committed artifact is here, in the caller.
+# `cargo run` rather than an installed binary, so the artifact always tracks the
+# working tree's surface — the pair `completions-check` then diffs.
+shell = "bash -c"
+run = '''
+for shell in bash zsh fish; do
+  cargo run --quiet -p batten -- generate completions --shell "$shell" >"completions/batten.$shell"
+done
+echo "completions: regenerated for bash, zsh, fish"
+'''
+
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
 # Same tool + severity CI enforces. GH_TOKEN (set in [env]) enables the online

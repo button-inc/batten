@@ -12,7 +12,8 @@
 use clap::{Arg, ArgAction, Command};
 use serde::Serialize;
 
-use crate::effect::{Effect, effect_for};
+use crate::effect::Effect;
+use crate::surface::effect_for;
 
 /// A single flag or positional argument in the emitted spec.
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -148,13 +149,11 @@ fn collect_read_only(node: &CommandSpec, root_name: &str, out: &mut Vec<String>)
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use clap::CommandFactory;
-
     use super::*;
-    use crate::cli::Cli;
+    use crate::surface;
 
     fn spec() -> CommandSpec {
-        describe(&Cli::command())
+        describe(&surface::command())
     }
 
     /// Collect every command path in the tree whose effect resolves to `ask`
@@ -206,6 +205,8 @@ mod tests {
                 "check".to_owned(),
                 "config".to_owned(),
                 "config show".to_owned(),
+                "generate".to_owned(),
+                "generate completions".to_owned(),
                 "receipt status".to_owned(),
                 "spec".to_owned(),
             ]

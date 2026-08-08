@@ -9,7 +9,6 @@ use std::io::{self, Write};
 use std::process::ExitCode;
 
 use anyhow::Result;
-use clap::Parser;
 
 fn main() -> ExitCode {
     match real_main() {
@@ -41,7 +40,7 @@ fn real_main() -> Result<batten::ExitCode> {
     // is the policy verdict. Render the message clap already composed, then map
     // the outcome onto the one table — help and version are a successful answer
     // on stdout, everything else is a usage error.
-    let cli = match batten::Cli::try_parse() {
+    let cli = match batten::cli::try_parse() {
         Ok(cli) => cli,
         Err(err) => {
             let _ = err.print();

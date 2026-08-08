@@ -1,27 +1,28 @@
-//! The effect model (house-style §5).
+//! The effect vocabulary (house-style §5).
 //!
 //! Every command self-declares an effect — `read`, `write`, or `destructive` —
-//! and the classification lives in **one table keyed by the full command path**,
-//! not scattered across the command definitions, because a safety classification
-//! is far easier to review as a single list.
+//! and the classification is carried on the command's own row in
+//! [`crate::surface::SURFACE`], so a safety classification is reviewed as part
+//! of the one list that declares the surface rather than in a second table
+//! keyed by the same paths.
 //!
-//! Two invariants make the model fail-safe:
+//! This module owns the *vocabulary*; [`crate::surface::effect_for`] owns the
+//! resolution, and the agent read-only allowlist is derived from the same walk
+//! (`filter(effect == read)`). There is never a second, hand-maintained list.
 //!
-//! * **Absence means "ask", never "safe".** A path missing from the table is
-//!   unknown ([`Effect::Ask`]); the conservative reading is to prompt/deny, never
-//!   to silently treat it as [`Effect::Read`].
+//! Two invariants make the model fail-safe, and both are enforced where a
+//! command is declared:
+//!
+//! * **Absence means "ask", never "safe".** A path with no row is unknown
+//!   ([`Effect::Ask`]); the conservative reading is to prompt/deny, never to
+//!   silently treat it as [`Effect::Read`].
 //! * **User-supplied code is unclassifiable.** A command that runs an arbitrary
 //!   passed command is listed [`Effect::Unclassified`] with a stated reason, not
 //!   guessed.
-//!
-//! The agent read-only allowlist is *derived* from this table
-//! (`filter(effect == read)`); there is never a second, hand-maintained list.
-
-use std::collections::BTreeMap;
 
 use serde::{Serialize, Serializer};
 
-/// The declared effect of a command, keyed by its full path in [`table`].
+/// The declared effect of a command, carried on its [`crate::surface`] row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
     /// Inspection only; idempotent. Not running it changes nothing.
@@ -65,71 +66,9 @@ impl Serialize for Effect {
     }
 }
 
-/// The single classification table, keyed by full command path (root-relative,
-/// so `config show`, never `batten config show`). This is the one reviewed list
-/// the emitted spec and the derived allowlist both read from; a command grows an
-/// entry here in the same change that adds it to the surface.
-fn table() -> BTreeMap<&'static str, Effect> {
-    BTreeMap::from([
-        // `check` only inspects the tree and reports findings; it mutates
-        // nothing. It refuses to run any rule kind that spawns a process
-        // (`rules::run_static`), which is what keeps this `read` honest and
-        // this path off the process-spawning surface.
-        ("check", Effect::Read),
-        ("config", Effect::Read),
-        // `enforce` runs rule kinds that execute commands declared in
-        // `batten.toml`. Per §5 a command that runs user-supplied code is
-        // listed unclassified with a stated reason, never guessed — so it is
-        // excluded from the derived read-only allowlist by construction.
-        ("enforce", Effect::Unclassified),
-        ("config show", Effect::Read),
-        ("spec", Effect::Read),
-        // `hook` adjudicates another tool's call: its own execution only reads
-        // stdin and config, but its *decision* mediates writes, so it is listed
-        // unclassified rather than allowed to leak into the derived read-only
-        // allowlist (CLOUD-202).
-        ("hook", Effect::Unclassified),
-        // The `receipt` noun only dispatches, but its subtree carries a write
-        // verb; classifying it `read` would put a write-bearing subtree onto
-        // the derived allowlist for any consumer that treats entries as
-        // prefixes. Same fail-safe posture as `hook`: listed with a reason,
-        // never allowed to leak (CLOUD-203).
-        ("receipt", Effect::Unclassified),
-        // Creates state the caller can recreate by re-running the check.
-        ("receipt record", Effect::Write),
-        // Inspection only: fixed read-only git queries (`rev-parse`) plus a
-        // state-dir read. A `read` verb may run a fixed VCS query; what it must
-        // never reach is user-supplied code (CLOUD-170's invariant), and no
-        // configured command is reachable from this path.
-        ("receipt status", Effect::Read),
-    ])
-}
-
-/// Resolve the declared effect for a full command path.
-///
-/// A path absent from [`table`] resolves to [`Effect::Ask`] — the conservative
-/// reading required by §5 — never silently to [`Effect::Read`].
-#[must_use]
-pub fn effect_for(path: &str) -> Effect {
-    table().get(path).copied().unwrap_or(Effect::Ask)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn known_path_resolves_to_its_declared_effect() {
-        assert_eq!(effect_for("spec"), Effect::Read);
-    }
-
-    #[test]
-    fn unknown_path_is_ask_never_read() {
-        // The load-bearing fail-safe: an unclassified path must not be read-only.
-        let effect = effect_for("some-command-not-in-the-table");
-        assert_eq!(effect, Effect::Ask);
-        assert!(!effect.is_read_only());
-    }
 
     #[test]
     fn only_read_is_read_only() {

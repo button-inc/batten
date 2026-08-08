@@ -22,14 +22,14 @@ pub mod rules;
 pub mod severity;
 pub mod spec;
 pub mod state;
+pub mod surface;
 
 use std::io::{Read, Write};
 use std::path::Path;
 
 use anyhow::Result;
-use clap::CommandFactory;
 
-pub use cli::{Cli, Command, ConfigCommand, ReceiptCommand, SpecFormat};
+pub use cli::{Cli, Command, ConfigCommand, GenerateCommand, ReceiptCommand, SpecFormat};
 pub use config::Config;
 pub use effect::Effect;
 pub use error::{Denial, UsageError};
@@ -71,6 +71,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Some(Command::Enforce { json }) => run_rules(out, overrides, rules::run_all, json),
         Some(Command::Config { command }) => run_config(&command, overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
+        Some(Command::Generate { command }) => Ok(run_generate(&command, out)),
         Some(Command::Hook { harness }) => run_hook(harness, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
@@ -235,7 +236,7 @@ fn run_config(
 }
 
 fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {
-    let described = spec::describe(&Cli::command());
+    let described = spec::describe(&surface::command());
     match format {
         SpecFormat::Json => {
             let json = spec::to_json(&described)?;
@@ -243,4 +244,21 @@ fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::Success)
+}
+
+/// Emit an artifact derived from the command surface, on stdout.
+///
+/// Stdout-only is what makes `generate`'s `read` effect structurally honest
+/// (§5): the binary writes no file, so refreshing a committed artifact is the
+/// caller's redirect (`mise run completions`) and never a side effect of the
+/// verb. The completions are generated from the same [`surface::command`] tree
+/// the parser is built from, so a committed script cannot describe a surface the
+/// binary does not have — which is the property `completions-check` gates.
+fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> ExitCode {
+    match command {
+        GenerateCommand::Completions { shell } => {
+            clap_complete::generate(*shell, &mut surface::command(), "batten", out);
+            ExitCode::Success
+        }
+    }
 }
