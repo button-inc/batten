@@ -30,6 +30,29 @@ min_batten_version = "0.0.0"
 # config and which layer set each key.
 strictness = "standard"
 
+# Whether a "warn"-severity finding is promoted to a violation. Absent means
+# false: a warn finding is reported and the run still exits 0. Set it and any
+# warn finding from `batten check` / `batten enforce` exits 2, the same policy
+# verdict a "deny" finding returns — a promotion changes which findings block,
+# never which code a blocking run reports.
+#
+# One setting, resolved once, exposed three ways. Overrides, highest precedence
+# first:
+#
+#   --fail-on-warning              the flag (no negative form: it can only turn
+#                                  the setting on, never off)
+#   BATTEN_FAIL_ON_WARNING=true    the env var; "true"/"false" only, and an
+#                                  empty value means unset, not invalid
+#   batten.local.toml              the git-ignored local file
+#
+# Policy-bearing, so §8's raise-only rule governs it: once this file commits
+# `true`, no lower-precedence source can turn it back off — that is refused with
+# exit 1 rather than applied. Every consumer reads the resolved value; no verb
+# carries a promotion knob of its own, and `batten exec` is deliberately not a
+# consumer at all (an exec output match always fails, because a warn-but-pass
+# match would be invisible to an agent reading only the exit code).
+fail_on_warning = false
+
 # The three path sets policy is defined over. They overlap in practice but are
 # three independent evaluators: a path's membership in each is computed from that
 # key's list alone, and no membership is ever derived from another set's.
@@ -57,7 +80,8 @@ unlanded = []
 # Two per-rule keys are deliberately separate axes (cargo-deny's model):
 #
 #   severity  what a match does — "deny" fails the run (exit 2), "warn" reports
-#             the finding without failing it, "allow" switches the rule off.
+#             the finding without failing it (unless fail_on_warning above
+#             promotes it), "allow" switches the rule off.
 #             Required on every rule: the default is stated explicitly here,
 #             with no implicit fallback — omitting it is refused with exit 1.
 #   scope     where the rule looks — "tree" is the whole working tree (the

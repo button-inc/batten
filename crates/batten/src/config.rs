@@ -76,6 +76,13 @@ pub struct Config {
     /// override may only raise it (§8).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strictness: Option<Strictness>,
+    /// Whether a `warn`-severity finding is promoted to a violation (CLOUD-49).
+    /// Absent means "this file does not speak to the setting", which is what
+    /// lets [`crate::resolve`] attribute the effective value to the layer that
+    /// actually set it. Policy-bearing, so an override may only turn it *on*
+    /// (§8): `false` over a committed `true` is refused, never applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_on_warning: Option<bool>,
     /// The declarative rules run against the repository. Absent or empty means
     /// "no rules configured" and nothing is reported. Which of these a given
     /// verb admits is the §5 effect split: `check` runs only non-spawning kinds
@@ -198,6 +205,32 @@ mod tests {
     fn unknown_strictness_value_is_a_usage_error() {
         let err = parse("version = 1\nstrictness = \"whatever\"\n", "test").unwrap_err();
         assert!(is_usage_error(&err));
+    }
+
+    #[test]
+    fn fail_on_warning_round_trips_through_toml() {
+        // The config surface of the one promotion setting (CLOUD-49). Absent is
+        // distinct from `false`: only the former lets a later layer claim the key.
+        let config = parse("version = 1\nfail_on_warning = true\n", "test").unwrap();
+        assert_eq!(config.fail_on_warning, Some(true));
+        let off = parse("version = 1\nfail_on_warning = false\n", "test").unwrap();
+        assert_eq!(off.fail_on_warning, Some(false));
+        assert_eq!(parse("version = 1\n", "test").unwrap().fail_on_warning, None);
+    }
+
+    #[test]
+    fn a_non_boolean_fail_on_warning_is_a_usage_error() {
+        // The key's vocabulary is TOML's own boolean literals; a string that
+        // merely looks like one is bad input, not a value to coerce. This is the
+        // same typing discipline `version = "1"` is held to above.
+        for value in ["\"true\"", "1", "\"yes\""] {
+            let err = parse(&format!("version = 1\nfail_on_warning = {value}\n"), "test")
+                .unwrap_err();
+            assert!(
+                is_usage_error(&err),
+                "fail_on_warning = {value} must be refused"
+            );
+        }
     }
 
     #[test]

@@ -106,6 +106,15 @@ pub const SETTINGS: &[SettingSpec] = &[
         long_flag: Some("--strictness"),
     },
     SettingSpec {
+        // The one promotion setting (CLOUD-49), exposed three ways that resolve
+        // to a single value. Every consumer reads the resolved value; no verb
+        // re-declares a promotion knob of its own, and `batten exec` is
+        // deliberately not a consumer at all (CLOUD-117).
+        key: "fail_on_warning",
+        env: Some("BATTEN_FAIL_ON_WARNING"),
+        long_flag: Some("--fail-on-warning"),
+    },
+    SettingSpec {
         // Rules layer additively: the local file may add a rule, never redefine
         // or remove a committed one. There is no env or flag surface — a policy
         // predicate belongs in a reviewable file, not an ambient variable.
@@ -135,6 +144,10 @@ fn setting(key: &str) -> &'static SettingSpec {
 pub struct Overrides {
     /// `--strictness`, when passed.
     pub strictness: Option<Strictness>,
+    /// `--fail-on-warning`, when passed. A bare boolean flag has no "off" form,
+    /// so this layer is raise-only by construction: `true` raises, absent says
+    /// nothing and lets a lower layer keep the key.
+    pub fail_on_warning: bool,
 }
 
 /// The effective configuration, plus the layer that won each key.
@@ -151,6 +164,10 @@ pub struct Resolved {
     pub min_batten_version: Option<String>,
     /// The effective strictness, after the raise-only clamp.
     pub strictness: Strictness,
+    /// Whether a `warn`-severity finding is promoted to a violation, after the
+    /// raise-only clamp (CLOUD-49). The checks/advisory pipeline reads this
+    /// resolved value; it is the only promotion setting there is.
+    pub fail_on_warning: bool,
     /// The effective rule set: the committed rules plus any the local file adds.
     #[serde(rename = "rule", skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<Rule>,
@@ -166,19 +183,33 @@ struct Layered<T> {
     source: Source,
 }
 
-impl Layered<Strictness> {
+impl<T: Ord + Copy> Layered<T> {
     /// Apply a candidate from a higher layer under the raise-only clamp.
     ///
     /// Tightening (or restating) is accepted and re-attributed to the new layer;
-    /// weakening is refused, naming both layers and both values so the operator
-    /// can see exactly which file to fix.
-    fn raise(self, candidate: Strictness, source: Source, origin: &str) -> Result<Self> {
+    /// weakening is refused, naming the key, both layers, and both values so the
+    /// operator can see exactly which file to fix.
+    ///
+    /// Generic over the key's type because the clamp *is* the ordering: every
+    /// policy-bearing key resolves to a value where "tighten" means `candidate >=
+    /// current`, whether that ordering is [`Strictness`]'s three ranks or
+    /// `false < true`. One implementation means a second key cannot acquire a
+    /// subtly different notion of weakening — `render` supplies the key's own
+    /// token vocabulary for the message, and nothing else varies.
+    fn raise(
+        self,
+        candidate: T,
+        source: Source,
+        origin: &str,
+        key: &str,
+        render: fn(T) -> String,
+    ) -> Result<Self> {
         if candidate < self.value {
             return Err(UsageError::raise(format!(
-                "strictness: {origin} would weaken policy ({} → {}); overrides may only tighten, \
+                "{key}: {origin} would weaken policy ({} → {}); overrides may only tighten, \
                  never weaken a gate (§8)",
-                token(self.value),
-                token(candidate),
+                render(self.value),
+                render(candidate),
             )));
         }
         Ok(Layered {
@@ -196,6 +227,29 @@ fn token(strictness: Strictness) -> String {
     strictness
         .to_possible_value()
         .map_or_else(|| "unknown".to_owned(), |v| v.get_name().to_owned())
+}
+
+/// The token a boolean key is written as in config, env, and messages.
+///
+/// TOML's own boolean literals, so the `batten.toml` key, the env var, and a
+/// refusal message all speak one vocabulary. Nothing else parses: widening the
+/// accepted set later stays backward-compatible, narrowing it would not.
+fn bool_token(value: bool) -> String {
+    if value { "true" } else { "false" }.to_owned()
+}
+
+/// Parse a boolean from an override's textual value, accepting exactly the
+/// tokens [`bool_token`] emits.
+fn parse_bool(raw: &str, origin: &str, key: &str) -> Result<bool> {
+    match raw {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(UsageError::raise(format!(
+            "{key}: {origin} has unknown value {raw:?}; expected one of {}, {}",
+            bool_token(false),
+            bool_token(true),
+        ))),
+    }
 }
 
 /// Parse a [`Strictness`] from an override's textual value, via the same
@@ -255,6 +309,19 @@ pub fn resolve_with_env(
         };
     }
 
+    // The promotion setting layers by the identical chain and the identical
+    // clamp; `false < true` is the ordering "tighten" is defined over.
+    let mut fail_on_warning = Layered {
+        value: false,
+        source: Source::Default,
+    };
+    if let Some(value) = repo.fail_on_warning {
+        fail_on_warning = Layered {
+            value,
+            source: Source::RepoConfig,
+        };
+    }
+
     let mut rules = repo.rules.clone();
     let mut rules_source = if rules.is_empty() {
         Source::Default
@@ -280,7 +347,19 @@ pub fn resolve_with_env(
             )));
         }
         if let Some(value) = local.strictness {
-            strictness = strictness.raise(value, Source::LocalFile, LOCAL_CONFIG_FILE)?;
+            strictness =
+                strictness.raise(value, Source::LocalFile, LOCAL_CONFIG_FILE, "strictness", token)?;
+        }
+        if let Some(value) = local.fail_on_warning {
+            // The raise-only clause this issue's acceptance names directly: a
+            // committed `on` cannot be turned off by an uncommitted file.
+            fail_on_warning = fail_on_warning.raise(
+                value,
+                Source::LocalFile,
+                LOCAL_CONFIG_FILE,
+                "fail_on_warning",
+                bool_token,
+            )?;
         }
         for rule in local.rules {
             if rules.iter().any(|committed| committed.id == rule.id) {
@@ -310,7 +389,17 @@ pub fn resolve_with_env(
             let raw = raw.trim();
             if !raw.is_empty() {
                 let value = parse_strictness(raw, name)?;
-                strictness = strictness.raise(value, Source::Env, name)?;
+                strictness = strictness.raise(value, Source::Env, name, "strictness", token)?;
+            }
+        }
+    }
+    if let Some(name) = setting("fail_on_warning").env {
+        if let Some(raw) = env(name) {
+            let raw = raw.trim();
+            if !raw.is_empty() {
+                let value = parse_bool(raw, name, "fail_on_warning")?;
+                fail_on_warning =
+                    fail_on_warning.raise(value, Source::Env, name, "fail_on_warning", bool_token)?;
             }
         }
     }
@@ -319,15 +408,31 @@ pub fn resolve_with_env(
     // flag may tighten a gate for one run, never disable one for it.
     if let Some(value) = overrides.strictness {
         let flag = setting("strictness").long_flag.unwrap_or("--strictness");
-        strictness = strictness.raise(value, Source::Flag, flag)?;
+        strictness = strictness.raise(value, Source::Flag, flag, "strictness", token)?;
+    }
+    if overrides.fail_on_warning {
+        // Only the raising direction exists here: a bare boolean flag cannot
+        // express "off", so the clamp has nothing to refuse. Routed through
+        // `raise` anyway so the attribution to `flag` follows the same path as
+        // every other layer rather than a bespoke assignment.
+        let flag = setting("fail_on_warning")
+            .long_flag
+            .unwrap_or("--fail-on-warning");
+        fail_on_warning =
+            fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
 
     Ok(Resolved {
         version: repo.version,
         min_batten_version: repo.min_batten_version,
         strictness: strictness.value,
+        fail_on_warning: fail_on_warning.value,
         rules,
-        sources: BTreeMap::from([("strictness", strictness.source), ("rule", rules_source)]),
+        sources: BTreeMap::from([
+            ("strictness", strictness.source),
+            ("fail_on_warning", fail_on_warning.source),
+            ("rule", rules_source),
+        ]),
     })
 }
 
@@ -547,6 +652,7 @@ mod tests {
             &dir,
             Overrides {
                 strictness: Some(Strictness::Strict),
+                ..Overrides::default()
             },
             &env,
         )
@@ -558,11 +664,137 @@ mod tests {
             &dir,
             Overrides {
                 strictness: Some(Strictness::Permissive),
+                ..Overrides::default()
             },
             &env,
         )
         .unwrap_err();
         assert!(is_usage_error(&err), "a flag may not weaken a gate either");
+    }
+
+    #[test]
+    fn fail_on_warning_layers_through_the_whole_chain() {
+        // The one setting, resolved once, reachable from every layer §8 declares
+        // — and attributed to the layer that actually set it.
+        let off = repo("fow-default", "version = 1\n", None);
+        let resolved = resolve_with_env(&off, Overrides::default(), &no_env).unwrap();
+        assert!(!resolved.fail_on_warning, "unset means off");
+        assert_eq!(resolved.sources["fail_on_warning"], Source::Default);
+
+        let committed = repo("fow-repo", "version = 1\nfail_on_warning = true\n", None);
+        let resolved = resolve_with_env(&committed, Overrides::default(), &no_env).unwrap();
+        assert!(resolved.fail_on_warning);
+        assert_eq!(resolved.sources["fail_on_warning"], Source::RepoConfig);
+
+        let local = repo(
+            "fow-local",
+            "version = 1\n",
+            Some("version = 1\nfail_on_warning = true\n"),
+        );
+        let resolved = resolve_with_env(&local, Overrides::default(), &no_env).unwrap();
+        assert!(resolved.fail_on_warning);
+        assert_eq!(resolved.sources["fail_on_warning"], Source::LocalFile);
+
+        let resolved = resolve_with_env(&off, Overrides::default(), &|name| {
+            (name == "BATTEN_FAIL_ON_WARNING").then(|| "true".to_owned())
+        })
+        .unwrap();
+        assert!(resolved.fail_on_warning);
+        assert_eq!(resolved.sources["fail_on_warning"], Source::Env);
+
+        let resolved = resolve_with_env(
+            &off,
+            Overrides {
+                fail_on_warning: true,
+                ..Overrides::default()
+            },
+            &no_env,
+        )
+        .unwrap();
+        assert!(resolved.fail_on_warning);
+        assert_eq!(resolved.sources["fail_on_warning"], Source::Flag);
+    }
+
+    #[test]
+    fn a_committed_fail_on_warning_may_not_be_turned_off() {
+        // The raise-only clause, over every layer that can express "off". The
+        // flag cannot: `--fail-on-warning` has no negative form, which is why it
+        // is absent from this list rather than missing from it.
+        let dir = repo(
+            "fow-weaken-local",
+            "version = 1\nfail_on_warning = true\n",
+            Some("version = 1\nfail_on_warning = false\n"),
+        );
+        let err = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap_err();
+        assert!(is_usage_error(&err));
+        assert!(
+            err.to_string().contains("fail_on_warning") && err.to_string().contains("may only tighten"),
+            "the refusal must name the key and say why, got: {err}"
+        );
+
+        let committed = repo("fow-weaken-env", "version = 1\nfail_on_warning = true\n", None);
+        let err = resolve_with_env(&committed, Overrides::default(), &|name| {
+            (name == "BATTEN_FAIL_ON_WARNING").then(|| "false".to_owned())
+        })
+        .unwrap_err();
+        assert!(is_usage_error(&err), "env may not turn a committed on off");
+
+        // Restating the committed value is not a weakening: it is accepted and
+        // re-attributed, exactly as a restated `strictness` is.
+        let resolved = resolve_with_env(&committed, Overrides::default(), &|name| {
+            (name == "BATTEN_FAIL_ON_WARNING").then(|| "true".to_owned())
+        })
+        .unwrap();
+        assert_eq!(resolved.sources["fail_on_warning"], Source::Env);
+    }
+
+    #[test]
+    fn turning_fail_on_warning_off_below_an_unset_authority_is_allowed() {
+        // `false` is the default, so a lower-precedence `false` weakens nothing.
+        // Only a *committed on* creates a floor — this is what keeps the clamp a
+        // policy rule rather than a blanket ban on writing the key.
+        let dir = repo(
+            "fow-off-is-not-weakening",
+            "version = 1\n",
+            Some("version = 1\nfail_on_warning = false\n"),
+        );
+        let resolved = resolve_with_env(&dir, Overrides::default(), &no_env).unwrap();
+        assert!(!resolved.fail_on_warning);
+        assert_eq!(resolved.sources["fail_on_warning"], Source::LocalFile);
+    }
+
+    #[test]
+    fn an_empty_fail_on_warning_env_var_means_unset_not_invalid() {
+        // Same §10 position as strictness: an unconditional CI export of every
+        // knob must not fail the run, and must not claim the key either.
+        let dir = repo("fow-env-empty", "version = 1\nfail_on_warning = true\n", None);
+        for raw in ["", "   "] {
+            let resolved = resolve_with_env(&dir, Overrides::default(), &|name| {
+                (name == "BATTEN_FAIL_ON_WARNING").then(|| raw.to_owned())
+            })
+            .expect("an empty env var is not a bad value");
+            assert!(resolved.fail_on_warning);
+            assert_eq!(resolved.sources["fail_on_warning"], Source::RepoConfig);
+        }
+    }
+
+    #[test]
+    fn an_unparseable_fail_on_warning_env_value_is_a_usage_error() {
+        // Present-but-invalid is refused, never coerced — a `=1` that silently
+        // read as `true` would be a gate whose state nobody can predict.
+        let dir = repo("fow-env-bad", "version = 1\n", None);
+        for raw in ["1", "0", "yes", "TRUE", "on"] {
+            let err = resolve_with_env(&dir, Overrides::default(), &|name| {
+                (name == "BATTEN_FAIL_ON_WARNING").then(|| raw.to_owned())
+            })
+            .unwrap_err();
+            assert!(is_usage_error(&err), "{raw:?} must be refused");
+            // Weakest-first, the same order `strictness` lists its variants in.
+            assert!(
+                err.to_string().contains("false, true"),
+                "the refusal must name the accepted tokens, got: {err}"
+            );
+        }
     }
 
     #[test]

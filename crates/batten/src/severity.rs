@@ -75,6 +75,21 @@
 //! them closed makes the compiler say so. Do not "fix" this to match the other
 //! enums.
 //!
+//! # The one promotion point
+//!
+//! [`promote`] is the **only** place `fail_on_warning` (CLOUD-49) touches this
+//! taxonomy: it lifts the middle rank's [`ReportLevel::Warn`] to the blocking
+//! [`ReportLevel::Fail`] and leaves the other two ranks alone. The setting is
+//! resolved once through the §8 precedence chain
+//! ([`crate::resolve::Resolved::fail_on_warning`]) and every consumer reads that
+//! resolved value; nothing re-declares a promotion knob of its own.
+//!
+//! **`batten exec` is deliberately not a consumer** (CLOUD-117). An exec output
+//! match always fails, because a warn-but-pass match would be invisible to an
+//! agent whose only actionable surface is the exit code — reproducing the exact
+//! false-green `exec` exists to catch. That is structural rather than a promise:
+//! `exec` does not call this function, and there is no exec-local knob to add.
+//!
 //! # Not an identity input
 //!
 //! Severity is deliberately excluded from every finding-identity tuple (see
@@ -274,6 +289,31 @@ pub const fn row_for_report(report: ReportLevel) -> Mapping {
     }
 }
 
+/// Apply the resolved `fail_on_warning` setting to a reporting level (CLOUD-49).
+///
+/// The middle rank — [`ReportLevel::Warn`], which renders and does not block —
+/// becomes the blocking [`ReportLevel::Fail`] when the setting is on. The other
+/// two ranks are returned unchanged, and that is where two of this issue's
+/// acceptance clauses come from rather than from a branch of their own:
+///
+/// * [`ReportLevel::Message`] is never promoted, so a pointer-only finding stays
+///   pointer-only however the setting is resolved;
+/// * [`ReportLevel::Fail`] passes through, so no already-blocking finding has to
+///   be present for a promotion to happen.
+///
+/// The result is idempotent and never lowers a rank —
+/// [`tests::promotion_only_lifts_the_middle_rank`] pins both, so the setting can
+/// never weaken a gate on the way to the exit contract.
+///
+/// See the module docs for why `batten exec` does not call this.
+#[must_use]
+pub const fn promote(report: ReportLevel, fail_on_warning: bool) -> ReportLevel {
+    match report {
+        ReportLevel::Warn if fail_on_warning => ReportLevel::Fail,
+        other => other,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -436,6 +476,54 @@ mod tests {
         assert_eq!(
             row_for_tier(AdvisoryTier::Warning).report,
             ReportLevel::Fail
+        );
+    }
+
+    #[test]
+    fn promotion_is_the_identity_when_the_setting_is_off() {
+        // The default (CLOUD-49): nothing moves, so a `warn` finding reports and
+        // exits clean exactly as it did before the setting existed.
+        for &report in ReportLevel::ALL {
+            assert_eq!(promote(report, false), report);
+        }
+    }
+
+    #[test]
+    fn promotion_only_lifts_the_middle_rank() {
+        // Totality over the axis, both settings, asserted against the ranks
+        // themselves rather than a second table that could drift from TABLE.
+        assert_eq!(promote(ReportLevel::Message, true), ReportLevel::Message);
+        assert_eq!(promote(ReportLevel::Warn, true), ReportLevel::Fail);
+        assert_eq!(promote(ReportLevel::Fail, true), ReportLevel::Fail);
+
+        for &report in ReportLevel::ALL {
+            for on in [false, true] {
+                let promoted = promote(report, on);
+                // Raise-only at the severity layer too: a promotion may lift a
+                // rank, never lower one. A weakening here would let the setting
+                // turn a `deny` finding into a passing run.
+                assert!(promoted >= report, "{} was lowered", report.as_str());
+                // Idempotent: promoting an already-promoted level is a no-op, so
+                // a value that passes through twice cannot climb a second rank.
+                assert_eq!(promote(promoted, on), promoted);
+            }
+        }
+    }
+
+    #[test]
+    fn the_promoted_rank_is_the_one_a_deny_already_reaches() {
+        // A promoted `warn` is not a new fourth outcome: it lands on exactly the
+        // rank a committed `deny` rule already produces, which is what makes the
+        // exit code the same verdict rather than a parallel one (§7).
+        assert_eq!(
+            promote(row_for_rule(RuleSeverity::Warn).report, true),
+            row_for_rule(RuleSeverity::Deny).report
+        );
+        // …and the low rank is untouched by the setting, so an `allow` rule's
+        // rank cannot be promoted into a gate.
+        assert_eq!(
+            promote(row_for_rule(RuleSeverity::Allow).report, true),
+            row_for_rule(RuleSeverity::Allow).report
         );
     }
 

@@ -39,6 +39,28 @@ impl ExitCode {
     pub const fn code(self) -> i32 {
         self as i32
     }
+
+    /// The code the checks/advisory pipeline returns for a run that did or did
+    /// not find something blocking.
+    ///
+    /// The pipeline's outcome is two-valued, so it gets one home here rather
+    /// than a `if … Violation else Success` at each call site. The range is the
+    /// point: `Usage` and `Internal` are unreachable through this function, so a
+    /// finding — however it was rated — can never be reported as a failure of
+    /// Batten's own.
+    ///
+    /// A **promoted** `warn` (CLOUD-49, [`crate::severity::promote`]) returns the
+    /// same [`ExitCode::Violation`] a `deny` finding returns, because it is the
+    /// same kind of answer: a policy verdict. Promotion changes which findings
+    /// block, never which code a blocking run reports.
+    #[must_use]
+    pub const fn verdict(blocking: bool) -> Self {
+        if blocking {
+            ExitCode::Violation
+        } else {
+            ExitCode::Success
+        }
+    }
 }
 
 impl From<ExitCode> for std::process::ExitCode {
@@ -86,6 +108,22 @@ mod tests {
                 ExitCode::Violation.code(),
                 "{failure:?} must not be the deny code"
             );
+        }
+    }
+
+    #[test]
+    fn a_findings_verdict_is_never_a_failure_of_battens_own() {
+        // The range of `verdict` is the whole guarantee: whatever the resolved
+        // `fail_on_warning` setting does to a finding's rank, the code it
+        // produces is an answer (0 or 2) and never `Usage` or `Internal`. A
+        // promotion that could exit 1 would read to a harness as "the gate is
+        // misconfigured", which is a different claim from "policy says no".
+        assert_eq!(ExitCode::verdict(true), ExitCode::Violation);
+        assert_eq!(ExitCode::verdict(false), ExitCode::Success);
+        for blocking in [false, true] {
+            let code = ExitCode::verdict(blocking);
+            assert_ne!(code, ExitCode::Usage);
+            assert_ne!(code, ExitCode::Internal);
         }
     }
 

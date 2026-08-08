@@ -53,18 +53,22 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
     let Cli {
         strictness,
+        fail_on_warning,
         command,
     } = cli;
     // The flag layer of the §8 precedence chain; every config read in this run
     // resolves through it, so a flag can never apply to one verb and not another.
-    let overrides = Overrides { strictness };
+    let overrides = Overrides {
+        strictness,
+        fail_on_warning,
+    };
     match command {
         // Unreachable in practice: `arg_required_else_help` has clap offer the
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
-        Some(Command::Check) => run_rules(out, overrides, rules::run_static),
-        Some(Command::Enforce) => run_rules(out, overrides, rules::run_all),
+        Some(Command::Check { json }) => run_rules(out, overrides, rules::run_static, json),
+        Some(Command::Enforce { json }) => run_rules(out, overrides, rules::run_all, json),
         Some(Command::Config { command }) => run_config(&command, overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Hook { harness }) => run_hook(harness, out),
@@ -114,6 +118,36 @@ fn run_hook(harness: hook::Harness, out: &mut dyn Write) -> Result<ExitCode> {
     }
 }
 
+/// One finding as the `-J` data channel renders it (§6).
+///
+/// Borrowed from the finding rather than owning a copy, and carrying **two**
+/// severity fields that are not two sources of truth: `severity` is the
+/// committed rule's own rating, and `report` is that rating rendered through the
+/// taxonomy table *after* the resolved `fail_on_warning` setting has been
+/// applied. A promoted warning is therefore visible as `"severity": "warn"` with
+/// `"report": "fail"` — the promoted disposition, derived here at the output
+/// boundary and never stored (see [`severity`]'s one-stored-field rule).
+#[derive(Debug, serde::Serialize)]
+struct FindingView<'a> {
+    rule: &'a str,
+    path: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    line: Option<usize>,
+    severity: RuleSeverity,
+    report: severity::ReportLevel,
+}
+
+/// The `-J` payload for one `check`/`enforce` run.
+///
+/// The resolved setting rides alongside the findings so a consumer can tell a
+/// `warn` that was promoted from one that was not without re-deriving the §8
+/// chain itself.
+#[derive(Debug, serde::Serialize)]
+struct CheckReport<'a> {
+    fail_on_warning: bool,
+    findings: Vec<FindingView<'a>>,
+}
+
 /// Run the configured rules against the current directory and report findings.
 ///
 /// `runner` selects which surface runs them — [`rules::run_static`] for the
@@ -122,37 +156,65 @@ fn run_hook(harness: hook::Harness, out: &mut dyn Write) -> Result<ExitCode> {
 /// differ, so the two verbs can never drift in output shape.
 ///
 /// Output is pointer-only (non-negotiable rule 4): one `path:line rule-id` per
-/// finding, byte-stable and never the matched bytes. The exit code consumes
-/// each finding's severity (CLOUD-61): a clean run exits [`ExitCode::Success`],
-/// any `deny` finding exits [`ExitCode::Violation`], and a `warn` finding is
-/// reported without failing the run — promoting it is `--fail-on-warning`'s
-/// job (CLOUD-49). Which severity produced a finding is the committed rule's
-/// declaration, looked up by the printed rule id.
+/// finding, byte-stable and never the matched bytes. `json` swaps that for the
+/// `-J` data channel, which is the same pointers plus each finding's severity
+/// and its post-promotion reporting level — still never the matched bytes.
+///
+/// The exit code consumes each finding's severity (CLOUD-61): a clean run exits
+/// [`ExitCode::Success`], any `deny` finding exits [`ExitCode::Violation`], and
+/// a `warn` finding is reported without failing the run unless the resolved
+/// `fail_on_warning` setting promotes it (CLOUD-49). Reporting is unaffected by
+/// that promotion: a warn finding prints either way, and only the verdict moves.
 fn run_rules(
     out: &mut dyn Write,
     overrides: Overrides,
     runner: fn(&[rules::Rule], &Path) -> Result<Vec<rules::Finding>>,
+    json: bool,
 ) -> Result<ExitCode> {
     // The *resolved* rule set, so a local override's added rules are gates a run
-    // actually applies rather than config the tool merely prints.
+    // actually applies rather than config the tool merely prints. The promotion
+    // setting comes off the same resolution, so one §8 chain decides both.
     let config = resolve::resolve(Path::new("."), overrides)?;
     let findings = runner(&config.rules, Path::new("."))?;
-    for finding in &findings {
-        // Pointer only: location and the rule that fired, never the line text.
-        // A rule-scoped finding (no line) prints its pointer without one rather
-        // than inventing a line number it does not have.
-        match finding.line {
-            Some(line) => writeln!(out, "{}:{} {}", finding.path, line, finding.rule)?,
-            None => writeln!(out, "{} {}", finding.path, finding.rule)?,
+    if json {
+        // A data channel emits its document unconditionally — including the
+        // empty one for a clean run. "Prints nothing when clean" (§6) is the
+        // human channel's contract; JSON that is sometimes absent is unparseable.
+        let report = CheckReport {
+            fail_on_warning: config.fail_on_warning,
+            findings: findings
+                .iter()
+                .map(|finding| FindingView {
+                    rule: &finding.rule,
+                    path: &finding.path,
+                    line: finding.line,
+                    severity: finding.severity,
+                    report: severity::promote(
+                        severity::row_for_rule(finding.severity).report,
+                        config.fail_on_warning,
+                    ),
+                })
+                .collect(),
+        };
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        for finding in &findings {
+            // Pointer only: location and the rule that fired, never the line
+            // text. A rule-scoped finding (no line) prints its pointer without
+            // one rather than inventing a line number it does not have.
+            match finding.line {
+                Some(line) => writeln!(out, "{}:{} {}", finding.path, line, finding.rule)?,
+                None => writeln!(out, "{} {}", finding.path, finding.rule)?,
+            }
         }
     }
     // The severity axis reaches the exit contract exactly here: blocking is
-    // derived through the taxonomy table, never name-matched (CLOUD-168).
-    if rules::any_blocking(&findings) {
-        Ok(ExitCode::Violation)
-    } else {
-        Ok(ExitCode::Success)
-    }
+    // derived through the taxonomy table, never name-matched (CLOUD-168), and
+    // the two-valued outcome becomes a code in one place (§7).
+    Ok(ExitCode::verdict(rules::any_blocking(
+        &findings,
+        config.fail_on_warning,
+    )))
 }
 
 fn run_config(

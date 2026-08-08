@@ -481,17 +481,26 @@ fn run_once(
 }
 
 /// Whether a set of findings fails the run: does any finding's severity rank as
-/// a blocking [`ReportLevel::Fail`]?
+/// a blocking [`ReportLevel::Fail`], once the resolved `fail_on_warning` setting
+/// has been applied?
 ///
 /// The one place the rule axis is converted for the exit contract, derived
 /// through the severity taxonomy's own table ([`severity::row_for_rule`])
-/// rather than a name-match — a `warn` finding renders and does not block
-/// (until `--fail-on-warning` promotes it, CLOUD-49).
+/// rather than a name-match — a `warn` finding renders and does not block until
+/// [`severity::promote`] lifts it (CLOUD-49).
+///
+/// `fail_on_warning` is a parameter rather than a value read here so that the
+/// §8 chain resolves it exactly once, in [`crate::resolve`], and every caller is
+/// forced by the signature to supply that resolved value. A default read inside
+/// this function would be a second place the setting could be decided.
 #[must_use]
-pub fn any_blocking(findings: &[Finding]) -> bool {
-    findings
-        .iter()
-        .any(|finding| severity::row_for_rule(finding.severity).report == ReportLevel::Fail)
+pub fn any_blocking(findings: &[Finding], fail_on_warning: bool) -> bool {
+    findings.iter().any(|finding| {
+        severity::promote(
+            severity::row_for_rule(finding.severity).report,
+            fail_on_warning,
+        ) == ReportLevel::Fail
+    })
 }
 
 /// Emit a finding for every line of `rel_path` that contains the rule's literal
@@ -1232,11 +1241,26 @@ mod tests {
         let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, RuleSeverity::Warn);
-        assert!(!any_blocking(&findings), "a warn finding must not block");
+        assert!(
+            !any_blocking(&findings, false),
+            "a warn finding must not block"
+        );
+        // …and the same finding, unchanged, blocks once the setting promotes it
+        // (CLOUD-49). The finding itself is identical in both runs: promotion
+        // acts on the exit decision, never on what was stored or reported.
+        assert!(
+            any_blocking(&findings, true),
+            "fail_on_warning must promote a warn finding"
+        );
 
         let deny = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
-        assert!(any_blocking(&deny), "a deny finding must block");
-        assert!(!any_blocking(&[]), "no findings, nothing blocks");
+        for promote in [false, true] {
+            assert!(
+                any_blocking(&deny, promote),
+                "a deny finding must block either way"
+            );
+            assert!(!any_blocking(&[], promote), "no findings, nothing blocks");
+        }
     }
 
     /// The three-set fixture (CLOUD-37), written as the config it is.
