@@ -321,6 +321,14 @@ pub const SURFACE: &[CommandDecl] = &[
             shell_parser,
         )],
     },
+    // Derived from the config types themselves, never hand-authored (CLOUD-33),
+    // so the schema cannot describe a `batten.toml` the binary would refuse.
+    CommandDecl {
+        path: "generate schema",
+        about: "Emit the JSON Schema for batten.toml, derived from the config types",
+        effect: Effect::Read,
+        flags: &[],
+    },
     // `hook` adjudicates another tool's call: its own execution only reads
     // stdin and config, but its *decision* mediates writes, so it is listed
     // unclassified rather than allowed to leak into the derived read-only

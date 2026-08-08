@@ -37,6 +37,18 @@ clap_complete = "4"
 # Per-OS base directories: XDG on Linux/macOS (honours XDG_DATA_HOME), the
 # roaming known folder on Windows — the CLOUD-23 state-path rule, one crate.
 etcetera = "0.10"
+# The JSON Schema for `batten.toml`, derived from the config types themselves
+# (CLOUD-33) — never hand-authored, so the schema cannot describe a config the
+# binary does not accept.
+schemars = "1"
+# Test-only: validates the committed configs against the derived schema, so the
+# published artifact is asserted to accept what the binary accepts.
+# default-features = false drops resolve-http (reqwest + rustls + aws-lc-rs) —
+# the schema is local, and a validator must never fetch over the network anyway.
+jsonschema = { version = "0.49", default-features = false }
+# `min_batten_version` comparison. Cargo's own flavour of SemVer, so the config
+# key means what a Rust consumer already expects it to.
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Finding-identity fingerprints (CLOUD-123): SHA-256 preimages, and NFC

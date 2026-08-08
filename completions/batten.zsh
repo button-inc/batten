@@ -152,6 +152,16 @@ strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(schema)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__generate__subcmd__help_commands" \
@@ -165,6 +175,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-generate-help-command-$line[1]:"
         case $line[1] in
             (completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(schema)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -324,6 +338,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(schema)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -428,6 +446,7 @@ _batten__subcmd__enforce_commands() {
 _batten__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'schema:Emit the JSON Schema for batten.toml, derived from the config types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten generate commands' commands "$@"
@@ -441,6 +460,7 @@ _batten__subcmd__generate__subcmd__completions_commands() {
 _batten__subcmd__generate__subcmd__help_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'schema:Emit the JSON Schema for batten.toml, derived from the config types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten generate help commands' commands "$@"
@@ -454,6 +474,16 @@ _batten__subcmd__generate__subcmd__help__subcmd__completions_commands() {
 _batten__subcmd__generate__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten generate help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__generate__subcmd__help__subcmd__schema_commands] )) ||
+_batten__subcmd__generate__subcmd__help__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate help schema commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__generate__subcmd__schema_commands] )) ||
+_batten__subcmd__generate__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate schema commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help_commands] )) ||
 _batten__subcmd__help_commands() {
@@ -495,6 +525,7 @@ _batten__subcmd__help__subcmd__enforce_commands() {
 _batten__subcmd__help__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'schema:Emit the JSON Schema for batten.toml, derived from the config types' \
     )
     _describe -t commands 'batten help generate commands' commands "$@"
 }
@@ -502,6 +533,11 @@ _batten__subcmd__help__subcmd__generate_commands() {
 _batten__subcmd__help__subcmd__generate__subcmd__completions_commands() {
     local commands; commands=()
     _describe -t commands 'batten help generate completions commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__generate__subcmd__schema_commands] )) ||
+_batten__subcmd__help__subcmd__generate__subcmd__schema_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help generate schema commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__help_commands] )) ||
 _batten__subcmd__help__subcmd__help_commands() {

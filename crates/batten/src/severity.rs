@@ -113,13 +113,16 @@
 //! `fail`/`warn`/`message` graduated model over git state; Alertmanager's
 //! `repeat_interval` as the precedent for keying a tier on response latency.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Config-time rule severity — *what fails a check* (cargo-deny's model,
 /// CLOUD-61).
 ///
 /// Declared weakest-first: derived [`Ord`] is the severity rank.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleSeverity {
     /// The rule is configured off: a match is not a finding at all.

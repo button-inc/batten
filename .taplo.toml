@@ -14,3 +14,30 @@ array_auto_collapse = false
 allowed_blank_lines = 1
 indent_tables = false
 trailing_newline = true
+
+# Bind `batten.toml` to the schema Batten ships (CLOUD-33).
+#
+# A schema that only sits in the tree is a build artifact; one a validator can
+# reach is published. This rule is the reachable half for the repository that
+# holds it: `taplo lint` picks it up through auto-config, and so does any editor
+# with the Even Better TOML / taplo LSP — so a mistyped key is caught **where
+# the config is edited**, not first at `batten check` time.
+#
+# Batten is consumer #1 in practice, not just in principle: its own
+# `batten.toml` is validated by the schema it ships, which is what keeps the
+# published artifact honest.
+#
+# A consumer repository writes the same rule against the released URL:
+#
+#   [[rule]]
+#   include = ["batten.toml"]
+#   [rule.schema]
+#   url = "https://github.com/button-inc/batten/releases/latest/download/batten.schema.json"
+#
+# `path` here rather than that URL because this repo *is* the source: pointing
+# at a release would validate the working tree against the last tag, so a config
+# key added in an unreleased commit would read as invalid.
+[[rule]]
+include = ["batten.toml", "batten.example.toml", "batten.local.toml"]
+[rule.schema]
+path = "schema/batten.schema.json"

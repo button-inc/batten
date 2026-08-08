@@ -352,7 +352,10 @@ pub fn resolve_with_env(
     // Layer 2 — the git-ignored local file. Optional, and raise-only.
     let local_path = dir.join(LOCAL_CONFIG_FILE);
     if local_path.exists() {
-        let local = config::load(&local_path)?;
+        // Ungated: `min_batten_version` is authority-only, and the refusal below
+        // names that specifically. Gating here would replace it with "this build
+        // is too old" — true of the value, useless about the mistake (CLOUD-33).
+        let local = config::load_override(&local_path)?;
         // The override layer honours `strictness` and `rule`; every other key
         // belongs to the committed authority alone. Refuse the ones it cannot
         // honour rather than parsing and dropping them — a setting that looks

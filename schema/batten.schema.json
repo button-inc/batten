@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Config",
+  "description": "A parsed, validated `batten.toml`.\n\n`deny_unknown_fields` makes an unrecognised key a hard error (§8): the config\nsurface stays narrow and a typo can never silently disable a gate.",
+  "type": "object",
+  "properties": {
+    "fail_on_warning": {
+      "description": "Whether a `warn`-severity finding is promoted to a violation (CLOUD-49).\nAbsent means \"this file does not speak to the setting\", which is what\nlets [`crate::resolve`] attribute the effective value to the layer that\nactually set it. Policy-bearing, so an override may only turn it *on*\n(§8): `false` over a committed `true` is refused, never applied.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "min_batten_version": {
+      "description": "The minimum Batten version permitted to read this file (semver).\nEnforced at parse time by [`check_min_version`]: a binary below it is\nrefused with a [`UsageError`] (→ exit `1`) rather than allowed to report\ngreen over rules it does not understand (CLOUD-33).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "protected": {
+      "description": "Paths whose modification is guarded. A plain include set — no `!`\nentries — evaluated independently of [`Config::scope`] and\n[`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rule": {
+      "description": "The declarative rules run against the repository. Absent or empty means\n\"no rules configured\" and nothing is reported. Which of these a given\nverb admits is the §5 effect split: `check` runs only non-spawning kinds\nand refuses the rest, `enforce` runs all of them (CLOUD-170).\n\nEvery rule pins its `severity` explicitly — the key is required, with no\nimplicit fallback — and carries a separate `scope` key whose vocabulary\nnever conflates with severity's (CLOUD-61). Both disciplines are\nenforced at parse time: omission or conflation is a usage error here,\nnever a value quietly assumed.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Rule"
+      }
+    },
+    "scope": {
+      "description": "The paths policy applies to, as an **ordered include/exclude list**: a\nplain glob includes, a `!`-prefixed glob excludes, and an exclude beats\nan include (CLOUD-37). Absent or empty means the set is empty — nothing\nis in scope — not \"everything\", because a set that silently defaults to\nuniversal membership is the widening a policy engine must never do.\n\nNot to be confused with [`Rule::scope`] ([`crate::rules::RuleScope`]),\nwhich is a per-rule axis saying *where a rule looks*. The two share a\ntoken and nothing else; their vocabularies never cross, exactly as\nseverity's three axes do not (see [`crate::severity`]).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "strictness": {
+      "description": "How strictly the gates apply. Absent means \"this file does not speak to\nstrictness\", which is what lets [`crate::resolve`] attribute the\neffective value to the layer that actually set it. Policy-bearing, so an\noverride may only raise it (§8).",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Strictness"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unlanded": {
+      "description": "Paths whose work is not yet landed. A plain include set, evaluated\nindependently of the other two: a path may be `unlanded` without being\n`protected`, and the sets must never be collapsed (CLOUD-37).",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "version": {
+      "description": "The config schema version. Must equal [`SUPPORTED_VERSION`].",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ],
+  "$defs": {
+    "Rule": {
+      "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
+      "type": "object",
+      "properties": {
+        "glob": {
+          "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.",
+          "type": "string"
+        },
+        "id": {
+          "description": "A stable identifier for the rule, surfaced in findings so a violation\npoints back at the policy that produced it.",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Which predicate to apply to the matched files.",
+          "$ref": "#/$defs/RuleKind"
+        },
+        "pattern": {
+          "description": "The literal substring a [`RuleKind::Forbid`] rule bans from matched\nfiles. Required by that kind, rejected by any other.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "The command template a [`RuleKind::Command`] rule runs. Required by that\nkind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "Which file domain the rule evaluates over. Independent of `severity` —\nscope says *where* the rule looks, severity says *what a match does* —\nand neither key's vocabulary parses as the other's. Defaults to\n[`RuleScope::Tree`], the pinned per-field default.",
+          "$ref": "#/$defs/RuleScope",
+          "default": "tree"
+        },
+        "severity": {
+          "description": "What a match does: `deny` fails the run, `warn` reports without failing\n(until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the\nrule off (cargo-deny's model, CLOUD-61).\n\n**Required, deliberately**: every committed rule states its severity\ndefault explicitly, and there is no implicit fallback — omitting the key\nis a usage error (exit `1`), never a silently assumed level.",
+          "$ref": "#/$defs/RuleSeverity"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "glob",
+        "severity"
+      ]
+    },
+    "RuleKind": {
+      "description": "The kind of predicate a [`Rule`] applies to its matched files.\n\nSerialized as a lowercase `kind = \"...\"` token in `batten.toml`. Marked\n`#[non_exhaustive]` because the engine is designed to grow kinds (the dynamic\n`command` kind is CLOUD-89) without that being a breaking change.",
+      "oneOf": [
+        {
+          "description": "A static banned shape: every line of a matched file that contains the\nliteral `pattern` is a finding. The check is inspection-only.",
+          "type": "string",
+          "const": "forbid"
+        },
+        {
+          "description": "A dynamic check: run the `run` template and treat its exit code as the\npredicate — `0` passes, non-zero is a violation. The sanctioned escape\nhatch for rules no static shape can express.\n\nIt is an **exit-code predicate, not a judge** (CLOUD-93): the command's\noutput is never parsed for meaning. Because it executes a process\ndeclared in `batten.toml`, it runs only on the non-`read` surface (§5,\nCLOUD-170).",
+          "type": "string",
+          "const": "command"
+        }
+      ]
+    },
+    "RuleScope": {
+      "description": "Which file domain a rule evaluates over — *where a rule looks*, never what a\nmatch does (CLOUD-61).\n\nScope and severity are two independent keys on a [`Rule`], deliberately: the\nquestion \"which files does this gate watch\" and the question \"what happens\nwhen it matches\" ([`RuleSeverity`]) are different axes, and conflating them\nis the config bug this type makes inexpressible. Neither vocabulary\ndeserializes as the other, so a severity token in the `scope` key (or the\nreverse) is a usage error (exit `1`), never a silent reinterpretation.\n\nMarked `#[non_exhaustive]` like [`RuleKind`]: the git change-set / protected\n/ unlanded domains (CLOUD-36, CLOUD-37) slot in as new variants without a\nbreaking change. The default is pinned as data —\n[`tests::scope_default_is_pinned`] asserts it — so it is an explicit,\nper-field default rather than an implicit fallback buried in code.",
+      "oneOf": [
+        {
+          "description": "The whole working tree: every file the walk yields. The only domain the\nengine evaluates today, and the pinned default.",
+          "type": "string",
+          "const": "tree"
+        }
+      ]
+    },
+    "RuleSeverity": {
+      "description": "Config-time rule severity — *what fails a check* (cargo-deny's model,\nCLOUD-61).\n\nDeclared weakest-first: derived [`Ord`] is the severity rank.",
+      "oneOf": [
+        {
+          "description": "The rule is configured off: a match is not a finding at all.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "A match is reported but does not by itself fail the run (it can be\npromoted by `--fail-on-warning`, CLOUD-49).",
+          "type": "string",
+          "const": "warn"
+        },
+        {
+          "description": "A match fails the run.",
+          "type": "string",
+          "const": "deny"
+        }
+      ]
+    },
+    "Strictness": {
+      "description": "How strictly Batten applies its gates — the ordered, policy-bearing key the\n§8 raise-only rule is defined over.\n\nThe ordering **is** the policy semantics: `Permissive < Standard < Strict`,\nso \"tighten\" is the computable predicate `candidate >= current` rather than a\njudgement call. Derived `Ord` follows declaration order, which is why the\nvariants are declared weakest-first; [`tests::strictness_orders_weakest_first`]\npins that so a reordering cannot silently invert the clamp.\n\nResolution is this issue's deliverable (CLOUD-29); the verbs that *read* the\nresolved value attach as they land (`--fail-on-warning` is CLOUD-49).",
+      "oneOf": [
+        {
+          "description": "Advisory: findings are reported without failing the run.",
+          "type": "string",
+          "const": "permissive"
+        },
+        {
+          "description": "The default: a finding is a violation.",
+          "type": "string",
+          "const": "standard"
+        },
+        {
+          "description": "Everything `Standard` fails on, plus anything advisory.",
+          "type": "string",
+          "const": "strict"
+        }
+      ]
+    }
+  }
+}

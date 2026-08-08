@@ -71,7 +71,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Some(Command::Enforce { json }) => run_rules(out, overrides, rules::run_all, json),
         Some(Command::Config { command }) => run_config(&command, overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
-        Some(Command::Generate { command }) => Ok(run_generate(&command, out)),
+        Some(Command::Generate { command }) => run_generate(&command, out),
         Some(Command::Hook { harness }) => run_hook(harness, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
@@ -254,11 +254,12 @@ fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {
 /// verb. The completions are generated from the same [`surface::command`] tree
 /// the parser is built from, so a committed script cannot describe a surface the
 /// binary does not have — which is the property `completions-check` gates.
-fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> ExitCode {
+fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCode> {
     match command {
         GenerateCommand::Completions { shell } => {
             clap_complete::generate(*shell, &mut surface::command(), "batten", out);
-            ExitCode::Success
         }
+        GenerateCommand::Schema => writeln!(out, "{}", config::schema()?)?,
     }
+    Ok(ExitCode::Success)
 }

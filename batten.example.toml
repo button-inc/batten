@@ -9,8 +9,16 @@
 # declaring any other version is refused rather than half-understood.
 version = 1
 
-# The minimum Batten version permitted to read this file (semver). Parsed today;
-# the version gate that enforces it lands separately.
+# The minimum Batten version permitted to read this file (semver). A binary older
+# than this refuses to run rather than reporting green over rules it does not
+# understand — exit 1, the config-error code, because "this binary is too old" is
+# a statement about the invocation and never a policy verdict (exit 2). Equal or
+# newer runs, and 0.0.0 accepts every build.
+#
+# This file is validated against the JSON Schema Batten ships
+# (schema/batten.schema.json, published as a release asset), so a mistyped key is
+# caught in your editor rather than first at `batten check` time. Bind it with a
+# .taplo.toml rule -- see this repository's own for the shape.
 min_batten_version = "0.0.0"
 
 # How strictly gates apply: "permissive", "standard" (the default), or "strict".

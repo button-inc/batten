@@ -207,6 +207,7 @@ mod tests {
                 "config show".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
+                "generate schema".to_owned(),
                 "receipt status".to_owned(),
                 "spec".to_owned(),
             ]

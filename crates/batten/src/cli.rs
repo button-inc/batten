@@ -113,6 +113,8 @@ pub enum GenerateCommand {
         /// The shell whose completion script to emit.
         shell: clap_complete::Shell,
     },
+    /// Emit the JSON Schema for `batten.toml`.
+    Schema,
 }
 
 /// The formats `batten spec` can emit.
@@ -181,6 +183,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 "completions" => matches
                     .get_one::<clap_complete::Shell>("shell")
                     .map(|shell| GenerateCommand::Completions { shell: *shell }),
+                "schema" => Some(GenerateCommand::Schema),
                 _ => None,
             })
             .map(|command| Command::Generate { command }),

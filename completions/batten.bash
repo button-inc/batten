@@ -58,11 +58,17 @@ _batten() {
             batten__subcmd__generate,help)
                 cmd="batten__subcmd__generate__subcmd__help"
                 ;;
+            batten__subcmd__generate,schema)
+                cmd="batten__subcmd__generate__subcmd__schema"
+                ;;
             batten__subcmd__generate__subcmd__help,completions)
                 cmd="batten__subcmd__generate__subcmd__help__subcmd__completions"
                 ;;
             batten__subcmd__generate__subcmd__help,help)
                 cmd="batten__subcmd__generate__subcmd__help__subcmd__help"
+                ;;
+            batten__subcmd__generate__subcmd__help,schema)
+                cmd="batten__subcmd__generate__subcmd__help__subcmd__schema"
                 ;;
             batten__subcmd__help,check)
                 cmd="batten__subcmd__help__subcmd__check"
@@ -93,6 +99,9 @@ _batten() {
                 ;;
             batten__subcmd__help__subcmd__generate,completions)
                 cmd="batten__subcmd__help__subcmd__generate__subcmd__completions"
+                ;;
+            batten__subcmd__help__subcmd__generate,schema)
+                cmd="batten__subcmd__help__subcmd__generate__subcmd__schema"
                 ;;
             batten__subcmd__help__subcmd__receipt,record)
                 cmd="batten__subcmd__help__subcmd__receipt__subcmd__record"
@@ -257,7 +266,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate)
-            opts="-h --strictness --fail-on-warning --help completions help"
+            opts="-h --strictness --fail-on-warning --help completions schema help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -297,7 +306,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__generate__subcmd__help)
-            opts="completions help"
+            opts="completions schema help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -331,6 +340,38 @@ _batten() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__generate__subcmd__help__subcmd__schema)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__generate__subcmd__schema)
+            opts="-h --strictness --fail-on-warning --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -409,7 +450,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__generate)
-            opts="completions"
+            opts="completions schema"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -423,6 +464,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help__subcmd__generate__subcmd__completions)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__help__subcmd__generate__subcmd__schema)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

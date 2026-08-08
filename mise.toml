@@ -114,6 +114,12 @@ done
 echo "completions: regenerated for bash, zsh, fish"
 '''
 
+[tasks.schema]
+description = "Regenerate the committed JSON Schema for batten.toml from the config types"
+# Same shape as `completions`: the binary emits on stdout only, so `generate`
+# stays a read-effect verb (§5) and the redirect lives here, in the caller.
+run = "cargo run --quiet -p batten -- generate schema >schema/batten.schema.json"
+
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
 # Same tool + severity CI enforces. GH_TOKEN (set in [env]) enables the online

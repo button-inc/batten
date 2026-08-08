@@ -37,6 +37,7 @@
 use std::fs;
 use std::path::Path;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
@@ -47,7 +48,7 @@ use crate::severity::{self, ReportLevel, RuleSeverity};
 /// Serialized as a lowercase `kind = "..."` token in `batten.toml`. Marked
 /// `#[non_exhaustive]` because the engine is designed to grow kinds (the dynamic
 /// `command` kind is CLOUD-89) without that being a breaking change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RuleKind {
@@ -105,7 +106,7 @@ impl RuleKind {
 /// breaking change. The default is pinned as data —
 /// [`tests::scope_default_is_pinned`] asserts it — so it is an explicit,
 /// per-field default rather than an implicit fallback buried in code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RuleScope {
@@ -134,7 +135,7 @@ impl RuleScope {
 /// error, never a silently ignored setting that disables a gate. The struct is
 /// flat rather than an enum with `#[serde(flatten)]` precisely so this guarantee
 /// holds — `flatten` silently defeats `deny_unknown_fields`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     /// A stable identifier for the rule, surfaced in findings so a violation

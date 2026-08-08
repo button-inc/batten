@@ -17,6 +17,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use clap::ValueEnum;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
@@ -42,7 +43,18 @@ pub const CONFIG_FILE: &str = "batten.toml";
 /// Resolution is this issue's deliverable (CLOUD-29); the verbs that *read* the
 /// resolved value attach as they land (`--fail-on-warning` is CLOUD-49).
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Deserialize, Serialize, ValueEnum,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    Deserialize,
+    Serialize,
+    ValueEnum,
+    JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
 #[clap(rename_all = "snake_case")]
@@ -61,13 +73,15 @@ pub enum Strictness {
 ///
 /// `deny_unknown_fields` makes an unrecognised key a hard error (§8): the config
 /// surface stays narrow and a typo can never silently disable a gate.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// The config schema version. Must equal [`SUPPORTED_VERSION`].
     pub version: u32,
-    /// The minimum Batten version permitted to read this file. Parsed now;
-    /// enforcement lands with the `min_batten_version` gate (CLOUD-33).
+    /// The minimum Batten version permitted to read this file (semver).
+    /// Enforced at parse time by [`check_min_version`]: a binary below it is
+    /// refused with a [`UsageError`] (→ exit `1`) rather than allowed to report
+    /// green over rules it does not understand (CLOUD-33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_batten_version: Option<String>,
     /// How strictly the gates apply. Absent means "this file does not speak to
@@ -128,6 +142,29 @@ pub struct Config {
 /// or an unsupported [`Config::version`]. These are bad *input*, not internal
 /// failures.
 pub fn parse(text: &str, source: &str) -> Result<Config> {
+    let config = parse_ungated(text, source)?;
+    check_min_version(&config, source)?;
+    Ok(config)
+}
+
+/// Parse an *override* layer, without the [`Config::min_batten_version`] gate.
+///
+/// `min_batten_version` is an **authority-only** key: [`crate::resolve`] refuses
+/// a `batten.local.toml` that sets it at all. Gating on it here would fire
+/// first and replace that refusal — telling an author their binary is too old
+/// when the real problem is that they set the key in a file that may not carry
+/// it. The more specific message is the useful one, so the override layer parses
+/// ungated and lets the authority-only check speak.
+///
+/// # Errors
+///
+/// As [`parse`], minus the version gate.
+pub fn parse_override(text: &str, source: &str) -> Result<Config> {
+    parse_ungated(text, source)
+}
+
+/// The shared body: deserialize and check the schema `version`.
+fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     let config: Config = toml::from_str(text)
         .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
     if config.version != SUPPORTED_VERSION {
@@ -139,6 +176,67 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
     Ok(config)
 }
 
+/// The version of the running binary, as `Cargo.toml` declares it.
+///
+/// Read from the compiled-in package version rather than re-typed, so the gate
+/// compares against the build that is actually running.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Refuse a config this build is too old to honour (CLOUD-33).
+///
+/// `min_batten_version` is the config author's statement of the oldest binary
+/// that understands the file. A binary below it cannot honour the policy the
+/// file describes — and a gate that runs anyway is worse than one that refuses,
+/// because it reports green over rules it silently did not understand.
+///
+/// This is [`UsageError`] (→ exit `1`), the same class as an unreadable or
+/// unsupported-version config: bad *input* for this binary, never a
+/// [`crate::ExitCode::Violation`]. A violation is a verdict about the
+/// repository; refusing to run is a statement about the invocation, and
+/// conflating them would have a harness read "this binary is too old" as
+/// "policy denied this call" (§7).
+///
+/// Equal-or-newer runs. An unparseable version on either side is refused rather
+/// than skipped, because "cannot compare" is not "compatible".
+fn check_min_version(config: &Config, source: &str) -> Result<()> {
+    let Some(required) = config.min_batten_version.as_deref() else {
+        return Ok(()); // The file does not speak to a minimum: nothing to gate.
+    };
+    let required = semver::Version::parse(required).map_err(|err| {
+        UsageError::raise(format!(
+            "invalid min_batten_version {required:?} in {source}: {err}"
+        ))
+    })?;
+    let running = semver::Version::parse(VERSION)
+        .map_err(|err| UsageError::raise(format!("invalid build version {VERSION:?}: {err}")))?;
+    if running < required {
+        return Err(UsageError::raise(format!(
+            "{source} requires batten {required} or newer; this build is {VERSION}"
+        )));
+    }
+    Ok(())
+}
+
+/// The JSON Schema for `batten.toml`, derived from [`Config`].
+///
+/// Derived, never hand-authored (CLOUD-33, `DoR` §1): the schema is generated
+/// from the very types `parse` deserializes into, so it cannot describe a
+/// config this binary would refuse — nor miss a key it accepts.
+///
+/// Emitted as byte-stable pretty JSON (§6): `schemars` orders properties
+/// deterministically, so identical input yields identical bytes and the drift
+/// gate never fails at random.
+///
+/// # Errors
+///
+/// Returns an error only if serialization itself fails, which for this
+/// data-only tree does not occur in practice.
+pub fn schema() -> Result<String> {
+    Ok(serde_json::to_string_pretty(&schemars::schema_for!(
+        Config
+    ))?)
+}
+
 /// Load and validate the `batten.toml` at `path`.
 ///
 /// # Errors
@@ -147,17 +245,31 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// carries an unknown key, or declares an unsupported version. A non-`NotFound`
 /// I/O failure propagates as an internal error (→ exit `3`).
 pub fn load(path: &Path) -> Result<Config> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {
-            return Err(UsageError::raise(format!(
-                "no config found at {}",
-                path.display()
-            )));
-        }
-        Err(err) => return Err(err.into()),
-    };
-    parse(&text, &path.display().to_string())
+    parse(&read(path)?, &path.display().to_string())
+}
+
+/// Load an *override* layer, without the [`Config::min_batten_version`] gate.
+///
+/// See [`parse_override`] for why the override layer is ungated.
+///
+/// # Errors
+///
+/// As [`load`], minus the version gate.
+pub fn load_override(path: &Path) -> Result<Config> {
+    parse_override(&read(path)?, &path.display().to_string())
+}
+
+/// Read a config file, mapping a missing file to a [`UsageError`] and any other
+/// I/O failure to an internal error (→ exit `3`).
+fn read(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(UsageError::raise(format!(
+            "no config found at {}",
+            path.display()
+        ))),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[cfg(test)]

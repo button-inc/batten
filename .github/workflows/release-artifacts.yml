@@ -145,3 +145,41 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: gh release upload "$TAG" "${{ steps.dist.outputs.archive }}" --clobber
+
+  # The JSON Schema for `batten.toml` (CLOUD-33), published as a release asset.
+  #
+  # A schema that only sits in the tree is a build artifact; one a validator can
+  # reach is published. This is what makes the consumer-side `.taplo.toml` rule
+  # possible — a consumer binds `batten.toml` to
+  #   https://github.com/button-inc/batten/releases/latest/download/batten.schema.json
+  # and their config is validated in the editor, not first at `batten check`.
+  #
+  # Its own job rather than a step in the matrix: the schema is platform
+  # independent, so uploading it seven times would race seven writers onto one
+  # asset name for no gain. Regenerated from the tagged source rather than read
+  # from the tree, so the published bytes are derived from the release's own
+  # config types — `schema-check` already gates that those match the committed
+  # copy, but deriving here means a release can never publish a stale artifact
+  # even if that gate were bypassed.
+  schema:
+    name: schema
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # upload the asset to the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          cache: false
+      - name: Derive the schema from the tagged config types
+        run: mise run schema
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: gh release upload "$TAG" schema/batten.schema.json --clobber

@@ -12,8 +12,10 @@
 # The config schema version. This build supports version 1.
 version = 1
 
-# Minimum Batten version permitted to read this file. Parsed now; enforcement
-# lands with the min_batten_version gate (see the project board).
+# Minimum Batten version permitted to read this file (semver). Enforced: a binary
+# older than this refuses to run rather than reporting green over rules it does
+# not understand (exit 1 — a statement about the invocation, not a policy
+# verdict). Equal or newer runs. 0.0.0 accepts every build.
 min_batten_version = "0.0.0"
 
 # Batten gates this repository with its own engine — consumer #1 in practice,
