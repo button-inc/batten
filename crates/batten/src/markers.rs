@@ -37,6 +37,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
@@ -49,7 +50,7 @@ use crate::rules;
 /// `token` is the literal text scanned for. Collapsing them would make every
 /// re-spelling of a marker look like a brand-new one whose count starts at
 /// zero — the ratchet defeated by a rename.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Marker {
     /// The stable identifier counts are reported under.

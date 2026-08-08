@@ -20,6 +20,9 @@
 //!   passed command is listed [`Effect::Unclassified`] with a stated reason, not
 //!   guessed.
 
+use std::borrow::Cow;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
 /// The declared effect of a command, carried on its [`crate::surface`] row.
@@ -87,6 +90,27 @@ impl Effect {
 impl Serialize for Effect {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
+    }
+}
+
+impl JsonSchema for Effect {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("Effect")
+    }
+
+    /// A string enumerating exactly the tokens [`Effect::from_token`] accepts.
+    ///
+    /// Built from [`Effect::ALL`] rather than a re-typed list, so the published
+    /// schema cannot drift from what the loader will actually take — the same
+    /// derive-don't-hardcode posture the vocabulary itself follows. Hand-written
+    /// because the `Serialize`/`Deserialize` pair is hand-written too: a derived
+    /// schema would describe a shape this type does not have.
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        let tokens: Vec<&'static str> = Effect::ALL.iter().map(|effect| effect.as_str()).collect();
+        json_schema!({
+            "type": "string",
+            "enum": tokens,
+        })
     }
 }
 

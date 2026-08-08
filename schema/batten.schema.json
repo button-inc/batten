@@ -11,6 +11,13 @@
         "null"
       ]
     },
+    "marker": {
+      "description": "The suppression markers to count (CLOUD-36). Which comment shape waves\na rule through is a property of the repository being gated, never of\nBatten; the type and the counting are [`crate::markers`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Marker"
+      }
+    },
     "min_batten_version": {
       "description": "The minimum Batten version permitted to read this file (semver).\nEnforced at parse time by [`check_min_version`]: a binary below it is\nrefused with a [`UsageError`] (→ exit `1`) rather than allowed to report\ngreen over rules it does not understand (CLOUD-33).",
       "type": [
@@ -57,6 +64,13 @@
         "type": "string"
       }
     },
+    "verb": {
+      "description": "The mutating-verb table (CLOUD-36): which programs change the world, in\nthe one §5 effect vocabulary. Consumer-specific by nature, so it lives\nhere and never in the crate (non-negotiable rule 1); the type and its\nlookup are [`crate::verbs`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/MutatingVerb"
+      }
+    },
     "version": {
       "description": "The config schema version. Must equal [`SUPPORTED_VERSION`].",
       "type": "integer",
@@ -69,6 +83,68 @@
     "version"
   ],
   "$defs": {
+    "Effect": {
+      "type": "string",
+      "enum": [
+        "read",
+        "write",
+        "destructive",
+        "unclassified",
+        "ask"
+      ]
+    },
+    "Marker": {
+      "description": "One suppression marker declared in `batten.toml`.\n\nThe two fields are deliberately separate axes: `id` is the stable name a\ncount is reported under and may not change when the spelling does, while\n`token` is the literal text scanned for. Collapsing them would make every\nre-spelling of a marker look like a brand-new one whose count starts at\nzero — the ratchet defeated by a rename.",
+      "type": "object",
+      "properties": {
+        "glob": {
+          "description": "Which files this marker is looked for in, as a `/`-separated glob. Omit\nto scan the whole tree.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "The stable identifier counts are reported under.",
+          "type": "string"
+        },
+        "token": {
+          "description": "The literal text that marks a suppression. Matched as a substring, not a\npattern: a marker is a fixed shape an author types, and admitting a\nregex here would make the count a function of an expression rather than\nof the tree.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "token"
+      ]
+    },
+    "MutatingVerb": {
+      "description": "One mutating program declared in `batten.toml`.",
+      "type": "object",
+      "properties": {
+        "effect": {
+          "description": "What running it does, in the one effect vocabulary: `write` for state\nthe caller can recreate, `destructive` for state whose recovery means\nredoing work.",
+          "$ref": "#/$defs/Effect"
+        },
+        "redirect": {
+          "description": "The sanctioned mutation to point at when this verb is refused — the\n\"run this instead\" half of the refusal contract. Optional, because not\nevery verb has an alternative; a consumer with none falls back to\nnaming the rule.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verb": {
+          "description": "The program name as it appears on a command line, e.g. the basename of\nthe executable. Matched exactly.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "verb",
+        "effect"
+      ]
+    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
       "type": "object",

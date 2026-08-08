@@ -833,6 +833,40 @@ fn the_acceptance_runner_is_the_landed_rule_engine() {
 }
 
 #[test]
+fn the_published_schema_takes_the_effect_vocabulary_from_one_place() {
+    // `Effect` hand-writes Serialize/Deserialize/JsonSchema, so three
+    // spellings of the vocabulary could drift apart. All three read
+    // `Effect::ALL`, and this asserts the committed schema still shows exactly
+    // that list — a consumer validating `batten.toml` against the published
+    // schema must accept precisely what the loader accepts, no more and no less.
+    let schema: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../schema/batten.schema.json"),
+        )
+        .expect("read the committed schema"),
+    )
+    .expect("the committed schema is JSON");
+
+    let published: Vec<&str> = schema["$defs"]["Effect"]["enum"]
+        .as_array()
+        .expect("the schema defines the Effect vocabulary")
+        .iter()
+        .map(|token| token.as_str().expect("tokens are strings"))
+        .collect();
+    let declared: Vec<&str> = batten::effect::Effect::ALL
+        .iter()
+        .map(|effect| effect.as_str())
+        .collect();
+    assert_eq!(published, declared);
+    for token in &published {
+        assert!(
+            batten::effect::Effect::from_token(token).is_some(),
+            "the schema publishes {token:?}, which the loader would refuse"
+        );
+    }
+}
+
+#[test]
 fn the_crate_bakes_in_no_consumer_vocabulary() {
     // Non-negotiable rule 1, over the whole library: every token this fixture
     // config declares is a consumer's word, and a grep of `crates/batten/src`

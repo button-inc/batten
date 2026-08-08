@@ -28,15 +28,15 @@
 //!   it from a command line — wrapper lookthrough, env prefixes, quoted spans —
 //!   is [`crate::hook`]'s parser, not a second one here.
 
-use serde::{Deserialize, Serialize};
-
 use anyhow::Result;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::effect::Effect;
 use crate::error::UsageError;
 
 /// One mutating program declared in `batten.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MutatingVerb {
     /// The program name as it appears on a command line, e.g. the basename of
