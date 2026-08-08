@@ -762,11 +762,26 @@ fn verbs_are_partitioned_by_the_one_effect_vocabulary() {
 #[test]
 fn a_verb_table_that_would_be_inert_is_refused_at_load() {
     // A `read` row in the mutating-verb table matches nothing while reading as
-    // covered. Refused at parse or validation, never kept.
+    // covered. Refused at parse, never kept.
+    //
+    // This test now earns its name. It used to `expect` `parse` to SUCCEED and
+    // then call `verbs::validate` by hand — which proved the validator worked
+    // while demonstrating that loading never invoked it, so a green suite
+    // certified a refusal production never performed (CLOUD-242).
     let inert = "version = 1\n\n[[verb]]\nverb = \"x\"\neffect = \"read\"\n";
-    let config = batten::config::parse(inert, "fixture").expect("the effect token itself is valid");
-    let err = batten::verbs::validate(&config.verbs).unwrap_err();
+    let err = batten::config::parse(inert, "fixture").unwrap_err();
     assert!(err.downcast_ref::<UsageError>().is_some());
+
+    // Same for a verb declared twice: one verb, one effect, one redirect.
+    let twice = "version = 1\n\n[[verb]]\nverb = \"x\"\neffect = \"write\"\n\n[[verb]]\nverb = \"x\"\neffect = \"write\"\n";
+    let err = batten::config::parse(twice, "fixture").unwrap_err();
+    assert!(err.downcast_ref::<UsageError>().is_some());
+
+    // And the other direction, so the refusal is not merely "any verb table
+    // fails": a well-formed table still loads.
+    let valid = "version = 1\n\n[[verb]]\nverb = \"rm\"\neffect = \"destructive\"\n";
+    let config = batten::config::parse(valid, "fixture").expect("a valid verb table loads");
+    assert_eq!(config.verbs.len(), 1);
 
     let unknown = "version = 1\n\n[[verb]]\nverb = \"x\"\neffect = \"nonsense\"\n";
     let err = batten::config::parse(unknown, "fixture").unwrap_err();

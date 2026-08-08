@@ -207,6 +207,19 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
             config.version
         )));
     }
+    // The verb table is validated here, at load, because nothing else validates
+    // it anywhere: `verbs::validate` had no caller outside its own tests, so a
+    // `[[verb]]` row that is inert — `effect = "read"` in a table named for
+    // mutation, matching nothing while reading as covered — loaded clean, as did
+    // a verb declared twice. A refusal with no call site is prose (non-negotiable
+    // rule 2), and this one was asserted present by a doc comment, a merged PR
+    // body and a passing test that reached past `parse` to call the validator by
+    // hand (CLOUD-242).
+    //
+    // In `parse_ungated` rather than `parse` so an override layer is held to it
+    // too: `batten.local.toml` may add verb rows, and a raise-only override that
+    // adds an inert one has still written something that cannot mean anything.
+    crate::verbs::validate(&config.verbs)?;
     Ok(config)
 }
 
