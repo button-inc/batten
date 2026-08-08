@@ -24,6 +24,30 @@ setup() {
 	git branch -f main
 	git update-ref refs/remotes/origin/main main
 	git checkout -q -b plain-branch
+
+	# A stubbed `gh`, ahead of the real one on PATH, so the duplicate-claim
+	# lookup (CLOUD-230) is exercised against state the test controls and the
+	# suite never touches the network. It answers empty by default — no
+	# competing PR — which leaves every case written before that check behaving
+	# exactly as it did.
+	STUB="$BATS_TEST_TMPDIR/bin-$BATS_TEST_NUMBER"
+	mkdir -p "$STUB"
+	cat >"$STUB/gh" <<-'EOF'
+		#!/usr/bin/env bash
+		case "$*" in
+		*"pr view --json number"*) printf '{"number":%s,"title":"","body":"%s"}\n' "${STUB_SELF:-0}" "${STUB_SELF_BODY:-}" ;;
+		*"pr list"*) printf '%s\n' "${STUB_PRS:-}" ;;
+		*"pr view "*) printf '%s\n' "${STUB_BODY:-}" ;;
+		*) exit 1 ;;
+		esac
+	EOF
+	chmod +x "$STUB/gh"
+	PATH="$STUB:$PATH"
+	export PATH
+	# `gh` lives only inside the mise environment here, so a PATH without the
+	# stub and without mise's shims genuinely has no `gh` — which is what the
+	# fail-open-on-absence case below relies on.
+	BARE_PATH="/usr/bin:/bin"
 }
 
 # Feed a PreToolUse payload the way Claude Code does.
@@ -122,4 +146,151 @@ Refs: CLOUD-178"
 	cd "$BATS_TEST_TMPDIR" || return 1
 	run guard 'gh pr create --draft'
 	! denied "$output"
+}
+
+# --- the duplicate-claim refusal (CLOUD-230) ----------------------------------
+#
+# Replayed from the measurement that motivated it: CLOUD-49 was implemented
+# twice in one cycle, and the competing PR (#145) named the issue only in its
+# title and body — its branch, `claude/fail-on-warning-setting-wc1wdx`, carried
+# no key at all. A check reading branch names alone would have missed it.
+#
+# What counts as a CLAIM is narrower than what counts as a mention, and these
+# cases exist because conflating them made this guard refuse its own PR twice: a
+# body cites related issues as evidence, and a bundle branch names issues that
+# already landed. Only a closing keyword, an unambiguous single-issue branch, or
+# a single `Refs:` trailer is a claim.
+
+@test "an issue already claimed by another open PR is denied" {
+	STUB_SELF=144 STUB_PRS="145 claude/fail-on-warning-setting-wc1wdx" \
+		STUB_BODY="feat: promote warn findings (CLOUD-49)" \
+		run guard 'gh pr create --draft --body Closes CLOUD-49'
+	denied "$output"
+	[[ "$output" == *"#145"* ]]
+}
+
+@test "the duplicate denial names the competing PR and the way out" {
+	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_BODY="CLOUD-49" \
+		run guard 'gh pr create --body Fixes CLOUD-49'
+	[[ "$output" == *"claim-check"* ]]
+	[[ "$output" == *"BATTEN_ISSUE_GUARD_BYPASS"* ]]
+}
+
+@test "a competitor whose branch alone names the issue is caught" {
+	# The other direction: no mention in title or body, only the branch.
+	STUB_SELF=144 STUB_PRS="150 wenzowski/cloud-49-add-fail-on-warning" STUB_BODY="" \
+		run guard 'gh pr create --body Resolves CLOUD-49'
+	denied "$output"
+	[[ "$output" == *"#150"* ]]
+}
+
+@test "our own PR is not a competitor, or pr ready would deny every time" {
+	STUB_SELF=145 STUB_PRS="145 claude/fail-on-warning-setting-wc1wdx" \
+		STUB_BODY="CLOUD-49" \
+		run guard 'gh pr ready --body Closes CLOUD-49'
+	! denied "$output"
+}
+
+@test "a different issue's open PR is not a competitor" {
+	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_BODY="feat: something CLOUD-49" \
+		run guard 'gh pr create --body Closes CLOUD-230'
+	! denied "$output"
+}
+
+@test "a near-miss issue number does not collide" {
+	# CLOUD-4 must not match a PR claiming CLOUD-49.
+	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_BODY="CLOUD-49" \
+		run guard 'gh pr create --body Closes CLOUD-4'
+	! denied "$output"
+}
+
+@test "a merely CITED issue is not a claim" {
+	# This PR's own body cites the issues it measured. Citing CLOUD-49 as
+	# evidence while closing CLOUD-230 must not be read as racing CLOUD-49 —
+	# the guard refused its own PR on exactly this before the split.
+	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_BODY="CLOUD-49" \
+		run guard 'gh pr create --body Closes CLOUD-230. Measured on CLOUD-49 and CLOUD-37.'
+	! denied "$output"
+}
+
+@test "a closing keyword overrides a branch whose name no longer fits the work" {
+	# The escape hatch, and the case that produced this whole distinction. A
+	# bundle branch (`claude/cloud-37-49-config-…`) reads as claiming CLOUD-37
+	# forever, including long after CLOUD-37 landed. The body is how the PR says
+	# which issue it is actually for.
+	git checkout -q -b claude/cloud-37-49-config-7ssbsh
+	STUB_SELF=999 STUB_PRS="150 claude/git-state-core-primitives" \
+		STUB_BODY="feat: git state primitives (CLOUD-37)" \
+		run guard 'gh pr create --draft --body Closes CLOUD-230'
+	! denied "$output"
+}
+
+@test "without that override, the branch is taken at its word" {
+	# Same branch, no closing keyword: CLOUD-37 is the only claim evidence
+	# available, so a live PR for it is a genuine collision to report.
+	git checkout -q -b claude/cloud-37-49-config-7ssbsh
+	STUB_SELF=999 STUB_PRS="150 claude/git-state-core-primitives" \
+		STUB_BODY="feat: git state primitives (CLOUD-37)" \
+		run guard 'gh pr create --draft'
+	denied "$output"
+	[[ "$output" == *"#150"* ]]
+}
+
+@test "a single-issue branch is an unambiguous claim" {
+	git checkout -q -b wenzowski/cloud-49-add-fail-on-warning
+	STUB_SELF=999 STUB_PRS="145 other" STUB_BODY="CLOUD-49" \
+		run guard 'gh pr create --draft'
+	denied "$output"
+	[[ "$output" == *"#145"* ]]
+}
+
+@test "a Refs: trailer claims when nothing more explicit does" {
+	git commit -q --allow-empty -m "fix: a thing
+
+Refs: CLOUD-49"
+	STUB_SELF=999 STUB_PRS="145 other" STUB_BODY="CLOUD-49" \
+		run guard 'gh pr create --draft'
+	denied "$output"
+}
+
+@test "a failing gh fails open — a guard that cannot reach GitHub must not block" {
+	# The stub exits non-zero for everything it is not told to answer; here it
+	# is told nothing, so every call fails.
+	STUB_FAIL=1 run guard 'gh pr create --body Closes CLOUD-230'
+	! denied "$output"
+	[ "$status" -eq 0 ]
+}
+
+@test "gh absent fails open too" {
+	PATH="$BARE_PATH" run guard 'gh pr create --body Closes CLOUD-230'
+	! denied "$output"
+	[ "$status" -eq 0 ]
+}
+
+@test "the bypass skips the duplicate check as well as the naming check" {
+	BATTEN_ISSUE_GUARD_BYPASS=1 STUB_SELF=144 STUB_PRS="145 b" STUB_BODY="CLOUD-49" \
+		run guard 'gh pr create --body Closes CLOUD-49'
+	! denied "$output"
+}
+
+@test "gh pr ready reads the claim from the PR it is readying" {
+	# `gh pr ready <n>` carries no body, so without this the branch is the only
+	# evidence — and a leftover bundle branch then contradicts the PR's own
+	# `Closes:` line. The guard allowed `pr create` and denied `pr ready` on one
+	# unchanged PR before this was added.
+	git checkout -q -b claude/cloud-37-49-config-7ssbsh
+	STUB_SELF=159 STUB_SELF_BODY="Closes CLOUD-230" \
+		STUB_PRS="150 claude/git-state-core-primitives" \
+		STUB_BODY="feat: git state primitives (CLOUD-37)" \
+		run guard 'gh pr ready 159'
+	! denied "$output"
+}
+
+@test "a competitor is still caught when the claim comes from our own PR body" {
+	git checkout -q -b some-branch
+	STUB_SELF=160 STUB_SELF_BODY="Closes CLOUD-49" \
+		STUB_PRS="145 other" STUB_BODY="CLOUD-49" \
+		run guard 'gh pr ready 160'
+	denied "$output"
+	[[ "$output" == *"#145"* ]]
 }

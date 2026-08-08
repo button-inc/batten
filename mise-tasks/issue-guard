@@ -29,14 +29,27 @@
 #
 # What that identifier actually buys, which is more than traceability: the
 # tracker's own GitHub integration consumes it and performs the state
-# transitions itself. Measured here — a commit carrying `Refs: CLOUD-178` moved
-# that issue Todo -> In Progress, set its assignee, and attached the PR, with no
-# write call from the session at all. So the agent's job is not to move the
-# issue; it is to supply the key the automation keys on, which is exactly what
-# this gate requires. Hand-moving the board is redundant work that also fails in
-# a way supplying a branch name does not: a state change is a tracker write, and
-# a write can be denied mid-session when the connector re-registers under a
-# different name (CLOUD-178). The key travels in git, where nothing can deny it.
+# transitions itself, with no write call from the session at all. Supplying the
+# key is therefore most of the agent's job, and it is robust in a way a tracker
+# write is not — a write can be denied mid-session when the connector
+# re-registers under a name no allow rule matches (CLOUD-178), while the key
+# travels in git, where nothing can deny it.
+#
+# But the automation is PUBLISH-SIDE ONLY, and an earlier version of this comment
+# got that wrong. It claimed a commit carrying `Refs: CLOUD-178` moved that issue
+# Todo -> In Progress. Re-measured on 2026-08-08 (CLOUD-230): a commit carrying
+# `Refs: CLOUD-37`, pushed at 04:33:18, moved nothing — the issue went In
+# Progress at 04:35:08, eight seconds after `gh pr create` and ~105 seconds after
+# that push, and was Done at 04:38:27. The PR event is the trigger, not the
+# keyed commit.
+#
+# That difference is not academic, because it is what the old wording licensed:
+# if a commit claims the issue, hand-moving the board is redundant and an agent
+# should skip it. It is not redundant. At pull time nothing has been pushed, so
+# no key can travel and the automation has nothing to fire on — the claim is the
+# agent's to make, by hand, before it writes code. The redundant hand-move the
+# board memory warns against is the *publish-side* one, which the integration
+# does perform.
 #
 # What this does NOT gate, stated rather than left as an unmet obligation:
 # whether outstanding items actually get written to the issue. That is not a
@@ -58,12 +71,6 @@ cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || 
 # An issue reference anywhere in the command itself (a --body naming CLOUD-178)
 # counts, so this is checked against the raw command before quotes are scrubbed.
 ISSUE_RE='CLOUD-[0-9]+'
-cmd_names_issue=0
-# Here-string, never a pipe: under `set -o pipefail` a `producer | grep -q` takes
-# the producer's SIGPIPE status when grep exits early on the first hit, so the
-# MATCH reads as a failure. See the note above the git log read below.
-grep -qiE "$ISSUE_RE" <<<"$cmd" && cmd_names_issue=1
-
 # Quoted spans are neutralised so a commit message *mentioning* the command is
 # not the command — same treatment as gh-guard and ready-guard.
 scrubbed=$(printf '%s' "$cmd" | sed -E "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
@@ -125,10 +132,10 @@ deny() {
 	exit 0
 }
 
-[ "$cmd_names_issue" = 1 ] && exit 0
-
+# Outside a git repo there is no branch and no history to read, so there is
+# nothing this guard can honestly judge — fail open rather than deny every PR
+# opened from a directory that is not a checkout.
 branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
-grep -qiE "$ISSUE_RE" <<<"$branch" && exit 0
 
 # Any commit on this branch that origin/main does not have.
 #
@@ -138,13 +145,124 @@ grep -qiE "$ISSUE_RE" <<<"$branch" && exit 0
 # commits DO name an issue was denied, with the reason claiming no commit named
 # one. This gate shipped with that bug and denied its own PR. Same family as the
 # false-clean board in `landed-check`.
+log=""
 if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
 	log=$(git log --format='%B' origin/main..HEAD 2>/dev/null || true)
-	grep -qiE "$ISSUE_RE" <<<"$log" && exit 0
 fi
 
-deny "Refused: this PR names no CLOUD-<n> issue — not in the branch \`$branch\`, not in any commit on it, not in the command. The board is this repo's observability surface: work that lands without an issue is invisible, and its follow-ups end up in a chat message that dies with the session.
+# `grep -o` consumes its whole input rather than exiting on the first hit, so
+# piping it is safe under pipefail — the trap documented above applies to
+# `-q`/`-m`/`-l` only.
+extract() { grep -oiE "$ISSUE_RE" <<<"$1" | tr '[:lower:]' '[:upper:]' | sort -u || true; }
+
+# This branch's own PR, if it has one. Read once and used twice: to exclude
+# ourselves from the competitor list below, and — for `gh pr ready`, which
+# carries no body at all — as a source of the issue reference and the claim the
+# PR already declares on GitHub. Guarded, so a missing `gh` leaves every verdict
+# below exactly as it was before this lookup existed.
+mine="" self="" mine_text=""
+if command -v gh >/dev/null 2>&1; then
+	mine=$(gh pr view --json number,title,body 2>/dev/null || true)
+	self=$(jq -r '.number // empty' <<<"$mine" 2>/dev/null || true)
+	mine_text=$(jq -r '(.title // "") + " " + (.body // "")' <<<"$mine" 2>/dev/null || true)
+fi
+
+# Every key this PR MENTIONS, anywhere — the naming check's question, which is
+# only "was the board consulted at all".
+keys=$(extract "$cmd $branch $log $mine_text")
+
+if [ -z "$keys" ]; then
+	deny "Refused: this PR names no CLOUD-<n> issue — not in the branch \`$branch\`, not in any commit on it, not in the command. The board is this repo's observability surface: work that lands without an issue is invisible, and its follow-ups end up in a chat message that dies with the session.
 
 Search the board before writing more code — the issue very often already exists, with measurements that change the fix. Then either name it (branch, commit trailer, or PR body), or create one and name that.
 
 Bypass with BATTEN_ISSUE_GUARD_BYPASS=1 when the PR genuinely precedes its issue."
+fi
+
+# --- the duplicate-claim refusal (CLOUD-230) ----------------------------------
+#
+# Naming an issue proves the board was consulted at *some* point. It does not
+# prove nobody else is already on it, and that is a distinct failure with its own
+# cost: measured here on 2026-08-08, CLOUD-49 was implemented twice in one cycle
+# and one implementation was thrown away. The board carried the claim from
+# 04:29:34; the second session had read the issue at startup, while it was still
+# Todo, and never re-read it.
+#
+# Why this check lives on `pr create`/`pr ready` rather than at pull time: no
+# artifact exists at pull time for a PreToolUse hook to inspect. Nothing has been
+# branched, committed, or pushed, so there is nothing to key on and nothing to
+# deny. This is the EARLIEST computable moment, not a complete one — and it is
+# only early in wall-clock terms if the draft PR is opened before the work, which
+# is what AGENTS.md's board section now asks for. Opened after the work, this
+# still fires, but it refuses a duplicate that has already been paid for.
+#
+# GitHub is the source, deliberately: the tracker has no credential here, but
+# `gh` carries the repo PAT (mem:github-access), and an open PR naming the key is
+# a stronger claim signal than a column anyway — it means someone has published.
+#
+# Fails OPEN on everything: no `gh`, no network, a timeout, an unparseable
+# response, or a repo we cannot resolve. A guard that cannot reach GitHub must
+# never become the reason a session cannot open a PR.
+# WHICH issue this PR claims is a narrower question than which it mentions, and
+# conflating them is a false positive this guard produced against its own PR —
+# twice. A body cites related issues, prior measurements and superseded work as
+# evidence; a branch may carry a bundle name naming two issues that landed hours
+# ago. Neither is a claim. Only these are, most explicit first:
+#
+#   1. a closing keyword — `Closes`/`Fixes`/`Resolves CLOUD-<n>` — in the command
+#      being run, or in the PR this branch already has. `gh pr ready` carries no
+#      body at all, so reading the existing PR is what makes the two calls agree
+#      rather than the second one contradicting the first. It OVERRIDES the
+#      branch, which is the escape hatch for a branch whose name no longer
+#      reflects the work: a bundle branch like
+#      `claude/cloud-37-49-config-…` reads as claiming CLOUD-37 forever, and the
+#      body is how a PR says otherwise.
+#   2. failing that, the branch name — the tracker's own `gitBranchName` shape
+#      names the issue being worked, so a branch is a claim.
+#   3. failing that, a `Refs:` trailer on a commit.
+#
+# When none of those resolves, the duplicate check does not run. That is
+# deliberate: it would be guessing, and a guard that guesses is one that blocks
+# correct work — the failure mode this whole file is written to avoid.
+claim_re='(Closes|Fixes|Resolves)[[:space:]]+CLOUD-[0-9]+'
+claimed=$(extract "$(grep -oiE "$claim_re" <<<"$cmd $log" || true)")
+[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "$claim_re" <<<"$mine_text" || true)")
+[ -n "$claimed" ] || claimed=$(extract "$branch")
+[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
+[ -n "$claimed" ] || exit 0
+[ -n "$mine" ] || command -v gh >/dev/null 2>&1 || exit 0
+
+while read -r key; do
+	[ -n "$key" ] || continue
+	# `--search` covers title and body; the branch list covers a PR whose only
+	# mention of the key is its branch name — which is how the CLOUD-49 duplicate
+	# would have presented, since that branch named no issue at all.
+	found=$(
+		{
+			gh pr list --state open --search "$key" --json number,headRefName \
+				--jq '.[] | "\(.number) \(.headRefName)"' 2>/dev/null || true
+			gh pr list --state open --json number,headRefName \
+				--jq '.[] | "\(.number) \(.headRefName)"' 2>/dev/null || true
+		} | sort -u
+	)
+	[ -n "$found" ] || continue
+
+	while read -r number head; do
+		[ -n "$number" ] || continue
+		# Our own PR is not a competitor — otherwise `pr ready` would deny the
+		# very PR it is readying, every time.
+		[ "$number" = "$self" ] && continue
+		# A branch-name hit only counts when the branch actually carries the key;
+		# the unfiltered listing above is deliberately broad and filtered here.
+		if grep -qiE "(^|[^0-9])${key}([^0-9]|$)" <<<"$head" ||
+			grep -qiE "(^|[^0-9])${key}([^0-9]|$)" <<<"$(gh pr view "$number" --json title,body --jq '.title + " " + .body' 2>/dev/null || true)"; then
+			deny "Refused: $key is already claimed by open PR #$number (branch \`$head\`). Two agents on one issue is work that gets thrown away — it has happened in this repo, and the discarded side had already been written and verified before anyone noticed.
+
+Check the board before opening a second front: pipe the issue's payload to \`mise run claim-check\`, and take the frontier from \`mise run graph-check\` rather than a stale snapshot read at session start. If #$number is stale or abandoned, say so on the issue and close it rather than racing it.
+
+Bypass with BATTEN_ISSUE_GUARD_BYPASS=1 when a second PR against one issue is deliberate."
+		fi
+	done <<<"$found"
+done <<<"$claimed"
+
+exit 0

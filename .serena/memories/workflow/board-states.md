@@ -57,12 +57,33 @@ attachment is what makes the In Review predicate true.
 ## The board moves itself — supply the key, don't perform the transition
 
 The tracker's GitHub integration performs the state transitions from the issue
-identifier appearing in a branch name, PR title, or commit message. Measured
-here: a commit carrying `Refs: CLOUD-178` moved that issue Todo -> In Progress,
-set its assignee, and attached the PR, with no write call from the session.
+identifier appearing in a branch name, PR title, or commit message — with no
+write call from the session.
 
-So an agent hand-moving the board is doing work that is already automated, and
-doing it the fragile way. A state change is a tracker write, and a write can be
+**But it is publish-side only, and an earlier version of this entry got that
+wrong.** It claimed a commit carrying `Refs: CLOUD-178` moved that issue Todo ->
+In Progress. Re-measured 2026-08-08 (CLOUD-230): a commit carrying `Refs:
+CLOUD-37`, pushed at 04:33:18, moved nothing. The issue went In Progress at
+04:35:08 — eight seconds after `gh pr create`, ~105 seconds after that push —
+and was Done at 04:38:27. **The PR event is the trigger, not the keyed commit.**
+
+So the automation issues a _receipt_ for work already written. It cannot reserve
+anything, because at pull time nothing has been pushed and no key can travel.
+**The pull-time claim is yours to make by hand** — move Todo -> In Progress and
+assign yourself _before_ writing code. That is not the redundant hand-move
+warned about below; the redundant one is the publish-side move the integration
+already performs.
+
+What it cost when nobody did: CLOUD-49 went In Progress at 04:29:34 and a second
+session started writing it ~6 minutes later, having read the issue at startup
+while it was still Todo and never re-read it. Both implementations were
+complete; one was discarded. `mise run claim-check` is that re-read, with an
+exit code (`not-todo` / `assigned` / `has-pr`), and `issue-guard` now refuses
+`gh pr create` when another open PR already claims the key — the earliest
+computable moment, since no artifact exists at pull time for a hook to inspect.
+
+For the transitions the automation _does_ perform, an agent hand-moving the
+board is doing work that is already automated, and doing it the fragile way. A state change is a tracker write, and a write can be
 denied mid-session when the connector re-registers under a name no allow rule
 matches (CLOUD-178) — which is exactly how a session lost the ability to update
 the board for three landed PRs. An identifier in a commit travels in git, where

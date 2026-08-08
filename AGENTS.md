@@ -87,21 +87,21 @@ tool calls, not prose (CLOUD-200).
 
 ## The board: move the issue as you move the work
 
-The Linear board is the observability surface. **The state transition IS how
-others know** — there is no separate "tell people." Move the `CLOUD-*` issue in
-lockstep: **Todo** = the ready queue (the issue's Ready block is satisfied —
-"Ready" is that block, not a status); **In Progress** = pulled, assign yourself
-in the same move; **In Review** = landed on `main` — [trunk-based
-development][tbd] reviews after merge, unreviewed paths stay behind feature
-flags, never a withheld merge; **Done** = the [dor-dod] Done definition holds
-(landed by fast-forward, CI green; release mapping: CLOUD-192). The
-Ready-vs-Todo trap and the gate gap: `mem:workflow/board-states`.
+The board is the observability surface: **the state transition IS how others
+know**, and there is no separate "tell people." Move the `CLOUD-*` issue in
+lockstep: **Todo** = the ready queue ("Ready" is the issue's Ready block, not a
+status); **In Progress** = pulled — claim it **by hand, before writing code**
+(`mise run claim-check`) and assign yourself: the automation fires on the PR
+event, the _end_ of the work, so waiting for it reserves nothing; **In Review**
+= landed on `main` — [trunk-based development][tbd] reviews after merge,
+unreviewed paths stay behind feature flags, never a withheld merge; **Done** =
+[dor-dod]'s Done holds (releases: CLOUD-192). Trap and claim detail:
+`mem:workflow/board-states`.
 
 [tbd]: https://trunkbaseddevelopment.com/
 
-**Branching is trunk-based.** `main` is the single long-lived, always-releasable
-branch; work on short-lived branches landed within a day or two, by fast-forward,
-so `main` stays a linear sequence of tested commits.
+**Branching is trunk-based.** `main` is the one long-lived, always-releasable
+branch; short-lived branches land by fast-forward, keeping it linear and tested.
 
 ## Workflow contract: verify locally, then land
 

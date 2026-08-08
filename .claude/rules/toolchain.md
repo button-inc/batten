@@ -36,6 +36,10 @@ block: only the clauses _present_ (restating all eight is forbidden by the DoR
 doc), anchored on label+tag pairs like `Commit / bump (§6)` because bare `(§N)`
 collides with house-style section references, holding §8 to `blockedBy` _claims_
 (one sentence, mention markup stripped) against the real relations. `mise run
+claim-check` is the pull-time half: pipe the payload for the issue you mean to
+pull and it exits non-zero on `not-todo`, `assigned`, or `has-pr` (a PR already
+attached — someone published before the column moved). The automation will not
+claim for you; it fires on the PR event, which is the end of the work. `mise run
 graph-check` enforces the board discipline (`In Progress ⇒ assignee`,
 `In Review ⇒ a linked PR attachment`, acyclic and non-dangling `blockedBy`) and
 emits the ready frontier + WIP count on stdout — the same command gates and
@@ -67,7 +71,14 @@ restate its count here), each failing open on anything it can't parse:
 - `context-budget` gates AGENTS.md plus anything always-loaded against a token
   budget — what every agent pays every turn.
 - `issue-guard` denies `gh pr create` and `gh pr ready` unless the work names a
-  `CLOUD-<n>` issue — in the branch, in a commit on it, or in the command. The
+  `CLOUD-<n>` issue — in the branch, in a commit on it, or in the command — and,
+  since CLOUD-230, unless that issue is unclaimed: a different **open** PR
+  naming the key (title, body, or branch) is refused, because CLOUD-49 was
+  implemented twice in one cycle and one side was thrown away. GitHub is the
+  source for that lookup, not the tracker, and it fails open when `gh` is
+  absent or failing. It is the _earliest_ computable moment, not an early one:
+  no artifact exists at pull time for a hook to inspect, so opening the draft PR
+  before the work is what makes the refusal cheap. The
   board rule was prose, and prose is feedforward only: a session followed every
   gated discipline and skipped every ungated one, landing three PRs with no
   issue moved and an existing issue (carrying measurements that contradicted the

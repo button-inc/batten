@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the issue you are about to pull is actually unclaimed (reads get_issue payloads on stdin)"
+#
+# CLOUD-230. The board's Todo -> In Progress transition is **publish-side only**.
+# Measured here on 2026-08-08: a commit carrying `Refs: CLOUD-37`, pushed at
+# 04:33:18, moved nothing; the issue went In Progress at 04:35:08, eight seconds
+# after `gh pr create` and ~105 seconds after that push. It was Done at 04:38:27.
+# So the automation issues a *receipt* for work already written, and structurally
+# cannot act as a claim: at pull time nothing has been pushed, so no key can
+# travel and there is nothing for the integration to key on.
+#
+# What that costs, measured rather than hypothesised: CLOUD-49 went In Progress
+# at 04:29:34, and a second session started writing it roughly six minutes later
+# and threw the result away. The board carried the claim the whole time. Nothing
+# made that session read it.
+#
+# This is the read, given an exit code. `graph-check` already answers the same
+# question in aggregate — an In Progress issue is excluded from its ready
+# frontier by construction — but the frontier is a set, and pulling is a decision
+# about one issue. This is that decision, checkable in one call.
+#
+# Interface, deliberately the same as `graph-check`: **agents fetch, gates
+# decide.** No tracker credential exists, so the caller pipes the
+# `get_issue(includeRelations: true)` payload for the issue it means to pull and
+# this stays a pure function of stdin — no network, and therefore nothing that
+# can hang, rate-limit, or fail differently in the sandbox than in CI.
+#
+# The three rules, and why the first is the load-bearing one:
+#
+#   not-todo   status is not Todo — already In Progress, In Review, or Done.
+#   assigned   Todo, but someone has already put their name on it.
+#   has-pr     a GitHub pull request is already attached to it.
+#
+# `assigned` deliberately does NOT say "assigned to someone else", because in
+# this workspace it cannot: every agent authenticates as the same tracker user,
+# so self and other are indistinguishable in the payload. Reporting a name
+# comparison here would be a check that looks like it discriminates and does
+# not. `not-todo` is what actually catches a concurrent agent, and `has-pr`
+# catches one that published before the column moved.
+#
+# Exit 0 pullable / 1 not pullable / 2 unreadable stdin — matching `graph-check`
+# so the two compose in one pipeline.
+set -euo pipefail
+
+# Accept either a JSON array or a concatenated stream of payload objects, the
+# same normalisation `graph-check` performs, so a caller can pipe either shape
+# to either gate. Exit 2 is "unreadable input", distinct from a failing check.
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
+	[ "$(jq 'length' <<<"$issues")" = 0 ] ||
+	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
+	exit 2
+fi
+
+blocked=0
+# Pointer-only per non-negotiable rule 4: the issue id and the rule id, plus the
+# PR number where there is one. Never an issue body, never a title.
+report() {
+	echo "$1 $2" >&2
+	blocked=$((blocked + 1))
+}
+
+while read -r id; do
+	[ -n "$id" ] || continue
+	payload=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues")
+	status=$(jq -r '.status // ""' <<<"$payload")
+
+	if [ "$status" != "Todo" ]; then
+		report "$id" "not-todo (in $status)"
+		continue
+	fi
+
+	# `assignee` is a name string when set and absent or null when not.
+	if [ "$(jq -r 'if (.assignee // null) == null then "" else "set" end' <<<"$payload")" = "set" ]; then
+		report "$id" "assigned"
+	fi
+
+	# An attachment whose URL is a GitHub pull request. Matched on the URL shape
+	# rather than the title, which is free text a human wrote.
+	pr=$(jq -r '[.attachments // [] | .[] | .url | select(test("github\\.com/.+/pull/[0-9]+"))]
+	            | first // ""' <<<"$payload")
+	if [ -n "$pr" ]; then
+		report "$id" "has-pr (${pr##*/})"
+	fi
+done <<<"$(jq -r '.[].id' <<<"$issues")"
+
+if [ "$blocked" -ne 0 ]; then
+	echo "::error:: claim-check: not pullable — someone is already on it. Pick another issue from \`mise run graph-check\`'s frontier, or take this one over deliberately rather than by collision." >&2
+	exit 1
+fi
+
+echo "claim-check: pullable ($(jq 'length' <<<"$issues") issue(s)) — claim it before you write code: move Todo -> In Progress and assign yourself. The tracker automation will not do this for you; it fires on the PR event, which is the end of the work, not the start."
