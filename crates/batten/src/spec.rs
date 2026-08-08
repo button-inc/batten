@@ -204,6 +204,7 @@ mod tests {
             vec![
                 "check".to_owned(),
                 "config".to_owned(),
+                "config epoch".to_owned(),
                 "config lint".to_owned(),
                 "config show".to_owned(),
                 "doctor".to_owned(),

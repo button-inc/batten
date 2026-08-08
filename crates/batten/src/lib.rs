@@ -12,6 +12,7 @@ pub mod cli;
 pub mod config;
 pub mod doctor;
 pub mod effect;
+pub mod epoch;
 pub mod error;
 pub mod exit;
 pub mod git;
@@ -298,6 +299,18 @@ fn run_config(
         // verdict about the *config*, so any smell is a Violation — the same
         // code a rule finding returns, because it is the same kind of answer.
         // An unparseable config is a Usage error, raised by the loader.
+        // The epoch is a pure function of the tracked files' bytes, so it is
+        // read-effect and byte-stable. An unreadable tracked path propagates as
+        // an internal error (exit 3) rather than being skipped — see `epoch`.
+        ConfigCommand::Epoch => {
+            // The epoch covers whichever authority governed the run: under
+            // `--config-from` that is the ref's surface, never the working
+            // tree's (CLOUD-31). An epoch attributing a run to a config that
+            // did not govern it would be worse than none.
+            let value = epoch::compute(Path::new("."), overrides.config_from.as_deref())?;
+            writeln!(out, "{value}")?;
+            Ok(ExitCode::Success)
+        }
         ConfigCommand::Lint => {
             let smells = lint::run(Path::new("."), overrides.config_from.as_deref())?;
             for smell in &smells {

@@ -87,6 +87,17 @@ impl Check {
 pub struct Report {
     /// The running binary's version.
     pub version: &'static str,
+    /// The content hash of the governing config surface (CLOUD-32), when it
+    /// could be computed.
+    ///
+    /// Absent rather than empty when the config did not load or a tracked path
+    /// is unreadable: a placeholder would be a *stable* value over an unknown
+    /// surface, which is exactly what the epoch exists to prevent. `doctor` does
+    /// not fail on that — the `config` check above already names the cause, and
+    /// a diagnostic that could exit 3 for a missing file would stop being the
+    /// config-or-usage-only verb §7 needs it to be.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_epoch: Option<String>,
     /// Whether every diagnostic passed.
     pub ok: bool,
     /// Each diagnostic, in a fixed order.
@@ -186,8 +197,13 @@ pub fn diagnose(dir: &Path) -> Report {
         Check::passed(COMMAND_PROGRAMS)
     });
 
+    // The working-tree authority: `doctor` diagnoses the checkout in front of
+    // it, so it does not take a base ref.
+    let config_epoch = crate::epoch::compute(dir, None).ok();
+
     Report {
         version: config::VERSION,
+        config_epoch,
         ok: checks.iter().all(|check| check.ok),
         checks,
     }

@@ -139,7 +139,7 @@ fn a_working_tree_that_weakens_protected_paths_is_judged_by_base_policy() {
     let repo = pr_fixture(
         "trust-protected-weakened",
         &format!(
-            "version = 1\nprotected = [\"crates/**\", \"hk.pkl\"]\n{}",
+            "version = 1\nprotected = [\"crates/**\", \"policy.toml\"]\n{}",
             rule("no-todo", "deny")
         ),
         "version = 1\nprotected = []\n",
@@ -154,7 +154,7 @@ fn a_working_tree_that_weakens_protected_paths_is_judged_by_base_policy() {
         "got: {text}"
     );
     assert!(
-        text.contains("batten.toml:protected[hk.pkl] present→absent"),
+        text.contains("batten.toml:protected[policy.toml] present→absent"),
         "got: {text}"
     );
     assert!(

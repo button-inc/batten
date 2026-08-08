@@ -343,6 +343,14 @@ pub const SURFACE: &[CommandDecl] = &[
     },
     // Complements `--config-from` rather than replacing it (CLOUD-87): that
     // makes a weakening *ineffective*, this makes it *visible*.
+    // The value only (CLOUD-32). Stamping it onto guard/decision records is
+    // CLOUD-133's, which defines the record it would be stamped on.
+    CommandDecl {
+        path: "config epoch",
+        about: "Print the content hash of the governing config surface",
+        effect: Effect::Read,
+        flags: &[],
+    },
     CommandDecl {
         path: "config lint",
         about: "Report policy smells in batten.toml (any smell is a violation)",

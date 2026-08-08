@@ -49,6 +49,26 @@ file itself for the "why", this is only the "where":
   reason id, never the error text, so `--json` is byte-stable and carries no
   filesystem path. Distinct from `mise-tasks/doctor`, which gates this repo's own
   provisioning.
+- `epoch.rs` — `config_epoch` (CLOUD-32): a SHA-256 over the governing config
+  surface, so two records carrying the same epoch were produced under provably
+  the same rules. The tracked set is **config** (`[epoch] tracked`), not code —
+  which files govern a repo is that repo's business, so the core carries only the
+  default (`batten.toml`) and Batten's own list lives in Batten's own config
+  (rule 1) — and true as a _grep_, not merely in spirit: no consumer's
+  identifiers appear anywhere in `crates/batten`, doc comments included.
+  Built on `identity::surface_fingerprint` — the one length-prefixed SHA-256
+  construction, shared with findings rather than a second hash of the same
+  bytes — so a rename cannot be hidden by choosing names, authoring order never
+  reaches the value (paths sorted + deduped), and a CRLF checkout attributes
+  identically (NFC/`LF` canonicalization). Follows `--config-from`: under a base
+  ref both the tracked list _and_ the bytes come from the ref, never the working
+  tree, so the epoch attributes the config that actually governed. An unreadable
+  tracked path is **exit 1, naming the path** — the tracked set _is_ config, so
+  an unreadable one is unreadable config (§7); `3` stays for I/O not
+  attributable to the config. Never a skip: that would compute a _stable_ epoch
+  over a changed surface, which looks exactly like a valid answer. Surfaced by
+  `config epoch` and in `doctor --json`; stamping onto guard records is
+  CLOUD-133's, the cache/etag revalidation CLOUD-232's.
 - `error.rs` — two typed carriers the binary boundary downcasts on: `UsageError`
   → `ExitCode::Usage` (1) for expected bad-input vs. an internal failure, and
   `Denial` → `ExitCode::Violation` (2), the mediation verdict travelling to the

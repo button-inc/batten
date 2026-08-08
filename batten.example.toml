@@ -102,3 +102,18 @@ glob = "**/*.rs"
 pattern = "<<<<<<< "
 severity = "deny"
 scope = "tree"
+
+# The governing config surface: the files whose bytes `batten config epoch`
+# hashes into one attributable value, so two records carrying the same epoch
+# were produced under provably the same rules.
+#
+# List the files that actually govern YOUR repository — an agent settings file,
+# a contributor guide, a hook config. Order does not matter (the set is sorted
+# before hashing) and a duplicate is ignored. Absent, or empty, means the
+# default: this file alone, which governs every consumer by definition.
+#
+# Every listed path must be readable. An unreadable one exits 3 rather than
+# being skipped: a skip would compute a stable epoch over a surface that
+# changed, which looks exactly like a valid answer.
+[epoch]
+tracked = ["batten.toml"]

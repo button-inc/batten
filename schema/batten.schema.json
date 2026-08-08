@@ -4,6 +4,17 @@
   "description": "A parsed, validated `batten.toml`.\n\n`deny_unknown_fields` makes an unrecognised key a hard error (§8): the config\nsurface stays narrow and a typo can never silently disable a gate.",
   "type": "object",
   "properties": {
+    "epoch": {
+      "description": "Which files make up the governing config surface the `config_epoch`\nhashes (CLOUD-32). Absent means the default: this file alone.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Epoch"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "fail_on_warning": {
       "description": "Whether a `warn`-severity finding is promoted to a violation (CLOUD-49).\nAbsent means \"this file does not speak to the setting\", which is what\nlets [`crate::resolve`] attribute the effective value to the layer that\nactually set it. Policy-bearing, so an override may only turn it *on*\n(§8): `false` over a committed `true` is refused, never applied.",
       "type": [
@@ -92,6 +103,20 @@
         "unclassified",
         "ask"
       ]
+    },
+    "Epoch": {
+      "description": "The `[epoch]` table: which files govern this repository.\n\nDeclared as **config** rather than compiled in, because which files govern a\nrepository is that repository's business: an agent settings file, a\ncontributor guide, a hook config — each meaningful in one repository and\nmeaningless in the next. The core therefore carries only the default (this\nfile), and every consumer's own list lives in that consumer's own config, so\na grep of `crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1).",
+      "type": "object",
+      "properties": {
+        "tracked": {
+          "description": "Repo-relative paths whose bytes the epoch covers. Order is irrelevant —\n[`crate::epoch::tracked_paths`] sorts and deduplicates, so the value is a\nfunction of the set rather than of how it was written.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "Marker": {
       "description": "One suppression marker declared in `batten.toml`.\n\nThe two fields are deliberately separate axes: `id` is the stable name a\ncount is reported under and may not change when the spelling does, while\n`token` is the literal text scanned for. Collapsing them would make every\nre-spelling of a marker look like a brand-new one whose count starts at\nzero — the ratchet defeated by a rename.",

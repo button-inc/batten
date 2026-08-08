@@ -15,8 +15,14 @@ version = 1
 # Minimum Batten version permitted to read this file (semver). Enforced: a binary
 # older than this refuses to run rather than reporting green over rules it does
 # not understand (exit 1 — a statement about the invocation, not a policy
-# verdict). Equal or newer runs. 0.0.0 accepts every build.
-min_batten_version = "0.0.0"
+# verdict). Equal or newer runs.
+#
+# Raised off 0.0.0 when this file started declaring `[epoch]` (CLOUD-32): a new
+# key must be REFUSED by an older binary, never ignored. `deny_unknown_fields`
+# is what actually forces that — an older build fails on the unknown key — and
+# this floor states the intent so the refusal names the version rather than the
+# key.
+min_batten_version = "0.0.30"
 
 # Batten gates this repository with its own engine — consumer #1 in practice,
 # not just in principle. Each rule below runs under `batten check`.
@@ -36,3 +42,23 @@ glob = "crates/**/*.rs"
 pattern = "<<<<<<< "
 severity = "deny"
 scope = "tree"
+
+# The governing config surface, hashed into `batten config epoch` (CLOUD-32).
+#
+# This list is consumer-specific ON PURPOSE, and it lives here rather than in
+# crates/batten: which files govern a repository is that repository's business,
+# and these four govern *this* one. The core ships only the default — batten.toml
+# itself — so a grep of the engine for any consumer's identifiers returns
+# nothing (non-negotiable rule 1). Batten is consumer #1 in practice: this is
+# the worked example of the feature, in the config the feature reads.
+#
+# Every path must be readable. An unreadable one is exit 3, never a silent skip
+# — skipping would compute a stable epoch over a surface that changed, which is
+# precisely the failure the value exists to prevent.
+[epoch]
+tracked = [
+  "batten.toml",
+  "AGENTS.md",
+  "hk.pkl",
+  ".claude/settings.json",
+]

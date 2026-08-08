@@ -186,16 +186,67 @@ pub fn normalize_span(span: &str, mode: SpanNormalization) -> String {
 /// field boundaries are injective: `("ab","c")` can never collide with
 /// `("a","bc")`.
 fn fingerprint_of(kind: FindingKind, fields: &[&str]) -> Fingerprint {
+    let bytes: Vec<&[u8]> = fields.iter().map(|field| field.as_bytes()).collect();
+    tagged_fingerprint(kind.as_tag(), &bytes)
+}
+
+/// The one framing: a domain tag then each field, every one length-prefixed.
+///
+/// The prefix is load-bearing. Without it `["ab", "c"]` and `["a", "bc"]` hash
+/// identically, so a rename could be made invisible by choosing the right
+/// names. Every identity in this crate — findings and the config-surface epoch
+/// alike — goes through here, so there is one construction rather than two that
+/// can drift.
+fn tagged_fingerprint(tag: &str, fields: &[&[u8]]) -> Fingerprint {
     let mut hasher = Sha256::new();
-    let tag = kind.as_tag().as_bytes();
-    hasher.update(u64::try_from(tag.len()).unwrap_or(u64::MAX).to_le_bytes());
-    hasher.update(tag);
+    write_field(&mut hasher, tag.as_bytes());
     for field in fields {
-        let bytes = field.as_bytes();
-        hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
-        hasher.update(bytes);
+        write_field(&mut hasher, field);
     }
     Fingerprint(hasher.finalize().into())
+}
+
+fn write_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
+    hasher.update(bytes);
+}
+
+/// The domain tag for a config-surface identity, distinct from every
+/// [`FindingKind`] tag so a surface hash can never collide with a finding's.
+const SURFACE_TAG: &str = "surface";
+
+/// The identity of a **file surface**: an ordered set of `(path, contents)`
+/// pairs — the `config_epoch`'s construction (CLOUD-32).
+///
+/// Not a finding, so it carries its own domain tag rather than a
+/// [`FindingKind`]; it reuses the framing above rather than minting a second
+/// hash of the same bytes.
+///
+/// Text content is canonicalized like a span — NFC, `LF` line endings, no
+/// trailing-whitespace collapse — so the same policy checked out on Windows or
+/// macOS attributes identically. Content that is not valid UTF-8 is hashed
+/// verbatim: there is nothing to normalize, and refusing it would make the
+/// tracked set silently text-only.
+///
+/// The path is hashed as well as the bytes, so the *set* is part of the
+/// identity: adding an empty file still moves the value.
+#[must_use]
+pub fn surface_fingerprint(entries: &[(String, Vec<u8>)]) -> Fingerprint {
+    let normalized: Vec<(Vec<u8>, Vec<u8>)> = entries
+        .iter()
+        .map(|(path, contents)| {
+            let content = match std::str::from_utf8(contents) {
+                Ok(text) => normalize_span(text, SpanNormalization::Verbatim).into_bytes(),
+                Err(_) => contents.clone(),
+            };
+            (path.as_bytes().to_vec(), content)
+        })
+        .collect();
+    let fields: Vec<&[u8]> = normalized
+        .iter()
+        .flat_map(|(path, content)| [path.as_slice(), content.as_slice()])
+        .collect();
+    tagged_fingerprint(SURFACE_TAG, &fields)
 }
 
 /// The identity of a code-anchored finding:

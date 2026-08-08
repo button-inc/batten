@@ -112,6 +112,8 @@ pub enum ConfigCommand {
     Show,
     /// Report policy smells in `batten.toml`.
     Lint,
+    /// Print the content hash of the governing config surface.
+    Epoch,
 }
 
 /// Subcommands of `generate`.
@@ -183,6 +185,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             .and_then(|(name, _)| match name {
                 "show" => Some(ConfigCommand::Show),
                 "lint" => Some(ConfigCommand::Lint),
+                "epoch" => Some(ConfigCommand::Epoch),
                 _ => None,
             })
             .map(|command| Command::Config { command }),

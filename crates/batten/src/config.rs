@@ -131,6 +131,10 @@ pub struct Config {
     /// `protected`, and the sets must never be collapsed (CLOUD-37).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unlanded: Vec<String>,
+    /// Which files make up the governing config surface the `config_epoch`
+    /// hashes (CLOUD-32). Absent means the default: this file alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<Epoch>,
     /// The mutating-verb table (CLOUD-36): which programs change the world, in
     /// the one §5 effect vocabulary. Consumer-specific by nature, so it lives
     /// here and never in the crate (non-negotiable rule 1); the type and its
@@ -142,6 +146,25 @@ pub struct Config {
     /// Batten; the type and the counting are [`crate::markers`].
     #[serde(default, rename = "marker", skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<crate::markers::Marker>,
+}
+
+/// The `[epoch]` table: which files govern this repository.
+///
+/// Declared as **config** rather than compiled in, because which files govern a
+/// repository is that repository's business: an agent settings file, a
+/// contributor guide, a hook config — each meaningful in one repository and
+/// meaningless in the next. The core therefore carries only the default (this
+/// file), and every consumer's own list lives in that consumer's own config, so
+/// a grep of `crates/batten` for any consumer's identifiers returns nothing
+/// (non-negotiable rule 1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Epoch {
+    /// Repo-relative paths whose bytes the epoch covers. Order is irrelevant —
+    /// [`crate::epoch::tracked_paths`] sorts and deduplicates, so the value is a
+    /// function of the set rather than of how it was written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tracked: Vec<String>,
 }
 
 /// Parse and validate a `batten.toml` from `text`, attributing errors to
