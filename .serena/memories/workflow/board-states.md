@@ -93,15 +93,24 @@ automation that did not run is not an excuse for a board that is wrong.
 
 Two things this does NOT cover, both observed rather than assumed:
 
-- **The merge-side transition did not fire.** #100 merged and CLOUD-178 stayed
-  In Progress; its state history shows only the one transition. Landing still
-  needs checking, and In Review / Done may need configuring on the integration
-  side before that half can be trusted. One exception, measured on CLOUD-61
-  (#129): a PR body carrying `Closes CLOUD-<n>` makes the integration complete
-  the issue on merge — overshooting In Review straight to Done, which is wrong
-  while the release has not shipped. Write `Refs:`/plain mentions in PR bodies,
-  never `Closes`, and check the state after landing; the fix is a hand-move
-  back to In Review (the board must be true).
+- **The merge-side transition fires now, and it lands on Done — not In Review.**
+  The older reading here (from #100 / CLOUD-178, where it did not fire at all)
+  is superseded. Measured on CLOUD-61: merging #129 moved In Progress → Done,
+  and merging #131 did it again from In Progress. **It is not keyword-gated** —
+  an earlier version of this entry blamed `Closes CLOUD-<n>`, and #131 falsified
+  that: its body said only "Follow-up to #129 (CLOUD-61)" with a `Refs:` trailer
+  and the issue still completed on merge. Opening a PR drives the other
+  direction: In Review → In Progress, measured two minutes after a hand-move.
+  So **hand-moving to In Review does not stick** — the next PR event overwrites
+  it, and re-doing the move is a fight with an automation that will win.
+
+  What to do instead: let the automation land the issue on Done, then check
+  whether Done is _truthful_ — the [dor-dod] gate is "released", and that is a
+  computable question, not a judgement. `git tag --contains <sha>` (or `mise run
+released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
+  shipped in v0.0.19. Only a Done whose commit is in **no** tag is a board that
+  is lying, and that is the case worth a hand-move.
+
 - **Prefer the tracker's own branch name.** Each issue exposes a `gitBranchName`
   (`<user>/cloud-178-<slug>`); a branch named that way carries the key from the
   first push, before any commit message does.
