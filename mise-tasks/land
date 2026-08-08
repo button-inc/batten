@@ -224,10 +224,45 @@ while :; do
 	gh pr comment "$pr" --body "/fast-forward"
 	echo "land: lap $lap — commented /fast-forward on #$pr ($sha); waiting for the merge"
 
+	# This wait is raced too (CLOUD-246). The CI wait above got the race and
+	# this one did not, which is backwards: a bot that answers nothing is
+	# exactly how landing once blocked for 26,123s (~7h15m) on #159 while
+	# `main` advanced 10 commits. The two exits below both depend on something
+	# external happening — the PR moving, or a run appearing and completing —
+	# and neither is guaranteed. `LAND_MAX_LAPS` cannot cover it either: the lap
+	# counter only advances when this poll breaks, so a poll that never breaks
+	# never reaches the backstop.
+	#
+	# `main-watch` is the same authority the CI wait races, not a second
+	# derivation of "is this SHA still landable". Once `main` moves past this
+	# branch the bot's answer can only be "no", whatever it does or does not
+	# say, so a win here is an ordinary lap rather than an error.
+	rc_ff="$(mktemp)"
+	: >"$rc_ff"
+	(
+		mise run main-watch "$base_main" >/dev/null 2>&1
+		echo $? >"$rc_ff"
+	) &
+	ff_watch_pid=$!
+	# Reap the watcher on every way out of this poll, the merged path included,
+	# so no `gh` poller outlives the task that started it. The pid is killed as
+	# well as its group, and the `wait` names that pid rather than waiting on
+	# everything: the loser of this race blocks indefinitely by construction, so
+	# a bare `wait` after a group-kill that did not land would hang here — which
+	# is the failure this whole change exists to remove.
+	reap_watch() {
+		kill "$ff_watch_pid" 2>/dev/null
+		kill -- -"$ff_watch_pid" 2>/dev/null
+		wait "$ff_watch_pid" 2>/dev/null
+		rm -f "$rc_ff"
+	}
+
 	refused=""
+	moved=""
 	while :; do
 		state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null)
 		if [ -n "$state" ] && [ "$state" != "OPEN" ]; then
+			reap_watch
 			git fetch -q origin main
 			echo "land: PR #$pr is $state after $lap lap(s); origin/main is now $(git rev-parse --short origin/main)"
 			[ "$state" = "MERGED" ] || die "PR #$pr is $state — closed without merging."
@@ -248,8 +283,23 @@ while :; do
                        | .conclusion] | first // empty' 2>/dev/null)
 		[ -z "$refused" ] || break
 
+		# The other way this lap can end: the bot has said nothing, but `main`
+		# has moved past this branch, so there is no answer left worth waiting
+		# for. An unmoved `main` and a quiet bot is NOT this case — nothing has
+		# changed and the PR may still merge, so that keeps polling.
+		if [ "$(cat "$rc_ff" 2>/dev/null)" = "0" ]; then
+			moved=1
+			break
+		fi
+
 		sleep "$interval"
 	done
+	reap_watch
+
+	if [ -n "$moved" ]; then
+		echo "land: lap $lap — main moved under ${sha:0:8} while the bot was still silent, so the fast-forward can only be refused. Lapping: rebase, re-verify, retry."
+		continue
+	fi
 
 	echo "land: lap $lap — the fast-forward bot refused ($refused); main moved under the branch. Lapping: rebase, re-verify, retry."
 done

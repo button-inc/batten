@@ -151,24 +151,33 @@ case "\$2" in
     exit 0 ;;
   ci-wait)  [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
   main-watch)
-    n=\$(cat "$BATS_TEST_TMPDIR/mw.calls" 2>/dev/null || echo 0)
-    n=\$((n + 1)); echo "\$n" >"$BATS_TEST_TMPDIR/mw.calls"
-    wins=\$(cat "$BATS_TEST_TMPDIR/mw.wins" 2>/dev/null || echo 0)
-    [ "\$n" -le "\$wins" ] || { while :; do sleep 1; done; }
+    # A lap starts two watchers, and they are told apart by WHEN: the one
+    # racing the fast-forward answer is by construction the one started after
+    # this lap's comment. Counting them separately is not cosmetic — a single
+    # shared counter is read stale by the second watcher and neither ever wins.
+    if [ -s "$BATS_TEST_TMPDIR/comments" ]; then role=answer; else role=ci; fi
+    n=\$(cat "$BATS_TEST_TMPDIR/mw.\$role.calls" 2>/dev/null || echo 0)
+    n=\$((n + 1)); echo "\$n" >"$BATS_TEST_TMPDIR/mw.\$role.calls"
+    wins=\$(cat "$BATS_TEST_TMPDIR/mw.\$role.wins" 2>/dev/null || echo 0)
+    [ "\$n" = "\$wins" ] || { while :; do sleep 1; done; }
     exit 0 ;;
 esac
 exit 0
 EOF
 	chmod +x "$STUB/mise"
-	rm -f "$BATS_TEST_TMPDIR/receipt" "$BATS_TEST_TMPDIR/mw.calls" \
-		"$BATS_TEST_TMPDIR/mw.wins" "$BATS_TEST_TMPDIR/ci-wait.slow"
+	rm -f "$BATS_TEST_TMPDIR/receipt" "$BATS_TEST_TMPDIR/ci-wait.slow" \
+		"$BATS_TEST_TMPDIR"/mw.*
 }
 
 fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.$1"; }
 already_verified() { : >"$BATS_TEST_TMPDIR/receipt"; }
 is_draft() { printf 'true' >"$BATS_TEST_TMPDIR/isdraft"; }
 ci_is_slow() { : >"$BATS_TEST_TMPDIR/ci-wait.slow"; }
-main_moves_on_lap() { echo "$1" >"$BATS_TEST_TMPDIR/mw.wins"; }
+# A lap makes TWO `main-watch` calls: one racing `ci-wait`, one racing the
+# fast-forward answer (CLOUD-246). Each is counted under its own role, so a
+# case says which of the two moves `main` and on which lap.
+main_moves_on_lap() { echo "$1" >"$BATS_TEST_TMPDIR/mw.ci.wins"; }
+main_moves_during_answer_wait() { echo "$1" >"$BATS_TEST_TMPDIR/mw.answer.wins"; }
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
 task_fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.$1"; }
 not_linear() { echo 1 >"$BATS_TEST_TMPDIR/rc.linear"; }
@@ -479,6 +488,67 @@ workflow_runs() {
 	[[ "$output" == *"receipt"* ]]
 }
 
+@test "a silent bot with main moved ends the lap instead of polling" {
+	# THE 7h15m CASE (CLOUD-246). The bot answers nothing at all — no terminal
+	# PR state, no completed run — while `main` advances past the branch. Before
+	# this the answer poll had no third exit and blocked for 26,123s on #159.
+	#
+	# `main_moves_during_answer_wait 1` is what makes the distinction testable:
+	# lap 1's CI-race watcher still loses, so the lap reaches the answer poll,
+	# and only the watcher started there wins. Lap 2 then merges, so `land`
+	# exits on its own — which every case here must let it do, because `set -m`
+	# puts each watcher in its own process group and a `timeout` kill of the
+	# parent would leave one holding this suite's stdout open.
+	main_moves_during_answer_wait 1
+	pr_state OPEN MERGED
+	workflow_runs runs.last
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"main moved under"* ]]
+	[[ "$output" == *"while the bot was still silent"* ]]
+	# Two laps means it really lapped rather than falling through.
+	[ "$(comments)" -eq 2 ]
+}
+
+@test "a silent bot with main unmoved keeps polling" {
+	# The other half, and why the fix is a race rather than a timeout: nothing
+	# has changed, so the PR may still merge, and ending the lap here would
+	# abandon a landing that was going to succeed.
+	#
+	# This is the one case that must kill `land` to prove a negative, so it
+	# redirects to a file instead of going through `run`: the orphaned watcher
+	# would otherwise hold the pipe and hang the suite rather than fail it.
+	pr_state OPEN
+	workflow_runs runs.last
+	local out="$BATS_TEST_TMPDIR/still-waiting" rc=0
+	# `|| rc=$?` because a bats body aborts on a non-zero command, and 124 is
+	# the result this case is asserting rather than a failure of it.
+	timeout -k 1 5 "$LAND" >"$out" 2>&1 || rc=$?
+	[ "$rc" -eq 124 ]
+	# This is the only case that kills `land` mid-poll, and `land` runs `set -m`
+	# so each watcher has its own process group and outlives the parent. Left
+	# alone they block forever and the suite never exits — so this reaps the
+	# ones this case orphaned, matched on the per-test stub path so it can
+	# touch nothing else.
+	pkill -f "$STUB/mise" 2>/dev/null || true
+	run cat "$out"
+	[[ "$output" != *"main moved under"* ]]
+	[[ "$output" != *"is MERGED"* ]]
+	[[ "$output" == *"waiting for the merge"* ]]
+}
+
+@test "the watcher does not outlive a merged landing" {
+	# The reap, on the path that exits rather than laps. A `main-watch` left
+	# running would keep polling GitHub after the task returned — and because
+	# the loser of this race blocks by construction, a `wait` that named no pid
+	# would hang the very landing this change exists to unblock. `run`
+	# returning at all is that assertion.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"is MERGED"* ]]
+}
+
 @test "every way a lap can end is exercised above" {
 	# The property that would have caught the dead branch: an exit nothing
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
@@ -487,6 +557,17 @@ workflow_runs() {
 	[ "$stops" -eq 10 ] || {
 		echo "land has $stops stopping conditions; this suite covers 10."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
+		return 1
+	}
+
+	# `die` is no longer the only way a lap ends: a lap can also `continue`,
+	# and CLOUD-246's exit is one of those. Counting only the dies would have
+	# left the new branch exactly as unwatched as the refusal branch once was,
+	# which is the mistake this assertion exists to stop repeating.
+	laps=$(grep -cE '^[[:space:]]*continue$' "$LAND")
+	[ "$laps" -eq 3 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 3."
+		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
 }
