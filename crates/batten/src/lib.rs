@@ -210,7 +210,21 @@ fn run_rules(
     let delta = match base_ref {
         Some(reference) => {
             let base = trust::load_base(Path::new("."), reference)?;
-            let working = config::load(&Path::new(".").join(config::CONFIG_FILE))?;
+            // A working authority that cannot be read is not a reason to abandon
+            // the verdict. `resolve` above already took its policy from the base
+            // ref, so the rules being evaluated are the trusted ones and the exit
+            // code below is computable; this load feeds the *report*, which the
+            // comment above calls "not a verdict". Letting it abort turned the
+            // maximal weakening — delete `batten.toml` — into exit 1, a code every
+            // mediating harness reads as "do not block", in the one mechanism
+            // whose stated purpose is to be un-loweable (CLOUD-243).
+            //
+            // An unreadable authority grants no policy, so it is compared as one
+            // that declares nothing: every key the base declares reports as
+            // removed, each under its own key path. That is both true and the
+            // loudest this report can be about it.
+            let working = config::load(&Path::new(".").join(config::CONFIG_FILE))
+                .unwrap_or_else(|_| config::Config::declaring_nothing());
             Some(trust::weakenings(&base, &working))
         }
         None => None,

@@ -271,6 +271,39 @@ pub fn schema() -> Result<String> {
     ))?)
 }
 
+impl Config {
+    /// A config that declares no policy at all.
+    ///
+    /// Deliberately not a [`Default`] impl. `version` has exactly one accepted
+    /// value ([`SUPPORTED_VERSION`]), so a derived default would produce a
+    /// `Config` carrying `0` that no loader would accept — a value that looks
+    /// like a config and is not one. Written as a literal rather than parsed from
+    /// a string constant so it needs no fallible path and no `expect`, and so
+    /// that a field added to [`Config`] fails to compile here until someone
+    /// decides what "declares nothing" means for it.
+    ///
+    /// Used where an **absent or unreadable** authority still has to be compared
+    /// against a trusted one (CLOUD-243): granting nothing is exactly what an
+    /// authority that cannot be read grants, so this is the honest comparand —
+    /// every key the trusted side declares then reports as removed.
+    #[must_use]
+    pub fn declaring_nothing() -> Self {
+        Config {
+            version: SUPPORTED_VERSION,
+            min_batten_version: None,
+            strictness: None,
+            fail_on_warning: None,
+            rules: Vec::new(),
+            scope: Vec::new(),
+            protected: Vec::new(),
+            unlanded: Vec::new(),
+            epoch: None,
+            verbs: Vec::new(),
+            markers: Vec::new(),
+        }
+    }
+}
+
 /// Load and validate the `batten.toml` at `path`.
 ///
 /// # Errors

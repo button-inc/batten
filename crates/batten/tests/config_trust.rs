@@ -447,3 +447,114 @@ fn json_omits_the_delta_when_no_base_ref_was_named() {
         serde_json::from_slice(&output.stdout).expect("the report is JSON");
     assert!(report.get("config_delta").is_none(), "got: {report}");
 }
+
+// --- an unreadable working authority is the maximal weakening, not an abort ---
+//
+// CLOUD-243. `resolve` takes its policy from the base ref under `--config-from`,
+// so the verdict is computable whatever the working tree did to its own config.
+// The working copy is loaded only to build the delta, and letting that load abort
+// turned "delete `batten.toml`" — the most complete weakening available — into
+// exit 1, which every mediating harness reads as "do not block".
+
+/// `pr_fixture`, then the working `batten.toml` removed and the removal committed.
+fn pr_fixture_without_working_config(name: &str, base: &str, files: &[(&str, &str)]) -> PathBuf {
+    let repo = pr_fixture(name, base, base, files);
+    fs::remove_file(repo.join("batten.toml")).expect("remove the working config");
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-q", "-m", "delete the policy"]);
+    repo
+}
+
+#[test]
+fn a_deleted_working_config_still_gets_the_base_rule_verdict() {
+    let repo = pr_fixture_without_working_config(
+        "trust-deleted-config-violation",
+        &format!("version = 1{}", rule("no-todo", "deny")),
+        &[("a.rs", "// TODO\n")],
+    );
+    let output = run(&repo, &["check", "--config-from", "origin/main"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the base rule found a violation, so the verdict is 2 — not 1, which a \
+         harness reads as do-not-block. stdout: {}, stderr: {}",
+        stdout(&output),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout(&output).contains("a.rs:1 no-todo"),
+        "got: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_deleted_working_config_reports_every_base_key_as_removed() {
+    let repo = pr_fixture_without_working_config(
+        "trust-deleted-config-delta",
+        &format!(
+            "version = 1\nprotected = [\"crates/**\"]\nstrictness = \"strict\"{}",
+            rule("no-todo", "deny")
+        ),
+        &[],
+    );
+    let text = stdout(&run(&repo, &["check", "--config-from", "origin/main"]));
+    // Each key named under its own pointer: granting nothing is what an absent
+    // authority grants, so every key the base declared reads as removed.
+    for pointer in [
+        "batten.toml:protected[crates/**] present→absent",
+        "batten.toml:rule[no-todo] present→absent",
+        "batten.toml:strictness strict→standard",
+    ] {
+        assert!(text.contains(pointer), "missing {pointer} in: {text}");
+    }
+    assert!(
+        text.contains("config-from origin/main: 3 weakened"),
+        "got: {text}"
+    );
+}
+
+#[test]
+fn an_unparseable_working_config_still_gets_the_base_rule_verdict() {
+    let repo = pr_fixture(
+        "trust-corrupt-config",
+        &format!("version = 1{}", rule("no-todo", "deny")),
+        "this is not = = toml\n",
+        &[("a.rs", "// TODO\n")],
+    );
+    let output = run(&repo, &["check", "--config-from", "origin/main"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a corrupt working config grants no policy either. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn a_deleted_working_config_does_not_manufacture_a_verdict() {
+    // The fallback must not invent findings: with no rule to fire, the base
+    // policy's verdict over a clean tree is still 0.
+    let repo = pr_fixture_without_working_config(
+        "trust-deleted-config-clean",
+        &format!("version = 1{}", rule("no-todo", "deny")),
+        &[("a.rs", "fn main() {}\n")],
+    );
+    let output = run(&repo, &["check", "--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(0), "stdout: {}", stdout(&output));
+}
+
+#[test]
+fn without_a_base_ref_a_missing_config_is_still_a_usage_error() {
+    // The asymmetry is the point, and pinning it is what stops a later change
+    // from quietly making an unreadable config fall back everywhere. A trusted
+    // base is exactly what makes the fallback safe; with no base there is no
+    // policy to fall back to, so refusing is correct.
+    let repo = pr_fixture_without_working_config(
+        "trust-no-config-no-base",
+        &format!("version = 1{}", rule("no-todo", "deny")),
+        &[("a.rs", "// TODO\n")],
+    );
+    let output = run(&repo, &["check"]);
+    assert_eq!(output.status.code(), Some(1), "stdout: {}", stdout(&output));
+}
