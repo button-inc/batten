@@ -33,9 +33,43 @@
 # Currency — "would regenerating produce something different?" — is a question
 # about upstream, not about the commit, so it does not belong on the landing
 # path. It runs on a schedule instead (.github/workflows/lock-currency.yml).
+#
+# WHICH BYTES (CLOUD-227). "The committed bytes" above was the intent; the code
+# read `mise.lock` from the WORKING TREE, and those differ on any machine that
+# has installed since checkout — which here is every cold provisioning run, since
+# `mise install` writes the residue key itself (CLOUD-223). The verdict was
+# therefore a property of the machine, and the split was invisible: the `ci` job
+# is the only one running this gate and its install list deliberately excludes
+# cargo-zigbuild, so CI could never see the residue, while every agent sandbox
+# installs the full set and failed this gate on its first command, for a reason
+# no branch caused. That is `lock-check`'s original defect one level down — a
+# verdict coming from the environment rather than from the change.
+#
+# So with no argument this gates the INDEX (`git show :mise.lock`): exactly the
+# bytes a commit would carry, identical in CI and in a sandbox, immune to
+# whatever an installer wrote afterwards. An explicit path still wins, which is
+# how the bats suite drives fixtures.
 set -euo pipefail
 
-lockfile="${1:-mise.lock}"
+# `label` is what the pointers name; `lockfile` is where the bytes are read from.
+# They differ only for the index, whose blob has no path of its own.
+if [ "$#" -gt 0 ]; then
+	lockfile="$1"
+	label="$1"
+	if [ ! -f "$lockfile" ]; then
+		echo "::error:: $lockfile not found" >&2
+		exit 2
+	fi
+else
+	label="mise.lock"
+	lockfile="$(mktemp)"
+	trap 'rm -f "$lockfile"' EXIT
+	# A read of the object store, not of the network and not of the tree.
+	if ! git show :mise.lock >"$lockfile" 2>/dev/null; then
+		echo "::error:: mise.lock is not in the index — run from the repo, or pass a path" >&2
+		exit 2
+	fi
+fi
 
 # The platform keys mise emits. Anything else in that position was written by an
 # install on some contributor's machine, not by a lock.
@@ -46,11 +80,6 @@ KNOWN='linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl macos-x64 macos-arm
 # on Apple silicon. musl, macos-x64 and windows are welcome but not demanded —
 # upstream not shipping one of those is not this repo's defect.
 REQUIRED="${BATTEN_LOCK_PLATFORMS:-linux-x64 linux-arm64 macos-arm64}"
-
-if [ ! -f "$lockfile" ]; then
-	echo "::error:: $lockfile not found" >&2
-	exit 2
-fi
 
 fail=0
 report() {
@@ -96,7 +125,7 @@ while IFS=$'\t' read -r tool toolline; do
 	while IFS=$'\t' read -r plat platline; do
 		[ -n "$plat" ] || continue
 		if ! grep -qw -- "$plat" <<<"$KNOWN"; then
-			report "$lockfile:$platline: $tool — platform key \`$plat\` is not one mise emits; this is install-time residue, not a lock"
+			report "$label:$platline: $tool — platform key \`$plat\` is not one mise emits; this is install-time residue, not a lock"
 			continue
 		fi
 		known_seen="$known_seen $plat"
@@ -104,7 +133,7 @@ while IFS=$'\t' read -r tool toolline; do
 		# other platform is mise recording that upstream ships no artifact there.
 		grep -qw -- "$plat" <<<"$REQUIRED" || continue
 		if ! awk -F'\t' -v t="$tool" -v p="$plat" '$1=="URL" && $2==t && $3==p {found=1} END{exit !found}' <<<"$parsed"; then
-			report "$lockfile:$platline: $tool — platform \`$plat\` has no url, so nothing can be installed from it"
+			report "$label:$platline: $tool — platform \`$plat\` has no url, so nothing can be installed from it"
 		fi
 	done <<<"$plats"
 
@@ -112,9 +141,9 @@ while IFS=$'\t' read -r tool toolline; do
 	[ -n "$known_seen" ] || continue
 	for want in $REQUIRED; do
 		grep -qw -- "$want" <<<"$known_seen" ||
-			report "$lockfile:$toolline: $tool — locked for other platforms but not \`$want\`, which this repo installs on"
+			report "$label:$toolline: $tool — locked for other platforms but not \`$want\`, which this repo installs on"
 	done
 done <<<"$tools"
 
-[ "$fail" = 0 ] && echo "lock-complete: every locked tool in $lockfile installs on $REQUIRED"
+[ "$fail" = 0 ] && echo "lock-complete: every locked tool in $label installs on $REQUIRED"
 exit "$fail"

@@ -112,3 +112,59 @@ tool_with() {
 	run "$GATE" "$BATS_TEST_TMPDIR/absent.lock"
 	[ "$status" -eq 2 ]
 }
+
+# CLOUD-227. The header always claimed "the committed bytes"; the code read the
+# working tree, so the verdict was a property of whatever the machine had
+# installed. `mise install` writes the residue key on every cold provisioning
+# run (CLOUD-223), which made this gate red in every agent sandbox and — because
+# the only CI job that runs it deliberately does not install cargo-zigbuild —
+# green in CI, for the same commit.
+# Sets REPO and points LOCK at its tracked lockfile. Not a command
+# substitution: that would run it in a subshell, where the LOCK it sets to
+# redirect tool_with would be discarded and the fixture written elsewhere.
+scratch_repo() {
+	REPO="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$REPO"
+	git -C "$REPO" init -q
+	git -C "$REPO" config user.email t@example.invalid
+	git -C "$REPO" config user.name t
+	LOCK="$REPO/mise.lock"
+	tool_with t linux-x64 linux-arm64 macos-arm64
+	git -C "$REPO" add mise.lock
+	git -C "$REPO" commit -qm lock
+}
+
+@test "with no argument it gates the index, not the working tree" {
+	scratch_repo
+	# Exactly what a cold `mise install` leaves behind, unstaged.
+	printf '[tools.t."platforms.linux-x64-t"]\nchecksum = "blake3:abc"\n\n' >>"$LOCK"
+
+	# The worktree copy is bad — the old gate failed here, on nobody's change.
+	run "$GATE" "$LOCK"
+	[ "$status" -eq 1 ]
+
+	# The bytes a commit would carry are clean, and that is the verdict.
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"mise.lock"* ]]
+}
+
+@test "with no argument a residue key that IS staged still fails" {
+	scratch_repo
+	printf '[tools.t."platforms.linux-x64-t"]\nchecksum = "blake3:abc"\n\n' >>"$LOCK"
+	git -C "$REPO" add mise.lock
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"install-time residue"* ]]
+	# Pointers name the tracked path, never the temp file the index was read into.
+	[[ "$output" == *"mise.lock:"* ]]
+	[[ "$output" != *"$BATS_TEST_TMPDIR/tmp"* ]]
+}
+
+@test "with no argument and no mise.lock in the index, exit 2" {
+	mkdir -p "$BATS_TEST_TMPDIR/bare"
+	git -C "$BATS_TEST_TMPDIR/bare" init -q
+	run bash -c "cd '$BATS_TEST_TMPDIR/bare' && '$GATE'"
+	[ "$status" -eq 2 ]
+}
