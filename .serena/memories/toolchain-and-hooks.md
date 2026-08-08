@@ -163,6 +163,38 @@ that cannot read it will violate it — scoped to "these tasks", so it never
 generalised to `verify` or `ci`. Prose, in a file only one agent reads, about one
 task. Three reasons it failed, and rule 2 predicted all three.
 
+## The shell tasks' exit convention is the inverse of batten's
+
+Read before porting a `mise-tasks/*-check` program into the engine, or before
+copying one of their bats cases.
+
+The `*-check` decision halves — `graph-check`, `landed-check`, `ready-lint`,
+`verified` — use **exit 1 = violation, exit 2 = could not read the input**.
+Batten's contract (house-style §7, CLOUD-226) is the exact opposite: **1 =
+usage or unreadable, 2 = the policy verdict**. Both are internally consistent
+and neither is wrong; they simply disagree, because batten's numbering is
+pinned by what a mediating harness reads as a deny and the shell tasks predate
+that constraint.
+
+Two consequences:
+
+- **A ported acceptance case inverts its own verdict.** CLOUD-202 names these
+  programs as the behavioural spec and their bats suites as the port's
+  acceptance corpus. Carry `assert_equal $status 1` across unchanged and the
+  ported test asserts "unreadable input" while the case means "violation" — and
+  it **passes**, which is the same failure shape as the `-v` regex and the
+  `pipefail | grep` entries below: a gate green on the wrong claim. Translate
+  the number, never copy it.
+- **The five `PreToolUse` guards are already aligned** (`gh-guard`,
+  `ready-guard`, `issue-guard`, `run-shape-guard`, `memory-guard` exit 2 to
+  deny), because they always spoke the harness convention. Only the `-check`
+  halves are inverted.
+
+The tasks were deliberately not renumbered with CLOUD-226: they are independent
+programs the engine will replace, and churning their contract now would rewrite
+suites that are about to be deleted. The hazard is recorded rather than fixed
+because the fix is the port itself.
+
 ## Never hand awk a regex through `-v`
 
 The value is escape-processed by the assignment before awk sees it as a pattern,
