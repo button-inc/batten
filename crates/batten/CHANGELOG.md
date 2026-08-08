@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.25](https://github.com/button-inc/batten/compare/v0.0.24...v0.0.25) - 2026-08-08
+
+### Added
+
+- *(check)* promote warn findings with one resolved fail_on_warning setting
+
+### Other
+
+- *(resolve)* lift the env and flag layer lookups out of the resolver
+
 ## [0.0.24](https://github.com/button-inc/batten/compare/v0.0.23...v0.0.24) - 2026-08-08
 
 ### Added
