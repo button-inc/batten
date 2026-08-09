@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.39](https://github.com/button-inc/batten/compare/v0.0.38...v0.0.39) - 2026-08-09
+
+### Other
+
+- *(corpus)* translate the predecessor acceptance corpus into a de-identified rule fixture
+
 ## [0.0.38](https://github.com/button-inc/batten/compare/v0.0.37...v0.0.38) - 2026-08-09
 
 ### Added
