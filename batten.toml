@@ -43,6 +43,58 @@ pattern = "<<<<<<< "
 severity = "deny"
 scope = "tree"
 
+# Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
+# repo-agnostic … a grep for a specific consumer's names must return zero hits"
+# was discharged once, by hand, when the crate landed (CLOUD-26) — which leaves a
+# standing property carried as a comment, half a change by non-negotiable rule 2.
+# These two rows re-run that grep on every gate invocation.
+#
+# WHY THE GLOB IS `crates/**` AND NOT `crates/**/*.rs`: rule 1 says *anywhere* in
+# crates/batten. `git ls-files crates/ | grep -v '\.rs$'` names the tracked files
+# a `*.rs` glob would skip — the crate manifest, the changelog, and every fixture
+# under tests/. `**` spans path segments (pinned by `glob_double_star_spans_
+# segments` in crates/batten/src/rules.rs), and the match is anchored at the
+# first segment, so `crates/**` selects all of crates/ and nothing outside it.
+#
+# WHY ONLY THESE TWO LITERALS, out of the four CLOUD-26's acceptance listed:
+# membership turns on one question — does the literal name a consumer, or is it a
+# word this repo uses in its own right? `forbid` is a case-sensitive literal
+# substring check (`forbid_in_file`), so a literal with an English reading is
+# wrong in both directions at once: it fires on ordinary prose while missing the
+# capitalised form. The vendor name fails that test (it names the vendor, not a
+# consumer; `git grep -Fn button -- crates/` already hits src/hook.rs and the
+# changelog), and so does the predecessor repo's name (`git grep -in complian`
+# finds the noun in AGENTS.md and LICENSE-APACHE). What survives is the shapes
+# with no English reading: an account identifier and an entity path.
+#
+# The rule IDs deliberately do not embed the literals they ban. A finding prints
+# `<path>:<line> <rule-id>`, so the id reaches the fixture test's expected-stdout
+# string, which lives under crates/batten/tests/ — inside this glob. An id naming
+# its own literal would make the gate fire on the test that proves it works.
+#
+# Naming the literals here is where they belong rather than a leak: rule 1 scopes
+# its grep to crates/batten, this file sits outside the crate, and it already
+# carries this repo's consumer-specific policy for exactly this reason (see the
+# [epoch] comment below). House style §9 wants a rule a reviewer can read, so an
+# obfuscated or hashed pattern would be the worse artifact even if the engine
+# could match one. The glob excludes this file, so neither rule matches its own
+# definition.
+[[rule]]
+id = "no-consumer-account-literal"
+kind = "forbid"
+glob = "crates/**"
+pattern = "etaxbc"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "no-consumer-entity-path"
+kind = "forbid"
+glob = "crates/**"
+pattern = "entities/"
+severity = "deny"
+scope = "tree"
+
 # The governing config surface, hashed into `batten config epoch` (CLOUD-32).
 #
 # This list is consumer-specific ON PURPOSE, and it lives here rather than in

@@ -1008,11 +1008,21 @@ fn the_receipt_statement_is_in_toto_shaped_and_never_printed() {
 
 #[test]
 fn the_committed_repo_config_gates_a_repository() {
-    // Consumer #1: the repo's own `batten.toml` must load, and its rule table
-    // must detect what it claims to — asserted over the shipped file, so config
-    // that drifts from the schema, or a rule that can never fire, fails here.
-    // The gate side (`mise run batten-check`, wired into hk) runs the same
-    // config against the real tree; this pins the config's behaviour.
+    // Consumer #1: the repo's own `batten.toml` must load, and the rule this
+    // fixture seeds must fire — asserted over the shipped file, so config that
+    // drifts from the schema fails here. The gate side (`mise run batten-check`,
+    // wired into hk) runs the same config against the real tree; this pins the
+    // config's behaviour.
+    //
+    // WHAT THIS CASE CANNOT SEE, stated because an earlier version of this
+    // comment claimed it could ("a rule that can never fire fails here"): the
+    // fixture writes one file carrying only a conflict marker, so the stdout
+    // asserted below is byte-identical whether the *other* committed rules are
+    // present, absent, misspelled, mis-globbed, or switched off at
+    // `severity = "allow"`. A rule is only pinned by a fixture that seeds the
+    // shape it bans. `the_committed_repo_agnosticism_rules_fire_on_every_banned_shape`
+    // below is that fixture for the CLOUD-7 rules, and any rule landing later
+    // owes one of its own.
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
 
@@ -1039,6 +1049,97 @@ fn the_committed_repo_config_gates_a_repository() {
         String::from_utf8_lossy(&output.stdout),
         "crates/x/src/lib.rs:1 no-conflict-markers\n",
         "pointer-only finding, byte-stable"
+    );
+}
+
+#[test]
+fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
+    // Non-negotiable rule 1 — "no consumer-specific identifier anywhere in
+    // crates/batten" — as a gate rather than a one-time grep (CLOUD-7). The
+    // committed rule table is loaded from the shipped file, so this fails if a
+    // rule is missing, renamed, mis-globbed, or set to `severity = "allow"`.
+    //
+    // Full stdout equality is the load-bearing part. Findings sort by the
+    // `(path, line, rule)` pointer tuple, so the expected bytes are fixed, and
+    // every way a rule can stop working changes them. A `contains` assertion
+    // would pass with one of the two rules deleted.
+    //
+    // The banned shapes are assembled at runtime rather than written as source
+    // text — the same dodge the conflict marker above uses. This file sits under
+    // `crates/batten/tests/`, inside the very glob these rules scan, so spelling
+    // one here would make `mise run batten-check` fire on the test that proves
+    // the rule works.
+    let account = format!("e{}bc", "tax");
+    let entity_path = format!("entit{}/", "ies");
+    let payload = format!("let id = \"{account}\";\nuse crate::{entity_path}mod;\n");
+
+    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+
+    // A stale fixture from a prior run would add findings and break the byte
+    // equality below — `repo_with_config` does not clear the directory itself.
+    let _ = fs::remove_dir_all(
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-dirty"),
+    );
+    let dirty = repo_with_config("config-agnostic-dirty", &contents);
+
+    // Both a Rust file and a non-Rust one, because that is what discriminates
+    // the rules' `crates/**` glob from the `crates/**/*.rs` the marker rule uses:
+    // rule 1 says *anywhere* under the crate, and a `*.rs` glob would wave the
+    // second file straight through.
+    let src = dirty.join("crates/demo/src");
+    fs::create_dir_all(&src).expect("create fixture source tree");
+    fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
+    fs::write(dirty.join("crates/demo/notes.txt"), &payload).expect("write fixture notes");
+
+    let output = batten()
+        .arg("check")
+        .current_dir(&dirty)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a banned consumer shape under crates/ is a policy violation"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "crates/demo/notes.txt:1 no-consumer-account-literal\n\
+         crates/demo/notes.txt:2 no-consumer-entity-path\n\
+         crates/demo/src/lib.rs:1 no-consumer-account-literal\n\
+         crates/demo/src/lib.rs:2 no-consumer-entity-path\n",
+        "one sorted pointer per banned shape per file, and nothing else"
+    );
+
+    // The other half of the discriminator: the same rules must stay silent on a
+    // tree that carries none of the shapes. A rule that fired on everything
+    // would pass the case above and still be useless.
+    let _ = fs::remove_dir_all(
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-clean"),
+    );
+    let clean = repo_with_config("config-agnostic-clean", &contents);
+    let ordinary = clean.join("crates/demo/src");
+    fs::create_dir_all(&ordinary).expect("create clean source tree");
+    fs::write(ordinary.join("lib.rs"), "pub fn ok() {}\n").expect("write clean source");
+
+    let output = batten()
+        .arg("check")
+        .current_dir(&clean)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a clean tree is not a violation"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a clean tree prints nothing, got: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 
