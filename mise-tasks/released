@@ -29,7 +29,27 @@
 # It needs TAGS, which a default CI checkout does not fetch — anything wiring
 # this into the release path must fetch them first, or every tag will look
 # absent.
+#
+# SHIPPING A REF IS NECESSARY FOR Done, NOT SUFFICIENT (CLOUD-257). The range is
+# resolved from commit messages, so this answers "did a tag ship a commit naming
+# this issue" — the same signal `landed-check`'s header warns about on the Todo
+# edge, and a commit can equally continue, document, cite or defer. The cost is
+# higher here because Done is terminal and nothing re-opens it. Measured: a sweep
+# reported 25 movable, of which CLOUD-108 (whose body says DO NOT CLOSE UNTIL THE
+# MATRIX HAS RUN GREEN) and CLOUD-202 (a five-item port with item 5 undone) were
+# not done; one was moved on that word and reverted.
+#
+# Remaining scope is not computable from git and this does not try. The tractable
+# half is the REFUSAL: an issue that says it is not done is reported HELD and the
+# run exits 1, so a sweep cannot close it. A literal marker, matched exactly —
+# never a judgement about whether prose means "not done", which would make a gate
+# out of a classification (non-negotiable 3).
 set -euo pipefail
+
+# The marker an issue puts in its own body to hold itself open. One string, and
+# it is stated here rather than in each issue's prose, so adding a hold is
+# copying a token rather than inventing a phrasing this has to recognise.
+HOLD_MARKER='DO-NOT-CLOSE'
 
 tag="${1:-}"
 if [ -z "$tag" ]; then
@@ -87,12 +107,17 @@ fi
 
 movable=0
 skipped=0
+held=0
 for ref in $refs; do
 	status=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .status' <<<"$issues" | head -n1)
 	# An issue this tag shipped but which was not piped in is not a finding: the
 	# caller chose the closure to judge, exactly as graph-check does.
 	[ -n "$status" ] || continue
-	if [ "$status" = "In Review" ]; then
+	body=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .description // ""' <<<"$issues" | head -c 100000)
+	if [ "$status" = "In Review" ] && [ "${body#*"$HOLD_MARKER"}" != "$body" ]; then
+		echo "  $ref  HELD — the issue holds itself open"
+		held=$((held + 1))
+	elif [ "$status" = "In Review" ]; then
 		echo "  $ref  In Review -> Done"
 		movable=$((movable + 1))
 	else
@@ -102,5 +127,11 @@ for ref in $refs; do
 		skipped=$((skipped + 1))
 	fi
 done
+
+if [ "$held" != 0 ]; then
+	echo "released: $tag ($range) — $movable to move, $skipped left alone, $held HELD"
+	echo "::error:: $held issue(s) shipped in $tag but carry \`$HOLD_MARKER\`. Shipping a ref is necessary for Done, not sufficient — resolve the hold or strike the marker before moving them." >&2
+	exit 1
+fi
 
 echo "released: $tag ($range) — $movable to move, $skipped left alone"
