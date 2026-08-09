@@ -316,9 +316,10 @@ fn raise_only_overrides_still_stack_on_the_base_ref_config() {
         ],
     );
     assert_eq!(raised.status.code(), Some(0));
+    // The pointer form is `<key> <value> <source>` (CLOUD-30), so the raised
+    // value and the layer that raised it are one line.
     let shown = stdout(&raised);
-    assert!(shown.contains("\"strictness\": \"strict\""), "got: {shown}");
-    assert!(shown.contains("\"strictness\": \"flag\""), "got: {shown}");
+    assert!(shown.contains("strictness strict flag"), "got: {shown}");
 }
 
 #[test]

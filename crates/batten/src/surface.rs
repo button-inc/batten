@@ -267,7 +267,7 @@ const JSON: FlagDecl = FlagDecl {
     id: "json",
     long: Some("json"),
     short: Some('J'),
-    help: "Emit findings as byte-stable JSON instead of pointer lines",
+    help: "Emit byte-stable JSON instead of pointer lines",
     env: EnvDecl::None,
     global: false,
     positional: false,
@@ -339,7 +339,10 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "config show",
         about: "Print the effective configuration",
         effect: Effect::Read,
-        flags: &[],
+        // The same per-command declaration `check` carries, not a second flag:
+        // selecting an encoding reaches no user-supplied code, so it raises
+        // nothing under §5 and the `read` classification stays honest.
+        flags: &[JSON],
     },
     // Complements `--config-from` rather than replacing it (CLOUD-87): that
     // makes a weakening *ineffective*, this makes it *visible*.

@@ -295,18 +295,50 @@ fn run_rules(
     )))
 }
 
+/// A key's value as one pointer-line token.
+///
+/// A list is reported as its length rather than its contents: the default
+/// channel points at policy, it does not carry it (non-negotiable rule 4). An
+/// object is reported the same way for the same reason.
+fn pointer_value(entry: &resolve::Attributed) -> String {
+    match &entry.value {
+        serde_json::Value::Array(items) => items.len().to_string(),
+        serde_json::Value::Object(fields) => fields.len().to_string(),
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Null => "-".to_owned(),
+        other => other.to_string(),
+    }
+}
+
 fn run_config(
     command: &ConfigCommand,
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
     match command {
-        ConfigCommand::Show => {
+        ConfigCommand::Show { json } => {
             let config = resolve::resolve(Path::new("."), overrides)?;
-            // stdout is the answer: byte-stable JSON of the effective config,
-            // with the layer that won each key alongside it (§8).
-            let json = serde_json::to_string_pretty(&config)?;
-            writeln!(out, "{json}")?;
+            // The document is the resolver's own serialization paired with the
+            // layer that set each key — never composed by hand here, so the
+            // emitted shape is stated once, in `resolve::Resolved` (§8).
+            let document = config.attributed()?;
+            if *json {
+                // stdout is the answer: one byte-stable document, keys sorted.
+                writeln!(out, "{}", serde_json::to_string_pretty(&document)?)?;
+            } else {
+                // The default channel stays pointer/count (non-negotiable rule
+                // 4): one `<key> <value> <source>` line per key, with the rule
+                // set as a COUNT — printing rule bodies here would put policy
+                // content on the channel that is meant to point at it.
+                for (key, entry) in &document {
+                    writeln!(
+                        out,
+                        "{key} {} {}",
+                        pointer_value(entry),
+                        entry.source.as_str()
+                    )?;
+                }
+            }
             Ok(ExitCode::Success)
         }
         // The alarm beside `--config-from`'s control (CLOUD-87): a smell is a

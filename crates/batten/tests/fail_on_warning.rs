@@ -294,22 +294,29 @@ fn config_show_reports_the_setting_and_the_layer_that_won_it() {
         None,
     );
 
-    let committed = run(&dir, &["config", "show"], None);
+    let committed = run(&dir, &["config", "show", "--json"], None);
     assert_eq!(committed.status.code(), Some(0));
     let json: serde_json::Value = serde_json::from_str(&stdout(&committed)).expect("valid JSON");
-    assert_eq!(json["fail_on_warning"], true);
-    assert_eq!(json["sources"]["fail_on_warning"], "repo-config");
+    // Each key is `{value, source}` — total attribution over the document
+    // rather than a parallel map keyed by the overridable subset (CLOUD-30).
+    assert_eq!(json["fail_on_warning"]["value"], true);
+    assert_eq!(json["fail_on_warning"]["source"], "repo-config");
 
     // A higher layer restating it wins the attribution without changing the value.
-    let by_flag = run(&dir, &["config", "show", "--fail-on-warning"], None);
+    let by_flag = run(
+        &dir,
+        &["config", "show", "--json", "--fail-on-warning"],
+        None,
+    );
     let json: serde_json::Value = serde_json::from_str(&stdout(&by_flag)).expect("valid JSON");
-    assert_eq!(json["sources"]["fail_on_warning"], "flag");
+    assert_eq!(json["fail_on_warning"]["source"], "flag");
 
     let unset = repo("fow-config-show-unset", &warn_only(), None);
     let json: serde_json::Value =
-        serde_json::from_str(&stdout(&run(&unset, &["config", "show"], None))).expect("valid JSON");
-    assert_eq!(json["fail_on_warning"], false);
-    assert_eq!(json["sources"]["fail_on_warning"], "default");
+        serde_json::from_str(&stdout(&run(&unset, &["config", "show", "--json"], None)))
+            .expect("valid JSON");
+    assert_eq!(json["fail_on_warning"]["value"], false);
+    assert_eq!(json["fail_on_warning"]["source"], "default");
 }
 
 /// Walk an emitted `batten spec` tree, collecting every command path that

@@ -39,8 +39,8 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
-'-J[Emit findings as byte-stable JSON instead of pointer lines]' \
-'--json[Emit findings as byte-stable JSON instead of pointer lines]' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
@@ -52,8 +52,8 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
-'-J[Emit findings as byte-stable JSON instead of pointer lines]' \
-'--json[Emit findings as byte-stable JSON instead of pointer lines]' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
@@ -84,6 +84,8 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
@@ -165,8 +167,8 @@ _arguments "${_arguments_options[@]}" : \
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
 '--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
-'-J[Emit findings as byte-stable JSON instead of pointer lines]' \
-'--json[Emit findings as byte-stable JSON instead of pointer lines]' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \

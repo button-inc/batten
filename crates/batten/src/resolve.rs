@@ -166,7 +166,12 @@ pub struct Resolved {
     /// The schema version of the committed authority.
     pub version: u32,
     /// The minimum Batten version the authority permits (enforcement: CLOUD-33).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    ///
+    /// Emitted even when absent — as `null`, attributed to `default`. Skipping
+    /// it would make the document's key set depend on the config's content, and
+    /// "every emitted key carries a source" would then be satisfied by a
+    /// document that simply stopped emitting the keys it could not attribute
+    /// (CLOUD-30).
     pub min_batten_version: Option<String>,
     /// The effective strictness, after the raise-only clamp.
     pub strictness: Strictness,
@@ -175,10 +180,77 @@ pub struct Resolved {
     /// resolved value; it is the only promotion setting there is.
     pub fail_on_warning: bool,
     /// The effective rule set: the committed rules plus any the local file adds.
-    #[serde(rename = "rule", skip_serializing_if = "Vec::is_empty")]
+    #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
-    /// Which layer won each key in [`SETTINGS`].
+    /// The scope path set, as the authority declares it.
+    pub scope: Vec<String>,
+    /// The protected path set, as the authority declares it.
+    pub protected: Vec<String>,
+    /// The unlanded path set, as the authority declares it.
+    pub unlanded: Vec<String>,
+    /// The governing config surface hashed into `config epoch` (CLOUD-32).
+    pub epoch: Option<config::Epoch>,
+    /// The mutating-verb table, consumer data the authority supplies.
+    #[serde(rename = "verb")]
+    pub verbs: Vec<crate::verbs::MutatingVerb>,
+    /// The suppression-marker table, consumer data the authority supplies.
+    #[serde(rename = "marker")]
+    pub markers: Vec<crate::markers::Marker>,
+    /// Which layer set each **emitted** key.
+    ///
+    /// Keyed by the serialized key name, and total over the document rather
+    /// than over [`SETTINGS`]: `SETTINGS` declares which layers *may* override a
+    /// key, which is a strictly smaller set than the keys this struct prints.
+    /// Pinning attribution to the overridable subset is what made the printed
+    /// "effective config" structurally partial (CLOUD-30).
+    ///
+    /// Skipped by serde so the document is exactly the config keys; the pairing
+    /// happens in [`Resolved::attributed`].
+    #[serde(skip_serializing)]
     pub sources: BTreeMap<&'static str, Source>,
+}
+
+/// One emitted key: its value, and the layer that set it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Attributed {
+    /// The effective value, exactly as the key serializes.
+    pub value: serde_json::Value,
+    /// The layer token that set it — never a filesystem path or a raw env
+    /// value, both of which would break byte-stability across machines and leak
+    /// a home directory.
+    pub source: Source,
+}
+
+impl Resolved {
+    /// The effective configuration as `{key: {value, source}}`, sorted.
+    ///
+    /// Derived from this struct's own serialization rather than composed by
+    /// hand, so the emitted key set is the struct's and cannot drift from it —
+    /// which is also what makes "every emitted key carries a source" a checkable
+    /// property instead of a promise.
+    ///
+    /// # Errors
+    ///
+    /// Propagates a serialization failure.
+    pub fn attributed(&self) -> anyhow::Result<BTreeMap<String, Attributed>> {
+        let document = serde_json::to_value(self)?;
+        let serde_json::Value::Object(fields) = document else {
+            anyhow::bail!("the resolved configuration did not serialize as an object");
+        };
+        fields
+            .into_iter()
+            .map(|(key, value)| {
+                let source = *self.sources.get(key.as_str()).ok_or_else(|| {
+                    // Unreachable in a build that passes
+                    // `tests::every_emitted_key_carries_a_source`; stated as an
+                    // error rather than a panic because an unattributed key is
+                    // exactly the defect this change removes.
+                    anyhow::anyhow!("emitted key {key} carries no source")
+                })?;
+                Ok((key, Attributed { value, source }))
+            })
+            .collect()
+    }
 }
 
 /// A value paired with the layer that set it, so a later layer can name both
@@ -458,18 +530,83 @@ pub fn resolve_with_env(
             fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
 
-    Ok(Resolved {
+    Ok(assemble(
+        &repo,
+        strictness,
+        fail_on_warning,
+        rules,
+        rules_source,
+    ))
+}
+
+/// Build the resolved configuration from the authority plus the layered values.
+///
+/// Split out so the layering above reads as the §8 chain it is, rather than
+/// ending in a field-by-field copy of every key the authority carries.
+fn assemble(
+    repo: &config::Config,
+    strictness: Layered<Strictness>,
+    fail_on_warning: Layered<bool>,
+    rules: Vec<Rule>,
+    rules_source: Source,
+) -> Resolved {
+    Resolved {
         version: repo.version,
-        min_batten_version: repo.min_batten_version,
+        min_batten_version: repo.min_batten_version.clone(),
         strictness: strictness.value,
         fail_on_warning: fail_on_warning.value,
         rules,
-        sources: BTreeMap::from([
-            ("strictness", strictness.source),
-            ("fail_on_warning", fail_on_warning.source),
-            ("rule", rules_source),
-        ]),
-    })
+        scope: repo.scope.clone(),
+        protected: repo.protected.clone(),
+        unlanded: repo.unlanded.clone(),
+        epoch: repo.epoch.clone(),
+        verbs: repo.verbs.clone(),
+        markers: repo.markers.clone(),
+        sources: attribution(
+            repo,
+            strictness.source,
+            fail_on_warning.source,
+            rules_source,
+        ),
+    }
+}
+
+/// Which layer set each emitted key.
+///
+/// Every key the authority *can* set but no layer may override is attributed the
+/// same way — present in the committed file means `repo-config`, absent means
+/// `default` — so the two cannot drift apart by being written out per key.
+fn attribution(
+    repo: &config::Config,
+    strictness: Source,
+    fail_on_warning: Source,
+    rules: Source,
+) -> BTreeMap<&'static str, Source> {
+    let authority_set = |present: bool| {
+        if present {
+            Source::RepoConfig
+        } else {
+            Source::Default
+        }
+    };
+    BTreeMap::from([
+        // `version` always comes from the authority: the file is required, and
+        // the key is required within it.
+        ("version", Source::RepoConfig),
+        (
+            "min_batten_version",
+            authority_set(repo.min_batten_version.is_some()),
+        ),
+        ("strictness", strictness),
+        ("fail_on_warning", fail_on_warning),
+        ("rule", rules),
+        ("scope", authority_set(!repo.scope.is_empty())),
+        ("protected", authority_set(!repo.protected.is_empty())),
+        ("unlanded", authority_set(!repo.unlanded.is_empty())),
+        ("epoch", authority_set(repo.epoch.is_some())),
+        ("verb", authority_set(!repo.verbs.is_empty())),
+        ("marker", authority_set(!repo.markers.is_empty())),
+    ])
 }
 
 #[cfg(test)]
@@ -515,18 +652,55 @@ mod tests {
     }
 
     #[test]
-    fn every_resolved_key_is_declared() {
-        // The `sources` map and SETTINGS must agree: a key the resolver reports
-        // but does not declare would have undocumented precedence.
-        let dir = repo("resolve-keys", "version = 1\n", None);
+    fn every_emitted_key_carries_a_source() {
+        // The identity this replaces was `sources.len() == SETTINGS.len()`,
+        // which pinned attribution to the OVERRIDABLE subset — so every key the
+        // document emitted outside `SETTINGS` (`version`, `min_batten_version`,
+        // the path sets, the consumer tables) printed with no source at all, and
+        // the hole widened with every `batten.toml` key that landed (CLOUD-30).
+        //
+        // The property now is total over the emitted document: `attributed()`
+        // errors on an unattributed key, so this asserts it succeeds and that
+        // the key set is the struct's own serialization.
+        let dir = repo("emitted-keys", "version = 1\n", None);
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
-        for key in resolved.sources.keys() {
+        let document = resolved
+            .attributed()
+            .expect("every emitted key is attributed");
+
+        let serialized = serde_json::to_value(&resolved).unwrap();
+        let serde_json::Value::Object(fields) = serialized else {
+            panic!("the resolved configuration serializes as an object");
+        };
+        assert_eq!(
+            document.keys().cloned().collect::<Vec<_>>(),
+            fields.keys().cloned().collect::<Vec<_>>(),
+            "the attributed document must cover exactly the serialized keys"
+        );
+
+        // `SETTINGS` keeps its own, narrower job: declaring which layers may
+        // override a key. Every key it names must still be emitted.
+        for spec in SETTINGS {
             assert!(
-                SETTINGS.iter().any(|spec| &spec.key == key),
-                "resolved key {key} is missing from SETTINGS"
+                document.contains_key(spec.key),
+                "SETTINGS declares {} but the document does not emit it",
+                spec.key
             );
         }
-        assert_eq!(resolved.sources.len(), SETTINGS.len());
+    }
+
+    #[test]
+    fn a_key_no_layer_set_reads_default_and_an_authority_key_reads_repo_config() {
+        let dir = repo(
+            "attribution-layers",
+            "version = 1\nprotected = [\"a\"]\n",
+            None,
+        );
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        let document = resolved.attributed().unwrap();
+        assert_eq!(document["protected"].source, Source::RepoConfig);
+        assert_eq!(document["unlanded"].source, Source::Default);
+        assert_eq!(document["version"].source, Source::RepoConfig);
     }
 
     #[test]

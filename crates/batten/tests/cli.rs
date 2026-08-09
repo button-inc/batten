@@ -450,15 +450,15 @@ fn config_show_prints_the_effective_config() {
         "version = 1\nmin_batten_version = \"0.0.0\"\n",
     );
     let output = batten()
-        .args(["config", "show"])
+        .args(["config", "show", "--json"])
         .current_dir(&dir)
         .output()
         .expect("run batten config show");
     assert!(output.status.success());
     let value: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("config show stdout is JSON");
-    assert_eq!(value["version"], 1);
-    assert_eq!(value["min_batten_version"], "0.0.0");
+    assert_eq!(value["version"]["value"], 1);
+    assert_eq!(value["min_batten_version"]["value"], "0.0.0");
 }
 
 /// Write a `batten.local.toml` beside an existing repo config.
@@ -473,14 +473,14 @@ fn config_show_reports_the_layer_that_won_each_key() {
     let dir = repo_with_config("config-sources", "version = 1\nstrictness = \"standard\"\n");
     with_local_config(&dir, "version = 1\nstrictness = \"strict\"\n");
     let output = batten()
-        .args(["config", "show"])
+        .args(["config", "show", "--json"])
         .current_dir(&dir)
         .output()
         .expect("run batten config show");
     assert!(output.status.success());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
-    assert_eq!(value["strictness"], "strict");
-    assert_eq!(value["sources"]["strictness"], "local-file");
+    assert_eq!(value["strictness"]["value"], "strict");
+    assert_eq!(value["strictness"]["source"], "local-file");
 }
 
 #[test]
@@ -504,24 +504,24 @@ fn config_precedence_runs_flag_over_env_over_local_over_repo() {
         (code, value)
     };
 
-    let (code, local) = strictness_of(&["config", "show"], None);
+    let (code, local) = strictness_of(&["config", "show", "--json"], None);
     assert_eq!(code, 0);
-    assert_eq!(local["strictness"], "standard");
-    assert_eq!(local["sources"]["strictness"], "local-file");
+    assert_eq!(local["strictness"]["value"], "standard");
+    assert_eq!(local["strictness"]["source"], "local-file");
 
-    let (code, env) = strictness_of(&["config", "show"], Some("strict"));
+    let (code, env) = strictness_of(&["config", "show", "--json"], Some("strict"));
     assert_eq!(code, 0);
-    assert_eq!(env["strictness"], "strict");
-    assert_eq!(env["sources"]["strictness"], "env");
+    assert_eq!(env["strictness"]["value"], "strict");
+    assert_eq!(env["strictness"]["source"], "env");
 
     // A flag outranks the env var — here restating the same value, which the
     // clamp accepts and re-attributes to the higher layer.
     let (code, flag) = strictness_of(
-        &["--strictness", "strict", "config", "show"],
+        &["--strictness", "strict", "config", "show", "--json"],
         Some("strict"),
     );
     assert_eq!(code, 0);
-    assert_eq!(flag["sources"]["strictness"], "flag");
+    assert_eq!(flag["strictness"]["source"], "flag");
 }
 
 #[test]
@@ -534,7 +534,7 @@ fn a_local_override_that_weakens_a_gate_is_rejected() {
     );
     with_local_config(&dir, "version = 1\nstrictness = \"permissive\"\n");
     let output = batten()
-        .args(["config", "show"])
+        .args(["config", "show", "--json"])
         .current_dir(&dir)
         .output()
         .expect("run batten config show");
@@ -1125,14 +1125,14 @@ fn the_committed_example_config_loads_over_the_binary() {
     let contents = fs::read_to_string(&example).expect("read batten.example.toml");
     let dir = repo_with_config("config-example", &contents);
     let output = batten()
-        .args(["config", "show"])
+        .args(["config", "show", "--json"])
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
         .output()
         .expect("run batten config show");
     assert_eq!(output.status.code(), Some(0), "the example must load");
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
-    assert_eq!(value["version"], 1);
+    assert_eq!(value["version"]["value"], 1);
 
     // A copied example must be able to produce a finding — a template whose
     // every rule can never fire teaches a new consumer that clean output means
@@ -1209,7 +1209,7 @@ fn conflating_scope_and_severity_is_refused_in_both_directions() {
     ] {
         let dir = repo_with_config(&format!("conflate-{name}"), &severity_fixture(lines));
         let output = batten()
-            .args(["config", "show"])
+            .args(["config", "show", "--json"])
             .current_dir(&dir)
             .output()
             .expect("run batten config show");
@@ -1279,7 +1279,7 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
     );
     let run = || {
         batten()
-            .args(["config", "show"])
+            .args(["config", "show", "--json"])
             .current_dir(&dir)
             .env_remove("BATTEN_STRICTNESS")
             .output()
@@ -1289,8 +1289,8 @@ fn severity_and_scope_serialize_byte_stably_over_the_binary() {
     assert_eq!(first.status.code(), Some(0));
     let value: serde_json::Value =
         serde_json::from_slice(&first.stdout).expect("config show stdout is JSON");
-    assert_eq!(value["rule"][0]["severity"], "warn");
-    assert_eq!(value["rule"][0]["scope"], "tree");
+    assert_eq!(value["rule"]["value"][0]["severity"], "warn");
+    assert_eq!(value["rule"]["value"][0]["scope"], "tree");
     assert_eq!(
         first.stdout,
         run().stdout,
@@ -1333,7 +1333,7 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
         // byte-stable vocabulary — never a value outside it.
         let dir = repo_with_config(&format!("conformance-{label}"), &contents);
         let output = batten()
-            .args(["config", "show"])
+            .args(["config", "show", "--json"])
             .current_dir(&dir)
             .env_remove("BATTEN_STRICTNESS")
             .output()
@@ -1341,7 +1341,7 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
         assert_eq!(output.status.code(), Some(0), "{label} must load");
         let value: serde_json::Value =
             serde_json::from_slice(&output.stdout).expect("config show stdout is JSON");
-        for rule in value["rule"].as_array().expect("rules in output") {
+        for rule in value["rule"]["value"].as_array().expect("rules in output") {
             let severity = rule["severity"].as_str().expect("severity token");
             assert!(
                 ["allow", "warn", "deny"].contains(&severity),

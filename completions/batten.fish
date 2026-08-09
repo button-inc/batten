@@ -44,14 +44,14 @@ complete -c batten -n "__fish_batten_using_subcommand check" -l strictness -d 'R
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
 complete -c batten -n "__fish_batten_using_subcommand check" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand check" -s J -l json -d 'Emit findings as byte-stable JSON instead of pointer lines'
+complete -c batten -n "__fish_batten_using_subcommand check" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand check" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand check" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand enforce" -s J -l json -d 'Emit findings as byte-stable JSON instead of pointer lines'
+complete -c batten -n "__fish_batten_using_subcommand enforce" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand config; and not __fish_seen_subcommand_from show epoch lint help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
@@ -68,6 +68,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_su
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from show" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
@@ -97,7 +98,7 @@ complete -c batten -n "__fish_batten_using_subcommand doctor" -l strictness -d '
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
 complete -c batten -n "__fish_batten_using_subcommand doctor" -l config-from -d 'Read the committed config from a git ref (e.g. origin/main) instead of the working tree' -r
-complete -c batten -n "__fish_batten_using_subcommand doctor" -s J -l json -d 'Emit findings as byte-stable JSON instead of pointer lines'
+complete -c batten -n "__fish_batten_using_subcommand doctor" -s J -l json -d 'Emit byte-stable JSON instead of pointer lines'
 complete -c batten -n "__fish_batten_using_subcommand doctor" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand doctor" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c batten -n "__fish_batten_using_subcommand generate; and not __fish_seen_subcommand_from completions schema help" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'

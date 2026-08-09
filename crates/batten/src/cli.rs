@@ -109,7 +109,10 @@ pub enum ReceiptCommand {
 #[non_exhaustive]
 pub enum ConfigCommand {
     /// Print the effective configuration.
-    Show,
+    Show {
+        /// Emit the full `{value, source}` document instead of pointer lines.
+        json: bool,
+    },
     /// Report policy smells in `batten.toml`.
     Lint,
     /// Print the content hash of the governing config surface.
@@ -182,8 +185,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         }),
         "config" => matches
             .subcommand()
-            .and_then(|(name, _)| match name {
-                "show" => Some(ConfigCommand::Show),
+            .and_then(|(name, matches)| match name {
+                "show" => Some(ConfigCommand::Show {
+                    json: flag(matches, "json"),
+                }),
                 "lint" => Some(ConfigCommand::Lint),
                 "epoch" => Some(ConfigCommand::Epoch),
                 _ => None,

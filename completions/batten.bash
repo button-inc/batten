@@ -338,7 +338,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__show)
-            opts="-h --strictness --fail-on-warning --config-from --help"
+            opts="-J -h --json --strictness --fail-on-warning --config-from --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
