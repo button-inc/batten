@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.40](https://github.com/button-inc/batten/compare/v0.0.39...v0.0.40) - 2026-08-09
+
+### Added
+
+- *(config)* attribute every emitted config key, and put the full table behind --json
+
 ## [0.0.39](https://github.com/button-inc/batten/compare/v0.0.38...v0.0.39) - 2026-08-09
 
 ### Other
