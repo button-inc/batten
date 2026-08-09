@@ -1,0 +1,165 @@
+# The predecessor acceptance corpus, translated into Batten's rule vocabulary
+# (CLOUD-64). Source: docs/acceptance-checks.yaml in the predecessor consumer
+# repo, pinned at blob ceba3afd — 9600 bytes, 165 lines, 21 items.
+#
+# Seventeen of those items cross as `command` rules: fourteen that expected exit
+# 0 (deny) and three whose non-zero IS the tree's current state (warn). The
+# remaining four are recorded in the disposition table in
+# tests/acceptance_corpus.rs — three negative tests and one non-crossing.
+#
+# Every `run` names a fixture-local program. The source invoked binaries at
+# consumer-specific paths; nothing of that survives here, and the suite CHECKS
+# containment rather than asserting it — a denylist of consumer names would put
+# those names inside crates/batten and break the rule it was meant to enforce.
+#
+# The subcommand argv is the source item's, verbatim minus the program. What is
+# NOT preserved is each item's `stdout_contains`: a `command` check is an
+# exit-code predicate by design and the runner nulls the child's streams, so
+# there are no bytes to match. The source's own header says "Exit 0 alone is
+# never enough", so the loss is real and is marked per item in the disposition
+# table rather than glossed.
+
+version = 1
+
+[[rule]]
+id = "conflict-marker"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker conflict-marker"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "build-config-single-commands"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker mise-lint"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "append-only-ledgers-intact"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker append-only"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "no-undeclared-external-command"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker preflight --build-system"
+severity = "deny"
+scope = "tree"
+
+# warn: the source expected exit 1 here, invoked over the tree it reads. That
+# non-zero is the tree's current state and clears as the backlog does, so it is
+# reported without failing the run (cargo-deny's model, CLOUD-61).
+[[rule]]
+id = "entity-fact-occurrences"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker entity-grep"
+severity = "warn"
+scope = "tree"
+
+[[rule]]
+id = "token-budget-floor"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker token-budget --threshold 2300"
+severity = "deny"
+scope = "tree"
+
+# warn: same shape as entity-fact-occurrences — the aspirational threshold is
+# not met yet, and that is a state of the tree rather than a defect in the run.
+[[rule]]
+id = "token-budget-target"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker token-budget --threshold 1500"
+severity = "warn"
+scope = "tree"
+
+[[rule]]
+id = "evidence-landed"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker evidence-unlanded --base HEAD"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "defect-store-queryable"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker defects query --open"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "design-structure-conforms"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker design verify"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "delegation-schema-available"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker brief --template"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "design-evidence-audited"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker design audit"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "shape-lint-config-parses"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/shape-lint validate-config"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "shape-lint-rules-loaded"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/shape-lint list"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "shape-lint-error-tier-clean"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/shape-lint check --no-docs"
+severity = "deny"
+scope = "tree"
+
+# warn: the warning tier is a real backlog, so the source expected exit 1. Once
+# the backlog clears this starts passing, which is exactly the `warn` contract.
+[[rule]]
+id = "shape-lint-warning-backlog"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/shape-lint check --fail-on-warning --no-docs"
+severity = "warn"
+scope = "tree"
+
+[[rule]]
+id = "question-record-present"
+kind = "command"
+glob = "**/*.rs"
+run = "bin/checker questions show Q1-prose-linter"
+severity = "deny"
+scope = "tree"

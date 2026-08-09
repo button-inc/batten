@@ -1,0 +1,19 @@
+#!/bin/sh
+# Fixture-local stand-in for the predecessor repo's own checker binary.
+#
+# De-identification is structural: the source corpus invoked a program at a
+# consumer-specific path, and every rule here invokes THIS file instead, which
+# lives inside the fixture directory. Obligation (f) checks that rather than
+# trusting it.
+#
+# The subcommand argv is the source item's, verbatim minus the program — that is
+# the part being preserved. The exit code mirrors what the source item expected,
+# so a `warn` rule reports and a `deny` rule passes on a clean tree.
+if [ -f seed-violation ]; then
+  exit 1
+fi
+case "$*" in
+  "entity-grep") exit 1 ;;
+  "token-budget --threshold 1500") exit 1 ;;
+  *) exit 0 ;;
+esac
