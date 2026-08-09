@@ -730,6 +730,30 @@ fn the_matrix_covers_every_supported_harness() {
 }
 
 #[test]
+fn a_quoted_invocation_denies_on_both_harness_channels() {
+    // CLOUD-269's one intended tightening, asserted over the compiled binary
+    // rather than only in-module: quoting the subcommand words is a real
+    // `gh pr merge`, and the sentinel parser let it through because the span
+    // never became tokens. Checked on both channels so the tightening is
+    // pinned wherever a host reads its decision.
+    for harness in ["claude-code", "exit-code"] {
+        let output = run_hook(harness, &claude_payload("gh \"pr\" \"merge\""), false);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if harness == "claude-code" {
+            assert_eq!(output.status.code(), Some(0), "{harness}");
+            assert!(
+                stdout.contains("\"permissionDecision\":\"deny\""),
+                "{harness}: got {stdout}"
+            );
+        } else {
+            assert_eq!(output.status.code(), Some(2), "{harness}");
+            assert!(stderr.contains("Refused"), "{harness}: got {stderr}");
+        }
+    }
+}
+
+#[test]
 fn a_malformed_harness_token_fails_loud_without_denying() {
     // The forced-failure leg of the matrix, and the only one reachable today:
     // `hook` reads no config, so nothing else it does can fail. An unselectable

@@ -135,7 +135,7 @@ pub fn adjudicate(envelope: &Envelope, bypass: bool) -> Decision {
 /// everything unrecognised.
 fn gh_lifecycle(command: &str) -> Decision {
     for segment in segments(command) {
-        let tokens: Vec<&str> = segment.split_whitespace().collect();
+        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
             continue;
         };
@@ -160,10 +160,13 @@ fn gh_lifecycle(command: &str) -> Decision {
                      already-passed commits. Bypass with BATTEN_GH_GUARD_BYPASS=1.",
                 ),
                 // Only a comment carrying the landing directive; an ordinary
-                // `gh pr comment` is not the lifecycle. Tested against the
-                // ORIGINAL command, since the directive lives inside the
-                // quoted --body that scrubbing neutralised.
-                ("pr", "comment") if command.contains("fast-forward") => Some(
+                // `gh pr comment` is not the lifecycle. Tested against the raw
+                // text, since the directive lives inside the quoted `--body`
+                // and the word split does not care what a word contains. Scoped
+                // to this segment rather than the whole command, so an earlier
+                // `echo fast-forward` cannot make a later comment look like the
+                // landing directive.
+                ("pr", "comment") if segment.raw.contains("fast-forward") => Some(
                     "Refused: commenting /fast-forward by hand only STARTS the merge — it does \
                      not wait for it, and the usual pairing with a guessed `sleep` reports \
                      before the merge lands. Use `mise run land` (backgrounded): it comments, \
@@ -188,34 +191,130 @@ fn gh_lifecycle(command: &str) -> Decision {
     Decision::Allow
 }
 
-/// Neutralise quoted spans, then split the command on shell separators, so
-/// `git commit -m "gh pr merge"` carries no `gh` segment at all.
-fn segments(command: &str) -> Vec<String> {
-    let mut scrubbed = String::with_capacity(command.len());
-    let mut chars = command.chars();
+/// One shell-separated span of a mediated command, in the two forms policy needs.
+///
+/// `words` is the span split into arguments with quoting resolved, so a quoted
+/// operand survives as a single **word** rather than being thrown away. `raw` is
+/// the same span exactly as written, for the one kind of predicate that must
+/// look *inside* a quoted span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Segment {
+    /// The span's arguments, quotes resolved and escapes applied.
+    words: Vec<String>,
+    /// The span exactly as written, quotes and all.
+    raw: String,
+}
+
+/// Split a command into shell-separated segments, resolving quotes as we go.
+///
+/// The earlier version replaced each quoted span with the literal sentinel
+/// `QUOTED`. That got the `gh` policy right — `git commit -m "gh pr merge"` must
+/// not read as an invocation — but it discarded the span's *contents*, so a path
+/// gate could not see `rm ".serena/memories/x"` at all: the operand had become
+/// the word `QUOTED`. Quoting a path is the ordinary way to write one with a
+/// space in it, so that hole is the shape of a common, legitimate spelling
+/// rather than an adversarial one (CLOUD-269, the same class as CLOUD-181).
+///
+/// Keeping the span as one word preserves every verdict the sentinel bought: a
+/// quoted `gh pr merge` is a single word, and one word never equals the adjacent
+/// pair the policy matches on. It tightens exactly one case — `gh "pr" "merge"`,
+/// a real invocation, now denies.
+///
+/// **Bounds, deliberate.** This is a pre-execution textual gate, not a shell:
+/// variable expansion, command substitution, and globbing all hide operands from
+/// it, and nothing here pretends otherwise. Every such miss under-denies, which
+/// is the sanctioned direction. An unterminated quote runs to the end of the
+/// command and keeps its tail as one word.
+fn segments(command: &str) -> Vec<Segment> {
+    let mut out: Vec<Segment> = Vec::new();
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut has_word = false;
+    let mut raw = String::new();
+    let mut chars = command.chars().peekable();
+
     while let Some(c) = chars.next() {
         match c {
             '\'' | '"' => {
                 let quote = c;
-                // Consume through the closing quote; an unterminated span runs
-                // to the end, which still neutralises it.
-                for inner in chars.by_ref() {
+                raw.push(c);
+                // An empty `""` is still an argument, so the word exists the
+                // moment the quote opens.
+                has_word = true;
+                while let Some(inner) = chars.next() {
+                    raw.push(inner);
                     if inner == quote {
                         break;
                     }
+                    // Inside single quotes a backslash is literal; inside double
+                    // quotes it escapes only this handful. Written without a
+                    // let-chain: those are unstable at the crate's 1.85 MSRV,
+                    // and a newer local toolchain compiles them happily while
+                    // `cross-check` does not.
+                    if quote == '"'
+                        && inner == '\\'
+                        && chars
+                            .peek()
+                            .is_some_and(|next| matches!(*next, '"' | '\\' | '$' | '`'))
+                    {
+                        if let Some(next) = chars.next() {
+                            raw.push(next);
+                            word.push(next);
+                        }
+                        continue;
+                    }
+                    word.push(inner);
                 }
-                scrubbed.push_str("QUOTED");
             }
-            _ => scrubbed.push(c),
+            '\\' => {
+                raw.push(c);
+                if let Some(next) = chars.next() {
+                    raw.push(next);
+                    word.push(next);
+                    has_word = true;
+                }
+            }
+            '&' | '|' | ';' => {
+                // `&&` and `||` are one separator, not two.
+                if (c == '&' || c == '|') && chars.peek() == Some(&c) {
+                    chars.next();
+                }
+                if has_word {
+                    words.push(std::mem::take(&mut word));
+                    has_word = false;
+                }
+                if !words.is_empty() {
+                    out.push(Segment {
+                        words: std::mem::take(&mut words),
+                        raw: raw.trim().to_owned(),
+                    });
+                }
+                raw.clear();
+            }
+            c if c.is_whitespace() => {
+                raw.push(c);
+                if has_word {
+                    words.push(std::mem::take(&mut word));
+                    has_word = false;
+                }
+            }
+            _ => {
+                raw.push(c);
+                word.push(c);
+                has_word = true;
+            }
         }
     }
-    scrubbed
-        .replace("&&", "\n")
-        .replace("||", "\n")
-        .replace([';', '|', '&'], "\n")
-        .lines()
-        .map(str::to_owned)
-        .collect()
+    if has_word {
+        words.push(word);
+    }
+    if !words.is_empty() {
+        out.push(Segment {
+            words,
+            raw: raw.trim().to_owned(),
+        });
+    }
+    out
 }
 
 /// Find the index of the effective program in a segment's tokens: skip
@@ -366,6 +465,70 @@ mod tests {
     fn quoted_spans_are_not_commands() {
         assert!(!is_deny("git commit -m \"gh pr merge\""));
         assert!(!is_deny("echo 'gh run watch'"));
+    }
+
+    #[test]
+    fn words_survive_quoting_while_a_quoted_span_is_never_a_command() {
+        // Both halves of CLOUD-269 in one assertion pair. The span stays a
+        // single WORD — so a path gate can read it, which the `QUOTED` sentinel
+        // made impossible — and being one word is also exactly why it still
+        // cannot match the adjacent pair the policy looks for.
+        let parsed = segments("git commit -m \"gh pr merge\"");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].words,
+            ["git", "commit", "-m", "gh pr merge"],
+            "the quoted span is one word, contents intact"
+        );
+        assert!(!is_deny("git commit -m \"gh pr merge\""));
+    }
+
+    #[test]
+    fn a_quoted_separator_does_not_split_a_segment() {
+        let parsed = segments("echo \"x; gh pr merge\"");
+        assert_eq!(parsed.len(), 1, "the `;` is inside quotes");
+        assert_eq!(parsed[0].words, ["echo", "x; gh pr merge"]);
+        assert!(!is_deny("echo \"x; gh pr merge\""));
+    }
+
+    #[test]
+    fn a_quoted_operand_keeps_its_contents_for_a_path_gate() {
+        // The case the sentinel form could not see at all: under `QUOTED` this
+        // command carried no path token, so a protected-path gate had nothing
+        // to match (CLOUD-96).
+        let parsed = segments("rm \".serena/memories/x.md\"");
+        assert_eq!(parsed[0].words, ["rm", ".serena/memories/x.md"]);
+    }
+
+    #[test]
+    fn a_backslash_escape_keeps_one_word() {
+        let parsed = segments("rm foo\\ bar.md");
+        assert_eq!(parsed[0].words, ["rm", "foo bar.md"]);
+    }
+
+    #[test]
+    fn a_quoted_invocation_is_still_an_invocation() {
+        // The one intended tightening: a real `gh pr merge`, spelled with
+        // quotes, that the sentinel form allowed through.
+        assert!(is_deny("gh \"pr\" \"merge\""));
+    }
+
+    #[test]
+    fn the_raw_text_is_scoped_to_its_own_segment() {
+        // The directive predicate reads raw text because the directive lives
+        // inside a quoted `--body`. Scoping it to the segment is what stops an
+        // unrelated earlier mention from making a later comment look like the
+        // landing directive.
+        assert!(is_deny("gh pr comment 7 --body /fast-forward"));
+        assert!(!is_deny(
+            "echo fast-forward && gh pr comment 7 --body thanks"
+        ));
+    }
+
+    #[test]
+    fn an_unterminated_quote_keeps_its_tail_as_one_word() {
+        let parsed = segments("rm \"unclosed path");
+        assert_eq!(parsed[0].words, ["rm", "unclosed path"]);
     }
 
     #[test]
