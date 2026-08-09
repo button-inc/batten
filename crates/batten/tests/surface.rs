@@ -12,13 +12,13 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
 
-fn batten() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batten"))
-}
+use common::{at_root, batten, scratch};
 
 /// The shells the repository commits a completion script for.
 const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
@@ -37,7 +37,7 @@ fn generate(shell: &str) -> Output {
 /// implementation of that (CLOUD-34), and a test helper that rediscovered the
 /// root would be a second one. This only needs a fixed relative path.
 fn committed_completion(shell: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../completions/batten.{shell}"))
+    at_root(&format!("completions/batten.{shell}"))
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn generate_writes_no_file() {
     // a promise about behaviour: the verb emits on stdout and touches nothing.
     // Asserted by running it from a scratch directory and finding that
     // directory still empty.
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("generate-writes-no-file");
+    let dir = scratch("generate-writes-no-file");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create scratch dir");
     let output = batten()

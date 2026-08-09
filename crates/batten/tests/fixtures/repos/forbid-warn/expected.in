@@ -1,0 +1,4 @@
+argv: check
+exit: 0
+stdout:
+lib.rs:2 no-todo

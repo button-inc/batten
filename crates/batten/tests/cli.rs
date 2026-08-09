@@ -7,14 +7,14 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
-fn batten() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batten"))
-}
+use common::{Fixture, batten, git_in, scratch};
 
 /// Run `batten hook --harness <harness>` with `payload` piped to stdin.
 ///
@@ -54,10 +54,10 @@ fn claude_payload(command: &str) -> String {
 /// Create a fresh temp directory under the test target dir containing a
 /// `batten.toml` with `contents`, and return its path so a command can run there.
 fn repo_with_config(name: &str, contents: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-    fs::create_dir_all(&dir).expect("create temp repo dir");
-    fs::write(dir.join("batten.toml"), contents).expect("write batten.toml");
-    dir
+    // Wiping first is `Fixture`'s unconditional behaviour (CLOUD-63). This copy
+    // used not to wipe, which is why byte-exact assertions below had to clear
+    // the directory by hand before calling it.
+    Fixture::new(name).config(contents).build()
 }
 
 /// The exit-code contract (§7), asserted as one table over the compiled binary.
@@ -164,7 +164,7 @@ fn exit_code_contract() {
     ];
 
     for (index, case) in cases.iter().enumerate() {
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("exit-case-{index}"));
+        let dir = scratch(&format!("exit-case-{index}"));
         fs::create_dir_all(&dir).expect("create case dir");
         let config_path = dir.join("batten.toml");
         match case.config {
@@ -730,47 +730,21 @@ fn bare_invocation_lists_subcommands() {
 
 // --- receipts (CLOUD-203) ----------------------------------------------------
 
-/// Run `git` in `dir`, asserting success; returns trimmed stdout.
-fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout)
-        .expect("git stdout is UTF-8")
-        .trim_end()
-        .to_owned()
-}
-
 /// A repo fixture for the receipt tests, in the normal PR shape: a committed
 /// `batten.toml` as the base commit, `origin/main` pinned to it, and one
 /// commit of work on top. Returns `(repo, home)` where `home` isolates the
 /// out-of-tree receipt store.
 fn receipt_fixture(name: &str) -> (PathBuf, PathBuf) {
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-    // A stale fixture from a prior run would mask state-dir behaviour.
-    let _ = fs::remove_dir_all(&root);
-    let repo = root.join("repo");
-    let home = root.join("home");
-    fs::create_dir_all(&repo).expect("create fixture repo");
-    fs::create_dir_all(&home).expect("create fixture home");
-    git_in(&repo, &["init", "-q"]);
-    git_in(&repo, &["config", "user.email", "t@example.com"]);
-    git_in(&repo, &["config", "user.name", "t"]);
-    fs::write(repo.join("batten.toml"), "version = 1\n").expect("write policy");
-    git_in(&repo, &["add", "batten.toml"]);
-    git_in(&repo, &["commit", "-q", "-m", "policy"]);
-    git_in(&repo, &["branch", "-M", "main"]);
-    let base = git_in(&repo, &["rev-parse", "HEAD"]);
-    git_in(&repo, &["update-ref", "refs/remotes/origin/main", &base]);
-    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "work"]);
+    // Wiping a stale fixture from a prior run is `Fixture`'s unconditional
+    // behaviour; it would otherwise mask state-dir behaviour.
+    let root = scratch(name);
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .work_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
     (repo, home)
 }
 
@@ -918,7 +892,7 @@ fn a_receipt_from_another_checkout_reads_as_missing() {
 fn receipt_checkout_problems_are_usage_errors_never_verdicts() {
     // Not a repository (discovery fenced by GIT_CEILING_DIRECTORIES): exit 1,
     // and no verdict line — a checkout problem is not a verification answer.
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("receipt-no-repo");
+    let root = scratch("receipt-no-repo");
     let _ = fs::remove_dir_all(&root);
     let plain = root.join("plain");
     let home = root.join("home");
@@ -952,7 +926,7 @@ fn receipt_record_requires_the_policy_committed_at_head() {
     // The statement's subject is a commit digest, so the policy digest must
     // bind bytes from that commit: a batten.toml present only in the working
     // tree is refused, never silently hashed.
-    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("receipt-no-policy");
+    let root = scratch("receipt-no-policy");
     let _ = fs::remove_dir_all(&root);
     let repo = root.join("repo");
     let home = root.join("home");

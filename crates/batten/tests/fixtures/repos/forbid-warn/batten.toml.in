@@ -1,0 +1,9 @@
+version = 1
+
+[[rule]]
+id = "no-todo"
+kind = "forbid"
+glob = "**/*.rs"
+pattern = "TODO"
+severity = "warn"
+scope = "tree"

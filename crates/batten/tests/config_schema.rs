@@ -15,25 +15,13 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::process::Output;
 
-fn batten() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batten"))
-}
-
-/// A committed file at the repository root, located from this crate's manifest
-/// directory.
-///
-/// Deliberately not a repo-root resolver: `git::repo_root` is the one
-/// implementation of that (CLOUD-34), and a test helper that rediscovered the
-/// root would be a second one.
-fn at_root(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(name)
-}
+use common::{Fixture, at_root, batten, scratch};
 
 /// The schema as the binary derives it, parsed.
 fn derived_schema() -> serde_json::Value {
@@ -52,21 +40,11 @@ fn as_json(toml_text: &str) -> serde_json::Value {
 
 /// Create a temp repo containing a `batten.toml` with `contents`.
 fn repo_with_config(name: &str, contents: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create temp repo dir");
-    fs::write(dir.join("batten.toml"), contents).expect("write batten.toml");
-    dir
+    Fixture::new(name).config(contents).build()
 }
 
 fn check_in(dir: &std::path::Path) -> Output {
-    batten()
-        .arg("check")
-        .current_dir(dir)
-        .env_remove("BATTEN_STRICTNESS")
-        .env_remove("BATTEN_FAIL_ON_WARNING")
-        .output()
-        .expect("run batten check")
+    common::run(dir, &["check"])
 }
 
 /// The build's own version, which the gate compares against.
@@ -185,7 +163,7 @@ fn generate_schema_writes_no_file() {
     // What keeps `generate schema`'s `read` effect structurally honest (§5):
     // the verb emits on stdout and touches nothing. The redirect that refreshes
     // the committed artifact is `mise run schema`, in the caller.
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("schema-writes-no-file");
+    let dir = scratch("schema-writes-no-file");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create scratch dir");
     let output = batten()

@@ -1,0 +1,9 @@
+version = 1
+
+[[rule]]
+id = "always-passes"
+kind = "command"
+glob = "**/*.rs"
+run = "true"
+severity = "deny"
+scope = "tree"

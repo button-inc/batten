@@ -17,39 +17,24 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-fn batten() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batten"))
-}
+use common::{Fixture, batten};
 
 /// A scratch repository containing `batten.toml` plus any extra files.
 fn repo(name: &str, config: &str, files: &[(&str, &str)]) -> PathBuf {
-    let dir = std::env::temp_dir().join("batten-epoch-e2e").join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create scratch repo");
-    fs::write(dir.join("batten.toml"), config).expect("write batten.toml");
-    for (path, contents) in files {
-        let full = dir.join(path);
-        if let Some(parent) = full.parent() {
-            fs::create_dir_all(parent).expect("create parent");
-        }
-        fs::write(full, contents).expect("write file");
-    }
-    dir
+    Fixture::at(std::env::temp_dir().join("batten-epoch-e2e").join(name))
+        .config(config)
+        .files(files)
+        .build()
 }
 
 fn epoch(dir: &Path) -> Output {
-    batten()
-        .args(["config", "epoch"])
-        .current_dir(dir)
-        .env_remove("BATTEN_STRICTNESS")
-        .env_remove("BATTEN_FAIL_ON_WARNING")
-        .env_remove("BATTEN_CONFIG_FROM")
-        .output()
-        .expect("run batten config epoch")
+    common::run(dir, &["config", "epoch"])
 }
 
 fn value(output: &Output) -> String {

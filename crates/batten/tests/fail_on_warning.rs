@@ -13,9 +13,13 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
+
+use common::{Fixture, stderr, stdout};
 
 /// A config whose only rule carries `severity`, with `top_level` spliced in
 /// **before** the rule table — a bare key written after one would be parsed as
@@ -40,41 +44,29 @@ const WARN_POINTER: &str = "lib.rs:2 no-todo\n";
 /// Create a fresh temp repo containing `config`, a `lib.rs` that trips the rule,
 /// and optionally a `batten.local.toml`.
 fn repo(name: &str, config: &str, local: Option<&str>) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-    // Start from an empty directory, not merely a present one. Clearing the
-    // local override alone was not enough: the rule globs `**/*.rs`, so ANY
+    // Starting from an empty directory is `Fixture`'s unconditional behaviour
+    // (CLOUD-63), and it is load-bearing here: the rule globs `**/*.rs`, so ANY
     // stray source file an earlier run left behind becomes an extra finding,
-    // and every assertion here that indexes `findings[0]` reads the wrong one.
-    // Measured — a discarded branch whose fixture wrote `a.rs` into these same
-    // scratch dirs turned this suite red without a line of it changing.
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create temp repo dir");
-    fs::write(dir.join("batten.toml"), config).expect("write batten.toml");
-    fs::write(dir.join("lib.rs"), "fine\nTODO fix this\n").expect("write source");
+    // and every assertion below that indexes `findings[0]` reads the wrong one.
+    let mut fixture = Fixture::new(name)
+        .config(config)
+        .file("lib.rs", "fine\nTODO fix this\n");
     if let Some(contents) = local {
-        fs::write(dir.join("batten.local.toml"), contents).expect("write batten.local.toml");
+        fixture = fixture.file("batten.local.toml", contents);
     }
-    dir
+    fixture.build()
 }
 
 /// Run `batten` in `dir` with `args`, with the setting's env var cleared unless
 /// `env` supplies one — a developer's exported knob must never decide a case.
 fn run(dir: &Path, args: &[&str], env: Option<&str>) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_batten"));
+    let mut command = common::batten();
     command.args(args).current_dir(dir);
     match env {
         Some(value) => command.env("BATTEN_FAIL_ON_WARNING", value),
         None => command.env_remove("BATTEN_FAIL_ON_WARNING"),
     };
     command.output().expect("run batten")
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8(output.stdout.clone()).expect("stdout is UTF-8")
-}
-
-fn stderr(output: &Output) -> String {
-    String::from_utf8(output.stderr.clone()).expect("stderr is UTF-8")
 }
 
 #[test]

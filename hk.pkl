@@ -271,7 +271,11 @@ local gate = new Mapping<String, Step> {
   // Tests the whole workspace because a change in one crate can break another.
   ["test"] {
     depends = List("cargo-clippy")
-    glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock")
+    // The fixture corpus is committed data the suite reads, so a fixture-only
+    // commit must run the tests too (CLOUD-63). Without this entry the corpus
+    // is exercised in CI (`hk check --all` ignores globs) but skipped at
+    // pre-commit, which is the half that gives feedback while it is cheap.
+    glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", "crates/batten/tests/fixtures/**")
     check = "mise run test:cargo"
   }
   // Consumer #1 in practice: the committed batten.toml, evaluated by the engine

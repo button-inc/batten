@@ -17,27 +17,13 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
-fn batten() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batten"))
-}
-
-/// Run `git` in `dir`, asserting success.
-fn git_in(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
+use common::{Fixture, batten, git_in, scratch, stdout};
 
 /// A pull-request-shaped fixture: `base` committed and pinned as `origin/main`,
 /// then `working` written into the tree on top (committed, so the tree is clean
@@ -46,48 +32,20 @@ fn git_in(dir: &Path, args: &[&str]) {
 /// Returns the repo path. `files` are extra files written into the working tree,
 /// so a rule has something to fire on.
 fn pr_fixture(name: &str, base: &str, working: &str, files: &[(&str, &str)]) -> PathBuf {
-    let repo = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-    let _ = fs::remove_dir_all(&repo);
-    fs::create_dir_all(&repo).expect("create fixture repo");
-    git_in(&repo, &["init", "-q"]);
-    git_in(&repo, &["config", "user.email", "t@example.com"]);
-    git_in(&repo, &["config", "user.name", "t"]);
-
-    fs::write(repo.join("batten.toml"), base).expect("write base config");
-    git_in(&repo, &["add", "batten.toml"]);
-    git_in(&repo, &["commit", "-q", "-m", "base policy"]);
-    git_in(&repo, &["branch", "-M", "main"]);
-    // Pin origin/main to the base commit: the trusted ref a PR is judged against.
-    git_in(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-
-    fs::write(repo.join("batten.toml"), working).expect("write working config");
-    for (path, contents) in files {
-        fs::write(repo.join(path), contents).expect("write fixture file");
-    }
-    git_in(&repo, &["add", "-A"]);
-    // `--allow-empty`: a fixture whose working config equals its base has
-    // nothing to commit, and that case (a branch that weakens nothing) is one
-    // the delta must still report.
-    git_in(
-        &repo,
-        &["commit", "-q", "--allow-empty", "-m", "the pull request"],
-    );
-    repo
+    Fixture::new(name)
+        .config(base)
+        .git()
+        // Pin origin/main to the base commit: the trusted ref a PR is judged
+        // against.
+        .base_commit()
+        .config(working)
+        .files(files)
+        .work_commit()
+        .build()
 }
 
 fn run(repo: &Path, args: &[&str]) -> Output {
-    batten()
-        .args(args)
-        .current_dir(repo)
-        .env_remove("BATTEN_STRICTNESS")
-        .env_remove("BATTEN_FAIL_ON_WARNING")
-        .env_remove("BATTEN_CONFIG_FROM")
-        .output()
-        .expect("run batten")
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    common::run(repo, args)
 }
 
 /// A `forbid` rule at the given severity, banning `TODO` in `.rs` files.
@@ -302,7 +260,7 @@ fn a_ref_with_no_config_is_a_usage_error() {
     // The ref exists but carries no `batten.toml` — the shape of pointing at a
     // branch from before the config landed. Refused, never treated as an empty
     // policy, which would silently pass everything.
-    let repo = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("trust-ref-no-config");
+    let repo = scratch("trust-ref-no-config");
     let _ = fs::remove_dir_all(&repo);
     fs::create_dir_all(&repo).expect("create fixture");
     git_in(&repo, &["init", "-q"]);

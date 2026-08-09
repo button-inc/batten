@@ -14,23 +14,13 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
-fn batten() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batten"))
-}
-
-/// A file at the repository root, located from this crate's manifest directory.
-///
-/// Deliberately not a repo-root resolver: `git::repo_root` is the one
-/// implementation of that (CLOUD-34).
-fn at_root(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(name)
-}
+use common::{at_root, batten, stdout};
 
 /// A scratch directory, optionally a git repository, optionally with a config.
 ///
@@ -41,19 +31,12 @@ fn at_root(name: &str) -> PathBuf {
 /// repository" fixture inside the tree would discover *this* repository and the
 /// check would pass by accident.
 fn scratch(name: &str, git: bool, config: Option<&str>) -> PathBuf {
-    let dir = std::env::temp_dir().join("batten-doctor-e2e").join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create scratch dir");
+    let dir = common::scratch_outside_tree("batten-doctor-e2e", name);
     if git {
-        let output = Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&dir)
-            .output()
-            .expect("run git init");
-        assert!(output.status.success());
+        common::git_in(&dir, &["init", "-q"]);
     }
     if let Some(text) = config {
-        fs::write(dir.join("batten.toml"), text).expect("write batten.toml");
+        common::write(&dir, "batten.toml", text);
     }
     dir
 }
@@ -69,10 +52,6 @@ fn doctor(dir: &Path, extra: &[&str]) -> Output {
         .env_remove("BATTEN_CONFIG_FROM")
         .output()
         .expect("run batten doctor")
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 // --- the diagnosis -----------------------------------------------------------

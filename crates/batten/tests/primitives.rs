@@ -14,6 +14,8 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::cell::Cell;
 use std::fs;
 use std::num::NonZeroUsize;
@@ -35,11 +37,8 @@ struct Repo {
 /// A fresh repository at `CARGO_TARGET_TMPDIR/<name>`, wiped first so a crashed
 /// prior run cannot mask behaviour.
 fn repo(name: &str) -> Repo {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create fixture repo");
     let repo = Repo {
-        dir,
+        dir: common::scratch(name),
         clock: Cell::new(0),
     };
     repo.git(&["init", "-q", "-b", "main"]);
@@ -77,37 +76,15 @@ impl Repo {
     }
 
     fn raw(&self, args: &[&str]) -> Command {
+        // Identity, blanked global/system config and the `GIT_CEILING_DIRECTORIES`
+        // fence all come from the one materializer (CLOUD-63). Only the
+        // monotonic commit clock is this suite's own: fixtures here assert on
+        // commit ordering, which needs stamps nothing else does.
         let stamp = format!("2020-01-01T00:00:{:02}Z", self.clock.get());
-        let mut command = Command::new("git");
+        let mut command = common::git_command(&self.dir, args);
         command
-            .arg("-C")
-            .arg(&self.dir)
-            .args([
-                "-c",
-                "user.email=t@t",
-                "-c",
-                "user.name=t",
-                "-c",
-                "init.defaultBranch=main",
-                "-c",
-                "advice.detachedHead=false",
-                "-c",
-                "core.autocrlf=false",
-            ])
-            .args(args)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
             .env("GIT_AUTHOR_DATE", &stamp)
             .env("GIT_COMMITTER_DATE", &stamp);
-        for var in [
-            "GIT_DIR",
-            "GIT_COMMON_DIR",
-            "GIT_WORK_TREE",
-            "GIT_DISCOVERY_ACROSS_FILESYSTEM",
-        ] {
-            command.env_remove(var);
-        }
         command
     }
 

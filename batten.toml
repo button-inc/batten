@@ -95,6 +95,23 @@ pattern = "entities/"
 severity = "deny"
 scope = "tree"
 
+# The fixture corpus must stay repo-agnostic (CLOUD-63). The corpus exists so
+# coverage stops implicitly depending on *this* repository, which a fixture
+# naming this repository's origin would quietly undo.
+#
+# The org literal rather than `batten`: `min_batten_version` and `batten.toml`
+# legitimately carry the crate name, while nothing a fixture needs names where
+# this repository is hosted. It lands green — the literal occurs in the
+# workspace manifest, the toolchain config, a release workflow and the
+# generated changelog, but nowhere under crates/batten/tests/.
+[[rule]]
+id = "no-origin-literal-in-fixtures"
+kind = "forbid"
+glob = "crates/batten/tests/**"
+pattern = "button-inc"
+severity = "deny"
+scope = "tree"
+
 # The governing config surface, hashed into `batten config epoch` (CLOUD-32).
 #
 # This list is consumer-specific ON PURPOSE, and it lives here rather than in

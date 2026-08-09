@@ -1,0 +1,4 @@
+argv: check
+exit: 1
+stderr-contains: severity
+stdout:

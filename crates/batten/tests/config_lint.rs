@@ -12,68 +12,35 @@
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
-fn batten() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_batten"))
-}
+use common::{Fixture, batten, scratch, stdout};
 
 /// Create a temp repo containing a `batten.toml` with `contents`.
 fn repo_with_config(name: &str, contents: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create temp repo dir");
-    fs::write(dir.join("batten.toml"), contents).expect("write batten.toml");
-    dir
-}
-
-/// Run `git` in `dir`, asserting success.
-fn git_in(dir: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .expect("run git");
-    assert!(output.status.success(), "git {args:?} failed");
+    Fixture::new(name).config(contents).build()
 }
 
 /// A pull-request-shaped fixture: `base` pinned as `origin/main`, `working` in
 /// the tree on top.
 fn pr_fixture(name: &str, base: &str, working: &str) -> PathBuf {
-    let repo = repo_with_config(name, base);
-    git_in(&repo, &["init", "-q"]);
-    git_in(&repo, &["config", "user.email", "t@example.com"]);
-    git_in(&repo, &["config", "user.name", "t"]);
-    git_in(&repo, &["add", "-A"]);
-    git_in(&repo, &["commit", "-q", "-m", "base policy"]);
-    git_in(&repo, &["branch", "-M", "main"]);
-    git_in(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    fs::write(repo.join("batten.toml"), working).expect("write working config");
-    git_in(&repo, &["add", "-A"]);
-    git_in(
-        &repo,
-        &["commit", "-q", "--allow-empty", "-m", "the pull request"],
-    );
-    repo
+    Fixture::new(name)
+        .config(base)
+        .git()
+        .base_commit()
+        .config(working)
+        .work_commit()
+        .build()
 }
 
 fn lint(dir: &Path, extra: &[&str]) -> Output {
-    let mut command = batten();
-    command.args(["config", "lint"]);
-    command.args(extra);
-    command
-        .current_dir(dir)
-        .env_remove("BATTEN_STRICTNESS")
-        .env_remove("BATTEN_FAIL_ON_WARNING")
-        .env_remove("BATTEN_CONFIG_FROM")
-        .output()
-        .expect("run batten config lint")
-}
-
-fn stdout(output: &Output) -> String {
-    String::from_utf8_lossy(&output.stdout).into_owned()
+    let mut args = vec!["config", "lint"];
+    args.extend_from_slice(extra);
+    common::run(dir, &args)
 }
 
 /// A `forbid` rule at the given severity.
@@ -288,7 +255,7 @@ fn a_malformed_config_is_a_usage_error() {
 
 #[test]
 fn a_missing_config_is_a_usage_error() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("lint-missing-config");
+    let dir = scratch("lint-missing-config");
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create dir");
     assert_eq!(lint(&dir, &[]).status.code(), Some(1));
