@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+#MISE description="Gate: a release carries one archive per target the dist matrix builds — the signal that six silently-failed releases had none"
+#
+# CLOUD-258. `release-artifacts.yml` failed on EVERY release from v0.0.31 to
+# v0.0.36 — all seven dist legs built, then died on the attestation step, which
+# is plan-gated and unavailable on a private repo. Because that step failed, the
+# upload after it never ran, so `v0.0.36` carries one asset (the schema) and no
+# binary has ever shipped.
+#
+# Six total failures in a row went unnoticed, and the reason is structural: a
+# `release`-triggered run reaches no PR and no gate. `ci-local-parity` holds its
+# properties over `pull_request` workflows; `land` watches a PR's check-runs. A
+# workflow that fails on 100% of invocations therefore looks exactly like one
+# that has never fired. This is the missing signal.
+#
+# A property of the WORLD, not of the commit (see lock-complete's header for the
+# same split), so it runs on a clock rather than on the landing path — a release
+# nobody is touching can go bad, and no branch is at fault when it does.
+#
+# ONE list of targets, and it is the workflow's. The matrix in
+# release-artifacts.yml decides what a release contains; this reads that list
+# rather than restating it, so a target added there is covered here with no
+# second edit. Archive NAMING likewise stays in `mise-tasks/dist` — matching on
+# the target triple means the stem/extension rule is not re-derived here either.
+#
+#   mise run release-assets-check v0.0.36
+#   mise run release-assets-check            # the latest release
+#
+# Pointer-only (rule 4): target names and counts, never asset contents or URLs.
+# Output is sorted, so re-running is byte-stable and diffable.
+set -euo pipefail
+
+WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-artifacts.yml}"
+
+if [ ! -f "$WORKFLOW" ]; then
+	echo "::error:: cannot read $WORKFLOW, so the target list is unknown. That is a checkout problem, not an empty release." >&2
+	exit 2
+fi
+
+# The matrix entries are `- target: <triple>` lines. Anchored on the list-item
+# form so a `target:` appearing in prose or in another key cannot widen it.
+targets=$(sed -nE 's/^[[:space:]]*-[[:space:]]+target:[[:space:]]*([A-Za-z0-9_.-]+)[[:space:]]*$/\1/p' "$WORKFLOW" | sort -u)
+if [ -z "$targets" ]; then
+	echo "::error:: no matrix targets found in $WORKFLOW. A gate that checks nothing must not report green." >&2
+	exit 2
+fi
+
+tag="${1:-}"
+if [ -z "$tag" ]; then
+	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [ -z "$tag" ]; then
+		echo "::error:: no tag given and no latest release readable. Pass one: mise run release-assets-check <tag>" >&2
+		exit 2
+	fi
+fi
+
+# An unreadable release is exit 2 — "I could not look" — never exit 1, which
+# would report a shipping release as broken on a network blip.
+if ! assets=$(gh release view "$tag" --json assets --jq '.assets[].name' 2>/dev/null); then
+	echo "::error:: cannot read release $tag. Fetch tags first; a release that does not exist is a caller error, not an empty one." >&2
+	exit 2
+fi
+
+missing=0
+present=0
+while IFS= read -r target; do
+	[ -n "$target" ] || continue
+	if grep -qF -- "$target" <<<"$assets"; then
+		present=$((present + 1))
+		continue
+	fi
+	[ "$missing" = 0 ] && echo "::error:: release $tag is missing an archive for targets the dist matrix builds:" >&2
+	echo "  $target" >&2
+	missing=$((missing + 1))
+done <<<"$targets"
+
+if [ "$missing" != 0 ]; then
+	echo "::error:: $missing of $((present + missing)) targets have no asset on $tag. Re-run release-artifacts.yml via workflow_dispatch against that tag; uploads are --clobber idempotent." >&2
+	exit 1
+fi
+
+echo "release-assets-check: $tag carries an archive for all $present matrix targets"

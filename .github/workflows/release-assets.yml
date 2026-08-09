@@ -1,0 +1,60 @@
+name: release-assets
+
+# "Does the latest release actually carry its binaries?" — a question about the
+# world, not about any branch, so it runs on a clock rather than on the landing
+# path. Same split as lock-currency.yml.
+#
+# It exists because the answer was NO for six consecutive releases and nothing
+# said so (CLOUD-258). `release-artifacts.yml` failed every run from v0.0.31 to
+# v0.0.36: each dist leg built, then died on the plan-gated attestation step, and
+# the upload after it never ran. A `release`-triggered run reaches no PR and no
+# gate — `ci-local-parity` holds its properties over `pull_request` workflows and
+# `land` watches a PR's check-runs — so a workflow failing on 100% of its
+# invocations was indistinguishable from one that had never fired.
+#
+# Failure here is actionable, not informational: re-run release-artifacts.yml
+# via workflow_dispatch against the named tag. Uploads are --clobber idempotent,
+# so topping up a partial release is safe.
+
+on:
+  schedule:
+    # Mondays, 06:30 UTC — after lock-currency, same weekly slot.
+    - cron: "30 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to check (defaults to the latest release)
+        required: false
+        type: string
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). A runner
+  # should install locked, and its checkout is disposable, so a write here
+  # costs nothing; the clone being protected is a developer's.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  release-assets:
+    name: release-assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read # read the release's asset list
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      # TAG goes through env, never interpolated into the run block: a `${{ }}`
+      # expansion is textual substitution into the shell script, so a tag naming
+      # shell metacharacters would execute. Same posture as every other run block
+      # in this repo, and zizmor gates it at high severity.
+      - name: Check the release carries one archive per matrix target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: mise run release-assets-check "$TAG"

@@ -140,18 +140,40 @@ jobs:
         env:
           DIST_BUILD_TOOL: ${{ matrix.build-tool }}
         run: mise run dist "${{ matrix.target }}" >>"$GITHUB_OUTPUT"
-      # Attest the BINARY rather than the archive: the provenance should bind to
-      # the executable a user runs, so repackaging cannot launder it (§12 — a
-      # trust engine must exceed the ordinary distribution bar, not match it).
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: ${{ steps.dist.outputs.binary }}
+      # UPLOAD FIRST, ATTEST SECOND (CLOUD-258). The reverse order shipped, and
+      # every release from v0.0.31 to v0.0.36 attached zero binaries: all seven
+      # legs built, then died on the attestation with
+      #
+      #   Failed to persist attestation: Feature not available for the
+      #   button-inc organization.
+      #
+      # — a plan-gated feature this private repo does not have. Because the step
+      # failed, the upload after it never ran, so an OPTIONAL provenance claim
+      # took the artifact itself down with it. Six consecutive total failures
+      # went unnoticed because a `release`-triggered run reaches no PR and no
+      # gate: `ci-local-parity` holds its properties over `pull_request`
+      # workflows, and `land` watches a PR's checks. `release-assets-check`,
+      # scheduled, is the signal that was missing.
       - name: Upload to the release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: gh release upload "$TAG" "${{ steps.dist.outputs.archive }}" --clobber
+      # Attest the BINARY rather than the archive: the provenance should bind to
+      # the executable a user runs, so repackaging cannot launder it (§12 — a
+      # trust engine must exceed the ordinary distribution bar, not match it).
+      # Uploading does not consume the binary, so attesting after it binds to the
+      # same bytes it did before.
+      #
+      # continue-on-error until the repo is public, at which point this step
+      # starts succeeding on its own with no change here — the plan gate is the
+      # only thing failing it. The claim is deferred, not dropped: an unattested
+      # release is worse than an attested one and far better than none.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        continue-on-error: true
+        with:
+          subject-path: ${{ steps.dist.outputs.binary }}
 
   # The JSON Schema for `batten.toml` (CLOUD-33), published as a release asset.
   #
