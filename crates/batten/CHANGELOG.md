@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.37](https://github.com/button-inc/batten/compare/v0.0.36...v0.0.37) - 2026-08-09
+
+### Added
+
+- *(rules)* re-run rule 1's grep on every gate, not once by hand
+
 ## [0.0.36](https://github.com/button-inc/batten/compare/v0.0.35...v0.0.36) - 2026-08-08
 
 ### Fixed
