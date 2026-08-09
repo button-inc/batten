@@ -135,3 +135,25 @@ released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
 - **Prefer the tracker's own branch name.** Each issue exposes a `gitBranchName`
   (`<user>/cloud-178-<slug>`); a branch named that way carries the key from the
   first push, before any commit message does.
+
+- **The branch name is not one key source among three — it BEATS the others.**
+  Re-measured 2026-08-09 (CLOUD-270). A branch named `claude/groom-cloud-35-*`
+  carried a commit trailed `Refs: CLOUD-270` and a PR body naming CLOUD-270. On
+  merge the integration moved **CLOUD-35** and left CLOUD-270 untouched, and
+  attached the PR to CLOUD-35 as well. So "branch name, PR title, or commit
+  message" reads as a precedence order, not a union: keying the commit and the
+  body does NOT redirect the automation off a branch name that names something
+  else. Rename the branch, or expect to hand-correct.
+
+- **It does not guard on the source column, so it can resurrect a dead issue.**
+  CLOUD-35 was **Canceled** when that merge landed, and the automation moved it
+  to Done — a closed-out issue silently reappearing as completed work it never
+  did. The earlier model here ("In Progress → Done") described the column it was
+  observed leaving, not a precondition it checks.
+
+- **Landing is not Done for a `ci` commit, and the automation cannot know that.**
+  Done means released ([dor-dod]). A `ci`-typed commit releases nothing at any
+  version, so its SHA is in no tag and Done would be a lie the moment the
+  automation writes it; **In Review** is the truthful column until some later
+  release sweeps the commit up. `git tag --contains <sha>` is the check, and an
+  empty answer is the hand-move case this file already names.
