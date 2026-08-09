@@ -5,12 +5,24 @@
 # symptom is an approval prompt on every call, which reads as harness behaviour
 # rather than as a settings bug. That silence is what earns a gate.
 #
-# One predicate, a pure function of the settings file:
+# Two predicates, both pure functions of the settings file:
 #
-#   unanchored-allow-glob  an allow rule whose glob reaches the server segment.
-#                          The CLI accepts a tool-name glob only after a literal
-#                          `mcp__<server>__` prefix; anything broader is skipped
-#                          with a warning, so it reads as a grant and is not one.
+#   unanchored-allow-glob     an allow rule whose glob reaches the server
+#                             segment. The CLI accepts a tool-name glob only
+#                             after a literal `mcp__<server>__` prefix; anything
+#                             broader is skipped with a warning, so it reads as
+#                             a grant and is not one.
+#
+#   ungranted-enabled-server  a server this repo turns on in
+#                             `enabledMcpjsonServers` that no allow rule names.
+#                             The same silence from the other end: the first
+#                             predicate catches a grant matching no tool, this
+#                             one catches a server with no grant at all. Serena
+#                             shipped that way — `.mcp.json` declared it,
+#                             `enabledMcpjsonServers` turned it on, and no allow
+#                             rule mentioned it, so every `mem:` read AGENTS.md
+#                             mandates stalled behind an approval prompt this
+#                             repo had already decided to give.
 #
 # Deny rules are deliberately not checked: a deny may glob freely, and a deny
 # that over-matches fails closed rather than silently.
@@ -35,7 +47,7 @@ fi
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: MCP allow rules that grant nothing (see mem:toolchain-and-hooks):" >&2
+	[ "$fail" = 0 ] && echo "::error:: MCP permission defects in $settings (see mem:toolchain-and-hooks):" >&2
 	printf '  %s\n' "$1" >&2
 	fail=1
 }
@@ -64,6 +76,25 @@ while IFS= read -r rule; do
 	esac
 done < <(jq -r '.[]' <<<"$allows")
 
+# The other end of the same silence: a server this repo turns on that no allow
+# rule names. Answerable from the file alone — unlike the connector-name question
+# below, `enabledMcpjsonServers` is the repo's own declaration of what is on.
+while IFS= read -r server; do
+	[ -n "$server" ] || continue
+	granted=0
+	while IFS= read -r rule; do
+		case "$rule" in
+		mcp__*) ;;
+		*) continue ;;
+		esac
+		rule_server=${rule#mcp__}
+		rule_server=${rule_server%%__*}
+		[ "$rule_server" = "$server" ] && granted=1
+	done < <(jq -r '.[]' <<<"$allows")
+	[ "$granted" = 1 ] ||
+		report "$server — enabledMcpjsonServers turns this server on and no allow rule names it; every call to it prompts"
+done < <(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null)
+
 # NOT checked: whether an allowed server also has a `mcp__claude_ai_<server>__*`
 # companion. An earlier version demanded one, on the reasoning that a claude.ai
 # connector is exposed under that name — true of the local CLI, whose own
@@ -79,5 +110,5 @@ done < <(jq -r '.[]' <<<"$allows")
 # A gate may only assert what it can verify from the repo. The connector-name
 # question cannot be, and belongs in user-level settings — see CLOUD-178.
 
-[ "$fail" = 0 ] && echo "mcp-allow-check: every MCP allow rule in $settings names a tool it can match"
+[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, and every enabled server has a grant"
 exit "$fail"

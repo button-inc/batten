@@ -13,6 +13,12 @@ allow() {
 	printf '{"permissions":{"allow":%s,"deny":[]}}\n' "$1" >"$FIXTURE"
 }
 
+# Writes a fixture carrying an enabledMcpjsonServers value alongside the
+# allowlist, for the second predicate: an enabled server with no grant.
+enabled() {
+	printf '{"enabledMcpjsonServers":%s,"permissions":{"allow":%s,"deny":[]}}\n' "$1" "$2" >"$FIXTURE"
+}
+
 @test "this repo's own settings pass the gate today" {
 	run "$GATE" "$BATS_TEST_DIRNAME/../.claude/settings.json"
 	[ "$status" -eq 0 ]
@@ -71,6 +77,54 @@ allow() {
 	allow '["mcp__Linear"]'
 	run "$GATE" "$FIXTURE"
 	[[ "$output" != *'"permissions"'* ]]
+}
+
+@test "an enabled server that no allow rule names is reported" {
+	# The defect this predicate exists for: serena enabled, nothing granting it,
+	# so every memory read prompted and the settings file never pointed at it.
+	enabled '["serena"]' '["Bash(git:*)", "mcp__Linear__*"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no allow rule names it"* ]]
+	[[ "$output" == *"serena"* ]]
+}
+
+@test "an enabled server granted by a tool-name glob passes" {
+	enabled '["serena"]' '["mcp__serena__*"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "an enabled server granted tool by tool passes" {
+	enabled '["serena"]' '["mcp__serena__read_memory", "mcp__serena__list_memories"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a bare server-level rule grants an enabled server" {
+	enabled '["serena"]' '["mcp__serena"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "every enabled server needs its own grant, not just one of them" {
+	enabled '["serena", "other"]' '["mcp__serena__*"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"other"* ]]
+}
+
+@test "an absent enabledMcpjsonServers leaves the predicate nothing to say" {
+	allow '["Bash(git:*)"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "enabledMcpjsonServers set to true is not an enumerable list" {
+	# The CLI accepts a boolean there; a gate may only assert what it can read.
+	enabled 'true' '["Bash(git:*)"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
 }
 
 @test "unparseable settings exit 2, distinct from a failing allowlist" {
