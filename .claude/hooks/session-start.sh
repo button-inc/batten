@@ -29,6 +29,13 @@
 # approval prompt. That second gate is closed by committing
 # `"enabledMcpjsonServers": ["serena"]` in .claude/settings.json — do not remove
 # it thinking this hook covers the case. Both are load-bearing.
+#
+# It also PREFLIGHTS THE CONTAINER (CLOUD-261), by calling `container-preflight`
+# after provisioning. "The toolchain installed" and "this container can do the
+# work" are different questions, and the second one used to be answered three
+# tasks in, by a failure wearing someone else's name. That task owns the what
+# and the why; this hook owns only the WHEN — the very beginning of the session,
+# before any work is planned against a container that cannot land it.
 set -uo pipefail
 
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" || exit 0
@@ -85,6 +92,27 @@ step submodules git submodule update --init --recursive
 
 if [ "$fail" -ne 0 ]; then
 	echo "::error:: session-start: setup incomplete — expect missing tools or MCP servers" >&2
+fi
+
+# --- can this container do the work at all? -----------------------------------
+#
+# Provisioning succeeding is a different question from the container being
+# usable, and the difference is invisible until a task deep in the lifecycle
+# fails in someone else's name. `container-preflight` asks the second question
+# and halts on it; see that task for what it checks and why each is unrepairable
+# from inside the session.
+#
+# It runs even when provisioning failed, because a failed install is usually a
+# SYMPTOM of what it diagnoses (a proxied api.github.com), and reporting the
+# cause beside the symptom is the whole point. Its own `--degraded` argument
+# tells it not to trust toolchain-dependent probes in that state.
+if [ "$fail" -ne 0 ]; then
+	mise run container-preflight -- --degraded || fail=1
+else
+	mise run container-preflight || fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "session-start: toolchain provisioned (mise install, submodules)"
+echo "session-start: toolchain provisioned (mise install, submodules); container preflight clean"

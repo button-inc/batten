@@ -7,6 +7,28 @@
 setup() {
 	HOOK="$BATS_TEST_DIRNAME/../.claude/hooks/session-start.sh"
 	SETTINGS="$BATS_TEST_DIRNAME/../.claude/settings.json"
+
+	# The hook now ends in `mise run container-preflight`, whose verdict is about
+	# the CONTAINER — its egress policy and its credential — not about this code
+	# (CLOUD-261). Letting that verdict decide these tests would make `mise run
+	# test:bats` a container-health check, and the fix for a broken container
+	# could then never be landed from one. So the preflight alone is neutralised
+	# here, and every other `mise` call — `mise install` above all — still runs
+	# for real, which is what keeps the lockfile assertion below non-vacuous.
+	#
+	# The preflight's own behaviour is asserted in tests/container-preflight.bats,
+	# where the GitHub half is stubbed and every verdict is reachable.
+	STUB="$BATS_TEST_TMPDIR/bin"
+	mkdir -p "$STUB"
+	REAL_MISE="$(command -v mise)"
+	cat >"$STUB/mise" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = run ] && [ "\$2" = container-preflight ]; then exit 0; fi
+exec "$REAL_MISE" "\$@"
+EOF
+	chmod +x "$STUB/mise"
+	PATH="$STUB:$PATH"
+	export PATH
 }
 
 @test "the hook is executable" {
