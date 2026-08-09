@@ -108,6 +108,99 @@ payload() {
 	[[ "$output" == *"In Review -> Done"* ]]
 }
 
+@test "THE SECOND WAY IN: no ref in the range, but a commit the tag contains" {
+	# CLOUD-260. The grep rests on issue-guard making the ref mandatory, which is
+	# not true retroactively: four issues had landed work behind merged PRs and
+	# zero mentions in main's entire history, so no tag could ever name them and
+	# they sat In Review permanently. A commit the caller supplies is the second
+	# evidence, and containment in this tag's range is the predicate.
+	local sha
+	sha=$(git rev-parse HEAD) # the v0.0.2 tip, which names no issue at all
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-9  In Review -> Done"* ]]
+}
+
+@test "a commit shipped by an EARLIER tag is not new in this one" {
+	# The range is \"new in this tag\", so an ancestor of the previous tag has
+	# already been reported once. Reporting it again on every later tag would
+	# make the sweep noisier the longer the history gets.
+	local sha
+	sha=$(git rev-parse v0.0.1)
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"CLOUD-9"* ]]
+}
+
+@test "a commit the tag does not contain is not movable" {
+	local sha
+	sha=$(git rev-parse HEAD)
+	# v0.0.1 predates HEAD, so HEAD is not contained in it.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.1"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"CLOUD-9"* ]]
+}
+
+@test "a commit does not buy a way past the hold" {
+	# A second way to be FOUND must not become a way around being HELD.
+	local sha
+	sha=$(git rev-parse HEAD)
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\",\"description\":\"DO-NOT-CLOSE\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-9  HELD"* ]]
+}
+
+@test "an unknown or malformed commit is ignored, not fatal" {
+	# Supplementary evidence: a sha this clone cannot resolve must not take the
+	# whole report down, or one stale payload field breaks every sweep.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"not-a-sha\"},{\"id\":\"CLOUD-2\",\"status\":\"In Review\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2  In Review -> Done"* ]]
+	[[ "$output" != *"CLOUD-9"* ]]
+}
+
+@test "an issue matched BOTH ways is reported once" {
+	# The ordinary case for work that carries its ref and supplies a commit.
+	local sha
+	sha=$(git rev-parse HEAD)
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[ "$(grep -c 'CLOUD-2  In Review -> Done' <<<"$output")" -eq 1 ]
+	[[ "$output" == *"1 to move"* ]]
+}
+
+@test "a payload with no commit field behaves exactly as before" {
+	# The whole existing corpus pipes payloads without one; adding a second path
+	# must cost them nothing.
+	run bash -c "printf '%s' '$(payload CLOUD-2:In\ Review)' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2  In Review -> Done"* ]]
+	[[ "$output" == *"1 to move"* ]]
+}
+
+@test "a tag naming no issue still reports cleanly when no commit matches either" {
+	# The no-refs path used to exit BEFORE stdin was read, which would have made
+	# commit matching unreachable for exactly the releases that need it most —
+	# a tag of pure chore commits. Its clean-outcome contract is unchanged.
+	commit "chore: release v0.0.3"
+	git tag v0.0.3
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\"}]' | '$TASK' v0.0.3"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"references no CLOUD-* issue"* ]]
+}
+
+@test "a chore-only tag still matches an issue by commit" {
+	# The half the moved early-exit unlocks: a release whose commits name nothing
+	# can still move an issue whose commit it contains.
+	commit "chore: release v0.0.3"
+	git tag v0.0.3
+	local sha
+	sha=$(git rev-parse HEAD)
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.3"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-9  In Review -> Done"* ]]
+}
+
 @test "a tag that does not exist is exit 2, not an empty release" {
 	run "$TASK" v9.9.9
 	[ "$status" -eq 2 ]
