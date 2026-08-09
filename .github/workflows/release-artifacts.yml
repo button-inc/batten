@@ -120,13 +120,22 @@ jobs:
         uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2
         with:
           tool: cross
-      # Prebuilt, so cargo-zigbuild's own MSRV (newer than the toolchain this
-      # repo pins) never constrains the build.
-      - name: Install zig and cargo-zigbuild
-        if: matrix.build-tool == 'zigbuild'
-        uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2
-        with:
-          tool: zig,cargo-zigbuild
+      # NO install step for zig or cargo-zigbuild: mise pins both in [tools], the
+      # mise-action step above passes no `install_args` and so installs every
+      # pinned tool, and `mise run dist` below puts them on PATH. That is also
+      # the versions `darwin-link` links against, so the release and the gate that
+      # proved it use one pin, written down once.
+      #
+      # There WAS an install-action step here — a second provisioning path for a
+      # mise-pinned tool — and it stopped working (CLOUD-259): upstream dropped
+      # zig, falls back to cargo-binstall (no prebuilt), then to cargo install
+      # (zig is not a crate). Both fallbacks are dead ends, so the step could only
+      # fail, and both Darwin legs died before reaching the build. cargo-zigbuild
+      # was already resolving out of mise's install dir on those runs — the step
+      # re-found what mise had installed and contributed only a way to fail.
+      #
+      # `cross` is NOT in mise.toml, so its step above is a different case.
+      #
       # cross supplies its target's std inside the container; the other two link
       # against a rustup-installed one on the host.
       - name: Add the Rust target

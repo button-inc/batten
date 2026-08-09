@@ -148,6 +148,32 @@ complete() {
 	[ "$(echo "$output" | head -1)" = "upload" ]
 }
 
+@test "no install-action step names a tool mise.toml already pins" {
+	# CLOUD-259. A second provisioning path for a mise-pinned tool is the repo's
+	# own rule violated, and it is not merely redundant: install-action dropped
+	# zig, and its two fallbacks (cargo-binstall, cargo install) are dead ends for
+	# a non-crate, so the step could only fail. Both Darwin legs died there while
+	# mise had zig 0.16 pinned and installed. `cross` is not in mise.toml, so it
+	# is not a finding.
+	# Scoped to the `tool:` values install-action is actually given — the word
+	# "zig" also appears in the matrix's build-tool name and in prose, and a bare
+	# grep would fail on those forever.
+	local requested
+	requested=$(sed -nE 's/^[[:space:]]*tool:[[:space:]]*(.+)$/\1/p' \
+		.github/workflows/release-artifacts.yml | tr ',' '\n' | tr -d ' ')
+	local tool
+	while read -r tool; do
+		[ -n "$tool" ] || continue
+		if grep -qxF -- "$tool" <<<"$requested"; then
+			echo "install-action is asked for '$tool', which mise.toml pins"
+			return 1
+		fi
+	done < <(
+		sed -nE 's/^[[:space:]]*"?([A-Za-z0-9:._/-]+)"?[[:space:]]*=[[:space:]]*".*/\1/p' mise.toml |
+			sed 's#^.*/##'
+	)
+}
+
 @test "the attestation cannot fail the leg while the repo is private" {
 	# The claim is deferred, not dropped: the step stays wired and starts
 	# succeeding on its own when the repo goes public.
