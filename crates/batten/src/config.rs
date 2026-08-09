@@ -226,6 +226,13 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // matches every line of every file — still loaded clean. The completeness
     // test below is what stops the next table arriving orphaned the same way.
     crate::markers::validate(&config.markers)?;
+    // And the rule table, which used to be validated only by the runner that
+    // happened to evaluate it (CLOUD-48). That was defensible while the tree
+    // engine was the only runner; `batten hook` is now a second one, and a
+    // malformed `mediated_call` row validated only by `check` is a policy row
+    // that loads, matches nothing at the mediation channel, and reads as
+    // coverage. `run_rule` still calls `Rule::validate` as defence in depth.
+    crate::rules::validate(&config.rules)?;
     Ok(config)
 }
 
@@ -371,15 +378,13 @@ mod tests {
     const VALIDATED_AT_LOAD: &[(&str, &str)] = &[
         ("verbs", "crate::verbs::validate("),
         ("markers", "crate::markers::validate("),
+        ("rules", "crate::rules::validate("),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing
     /// an exemption is the point: a reader sees the justification rather than
     /// an absence, which is what an orphaned validator looks like.
-    const VALIDATED_BY_ITS_RUNNER: &[(&str, &str)] = &[(
-        "rules",
-        "Rule::validate fires in rules::run_rule when the rule is evaluated, not at load",
-    )];
+    const VALIDATED_BY_ITS_RUNNER: &[(&str, &str)] = &[];
 
     #[test]
     fn every_typed_config_table_has_a_validation_call_site() {

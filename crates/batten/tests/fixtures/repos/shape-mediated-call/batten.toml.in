@@ -1,0 +1,13 @@
+version = 1
+
+# A shape rule is adjudicated by `batten hook` against one mediated command, not
+# by the tree engine. This fixture pins the routing half of that: `check` walks
+# past a `mediated_call` row and reports nothing, rather than erroring on a rule
+# it cannot evaluate or — worse — evaluating it as if it selected files.
+[[rule]]
+id = "no-hand-merge"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr merge"
+reason = "use the sanctioned landing path"

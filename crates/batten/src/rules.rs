@@ -18,10 +18,13 @@
 //! than skipping it, because a skipped gate that still exits `0` is the
 //! false-green Batten exists to catch.
 //!
-//! Two kinds ship: [`RuleKind::Forbid`], a static banned-shape literal check,
-//! and [`RuleKind::Command`], the dynamic escape hatch that runs a configured
-//! command and reads its exit code as the predicate. Further kinds slot in as
-//! new variants with one match arm each. Two properties are load-bearing and
+//! Three kinds ship: [`RuleKind::Forbid`], a static banned-shape literal check
+//! over files; [`RuleKind::Command`], the dynamic escape hatch that runs a
+//! configured command and reads its exit code as the predicate; and
+//! [`RuleKind::Shape`], a banned *command* shape adjudicated by `batten hook`
+//! against one mediated call. [`RuleScope`] is what routes a rule to the surface
+//! that evaluates it, and [`RuleKind::scopes`] pairs the two so a rule no
+//! surface would ever run cannot load. Two properties are load-bearing and
 //! preserved by every kind added later:
 //!
 //! * **Pointer-only output** (non-negotiable rule 4): a finding is a
@@ -64,15 +67,33 @@ pub enum RuleKind {
     /// declared in `batten.toml`, it runs only on the non-`read` surface (§5,
     /// CLOUD-170).
     Command,
+    /// A banned **command shape**: the mediated call `batten hook` is
+    /// adjudicating matches `pattern` read as an effective program plus the
+    /// adjacent words that must follow it.
+    ///
+    /// Distinct from [`RuleKind::Command`], which *runs* a declared command.
+    /// This one runs nothing — it is a string match over a command line the
+    /// host handed us, so it cannot spawn and stays on the read-safe surface.
+    Shape,
 }
 
 impl RuleKind {
-    /// Every kind the engine knows, so the spawn partition below is total.
+    /// Every kind the engine knows, so the partitions below are total.
     ///
     /// A new variant must be added here or [`tests::all_covers_every_kind`]
     /// fails — which is what keeps [`RuleKind::spawns_processes`] from silently
     /// defaulting a spawning kind to "safe".
-    pub const ALL: &'static [RuleKind] = &[RuleKind::Forbid, RuleKind::Command];
+    pub const ALL: &'static [RuleKind] = &[RuleKind::Forbid, RuleKind::Command, RuleKind::Shape];
+
+    /// The stable lowercase token used in config and machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RuleKind::Forbid => "forbid",
+            RuleKind::Command => "command",
+            RuleKind::Shape => "shape",
+        }
+    }
 
     /// Whether running this kind can execute a process declared in
     /// `batten.toml`.
@@ -85,8 +106,50 @@ impl RuleKind {
     #[must_use]
     pub const fn spawns_processes(self) -> bool {
         match self {
-            RuleKind::Forbid => false,
+            RuleKind::Forbid | RuleKind::Shape => false,
             RuleKind::Command => true,
+        }
+    }
+
+    /// The columns this kind cannot load without.
+    #[must_use]
+    pub const fn requires(self) -> &'static [&'static str] {
+        match self {
+            RuleKind::Forbid => &["glob", "pattern"],
+            RuleKind::Command => &["glob", "run"],
+            // A shape row's `reason` is required, not optional: the deny it
+            // produces reaches a model as the whole explanation, and a refusal
+            // with nothing but an id is the un-actionable shape CLOUD-122 exists
+            // to prevent.
+            RuleKind::Shape => &["pattern", "reason"],
+        }
+    }
+
+    /// Every column this kind accepts — a superset of [`RuleKind::requires`].
+    ///
+    /// Anything outside this set is a usage error rather than an ignored key: a
+    /// `glob` on a shape rule selects files a shape rule never reads, so
+    /// accepting it would let a reviewer believe a rule is scoped when it is not.
+    #[must_use]
+    pub const fn permits(self) -> &'static [&'static str] {
+        match self {
+            RuleKind::Forbid => &["glob", "pattern"],
+            RuleKind::Command => &["glob", "run"],
+            RuleKind::Shape => &["pattern", "reason", "contains", "policy_url"],
+        }
+    }
+
+    /// The scopes this kind may declare.
+    ///
+    /// The pairing is what makes the scope key a real router rather than a label:
+    /// a file kind scoped to the mediated call, or a shape kind scoped to the
+    /// tree, would be a rule that no surface ever evaluates — present, inert, and
+    /// reading as covered.
+    #[must_use]
+    pub const fn scopes(self) -> &'static [RuleScope] {
+        match self {
+            RuleKind::Forbid | RuleKind::Command => &[RuleScope::Tree],
+            RuleKind::Shape => &[RuleScope::MediatedCall],
         }
     }
 }
@@ -110,21 +173,29 @@ impl RuleKind {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RuleScope {
-    /// The whole working tree: every file the walk yields. The only domain the
-    /// engine evaluates today, and the pinned default.
+    /// The whole working tree: every file the walk yields. The pinned default.
     #[default]
     Tree,
+    /// The single command `batten hook` is adjudicating — not a file domain at
+    /// all, which is why a rule declaring it reads no `glob`.
+    ///
+    /// Spelled `mediated_call` rather than `command` on purpose: `command` is
+    /// already a [`RuleKind`] token meaning "run this", and one word meaning two
+    /// unrelated things across two keys is the cross-vocabulary confusion
+    /// [`tests::severity_and_scope_vocabularies_do_not_cross`] exists to prevent.
+    MediatedCall,
 }
 
 impl RuleScope {
     /// Every scope the engine knows, so vocabulary tests stay total.
-    pub const ALL: &'static [RuleScope] = &[RuleScope::Tree];
+    pub const ALL: &'static [RuleScope] = &[RuleScope::Tree, RuleScope::MediatedCall];
 
     /// The stable lowercase token used in config and machine output (§6).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             RuleScope::Tree => "tree",
+            RuleScope::MediatedCall => "mediated_call",
         }
     }
 }
@@ -146,7 +217,11 @@ pub struct Rule {
     /// The glob selecting which files the rule inspects, matched against
     /// repo-relative paths (`/`-separated). `**` matches any run of path
     /// segments, `*` and `?` match within a single segment.
-    pub glob: String,
+    ///
+    /// Optional at the type level and required per-kind: a file kind cannot load
+    /// without it, and [`RuleKind::Shape`] — which inspects no files — rejects it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glob: Option<String>,
     /// What a match does: `deny` fails the run, `warn` reports without failing
     /// (until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the
     /// rule off (cargo-deny's model, CLOUD-61).
@@ -161,10 +236,36 @@ pub struct Rule {
     /// [`RuleScope::Tree`], the pinned per-field default.
     #[serde(default)]
     pub scope: RuleScope,
-    /// The literal substring a [`RuleKind::Forbid`] rule bans from matched
-    /// files. Required by that kind, rejected by any other.
+    /// The literal shape this rule bans — one meaning, two domains.
+    ///
+    /// For [`RuleKind::Forbid`] it is a substring banned from matched *files*.
+    /// For [`RuleKind::Shape`] it is a banned *command line*: the first word is
+    /// the effective program (matched after wrapper look-through) and the rest
+    /// are the adjacent non-flag words that must follow it, so
+    /// `pattern = "gh pr merge"` reads exactly as a reviewer would say it aloud.
+    /// Required by both kinds, rejected by [`RuleKind::Command`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
+    /// An extra literal that must appear in the mediated command **as written**
+    /// for a [`RuleKind::Shape`] rule to fire. Optional, that kind only.
+    ///
+    /// It exists for one real case rather than as a general escape hatch: a
+    /// landing directive lives inside a quoted `--body`, so it is not one of the
+    /// words the shape matches, and without this an ordinary `gh pr comment`
+    /// would be denied alongside the one that carries the directive. Matched
+    /// against the raw text of the same segment, quotes included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contains: Option<String>,
+    /// Why this rule refuses, and what to do instead — the deny's whole text.
+    ///
+    /// Required by [`RuleKind::Shape`], where the refusal is all a caller gets;
+    /// optional elsewhere, where a `path:line` pointer plus the id already says
+    /// where to look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// An optional link to the policy this rule enforces, appended to the deny.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_url: Option<String>,
     /// The command template a [`RuleKind::Command`] rule runs. Required by that
     /// kind, rejected by any other.
     ///
@@ -202,32 +303,110 @@ impl Rule {
     /// `deny_unknown_fields`), so the kind/field agreement that a tagged enum
     /// would give for free is asserted here instead — and a field belonging to
     /// another kind is an *error*, never ignored, so a rule can never half-apply.
+    /// Every optional column, paired with whether this rule carries it.
+    ///
+    /// The census is what keeps [`Rule::validate`] total. The previous version
+    /// hand-wrote one match arm per kind naming one required and one forbidden
+    /// field, which was correct for two kinds and two columns and goes stale
+    /// silently the moment either grows: a new column simply appears in no arm,
+    /// so every kind accepts it. Listing the columns once and asking each kind
+    /// about all of them makes that failure impossible, and
+    /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
+    /// a column is added here without being placed.
+    fn columns(&self) -> [(&'static str, bool); 6] {
+        [
+            ("glob", self.glob.is_some()),
+            ("pattern", self.pattern.is_some()),
+            ("run", self.run.is_some()),
+            ("contains", self.contains.is_some()),
+            ("reason", self.reason.is_some()),
+            ("policy_url", self.policy_url.is_some()),
+        ]
+    }
+
     fn validate(&self) -> anyhow::Result<()> {
-        let (required, extra) = match self.kind {
-            RuleKind::Forbid => (self.pattern.is_some(), self.run.is_some().then_some("run")),
-            RuleKind::Command => (
-                self.run.is_some(),
-                self.pattern.is_some().then_some("pattern"),
-            ),
-        };
-        let (needs, kind) = match self.kind {
-            RuleKind::Forbid => ("pattern", "forbid"),
-            RuleKind::Command => ("run", "command"),
-        };
-        if !required {
+        let kind = self.kind.as_str();
+        for column in self.kind.requires() {
+            let present = self
+                .columns()
+                .into_iter()
+                .any(|(name, present)| name == *column && present);
+            if !present {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"{kind}\" requires `{column}`",
+                    self.id
+                )));
+            }
+        }
+        for (name, present) in self.columns() {
+            if present && !self.kind.permits().contains(&name) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `{name}` is not valid for kind \"{kind}\"",
+                    self.id
+                )));
+            }
+        }
+        // Scope routes a rule to the surface that evaluates it, so a pairing the
+        // engine cannot honour must be refused rather than accepted and never
+        // run. An inert rule reads as coverage.
+        if !self.kind.scopes().contains(&self.scope) {
             return Err(UsageError::raise(format!(
-                "rule {}: kind \"{kind}\" requires `{needs}`",
-                self.id
+                "rule {}: kind \"{kind}\" does not evaluate over scope \"{}\"",
+                self.id,
+                self.scope.as_str()
             )));
         }
-        if let Some(extra) = extra {
+        if self.glob.as_deref().is_some_and(str::is_empty) {
             return Err(UsageError::raise(format!(
-                "rule {}: `{extra}` is not valid for kind \"{kind}\"",
+                "rule {}: `glob` must not be empty",
                 self.id
             )));
         }
         Ok(())
     }
+
+    /// The banned command shape: the effective program, then the adjacent words
+    /// that must follow it.
+    ///
+    /// `None` for any kind but [`RuleKind::Shape`], and for a `pattern` with no
+    /// program token.
+    #[must_use]
+    pub fn shape(&self) -> Option<(&str, Vec<&str>)> {
+        if self.kind != RuleKind::Shape {
+            return None;
+        }
+        let mut words = self.pattern.as_deref()?.split_whitespace();
+        let program = words.next()?;
+        Some((program, words.collect()))
+    }
+}
+
+/// Validate a whole `[[rule]]` table, and refuse a duplicated id.
+///
+/// Called at **load** rather than only by a runner (`config::parse_ungated`),
+/// because there are now two runners: the tree engine and `batten hook`. A rule
+/// validated only by the surface that happens to run it is a rule the other
+/// surface accepts malformed — and for the hook that means a policy row that
+/// loads, matches nothing, and reads as coverage.
+///
+/// Two rows for one id is a policy question with two answers, and silently
+/// taking the first is how a tightening edit gets lost behind a stale row. Same
+/// reasoning, and the same shape, as [`crate::verbs::validate`].
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) for a malformed or duplicated rule.
+pub fn validate(rules: &[Rule]) -> anyhow::Result<()> {
+    for (index, rule) in rules.iter().enumerate() {
+        rule.validate()?;
+        if rules[..index].iter().any(|prior| prior.id == rule.id) {
+            return Err(UsageError::raise(format!(
+                "rule {}: declared twice; a rule has one definition",
+                rule.id
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// A single policy finding: the rule that fired and where, as a pointer only.
@@ -330,13 +509,20 @@ fn run_rule(
     files: &[String],
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<()> {
-    if rule.glob.is_empty() {
-        return Err(UsageError::raise(format!(
-            "rule {}: glob must not be empty",
-            rule.id
-        )));
-    }
+    // Validation first, and it owns the empty-glob refusal now: the census in
+    // `Rule::validate` is the one place that knows which columns a kind needs,
+    // so a second check here could only disagree with it.
     rule.validate()?;
+    // A rule the tree engine does not evaluate is not this surface's business.
+    // `validate` has already refused an unevaluable kind/scope pairing, so a
+    // skip here is a rule another surface owns, never one nothing runs.
+    if rule.scope != RuleScope::Tree {
+        return Ok(());
+    }
+    let Some(glob) = rule.glob.as_deref() else {
+        // Unreachable for a tree-scoped kind, whose census requires `glob`.
+        return Ok(());
+    };
     // An `allow` rule is configured off: a match is not a finding at all. It is
     // still validated above — a malformed rule is a config error even when off,
     // because "off" must never double as "unreadable" — but it matches nothing
@@ -346,10 +532,7 @@ fn run_rule(
     if rule.severity == RuleSeverity::Allow {
         return Ok(());
     }
-    let matched: Vec<&String> = files
-        .iter()
-        .filter(|path| glob_match(&rule.glob, path))
-        .collect();
+    let matched: Vec<&String> = files.iter().filter(|path| glob_match(glob, path)).collect();
     // The glob is a gate before it is an argv source (§4 "cheap when
     // irrelevant"): no match means the rule is skipped entirely — for a command
     // rule, without ever spawning.
@@ -363,6 +546,10 @@ fn run_rule(
             }
         }
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
+        // Unreachable: a shape rule is `mediated_call`-scoped, and the scope
+        // guard above returned before the walk. Stated rather than caught by a
+        // wildcard so adding a kind that *is* tree-scoped has to come here.
+        RuleKind::Shape => {}
     }
     Ok(())
 }
@@ -489,7 +676,11 @@ fn run_once(
         findings.push(Finding {
             rule: rule.id.clone(),
             severity: rule.severity,
-            path: rule.glob.clone(),
+            // The rule's glob is the tightest honest pointer for a finding a
+            // command condemned as a batch. A command kind cannot load without
+            // one, so the fallback is unreachable; naming the rule id rather
+            // than an empty string keeps it a usable pointer if it ever is not.
+            path: rule.glob.as_deref().unwrap_or(&rule.id).to_owned(),
             line: None,
         });
     }
@@ -811,27 +1002,46 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
-    fn forbid(id: &str, glob: &str, pattern: &str) -> Rule {
+    /// A rule with every column empty, for a test to fill in the one it means.
+    ///
+    /// Keeps the fixtures below from re-listing six `None`s each, so adding a
+    /// column touches this one place rather than every test.
+    fn blank(id: &str, kind: RuleKind) -> Rule {
         Rule {
             id: id.to_owned(),
-            kind: RuleKind::Forbid,
-            glob: glob.to_owned(),
+            kind,
+            glob: None,
             severity: RuleSeverity::Deny,
-            scope: RuleScope::Tree,
-            pattern: Some(pattern.to_owned()),
+            scope: kind.scopes()[0],
+            pattern: None,
+            contains: None,
+            reason: None,
+            policy_url: None,
             run: None,
+        }
+    }
+
+    fn forbid(id: &str, glob: &str, pattern: &str) -> Rule {
+        Rule {
+            glob: Some(glob.to_owned()),
+            pattern: Some(pattern.to_owned()),
+            ..blank(id, RuleKind::Forbid)
         }
     }
 
     fn command(id: &str, glob: &str, run: &str) -> Rule {
         Rule {
-            id: id.to_owned(),
-            kind: RuleKind::Command,
-            glob: glob.to_owned(),
-            severity: RuleSeverity::Deny,
-            scope: RuleScope::Tree,
-            pattern: None,
+            glob: Some(glob.to_owned()),
             run: Some(run.to_owned()),
+            ..blank(id, RuleKind::Command)
+        }
+    }
+
+    fn shape(id: &str, pattern: &str, reason: &str) -> Rule {
+        Rule {
+            pattern: Some(pattern.to_owned()),
+            reason: Some(reason.to_owned()),
+            ..blank(id, RuleKind::Shape)
         }
     }
 
@@ -923,6 +1133,154 @@ mod tests {
     }
 
     #[test]
+    fn every_optional_rule_field_is_classified_by_every_kind() {
+        // The census's own gate. Every column a rule can carry must be either
+        // required or permitted by at least one kind — a column classified by no
+        // kind is one every kind rejects, which is a field nobody can ever set.
+        // This is what the hand-written per-kind match could not give: it named
+        // fields, so a new one simply appeared in no arm.
+        let all = blank("probe", RuleKind::Forbid).columns();
+        for (name, _) in all {
+            let classified = RuleKind::ALL
+                .iter()
+                .any(|kind| kind.permits().contains(&name));
+            assert!(
+                classified,
+                "column `{name}` is permitted by no kind, so it can never be set"
+            );
+        }
+        // And `requires` must be a subset of `permits` for every kind, or a kind
+        // would demand a column it then rejects.
+        for kind in RuleKind::ALL {
+            for required in kind.requires() {
+                assert!(
+                    kind.permits().contains(required),
+                    "{kind:?} requires `{required}` but does not permit it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_mediated_call_kind_spawns_a_process() {
+        // What actually makes `hook`'s dispatch structurally unable to run a
+        // configured command, stated over the whole cross product rather than a
+        // named pair. `Policy::from_resolved` filters on scope alone, so this is
+        // the property that filter relies on.
+        for kind in RuleKind::ALL {
+            if kind.scopes().contains(&RuleScope::MediatedCall) {
+                assert!(
+                    !kind.spawns_processes(),
+                    "{kind:?} is adjudicable at the mediation channel and can spawn"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn kind_and_scope_vocabularies_do_not_cross() {
+        // The same separation `severity_and_scope_vocabularies_do_not_cross`
+        // enforces, applied to the pair that nearly collided: `command` is a
+        // kind, and naming a scope `command` too would make one word mean two
+        // unrelated things across two keys in the same table.
+        for kind in RuleKind::ALL {
+            for scope in RuleScope::ALL {
+                assert_ne!(
+                    kind.as_str(),
+                    scope.as_str(),
+                    "the token {:?} names both a kind and a scope",
+                    kind.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_kind_only_accepts_its_own_scopes() {
+        // A kind/scope pairing the engine cannot honour must be refused, never
+        // accepted and then never evaluated. An inert rule reads as coverage,
+        // which is the failure this whole file is written against.
+        for kind in RuleKind::ALL {
+            for scope in RuleScope::ALL {
+                let mut rule = blank("pairing", *kind);
+                rule.scope = *scope;
+                // Fill whatever this kind requires so the only possible
+                // complaint is the pairing.
+                for column in kind.requires() {
+                    match *column {
+                        "glob" => rule.glob = Some("**".to_owned()),
+                        "pattern" => rule.pattern = Some("x".to_owned()),
+                        "run" => rule.run = Some("true".to_owned()),
+                        "reason" => rule.reason = Some("because".to_owned()),
+                        other => panic!("unclassified required column `{other}`"),
+                    }
+                }
+                let result = rule.validate();
+                if kind.scopes().contains(scope) {
+                    assert!(result.is_ok(), "{kind:?}/{scope:?} must load");
+                } else {
+                    let err = result.expect_err("an unevaluable pairing must be refused");
+                    assert!(err.downcast_ref::<UsageError>().is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_shape_rule_requires_a_pattern_and_a_reason() {
+        let mut no_pattern = blank("s", RuleKind::Shape);
+        no_pattern.reason = Some("because".to_owned());
+        assert!(no_pattern.validate().is_err(), "a shape needs a pattern");
+
+        let mut no_reason = blank("s", RuleKind::Shape);
+        no_reason.pattern = Some("gh pr merge".to_owned());
+        // A mediated deny reaches a model as the whole explanation, so a row
+        // that would refuse with nothing but an id cannot load (CLOUD-122).
+        assert!(no_reason.validate().is_err(), "a shape needs a reason");
+    }
+
+    #[test]
+    fn a_shape_rule_rejects_a_glob_and_a_run() {
+        for column in ["glob", "run"] {
+            let mut rule = shape("s", "gh pr merge", "because");
+            match column {
+                "glob" => rule.glob = Some("**".to_owned()),
+                _ => rule.run = Some("true".to_owned()),
+            }
+            let err = rule
+                .validate()
+                .expect_err("a shape rule inspects no files and runs nothing");
+            assert!(
+                format!("{err}").contains(column),
+                "the refusal must name `{column}`"
+            );
+        }
+    }
+
+    #[test]
+    fn the_tree_engine_skips_a_mediated_call_rule_without_running_it() {
+        // Routing, from the tree side: a shape row contributes no finding and no
+        // error to `check`. It must not be refused either — `check` refusing a
+        // rule another surface owns would make every hook-using repo unable to
+        // run `check` at all.
+        let dir = temp_dir("rules-skip-mediated");
+        write(&dir, "a.rs", "gh pr merge\n");
+        let rule = shape("no-hand-merge", "gh pr merge", "use the landing path");
+        let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
+        assert!(findings.is_empty(), "a shape rule is not a file rule");
+    }
+
+    #[test]
+    fn a_rule_id_declared_twice_is_a_usage_error() {
+        // Two rows for one id is a policy question with two answers, and taking
+        // the first silently is how a tightening edit gets lost behind a stale
+        // row. Same reasoning as the verb table's duplicate refusal.
+        let rules = [forbid("dup", "**", "a"), forbid("dup", "**", "b")];
+        let err = validate(&rules).expect_err("a duplicated id must be refused");
+        assert!(err.downcast_ref::<UsageError>().is_some());
+    }
+
+    #[test]
     fn all_covers_every_kind() {
         // The spawn partition must be total. `ALL` is what the gate below
         // iterates, so a kind missing from it would be silently untested —
@@ -930,12 +1288,12 @@ mod tests {
         // The match is exhaustive by the compiler; this asserts `ALL` agrees.
         for kind in RuleKind::ALL {
             match kind {
-                RuleKind::Forbid | RuleKind::Command => {}
+                RuleKind::Forbid | RuleKind::Command | RuleKind::Shape => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            2,
+            3,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }
@@ -954,13 +1312,9 @@ mod tests {
                 continue;
             }
             let rule = Rule {
-                id: "spawner".to_owned(),
-                kind: *kind,
-                glob: "**".to_owned(),
-                severity: RuleSeverity::Deny,
-                scope: RuleScope::Tree,
-                pattern: None,
+                glob: Some("**".to_owned()),
                 run: Some("true".to_owned()),
+                ..blank("spawner", *kind)
             };
             let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
             assert!(
@@ -1095,41 +1449,29 @@ mod tests {
         let dir = temp_dir("cmd-schema");
         write(&dir, "a.rs", "x\n");
         let cases = [
+            // command with no `run`
             Rule {
-                id: "a".into(),
-                kind: RuleKind::Command,
-                glob: "**".into(),
-                severity: RuleSeverity::Deny,
-                scope: RuleScope::Tree,
-                pattern: None,
-                run: None,
+                glob: Some("**".into()),
+                ..blank("a", RuleKind::Command)
             },
+            // command carrying a forbid-only column
             Rule {
-                id: "b".into(),
-                kind: RuleKind::Command,
-                glob: "**".into(),
-                severity: RuleSeverity::Deny,
-                scope: RuleScope::Tree,
+                glob: Some("**".into()),
                 pattern: Some("x".into()),
                 run: Some("true".into()),
+                ..blank("b", RuleKind::Command)
             },
+            // forbid with no `pattern`
             Rule {
-                id: "c".into(),
-                kind: RuleKind::Forbid,
-                glob: "**".into(),
-                severity: RuleSeverity::Deny,
-                scope: RuleScope::Tree,
-                pattern: None,
-                run: None,
+                glob: Some("**".into()),
+                ..blank("c", RuleKind::Forbid)
             },
+            // forbid carrying a command-only column
             Rule {
-                id: "d".into(),
-                kind: RuleKind::Forbid,
-                glob: "**".into(),
-                severity: RuleSeverity::Deny,
-                scope: RuleScope::Tree,
+                glob: Some("**".into()),
                 pattern: Some("x".into()),
                 run: Some("true".into()),
+                ..blank("d", RuleKind::Forbid)
             },
         ];
         for rule in cases {
@@ -1166,7 +1508,7 @@ mod tests {
         // `ALL` stays total: a new variant must extend it or this stops compiling.
         for scope in RuleScope::ALL {
             match scope {
-                RuleScope::Tree => {}
+                RuleScope::Tree | RuleScope::MediatedCall => {}
             }
         }
     }

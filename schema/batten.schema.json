@@ -174,9 +174,19 @@
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
       "type": "object",
       "properties": {
+        "contains": {
+          "description": "An extra literal that must appear in the mediated command **as written**\nfor a [`RuleKind::Shape`] rule to fire. Optional, that kind only.\n\nIt exists for one real case rather than as a general escape hatch: a\nlanding directive lives inside a quoted `--body`, so it is not one of the\nwords the shape matches, and without this an ordinary `gh pr comment`\nwould be denied alongside the one that carries the directive. Matched\nagainst the raw text of the same segment, quotes included.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "glob": {
-          "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.",
-          "type": "string"
+          "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.\n\nOptional at the type level and required per-kind: a file kind cannot load\nwithout it, and [`RuleKind::Shape`] — which inspects no files — rejects it.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "id": {
           "description": "A stable identifier for the rule, surfaced in findings so a violation\npoints back at the policy that produced it.",
@@ -187,7 +197,21 @@
           "$ref": "#/$defs/RuleKind"
         },
         "pattern": {
-          "description": "The literal substring a [`RuleKind::Forbid`] rule bans from matched\nfiles. Required by that kind, rejected by any other.",
+          "description": "The literal shape this rule bans — one meaning, two domains.\n\nFor [`RuleKind::Forbid`] it is a substring banned from matched *files*.\nFor [`RuleKind::Shape`] it is a banned *command line*: the first word is\nthe effective program (matched after wrapper look-through) and the rest\nare the adjacent non-flag words that must follow it, so\n`pattern = \"gh pr merge\"` reads exactly as a reviewer would say it aloud.\nRequired by both kinds, rejected by [`RuleKind::Command`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_url": {
+          "description": "An optional link to the policy this rule enforces, appended to the deny.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why this rule refuses, and what to do instead — the deny's whole text.\n\nRequired by [`RuleKind::Shape`], where the refusal is all a caller gets;\noptional elsewhere, where a `path:line` pointer plus the id already says\nwhere to look.",
           "type": [
             "string",
             "null"
@@ -214,7 +238,6 @@
       "required": [
         "id",
         "kind",
-        "glob",
         "severity"
       ]
     },
@@ -230,6 +253,11 @@
           "description": "A dynamic check: run the `run` template and treat its exit code as the\npredicate — `0` passes, non-zero is a violation. The sanctioned escape\nhatch for rules no static shape can express.\n\nIt is an **exit-code predicate, not a judge** (CLOUD-93): the command's\noutput is never parsed for meaning. Because it executes a process\ndeclared in `batten.toml`, it runs only on the non-`read` surface (§5,\nCLOUD-170).",
           "type": "string",
           "const": "command"
+        },
+        {
+          "description": "A banned **command shape**: the mediated call `batten hook` is\nadjudicating matches `pattern` read as an effective program plus the\nadjacent words that must follow it.\n\nDistinct from [`RuleKind::Command`], which *runs* a declared command.\nThis one runs nothing — it is a string match over a command line the\nhost handed us, so it cannot spawn and stays on the read-safe surface.",
+          "type": "string",
+          "const": "shape"
         }
       ]
     },
@@ -237,9 +265,14 @@
       "description": "Which file domain a rule evaluates over — *where a rule looks*, never what a\nmatch does (CLOUD-61).\n\nScope and severity are two independent keys on a [`Rule`], deliberately: the\nquestion \"which files does this gate watch\" and the question \"what happens\nwhen it matches\" ([`RuleSeverity`]) are different axes, and conflating them\nis the config bug this type makes inexpressible. Neither vocabulary\ndeserializes as the other, so a severity token in the `scope` key (or the\nreverse) is a usage error (exit `1`), never a silent reinterpretation.\n\nMarked `#[non_exhaustive]` like [`RuleKind`]: the git change-set / protected\n/ unlanded domains (CLOUD-36, CLOUD-37) slot in as new variants without a\nbreaking change. The default is pinned as data —\n[`tests::scope_default_is_pinned`] asserts it — so it is an explicit,\nper-field default rather than an implicit fallback buried in code.",
       "oneOf": [
         {
-          "description": "The whole working tree: every file the walk yields. The only domain the\nengine evaluates today, and the pinned default.",
+          "description": "The whole working tree: every file the walk yields. The pinned default.",
           "type": "string",
           "const": "tree"
+        },
+        {
+          "description": "The single command `batten hook` is adjudicating — not a file domain at\nall, which is why a rule declaring it reads no `glob`.\n\nSpelled `mediated_call` rather than `command` on purpose: `command` is\nalready a [`RuleKind`] token meaning \"run this\", and one word meaning two\nunrelated things across two keys is the cross-vocabulary confusion\n[`tests::severity_and_scope_vocabularies_do_not_cross`] exists to prevent.",
+          "type": "string",
+          "const": "mediated_call"
         }
       ]
     },

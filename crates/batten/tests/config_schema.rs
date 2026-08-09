@@ -274,3 +274,67 @@ fn the_gate_applies_to_every_verb_that_reads_config() {
         "config show skipped the gate"
     );
 }
+
+#[test]
+fn the_schema_accepts_a_mediated_call_rule() {
+    // The shape kind and its scope are part of the published vocabulary, so an
+    // editor validating against the schema must accept a row the binary accepts.
+    let schema = derived_schema();
+    let validator = jsonschema::validator_for(&schema).expect("the schema compiles");
+    let good = "version = 1\n\n[[rule]]\nid = \"s\"\nkind = \"shape\"\n\
+                scope = \"mediated_call\"\nseverity = \"deny\"\n\
+                pattern = \"gh pr merge\"\nreason = \"use the landing path\"\n";
+    assert!(
+        validator.is_valid(&as_json(good)),
+        "the schema rejected a shape rule the binary accepts"
+    );
+}
+
+#[test]
+fn the_schema_cannot_express_per_kind_requirements() {
+    // An honest negative, recorded rather than papered over (CLOUD-48).
+    //
+    // `Rule` is a flat `deny_unknown_fields` struct — deliberately, because a
+    // `#[serde(flatten)]` enum silently defeats that guarantee — so schemars
+    // emits ONE `required` list for every kind. "required iff kind == shape"
+    // therefore has nowhere to live, and two columns are looser in the schema
+    // than in the binary: `glob`, which a file kind cannot load without, and
+    // `reason`, which a shape kind cannot.
+    //
+    // The consequence is the mirror of `the_schema_refuses_what_the_binary_refuses`:
+    // an editor waves a config through that `batten check` then refuses. That is
+    // the safer direction of the two — the binary is the authority and it still
+    // refuses — but it is a real gap, so it is asserted here rather than left for
+    // someone to discover as a surprise.
+    let schema = derived_schema();
+    let validator = jsonschema::validator_for(&schema).expect("the schema compiles");
+
+    for (label, config) in [
+        // A forbid rule with no glob.
+        (
+            "forbid without glob",
+            "version = 1\n\n[[rule]]\nid = \"f\"\nkind = \"forbid\"\n\
+             severity = \"deny\"\npattern = \"x\"\n",
+        ),
+        // A shape rule with no reason.
+        (
+            "shape without reason",
+            "version = 1\n\n[[rule]]\nid = \"s\"\nkind = \"shape\"\n\
+             scope = \"mediated_call\"\nseverity = \"deny\"\npattern = \"gh pr merge\"\n",
+        ),
+    ] {
+        assert!(
+            validator.is_valid(&as_json(config)),
+            "{label}: the schema is expected to be looser here; if it now \
+             refuses, per-kind requirements became expressible and this test \
+             should be replaced by the positive one"
+        );
+        // The binary is the authority, and it refuses.
+        let dir = repo_with_config(&format!("per-kind-{}", label.replace(' ', "-")), config);
+        assert_eq!(
+            check_in(&dir).status.code(),
+            Some(1),
+            "{label}: the binary must refuse what the schema let through"
+        );
+    }
+}

@@ -103,6 +103,31 @@ pattern = "<<<<<<< "
 severity = "deny"
 scope = "tree"
 
+# A shape rule refuses a banned COMMAND rather than a banned file, so it is
+# adjudicated by `batten hook` against one mediated tool call at a time and is
+# never evaluated by `check`. That is what `scope` selects: "tree" is the working
+# tree, "mediated_call" is the single command being mediated.
+#
+# `pattern` is the command line as you would say it aloud. The first word is the
+# program, matched *after* wrapper look-through — so this row also refuses
+# `mise exec -- terraform apply` and `env TF_LOG=debug terraform apply`, which is
+# the whole reason the look-through exists. The remaining words are the adjacent
+# non-flag words that must follow, so `terraform apply -auto-approve` matches and
+# `terraform plan apply-notes` does not.
+#
+# `reason` is REQUIRED here, unlike on a file rule. A file finding is a
+# `path:line` a reader can open; a mediated deny is all the caller gets back, so
+# a refusal that named only its id would leave nothing to act on.
+[[rule]]
+id = "no-unreviewed-apply"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "terraform apply"
+reason = "apply runs from the pipeline, not a workstation — open a change request"
+# Optional. Appended to the refusal so a caller can read the policy itself.
+policy_url = "https://example.invalid/handbook/infrastructure"
+
 # The governing config surface: the files whose bytes `batten config epoch`
 # hashes into one attributable value, so two records carrying the same epoch
 # were produced under provably the same rules.

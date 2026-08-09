@@ -116,13 +116,25 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   command-executing rule rather than silently skipping it. Each rule pins a
   required `severity` (`RuleSeverity`, no implicit fallback) and a separate
   `scope` (`RuleScope`, pinned default `tree`) — two axes that never conflate
-  (CLOUD-61); `any_blocking` is where severity meets the exit contract.
+  (CLOUD-61); `any_blocking` is where severity meets the exit contract. `scope`
+  is also the surface router (CLOUD-48): `tree` rules are the tree engine's,
+  `mediated_call` rules are `hook`'s, and `RuleKind::scopes` refuses a pairing no
+  surface would evaluate. Per-kind column agreement is a **census**
+  (`Rule::columns` × `requires`/`permits`), not a per-kind match — the match
+  named fields, so a new column landed in no arm and every kind accepted it.
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
-  wrapper-lookthrough command parser, and the policy tables, ported from the
-  shell guards. Harness adapters decode/encode at the edges; the core is
-  harness-blind and fail-open. What varies per harness is the _channel_ a deny
-  travels over, never the number: the exit-code adapter denies with `2`, the
-  claude-code adapter with a `permissionDecision` document and exit `0`.
+  wrapper-lookthrough command parser, and the matcher. **The policy is config,
+  not code** (CLOUD-48): `Policy` is the `mediated_call`-scoped rows of the
+  _resolved_ config, so a `batten.local.toml` that adds a row is applied and
+  `--config-from` is inherited. The parser is quote-aware (CLOUD-269) — a quoted
+  operand survives as a word, which is what a path gate needs and what the old
+  `QUOTED` sentinel destroyed. Harness adapters decode/encode at the edges; the
+  core is harness-blind and fail-open. What varies per harness is the _channel_ a
+  deny travels over, never the number: the exit-code adapter denies with `2`, the
+  claude-code adapter with a `permissionDecision` document and exit `0`;
+  `Harness::ALL` is what keeps CLOUD-40's channel matrix total. Absent authority
+  is the empty policy (allow, silently); an authority that exists and cannot be
+  read is exit `1`, loud, never a deny.
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy
   was waved through, and where. Tokens are config, never crate constants (rule
   1); hits are pointer-only (`path:line` + marker id, rule 4) and `counts`

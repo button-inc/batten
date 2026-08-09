@@ -1,0 +1,5 @@
+// A file with a line that would match if a shape rule were ever mistaken for a
+// file rule: the pattern below is the shape this repo's rule bans.
+fn main() {
+    // gh pr merge
+}

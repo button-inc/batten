@@ -21,8 +21,72 @@ use common::{Fixture, batten, git_in, scratch};
 /// The ambient bypass var is removed so a developer's shell can never flip a
 /// deny case; the `bypass` flag sets it explicitly for the case that wants it.
 fn run_hook(harness: &str, payload: &str, bypass: bool) -> Output {
+    run_hook_in(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+        harness,
+        payload,
+        bypass,
+    )
+}
+
+/// A fixture repo whose `batten.toml` carries the `gh` lifecycle shape rows.
+///
+/// Since CLOUD-48 the policy is config, not Rust, so a hook test that wants a
+/// deny has to supply one. Deliberately *not* this repo's own `batten.toml`: a
+/// test that read the committed file would pass or fail with an edit to
+/// production policy, and the committed rows have their own gate
+/// (`the_committed_shape_rules_fire_on_every_banned_shape`).
+fn repo_with_gh_policy(name: &str) -> PathBuf {
+    repo_with_config(
+        name,
+        r#"version = 1
+[[rule]]
+id = "gh-pr-merge"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr merge"
+reason = "use `mise run land`"
+
+[[rule]]
+id = "gh-pr-comment-fast-forward"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr comment"
+contains = "fast-forward"
+reason = "use `mise run land`"
+
+[[rule]]
+id = "gh-pr-checks"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr checks"
+reason = "use `mise run ci-wait`"
+
+[[rule]]
+id = "gh-run-watch"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh run watch"
+reason = "use `mise run ci-wait`"
+"#,
+    )
+}
+
+/// [`run_hook`], with the directory the policy is resolved from.
+///
+/// The directory is now load-bearing: `hook` reads its authority from the cwd
+/// (CLOUD-48), so a test that does not set one adjudicates against the empty
+/// policy and allows everything. `run_hook` itself keeps the old signature and
+/// points at `crates/batten/`, which has no `batten.toml` — that is the
+/// no-authority case, which several tests want.
+fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str, bypass: bool) -> Output {
     let mut command = batten();
     command
+        .current_dir(dir)
         .args(["hook", "--harness", harness])
         .env_remove("BATTEN_GH_GUARD_BYPASS")
         .stdin(Stdio::piped())
@@ -676,8 +740,9 @@ const MATRIX: &[Row] = &[
 
 #[test]
 fn the_decision_channel_matrix_holds_for_every_harness() {
+    let dir = repo_with_gh_policy("matrix-policy");
     for row in MATRIX {
-        let output = run_hook(row.harness, &claude_payload(row.command), false);
+        let output = run_hook_in(&dir, row.harness, &claude_payload(row.command), false);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let at = format!("{}/{}", row.harness, row.case);
@@ -736,8 +801,9 @@ fn a_quoted_invocation_denies_on_both_harness_channels() {
     // `gh pr merge`, and the sentinel parser let it through because the span
     // never became tokens. Checked on both channels so the tightening is
     // pinned wherever a host reads its decision.
+    let dir = repo_with_gh_policy("quoted-invocation");
     for harness in ["claude-code", "exit-code"] {
-        let output = run_hook(harness, &claude_payload("gh \"pr\" \"merge\""), false);
+        let output = run_hook_in(&dir, harness, &claude_payload("gh \"pr\" \"merge\""), false);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if harness == "claude-code" {
@@ -748,7 +814,7 @@ fn a_quoted_invocation_denies_on_both_harness_channels() {
             );
         } else {
             assert_eq!(output.status.code(), Some(2), "{harness}");
-            assert!(stderr.contains("Refused"), "{harness}: got {stderr}");
+            assert!(stderr.contains("Refused by"), "{harness}: got {stderr}");
         }
     }
 }
@@ -783,30 +849,181 @@ fn a_malformed_harness_token_fails_loud_without_denying() {
 }
 
 #[test]
-fn hook_reads_no_config_so_a_broken_one_cannot_block() {
-    // Pins *why* the config-failure leg above is unreachable rather than merely
-    // untested: `hook` never loads an authority, so the directory shapes that
-    // break every other verb are nothing to it. When that stops being true the
-    // deletion of this test is the seam where config became load-bearing.
-    let dir = repo_with_config("hook-broken-config", "this is not toml at all\n");
-    let mut command = batten();
-    command
-        .args(["hook", "--harness", "claude-code"])
-        .current_dir(&dir)
-        .env_remove("BATTEN_GH_GUARD_BYPASS")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("spawn batten hook");
-    child
-        .stdin
-        .take()
-        .expect("piped stdin")
-        .write_all(claude_payload("gh pr view 42").as_bytes())
-        .expect("write payload");
-    let output = child.wait_with_output().expect("run batten hook");
+fn hook_allows_when_no_authority_is_configured() {
+    // This replaces CLOUD-40's `hook_reads_no_config_so_a_broken_one_cannot_block`
+    // — the test written to be deleted here, marking the seam where config became
+    // load-bearing.
+    //
+    // `hook` is registered once and then mediates every call in whatever
+    // directory the agent is in, most of which are not Batten repositories. An
+    // absent authority is therefore the empty policy, not an error: nothing
+    // declared, nothing denied, silently.
+    let dir = repo_with_config("hook-no-authority", "");
+    fs::remove_file(dir.join("batten.toml")).expect("remove the authority");
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &claude_payload("gh pr merge 42"),
+        false,
+    );
     assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
+    assert!(output.stdout.is_empty(), "no authority denies nothing");
+}
+
+#[test]
+fn hook_fails_open_and_loud_on_an_unloadable_authority() {
+    // The opposite case, and the one CLOUD-40 could not reach because `hook`
+    // loaded no config: an authority that EXISTS and cannot be read means the
+    // rules the operator wrote are not being applied. Allowing silently there
+    // would be the false green the engine exists to catch, so it is a usage
+    // error — loud on stderr, exit 1, and structurally not a deny, because §7
+    // spends 2 on the verdict alone.
+    let dir = repo_with_config("hook-broken-authority", "this is not toml at all\n");
+    for harness in ["claude-code", "exit-code"] {
+        let output = run_hook_in(&dir, harness, &claude_payload("gh pr view 42"), false);
+        let code = output.status.code();
+        assert_eq!(code, Some(1), "{harness}: an unreadable authority is usage");
+        assert_ne!(code, Some(2), "{harness}: must never deny");
+        assert!(output.stdout.is_empty(), "{harness}: no decision document");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("batten.toml"),
+            "{harness}: the failure names the file, got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn shape_scope_parses_independently_of_severity() {
+    // Acceptance (d). The two keys are separate axes, and a shape row proves it
+    // over the binary: `mediated_call` × each severity all load, and neither
+    // key's vocabulary is accepted in the other's slot.
+    for severity in ["deny", "warn", "allow"] {
+        let dir = repo_with_config(
+            &format!("shape-severity-{severity}"),
+            &format!(
+                "version = 1\n\n[[rule]]\nid = \"s\"\nkind = \"shape\"\n\
+                 scope = \"mediated_call\"\nseverity = \"{severity}\"\n\
+                 pattern = \"gh pr merge\"\nreason = \"use the landing path\"\n"
+            ),
+        );
+        let output = batten()
+            .args(["config", "show", "--json"])
+            .current_dir(&dir)
+            .output()
+            .expect("run config show");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "severity {severity} must load"
+        );
+        let value: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+        let rule = &value["rule"]["value"][0];
+        assert_eq!(rule["severity"], severity);
+        assert_eq!(rule["scope"], "mediated_call");
+    }
+
+    // And crossing them is inexpressible, not silently reinterpreted.
+    for (key, value) in [("scope", "deny"), ("severity", "mediated_call")] {
+        let dir = repo_with_config(
+            &format!("shape-crossed-{key}"),
+            &format!(
+                "version = 1\n\n[[rule]]\nid = \"s\"\nkind = \"shape\"\n\
+                 scope = \"mediated_call\"\nseverity = \"deny\"\n\
+                 pattern = \"gh pr merge\"\nreason = \"r\"\n{key} = \"{value}\"\n"
+            ),
+        );
+        assert_eq!(
+            batten()
+                .arg("check")
+                .current_dir(&dir)
+                .output()
+                .expect("run batten check")
+                .status
+                .code(),
+            Some(1),
+            "{key} = {value:?} must be a usage error"
+        );
+    }
+}
+
+#[test]
+fn hook_refuses_an_invalid_severity_without_denying() {
+    // Acceptance (e), corrected: the ticket said exit 2, but 2 is the deny code,
+    // so a config typo would refuse every mediated call. Every sibling
+    // config error in the tree is exit 1, and non-negotiable rule 5 plus
+    // `no_failure_code_can_deny_a_mediated_call` forbid the alternative.
+    let dir = repo_with_config(
+        "shape-bad-severity",
+        "version = 1\n\n[[rule]]\nid = \"s\"\nkind = \"shape\"\n\
+         scope = \"mediated_call\"\nseverity = \"nope\"\n\
+         pattern = \"gh pr merge\"\nreason = \"r\"\n",
+    );
+    for harness in ["claude-code", "exit-code"] {
+        let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge"), false);
+        let code = output.status.code();
+        assert_eq!(code, Some(1), "{harness}: a bad severity is a usage error");
+        assert_ne!(code, Some(2), "{harness}: must never deny");
+        assert!(output.stdout.is_empty(), "{harness}: no decision document");
+    }
+}
+
+#[test]
+fn hook_honours_a_shape_rule_a_local_override_added() {
+    // Why the policy resolves through `resolve` rather than `config::load`: the
+    // raise-only override model is worth nothing at a surface that ignores it.
+    // A `batten.local.toml` may only tighten, and adding a shape row is a
+    // tightening, so the hook must apply it.
+    let dir = repo_with_config("shape-local-override", "version = 1\n");
+    with_local_config(
+        &dir,
+        "version = 1\n\n[[rule]]\nid = \"local-shape\"\nkind = \"shape\"\n\
+         scope = \"mediated_call\"\nseverity = \"deny\"\n\
+         pattern = \"npm publish\"\nreason = \"releases go through the release pipeline\"\n",
+    );
+    let output = run_hook_in(
+        &dir,
+        "exit-code",
+        &claude_payload("npm publish --tag next"),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(2), "a local row must be applied");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("local-shape"), "got: {stderr}");
+}
+
+#[test]
+fn the_committed_shape_rules_fire_on_every_banned_shape() {
+    // The obligation the fixture tests do not discharge. Every hook test above
+    // supplies its own policy, so after CLOUD-48 deleting a row from this repo's
+    // `batten.toml` would break none of them — and the guard chain in
+    // `.claude/settings.json` would silently lose a rule. `tests/cli.rs` states
+    // the standing rule: a rule is only pinned by a fixture that seeds the shape
+    // it bans, and any rule landing later owes one of its own.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for command in [
+        "gh pr merge 42",
+        "gh pr checks --watch",
+        "gh run watch 123",
+        "gh pr comment 7 --body /fast-forward",
+    ] {
+        let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "the committed policy must still refuse {command:?}"
+        );
+    }
+    // And the reads it must not refuse, from the same committed rows.
+    for command in ["gh pr view 42", "gh pr ready 42", "mise run land"] {
+        let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "the committed policy must allow {command:?}"
+        );
+    }
 }
 
 #[test]
@@ -815,7 +1032,9 @@ fn hook_denies_a_blocked_shape_in_the_harness_channel() {
     // exit 0 — the channel the production shell guards already use. The
     // wrapper form is the load-bearing case: judging the wrapper token instead
     // of the effective program is the bug class CLOUD-181 hardened against.
-    let output = run_hook(
+    let dir = repo_with_gh_policy("deny-claude-channel");
+    let output = run_hook_in(
+        &dir,
         "claude-code",
         &claude_payload("mise exec -- gh pr merge 42"),
         false,
@@ -828,7 +1047,7 @@ fn hook_denies_a_blocked_shape_in_the_harness_channel() {
     );
     assert!(
         stdout.contains("mise run land"),
-        "the deny must name the redirect"
+        "the deny must name the redirect the fixture policy declares"
     );
 }
 
@@ -865,11 +1084,12 @@ fn hook_exit_code_harness_denies_with_exit_2() {
     // The one contract, unmodified: 2 is the policy verdict, so a deny needs
     // no translation. The reason goes to stderr — the neutral channel for a
     // host whose only decision vocabulary is an exit status.
-    let output = run_hook("exit-code", &claude_payload("gh pr merge 42"), false);
+    let dir = repo_with_gh_policy("deny-exit-code-channel");
+    let output = run_hook_in(&dir, "exit-code", &claude_payload("gh pr merge 42"), false);
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Refused"), "got: {stderr}");
+    assert!(stderr.contains("Refused by"), "got: {stderr}");
     // A verdict is an answer, not a crash. The host hands this text back to the
     // model as the deny reason, so it must not wear the binary's error prefix.
     assert!(
@@ -1542,7 +1762,16 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
                 ["allow", "warn", "deny"].contains(&severity),
                 "{label}: severity {severity:?} outside the vocabulary"
             );
-            assert_eq!(rule["scope"], "tree", "{label}: scope token");
+            // Derived from the vocabulary rather than pinned to `tree`: the
+            // literal was correct while one scope existed, and would have had to
+            // be edited by every change that adds one — which is the edit a
+            // reviewer waves through. What matters is that the token is *in* the
+            // vocabulary, never that it is one particular member.
+            let scope = rule["scope"].as_str().expect("scope token");
+            assert!(
+                ["tree", "mediated_call"].contains(&scope),
+                "{label}: scope {scope:?} outside the vocabulary"
+            );
         }
     }
 }

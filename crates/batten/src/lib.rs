@@ -81,7 +81,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Doctor { json }) => run_doctor(json, out),
         Some(Command::Generate { command }) => run_generate(&command, out),
-        Some(Command::Hook { harness }) => run_hook(harness, out),
+        Some(Command::Hook { harness }) => run_hook(harness, &overrides, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
         Some(Command::Receipt { command }) => match command {
@@ -103,16 +103,68 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
 /// the deny; the neutral exit-code adapter denies with [`ExitCode::Violation`],
 /// the same code a `check` violation returns, carrying its reason to stderr
 /// through [`Denial`] so the write stays at the binary boundary.
-fn run_hook(harness: hook::Harness, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_hook(
+    harness: hook::Harness,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {
         return Ok(ExitCode::Success);
     }
-    let bypass = std::env::var_os("BATTEN_GH_GUARD_BYPASS").is_some_and(|v| !v.is_empty());
+    let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
     let Some(envelope) = hook::decode(harness, &raw) else {
         return Ok(ExitCode::Success);
     };
-    match hook::adjudicate(&envelope, bypass) {
+    // Only now is config touched. Ordering the cheap refusals first is §4's
+    // "cheap when irrelevant" applied to the hottest path in the binary — this
+    // runs on every mediated tool call — and it is also what keeps a bypassed or
+    // command-less call from being able to fail on an unrelated config error.
+    let policy = if bypass || envelope.command.is_empty() {
+        hook::Policy::declaring_nothing()
+    } else {
+        load_policy(overrides)?
+    };
+    decide(harness, &envelope, &policy, bypass, out)
+}
+
+/// Resolve the mediated-call policy for this run.
+///
+/// **Absent authority is the empty policy, not an error.** `batten hook` is
+/// registered once and then mediates every call in whatever directory the agent
+/// happens to be in, most of which are not Batten repositories; refusing there
+/// would make the guard the reason ordinary work stops.
+///
+/// An authority that exists and **cannot be read** is the opposite case, and it
+/// propagates: a policy file that does not parse means the rules the operator
+/// wrote are not being applied, and silently allowing would be the false green
+/// this engine exists to catch. It surfaces as a [`UsageError`] — exit `1`, loud
+/// on stderr, and structurally not a deny, because §7 spends `2` on the verdict
+/// alone.
+fn load_policy(overrides: &Overrides) -> Result<hook::Policy> {
+    let here = std::path::Path::new(".");
+    if !here.join(config::CONFIG_FILE).exists() {
+        return Ok(hook::Policy::declaring_nothing());
+    }
+    Ok(hook::Policy::from_resolved(&resolve::resolve(
+        here, overrides,
+    )?))
+}
+
+/// Map one decoded call onto its harness's decision channel.
+///
+/// Split out of [`run_hook`] so the mapping is reachable without the process's
+/// own stdin: `run_hook` owns the boundary (stdin, the bypass variable, the
+/// config load) and this owns the contract CLOUD-40's matrix pins — including
+/// the case where writing the decision document itself fails.
+fn decide(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    policy: &hook::Policy,
+    bypass: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    match hook::adjudicate(policy, envelope, bypass) {
         hook::Decision::Allow => Ok(ExitCode::Success),
         hook::Decision::Deny(reason) => match harness {
             hook::Harness::ClaudeCode => {

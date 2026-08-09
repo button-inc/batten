@@ -22,10 +22,81 @@ version = 1
 # is what actually forces that — an older build fails on the unknown key — and
 # this floor states the intent so the refusal names the version rather than the
 # key.
-min_batten_version = "0.0.30"
+min_batten_version = "0.0.42"
 
 # Batten gates this repository with its own engine — consumer #1 in practice,
-# not just in principle. Each rule below runs under `batten check`.
+# not just in principle. Rules below whose `scope` is "tree" run under `batten
+# check`; rules whose `scope` is "mediated_call" are adjudicated by `batten hook`
+# against one command at a time and are never evaluated by `check` (CLOUD-48).
+
+# ---------------------------------------------------------------------------
+# The `gh` lifecycle, as config rather than Rust (CLOUD-48).
+#
+# These four rows were a hardcoded `match` inside `crates/batten/src/hook.rs`.
+# Moving them here is the point of the change twice over: the engine stops
+# carrying one consumer's task names (non-negotiable rule 1 — `git grep -Fn
+# "mise run land" crates/` now finds nothing outside a test fixture), and a
+# reviewer can read exactly what will be refused without reading Rust (§9).
+#
+# `pattern` for a shape rule is the banned command line as you would say it: the
+# first word is the effective program — matched AFTER wrapper look-through, so
+# `mise exec -- gh pr merge` and `env GH_PAGER= gh pr merge` both match — and the
+# rest are the adjacent non-flag words that must follow it.
+#
+# `reason` is required on a shape rule, unlike on a file rule: a mediated deny
+# reaches a model as the entire explanation, so a refusal that named only its id
+# would be un-actionable (CLOUD-122). The crate appends the bypass hatch.
+[[rule]]
+id = "gh-pr-merge"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr merge"
+reason = """
+`gh pr merge` (like the merge button) rewrites commits under new SHAs, \
+discarding the exact objects CI tested. Use `mise run land`, which comments \
+/fast-forward so main advances to this branch's already-passed commits."""
+
+# The one row with a second condition. Only a comment carrying the landing
+# directive is the lifecycle; an ordinary `gh pr comment` is not. The directive
+# lives inside a quoted `--body`, so it is not one of the words `pattern`
+# matches — `contains` looks at the segment as written, which is the only reason
+# this key exists.
+[[rule]]
+id = "gh-pr-comment-fast-forward"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr comment"
+contains = "fast-forward"
+reason = """
+Commenting /fast-forward by hand only STARTS the merge — it does not wait for \
+it, and the usual pairing with a guessed `sleep` reports before the merge \
+lands. Use `mise run land` (backgrounded): it comments, then blocks until the \
+PR is MERGED or the fast-forward bot refuses."""
+
+[[rule]]
+id = "gh-pr-checks"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr checks"
+reason = """
+Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. It polls \
+check-runs for HEAD until every one is terminal, prints their conclusions, and \
+exits non-zero unless all are green — with no timeout to reintroduce the \
+VM-reap gap. Background it. (`gh pr view`/`list`/`create`, `gh pr ready`, `gh \
+api`, `gh run view` are NOT blocked.)"""
+
+[[rule]]
+id = "gh-run-watch"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh run watch"
+reason = """
+Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. Background \
+it rather than holding a foreground poll open."""
 
 # A conflict marker reaching a source file means a botched merge landed. The
 # shape is unambiguous and no compiler catches it in every file type, which is

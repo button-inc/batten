@@ -413,7 +413,15 @@ pub const SURFACE: &[CommandDecl] = &[
     // `hook` adjudicates another tool's call: its own execution only reads
     // stdin and config, but its *decision* mediates writes, so it is listed
     // unclassified rather than allowed to leak into the derived read-only
-    // allowlist (CLOUD-202).
+    // allowlist (CLOUD-202). Re-examined when CLOUD-48 made the policy config:
+    // `hook` still reaches no user-supplied code — `RuleKind::scopes` pairs every
+    // spawning kind with `RuleScope::Tree` alone, and `Policy::from_resolved`
+    // filters on scope, which `rules::tests::no_mediated_call_kind_spawns_a_process`
+    // pins. So `read` would now be *defensible*; it stays `Unclassified` because
+    // the classification is load-bearing in one place only — the derived
+    // allowlist — and putting a deny-issuing mediator on the agent's read-only
+    // list buys nothing an agent needs. §5's rule is that an unclassified command
+    // is listed with a stated reason rather than guessed; this is that reason.
     CommandDecl {
         path: "hook",
         about: "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",

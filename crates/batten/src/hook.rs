@@ -5,16 +5,21 @@
 //! Three layers, deliberately separated:
 //!
 //! * [`Envelope`] — the one normalized shape every harness adapter decodes
-//!   into: `event`, `tool`, `input`, `cwd?`, `session?`. Harness-specific field
-//!   names live in the adapter for that harness, never here.
-//! * the parser — quoted spans are neutralised, segments split on shell
-//!   separators, env prefixes and wrapper programs (`env`, `timeout`,
-//!   `mise exec -- …`) looked through, so policy judges the **effective**
-//!   program. Judging the wrapper token instead is the bug class CLOUD-181
-//!   hardened the shell guards against; the port keeps that hard-won shape.
-//! * the policy — a table from command shape to a deny with a fix pointer.
-//!   This slice carries the `gh` lifecycle table; the receipt, issue-key,
-//!   run-shape, and protected-path policies follow (CLOUD-202 items 3–5).
+//!   into: `event`, `tool`, and `command`. Harness-specific field names live in
+//!   the adapter for that harness, never here. (`cwd` and `session` are *not*
+//!   fields yet; the absence is why an absolute path argument cannot be resolved
+//!   against the repo root.)
+//! * the parser — quoted spans become words rather than a sentinel, segments
+//!   split on unquoted shell separators, env prefixes and wrapper programs
+//!   (`env`, `timeout`, `mise exec -- …`) looked through, so policy judges the
+//!   **effective** program. Judging the wrapper token instead is the bug class
+//!   CLOUD-181 hardened the shell guards against; the port keeps that hard-won
+//!   shape, and CLOUD-269 extended it so a quoted operand survives as a word.
+//! * the policy — **config, not code** (CLOUD-48). [`Policy`] is the
+//!   `mediated_call`-scoped rows of the resolved `batten.toml`, so the shapes a
+//!   repository refuses are readable without reading Rust (§9) and the engine
+//!   carries no consumer's task names (non-negotiable rule 1). This module owns
+//!   the matcher; the table lives in the consumer's config.
 //!
 //! **Posture: fail open.** Unreadable stdin, unparseable JSON, an envelope with
 //! no command — all resolve to [`Decision::Allow`]. A guard must never be the
@@ -25,6 +30,10 @@
 
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::resolve::Resolved;
+use crate::rules::{Rule, RuleScope};
+use crate::severity::{self, ReportLevel, RuleSeverity};
 
 /// The harness adapters `batten hook` can speak. Each owns the decode of its
 /// host's payload into an [`Envelope`] and the encode of a [`Decision`] into
@@ -62,9 +71,13 @@ impl Harness {
 }
 
 /// The normalized hook envelope — the shape the core adjudicates, whatever the
-/// host called its fields. `session` is optional by design: some harnesses
-/// expose two ids, some events none, so anything keyed on it degrades to
-/// per-invocation (contracts doc).
+/// host called its fields.
+///
+/// Deliberately three fields and no more for now. A `session` id was described
+/// here before it existed; anything keyed on one would have to degrade to
+/// per-invocation anyway, since some harnesses expose two and some events none.
+/// A `cwd` is the gap that bites: without it a path operand cannot be resolved
+/// against the repo root, so an absolute path is compared as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
     /// The lifecycle event, e.g. `PreToolUse`.
@@ -118,77 +131,150 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
     }
 }
 
-/// Adjudicate an envelope against the policy tables.
+/// The escape hatch, named once so the boundary and the reason text agree.
+pub const BYPASS_ENV: &str = "BATTEN_GH_GUARD_BYPASS";
+
+/// The mediated-call policy this run adjudicates against.
 ///
-/// `bypass` is the caller-resolved escape hatch (the boundary reads
-/// `BATTEN_GH_GUARD_BYPASS`, keeping this function pure and testable).
-#[must_use]
-pub fn adjudicate(envelope: &Envelope, bypass: bool) -> Decision {
-    if bypass || envelope.command.is_empty() {
-        return Decision::Allow;
-    }
-    gh_lifecycle(&envelope.command)
+/// Built from the *resolved* config (§8), not the committed file alone, so a
+/// `batten.local.toml` that **adds** a shape row is a gate the hook actually
+/// applies — the raise-only override model is worth nothing at a surface that
+/// ignores it — and `--config-from` is inherited for free.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Policy {
+    shapes: Vec<Rule>,
+    fail_on_warning: bool,
 }
 
-/// The `gh` lifecycle policy, ported from `mise-tasks/gh-guard-check`: deny a
-/// hand-rolled shape this repo's config routes through a task, allow reads and
-/// everything unrecognised.
-fn gh_lifecycle(command: &str) -> Decision {
+impl Policy {
+    /// The policy that denies nothing.
+    ///
+    /// Not an error state: a repository with no authority, or a bypassed run, has
+    /// declared no mediated-call policy, and "nothing declared" means "nothing
+    /// denied". Mirrors `Config::declaring_nothing`.
+    #[must_use]
+    pub fn declaring_nothing() -> Policy {
+        Policy::default()
+    }
+
+    /// Take the mediated-call rules out of a resolved config.
+    ///
+    /// Filters on `scope`, so the tree engine's rules are simply absent here
+    /// rather than skipped per-call, and a spawning kind can never reach this
+    /// surface — [`RuleKind::scopes`] pairs every spawning kind with
+    /// [`RuleScope::Tree`] alone, which is what keeps `hook` structurally unable
+    /// to execute a configured command.
+    #[must_use]
+    pub fn from_resolved(resolved: &Resolved) -> Policy {
+        Policy {
+            shapes: resolved
+                .rules
+                .iter()
+                .filter(|rule| rule.scope == RuleScope::MediatedCall)
+                .cloned()
+                .collect(),
+            fail_on_warning: resolved.fail_on_warning,
+        }
+    }
+
+    /// Whether this policy can deny anything at all.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.shapes.is_empty()
+    }
+}
+
+/// Adjudicate an envelope against the policy.
+///
+/// Pure: no I/O, no environment, no clock. `bypass` is the caller-resolved
+/// escape hatch (the boundary reads [`BYPASS_ENV`]), and the policy arrives as a
+/// value, so every verdict is a function of config plus argv and nothing else.
+#[must_use]
+pub fn adjudicate(policy: &Policy, envelope: &Envelope, bypass: bool) -> Decision {
+    if bypass || envelope.command.is_empty() || policy.is_empty() {
+        return Decision::Allow;
+    }
+    shape_rules(policy, &envelope.command)
+}
+
+/// The first shape row that matches the mediated command, in declaration order.
+///
+/// Declaration order is the tie-break rather than "most specific wins": a
+/// reviewer reads the table top to bottom, and any cleverer precedence would be
+/// a rule about rules that the config does not state.
+fn shape_rules(policy: &Policy, command: &str) -> Decision {
     for segment in segments(command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
             continue;
         };
-        if tokens[program_index] != "gh" {
-            continue;
-        }
         // Subcommand words with flags dropped. A value-taking flag leaves its
-        // value behind, but the blocked pairs are adjacent, so that never
-        // hides a real match (`gh -R o/r pr merge` still matches; `gh pr view
+        // value behind, but the blocked words are adjacent, so that never hides
+        // a real match (`gh -R o/r pr merge` still matches; `gh pr view
         // merge-fix` never does).
         let words: Vec<&str> = tokens[program_index + 1..]
             .iter()
             .copied()
-            .filter(|t| !t.starts_with('-'))
+            .filter(|token| !token.starts_with('-'))
             .collect();
-        for pair in words.windows(2) {
-            let decision = match (pair[0], pair[1]) {
-                ("pr", "merge") => Some(
-                    "Refused: `gh pr merge` is blocked — it (like the merge button) rewrites \
-                     commits under new SHAs, discarding the exact objects CI tested. Use `mise \
-                     run land`, which comments /fast-forward so main advances to this branch's \
-                     already-passed commits. Bypass with BATTEN_GH_GUARD_BYPASS=1.",
-                ),
-                // Only a comment carrying the landing directive; an ordinary
-                // `gh pr comment` is not the lifecycle. Tested against the raw
-                // text, since the directive lives inside the quoted `--body`
-                // and the word split does not care what a word contains. Scoped
-                // to this segment rather than the whole command, so an earlier
-                // `echo fast-forward` cannot make a later comment look like the
-                // landing directive.
-                ("pr", "comment") if segment.raw.contains("fast-forward") => Some(
-                    "Refused: commenting /fast-forward by hand only STARTS the merge — it does \
-                     not wait for it, and the usual pairing with a guessed `sleep` reports \
-                     before the merge lands. Use `mise run land` (backgrounded): it comments, \
-                     then blocks until the PR is MERGED or the fast-forward bot refuses. Bypass \
-                     with BATTEN_GH_GUARD_BYPASS=1.",
-                ),
-                ("pr", "checks") | ("run", "watch") => Some(
-                    "Refused: hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. \
-                     It polls check-runs for HEAD until every one is terminal, prints their \
-                     conclusions, and exits non-zero unless all are green — with no timeout to \
-                     reintroduce the VM-reap gap. Background it. (`gh pr view`/`list`/`create`, \
-                     `gh pr ready`, `gh api`, `gh run view` are NOT blocked.) Bypass with \
-                     BATTEN_GH_GUARD_BYPASS=1.",
-                ),
-                _ => None,
-            };
-            if let Some(reason) = decision {
-                return Decision::Deny(reason.to_owned());
+        for rule in &policy.shapes {
+            if !blocks(rule.severity, policy.fail_on_warning) {
+                continue;
             }
+            let Some((program, wanted)) = rule.shape() else {
+                continue;
+            };
+            if tokens[program_index] != program {
+                continue;
+            }
+            if !words
+                .windows(wanted.len().max(1))
+                .any(|w| w == wanted.as_slice())
+            {
+                continue;
+            }
+            // The extra literal is matched against the segment as written,
+            // because the thing it looks for lives inside a quoted argument and
+            // so is not one of the words above.
+            if let Some(needle) = rule.contains.as_deref() {
+                if !segment.raw.contains(needle) {
+                    continue;
+                }
+            }
+            return Decision::Deny(deny_reason(rule));
         }
     }
     Decision::Allow
+}
+
+/// Whether a rule at this severity blocks, once promotion has been applied.
+///
+/// Routed through [`severity`] rather than matched here, so `allow` / `warn` /
+/// `deny` mean the same thing at the mediation channel as in the checks
+/// pipeline. One interpretation, two surfaces.
+fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
+    severity::promote(severity::row_for_rule(severity).report, fail_on_warning) == ReportLevel::Fail
+}
+
+/// Compose a deny reason: the rule that refused, why, and where the policy lives.
+///
+/// Pointer-only (rule 4) — it names the rule and the fix, never the mediated
+/// command, which is the caller's own text and could carry anything.
+fn deny_reason(rule: &Rule) -> String {
+    let mut reason = format!(
+        "Refused by {}: {}",
+        rule.id,
+        rule.reason.as_deref().unwrap_or("policy")
+    );
+    if let Some(url) = rule.policy_url.as_deref() {
+        reason.push_str(" See ");
+        reason.push_str(url);
+        reason.push('.');
+    }
+    reason.push_str(" Bypass with ");
+    reason.push_str(BYPASS_ENV);
+    reason.push_str("=1.");
+    reason
 }
 
 /// One shell-separated span of a mediated command, in the two forms policy needs.
@@ -412,15 +498,50 @@ pub fn encode_claude_deny(event: &str, reason: &str) -> serde_json::Result<Strin
 mod tests {
     use super::*;
 
+    fn shape(id: &str, pattern: &str, contains: Option<&str>) -> Rule {
+        Rule {
+            id: id.to_owned(),
+            kind: crate::rules::RuleKind::Shape,
+            glob: None,
+            severity: RuleSeverity::Deny,
+            scope: RuleScope::MediatedCall,
+            pattern: Some(pattern.to_owned()),
+            contains: contains.map(ToOwned::to_owned),
+            reason: Some(format!("use the sanctioned path for {id}")),
+            policy_url: None,
+            run: None,
+        }
+    }
+
+    /// The `gh` lifecycle table as config, standing in for the rows this repo's
+    /// own `batten.toml` now carries. The policy left the crate in CLOUD-48, so
+    /// these tests supply it rather than assert against a baked-in table.
+    fn gh_policy() -> Policy {
+        Policy {
+            shapes: vec![
+                shape("gh-pr-merge", "gh pr merge", None),
+                shape(
+                    "gh-pr-comment-fast-forward",
+                    "gh pr comment",
+                    Some("fast-forward"),
+                ),
+                shape("gh-pr-checks", "gh pr checks", None),
+                shape("gh-run-watch", "gh run watch", None),
+            ],
+            fail_on_warning: false,
+        }
+    }
+
+    fn envelope(command: &str) -> Envelope {
+        Envelope {
+            event: "PreToolUse".to_owned(),
+            tool: "Bash".to_owned(),
+            command: command.to_owned(),
+        }
+    }
+
     fn adjudicate_command(command: &str) -> Decision {
-        adjudicate(
-            &Envelope {
-                event: "PreToolUse".to_owned(),
-                tool: "Bash".to_owned(),
-                command: command.to_owned(),
-            },
-            false,
-        )
+        adjudicate(&gh_policy(), &envelope(command), false)
     }
 
     fn is_deny(command: &str) -> bool {
@@ -538,12 +659,10 @@ mod tests {
 
     #[test]
     fn bypass_allows_everything() {
-        let envelope = Envelope {
-            event: "PreToolUse".to_owned(),
-            tool: "Bash".to_owned(),
-            command: "gh pr merge".to_owned(),
-        };
-        assert_eq!(adjudicate(&envelope, true), Decision::Allow);
+        assert_eq!(
+            adjudicate(&gh_policy(), &envelope("gh pr merge"), true),
+            Decision::Allow
+        );
     }
 
     #[test]
@@ -560,7 +679,139 @@ mod tests {
         // A payload with no command decodes to an empty command, which
         // adjudicates to Allow rather than erroring.
         let envelope = decode(Harness::ClaudeCode, "{}").expect("decodes");
-        assert_eq!(adjudicate(&envelope, false), Decision::Allow);
+        assert_eq!(adjudicate(&gh_policy(), &envelope, false), Decision::Allow);
+    }
+
+    #[test]
+    fn an_empty_policy_denies_nothing() {
+        // The default state, and the one most invocations are in: `hook` is
+        // registered once and mediates calls in directories that declare no
+        // policy at all.
+        assert_eq!(
+            adjudicate(
+                &Policy::declaring_nothing(),
+                &envelope("gh pr merge 42"),
+                false
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn the_deny_names_the_rule_and_its_reason() {
+        // Acceptance (c). The id is what a reviewer greps for in `batten.toml`;
+        // the reason is what the model acts on.
+        let Decision::Deny(reason) = adjudicate_command("gh pr merge 42") else {
+            panic!("a configured shape must deny");
+        };
+        assert!(reason.contains("gh-pr-merge"), "names the rule: {reason}");
+        assert!(reason.contains("sanctioned path"), "names why: {reason}");
+        assert!(reason.contains(BYPASS_ENV), "names the hatch: {reason}");
+    }
+
+    #[test]
+    fn the_deny_never_echoes_the_mediated_command() {
+        // Rule 4 at the mediation channel. The command is the caller's own text
+        // and can carry anything — a token, a path, a customer name — so a deny
+        // names the policy that refused, never the thing refused.
+        let secret = "gh pr merge --repo o/r-SENTINEL-9f3a";
+        let Decision::Deny(reason) = adjudicate_command(secret) else {
+            panic!("a configured shape must deny");
+        };
+        assert!(
+            !reason.contains("SENTINEL"),
+            "the deny echoed the mediated command: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_shape_rule_at_allow_is_configured_off() {
+        // `allow` is cargo-deny's "this rule is off", and it must mean the same
+        // thing here as in the checks pipeline — that is what routing through
+        // `severity::promote` buys.
+        let mut rule = shape("gh-pr-merge", "gh pr merge", None);
+        rule.severity = RuleSeverity::Allow;
+        let policy = Policy {
+            shapes: vec![rule],
+            fail_on_warning: false,
+        };
+        assert_eq!(
+            adjudicate(&policy, &envelope("gh pr merge 42"), false),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn a_warn_shape_rule_blocks_only_once_promotion_is_on() {
+        let mut rule = shape("gh-pr-merge", "gh pr merge", None);
+        rule.severity = RuleSeverity::Warn;
+        let call = envelope("gh pr merge 42");
+
+        let advisory = Policy {
+            shapes: vec![rule.clone()],
+            fail_on_warning: false,
+        };
+        assert_eq!(
+            adjudicate(&advisory, &call, false),
+            Decision::Allow,
+            "a warn row does not block a mediated call on its own"
+        );
+
+        let promoted = Policy {
+            shapes: vec![rule],
+            fail_on_warning: true,
+        };
+        assert!(
+            matches!(adjudicate(&promoted, &call, false), Decision::Deny(_)),
+            "promotion applies at the mediation channel too"
+        );
+    }
+
+    #[test]
+    fn the_first_matching_row_wins_in_declaration_order() {
+        // Declaration order, not "most specific": a reviewer reads the table top
+        // to bottom, and any cleverer precedence would be a rule about rules the
+        // config never states.
+        let policy = Policy {
+            shapes: vec![
+                shape("first", "gh pr merge", None),
+                shape("second", "gh pr merge", None),
+            ],
+            fail_on_warning: false,
+        };
+        let Decision::Deny(reason) = adjudicate(&policy, &envelope("gh pr merge"), false) else {
+            panic!("must deny");
+        };
+        assert!(reason.contains("first"), "got: {reason}");
+    }
+
+    #[test]
+    fn an_extra_literal_condition_is_matched_against_the_command_as_written() {
+        // `contains` exists for exactly this pair: the directive lives inside a
+        // quoted argument, so it is not one of the words the shape matches.
+        assert!(matches!(
+            adjudicate_command("gh pr comment 7 --body /fast-forward"),
+            Decision::Deny(_)
+        ));
+        assert_eq!(
+            adjudicate_command("gh pr comment 7 --body thanks"),
+            Decision::Allow,
+            "an ordinary comment is not the lifecycle"
+        );
+    }
+
+    #[test]
+    fn a_policy_url_rides_the_deny_when_declared() {
+        let mut rule = shape("gh-pr-merge", "gh pr merge", None);
+        rule.policy_url = Some("https://example.invalid/policy".to_owned());
+        let policy = Policy {
+            shapes: vec![rule],
+            fail_on_warning: false,
+        };
+        let Decision::Deny(reason) = adjudicate(&policy, &envelope("gh pr merge"), false) else {
+            panic!("must deny");
+        };
+        assert!(reason.contains("example.invalid/policy"), "got: {reason}");
     }
 
     #[test]
