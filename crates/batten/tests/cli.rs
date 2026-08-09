@@ -614,6 +614,177 @@ fn a_local_override_may_add_a_rule_but_not_redefine_one() {
     );
 }
 
+/// Which channel a decision travels over (CLOUD-40).
+///
+/// The *number* is the same on every surface (§7); only the channel differs.
+/// And a channel is observable only by spawning the binary — reading `hook.rs`
+/// cannot tell you whether a deny actually reached the host — so this is the
+/// one property that has to be pinned by a fixture rather than a type.
+enum Channel {
+    /// Nothing on stdout. A clean run is the cheapest possible signal (§6).
+    Silent,
+    /// The host reads an in-band decision document; the document *is* the deny.
+    StdoutDenyJson,
+    /// The host's only channel is process status, so the reason rides stderr.
+    StderrReason,
+}
+
+/// One row of the per-harness decision matrix.
+struct Row {
+    harness: &'static str,
+    case: &'static str,
+    command: &'static str,
+    expected: i32,
+    channel: Channel,
+}
+
+/// Allow and deny, once per supported harness.
+///
+/// Kept beside the other `hook_*` tests rather than in a file of its own: the
+/// rows pin exactly the behaviour those tests describe, and splitting them
+/// would put the reasoning a screen away from the assertions it explains.
+const MATRIX: &[Row] = &[
+    Row {
+        harness: "claude-code",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "claude-code",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 0,
+        channel: Channel::StdoutDenyJson,
+    },
+    Row {
+        harness: "exit-code",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "exit-code",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 2,
+        channel: Channel::StderrReason,
+    },
+];
+
+#[test]
+fn the_decision_channel_matrix_holds_for_every_harness() {
+    for row in MATRIX {
+        let output = run_hook(row.harness, &claude_payload(row.command), false);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let at = format!("{}/{}", row.harness, row.case);
+        assert_eq!(output.status.code(), Some(row.expected), "{at}: exit code");
+        match row.channel {
+            Channel::Silent => assert!(
+                stdout.is_empty(),
+                "{at}: an allow answers nothing on stdout, got: {stdout}"
+            ),
+            Channel::StdoutDenyJson => assert!(
+                stdout.contains("\"permissionDecision\":\"deny\""),
+                "{at}: the decision document is the deny, got: {stdout}"
+            ),
+            Channel::StderrReason => {
+                assert!(
+                    stdout.is_empty(),
+                    "{at}: the verdict rides stderr, not the answer channel, got: {stdout}"
+                );
+                assert!(!stderr.trim().is_empty(), "{at}: a deny carries its reason");
+                // A verdict is an answer, not a crash. The host hands this text
+                // back to the model, so it must not wear the binary's error
+                // prefix — that belongs to 1 and 3.
+                assert!(
+                    !stderr.starts_with("batten:"),
+                    "{at}: a deny reason is unprefixed, got: {stderr}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_matrix_covers_every_supported_harness() {
+    // The matrix is a contract only while it is total. A third adapter added to
+    // `Harness::ALL` with no row here would ship with its channel unpinned, and
+    // an unpinned channel is precisely the silently-converted refusal this
+    // issue exists to prevent.
+    let mut covered: Vec<&str> = MATRIX.iter().map(|row| row.harness).collect();
+    covered.sort_unstable();
+    covered.dedup();
+    let mut declared: Vec<&str> = batten::hook::Harness::ALL
+        .iter()
+        .map(|harness| harness.as_str())
+        .collect();
+    declared.sort_unstable();
+    assert_eq!(
+        covered, declared,
+        "every declared harness needs a decision-channel row"
+    );
+}
+
+#[test]
+fn a_malformed_harness_token_fails_loud_without_denying() {
+    // The forced-failure leg of the matrix, and the only one reachable today:
+    // `hook` reads no config, so nothing else it does can fail. An unselectable
+    // harness is a usage error — exit 1, loud on stderr, and emphatically not a
+    // deny, because a guard that blocks when its own invocation is wrong is a
+    // guard that blocks on a typo.
+    //
+    // Spawned without piping a payload, deliberately: clap rejects the token
+    // before anything reads stdin, so `run_hook`'s write would race a closed
+    // pipe. That it never reads the payload is itself the point.
+    for token in ["claude_code", "", "exitcode"] {
+        let output = batten()
+            .args(["hook", "--harness", token])
+            .env_remove("BATTEN_GH_GUARD_BYPASS")
+            .stdin(Stdio::null())
+            .output()
+            .expect("run batten hook");
+        let code = output.status.code();
+        assert_eq!(code, Some(1), "harness {token:?}: usage error");
+        assert_ne!(code, Some(2), "harness {token:?}: must never deny");
+        assert!(output.stdout.is_empty(), "harness {token:?}: no answer");
+        assert!(
+            !output.stderr.is_empty(),
+            "harness {token:?}: a failure is loud"
+        );
+    }
+}
+
+#[test]
+fn hook_reads_no_config_so_a_broken_one_cannot_block() {
+    // Pins *why* the config-failure leg above is unreachable rather than merely
+    // untested: `hook` never loads an authority, so the directory shapes that
+    // break every other verb are nothing to it. When that stops being true the
+    // deletion of this test is the seam where config became load-bearing.
+    let dir = repo_with_config("hook-broken-config", "this is not toml at all\n");
+    let mut command = batten();
+    command
+        .args(["hook", "--harness", "claude-code"])
+        .current_dir(&dir)
+        .env_remove("BATTEN_GH_GUARD_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(claude_payload("gh pr view 42").as_bytes())
+        .expect("write payload");
+    let output = child.wait_with_output().expect("run batten hook");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
 #[test]
 fn hook_denies_a_blocked_shape_in_the_harness_channel() {
     // The claude-code adapter answers in the host's JSON decision object with

@@ -41,6 +41,26 @@ pub enum Harness {
     ExitCode,
 }
 
+impl Harness {
+    /// Every harness, so anything ranging over them is derived rather than
+    /// re-typed — the CLOUD-40 decision-channel matrix reads this, which is what
+    /// stops a third adapter from landing with no fixture row.
+    pub const ALL: &'static [Harness] = &[Harness::ClaudeCode, Harness::ExitCode];
+
+    /// The CLI token, identical to the `ValueEnum` spelling `--harness` accepts.
+    ///
+    /// Stated here rather than read off `clap` so the matrix can name a harness
+    /// without building a command; `tests::every_harness_token_matches_its_clap_spelling`
+    /// is what keeps the two from drifting.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Harness::ClaudeCode => "claude-code",
+            Harness::ExitCode => "exit-code",
+        }
+    }
+}
+
 /// The normalized hook envelope — the shape the core adjudicates, whatever the
 /// host called its fields. `session` is optional by design: some harnesses
 /// expose two ids, some events none, so anything keyed on it degrades to
@@ -378,6 +398,20 @@ mod tests {
         // adjudicates to Allow rather than erroring.
         let envelope = decode(Harness::ClaudeCode, "{}").expect("decodes");
         assert_eq!(adjudicate(&envelope, false), Decision::Allow);
+    }
+
+    #[test]
+    fn every_harness_token_matches_its_clap_spelling() {
+        // `as_str` exists so the E2E matrix can name a harness without building
+        // a clap command. That is only safe while the two spellings agree, and
+        // nothing else would notice if a `ValueEnum` rename left `as_str`
+        // behind — the matrix would keep passing against a token the binary no
+        // longer accepts.
+        use clap::ValueEnum;
+        for harness in Harness::ALL {
+            let value = harness.to_possible_value().expect("harness is selectable");
+            assert_eq!(harness.as_str(), value.get_name());
+        }
     }
 
     #[test]
