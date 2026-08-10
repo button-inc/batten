@@ -196,6 +196,11 @@ pub struct Resolved {
     /// The suppression-marker table, consumer data the authority supplies.
     #[serde(rename = "marker")]
     pub markers: Vec<crate::markers::Marker>,
+    /// The `exec` output predicates (CLOUD-117), authority rows plus any a local
+    /// file **added**. Raise-only by construction: a local file can only append,
+    /// and a row reusing a committed id is refused rather than merged.
+    #[serde(rename = "exec_pattern")]
+    pub exec_patterns: Vec<crate::outputs::OutputPattern>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -434,6 +439,7 @@ pub fn resolve_with_env(
         };
     }
 
+    let mut exec_patterns = repo.exec_patterns.clone();
     let mut rules = repo.rules.clone();
     let mut rules_source = if rules.is_empty() {
         Source::Default
@@ -497,6 +503,7 @@ pub fn resolve_with_env(
             rules.push(rule);
             rules_source = Source::LocalFile;
         }
+        merge_local_patterns(&mut exec_patterns, local.exec_patterns)?;
     }
 
     // Layer 3 — the environment. An *empty* variable is "not set", not a bad
@@ -536,7 +543,40 @@ pub fn resolve_with_env(
         fail_on_warning,
         rules,
         rules_source,
+        exec_patterns,
     ))
+}
+
+/// Append a local file's output predicates to the committed ones.
+///
+/// The same reading local *rules* get, and for the same reason: a local file may
+/// ADD a pattern — tightening, one more way for a wrapped command to be caught
+/// lying — but may not redefine a committed one, since a narrowed stream or an
+/// altered literal is a weakening Batten cannot distinguish from a fix.
+///
+/// Extracted rather than inlined because `resolve_with_env` is the §8 chain and
+/// reads as one; a second per-table merge loop in its body is the thing that
+/// pushed it past the line limit.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] when a local pattern reuses a committed id.
+fn merge_local_patterns(
+    committed: &mut Vec<crate::outputs::OutputPattern>,
+    local: Vec<crate::outputs::OutputPattern>,
+) -> Result<()> {
+    for pattern in local {
+        if committed.iter().any(|row| row.id == pattern.id) {
+            return Err(UsageError::raise(format!(
+                "exec_pattern {}: {LOCAL_CONFIG_FILE} may not redefine a pattern from {}; an \
+                 override may only add patterns, never weaken a committed gate (§8)",
+                pattern.id,
+                config::CONFIG_FILE,
+            )));
+        }
+        committed.push(pattern);
+    }
+    Ok(())
 }
 
 /// Build the resolved configuration from the authority plus the layered values.
@@ -549,6 +589,7 @@ fn assemble(
     fail_on_warning: Layered<bool>,
     rules: Vec<Rule>,
     rules_source: Source,
+    exec_patterns: Vec<crate::outputs::OutputPattern>,
 ) -> Resolved {
     Resolved {
         version: repo.version,
@@ -562,6 +603,7 @@ fn assemble(
         epoch: repo.epoch.clone(),
         verbs: repo.verbs.clone(),
         markers: repo.markers.clone(),
+        exec_patterns,
         sources: attribution(
             repo,
             strictness.source,
@@ -606,6 +648,10 @@ fn attribution(
         ("epoch", authority_set(repo.epoch.is_some())),
         ("verb", authority_set(!repo.verbs.is_empty())),
         ("marker", authority_set(!repo.markers.is_empty())),
+        (
+            "exec_pattern",
+            authority_set(!repo.exec_patterns.is_empty()),
+        ),
     ])
 }
 

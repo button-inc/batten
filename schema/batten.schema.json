@@ -15,6 +15,13 @@
         }
       ]
     },
+    "exec_pattern": {
+      "description": "Output predicates over a wrapped command's captured streams (CLOUD-117):\nliterals that, found in `batten exec`'s output, promote a lying exit `0`\nto a violation. Consumer-specific by nature — which warning means\nnot-actually-done is a property of the tools a repository runs — so it\nlives here and never in the crate (non-negotiable rule 1). The type and\nthe predicate are [`crate::outputs`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OutputPattern"
+      }
+    },
     "fail_on_warning": {
       "description": "Whether a `warn`-severity finding is promoted to a violation (CLOUD-49).\nAbsent means \"this file does not speak to the setting\", which is what\nlets [`crate::resolve`] attribute the effective value to the layer that\nactually set it. Policy-bearing, so an override may only turn it *on*\n(§8): `false` over a committed `true` is refused, never applied.",
       "type": [
@@ -170,6 +177,35 @@
         "effect"
       ]
     },
+    "OutputPattern": {
+      "description": "One declared output predicate: a literal that must not appear.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The stable identifier a match is reported under.\n\nRequired, and it is what keeps the report pointer-only: a finding names\n`stream:line` plus this id, never the line that matched. Without an id the\nonly way to say *which* pattern fired would be to echo the bytes.",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "The case-sensitive literal that must not appear in the watched stream.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "What the caller should do about it.\n\nRequired, unlike on a file rule. A file finding is a `path:line` a reader\ncan open; a promoted exit code is all a caller gets back, so a refusal\nnaming only its id would be un-actionable (CLOUD-122).",
+          "type": "string"
+        },
+        "stream": {
+          "description": "Which stream to watch. Defaults to both.",
+          "$ref": "#/$defs/Watched",
+          "default": "both"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pattern",
+        "reason"
+      ]
+    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
       "type": "object",
@@ -313,6 +349,26 @@
           "description": "Everything `Standard` fails on, plus anything advisory.",
           "type": "string",
           "const": "strict"
+        }
+      ]
+    },
+    "Watched": {
+      "description": "Which captured stream a pattern is matched against.",
+      "oneOf": [
+        {
+          "description": "The child's standard output only.",
+          "type": "string",
+          "const": "stdout"
+        },
+        {
+          "description": "The child's standard error only.",
+          "type": "string",
+          "const": "stderr"
+        },
+        {
+          "description": "Both streams.\n\nThe default, and deliberately the *widest* reading: a tool that moves a\nwarning from one stream to the other between releases would otherwise\nsilently stop being gated, and a pattern that quietly matches nothing is\nthe failure this whole feature exists to prevent.",
+          "type": "string",
+          "const": "both"
         }
       ]
     }

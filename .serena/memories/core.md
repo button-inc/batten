@@ -40,6 +40,16 @@ file itself for the "why", this is only the "where":
   `out: &mut dyn Write` and have no `Mode` to consult, which is what makes `-J`
   structurally ungatable. `verdict` and `error` are ungated: exit `1` is
   fail-loud, so `--silent` must not empty it.
+- `outputs.rs` — `exec` output predicates (CLOUD-117): declared literals that,
+  found in a wrapped command's captured stream, promote a lying exit `0` to a
+  failure. **A match always fails** — no severity field, no `fail_on_warning`
+  dependence, because a finding that exits `0` is invisible to the only surface an
+  agent reads. Literal substring, not regex: the crate carries no regex dependency
+  and `forbid` sets the precedent. Report is pointer-only (`stream:line <id>` plus
+  a count and each reason once), never the matched line — a wrapped command's
+  output is the likeliest place in the engine for a secret to appear. Batten only
+  ever **adds** failure: a non-zero child passes its code through untouched.
+  Raise-only from a local file (add yes, redefine no).
 - `capture.rs` — captured child output, content-addressed in out-of-tree state
   (CLOUD-162): the shared substrate CLOUD-117's output predicate and CLOUD-121's
   handles both read, built once so neither grows its own copy. The digest **is**

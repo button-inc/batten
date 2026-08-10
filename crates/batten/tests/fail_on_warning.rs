@@ -405,23 +405,60 @@ fn there_is_exactly_one_promotion_knob_and_exec_is_not_a_consumer() {
         );
     }
 
-    // The re-pointed tripwire: when CLOUD-117 adds exec output predicates, they
-    // will surface as a resolved config key, and this must become the real
-    // assertion that a match fails regardless of promotion.
-    let document: serde_json::Value = serde_json::from_str(&stdout(&run(
-        &promoted,
-        &["config", "show", "--json"],
+    // And the assertion the tripwire that used to stand here was holding a place
+    // for. It fired twice as designed — once when `batten exec` landed (CLOUD-285)
+    // and once when the output-predicate config key did (CLOUD-117) — and this is
+    // the real thing it was deferring to.
+    //
+    // An exec output match fails UNCONDITIONALLY. There is no severity field on a
+    // pattern and no dependence on `fail_on_warning`, because the only surface an
+    // agent acts on is the exit code: a warn-but-pass match would be invisible to
+    // it and would reproduce the exact false green the predicate exists to kill.
+    let with_pattern = repo(
+        "fow-exec-pattern",
+        &config(
+            "\n[[exec_pattern]]\nid = \"lying-zero\"\npattern = \"warning[duplicate]\"\n\
+             stream = \"both\"\nreason = \"configure the tool to fail instead\"\n",
+            "warn",
+        ),
         None,
-    )))
-    .expect("valid config JSON");
-    let keys: Vec<&String> = document
-        .as_object()
-        .map(|map| map.keys().collect())
-        .unwrap_or_default();
-    assert!(
-        !keys.iter().any(|key| key.contains("exec")),
-        "an exec-scoped config key has landed (CLOUD-117): replace this tripwire \
-         with the real assertion that an output-predicate match fails regardless \
-         of fail_on_warning, got {keys:?}"
     );
+    for env in [None, Some("true"), Some("false")] {
+        let matched = run(
+            &with_pattern,
+            &["exec", "--", "sh", "-c", "echo 'warning[duplicate] x'"],
+            env,
+        );
+        assert_eq!(
+            matched.status.code(),
+            Some(1),
+            "an output match must fail whatever the promotion setting says (env {env:?})"
+        );
+        // Pointer-only: the pattern id and a location, never the matched line.
+        let report = stderr(&matched);
+        assert!(
+            report.contains("lying-zero"),
+            "the refusal names the pattern"
+        );
+        assert!(
+            !report.contains("warning[duplicate] x"),
+            "the refusal must never echo the matched line: {report}"
+        );
+    }
+
+    // And the negative, so the assertion above is about the match rather than
+    // about `exec` failing generally: the same command with nothing to match
+    // exits 0 under every promotion setting.
+    for env in [None, Some("true")] {
+        let clean = run(
+            &with_pattern,
+            &["exec", "--", "sh", "-c", "echo 'all good'"],
+            env,
+        );
+        assert_eq!(
+            clean.status.code(),
+            Some(0),
+            "no match, no promotion (env {env:?})"
+        );
+    }
 }

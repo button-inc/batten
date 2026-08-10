@@ -141,6 +141,18 @@ pub struct Config {
     /// lookup are [`crate::verbs`].
     #[serde(default, rename = "verb", skip_serializing_if = "Vec::is_empty")]
     pub verbs: Vec<crate::verbs::MutatingVerb>,
+    /// Output predicates over a wrapped command's captured streams (CLOUD-117):
+    /// literals that, found in `batten exec`'s output, promote a lying exit `0`
+    /// to a violation. Consumer-specific by nature — which warning means
+    /// not-actually-done is a property of the tools a repository runs — so it
+    /// lives here and never in the crate (non-negotiable rule 1). The type and
+    /// the predicate are [`crate::outputs`].
+    #[serde(
+        default,
+        rename = "exec_pattern",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub exec_patterns: Vec<crate::outputs::OutputPattern>,
     /// The suppression markers to count (CLOUD-36). Which comment shape waves
     /// a rule through is a property of the repository being gated, never of
     /// Batten; the type and the counting are [`crate::markers`].
@@ -233,6 +245,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // that loads, matches nothing at the mediation channel, and reads as
     // coverage. `run_rule` still calls `Rule::validate` as defence in depth.
     crate::rules::validate(&config.rules)?;
+    crate::outputs::validate(&config.exec_patterns)?;
     Ok(config)
 }
 
@@ -326,6 +339,7 @@ impl Config {
             epoch: None,
             verbs: Vec::new(),
             markers: Vec::new(),
+            exec_patterns: Vec::new(),
         }
     }
 }
@@ -379,6 +393,7 @@ mod tests {
         ("verbs", "crate::verbs::validate("),
         ("markers", "crate::markers::validate("),
         ("rules", "crate::rules::validate("),
+        ("exec_patterns", "crate::outputs::validate("),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing

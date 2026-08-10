@@ -2028,6 +2028,202 @@ fn a_capture_handle_is_what_a_log_anchored_finding_joins_on() {
     assert_ne!(joined.to_hex(), other.to_hex());
 }
 
+// --- exec output predicates (CLOUD-117) ---------------------------------------
+//
+// A command can lie about completion: exit 0 while its own output says otherwise.
+// A declared literal in that output promotes the lying 0 to a failure — always,
+// with no severity tier, because a finding that exits 0 is invisible to the only
+// surface an agent reads.
+
+/// A repo with a committed authority carrying `patterns`, plus an isolated store.
+#[cfg(unix)]
+fn exec_pattern_repo(name: &str, patterns: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let repo = Fixture::at(root.join("repo"))
+        .config(&format!("version = 1\n{patterns}"))
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    (repo, home)
+}
+
+/// One committed pattern over both streams.
+#[cfg(unix)]
+const ONE_PATTERN: &str = "\n[[exec_pattern]]\nid = \"lying-zero\"\n                           pattern = \"warning[duplicate]\"\nstream = \"both\"\n                           reason = \"configure the tool to fail instead\"\n";
+
+#[cfg(unix)]
+fn run_exec(repo: &std::path::Path, home: &std::path::Path, script: &str) -> Output {
+    batten()
+        .args(["exec", "--", "sh", "-c", script])
+        .current_dir(repo)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten exec")
+}
+
+#[cfg(unix)]
+#[test]
+fn an_exit_zero_child_whose_output_matches_is_promoted_to_a_failure() {
+    let (repo, home) = exec_pattern_repo("exec-pred-match", ONE_PATTERN);
+    let output = run_exec(&repo, &home, "echo 'warning[duplicate] serde'");
+    assert_eq!(output.status.code(), Some(1));
+    let report = String::from_utf8_lossy(&output.stderr);
+    // Pointer-only: stream, line, and the pattern id — the same `path:line rule-id`
+    // shape `check` emits, so a caller needs no second parser.
+    assert!(report.contains("stdout:1 lying-zero"), "got {report}");
+    assert!(report.contains("1 output match(es)"));
+    assert!(report.contains("configure the tool to fail instead"));
+}
+
+#[cfg(unix)]
+#[test]
+fn the_refusal_never_echoes_the_line_that_matched() {
+    // A wrapped command's output is the likeliest place in this whole engine for a
+    // secret to appear, which is what makes pointer-only load-bearing here rather
+    // than stylistic. The child's own stdout still carries it — that is the
+    // child's channel — but Batten's report must not repeat it.
+    let (repo, home) = exec_pattern_repo("exec-pred-pointer", ONE_PATTERN);
+    let output = run_exec(&repo, &home, "echo 'warning[duplicate] SUPERSECRET'");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("SUPERSECRET"),
+        "the refusal echoed the matched line"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_exit_zero_child_with_no_match_is_still_clean() {
+    let (repo, home) = exec_pattern_repo("exec-pred-clean", ONE_PATTERN);
+    let output = run_exec(&repo, &home, "echo 'all good'");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "all good\n");
+    assert!(output.stderr.is_empty(), "a clean run says nothing");
+}
+
+#[cfg(unix)]
+#[test]
+fn batten_only_adds_failure_so_a_non_zero_child_is_untouched() {
+    // There is nothing to promote, and re-deciding a failure Batten did not
+    // diagnose would make the wrapper's verdict unreadable. The child's own code
+    // survives even though its output matches.
+    let (repo, home) = exec_pattern_repo("exec-pred-nonzero", ONE_PATTERN);
+    let output = run_exec(&repo, &home, "echo 'warning[duplicate] x'; exit 7");
+    assert_eq!(
+        output.status.code(),
+        Some(7),
+        "a child that already failed passes its code through"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pattern_scoped_to_one_stream_does_not_fire_on_the_other() {
+    let stderr_only = "\n[[exec_pattern]]\nid = \"err-only\"\npattern = \"boom\"\n                       stream = \"stderr\"\nreason = \"look at stderr\"\n";
+    let (repo, home) = exec_pattern_repo("exec-pred-stream", stderr_only);
+    assert_eq!(
+        run_exec(&repo, &home, "echo boom").status.code(),
+        Some(0),
+        "a stderr-scoped pattern must ignore stdout"
+    );
+    assert_eq!(
+        run_exec(&repo, &home, "echo boom >&2").status.code(),
+        Some(1),
+        "and must fire on stderr"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn every_match_is_reported_not_only_the_first() {
+    let (repo, home) = exec_pattern_repo("exec-pred-all", ONE_PATTERN);
+    let output = run_exec(
+        &repo,
+        &home,
+        "echo 'warning[duplicate] a'; echo ok; echo 'warning[duplicate] b'",
+    );
+    assert_eq!(output.status.code(), Some(1));
+    let report = String::from_utf8_lossy(&output.stderr);
+    assert!(report.contains("stdout:1 lying-zero"), "got {report}");
+    assert!(report.contains("stdout:3 lying-zero"), "got {report}");
+    assert!(report.contains("2 output match(es)"));
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_still_runs_where_no_authority_is_configured() {
+    // `exec` is a wrapper a caller puts in front of arbitrary commands, most of
+    // them outside a Batten repository. Refusing there would make the wrapper the
+    // reason ordinary work stops — the same reading `hook` takes for its policy.
+    let home = scratch("exec-pred-no-authority");
+    fs::create_dir_all(&home).expect("create home");
+    let elsewhere = scratch("exec-pred-elsewhere");
+    fs::create_dir_all(&elsewhere).expect("create dir");
+    let _ = fs::remove_file(elsewhere.join("batten.toml"));
+    let output = batten()
+        .args(["exec", "--", "sh", "-c", "echo fine"])
+        .current_dir(&elsewhere)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .output()
+        .expect("run batten exec");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "fine\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_authority_stops_exec_rather_than_silently_ungating_it() {
+    // The mirror of the case above, and the reason it is not fail-open: a pattern
+    // table nobody could parse is a gate that silently did not run.
+    let (repo, home) = exec_pattern_repo("exec-pred-broken", ONE_PATTERN);
+    fs::write(repo.join("batten.toml"), "version = 1\nbogus = true\n").expect("break the config");
+    let output = run_exec(&repo, &home, "echo fine");
+    assert_eq!(output.status.code(), Some(1));
+    assert_ne!(
+        output.status.code(),
+        Some(2),
+        "an unreadable authority is a usage error, never a policy verdict"
+    );
+    assert!(!output.stderr.is_empty(), "exit 1 is fail-loud");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_local_file_may_add_a_pattern_but_not_redefine_a_committed_one() {
+    // Raise-only (§8): adding a pattern is one more way for a lying command to be
+    // caught, so it is tightening. Redefining one could narrow its stream or alter
+    // its literal, and Batten cannot tell that from a fix — so it is refused.
+    let (repo, home) = exec_pattern_repo("exec-pred-local", ONE_PATTERN);
+    fs::write(
+        repo.join("batten.local.toml"),
+        "version = 1\n\n[[exec_pattern]]\nid = \"local-extra\"\npattern = \"deprecated\"\n         stream = \"both\"\nreason = \"stop using it\"\n",
+    )
+    .expect("write local");
+    assert_eq!(
+        run_exec(&repo, &home, "echo 'deprecated api'")
+            .status
+            .code(),
+        Some(1),
+        "a locally added pattern is a gate the run applies"
+    );
+
+    fs::write(
+        repo.join("batten.local.toml"),
+        "version = 1\n\n[[exec_pattern]]\nid = \"lying-zero\"\npattern = \"never\"\n         stream = \"both\"\nreason = \"weaken it\"\n",
+    )
+    .expect("write local");
+    let output = run_exec(&repo, &home, "echo fine");
+    assert_eq!(output.status.code(), Some(1), "redefining is refused");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("may not redefine"),
+        "the refusal says why"
+    );
+}
+
 // --- the machine-output contract, as a derived census (CLOUD-41) -------------
 //
 // House-style §6-§7 says stdout is the answer and stderr is the messaging, that a

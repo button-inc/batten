@@ -23,6 +23,7 @@ pub mod identity;
 pub mod lint;
 pub mod markers;
 pub mod output;
+pub mod outputs;
 pub mod receipt;
 pub mod resolve;
 pub mod rules;
@@ -88,7 +89,18 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         // `exec` reads no config and renders no verdict: it runs what the caller
         // named and reports what that returned. The §8 chain is deliberately not
         // threaded through it — there is nothing here for policy to decide.
-        Some(Command::Exec { command }) => exec::run(&command),
+        // `exec` resolves config for exactly one reason — the output predicates
+        // (CLOUD-117) — and renders no verdict of its own beyond them. An
+        // unreadable authority is still a usage error here: a pattern table nobody
+        // could read is a gate that silently did not run.
+        Some(Command::Exec { command }) => {
+            let patterns = load_exec_patterns(&overrides)?;
+            // The report goes to the ERROR channel, never `out`: stdout belongs to
+            // the wrapped command (CLOUD-285), so a pointer line there would
+            // corrupt a document the caller may be parsing.
+            let mut report = std::io::stderr();
+            exec::run_with(&command, &patterns, &mut report)
+        }
         Some(Command::Hook { harness }) => run_hook(harness, &overrides, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
@@ -155,6 +167,25 @@ fn load_policy(overrides: &Overrides) -> Result<hook::Policy> {
         return Ok(hook::Policy::declaring_nothing());
     }
     hook::Policy::from_resolved(&resolve::resolve(here, overrides)?)
+}
+
+/// Resolve the `exec` output predicates for this run (CLOUD-117).
+///
+/// **Absent authority declares no patterns, and is not an error** — the same
+/// reading [`load_policy`] gives the mediated-call policy, and for the same
+/// reason. `batten exec` is a wrapper a caller puts in front of arbitrary
+/// commands, most of them in directories that are not Batten repositories;
+/// refusing there would make the wrapper the reason ordinary work stops.
+///
+/// An authority that exists and **cannot be read** propagates. A pattern table
+/// nobody could parse is a gate that silently did not run, which is the false
+/// green this predicate exists to prevent.
+fn load_exec_patterns(overrides: &Overrides) -> Result<Vec<outputs::OutputPattern>> {
+    let here = Path::new(".");
+    if !here.join(config::CONFIG_FILE).exists() {
+        return Ok(Vec::new());
+    }
+    Ok(resolve::resolve(here, overrides)?.exec_patterns)
 }
 
 /// Map one decoded call onto its harness's decision channel.

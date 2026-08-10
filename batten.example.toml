@@ -156,6 +156,42 @@ reason = "apply runs from the pipeline, not a workstation — open a change requ
 # Optional. Appended to the refusal so a caller can read the policy itself.
 policy_url = "https://example.invalid/handbook/infrastructure"
 
+# Output predicates over a wrapped command's streams (CLOUD-117): literals that,
+# found in `batten exec`'s output, promote a lying exit `0` to a failure.
+#
+# The case this exists for: a tool exits 0 while its own output says the work is
+# not really done, and has no severity knob of its own to make it fail. The only
+# surface an agent acts on is the exit code, so a warning that leaves the code at
+# 0 is operationally invisible.
+#
+# A match ALWAYS fails. There is deliberately no severity field and no dependence
+# on `fail_on_warning` above: a "warn-but-pass" match would reproduce the very
+# false green this predicate exists to kill. You declare a pattern here precisely
+# because the string means not-actually-done.
+#
+# `pattern` is a case-sensitive literal substring — the same predicate a `forbid`
+# rule uses, and a shape a reviewer can read without evaluating it. `stream` is
+# `stdout`, `stderr`, or `both` (the default, and the widest reading: a tool that
+# moves a warning between streams must not silently stop being gated).
+#
+# `reason` is REQUIRED. A promoted exit code is the whole of what a caller gets
+# back, so a refusal naming only its id would be un-actionable — and the report is
+# pointer-only (`stream:line <id>`), never the line that matched, because a
+# wrapped command's output is the likeliest place for a secret to appear.
+#
+# REACH FOR SOMETHING ELSE WHEN: the tool has its own severity model (configure
+# that — do not rebuild it as output-scraping); you want to gate a file's contents
+# (a `command` rule over a glob); or you want to promote an existing Batten
+# finding (`fail_on_warning`, which does not apply here).
+#
+# A git-ignored batten.local.toml may ADD a pattern — one more way to catch a
+# lying command is tightening — but may not redefine one declared here.
+[[exec_pattern]]
+id = "no-unfailed-duplicate"
+pattern = "warning[duplicate]"
+stream = "both"
+reason = "set the tool's own severity to deny; do not let a warning ride an exit 0"
+
 # The governing config surface: the files whose bytes `batten config epoch`
 # hashes into one attributable value, so two records carrying the same epoch
 # were produced under provably the same rules.

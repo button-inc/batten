@@ -73,6 +73,7 @@ use anyhow::{Context, Result};
 use crate::capture::{self, Stream};
 use crate::error::{Passthrough, UsageError};
 use crate::exit::ExitCode;
+use crate::outputs::{self, Hit, OutputPattern};
 
 /// The exit code a POSIX shell reports for a process killed by a signal.
 ///
@@ -128,13 +129,26 @@ fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W) -> Result<Vec<u8>> {
 /// [`ExitCode::Violation`] of its own accord; a `2` from this verb came from the
 /// child.
 pub fn run(command: &[String]) -> Result<ExitCode> {
+    run_with(command, &[], &mut std::io::sink())
+}
+
+/// [`run`], with the output predicates to apply and where to report a hit.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_with(
+    command: &[String],
+    patterns: &[OutputPattern],
+    report: &mut dyn Write,
+) -> Result<ExitCode> {
     // The repository root, not the cwd: `state::derive_repo_name` needs a real
     // final path component, and `.` has none — measured, as
     // `cannot derive a repository name from .`. Resolving through `git::repo_root`
     // also means a capture taken from a subdirectory lands in the same store as one
     // taken from the top, which is what makes a handle portable within a checkout.
     let root = crate::git::repo_root(Path::new("."))?;
-    run_in(&root, command)
+    run_in_with(&root, command, patterns, report)
 }
 
 /// [`run`], with the repository root the capture is stored under.
@@ -143,6 +157,20 @@ pub fn run(command: &[String]) -> Result<ExitCode> {
 ///
 /// As [`run`].
 pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
+    run_in_with(repo_root, command, &[], &mut std::io::sink())
+}
+
+/// [`run_in`], with the output predicates to apply and where to report a hit.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_in_with(
+    repo_root: &Path,
+    command: &[String],
+    patterns: &[OutputPattern],
+    report: &mut dyn Write,
+) -> Result<ExitCode> {
     let Some((program, args)) = command.split_first() else {
         // Unreachable through the CLI: `num_args(1..)` makes clap refuse an empty
         // tail. Kept total because the workspace lints forbid panicking on a
@@ -205,10 +233,39 @@ pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
     capture::store(repo_root, Stream::Stderr, &err_bytes)?;
 
     let code = status.code().unwrap_or_else(|| signal_code(status));
-    if code == 0 {
+    if code != 0 {
+        // Batten only ever ADDS failure (CLOUD-117). A child that already failed
+        // needs no promotion, and re-deciding a failure Batten did not diagnose
+        // would make the wrapper's verdict unreadable. Its code passes through.
+        return Err(Passthrough::raise(code));
+    }
+
+    // Only `0` is promotable, and only a declared pattern promotes it.
+    let mut found: Vec<Hit> = outputs::hits(patterns, Stream::Stdout, &out_bytes);
+    found.extend(outputs::hits(patterns, Stream::Stderr, &err_bytes));
+    if found.is_empty() {
         return Ok(ExitCode::Success);
     }
-    Err(Passthrough::raise(code))
+
+    // Pointer-only (non-negotiable rule 4): `stream:line <id>` per hit, then the
+    // count, then each pattern's reason once. Never the matched line — a wrapped
+    // command's output is the likeliest place in this whole engine for a secret to
+    // appear, which is what makes pointer-only load-bearing here.
+    for hit in &found {
+        writeln!(report, "{}", hit.line_text())?;
+    }
+    writeln!(report, "exec: {} output match(es)", found.len())?;
+    for reason in outputs::reasons(patterns, &found) {
+        writeln!(report, "{reason}")?;
+    }
+    // Exit 1, not 2: this is a statement that the invocation's own report was
+    // untrustworthy, not a rule finding over the repository. Stated on the issue as
+    // a chosen asymmetry rather than an oversight.
+    Err(UsageError::raise(format!(
+        "exec: the wrapped command exited 0 but its output matched {} declared \
+         pattern(s) meaning it is not actually done",
+        outputs::reasons(patterns, &found).len()
+    )))
 }
 
 #[cfg(test)]
