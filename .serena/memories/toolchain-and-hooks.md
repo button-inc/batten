@@ -137,6 +137,26 @@ immediately — a wrapped launcher looks identical in the tool result and silent
 drops the re-invocation. A pager over a **file** is fine; over a **live task** it
 is not.
 
+### Do not hand-roll a waiter for work the harness already supervises
+
+A third habit, same root, no green failure — it just hangs. Backgrounding a
+`until ! pgrep -f "hk fix --all"; do sleep; done` waiter to "wait for the real
+task" **never exits**: the waiter's own command line contains the pattern, so
+`pgrep -f` matches the waiter itself and the loop is true forever. Measured
+2026-08-10: five such waiters accumulated, all reporting `STILL RUNNING` for
+~15 minutes after `hk` had actually finished and failed, which also masked the
+real failure (`lock-complete` rejecting the un-staged old lockfile) until the
+log was read directly. `pgrep -fa` shows the self-match immediately, and
+`pgrep -f "[h]k fix"` avoids it — but the waiter should not exist at all.
+
+There is nothing to wait *for*: a command already launched with
+`run_in_background` re-invokes the session on its exit. A second background call
+that watches the first is pure overhead, and each poll of it burns a turn.
+Launch the long thing, end the turn, act on the notification. When something
+genuinely external must be watched (a condition no tracked task will announce),
+use `Monitor` or a single `until` loop over a **file or an API**, never over a
+process table the loop is itself a row in.
+
 Two mechanisms, at different layers. `mise run run-shape-guard`, a `PreToolUse`
 hook, denies both shapes and names the correct one — a fast path with a good
 error message, and inherently incomplete, since it recognises _shapes_ and
