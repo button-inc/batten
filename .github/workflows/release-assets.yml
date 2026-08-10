@@ -40,7 +40,7 @@ jobs:
   release-assets:
     name: release-assets
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
     permissions:
       contents: read # read the release's asset list
     steps:

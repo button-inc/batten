@@ -26,7 +26,7 @@ jobs:
       contains(github.event.comment.body, '/fast-forward') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:
       - uses: sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979 # v1
         with:

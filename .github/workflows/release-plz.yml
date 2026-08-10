@@ -37,7 +37,7 @@ env:
 jobs:
   release-plz:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
     env:
       GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
     steps:

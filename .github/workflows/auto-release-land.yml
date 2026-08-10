@@ -49,7 +49,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'release-plz-')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     env:
       REPO: ${{ github.repository }}
       SHA: ${{ github.event.workflow_run.head_sha }}

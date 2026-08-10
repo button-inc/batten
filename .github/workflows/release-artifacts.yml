@@ -68,7 +68,7 @@ jobs:
   dist:
     name: dist (${{ matrix.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 30 # budget: grandfathered measured=2026-08-10
     permissions:
       contents: write # upload assets to the release
       id-token: write # sign the provenance statement
@@ -202,7 +202,7 @@ jobs:
   schema:
     name: schema
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
     permissions:
       contents: write # upload the asset to the release
     steps:
