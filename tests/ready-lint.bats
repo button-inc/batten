@@ -440,3 +440,117 @@ heading_block() {
 	lint
 	[ "$status" -eq 0 ]
 }
+
+# --- the clause floor (CLOUD-299) ---------------------------------------------
+#
+# "Validate only the clauses present" needs a floor, or a block with nothing
+# present passes as refined. Measured on CLOUD-59, whose block opened with a
+# refinement note handed down from another issue and carried no clause at all.
+# The floor must not become a checklist, and must not be satisfiable by the
+# house-style §N cross-references that share the notation.
+
+# A body whose only block is a refinement NOTE — the CLOUD-59 shape.
+note_block() {
+	cat <<-EOF
+		**Why**
+		Secret scanning should be reused, without printing secret bytes.
+
+		**Refinement from the identity decision (CLOUD-123) — secret-class identity:**
+
+		* Identity inputs for secret-class findings are HMAC-keyed.
+		* Key loss is a declared orphan event with loud forced re-triage.
+	EOF
+}
+
+@test "a block that is only a refinement note carries no clause and is reported" {
+	payload "$(note_block)"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ready-block-without-clauses"* ]]
+}
+
+@test "a house-style cross-reference in prose does not satisfy the floor" {
+	# The §N namespace is overloaded: counting any (§N) would let a pointer to the
+	# output contract stand in for a clause, which is the vacuous pass again.
+	local desc
+	desc=$(
+		cat <<-EOF
+			**Refinement — Ready (a summary)**
+
+			Output stays pointer-only per house-style (§6), and the gate runs in CI.
+		EOF
+	)
+	payload "$desc"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ready-block-without-clauses"* ]]
+}
+
+@test "a block carrying only §1 clears the floor — it is a floor, not a checklist" {
+	# The counterpart assertion to "omitted clauses are not a violation": the floor
+	# must not have quietly become the all-eight demand the gate document forbids.
+	payload "$(block '')"
+	lint
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"ready-block-without-clauses"* ]]
+}
+
+@test "a heading-form label counts as a clause" {
+	# `### Blockers (§8)` is the corpus's other dialect. A bold-only anchor would
+	# report every heading-dialect body as clause-free.
+	payload "$(heading_block 'None.')"
+	lint
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"ready-block-without-clauses"* ]]
+}
+
+@test "a clause-free parent block is exempt from the floor" {
+	# The gate document tells an epic to link the document rather than copy the
+	# lists, so a parent carrying no clause is the prescribed shape. The exemption
+	# is keyed on the opener; keying it on the count would exempt empty leaves too.
+	payload "$(epic_block '')"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+# --- the non-canonical opener (CLOUD-299) -------------------------------------
+#
+# Recognised in order to be reported, the same bargain as the `(clause N)`
+# notation. Before this, the dialect reported no-ready-block — the right verdict
+# for a body with open preconditions, but reached by accident rather than by
+# reading its content.
+
+# The `**Definition of ready**` dialect: $* becomes the block body.
+defready_block() {
+	cat <<-EOF
+		**Why**
+		A format decision is needed.
+
+		**Definition of ready**
+
+		$*
+	EOF
+}
+
+@test "the non-canonical ready opener is reported, not treated as no block" {
+	payload "$(defready_block '* **Source of truth (§1).** One authoritative artifact.')"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"non-canonical-ready-opener"* ]]
+	[[ "$output" != *"no-ready-block"* ]]
+}
+
+@test "a non-canonical opener still has its content judged" {
+	# The point of recognising the dialect: the verdict becomes about the block's
+	# content, so an open-questions marker inside one is now reachable at all.
+	local d
+	d=$(defready_block '* **Source of truth (§1).** One artifact.')
+	d="$d
+
+	Open questions blocking Ready: which signature format the install path verifies."
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"open-questions-block-ready"* ]]
+	[[ "$output" == *"non-canonical-ready-opener"* ]]
+}
