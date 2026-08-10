@@ -773,6 +773,21 @@ enum Channel {
     StderrReason,
 }
 
+/// Every supported harness token, derived from `Harness::ALL`.
+///
+/// The five loops below used to hardcode `["claude-code", "exit-code"]`. That is
+/// the same defect class the matrix's own totality test exists to prevent, one
+/// level down: a third adapter would have landed with its fail-open leg, its
+/// cross-channel leg and its malformed-payload leg all unexercised, while every
+/// totality assertion still passed. Derived, so a new variant is covered the day
+/// it is declared.
+fn harnesses() -> Vec<&'static str> {
+    batten::hook::Harness::ALL
+        .iter()
+        .map(|harness| harness.as_str())
+        .collect()
+}
+
 /// One row of the per-harness decision matrix.
 struct Row {
     harness: &'static str,
@@ -860,17 +875,32 @@ fn the_matrix_covers_every_supported_harness() {
     // `Harness::ALL` with no row here would ship with its channel unpinned, and
     // an unpinned channel is precisely the silently-converted refusal this
     // issue exists to prevent.
-    let mut covered: Vec<&str> = MATRIX.iter().map(|row| row.harness).collect();
+    // Deduping the HARNESS column alone was not enough, and the gap was real: a
+    // third adapter landing with a single `allow` row would have satisfied it
+    // with its deny channel — the one thing this matrix exists to pin —
+    // completely unexercised. So the assertion is over harness x case.
+    let cases: Vec<&str> = {
+        let mut seen: Vec<&str> = MATRIX.iter().map(|row| row.case).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    };
+    assert!(
+        cases.contains(&"allow") && cases.contains(&"deny"),
+        "the matrix must pin both an allow and a deny, or a channel goes unpinned"
+    );
+
+    let mut covered: Vec<(&str, &str)> = MATRIX.iter().map(|row| (row.harness, row.case)).collect();
     covered.sort_unstable();
     covered.dedup();
-    let mut declared: Vec<&str> = batten::hook::Harness::ALL
-        .iter()
-        .map(|harness| harness.as_str())
+    let mut required: Vec<(&str, &str)> = harnesses()
+        .into_iter()
+        .flat_map(|harness| cases.iter().map(move |case| (harness, *case)))
         .collect();
-    declared.sort_unstable();
+    required.sort_unstable();
     assert_eq!(
-        covered, declared,
-        "every declared harness needs a decision-channel row"
+        covered, required,
+        "every declared harness needs a row for every case the matrix distinguishes"
     );
 }
 
@@ -882,7 +912,7 @@ fn a_quoted_invocation_denies_on_both_harness_channels() {
     // never became tokens. Checked on both channels so the tightening is
     // pinned wherever a host reads its decision.
     let dir = repo_with_gh_policy("quoted-invocation");
-    for harness in ["claude-code", "exit-code"] {
+    for harness in harnesses() {
         let output = run_hook_in(&dir, harness, &claude_payload("gh \"pr\" \"merge\""), false);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -959,7 +989,7 @@ fn hook_fails_open_and_loud_on_an_unloadable_authority() {
     // error — loud on stderr, exit 1, and structurally not a deny, because §7
     // spends 2 on the verdict alone.
     let dir = repo_with_config("hook-broken-authority", "this is not toml at all\n");
-    for harness in ["claude-code", "exit-code"] {
+    for harness in harnesses() {
         let output = run_hook_in(&dir, harness, &claude_payload("gh pr view 42"), false);
         let code = output.status.code();
         assert_eq!(code, Some(1), "{harness}: an unreadable authority is usage");
@@ -1040,7 +1070,7 @@ fn hook_refuses_an_invalid_severity_without_denying() {
          scope = \"mediated_call\"\nseverity = \"nope\"\n\
          pattern = \"gh pr merge\"\nreason = \"r\"\n",
     );
-    for harness in ["claude-code", "exit-code"] {
+    for harness in harnesses() {
         let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge"), false);
         let code = output.status.code();
         assert_eq!(code, Some(1), "{harness}: a bad severity is a usage error");
@@ -1096,7 +1126,7 @@ redirect = "append instead"
 #[test]
 fn hook_denies_a_mutating_verb_against_a_protected_path_on_both_channels() {
     let dir = repo_with_protected_policy("protected-both-channels");
-    for harness in ["claude-code", "exit-code"] {
+    for harness in harnesses() {
         let output = run_hook_in(&dir, harness, &claude_payload("rm guarded/thing"), false);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1349,7 +1379,7 @@ fn no_failure_path_can_deny_a_mediated_call() {
             r#"{"tool_input":{"command":42}}"#,
         ),
     ];
-    for harness in ["claude-code", "exit-code"] {
+    for harness in harnesses() {
         for (name, payload) in cases {
             let output = run_hook(harness, payload, false);
             assert_ne!(
@@ -1624,6 +1654,196 @@ protected = []
         assert!(lines.contains(id), "the human channel names {id} too");
         assert!(lines.contains(at), "the human channel points at {at} too");
     }
+}
+
+// --- the machine-output contract, as a derived census (CLOUD-41) -------------
+//
+// House-style §6-§7 says stdout is the answer and stderr is the messaging, that a
+// data document is byte-stable, and that it is emitted whole or not at all. Those
+// properties were already asserted sixteen times over — once per surface, by
+// hand, in six different files. That is coverage, not a contract: the next `-J`
+// verb inherits the flag census in `surface.rs` and none of the document
+// properties, which is exactly how `receipt status -J` shipped in CLOUD-42 with a
+// declared data channel and zero assertions about what it emits.
+//
+// So the suite is derived from the same `data_channel` column the flag census
+// reads. A verb that declares the channel is held to the document contract the
+// day its row lands, with no edit here.
+
+/// A git repo with a committed authority, isolated state dir, and a work commit —
+/// enough for every `data_channel` verb to have something real to answer about.
+///
+/// `config epoch` needs readable tracked paths, `receipt status` needs a repo with
+/// `origin/main`, and `check`/`enforce`/`config *` need an authority. One fixture
+/// satisfying all of them beats a per-verb table that would drift.
+fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
+    receipt_fixture(name)
+}
+
+/// The minimal argv that makes `decl` emit its document.
+///
+/// Derived from the declaration rather than listed: the path, then a placeholder
+/// for each required positional, then `-J`. The placeholder is a valid check name
+/// because the one positional across every data-emitting verb today is `receipt
+/// status <check>`; the assertion below fails loudly if a second one ever appears,
+/// rather than silently passing a nonsense value to it.
+fn census_argv(decl: &batten::surface::CommandDecl) -> Vec<String> {
+    let positionals: Vec<&batten::surface::FlagDecl> =
+        decl.flags.iter().filter(|flag| flag.positional).collect();
+    assert!(
+        positionals.len() <= 1,
+        "{}: more than one positional — the census placeholder needs revisiting",
+        decl.path
+    );
+    let mut argv: Vec<String> = decl.path.split(' ').map(ToOwned::to_owned).collect();
+    for _ in &positionals {
+        argv.push("verify".to_owned());
+    }
+    argv.push("-J".to_owned());
+    argv
+}
+
+/// Every verb that declares the `-J` data channel.
+fn data_channel_verbs() -> Vec<&'static batten::surface::CommandDecl> {
+    let verbs: Vec<&batten::surface::CommandDecl> = batten::surface::SURFACE
+        .iter()
+        .filter(|decl| decl.data_channel)
+        .collect();
+    assert!(
+        !verbs.is_empty(),
+        "the census is vacuous — no row declares a data channel"
+    );
+    verbs
+}
+
+#[test]
+fn every_data_channel_verb_emits_one_pure_json_document() {
+    // Acceptance: "JSON mode emits pure JSON on stdout for every subcommand."
+    // Purity is the load-bearing half — a single line of messaging mixed into
+    // stdout makes the document unparseable for the caller that asked for it.
+    let (repo, home) = census_fixture("census-purity");
+    for decl in data_channel_verbs() {
+        let owned = census_argv(decl);
+        let argv: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let output = receipt_cmd(&repo, &home, &argv);
+        assert!(
+            !output.stdout.is_empty(),
+            "{}: a data channel emits its document unconditionally, including \
+             when the answer is empty — JSON that is sometimes absent is unparseable",
+            decl.path
+        );
+        let parsed: Result<serde_json::Value, _> = serde_json::from_slice(&output.stdout);
+        assert!(
+            parsed.is_ok(),
+            "{} -J stdout is not one JSON document: {}",
+            decl.path,
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
+
+#[test]
+fn every_data_channel_verb_is_byte_stable_across_runs() {
+    // Acceptance: "re-running the same command with the same input under --json
+    // yields byte-identical stdout." No timestamps, no durations, no ordering
+    // nondeterminism — the property that makes a golden file possible at all
+    // (CLOUD-106 mechanises it from here).
+    let (repo, home) = census_fixture("census-stable");
+    for decl in data_channel_verbs() {
+        let owned = census_argv(decl);
+        let argv: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let first = receipt_cmd(&repo, &home, &argv).stdout;
+        let second = receipt_cmd(&repo, &home, &argv).stdout;
+        assert_eq!(
+            first, second,
+            "{} -J is not byte-stable across two identical runs",
+            decl.path
+        );
+    }
+}
+
+#[test]
+fn no_ladder_rung_can_change_a_data_document() {
+    // The structural guarantee, asserted against real documents rather than only
+    // against `spec`. `Mode` is consumed in `output` and in `main`; the
+    // data-emitting functions take `out: &mut dyn Write` and have no `Mode` to
+    // consult, so no rung can reach stdout. This is what makes `-J` safe to hand
+    // to a parser regardless of what the wrapper script passed.
+    let (repo, home) = census_fixture("census-ladder");
+    for decl in data_channel_verbs() {
+        let base: Vec<String> = census_argv(decl);
+        let baseline = {
+            let argv: Vec<&str> = base.iter().map(String::as_str).collect();
+            receipt_cmd(&repo, &home, &argv).stdout
+        };
+        for rung in ["--silent", "-q", "-vv", "--trace", "--no-color"] {
+            let mut argv: Vec<&str> = vec![rung];
+            argv.extend(base.iter().map(String::as_str));
+            assert_eq!(
+                receipt_cmd(&repo, &home, &argv).stdout,
+                baseline,
+                "{}: {rung} changed the answer channel",
+                decl.path
+            );
+        }
+    }
+}
+
+#[test]
+fn no_progress_reaches_stderr_when_it_is_not_a_terminal() {
+    // Acceptance (d): "progress never appears when not on a TTY." A test's stderr
+    // is a pipe, so §4 resolves to machine mode and the default rung admits no
+    // progress — stderr stays empty for a clean run.
+    //
+    // The complement is what keeps this honest rather than vacuous: asking for a
+    // rung explicitly DOES produce output, even piped, because the caller asked.
+    // The property is that unrequested decoration never appears, not that stderr
+    // is unreachable.
+    let (repo, home) = census_fixture("census-progress");
+    for decl in data_channel_verbs() {
+        let base: Vec<String> = census_argv(decl);
+        let argv: Vec<&str> = base.iter().map(String::as_str).collect();
+        let quiet = receipt_cmd(&repo, &home, &argv);
+        assert!(
+            quiet.stderr.is_empty(),
+            "{}: a clean piped run must print no progress, got {}",
+            decl.path,
+            String::from_utf8_lossy(&quiet.stderr)
+        );
+    }
+
+    // Asked for, and therefore delivered — so the assertion above is a statement
+    // about the default, not about an unreachable channel.
+    let mut verbose: Vec<&str> = vec!["-v"];
+    verbose.extend(["spec"]);
+    let asked = receipt_cmd(&repo, &home, &verbose);
+    assert!(
+        !asked.stderr.is_empty(),
+        "an explicitly requested rung must still reach a piped stderr"
+    );
+}
+
+#[test]
+fn receipt_status_json_names_the_pointer_lines_tokens() {
+    // The specific gap this issue closes: `receipt status -J` landed in CLOUD-42
+    // and every receipt test used the pointer form, so a declared data channel
+    // shipped with nothing asserting its shape. The census above covers purity
+    // and stability; this covers the field names a consumer actually reads.
+    let (repo, home) = census_fixture("census-receipt");
+    let output = receipt_cmd(&repo, &home, &["receipt", "status", "verify", "-J"]);
+    // Missing receipt: a policy verdict, and the document is still emitted.
+    assert_eq!(output.status.code(), Some(2));
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("receipt status -J is JSON");
+    assert_eq!(document["check"], serde_json::json!("verify"));
+    assert_eq!(document["verdict"], serde_json::json!("missing"));
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(document["head"], serde_json::json!(head));
+
+    // The same three tokens the human channel concatenates, so the two renderings
+    // cannot drift apart.
+    let (_, pointer) = receipt_status(&repo, &home, "verify");
+    assert_eq!(pointer.trim(), format!("verify {head} missing"));
 }
 
 // --- receipts (CLOUD-203) ----------------------------------------------------
