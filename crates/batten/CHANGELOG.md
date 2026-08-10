@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.50](https://github.com/button-inc/batten/compare/v0.0.49...v0.0.50) - 2026-08-10
+
+### Other
+
+- *(readme)* document the three extension surfaces, with executed examples
+
 ## [0.0.49](https://github.com/button-inc/batten/compare/v0.0.48...v0.0.49) - 2026-08-10
 
 ### Added
