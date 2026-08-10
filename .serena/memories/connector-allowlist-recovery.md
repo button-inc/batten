@@ -29,6 +29,32 @@ reconnected exercises only the case that was never broken.
 The failure is silent to the agent: an agent cannot observe its own approval
 prompts. What it observes is a denial on the call, or nothing at all.
 
+**There is a third state, and it reads as an unauthorized connector.** The tools
+can be absent _entirely_ — no prefix of any form in the listing — while the host
+separately reports the server as needing authentication. Measured 2026-08-10 in
+one container: absent-with-auth-notice → readable `mcp__Linear__*` with all 58
+tools working → UUID-form with all 58 still working, the auth notice reappearing
+_alongside_ the working tools. Three episodes, ~40 minutes, no reconnect the
+session initiated and no user action it could observe.
+
+Two consequences, both learned the expensive way in that session:
+
+- **Absent tools are not evidence of a missing grant.** The agent concluded
+  Linear needed authorizing and told the user so; the connector had been
+  authorized throughout. From inside, "not authorized" and "mid-re-registration"
+  produce identical observations, so **do not report an auth gap from absent
+  tools alone** — say the tools are not currently exposed, and re-check.
+- **Step 1 below does not discriminate.** The injected config listed the server
+  identically in every episode — same UUID key, same url, same headers — so
+  reading it proves the connector is _registered_, never that its tools are
+  _reachable_. It answers "what must an allow rule name", which is a different
+  question from "why can I not call this".
+
+And because the flip can happen mid-session, **anything that resolves a tool
+name once and caches it for the session is wrong for part of that session by
+construction** — including an allow rule written at startup, which is what
+CLOUD-191 proposes. Re-search for the tool rather than remembering its name.
+
 ## Recovering, in order
 
 1. **Find the live names.** The host writes its injected MCP config to
