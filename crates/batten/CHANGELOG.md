@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.51](https://github.com/button-inc/batten/compare/v0.0.50...v0.0.51) - 2026-08-10
+
+### Added
+
+- *(waiver)* add per-rule waivers that lapse on their own date
+
 ## [0.0.50](https://github.com/button-inc/batten/compare/v0.0.49...v0.0.50) - 2026-08-10
 
 ### Other
