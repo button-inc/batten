@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.45](https://github.com/button-inc/batten/compare/v0.0.44...v0.0.45) - 2026-08-10
+
+### Added
+
+- *(cli)* add the standard flag ladder and the attended/unattended layer
+
 ## [0.0.44](https://github.com/button-inc/batten/compare/v0.0.43...v0.0.44) - 2026-08-10
 
 ### Added
