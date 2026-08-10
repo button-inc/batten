@@ -8,6 +8,7 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
+pub mod capture;
 pub mod cli;
 pub mod config;
 pub mod doctor;

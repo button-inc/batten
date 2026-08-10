@@ -15,11 +15,24 @@
 //!   it a wrapped command's own `-v` is parsed as Batten's §3 verbosity rung, so
 //!   `batten exec -- cargo test -v` would raise Batten's log level and drop the
 //!   flag the caller meant for `cargo`.
-//! * **The child's streams.** Inherited, not captured, so the caller sees exactly
-//!   the bytes the child wrote, in the order it wrote them, with no buffering
-//!   Batten introduced. Capturing is CLOUD-162's job and it belongs behind a
-//!   pointer; doing it here would silently change what every existing consumer of
-//!   a wrapped command sees.
+//! * **The child's streams.** TEED, not merely captured (CLOUD-162): each stream
+//!   is copied to the store *and* to Batten's corresponding stream, so the caller
+//!   still sees exactly the bytes the child wrote. Replacing inheritance with a
+//!   plain capture would have silently changed what every wrapped command's
+//!   caller sees, which is why `exec_inherits_both_child_streams_unchanged` is the
+//!   test that governs this design.
+//!
+//!   **The cost, stated rather than discovered:** stdout and stderr are separate
+//!   pipes, so their *relative* interleaving is no longer guaranteed to match what
+//!   a terminal would have shown. Each stream's own order is preserved. That is
+//!   inherent to reading two pipes, and it is why a capture is keyed by stream
+//!   rather than stored as one merged log.
+//!
+//!   Each pipe is drained on its own thread. Reading them in sequence would
+//!   deadlock the moment a child filled the other pipe's buffer — a wrapped
+//!   command that writes a lot to stderr before finishing stdout would hang
+//!   forever, and it would hang only for large outputs, which is the worst
+//!   possible way to find out.
 //! * **The child's exit code.**
 //!
 //! ## The exit code is the child's, and that is an exception with a record
@@ -51,10 +64,13 @@
 //! is no child.
 
 use std::ffi::OsString;
-use std::process::Command;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::process::{Command, Stdio};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
+use crate::capture::{self, Stream};
 use crate::error::{Passthrough, UsageError};
 use crate::exit::ExitCode;
 
@@ -76,7 +92,27 @@ fn signal_code(_status: std::process::ExitStatus) -> i32 {
     128
 }
 
-/// Run `command`, inheriting its streams, and report its exit code unchanged.
+/// Drain `pipe` into `sink`, returning everything that passed through.
+///
+/// The tee. Chunked rather than read-to-end-then-write so a long-running child's
+/// output still appears as it is produced: buffering it all until exit would make
+/// `batten exec -- cargo test` look hung.
+fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W) -> Result<Vec<u8>> {
+    let mut seen = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    loop {
+        let read = pipe.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(seen);
+        }
+        let bytes = chunk.get(..read).unwrap_or(&[]);
+        sink.write_all(bytes)?;
+        sink.flush()?;
+        seen.extend_from_slice(bytes);
+    }
+}
+
+/// Run `command`, teeing its streams, and report its exit code unchanged.
 ///
 /// Returns [`ExitCode::Success`] only for a child that exited `0`; every other
 /// code travels as a [`Passthrough`] error, which the binary boundary turns into
@@ -85,10 +121,28 @@ fn signal_code(_status: std::process::ExitStatus) -> i32 {
 /// # Errors
 ///
 /// Returns a [`UsageError`] when `command` is empty or names a program that
-/// cannot be started, and a [`Passthrough`] for any non-zero child code. Nothing
-/// here returns [`ExitCode::Violation`] of its own accord; a `2` from this verb
-/// came from the child.
+/// cannot be started, and a [`Passthrough`] for any non-zero child code. A store
+/// that cannot be written is an internal error, never a silent skip: this is the
+/// substrate a gate reads, and a capture that quietly did not happen is
+/// indistinguishable from a command nobody checked. Nothing here returns
+/// [`ExitCode::Violation`] of its own accord; a `2` from this verb came from the
+/// child.
 pub fn run(command: &[String]) -> Result<ExitCode> {
+    // The repository root, not the cwd: `state::derive_repo_name` needs a real
+    // final path component, and `.` has none — measured, as
+    // `cannot derive a repository name from .`. Resolving through `git::repo_root`
+    // also means a capture taken from a subdirectory lands in the same store as one
+    // taken from the top, which is what makes a handle portable within a checkout.
+    let root = crate::git::repo_root(Path::new("."))?;
+    run_in(&root, command)
+}
+
+/// [`run`], with the repository root the capture is stored under.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
     let Some((program, args)) = command.split_first() else {
         // Unreachable through the CLI: `num_args(1..)` makes clap refuse an empty
         // tail. Kept total because the workspace lints forbid panicking on a
@@ -98,15 +152,14 @@ pub fn run(command: &[String]) -> Result<ExitCode> {
         ));
     };
 
-    // No `.stdout()`/`.stderr()` call: inherit is the default, and saying so
-    // explicitly here would read as a choice that could be changed, when in fact
-    // capturing is a different verb's contract (CLOUD-162).
-    let status = Command::new(OsString::from(program))
+    let spawned = Command::new(OsString::from(program))
         .args(args.iter().map(OsString::from))
-        .status();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
 
-    let status = match status {
-        Ok(status) => status,
+    let mut child = match spawned {
+        Ok(child) => child,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Err(UsageError::raise(format!(
                 "exec: cannot run `{program}`: not found on PATH"
@@ -118,6 +171,38 @@ pub fn run(command: &[String]) -> Result<ExitCode> {
             )));
         }
     };
+
+    // A missing pipe is unreachable — both were just requested as `piped()` — but
+    // the workspace lints forbid unwrapping on a path the compiler cannot rule
+    // out, and an internal error here is honest: it means the spawn lied.
+    let (Some(out_pipe), Some(err_pipe)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(anyhow::anyhow!(
+            "exec: the spawned child exposed no pipes to tee"
+        ));
+    };
+
+    // One thread per pipe. See the module docs: draining them in sequence
+    // deadlocks as soon as a child fills the one not being read.
+    let out_worker = std::thread::spawn(move || tee(out_pipe, std::io::stdout()));
+    let err_worker = std::thread::spawn(move || tee(err_pipe, std::io::stderr()));
+
+    let status = child.wait().context("wait for the wrapped command")?;
+    let out_bytes = out_worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("exec: the stdout tee panicked"))?
+        .context("tee the wrapped command's stdout")?;
+    let err_bytes = err_worker
+        .join()
+        .map_err(|_| anyhow::anyhow!("exec: the stderr tee panicked"))?
+        .context("tee the wrapped command's stderr")?;
+
+    // Both streams are stored, including an empty one: zero bytes is the real
+    // answer "the command said nothing", and it must be distinguishable from a run
+    // that was never captured at all. The handles are addressable, never printed —
+    // emitting them here would put Batten's bookkeeping on a channel this verb
+    // promises is the child's (CLOUD-121 owns the verbs that read them).
+    capture::store(repo_root, Stream::Stdout, &out_bytes)?;
+    capture::store(repo_root, Stream::Stderr, &err_bytes)?;
 
     let code = status.code().unwrap_or_else(|| signal_code(status));
     if code == 0 {

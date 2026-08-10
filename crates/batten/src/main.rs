@@ -18,7 +18,13 @@ fn main() -> ExitCode {
     // error must still be reported — and at that point `clap` has refused to
     // produce any parsed value to read the mode from.
     let flags = output::Presentation::from_argv(std::env::args_os().skip(1));
-    let mut err = io::stderr().lock();
+    // NOT `.lock()`. A held `StderrLock` is not reentrant, and `batten exec` tees a
+    // child's streams from worker threads — so holding either lock across the run
+    // deadlocks the moment a wrapped command actually writes something. Measured:
+    // `batten exec -- sh -c 'echo hi'` hung forever while `exit 0` passed, which is
+    // the worst possible way to find out. `Stdout`/`Stderr` lock per write instead,
+    // which costs a mutex acquire and removes the footgun.
+    let mut err = io::stderr();
     // A bad `BATTEN_LOG_LEVEL` is itself a usage error, reported under the
     // default mode: loud and uncoloured, the reading that cannot hide a message.
     let (mode, resolution) = match output::resolve(&flags) {
@@ -96,9 +102,10 @@ fn real_main(mode: Mode, err: &mut dyn Write) -> Result<batten::ExitCode> {
         err,
         "resolved the output mode; running",
     );
-    // stdout is the answer channel; hold the lock for the whole run and flush
-    // before exit so buffered output is never dropped.
-    let mut out = io::stdout().lock();
+    // stdout is the answer channel. Deliberately unlocked, for the reason given on
+    // the stderr handle above; flushed explicitly before exit so buffered output is
+    // never dropped.
+    let mut out = io::stdout();
     let code = batten::run(cli, &mut out)?;
     out.flush()?;
     Ok(code)

@@ -215,6 +215,32 @@ fn write_field(hasher: &mut Sha256, bytes: &[u8]) {
 /// [`FindingKind`] tag so a surface hash can never collide with a finding's.
 const SURFACE_TAG: &str = "surface";
 
+/// The domain tag for a captured output stream, distinct from every
+/// [`FindingKind`] tag and from [`SURFACE_TAG`] for the same reason: three
+/// domains under one tag could collide across kinds of thing.
+const CAPTURE_TAG: &str = "capture";
+
+/// The identity of a **captured output stream**: `(capture, stream, bytes)`.
+///
+/// Not a finding, so it carries its own domain tag rather than a
+/// [`FindingKind`] — the [`surface_fingerprint`] precedent below. It reuses the
+/// one framing rather than minting a second hash of the same bytes, which is
+/// what CLOUD-162 means by "the advisory subsystem must not contain two
+/// divergent ways of content-addressing the same bytes".
+///
+/// Bytes are hashed **verbatim**, unlike [`surface_fingerprint`], which
+/// NFC/LF-normalizes its text. A capture identifies the exact bytes a program
+/// wrote: normalizing would give two genuinely different outputs one identity,
+/// and there is no cross-platform checkout to reconcile here — the bytes came
+/// from a process, not from a working tree.
+///
+/// The stream name is in the tuple, so one run's stdout and stderr are distinct
+/// identities even when a program wrote the same text to both.
+#[must_use]
+pub fn capture_fingerprint(stream: &str, bytes: &[u8]) -> Fingerprint {
+    tagged_fingerprint(CAPTURE_TAG, &[stream.as_bytes(), bytes])
+}
+
 /// The identity of a **file surface**: an ordered set of `(path, contents)`
 /// pairs — the `config_epoch`'s construction (CLOUD-32).
 ///

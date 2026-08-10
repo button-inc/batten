@@ -40,6 +40,16 @@ file itself for the "why", this is only the "where":
   `out: &mut dyn Write` and have no `Mode` to consult, which is what makes `-J`
   structurally ungatable. `verdict` and `error` are ungated: exit `1` is
   fail-loud, so `--silent` must not empty it.
+- `capture.rs` — captured child output, content-addressed in out-of-tree state
+  (CLOUD-162): the shared substrate CLOUD-117's output predicate and CLOUD-121's
+  handles both read, built once so neither grows its own copy. The digest **is**
+  the key (`captures/<stream>-<digest>` under `state::repo_state_dir`), so
+  identical bytes are one record and the record carries no timestamp — a
+  content-keyed capture must be a pure function of its content. Addressing goes
+  through `identity::capture_fingerprint`, which has its own domain tag beside
+  `SURFACE_TAG` rather than a `FindingKind`: a capture is not a finding. Bytes are
+  hashed **verbatim**, unlike `surface_fingerprint`, because a capture identifies
+  what a program actually wrote. It renders no verdict and emits nothing.
 - `exec.rs` — `batten exec -- <cmd>` (CLOUD-285): the transparent passthrough two
   Phase 2 issues were waiting on. Three things pass through untouched — the
   child's argv (`ValueDecl::Trailing`, with `allow_hyphen_values` so a child's own

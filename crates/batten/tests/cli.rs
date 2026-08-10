@@ -1663,6 +1663,45 @@ protected = []
 // its streams, and its exit code — and the third is the one deliberate exception
 // to the §7 table, so it is pinned rather than left to a reader's inference.
 
+/// Run `batten exec` with the capture store isolated under a scratch HOME.
+///
+/// Without the isolation these tests write captures into the developer's real
+/// state dir — harmless but untidy, and it would make one test's store visible to
+/// another. The env keys are the receipt suite's, for the same reason.
+fn exec_cmd(name: &str, args: &[&str]) -> (Output, PathBuf) {
+    let home = scratch(name);
+    fs::create_dir_all(&home).expect("create home");
+    let output = batten()
+        .args(args)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .output()
+        .expect("run batten exec");
+    (output, home)
+}
+
+/// Every file under a scratch home's capture store, sorted.
+fn captures_in(home: &std::path::Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let root = home.join("data");
+    let mut stack = vec![root];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                found.push(name.to_owned());
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// A `#!/bin/sh` fixture child, executable, that runs `body`.
 ///
 /// The `tests/doctor.rs` idiom. Unix-only: `PermissionsExt` is the only portable
@@ -1718,10 +1757,10 @@ fn an_exec_two_is_the_childs_verdict_not_battens() {
     // call, and `exec` is not reachable from `hook`. Pinned because a host reading
     // codes alone could otherwise take a wrapped command's `2` for a deny.
     let script = child_script("exec-two", "exit 2");
-    let output = batten()
-        .args(["exec", "--", script.to_str().expect("utf-8")])
-        .output()
-        .expect("run batten exec");
+    let (output, _) = exec_cmd(
+        "exec-two-home",
+        &["exec", "--", script.to_str().expect("utf-8")],
+    );
     assert_eq!(output.status.code(), Some(2));
     assert!(
         output.stderr.is_empty(),
@@ -1765,10 +1804,10 @@ fn exec_hands_the_child_its_own_argv_including_battens_own_flag_spellings() {
 #[test]
 fn exec_inherits_both_child_streams_unchanged() {
     let script = child_script("exec-streams", "echo out; echo err >&2");
-    let output = batten()
-        .args(["exec", "--", script.to_str().expect("utf-8")])
-        .output()
-        .expect("run batten exec");
+    let (output, _) = exec_cmd(
+        "exec-streams-home",
+        &["exec", "--", script.to_str().expect("utf-8")],
+    );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "err\n");
 }
@@ -1786,7 +1825,7 @@ fn no_exec_failure_path_can_deny() {
         &["exec", "sh", "-c", "true"],
     ];
     for args in cases {
-        let output = batten().args(args).output().expect("run batten exec");
+        let (output, _) = exec_cmd("exec-failopen-home", args);
         assert_eq!(
             output.status.code(),
             Some(1),
@@ -1827,6 +1866,166 @@ fn a_trailing_arg_takes_values_in_the_emitted_spec() {
     // A positional: no long, no short.
     assert_eq!(command["long"], serde_json::json!(null));
     assert_eq!(command["short"], serde_json::json!(null));
+}
+
+// --- the capture primitive (CLOUD-162) ---------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn a_captured_run_still_hands_the_caller_the_childs_own_bytes() {
+    // The property that governs the whole design. Capture had to be a TEE: a plain
+    // capture would replace inheritance with a pipe and silently change what every
+    // wrapped command's caller sees. This is the same assertion
+    // `exec_inherits_both_child_streams_unchanged` makes, restated here because it
+    // is what the capture must not break.
+    let script = child_script("capture-tee", "echo out; echo err >&2; exit 5");
+    let (output, home) = exec_cmd(
+        "capture-tee-home",
+        &["exec", "--", script.to_str().expect("utf-8")],
+    );
+    assert_eq!(output.status.code(), Some(5), "the child's code survives");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "err\n",
+        "no handle, no pointer, no bookkeeping — stderr is the child's"
+    );
+    // And both streams were nonetheless stored.
+    let stored = captures_in(&home);
+    assert_eq!(stored.len(), 2, "one record per stream, got {stored:?}");
+    assert!(stored.iter().any(|name| name.starts_with("stdout-")));
+    assert!(stored.iter().any(|name| name.starts_with("stderr-")));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_capture_is_content_addressed_so_an_identical_rerun_adds_nothing() {
+    // Acceptance: "re-running over identical child output yields a byte-identical
+    // capture and digest." Content addressing makes that structural rather than a
+    // promise — the digest IS the key, so identical bytes are one record.
+    let script = child_script("capture-stable", "echo same");
+    let argv = ["exec", "--", script.to_str().expect("utf-8")];
+
+    let home = scratch("capture-stable-home");
+    fs::create_dir_all(&home).expect("create home");
+    let run_once = || {
+        batten()
+            .args(argv)
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", home.join("data"))
+            .output()
+            .expect("run batten exec")
+    };
+
+    run_once();
+    let first = captures_in(&home);
+    run_once();
+    let second = captures_in(&home);
+    assert_eq!(
+        first, second,
+        "identical output must not mint a second record"
+    );
+    assert_eq!(first.len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn different_output_is_a_different_capture() {
+    // The other direction: content addressing is only useful if it discriminates.
+    let home = scratch("capture-differs-home");
+    fs::create_dir_all(&home).expect("create home");
+    for body in ["echo one", "echo two"] {
+        let script = child_script(&format!("capture-differs-{}", body.len()), body);
+        batten()
+            .args(["exec", "--", script.to_str().expect("utf-8")])
+            .env("HOME", &home)
+            .env("XDG_DATA_HOME", home.join("data"))
+            .output()
+            .expect("run batten exec");
+    }
+    let stored = captures_in(&home);
+    let stdouts = stored
+        .iter()
+        .filter(|name| name.starts_with("stdout-"))
+        .count();
+    assert_eq!(
+        stdouts, 2,
+        "two different outputs are two records: {stored:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_empty_stream_is_still_captured() {
+    // "The command said nothing" is an answer, and it must be distinguishable
+    // from a run nobody captured — otherwise a consumer cannot tell a silent
+    // success from a missing record.
+    let script = child_script("capture-empty", "true");
+    let (output, home) = exec_cmd(
+        "capture-empty-home",
+        &["exec", "--", script.to_str().expect("utf-8")],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let stored = captures_in(&home);
+    assert_eq!(
+        stored.len(),
+        2,
+        "both streams recorded even when empty: {stored:?}"
+    );
+}
+
+#[test]
+fn the_capture_digest_is_the_one_hashing_discipline() {
+    // Asserted against a hand-computed preimage rather than a golden string, so
+    // this fails if the construction changes rather than merely recording whatever
+    // it currently produces. The framing is a domain tag then each field, every
+    // part length-prefixed as u64 LE — the same one every finding identity and the
+    // config epoch go through.
+    use sha2::{Digest, Sha256};
+    fn field(hasher: &mut Sha256, bytes: &[u8]) {
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+    let mut hasher = Sha256::new();
+    field(&mut hasher, b"capture");
+    field(&mut hasher, b"stdout");
+    field(&mut hasher, b"hello\n");
+    let expected = hasher
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            // `write!` into a String cannot fail; the result is consumed so clippy's
+            // format-collect lint is satisfied without an allocation per byte.
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+
+    assert_eq!(
+        batten::identity::capture_fingerprint("stdout", b"hello\n").to_hex(),
+        expected,
+        "a capture digest must be the one length-prefixed, tagged construction"
+    );
+}
+
+#[test]
+fn a_capture_handle_is_what_a_log_anchored_finding_joins_on() {
+    // CLOUD-162's own words: "a log-anchored finding's evidence pointer is
+    // `capture_handle:byte_range` into this capture". `log_fingerprint` was landed
+    // and unused; the capture handle is the `source_key` that makes it real.
+    let capture = batten::capture::Capture {
+        stream: "stdout",
+        bytes: 6,
+        digest: batten::identity::capture_fingerprint("stdout", b"hello\n").to_hex(),
+    };
+    let handle = capture.handle();
+    assert!(handle.starts_with("stdout:"));
+
+    let joined = batten::identity::log_fingerprint("a-rule", &handle, "a-pattern");
+    // The join is a function of the handle: a different capture is a different
+    // finding identity, which is what stops two runs' findings deduplicating.
+    let other = batten::identity::log_fingerprint("a-rule", "stdout:different", "a-pattern");
+    assert_ne!(joined.to_hex(), other.to_hex());
 }
 
 // --- the machine-output contract, as a derived census (CLOUD-41) -------------
