@@ -101,6 +101,110 @@ _diagnostic_, so it never returns `2` — every failure it can report is the
 config-or-usage class, and a harness must never read "this checkout is
 misconfigured" as a policy denial.
 
+## Extending Batten: three surfaces, and which to reach for
+
+Any predicate you can express as a command plus an exit code is expressible in
+Batten. There are three ways to do it, and the failure mode is picking the wrong
+one — so the boundary matters more than the mechanics.
+
+| What you are gating on                                  | Reach for                | Where it is configured           |
+| ------------------------------------------------------- | ------------------------ | -------------------------------- |
+| A **file's contents**                                   | a `command` rule kind    | `[[rule]]` with `kind="command"` |
+| A **command's output**, when the tool lies about exit 0 | `exec` output predicates | `[[exec_pattern]]`               |
+| An **existing warn finding**, to make it block          | `fail_on_warning`        | a top-level key                  |
+
+Everything a consumer adds is **raise-only** (§8): a git-ignored
+`batten.local.toml` may add a rule or a pattern, never redefine or remove one the
+committed authority declares. A weakening is refused with exit `1`, not applied.
+
+### Gating on a file's contents — a `command` rule
+
+`glob` selects the files, `run` names the command, and `{{files}}` is substituted
+with the matched paths. Exit `0` passes; any non-zero exit is a violation.
+
+```toml
+[[rule]]
+id = "single-entrypoint"
+kind = "command"
+glob = "src/**/*.rs"
+run = "./scripts/one-entrypoint {{files}}"
+severity = "deny"
+```
+
+A `command` rule runs under `batten enforce` only. `batten check` **refuses** it
+with a usage error rather than running it, which is what keeps `check`'s
+read-only effect honest — the read-only surface never reaches user-supplied code.
+
+**Don't reach for this** when you want to gate a command's _output_: the child's
+streams are discarded here, deliberately. The exit code is the whole predicate.
+
+### Gating on a command's output — an `exec` output predicate
+
+For a tool that exits `0` while its own output says the work is not really done,
+and has no severity knob of its own to make it fail.
+
+```toml
+[[exec_pattern]]
+id = "no-unfailed-duplicate"
+pattern = "warning[duplicate]"
+stream = "both"
+reason = "set the tool's own severity to deny; do not let a warning ride an exit 0"
+```
+
+```console
+$ batten exec -- cargo deny check
+stdout:14 no-unfailed-duplicate
+exec: 1 output match(es)
+no-unfailed-duplicate: set the tool's own severity to deny; …
+```
+
+A match **always fails**. There is no severity field on a pattern and no
+dependence on `fail_on_warning`, because the only surface an agent acts on is the
+exit code: a warn-but-pass match would be invisible to it, which is the exact
+false green the predicate exists to kill.
+
+Batten only ever _adds_ failure — a child that already exited non-zero passes its
+code through untouched.
+
+**Don't reach for this** when the tool has its own severity model. Configure that
+instead; re-implementing a tool's severity as output-scraping is the thing this
+surface should not become.
+
+### Making an existing warn finding block — `fail_on_warning`
+
+A `warn`-severity rule reports and does not fail the run. `fail_on_warning`
+promotes it, and it is the _only_ promotion knob: no verb carries its own.
+
+```toml
+fail_on_warning = true
+```
+
+`batten exec` is deliberately **not** a consumer — an exec output match already
+fails unconditionally, so there is nothing for a promotion to promote.
+
+### The two promotion paths do not share a code, and that is worth knowing
+
+|                                         | Not promoted | Promoted |
+| --------------------------------------- | ------------ | -------- |
+| a `warn` finding from `check`/`enforce` | exit `0`     | exit `2` |
+| an `exec` output match                  | —            | exit `1` |
+
+A rule finding is a policy verdict about the repository, which is exit `2` on
+every surface that renders one. An `exec` match reports that the _invocation's own
+report_ was untrustworthy, and `exec` is a transparent passthrough whose codes are
+otherwise the wrapped command's — so it uses exit `1`.
+
+That asymmetry is a known rough edge rather than a settled design: a transparent
+verb cannot also render a policy verdict on the same channel without some
+ambiguity against the child's own codes, whichever number it picks. Tracked as
+CLOUD-292 rather than papered over here.
+
+### Every example above is executed, not just written
+
+`crates/batten/tests/extension_surfaces.rs` runs each command in this section
+against the compiled binary and asserts the exit code it claims. A drifted example
+fails CI, so this documentation cannot rot into fiction.
+
 ## Roadmap
 
 Work is tracked on the project board across phases:
