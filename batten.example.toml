@@ -192,6 +192,40 @@ pattern = "warning[duplicate]"
 stream = "both"
 reason = "set the tool's own severity to deny; do not let a warning ride an exit 0"
 
+# The designed escape hatch: a per-rule waiver that lapses on its own.
+#
+# A gate with no override gets removed, and a gate with an unaudited override
+# becomes decoration — so this is a feature rather than a concession. A waiver
+# names the `rule` it suppresses, carries a REQUIRED `reason`, and carries a
+# REQUIRED `expires` date (`YYYY-MM-DD`, the last day it applies). Every finding
+# it suppresses writes an audit line to stderr; stdout is untouched, so a `-J`
+# document never mentions a waiver.
+#
+# EXPIRY IS THE POINT, not paperwork. A justification and a dead-waiver lint both
+# leave "the waiver persists" as what happens when nobody looks. An expiry inverts
+# that: past its date the waiver simply stops applying, the rule fires again, and
+# the run exits 2. Nobody has to notice for the suppression to lapse.
+#
+# `path` is optional and narrows the waiver to some of the rule's findings, using
+# the same glob vocabulary a rule's own `glob` uses. Absent means the whole rule —
+# the widest a waiver can be, which is why it has to be reached deliberately.
+#
+# `batten config lint` names two dead shapes: `waiver-names-no-rule` (no [[rule]]
+# declares that id) and `waiver-expired`. And `--config-from <ref>` reports an
+# added waiver as `waiver-added`: it is the one config entity whose PRESENCE
+# lowers the bar, so a branch that adds one is naming a weakening.
+#
+# A waiver is not a severity. `severity = "allow"` switches a rule off with no
+# reason and no end date; that is the undesigned hatch this table replaces.
+#
+# A git-ignored batten.local.toml may NOT waive a rule declared here — a waiver
+# lowers the bar, so the durable tier is the committed authority alone (§8).
+[[waiver]]
+rule = "no-conflict-markers"
+reason = "the vendored tree is being replaced in CLOUD-123; gating it churns the diff"
+expires = "2026-12-31"
+path = "vendor/**"
+
 # The governing config surface: the files whose bytes `batten config epoch`
 # hashes into one attributable value, so two records carrying the same epoch
 # were produced under provably the same rules.

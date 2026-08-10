@@ -158,6 +158,17 @@ pub struct Config {
     /// Batten; the type and the counting are [`crate::markers`].
     #[serde(default, rename = "marker", skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<crate::markers::Marker>,
+    /// The designed escape hatch (CLOUD-208): per-rule waivers, each carrying a
+    /// required justification and a required expiry.
+    ///
+    /// A waiver suppresses findings of the rule it names, and **lapses on its own
+    /// date** — which is what makes the suppression set stop growing
+    /// monotonically without anyone having to look at it. Not a severity: the
+    /// filter runs over findings before the verdict, and [`crate::severity`]'s
+    /// three axes are untouched. The type and the predicate are
+    /// [`crate::waiver`].
+    #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
+    pub waivers: Vec<crate::waiver::Waiver>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -246,6 +257,11 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // coverage. `run_rule` still calls `Rule::validate` as defence in depth.
     crate::rules::validate(&config.rules)?;
     crate::outputs::validate(&config.exec_patterns)?;
+    // And the waiver table, where the stakes are inverted from every other row
+    // here: a malformed rule fails to gate, but a malformed *waiver* is a hatch
+    // whose expiry nobody could read. Refusing at load is what makes "every
+    // waiver carries an expiry" true of the resolved config rather than aspirational.
+    crate::waiver::validate(&config.waivers)?;
     Ok(config)
 }
 
@@ -340,6 +356,7 @@ impl Config {
             verbs: Vec::new(),
             markers: Vec::new(),
             exec_patterns: Vec::new(),
+            waivers: Vec::new(),
         }
     }
 }
@@ -394,6 +411,7 @@ mod tests {
         ("markers", "crate::markers::validate("),
         ("rules", "crate::rules::validate("),
         ("exec_patterns", "crate::outputs::validate("),
+        ("waivers", "crate::waiver::validate("),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing

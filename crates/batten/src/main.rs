@@ -106,7 +106,7 @@ fn real_main(mode: Mode, err: &mut dyn Write) -> Result<batten::ExitCode> {
     // the stderr handle above; flushed explicitly before exit so buffered output is
     // never dropped.
     let mut out = io::stdout();
-    let code = batten::run(cli, &mut out)?;
+    let code = batten::run(cli, mode, &mut out, err)?;
     out.flush()?;
     Ok(code)
 }

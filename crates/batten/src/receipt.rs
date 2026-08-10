@@ -318,30 +318,27 @@ fn hex_sha256(bytes: &[u8]) -> String {
 
 /// Format seconds since the Unix epoch as RFC 3339 UTC (`1970-01-01T00:00:00Z`).
 ///
-/// A hand-written civil-from-days conversion (the standard era-based integer
-/// algorithm), total for any post-epoch instant, so the timestamp costs no
-/// dependency. The receipt's validity never reads it — expiry is a git fact.
+/// The date half comes from [`crate::waiver::Date::from_unix_seconds`] — one
+/// hand-written civil-from-days conversion in the tree rather than two, so a date
+/// still costs no dependency and cannot be right in one module and wrong in the
+/// other. Only the time-of-day arithmetic is here.
+///
+/// **The receipt's validity never reads this timestamp — expiry is a git fact,
+/// never a clock.** That is right *here* and does not generalise: a receipt's
+/// claim is about a specific SHA, so a SHA comparison is the invalidator. A
+/// waiver's claim is a human judgement whose warrant decays in calendar time and
+/// leaves no git trace, which is why [`crate::waiver`] does evaluate a clock — at
+/// its boundary, with the date threaded in as data. Different claims, different
+/// invalidators (CLOUD-208).
 fn rfc3339_utc(unix_seconds: u64) -> String {
-    let days = unix_seconds / 86_400;
+    let date = crate::waiver::Date::from_unix_seconds(unix_seconds);
     let second_of_day = unix_seconds % 86_400;
     let (hour, minute, second) = (
         second_of_day / 3_600,
         (second_of_day % 3_600) / 60,
         second_of_day % 60,
     );
-    // Shift to the era starting 0000-03-01; every quantity below is
-    // non-negative, so the arithmetic stays in u64.
-    let z = days + 719_468;
-    let era = z / 146_097;
-    let day_of_era = z % 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let mp = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = year_of_era + era * 400 + u64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+    format!("{}T{hour:02}:{minute:02}:{second:02}Z", date.text())
 }
 
 /// Record that `check` concluded pass against the current HEAD.

@@ -94,6 +94,13 @@
       "type": "integer",
       "format": "uint32",
       "minimum": 0
+    },
+    "waiver": {
+      "description": "The designed escape hatch (CLOUD-208): per-rule waivers, each carrying a\nrequired justification and a required expiry.\n\nA waiver suppresses findings of the rule it names, and **lapses on its own\ndate** — which is what makes the suppression set stop growing\nmonotonically without anyone having to look at it. Not a severity: the\nfilter runs over findings before the verdict, and [`crate::severity`]'s\nthree axes are untouched. The type and the predicate are\n[`crate::waiver`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Waiver"
+      }
     }
   },
   "additionalProperties": false,
@@ -350,6 +357,37 @@
           "type": "string",
           "const": "strict"
         }
+      ]
+    },
+    "Waiver": {
+      "description": "One declared waiver: which rule, why, until when, and optionally where.",
+      "type": "object",
+      "properties": {
+        "expires": {
+          "description": "The last day this waiver applies, `YYYY-MM-DD`. Required — see the module\ndocs on why a waiver with no expiry is the rot rather than a convenience.",
+          "type": "string"
+        },
+        "path": {
+          "description": "A glob narrowing the waiver to some of the rule's findings.\n\nAbsent means the whole rule, which is the widest a waiver can be and\ntherefore the one that must be typed deliberately rather than reached by\nomitting a field nobody noticed. Matched with\n[`crate::rules::glob_match`], so a waiver's path vocabulary is the one the\nrules use and not a second dialect.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why the finding is being waived. Required, and required to be non-empty:\nan unjustified waiver is the undesigned hatch this table replaces, and a\nreason nobody had to write is one nobody can review.",
+          "type": "string"
+        },
+        "rule": {
+          "description": "The [`crate::rules::Rule::id`] this waiver suppresses findings of.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "reason",
+        "expires"
       ]
     },
     "Watched": {

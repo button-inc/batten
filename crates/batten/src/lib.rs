@@ -33,6 +33,7 @@ pub mod state;
 pub mod surface;
 pub mod trust;
 pub mod verbs;
+pub mod waiver;
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -55,13 +56,19 @@ pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 /// `print!`, so the library stays byte-stable and testable and the
 /// stdout-is-the-answer split of the output contract is honoured.
 ///
+/// `err` is the **other** channel, and the split is the whole point: nothing a
+/// verb writes there can reach the data channel, so a ladder-gated message
+/// (CLOUD-42) is structurally incapable of corrupting a `-J` document. `mode`
+/// carries the resolved rung, so what gets written there is a decision the
+/// binary already made rather than one each verb re-derives.
+///
 /// # Errors
 ///
 /// Returns an error when a command cannot complete because of an underlying
 /// failure (I/O, a missing external tool, or an internal invariant violation).
 /// Such errors map to [`ExitCode::Internal`] at the boundary; a *policy
 /// violation*, by contrast, is a normal return of [`ExitCode::Violation`].
-pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
+pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Result<ExitCode> {
     let Cli {
         strictness,
         fail_on_warning,
@@ -80,8 +87,12 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
-        Some(Command::Check { json }) => run_rules(out, &overrides, rules::run_static, json),
-        Some(Command::Enforce { json }) => run_rules(out, &overrides, rules::run_all, json),
+        Some(Command::Check { json }) => {
+            run_rules(out, err, mode, &overrides, rules::run_static, json)
+        }
+        Some(Command::Enforce { json }) => {
+            run_rules(out, err, mode, &overrides, rules::run_all, json)
+        }
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Doctor { json }) => run_doctor(json, out),
@@ -98,8 +109,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
             // The report goes to the ERROR channel, never `out`: stdout belongs to
             // the wrapped command (CLOUD-285), so a pointer line there would
             // corrupt a document the caller may be parsing.
-            let mut report = std::io::stderr();
-            exec::run_with(&command, &patterns, &mut report)
+            exec::run_with(&command, &patterns, err)
         }
         Some(Command::Hook { harness }) => run_hook(harness, &overrides, out),
         // The receipt verbs read their own git facts; the §8 config chain does
@@ -302,6 +312,8 @@ struct LintReport<'a> {
 
 fn run_rules(
     out: &mut dyn Write,
+    err: &mut dyn Write,
+    mode: Mode,
     overrides: &Overrides,
     runner: fn(&[rules::Rule], &Path) -> Result<Vec<rules::Finding>>,
     json: bool,
@@ -312,6 +324,26 @@ fn run_rules(
     let base_ref = overrides.config_from.as_deref();
     let config = resolve::resolve(Path::new("."), overrides)?;
     let findings = runner(&config.rules, Path::new("."))?;
+
+    // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function
+    // is the single funnel `check` and `enforce` share — they differ only in the
+    // `runner` above — so one insertion point covers both verbs, both channels and
+    // the exit code. Inside `rules::run` it would also hide waived findings from
+    // `-J`, and `run` has no access to resolved config beyond `&[Rule]`.
+    //
+    // Before rendering and before `any_blocking`: a waiver is a statement about
+    // whether a finding is *counted*, not a fourth severity (`crate::severity`
+    // says why a fourth rank would be a redesign). An expired waiver simply is not
+    // found here, so the finding survives and the verdict below is the one the
+    // rule always rendered — nobody had to act for the suppression to lapse.
+    let (findings, waived) = waiver::apply(findings, &config.waivers, waiver::today()?);
+    // The audit line every application owes, on the ERROR channel: ladder-gated
+    // chatter that cannot reach a `-J` document even in principle. At `Normal`,
+    // because a suppressed policy finding is not a detail a default run should
+    // have to ask for.
+    for applied in &waived {
+        output::message(mode, Verbosity::Normal, err, &applied.line_text())?;
+    }
 
     // The working-tree-vs-base delta, computed only when a base ref was named.
     // It is *reporting*, not a verdict: the exit code below comes from the rules
@@ -482,7 +514,13 @@ fn run_config(
             Ok(ExitCode::Success)
         }
         ConfigCommand::Lint { json } => {
-            let smells = lint::run(Path::new("."), overrides.config_from.as_deref())?;
+            // The date the expiry smell is computed against, read once at this
+            // boundary and threaded in as data (`waiver`'s module docs say why).
+            let smells = lint::run(
+                Path::new("."),
+                overrides.config_from.as_deref(),
+                waiver::today()?,
+            )?;
             if *json {
                 // Emitted unconditionally, including the clean run: JSON that is
                 // sometimes absent is unparseable. `at` is rendered through

@@ -198,6 +198,28 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   rather than a second severity axis. Each verb carries its own redirect for the
   refusal contract. Table and lookup only — crossing it with the protected path
   set is CLOUD-96's gate, and the sets are CLOUD-37's.
+- `waiver.rs` — the designed escape hatch (CLOUD-208): a `[[waiver]]` names a
+  rule, a required reason and a required expiry, and `apply` filters findings in
+  `lib.rs`'s `run_rules` — the one funnel both `check` and `enforce` pass through
+  — before rendering and before `any_blocking`. **Never a fourth severity**
+  (`severity.rs`'s three axes are a bijection): "waived" says whether a finding is
+  counted. Expiry is load-bearing rather than paperwork — it is the only
+  mechanism that makes lapsing the default when nobody looks — so it is evaluated
+  in the gate, with **today injected as a `Date` input** (`resolve_with`'s idiom),
+  which is how §6 byte-stability survives a clock: same commit + same date → same
+  bytes. `today()` is the one boundary reader. Carries the tree's single
+  civil-from-days conversion, which `receipt.rs` now reads its date half from;
+  `receipt.rs`'s "expiry is a git fact, never a clock" is right there and does not
+  generalise, because a receipt's claim is about a SHA and a waiver's warrant
+  decays in calendar time. Each application writes a pointer-only audit line to
+  stderr through `output::message`. Scope bound: a `shape` rule cannot be waived
+  (`adjudicate` returns `Decision`, not `Finding`). A local file may add a waiver
+  for a rule the authority does not declare and is refused outright for one it
+  does — the one direction where the local layer lowers the bar, and `trust.rs`'s
+  `added_entries`/`WaiverAdded` is the first _added_-direction weakening in the
+  tree. Dead-waiver diagnostics are `lint.rs`'s `waiver-names-no-rule` and
+  `waiver-expired`; the runtime one (a waiver matching nothing) is deliberately
+  out of scope — it would put `rules::run_all`'s spawning path behind a `read` verb.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do.

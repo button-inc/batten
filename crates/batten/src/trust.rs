@@ -30,6 +30,16 @@
 //! among the tightening moves, because a smaller scope polices less but forgives
 //! nothing inside what remains.
 //!
+//! **Weakening is not the same as removal, and a waiver is where the two part.**
+//! Every comparison here used to run in one direction — present in the base,
+//! absent or rank-lowered in the working tree — because for `protected`,
+//! `unlanded` and `rule` alike, more entries meant a higher bar. A `[[waiver]]`
+//! (CLOUD-208) is the first config entity whose *presence* lowers it: adding one
+//! switches a gate off for what it covers. So [`added_entries`] exists beside
+//! [`removed_entries`], and "which direction is weakening" is a property of the
+//! key rather than of this module. Adding a `protected` path is still clean;
+//! adding a waiver is not.
+//!
 //! Every comparison is key-local and order-independent, so the report is a
 //! deterministic function of the two configs and nothing else.
 
@@ -42,6 +52,7 @@ use crate::config::{self, Config, Strictness};
 use crate::git;
 use crate::rules::Rule;
 use crate::severity::RuleSeverity;
+use crate::waiver;
 
 /// Load the committed authority from a git ref instead of the working tree.
 ///
@@ -76,6 +87,14 @@ pub enum WeakeningKind {
     RuleRemoved,
     /// A rule survives at a lower severity rank.
     SeverityLowered,
+    /// A waiver the base did not carry (CLOUD-208) — the one *added*-direction
+    /// weakening, because a waiver suppresses findings the base ref would report.
+    ///
+    /// Reported whether or not it has expired: a lapsed waiver suppresses nothing
+    /// today and the pointer would then depend on the date the comparison ran,
+    /// which §6 forbids. The expiry is what the *run* evaluates; whether the diff
+    /// added a suppression is a property of the two files alone.
+    WaiverAdded,
 }
 
 impl WeakeningKind {
@@ -89,6 +108,7 @@ impl WeakeningKind {
             WeakeningKind::UnlandedRemoved => "unlanded-removed",
             WeakeningKind::RuleRemoved => "rule-removed",
             WeakeningKind::SeverityLowered => "severity-lowered",
+            WeakeningKind::WaiverAdded => "waiver-added",
         }
     }
 }
@@ -206,6 +226,25 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
 
     found.extend(rule_weakenings(&base.rules, &working.rules));
 
+    // The added direction (CLOUD-208). A waiver the base does not carry is a
+    // suppression the branch introduced, which is the one shape where "the
+    // working tree has more" means "the bar is lower". Keyed by
+    // `crate::waiver::Waiver::key`, so a whole-rule waiver and a path-narrowed
+    // one are distinct entries rather than one that swallows the other.
+    found.extend(added_entries(
+        WeakeningKind::WaiverAdded,
+        &base
+            .waivers
+            .iter()
+            .map(waiver::Waiver::key)
+            .collect::<Vec<_>>(),
+        &working
+            .waivers
+            .iter()
+            .map(waiver::Waiver::key)
+            .collect::<Vec<_>>(),
+    ));
+
     found.sort();
     found
 }
@@ -221,6 +260,23 @@ fn removed_entries(
     base.iter()
         .filter(|entry| !present.contains(entry.as_str()))
         .map(|entry| Weakening::new(kind, format!("{key}[{entry}]"), "present", "absent"))
+        .collect()
+}
+
+/// Entries present in `working` and absent from `base`, as weakenings.
+///
+/// The mirror of [`removed_entries`], for a key where *more* is weaker. The
+/// entries arrive as their own rendered key paths rather than as a key plus an
+/// index, because a waiver's identity is already two fields and reconstructing it
+/// here would be a second definition of it.
+fn added_entries(kind: WeakeningKind, base: &[String], working: &[String]) -> Vec<Weakening> {
+    let known: BTreeSet<&str> = base.iter().map(String::as_str).collect();
+    working
+        .iter()
+        .filter(|entry| !known.contains(entry.as_str()))
+        // The tokens are the mirror image too: this key went from absent to
+        // present, and printing it that way is what makes the arrow readable.
+        .map(|entry| Weakening::new(kind, entry.clone(), "absent", "present"))
         .collect()
 }
 
@@ -396,6 +452,72 @@ mod tests {
         let base = parse("version = 1\n");
         let working = parse(&format!("version = 1\n{}", rule("r", "deny")));
         assert!(weakenings(&base, &working).is_empty());
+    }
+
+    fn waiver_row(rule: &str, path: Option<&str>) -> String {
+        let narrowing = path.map_or_else(String::new, |glob| format!("path = \"{glob}\"\n"));
+        format!(
+            "\n[[waiver]]\nrule = \"{rule}\"\nreason = \"tracked\"\nexpires = \"2099-01-01\"\n{narrowing}"
+        )
+    }
+
+    #[test]
+    fn adding_a_waiver_is_a_weakening() {
+        // The first added-direction case in this module: every other comparison
+        // asks what the working tree REMOVED, because for every other key more
+        // entries meant a higher bar. A waiver inverts that.
+        let base = parse("version = 1\n");
+        let working = parse(&format!("version = 1\n{}", waiver_row("r", None)));
+        assert_eq!(
+            weakenings(&base, &working),
+            vec![Weakening::new(
+                WeakeningKind::WaiverAdded,
+                "waiver[r]",
+                "absent",
+                "present",
+            )]
+        );
+    }
+
+    #[test]
+    fn removing_a_waiver_is_not_a_weakening() {
+        // The mirror, and the reason the direction has to be per-key rather than
+        // global: deleting a suppression raises the bar.
+        let base = parse(&format!("version = 1\n{}", waiver_row("r", None)));
+        let working = parse("version = 1\n");
+        assert!(weakenings(&base, &working).is_empty());
+    }
+
+    #[test]
+    fn a_waiver_kept_unchanged_is_not_a_weakening() {
+        let text = format!("version = 1\n{}", waiver_row("r", None));
+        assert!(weakenings(&parse(&text), &parse(&text)).is_empty());
+    }
+
+    #[test]
+    fn narrowing_a_waiver_reports_the_narrowed_one_as_added() {
+        // A path-narrowed waiver is a different identity from the whole-rule one,
+        // so replacing one with the other reads as an addition rather than as no
+        // change. That is the honest answer: Batten cannot tell that the new row
+        // is narrower than the old across arbitrary globs, and the pointer names
+        // exactly what appeared.
+        let base = parse(&format!("version = 1\n{}", waiver_row("r", None)));
+        let working = parse(&format!("version = 1\n{}", waiver_row("r", Some("src/**"))));
+        let found = weakenings(&base, &working);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].key, "waiver[r][src/**]");
+    }
+
+    #[test]
+    fn two_added_waivers_of_one_rule_are_two_distinct_weakenings() {
+        let base = parse("version = 1\n");
+        let working = parse(&format!(
+            "version = 1\n{}{}",
+            waiver_row("r", Some("src/**")),
+            waiver_row("r", Some("vendor/**"))
+        ));
+        let found = weakenings(&base, &working);
+        assert_eq!(found.len(), 2, "neither may swallow the other (CLOUD-233)");
     }
 
     #[test]

@@ -114,6 +114,12 @@ const EMPTY_UNLANDED_SET: &str = "empty-unlanded-set";
 const EMPTY_SCOPE_SET: &str = "empty-scope-set";
 /// A rule that is present but switched off.
 const RULE_DISABLED: &str = "rule-disabled";
+/// A waiver whose `rule` no `[[rule]]` declares: it suppresses nothing, and reads
+/// in the file as an exemption someone is relying on (CLOUD-208).
+const WAIVER_NAMES_NO_RULE: &str = "waiver-names-no-rule";
+/// A waiver whose expiry has passed. It has already stopped suppressing — this is
+/// the alarm that says so, rather than leaving a dead row in the file forever.
+const WAIVER_EXPIRED: &str = "waiver-expired";
 
 /// The spans of the keys the lint locates.
 ///
@@ -132,12 +138,25 @@ struct Located {
     scope: Option<Spanned<Vec<String>>>,
     #[serde(default, rename = "rule")]
     rules: Vec<LocatedRule>,
+    #[serde(default, rename = "waiver")]
+    waivers: Vec<LocatedWaiver>,
 }
 
 #[derive(Debug, Deserialize)]
 struct LocatedRule {
     id: Spanned<String>,
     severity: RuleSeverity,
+}
+
+/// A waiver's span, located by the one field a smell has to name: the rule it
+/// waives. `expires` is read as a plain string — [`config::parse`] above has
+/// already refused an unparseable one, so this view never has to re-decide it.
+#[derive(Debug, Deserialize)]
+struct LocatedWaiver {
+    rule: Spanned<String>,
+    expires: String,
+    #[serde(default)]
+    path: Option<String>,
 }
 
 /// Convert a byte offset into a 1-based line number.
@@ -157,7 +176,12 @@ fn line_of(text: &str, offset: usize) -> usize {
 /// # Errors
 ///
 /// Returns a [`crate::UsageError`] (→ exit `1`) when the config does not parse.
-pub fn smells(text: &str, source: &str, base: Option<&Config>) -> Result<Vec<Smell>> {
+pub fn smells(
+    text: &str,
+    source: &str,
+    base: Option<&Config>,
+    today: crate::waiver::Date,
+) -> Result<Vec<Smell>> {
     // Parse through the real loader first, so a malformed config produces the
     // same message it would anywhere else rather than this module's own.
     let config = config::parse(text, source)?;
@@ -197,6 +221,42 @@ pub fn smells(text: &str, source: &str, base: Option<&Config>) -> Result<Vec<Sme
         }
     }
 
+    // The dead-suppression diagnostic (CLOUD-208), in the two shapes computable
+    // from this file alone. Both are located by the waiver's `rule` span, which
+    // gives two waivers of one rule distinct locations — the property that keeps
+    // CLOUD-233's dedup bug from returning through a new smell.
+    //
+    // Deliberately NOT here: a waiver over a live rule that matches no finding.
+    // That needs the rules run, and `rules::run_all` can spawn processes — putting
+    // one behind `config lint` would put a spawning path behind a verb the derived
+    // read-only allowlist pins as `read`. Filed rather than smuggled in.
+    for waiver in &located.waivers {
+        let at = Where::Line(line_of(text, waiver.rule.span().start));
+        if !config
+            .rules
+            .iter()
+            .any(|rule| rule.id == *waiver.rule.get_ref())
+        {
+            found.push(Smell {
+                at: at.clone(),
+                id: WAIVER_NAMES_NO_RULE,
+            });
+        }
+        // The expiry is a date, and `today` is the injected input the module docs
+        // in `crate::waiver` explain: the smell list for a given config is a
+        // function of (bytes, date), never of when the process happened to start.
+        if crate::waiver::Date::parse(&waiver.expires).is_ok_and(|expiry| expiry < today) {
+            found.push(Smell {
+                at,
+                id: WAIVER_EXPIRED,
+            });
+        }
+        // `path` is read but not linted: whether a glob matches anything is a
+        // question about the tree, not about this file, and answering it here
+        // would be the runtime diagnostic above wearing a disguise.
+        let _ = &waiver.path;
+    }
+
     // The base-ref class, reusing the one definition of "weakened" — and its
     // location. A weakening arrives from `trust` already carrying the key path
     // it applies to, so the conversion keeps it rather than substituting a line
@@ -224,7 +284,7 @@ pub fn smells(text: &str, source: &str, base: Option<&Config>) -> Result<Vec<Sme
 ///
 /// Returns a [`crate::UsageError`] (→ exit `1`) when the working config or the
 /// base-ref config cannot be read or parsed.
-pub fn run(dir: &Path, base_ref: Option<&str>) -> Result<Vec<Smell>> {
+pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Result<Vec<Smell>> {
     let path = dir.join(config::CONFIG_FILE);
     let text = std::fs::read_to_string(&path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
@@ -236,16 +296,23 @@ pub fn run(dir: &Path, base_ref: Option<&str>) -> Result<Vec<Smell>> {
     let base = base_ref
         .map(|reference| trust::load_base(dir, reference))
         .transpose()?;
-    smells(&text, &path.display().to_string(), base.as_ref())
+    smells(&text, &path.display().to_string(), base.as_ref(), today)
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::waiver::Date;
+
+    /// A fixed date, so a lint verdict never depends on when the suite ran — the
+    /// point of `waiver`'s injected-date design, exercised here.
+    fn today() -> Date {
+        Date::parse("2026-08-10").unwrap()
+    }
 
     fn ids(text: &str) -> Vec<&'static str> {
-        smells(text, "test", None)
+        smells(text, "test", None, today())
             .unwrap()
             .into_iter()
             .map(|smell| smell.id)
@@ -292,7 +359,7 @@ mod tests {
     #[test]
     fn a_smell_carries_the_line_its_key_sits_on() {
         let text = "version = 1\n\nprotected = []\n";
-        let found = smells(text, "test", None).unwrap();
+        let found = smells(text, "test", None, today()).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].at,
@@ -309,7 +376,7 @@ mod tests {
             "base",
         )
         .unwrap();
-        let found = smells("version = 1\n", "test", Some(&base)).unwrap();
+        let found = smells("version = 1\n", "test", Some(&base), today()).unwrap();
         let ids: Vec<&str> = found.iter().map(|smell| smell.id).collect();
         assert!(ids.contains(&"protected-removed"), "got: {ids:?}");
         assert!(ids.contains(&"strictness-lowered"), "got: {ids:?}");
@@ -321,7 +388,7 @@ mod tests {
         // the conversion must not trade that key for a line number the working
         // file may not even have. `batten.toml:0` pointed nowhere.
         let base = config::parse("version = 1\nprotected = [\"a\"]\n", "base").unwrap();
-        let found = smells("version = 1\n", "test", Some(&base)).unwrap();
+        let found = smells("version = 1\n", "test", Some(&base), today()).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].at, Where::Key("protected[a]".to_owned()));
         assert_eq!(
@@ -356,7 +423,7 @@ mod tests {
             rule("one", "warn"),
             rule("two", "warn")
         );
-        let found = smells(&working, "test", Some(&base)).unwrap();
+        let found = smells(&working, "test", Some(&base), today()).unwrap();
         let lowered: Vec<&Smell> = found
             .iter()
             .filter(|smell| smell.id == "severity-lowered")
@@ -380,21 +447,105 @@ mod tests {
         // simply cannot answer the comparison question, and must not report a
         // clean answer to it.
         let text = "version = 1\n";
-        assert!(smells(text, "test", None).unwrap().is_empty());
+        assert!(smells(text, "test", None, today()).unwrap().is_empty());
     }
 
     #[test]
     fn the_report_is_sorted_and_so_byte_stable() {
         let text = "version = 1\nunlanded = []\nscope = []\nprotected = []\n";
-        let found = smells(text, "test", None).unwrap();
+        let found = smells(text, "test", None, today()).unwrap();
         let mut sorted = found.clone();
         sorted.sort();
         assert_eq!(found, sorted);
     }
 
+    /// A config with one live rule, plus whatever waiver rows the case needs.
+    fn with_waivers(waivers: &str) -> String {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
+             pattern = \"x\"\nseverity = \"deny\"\n{waivers}"
+        )
+    }
+
+    fn waiver_row(rule: &str, expires: &str) -> String {
+        format!("\n[[waiver]]\nrule = \"{rule}\"\nreason = \"tracked\"\nexpires = \"{expires}\"\n")
+    }
+
+    #[test]
+    fn a_waiver_naming_no_declared_rule_is_a_smell() {
+        // The dead-suppression case computable from this file alone: it reads as
+        // an exemption someone relies on and suppresses nothing.
+        let text = with_waivers(&waiver_row("typo", "2099-01-01"));
+        assert_eq!(ids(&text), vec![WAIVER_NAMES_NO_RULE]);
+        // And the live rule's own waiver is not a smell.
+        let clean = with_waivers(&waiver_row("r", "2099-01-01"));
+        assert!(ids(&clean).is_empty());
+    }
+
+    #[test]
+    fn a_lapsed_waiver_is_a_smell_and_the_date_is_the_input() {
+        let text = with_waivers(&waiver_row("r", "2026-08-09"));
+        assert_eq!(ids(&text), vec![WAIVER_EXPIRED]);
+        // The same bytes, judged on a date before the expiry, are clean — which is
+        // §6 holding with a clock in the design: the verdict is a function of
+        // (bytes, date) and of nothing else.
+        let earlier = smells(&text, "test", None, Date::parse("2026-01-01").unwrap()).unwrap();
+        assert!(earlier.is_empty());
+    }
+
+    #[test]
+    fn the_waiver_pointer_names_the_line_the_rule_key_sits_on() {
+        let text = with_waivers(&waiver_row("typo", "2099-01-01"));
+        let found = smells(&text, "test", None, today()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].line_text(), "batten.toml:11 waiver-names-no-rule");
+        assert!(
+            !found[0].line_text().contains("tracked"),
+            "the pointer must never carry the justification text"
+        );
+    }
+
+    #[test]
+    fn two_dead_waivers_of_one_kind_both_survive_dedup() {
+        // CLOUD-233's bug, in the shape a new smell could reintroduce it: two
+        // waivers of one kind must be located distinctly or `dedup` eats the
+        // second, and "the more a config was weakened, the more was swallowed".
+        let text = with_waivers(&format!(
+            "{}{}",
+            waiver_row("typo-one", "2099-01-01"),
+            waiver_row("typo-two", "2099-01-01")
+        ));
+        assert_eq!(
+            ids(&text),
+            vec![WAIVER_NAMES_NO_RULE, WAIVER_NAMES_NO_RULE],
+            "both must be reported, at their own lines"
+        );
+    }
+
+    #[test]
+    fn one_waiver_can_carry_both_smells() {
+        // Dead in two ways at once, and each is separately actionable — reporting
+        // only the first would hide the other after a fix.
+        let text = with_waivers(&waiver_row("typo", "2020-01-01"));
+        let mut found = ids(&text);
+        found.sort_unstable();
+        assert_eq!(found, vec![WAIVER_EXPIRED, WAIVER_NAMES_NO_RULE]);
+    }
+
+    #[test]
+    fn adding_a_waiver_reaches_the_lint_as_a_base_ref_weakening() {
+        // The added-direction weakening arrives through the one definition of
+        // "weakened" rather than a second copy in this module.
+        let base = config::parse(&with_waivers(""), "base").unwrap();
+        let working = with_waivers(&waiver_row("r", "2099-01-01"));
+        let found = smells(&working, "test", Some(&base), today()).unwrap();
+        let ids: Vec<&str> = found.iter().map(|smell| smell.id).collect();
+        assert!(ids.contains(&"waiver-added"), "got: {ids:?}");
+    }
+
     #[test]
     fn a_malformed_config_is_a_usage_error() {
-        let err = smells("version = 1\nnot toml\n", "test", None).unwrap_err();
+        let err = smells("version = 1\nnot toml\n", "test", None, today()).unwrap_err();
         assert!(err.downcast_ref::<crate::UsageError>().is_some());
     }
 }

@@ -201,6 +201,11 @@ pub struct Resolved {
     /// and a row reusing a committed id is refused rather than merged.
     #[serde(rename = "exec_pattern")]
     pub exec_patterns: Vec<crate::outputs::OutputPattern>,
+    /// The waiver table (CLOUD-208), authority rows plus any a local file
+    /// **added for a rule the authority does not declare**. A local waiver over a
+    /// committed rule is refused rather than merged — see [`merge_local_waivers`].
+    #[serde(rename = "waiver")]
+    pub waivers: Vec<crate::waiver::Waiver>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -440,6 +445,7 @@ pub fn resolve_with_env(
     }
 
     let mut exec_patterns = repo.exec_patterns.clone();
+    let mut waivers = repo.waivers.clone();
     let mut rules = repo.rules.clone();
     let mut rules_source = if rules.is_empty() {
         Source::Default
@@ -504,6 +510,7 @@ pub fn resolve_with_env(
             rules_source = Source::LocalFile;
         }
         merge_local_patterns(&mut exec_patterns, local.exec_patterns)?;
+        merge_local_waivers(&mut waivers, local.waivers, &repo.rules)?;
     }
 
     // Layer 3 — the environment. An *empty* variable is "not set", not a bad
@@ -544,6 +551,7 @@ pub fn resolve_with_env(
         rules,
         rules_source,
         exec_patterns,
+        waivers,
     ))
 }
 
@@ -579,6 +587,47 @@ fn merge_local_patterns(
     Ok(())
 }
 
+/// Add a local file's waivers to the committed ones, refusing any that touch a
+/// committed rule.
+///
+/// This is the one place where the local layer *lowers* a bar rather than raising
+/// one, so the clamp has to be strict. [`Layered::raise`] cannot express it — it
+/// is bounded `T: Ord + Copy` and a waiver has no ordering — so this copies the
+/// blunter rule local *rules* already get, on the same stated ground: Batten
+/// cannot tell tightening from weakening across arbitrary predicates, and a
+/// waiver over a committed gate is the case where guessing wrong switches that
+/// gate off from an uncommitted file.
+///
+/// A waiver for a rule the authority does not declare is accepted, because it
+/// suppresses nothing the committed policy asserts. That is what lets a local
+/// file waive a rule it also added, without a second mechanism.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] when a local waiver names a committed rule, or when
+/// two waivers end up sharing an identity.
+fn merge_local_waivers(
+    committed: &mut Vec<crate::waiver::Waiver>,
+    local: Vec<crate::waiver::Waiver>,
+    rules: &[Rule],
+) -> Result<()> {
+    for waiver in local {
+        if rules.iter().any(|rule| rule.id == waiver.rule) {
+            return Err(UsageError::raise(format!(
+                "waiver {}: {LOCAL_CONFIG_FILE} may not waive a rule declared in {}; a waiver \
+                 lowers the bar, so the durable tier is the committed authority alone (§8)",
+                waiver.rule,
+                config::CONFIG_FILE,
+            )));
+        }
+        committed.push(waiver);
+    }
+    // Re-validate the merged table: two layers can each be well formed and still
+    // duplicate an identity between them, and a duplicate that only exists after
+    // layering would otherwise never be refused.
+    crate::waiver::validate(committed)
+}
+
 /// Build the resolved configuration from the authority plus the layered values.
 ///
 /// Split out so the layering above reads as the §8 chain it is, rather than
@@ -590,6 +639,7 @@ fn assemble(
     rules: Vec<Rule>,
     rules_source: Source,
     exec_patterns: Vec<crate::outputs::OutputPattern>,
+    waivers: Vec<crate::waiver::Waiver>,
 ) -> Resolved {
     Resolved {
         version: repo.version,
@@ -604,6 +654,7 @@ fn assemble(
         verbs: repo.verbs.clone(),
         markers: repo.markers.clone(),
         exec_patterns,
+        waivers,
         sources: attribution(
             repo,
             strictness.source,
@@ -652,6 +703,7 @@ fn attribution(
             "exec_pattern",
             authority_set(!repo.exec_patterns.is_empty()),
         ),
+        ("waiver", authority_set(!repo.waivers.is_empty())),
     ])
 }
 
@@ -824,6 +876,73 @@ mod tests {
         let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
         assert!(err.to_string().contains("may not redefine"), "got: {err}");
+    }
+
+    /// `batten.toml` text declaring rule `a`, plus whatever else the case needs.
+    fn with_rule_a(extra: &str) -> String {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"a\"\nkind = \"forbid\"\nglob = \"**\"\n\
+             pattern = \"x\"\nseverity = \"deny\"\n{extra}"
+        )
+    }
+
+    fn waiver_row(rule: &str) -> String {
+        format!("\n[[waiver]]\nrule = \"{rule}\"\nreason = \"tracked\"\nexpires = \"2099-01-01\"\n")
+    }
+
+    #[test]
+    fn a_local_waiver_over_a_committed_rule_is_refused() {
+        // The one direction where the local layer would LOWER the bar, so the
+        // clamp is a flat refusal: `Layered::raise` needs `Ord` and a waiver has
+        // none, so there is no "clamp to the tighter one" to fall back on.
+        let dir = repo(
+            "resolve-local-waiver-committed",
+            &with_rule_a(""),
+            Some(&format!("version = 1\n{}", waiver_row("a"))),
+        );
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
+        assert!(is_usage_error(&err));
+        assert!(err.to_string().contains("may not waive"), "got: {err}");
+    }
+
+    #[test]
+    fn a_local_file_may_add_a_waiver_for_an_undeclared_rule() {
+        // It suppresses nothing the committed policy asserts, so refusing it would
+        // buy no safety and would stop a local file waiving a rule it also added.
+        let dir = repo(
+            "resolve-local-waiver-unknown",
+            &with_rule_a(""),
+            Some(&format!("version = 1\n{}", waiver_row("elsewhere"))),
+        );
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        let rules: Vec<&str> = resolved.waivers.iter().map(|w| w.rule.as_str()).collect();
+        assert_eq!(rules, vec!["elsewhere"]);
+    }
+
+    #[test]
+    fn a_committed_waiver_resolves_and_is_attributed_to_the_authority() {
+        let dir = repo(
+            "resolve-committed-waiver",
+            &with_rule_a(&waiver_row("a")),
+            None,
+        );
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(resolved.waivers.len(), 1);
+        assert_eq!(resolved.sources["waiver"], Source::RepoConfig);
+    }
+
+    #[test]
+    fn a_layered_duplicate_waiver_is_refused_even_though_each_layer_is_clean() {
+        // Both files are individually well formed; the duplicate exists only after
+        // merging, which is the one case a per-file validator cannot see.
+        let dir = repo(
+            "resolve-layered-duplicate-waiver",
+            &with_rule_a(&waiver_row("elsewhere")),
+            Some(&format!("version = 1\n{}", waiver_row("elsewhere"))),
+        );
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
+        assert!(is_usage_error(&err));
+        assert!(err.to_string().contains("declared twice"), "got: {err}");
     }
 
     #[test]
