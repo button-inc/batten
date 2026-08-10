@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.48](https://github.com/button-inc/batten/compare/v0.0.47...v0.0.48) - 2026-08-10
+
+### Added
+
+- *(capture)* tee `exec` output to a content-addressed out-of-tree store
+
 ## [0.0.47](https://github.com/button-inc/batten/compare/v0.0.46...v0.0.47) - 2026-08-10
 
 ### Added
