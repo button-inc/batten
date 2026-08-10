@@ -1,0 +1,60 @@
+name: timeout-drift
+
+# "Does each job's committed timeout budget still match what the job costs?" — a
+# question about the world, not about any branch, so it runs on a clock rather
+# than on the landing path. Same split as lock-currency.yml and release-assets.yml.
+#
+# The commit half is `mise run timeout-check`, in the hk gate: every job's
+# `timeout-minutes` must carry a budget comment that justifies it. That gate
+# cannot ask whether the justification is still true, because the answer lives in
+# the Actions API rather than in the tree — and a gate whose verdict comes from a
+# remote API is not testing the commit (CLOUD-227's lesson, one level down).
+#
+# Failure here is informational: it means a number needs re-deriving, not that
+# anything is broken and not that whichever branch is in flight is at fault. It
+# reports in both directions on purpose — a budget gone slack because the job got
+# faster is the ratchet CLOUD-266 exists for, and a report that only complained
+# about tightness would let every number rot upward forever.
+#
+# Converting a `grandfathered` entry into a measured one is a deliberate commit,
+# prompted by this report. Nothing here writes to the tree: a bot silently
+# re-baselining the number it is supposed to defend is exactly the failure the
+# hand-authored budget comment prevents.
+
+on:
+  schedule:
+    # Mondays, 07:00 UTC — after lock-currency (06:00) and release-assets (06:30),
+    # staggered into the same weekly slot rather than contending with them.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). A runner
+  # should install locked, and its checkout is disposable, so a write here
+  # costs nothing; the clone being protected is a developer's.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  timeout-drift:
+    name: timeout-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-10
+    permissions:
+      actions: read # read workflow run and job durations
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      # GH_TOKEN goes through env, never interpolated into the run block: a
+      # `${{ }}` expansion is textual substitution into the shell script, and
+      # zizmor gates that at high severity. All logic is in the task; nothing
+      # here but the invocation.
+      - name: Report budgets that no longer match their measurement
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mise run timeout-drift
