@@ -79,6 +79,34 @@ scope = ["**", "!target/**"]
 protected = ["batten.toml", ".github/workflows/**"]
 unlanded = []
 
+# `protected` earns a second job when you also declare mutating verbs: crossing
+# the two is the protected-path gate (CLOUD-96), which `batten hook` applies to
+# one mediated command at a time. It is an INTERSECTION, not a rule — declaring
+# it as `[[rule]]` rows would need one row per verb × path pair.
+#
+# Each verb names the sanctioned mutation to point at when it is refused, because
+# a deny that says only "no" is a refusal a caller cannot act on (CLOUD-122).
+#
+# `>` and `>>` are not programs: a truncating redirect has no mutating program to
+# classify, since in `cat x > p` the program is `cat`. The engine surfaces the
+# operator as a pseudo-program so you can gate truncation like any other verb.
+# Those two tokens are a contract with the engine — `verb = "redirect"` would
+# simply never match.
+#
+# Bounds worth knowing before you rely on this: it is a pre-execution *textual*
+# gate, so a path arriving through `$VAR`, a glob, or `$(command)` is invisible to
+# it, and an absolute path is compared as written rather than resolved against the
+# repo root. Every such miss under-denies, which is the safe direction.
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or change it through the surface that owns it"
+
+[[verb]]
+verb = ">"
+effect = "destructive"
+redirect = "append, or write through the surface that owns the file"
+
 # Rules are the output-producing half of the config: glob-selected, kind-typed
 # predicates over the repository, evaluated by `batten check`. A `forbid` rule
 # fires on any line containing its literal pattern, reported pointer-only as

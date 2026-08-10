@@ -24,6 +24,31 @@ version = 1
 # key.
 min_batten_version = "0.0.42"
 
+# ---------------------------------------------------------------------------
+# The protected-path gate (CLOUD-96): {mutating verb} × {protected path}.
+#
+# This is not a `[[rule]]` row and deliberately so. The gate is the INTERSECTION
+# of the two tables below, and expressing an intersection as rules would need one
+# row per verb × path pair — the config restating what a set operation already
+# says. `batten hook` crosses them per mediated call.
+#
+# The incident: an agent retracting its own managed state reached for `rm`
+# instead of the surface that owns the file. Managed state has a defined mutation
+# path and a raw destructive verb bypasses its bookkeeping.
+
+# Which paths are guarded. Consumer-specific by nature, which is why they live
+# here and never in the crate (non-negotiable rule 1) — the engine holds the
+# matcher, this file holds the answer.
+protected = [
+  # Agent memory: written through the Serena tools, never by hand.
+  ".serena/memories/**",
+  # The policy authority itself. Deleting it is the maximal weakening — it
+  # disarms every gate at once, including this one.
+  "batten.toml",
+  # CI's definition of green.
+  ".github/workflows/**",
+]
+
 # Batten gates this repository with its own engine — consumer #1 in practice,
 # not just in principle. Rules below whose `scope` is "tree" run under `batten
 # check`; rules whose `scope` is "mediated_call" are adjudicated by `batten hook`
@@ -182,6 +207,34 @@ glob = "crates/batten/tests/**"
 pattern = "button-inc"
 severity = "deny"
 scope = "tree"
+
+# Which programs change the world, in the one §5 effect vocabulary, each with the
+# sanctioned mutation to point at when it is refused.
+#
+# `>` and `>>` are not programs — a truncating redirect has no mutating program
+# to classify, since in `cat x > p` the program is `cat`. The engine surfaces the
+# operator as a pseudo-program (`hook::REDIRECT_VERBS`) so a consumer that wants
+# truncation gated declares it here like any other verb. That token is a
+# crate↔config contract: `verb = "redirect"` would get silence.
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or change it through the surface that owns it"
+
+[[verb]]
+verb = "mv"
+effect = "destructive"
+redirect = "copy instead of moving, or change the file in place"
+
+[[verb]]
+verb = ">"
+effect = "destructive"
+redirect = "append, or write through the surface that owns the file"
+
+[[verb]]
+verb = ">>"
+effect = "write"
+redirect = "write through the surface that owns the file"
 
 # The governing config surface, hashed into `batten config epoch` (CLOUD-32).
 #

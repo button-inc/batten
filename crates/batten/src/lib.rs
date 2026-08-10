@@ -146,9 +146,7 @@ fn load_policy(overrides: &Overrides) -> Result<hook::Policy> {
     if !here.join(config::CONFIG_FILE).exists() {
         return Ok(hook::Policy::declaring_nothing());
     }
-    Ok(hook::Policy::from_resolved(&resolve::resolve(
-        here, overrides,
-    )?))
+    hook::Policy::from_resolved(&resolve::resolve(here, overrides)?)
 }
 
 /// Map one decoded call onto its harness's decision channel.

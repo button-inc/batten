@@ -993,6 +993,162 @@ fn hook_honours_a_shape_rule_a_local_override_added() {
     assert!(stderr.contains("local-shape"), "got: {stderr}");
 }
 
+/// A fixture repo declaring the CLOUD-96 cross product: two verbs, one path.
+fn repo_with_protected_policy(name: &str) -> PathBuf {
+    repo_with_config(
+        name,
+        r#"version = 1
+protected = ["guarded/**"]
+
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with git"
+
+[[verb]]
+verb = ">"
+effect = "destructive"
+redirect = "append instead"
+"#,
+    )
+}
+
+#[test]
+fn hook_denies_a_mutating_verb_against_a_protected_path_on_both_channels() {
+    let dir = repo_with_protected_policy("protected-both-channels");
+    for harness in ["claude-code", "exit-code"] {
+        let output = run_hook_in(&dir, harness, &claude_payload("rm guarded/thing"), false);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if harness == "claude-code" {
+            assert_eq!(output.status.code(), Some(0), "{harness}");
+            assert!(
+                stdout.contains("\"permissionDecision\":\"deny\""),
+                "{harness}: got {stdout}"
+            );
+            assert!(stdout.contains("restore it with git"), "names the redirect");
+        } else {
+            assert_eq!(output.status.code(), Some(2), "{harness}");
+            assert!(
+                stderr.contains("restore it with git"),
+                "{harness}: names the redirect, got {stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hook_allows_the_same_verb_against_an_unprotected_path() {
+    let dir = repo_with_protected_policy("protected-elsewhere");
+    let output = run_hook_in(
+        &dir,
+        "exit-code",
+        &claude_payload("rm scratch/thing"),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn hook_denies_a_truncating_redirect_against_a_protected_path() {
+    // A redirect has no mutating program to classify, so the operator is the
+    // pseudo-verb the consumer declared.
+    let dir = repo_with_protected_policy("protected-redirect");
+    for command in ["cat x > guarded/thing", "cat x >guarded/thing"] {
+        let output = run_hook_in(&dir, "exit-code", &claude_payload(command), false);
+        assert_eq!(output.status.code(), Some(2), "must deny: {command}");
+    }
+}
+
+#[test]
+fn the_deny_is_a_function_of_config_and_argv_not_the_ambient_environment() {
+    // Acceptance (c): "a repeat attempt with the sandbox disabled is still
+    // denied" — i.e. the verdict is computed from config plus argv, so nothing
+    // ambient can turn it off. Asserted by varying the environment around an
+    // identical payload and config and requiring byte-identical answers.
+    let dir = repo_with_protected_policy("protected-deterministic");
+    let payload = claude_payload("rm guarded/thing");
+    let baseline = run_hook_in(&dir, "exit-code", &payload, false);
+    for (key, value) in [
+        ("BATTEN_SANDBOX", "0"),
+        ("CI", "1"),
+        ("NO_COLOR", "1"),
+        ("HOME", "/tmp"),
+    ] {
+        let mut command = batten();
+        command
+            .current_dir(&dir)
+            .args(["hook", "--harness", "exit-code"])
+            .env_remove("BATTEN_GH_GUARD_BYPASS")
+            .env(key, value)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().expect("spawn batten hook");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(payload.as_bytes())
+            .expect("write payload");
+        let output = child.wait_with_output().expect("run batten hook");
+        assert_eq!(
+            output.status.code(),
+            baseline.status.code(),
+            "{key}={value} changed the verdict"
+        );
+        assert_eq!(
+            output.stderr, baseline.stderr,
+            "{key}={value} changed the reason"
+        );
+    }
+}
+
+#[test]
+fn the_committed_protected_paths_fire_on_a_mutating_verb() {
+    // The same obligation the shape rows carry: every other protected-path test
+    // supplies its own fixture, so without this, deleting a `protected` entry or
+    // a `[[verb]]` row from the real `batten.toml` would break nothing.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for command in [
+        "rm .serena/memories/core.md",
+        "mv batten.toml elsewhere.toml",
+        "cat x > .github/workflows/ci.yml",
+    ] {
+        let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "the committed policy must refuse {command:?}"
+        );
+    }
+    // A mutating verb aimed somewhere ordinary is not this gate's business.
+    let output = run_hook_in(
+        &root,
+        "exit-code",
+        &claude_payload("rm target/debug/scratch"),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn hook_fails_open_and_loud_on_a_malformed_protected_list() {
+    // `PathSet::includes` refuses a `!` entry — `protected` is an include-only
+    // key. That is a usage error, never a deny.
+    let dir = repo_with_config(
+        "protected-malformed",
+        "version = 1\nprotected = [\"!nope\"]\n\n[[verb]]\nverb = \"rm\"\n\
+         effect = \"destructive\"\n",
+    );
+    let output = run_hook_in(&dir, "exit-code", &claude_payload("rm anything"), false);
+    let code = output.status.code();
+    assert_eq!(code, Some(1), "a malformed protected list is usage");
+    assert_ne!(code, Some(2), "must never deny");
+    assert!(!output.stderr.is_empty(), "a failure is loud");
+}
+
 #[test]
 fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // The obligation the fixture tests do not discharge. Every hook test above

@@ -32,8 +32,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::resolve::Resolved;
-use crate::rules::{Rule, RuleScope};
+use crate::rules::{PathSet, Rule, RuleScope};
 use crate::severity::{self, ReportLevel, RuleSeverity};
+use crate::verbs::MutatingVerb;
 
 /// The harness adapters `batten hook` can speak. Each owns the decode of its
 /// host's payload into an [`Envelope`] and the encode of a [`Decision`] into
@@ -140,10 +141,19 @@ pub const BYPASS_ENV: &str = "BATTEN_GH_GUARD_BYPASS";
 /// `batten.local.toml` that **adds** a shape row is a gate the hook actually
 /// applies — the raise-only override model is worth nothing at a surface that
 /// ignores it — and `--config-from` is inherited for free.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
     shapes: Vec<Rule>,
     fail_on_warning: bool,
+    /// Which programs change the world, and what to run instead (CLOUD-36).
+    verbs: Vec<MutatingVerb>,
+    /// Which paths are guarded (CLOUD-37).
+    ///
+    /// Crossed with `verbs` this is CLOUD-96's gate. It is a *derived* predicate
+    /// rather than `[[rule]]` rows because the two tables are sets: expressing
+    /// the cross product as rules would need one row per verb × path pair, and
+    /// the config would restate what an intersection already says.
+    protected: PathSet,
 }
 
 impl Policy {
@@ -154,7 +164,12 @@ impl Policy {
     /// denied". Mirrors `Config::declaring_nothing`.
     #[must_use]
     pub fn declaring_nothing() -> Policy {
-        Policy::default()
+        Policy {
+            shapes: Vec::new(),
+            fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+        }
     }
 
     /// Take the mediated-call rules out of a resolved config.
@@ -164,9 +179,14 @@ impl Policy {
     /// surface — [`RuleKind::scopes`] pairs every spawning kind with
     /// [`RuleScope::Tree`] alone, which is what keeps `hook` structurally unable
     /// to execute a configured command.
-    #[must_use]
-    pub fn from_resolved(resolved: &Resolved) -> Policy {
-        Policy {
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) when the protected list is malformed
+    /// — a `!` entry in an include-only key. Never a deny: a policy that cannot be
+    /// read must fail loud, not refuse the call.
+    pub fn from_resolved(resolved: &Resolved) -> anyhow::Result<Policy> {
+        Ok(Policy {
             shapes: resolved
                 .rules
                 .iter()
@@ -174,13 +194,19 @@ impl Policy {
                 .cloned()
                 .collect(),
             fail_on_warning: resolved.fail_on_warning,
-        }
+            verbs: resolved.verbs.clone(),
+            protected: PathSet::includes("protected", &resolved.protected)?,
+        })
     }
 
     /// Whether this policy can deny anything at all.
+    ///
+    /// Both halves must be empty. The protected gate needs *both* its tables to
+    /// bite, so a repository declaring verbs but no protected paths (or the
+    /// reverse) can deny nothing through it — but a shape row alone still can.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.shapes.is_empty()
+        self.shapes.is_empty() && (self.verbs.is_empty() || self.protected.is_empty())
     }
 }
 
@@ -194,7 +220,13 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, bypass: bool) -> Decisio
     if bypass || envelope.command.is_empty() || policy.is_empty() {
         return Decision::Allow;
     }
-    shape_rules(policy, &envelope.command)
+    // Explicit rows first, then the derived gate: a row a reviewer wrote by hand
+    // should be the one they see quoted back, and its reason is more specific
+    // than the generic protected-path message.
+    match shape_rules(policy, &envelope.command) {
+        Decision::Deny(reason) => Decision::Deny(reason),
+        Decision::Allow => protected_mutation(policy, &envelope.command),
+    }
 }
 
 /// The first shape row that matches the mediated command, in declaration order.
@@ -247,6 +279,141 @@ fn shape_rules(policy: &Policy, command: &str) -> Decision {
     Decision::Allow
 }
 
+/// The id the derived protected-path gate denies under.
+///
+/// It has no `[[rule]]` row to name — the gate is an intersection of two config
+/// tables, not a row — so the id is declared once here and used by both the
+/// refusal and its tests, which is what stops the two from drifting.
+pub const PROTECTED_MUTATION: &str = "protected-mutation";
+
+/// The pseudo-programs a shell redirect is reported as.
+///
+/// A truncating redirect mutates a file with no program to classify: in
+/// `cat x > p` the program is `cat`, which mutates nothing. So the operator is
+/// surfaced *as if* it were a program, and a consumer that wants truncation
+/// gated declares `verb = ">"` in `[[verb]]` like any other.
+///
+/// Declared as a constant because it is a crate↔config contract: a consumer
+/// writing `verb = "redirect"` would get silence, and nothing else in the tree
+/// would say why. `tests::the_redirect_pseudo_program_token_is_declared_not_implied`
+/// is the gate.
+pub const REDIRECT_VERBS: &[&str] = &[">", ">>"];
+
+/// Deny a declared mutating verb aimed at a protected path (CLOUD-96).
+///
+/// The predicate is an intersection and nothing more: `{program ∈ [[verb]]} ×
+/// {path ∈ protected}`. Both tables are the consumer's, so the crate holds no
+/// path literal and no verb name (`tests::the_source_bakes_in_no_protected_path`).
+fn protected_mutation(policy: &Policy, command: &str) -> Decision {
+    for segment in segments(command) {
+        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        // Operands of the effective program, plus any redirect target. Both are
+        // candidates; a redirect needs no program at all.
+        let mut candidates: Vec<(&str, &str)> = Vec::new();
+        if let Some(index) = effective_program(&tokens) {
+            let program = tokens[index];
+            for operand in operands(&tokens, index + 1) {
+                candidates.push((program, operand));
+            }
+        }
+        candidates.extend(redirect_targets(&tokens));
+
+        for (program, path) in candidates {
+            let Some(verb) = crate::verbs::classify(&policy.verbs, program) else {
+                continue;
+            };
+            if !policy.protected.contains(normalise(path)) {
+                continue;
+            }
+            return Decision::Deny(protected_reason(program, path, verb));
+        }
+    }
+    Decision::Allow
+}
+
+/// The non-flag, non-env operands of a segment, from `start`.
+///
+/// A `--` ends option parsing, and everything after it is an operand even if it
+/// begins with a dash — the shape `rm -- -weird-name` uses, which a naive flag
+/// filter would drop and so fail to guard.
+fn operands<'a>(tokens: &[&'a str], start: usize) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    let mut literal = false;
+    for token in tokens.iter().skip(start) {
+        if !literal && *token == "--" {
+            literal = true;
+            continue;
+        }
+        if !literal && (token.starts_with('-') || is_env_assignment(token)) {
+            continue;
+        }
+        if REDIRECT_VERBS.iter().any(|op| token.starts_with(op)) {
+            continue;
+        }
+        out.push(*token);
+    }
+    out
+}
+
+/// The `(operator, target)` pairs a segment's shell redirects name.
+///
+/// Handles the glued form (`>p`) and the separated one (`> p`), and normalises a
+/// numbered descriptor (`2>p`). **Not** `&>`: [`segments`] splits on an unquoted
+/// `&`, so that form never arrives here as one token — the `> p` remainder
+/// becomes its own segment and is caught there instead.
+fn redirect_targets<'a>(tokens: &[&'a str]) -> Vec<(&'static str, &'a str)> {
+    let mut out = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        // A leading descriptor is shell syntax, not part of the operator.
+        let bare = token.trim_start_matches(|c: char| c.is_ascii_digit());
+        // Longest first, so `>>` is never read as `>` with a stray `>` target.
+        let Some(op) = REDIRECT_VERBS
+            .iter()
+            .find(|op| bare.starts_with(**op))
+            .copied()
+        else {
+            continue;
+        };
+        let target = bare.trim_start_matches('>').trim();
+        if target.is_empty() {
+            if let Some(next) = tokens.get(index + 1) {
+                out.push((op, *next));
+            }
+        } else {
+            out.push((op, target));
+        }
+    }
+    out
+}
+
+/// Strip a leading `./`, which names the same path.
+///
+/// Deliberately the *only* normalisation. An absolute path, a `..` traversal, or
+/// a `~` are not resolved against the repo root — `Envelope` carries no `cwd`, so
+/// there is nothing honest to resolve against. Every such miss under-denies,
+/// which is the sanctioned direction, and
+/// `tests::an_absolute_path_is_not_resolved_against_the_repo_root` pins the limit
+/// so it cannot change silently.
+fn normalise(path: &str) -> &str {
+    path.strip_prefix("./").unwrap_or(path)
+}
+
+/// Compose the protected-path refusal: what was aimed where, and what to run.
+///
+/// The path is a *pointer* and rule 4 permits it — it is what the caller already
+/// typed, and naming it is the difference between an actionable refusal and a
+/// riddle. The file's contents never appear.
+fn protected_reason(program: &str, path: &str, verb: &MutatingVerb) -> String {
+    let mutation = verb
+        .redirect
+        .as_deref()
+        .unwrap_or("change it through the surface that owns it, or restore it with git");
+    format!(
+        "Refused by {PROTECTED_MUTATION}: `{program}` targets the protected path \
+         {path} — {mutation}. Bypass with {BYPASS_ENV}=1."
+    )
+}
+
 /// Whether a rule at this severity blocks, once promotion has been applied.
 ///
 /// Routed through [`severity`] rather than matched here, so `allow` / `warn` /
@@ -296,7 +463,7 @@ struct Segment {
 /// The earlier version replaced each quoted span with the literal sentinel
 /// `QUOTED`. That got the `gh` policy right — `git commit -m "gh pr merge"` must
 /// not read as an invocation — but it discarded the span's *contents*, so a path
-/// gate could not see `rm ".serena/memories/x"` at all: the operand had become
+/// gate could not see `rm "some/guarded path"` at all: the operand had become
 /// the word `QUOTED`. Quoting a path is the ordinary way to write one with a
 /// space in it, so that hole is the shape of a common, legitimate spelling
 /// rather than an adversarial one (CLOUD-269, the same class as CLOUD-181).
@@ -516,8 +683,46 @@ mod tests {
     /// The `gh` lifecycle table as config, standing in for the rows this repo's
     /// own `batten.toml` now carries. The policy left the crate in CLOUD-48, so
     /// these tests supply it rather than assert against a baked-in table.
+    fn verb(name: &str, redirect: Option<&str>) -> MutatingVerb {
+        MutatingVerb {
+            verb: name.to_owned(),
+            effect: crate::effect::Effect::Destructive,
+            redirect: redirect.map(ToOwned::to_owned),
+        }
+    }
+
+    /// A policy with the CLOUD-96 cross product declared: two mutating verbs and
+    /// one protected glob. Both tables are the consumer's, so a test supplies
+    /// them exactly as a `batten.toml` would.
+    fn protected_policy(verbs: Vec<MutatingVerb>) -> Policy {
+        Policy {
+            shapes: Vec::new(),
+            fail_on_warning: false,
+            verbs,
+            protected: PathSet::includes(
+                "protected",
+                &[".serena/memories/**".to_owned(), "batten.toml".to_owned()],
+            )
+            .expect("the fixture protected set is well formed"),
+        }
+    }
+
+    fn guarded(command: &str) -> Decision {
+        adjudicate(
+            &protected_policy(vec![
+                verb("rm", Some("restore it with git")),
+                verb("mv", None),
+                verb(">", Some("write through the surface that owns it")),
+            ]),
+            &envelope(command),
+            false,
+        )
+    }
+
     fn gh_policy() -> Policy {
         Policy {
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
             shapes: vec![
                 shape("gh-pr-merge", "gh pr merge", None),
                 shape(
@@ -734,6 +939,8 @@ mod tests {
         let policy = Policy {
             shapes: vec![rule],
             fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
         };
         assert_eq!(
             adjudicate(&policy, &envelope("gh pr merge 42"), false),
@@ -750,6 +957,8 @@ mod tests {
         let advisory = Policy {
             shapes: vec![rule.clone()],
             fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
         };
         assert_eq!(
             adjudicate(&advisory, &call, false),
@@ -760,6 +969,8 @@ mod tests {
         let promoted = Policy {
             shapes: vec![rule],
             fail_on_warning: true,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
         };
         assert!(
             matches!(adjudicate(&promoted, &call, false), Decision::Deny(_)),
@@ -778,6 +989,8 @@ mod tests {
                 shape("second", "gh pr merge", None),
             ],
             fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
         };
         let Decision::Deny(reason) = adjudicate(&policy, &envelope("gh pr merge"), false) else {
             panic!("must deny");
@@ -807,11 +1020,228 @@ mod tests {
         let policy = Policy {
             shapes: vec![rule],
             fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
         };
         let Decision::Deny(reason) = adjudicate(&policy, &envelope("gh pr merge"), false) else {
             panic!("must deny");
         };
         assert!(reason.contains("example.invalid/policy"), "got: {reason}");
+    }
+
+    #[test]
+    fn a_mutating_verb_against_a_protected_path_is_denied() {
+        // The incident this gate is written from: an agent reaching for `rm` on
+        // its own managed state instead of the surface that owns it.
+        assert!(matches!(
+            guarded("rm .serena/memories/core.md"),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn the_same_verb_against_an_unprotected_path_is_allowed() {
+        assert_eq!(guarded("rm target/debug/scratch"), Decision::Allow);
+    }
+
+    #[test]
+    fn every_operand_is_a_candidate_so_a_destination_is_guarded_too() {
+        // `mv` overwrites its destination, so guarding only the source would miss
+        // the direction that destroys the protected file.
+        assert!(matches!(
+            guarded("mv notes.md batten.toml"),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            guarded("mv batten.toml notes.md"),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn a_redirect_target_is_a_mutation_even_with_no_program() {
+        // A truncating redirect has no mutating program to classify — in
+        // `cat x > p` the program is `cat` — so the operator is surfaced as a
+        // pseudo-program the consumer declares like any other verb.
+        for command in [
+            "cat notes.md > batten.toml",
+            "cat notes.md >batten.toml",
+            "echo x >> batten.toml",
+            "cat notes.md 2>batten.toml",
+        ] {
+            assert!(
+                matches!(guarded(command), Decision::Deny(_)),
+                "must deny: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undeclared_program_against_a_protected_path_is_allowed() {
+        // The table is the authority on what mutates. `cat` reads, so it is not
+        // this gate's business even against a protected path — the conservative
+        // reading of an unknown program belongs to the consumer's config, not to
+        // a guess here.
+        assert_eq!(guarded("cat .serena/memories/core.md"), Decision::Allow);
+    }
+
+    #[test]
+    fn the_deny_names_the_sanctioned_mutation_declared_beside_the_verb() {
+        let Decision::Deny(reason) = guarded("rm .serena/memories/core.md") else {
+            panic!("must deny");
+        };
+        assert!(
+            reason.contains(PROTECTED_MUTATION),
+            "names the gate: {reason}"
+        );
+        assert!(
+            reason.contains("restore it with git"),
+            "names the fix: {reason}"
+        );
+        assert!(
+            reason.contains(".serena/memories/core.md"),
+            "names where: {reason}"
+        );
+    }
+
+    #[test]
+    fn a_verb_with_no_redirect_names_a_fallback_rather_than_nothing() {
+        // `redirect` is optional on a verb, so the refusal must still say
+        // something actionable — CLOUD-280 is the per-path-class version.
+        let Decision::Deny(reason) = guarded("mv batten.toml elsewhere") else {
+            panic!("must deny");
+        };
+        assert!(reason.contains("surface that owns it"), "got: {reason}");
+    }
+
+    #[test]
+    fn flags_are_never_treated_as_paths() {
+        // And `--` ends option parsing, so a dash-leading operand after it is
+        // still an operand — the shape `rm -- -weird` uses.
+        assert_eq!(guarded("rm -rf target"), Decision::Allow);
+        assert!(matches!(guarded("rm -- batten.toml"), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn a_leading_dot_slash_is_the_same_path() {
+        assert!(matches!(guarded("rm ./batten.toml"), Decision::Deny(_)));
+    }
+
+    #[test]
+    fn an_absolute_path_is_not_resolved_against_the_repo_root() {
+        // A stated limit, pinned so it cannot change silently. `Envelope` carries
+        // no `cwd`, so there is nothing honest to resolve against; this
+        // under-denies, which is the sanctioned direction.
+        assert_eq!(guarded("rm /home/user/batten/batten.toml"), Decision::Allow);
+    }
+
+    #[test]
+    fn a_quoted_protected_path_is_still_guarded() {
+        // The whole reason CLOUD-269 landed first: under the old sentinel parser
+        // this command carried no path token at all.
+        assert!(matches!(
+            guarded("rm \".serena/memories/core.md\""),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn the_protected_gate_denies_nothing_when_either_table_is_empty() {
+        // The cross product needs both halves. A repository declaring verbs but
+        // no protected paths — or the reverse — has declared no gate.
+        let no_verbs = protected_policy(Vec::new());
+        assert_eq!(
+            adjudicate(&no_verbs, &envelope("rm batten.toml"), false),
+            Decision::Allow
+        );
+        let no_paths = Policy {
+            shapes: Vec::new(),
+            fail_on_warning: false,
+            verbs: vec![verb("rm", None)],
+            protected: PathSet::empty(),
+        };
+        assert_eq!(
+            adjudicate(&no_paths, &envelope("rm batten.toml"), false),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn an_explicit_row_wins_over_the_derived_protected_gate() {
+        // A row a reviewer wrote by hand carries a more specific reason than the
+        // generic protected-path message, so it should be the one quoted back.
+        let mut policy = protected_policy(vec![verb("rm", Some("restore it with git"))]);
+        policy.shapes = vec![shape("no-rm-memories", "rm .serena/memories/core.md", None)];
+        let Decision::Deny(reason) =
+            adjudicate(&policy, &envelope("rm .serena/memories/core.md"), false)
+        else {
+            panic!("must deny");
+        };
+        assert!(reason.contains("no-rm-memories"), "got: {reason}");
+    }
+
+    #[test]
+    fn the_protected_gate_honours_the_bypass_hatch() {
+        assert_eq!(
+            adjudicate(
+                &protected_policy(vec![verb("rm", None)]),
+                &envelope("rm batten.toml"),
+                true
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn the_redirect_pseudo_program_token_is_declared_not_implied() {
+        // The crate↔config contract: a consumer declaring `verb = "redirect"`
+        // would get silence, and nothing would say why. Naming the tokens here
+        // is what makes the contract greppable.
+        assert!(REDIRECT_VERBS.contains(&">"));
+        assert!(REDIRECT_VERBS.contains(&">>"));
+    }
+
+    #[test]
+    fn the_source_bakes_in_no_protected_path() {
+        // Acceptance (d), in the `verbs::the_source_bakes_in_no_verb` idiom. The
+        // literals are assembled so this test's own prose is not a match.
+        //
+        // Asserted behaviourally rather than by grepping the source. A grep is
+        // what `verbs::the_source_bakes_in_no_verb` uses, and it works there
+        // because a verb name is a short token. A *path* is not: the module doc
+        // legitimately cites `mise-tasks/gh-guard-check` as the provenance of
+        // this port, and prose examples name paths too, so a grep either fails on
+        // documentation or needs an escape clause loose enough to pass always.
+        // Both were tried; both were worse than the property itself.
+        //
+        // The property is that the set is *config*: the same command must get
+        // opposite verdicts from two policies differing only in `protected`. A
+        // hardcoded path could not produce that.
+        let verbs = vec![verb("rm", None)];
+        let guarding = Policy {
+            shapes: Vec::new(),
+            fail_on_warning: false,
+            verbs: verbs.clone(),
+            protected: PathSet::includes("protected", &["guarded/**".to_owned()])
+                .expect("well formed"),
+        };
+        let elsewhere = Policy {
+            shapes: Vec::new(),
+            fail_on_warning: false,
+            verbs,
+            protected: PathSet::includes("protected", &["other/**".to_owned()])
+                .expect("well formed"),
+        };
+        let call = envelope("rm guarded/thing");
+        assert!(
+            matches!(adjudicate(&guarding, &call, false), Decision::Deny(_)),
+            "the declared set must deny"
+        );
+        assert_eq!(
+            adjudicate(&elsewhere, &call, false),
+            Decision::Allow,
+            "a different declared set must allow the same command"
+        );
     }
 
     #[test]

@@ -823,6 +823,34 @@ pub struct PathSet {
 }
 
 impl PathSet {
+    /// The set that contains nothing.
+    ///
+    /// Spelled out rather than derived as `Default`, because the safe empty value
+    /// and the *obvious* one point in opposite directions here: an absent list
+    /// must mean "no paths", never "all paths", and a `Default` impl is exactly
+    /// the thing a future caller reaches for without reading which way it went
+    /// (see the type's own doc comment). [`PathSet::contains`] needs at least one
+    /// matching include, so this matches nothing by construction.
+    #[must_use]
+    pub const fn empty() -> Self {
+        PathSet {
+            includes: Vec::new(),
+            excludes: Vec::new(),
+        }
+    }
+
+    /// Whether this set can match anything.
+    ///
+    /// A set with no includes contains nothing, so a caller can skip the work of
+    /// even asking. Excludes alone cannot make a set non-empty — they only
+    /// subtract.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.includes.is_empty()
+    }
+}
+
+impl PathSet {
     /// Build the ordered include/exclude set the `scope` key declares: a plain
     /// glob includes, a `!`-prefixed glob excludes.
     ///

@@ -134,7 +134,15 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   claude-code adapter with a `permissionDecision` document and exit `0`;
   `Harness::ALL` is what keeps CLOUD-40's channel matrix total. Absent authority
   is the empty policy (allow, silently); an authority that exists and cannot be
-  read is exit `1`, loud, never a deny.
+  read is exit `1`, loud, never a deny. Two gates run per call: the explicit
+  `[[rule]]` shape rows first, then the derived protected-path gate (CLOUD-96) —
+  `{program ∈ [[verb]]} × {path ∈ protected}`, an intersection of two config
+  tables rather than rows, since rows would need one per verb × path pair. A
+  truncating redirect has no mutating program, so `>`/`>>` are surfaced as
+  pseudo-programs (`REDIRECT_VERBS`) a consumer declares like any verb — a
+  crate↔config contract, hence the constant. Stated limits: no `cwd`, so an
+  absolute or `..` path is compared as written, and expansion/substitution hide
+  operands. Both under-deny, the sanctioned direction.
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy
   was waved through, and where. Tokens are config, never crate constants (rule
   1); hits are pointer-only (`path:line` + marker id, rule 4) and `counts`
