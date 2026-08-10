@@ -76,6 +76,24 @@ so it only fires on relevant files, and put repo-specific logic in a `mise` task
 the step calls rather than inline. Adopt new `hk` release
 features (batching, caching, scheduling) when they'd tighten this.
 
+**A builtin's selector is a claim about coverage — measure it, never infer it.**
+Leaving the selector upstream is right, and it silently decides _which files the
+gate reads_. `Builtins.shellcheck` selects `(glob **/*.sh, **/*.bash) OR (types:
+sh, bash)`, and `#!/usr/bin/env bats` is neither — so `tests/*.bats` was never
+linted at all. Measured with `hk check --all --step shellcheck -v`: 45 files
+batched (every `mise-tasks/*`, `session-start.sh`, two fixture `.in` files), none
+of the 42 bats files. The step had looked like it covered the suite for its whole
+life, and `.shellcheckrc` carried an SC2030/SC2031 suppression reasoning about
+bats `run` subshells — **a suppression reads as evidence a file is being read, and
+it is not.** Same shape as the `-v` regex and the `pipefail | grep` entries below:
+green on a claim nobody checked. `--step <name> -v` prints the batched argv per
+step, and that is the only way to see a selector's real reach.
+
+What it cost: SC2314 is bats-only (an `!`-led assertion does not fail a bats
+test), so it had never fired over ten `error`-severity dead assertions in six
+suites. ShellCheck 0.11.0 derives the `bats` dialect from that shebang unaided —
+so the fix is a selector, never a `--shell` flag and never per-file directives.
+
 ## The always-loaded context budget
 
 `mise run policy-budget` runs `batten policy budget` and fails when the
