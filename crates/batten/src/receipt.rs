@@ -416,10 +416,22 @@ pub fn run_record(check: &str) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
+/// The `receipt status -J` document: the pointer line's three tokens, named.
+///
+/// Borrowed rather than owned, so the document is a view over the facts already
+/// read and nothing is copied to be serialized.
+#[derive(Debug, serde::Serialize)]
+struct StatusReport<'a> {
+    check: &'a str,
+    head: &'a str,
+    verdict: &'a str,
+}
+
 /// Judge the recorded receipt for `check` against HEAD and `origin/main`.
 ///
 /// Prints the pointer line `<check> <head-sha> <verdict>` — byte-stable, and
-/// never the receipt payload. Exits [`ExitCode::Success`] iff the receipt is
+/// never the receipt payload; `json` swaps it for the same three tokens as a
+/// named document. Exits [`ExitCode::Success`] iff the receipt is
 /// valid, [`ExitCode::Violation`] otherwise.
 ///
 /// # Errors
@@ -428,12 +440,25 @@ pub fn run_record(check: &str) -> Result<ExitCode> {
 /// a repository, unresolvable HEAD or `origin/main` — a checkout problem is
 /// never reported as a verification verdict), and an internal error when the
 /// output stream cannot be written.
-pub fn run_status(check: &str, out: &mut dyn Write) -> Result<ExitCode> {
+pub fn run_status(check: &str, json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     validate_check_name(check)?;
     let facts = repo_facts()?;
     let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
     let verdict = validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir);
-    writeln!(out, "{check} {} {}", facts.head, verdict.as_str())?;
+    if json {
+        // The same three tokens the pointer line carries, named — so a caller
+        // reading the verdict programmatically stops splitting on whitespace and
+        // a fourth token could never be mistaken for the third. Emitted for a
+        // valid receipt too: a document that is sometimes absent is unparseable.
+        let report = StatusReport {
+            check,
+            head: &facts.head,
+            verdict: verdict.as_str(),
+        };
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        writeln!(out, "{check} {} {}", facts.head, verdict.as_str())?;
+    }
     Ok(match verdict {
         Validity::Valid => ExitCode::Success,
         Validity::StaleHead | Validity::StaleMain | Validity::Missing => ExitCode::Violation,

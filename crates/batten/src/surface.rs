@@ -34,6 +34,7 @@ use clap::builder::ValueParser;
 use clap::{Arg, ArgAction, Command};
 
 use crate::effect::Effect;
+use crate::output::Verbosity;
 
 /// How an argument takes its value.
 #[derive(Debug)]
@@ -41,6 +42,12 @@ use crate::effect::Effect;
 pub enum ValueDecl {
     /// A boolean flag: present or absent, consuming nothing.
     Bool,
+    /// A repeatable boolean flag, whose occurrences are counted.
+    ///
+    /// Deliberately not [`ValueDecl::Bool`]: `ArgAction::SetTrue` errors on a
+    /// *second* occurrence, so `-vv` would be a usage error rather than the
+    /// next rung up the §3 ladder.
+    Count,
     /// Consumes a free-form string.
     Str,
     /// Consumes one token of a `ValueEnum`.
@@ -82,6 +89,17 @@ pub enum EnvDecl {
     /// not attribute a value to one rather than the other, and the raise-only
     /// clamp would compare a layer against itself.
     Layered(&'static str),
+    /// [`crate::output`] reads the variable when resolving the output mode.
+    ///
+    /// For a §3/§4 presentation flag. Neither of the other two fits:
+    /// `Clap` cannot, because `ArgAction::SetTrue`'s value parser accepts
+    /// exactly `"true"`/`"false"` — so `BATTEN_NO_COLOR=1`, or an empty
+    /// `BATTEN_NO_COLOR=`, would be a *usage error* instead of the empty-means-
+    /// unset reading every other layer uses. `Layered` cannot, because
+    /// [`crate::resolve::SETTINGS`] is policy-bearing and clamped raise-only,
+    /// and verbosity has no weakening ordering to clamp along: `--quiet` does
+    /// not lower a gate, it lowers a word count.
+    Presentation(&'static str),
 }
 
 impl EnvDecl {
@@ -90,12 +108,40 @@ impl EnvDecl {
     pub const fn name(&self) -> Option<&'static str> {
         match self {
             EnvDecl::None => None,
-            EnvDecl::Clap(name) | EnvDecl::Layered(name) => Some(*name),
+            EnvDecl::Clap(name) | EnvDecl::Layered(name) | EnvDecl::Presentation(name) => {
+                Some(*name)
+            }
         }
     }
 }
 
+/// Which rung of the §3 verbosity ladder a flag selects, if any.
+///
+/// A column rather than a naming convention, so the ladder can be *audited*:
+/// [`tests::the_ladder_declares_every_rung_but_normal_exactly_once`] reads it and
+/// fails if a rung is declared twice or goes missing, and
+/// [`tests::a_ladder_rung_declares_no_boolean_env_equivalent`] reads it to hold
+/// the one-variable rule shut. Without it "is this a ladder flag" would be a
+/// question answered by looking at the long name.
+#[derive(Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Rung {
+    /// Not a ladder flag.
+    None,
+    /// Selects one fixed rung; repeating it steps one further from `normal`.
+    Fixed(Verbosity),
+    /// Names a rung by token (`--log-level trace`) rather than selecting one.
+    Named,
+}
+
 /// One argument of one command, declared as data.
+// Four booleans, and deliberately four: this is a declaration *table*, and each
+// column is an independent axis of one argument — where it applies (`global`),
+// how it is written (`positional`), whether it may be omitted (`required`), and
+// whether `--help` lists it (`hidden`). Collapsing them into two-variant enums
+// would make every row read as four type names instead of four answers, which is
+// the opposite of the reviewability §11 declares the table for.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct FlagDecl {
@@ -116,6 +162,15 @@ pub struct FlagDecl {
     pub positional: bool,
     /// Whether the command refuses to run without it.
     pub required: bool,
+    /// Whether `--help` omits the flag.
+    ///
+    /// For the diagnostic tiers: `--debug` and `--trace` are real, supported
+    /// flags, but listing all five rungs in every `--help` buries the two a
+    /// caller actually reaches for (§3). Hidden is not undeclared — the flag is
+    /// still in the emitted spec and still in the completions.
+    pub hidden: bool,
+    /// Which §3 ladder rung the flag selects, if any.
+    pub rung: Rung,
     /// How the argument takes its value.
     pub value: ValueDecl,
 }
@@ -132,6 +187,8 @@ impl FlagDecl {
             global: false,
             positional: true,
             required: true,
+            hidden: false,
+            rung: Rung::None,
             value: ValueDecl::Str,
         }
     }
@@ -152,6 +209,8 @@ impl FlagDecl {
             global: false,
             positional: false,
             required: true,
+            hidden: false,
+            rung: Rung::None,
             value: ValueDecl::Enum {
                 parser,
                 default: None,
@@ -176,10 +235,60 @@ impl FlagDecl {
             global: false,
             positional: false,
             required: false,
+            hidden: false,
+            rung: Rung::None,
             value: ValueDecl::Enum {
                 parser,
                 default: Some(default),
             },
+        }
+    }
+
+    /// A global counted ladder flag (§3).
+    const fn ladder(
+        id: &'static str,
+        long: &'static str,
+        short: Option<char>,
+        help: &'static str,
+        rung: Verbosity,
+        hidden: bool,
+    ) -> Self {
+        FlagDecl {
+            id,
+            long: Some(long),
+            short,
+            help,
+            // Only the level-naming variable carries an env equivalent; see
+            // `crate::output::LOG_LEVEL_ENV` for why five booleans would not.
+            env: EnvDecl::None,
+            global: true,
+            positional: false,
+            required: false,
+            hidden,
+            rung: Rung::Fixed(rung),
+            value: ValueDecl::Count,
+        }
+    }
+
+    /// A global presentation boolean with its own env equivalent (§4).
+    const fn presentation(
+        id: &'static str,
+        long: &'static str,
+        help: &'static str,
+        env: &'static str,
+    ) -> Self {
+        FlagDecl {
+            id,
+            long: Some(long),
+            short: None,
+            help,
+            env: EnvDecl::Presentation(env),
+            global: true,
+            positional: false,
+            required: false,
+            hidden: false,
+            rung: Rung::None,
+            value: ValueDecl::Bool,
         }
     }
 }
@@ -194,6 +303,21 @@ pub struct CommandDecl {
     pub about: &'static str,
     /// The declared effect (§5). Self-declared, never inherited.
     pub effect: Effect,
+    /// Whether the command emits a data document through the `-J` switch (§6).
+    ///
+    /// A separate declaration from the flag list on purpose: without it,
+    /// "every data-emitting verb declares `-J`" would be a hand-kept list in a
+    /// test — the exact thing this table exists to eliminate. Declaring the
+    /// *intent* here means a row that forgets the flag fails
+    /// [`tests::every_data_emitting_verb_declares_the_json_flag`], and a row that
+    /// carries the flag without declaring the intent fails it too.
+    ///
+    /// `spec` is deliberately `false`: it emits data, but its switch is
+    /// `--format`, which selects an encoding rather than toggling a channel.
+    /// `generate schema` and `generate completions` are `false` because their
+    /// only output *is* the artifact — there is no human rendering to switch away
+    /// from.
+    pub data_channel: bool,
     /// The command's own arguments.
     pub flags: &'static [FlagDecl],
 }
@@ -212,6 +336,8 @@ const STRICTNESS: FlagDecl = FlagDecl {
     global: true,
     positional: false,
     required: false,
+    hidden: false,
+    rung: Rung::None,
     value: ValueDecl::Enum {
         parser: strictness_parser,
         default: None,
@@ -237,6 +363,8 @@ const FAIL_ON_WARNING: FlagDecl = FlagDecl {
     global: true,
     positional: false,
     required: false,
+    hidden: false,
+    rung: Rung::None,
     value: ValueDecl::Bool,
 };
 
@@ -256,6 +384,8 @@ const CONFIG_FROM: FlagDecl = FlagDecl {
     global: true,
     positional: false,
     required: false,
+    hidden: false,
+    rung: Rung::None,
     value: ValueDecl::Str,
 };
 
@@ -272,8 +402,14 @@ const JSON: FlagDecl = FlagDecl {
     global: false,
     positional: false,
     required: false,
+    hidden: false,
+    rung: Rung::None,
     value: ValueDecl::Bool,
 };
+
+fn verbosity_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<Verbosity>::new())
+}
 
 fn strictness_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::config::Strictness>::new())
@@ -300,8 +436,102 @@ pub const ROOT: CommandDecl = CommandDecl {
     path: "",
     about: "Repo-agnostic policy engine that keeps \"done\" aligned with landed-and-verified work.",
     effect: Effect::Ask,
-    flags: &[STRICTNESS, FAIL_ON_WARNING, CONFIG_FROM],
+    // A bare invocation performs no default action, so there is no answer to
+    // encode and `-J` would be a flag that looks applied and isn't.
+    data_channel: false,
+    flags: ROOT_FLAGS,
 };
+
+/// [`ROOT`]'s arguments: the config overrides, then the §3 verbosity ladder and
+/// the §4 presentation booleans (CLOUD-42).
+///
+/// Every one is **global**, because verbosity and attendedness are properties of
+/// the *invocation*, not of one verb: scoping them would let one verb in a
+/// pipeline be quiet and the next not.
+///
+/// The rungs are **counted** rather than boolean so `-vv` is the next rung up
+/// rather than a usage error, and deliberately **not** an `ArgGroup` or a
+/// `conflicts_with` pair — both of those make `-q -v` an *error*, which is
+/// exactly the shape §3's last-flag-wins rule exists to resolve. Which rung wins
+/// is resolved from raw argument order by [`crate::output`]; see that module for
+/// why `clap`'s recorded indices cannot supply it.
+const ROOT_FLAGS: &[FlagDecl] = &[
+    STRICTNESS,
+    FAIL_ON_WARNING,
+    CONFIG_FROM,
+    FlagDecl::ladder(
+        "silent",
+        "silent",
+        None,
+        "Say nothing but a verdict or a usage error",
+        Verbosity::Silent,
+        false,
+    ),
+    FlagDecl::ladder(
+        "quiet",
+        "quiet",
+        Some('q'),
+        "Suppress ordinary progress (repeatable: -qq is silent)",
+        Verbosity::Quiet,
+        false,
+    ),
+    FlagDecl::ladder(
+        "verbose",
+        "verbose",
+        Some('v'),
+        "Explain what is being checked (repeatable: -vv is debug)",
+        Verbosity::Verbose,
+        false,
+    ),
+    // Hidden: real and supported, but listing five rungs in every `--help`
+    // buries the two a caller reaches for.
+    FlagDecl::ladder(
+        "debug",
+        "debug",
+        None,
+        "Add resolution detail",
+        Verbosity::Debug,
+        true,
+    ),
+    FlagDecl::ladder(
+        "trace",
+        "trace",
+        None,
+        "Add everything",
+        Verbosity::Trace,
+        true,
+    ),
+    // The one env-bearing rung, and the only flag that names a rung rather than
+    // selecting one. Hidden because the ladder above is the human surface.
+    FlagDecl {
+        id: "log_level",
+        long: Some("log-level"),
+        short: None,
+        help: "Set the verbosity rung by name",
+        env: EnvDecl::Presentation(crate::output::LOG_LEVEL_ENV),
+        global: true,
+        positional: false,
+        required: false,
+        hidden: true,
+        rung: Rung::Named,
+        value: ValueDecl::Enum {
+            parser: verbosity_parser,
+            default: None,
+        },
+    },
+    FlagDecl::presentation(
+        "no_color",
+        "no-color",
+        "Never colour stderr, whatever it is attached to",
+        crate::output::NO_COLOR_ENV,
+    ),
+    FlagDecl::presentation(
+        "no_input",
+        "no-input",
+        "Never prompt; treat the run as unattended",
+        crate::output::NO_INPUT_ENV,
+    ),
+];
 
 /// The command tree: every subcommand, with its summary, effect, and flags.
 ///
@@ -316,6 +546,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "check",
         about: "Run the applicable read-only gates against the repository",
+        data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
     },
@@ -326,18 +557,21 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "enforce",
         about: "Run every configured rule, including kinds that execute a configured command",
+        data_channel: true,
         effect: Effect::Unclassified,
         flags: &[JSON],
     },
     CommandDecl {
         path: "config",
         about: "Inspect configuration",
+        data_channel: false,
         effect: Effect::Read,
         flags: &[],
     },
     CommandDecl {
         path: "config show",
         about: "Print the effective configuration",
+        data_channel: true,
         effect: Effect::Read,
         // The same per-command declaration `check` carries, not a second flag:
         // selecting an encoding reaches no user-supplied code, so it raises
@@ -351,18 +585,27 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "config epoch",
         about: "Print the content hash of the governing config surface",
+        data_channel: true,
         effect: Effect::Read,
-        flags: &[],
+        // The value alone is already machine-readable, so `-J` is not a second
+        // rendering of it: it names *which surface* the hash covers, which a
+        // caller stamping a record needs and a bare digest cannot carry.
+        flags: &[JSON],
     },
     CommandDecl {
         path: "config lint",
         about: "Report policy smells in batten.toml (any smell is a violation)",
+        data_channel: true,
         effect: Effect::Read,
-        flags: &[],
+        flags: &[JSON],
     },
     CommandDecl {
         path: "spec",
         about: "Print the tool's own command spec",
+        // Emits data, but through `--format`: an encoding selector, not a
+        // channel toggle. `tests::spec_switches_format_rather_than_declaring_json`
+        // pins the distinction so a future row cannot acquire both.
+        data_channel: false,
         effect: Effect::Read,
         flags: &[FlagDecl::defaulted_enum(
             "format",
@@ -382,18 +625,23 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "doctor",
         about: "Diagnose whether Batten can run in this repository",
+        data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
     },
     CommandDecl {
         path: "generate",
         about: "Emit artifacts derived from the command spec, on stdout",
+        data_channel: false,
         effect: Effect::Read,
         flags: &[],
     },
     CommandDecl {
         path: "generate completions",
         about: "Emit the shell completion script for one shell",
+        // The artifact *is* the output; there is no human rendering to switch
+        // away from, and a shell script is not JSON.
+        data_channel: false,
         effect: Effect::Read,
         flags: &[FlagDecl::required_enum(
             "shell",
@@ -407,6 +655,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "generate schema",
         about: "Emit the JSON Schema for batten.toml, derived from the config types",
+        data_channel: false,
         effect: Effect::Read,
         flags: &[],
     },
@@ -425,6 +674,12 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "hook",
         about: "Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)",
+        // Excluded deliberately: `hook`'s stdout is already a harness-shaped
+        // decision document that the host parses. A second JSON shape on the
+        // same stream, selected by a flag the host does not pass, could only
+        // ever be an ambiguity — and it would break the per-harness decision
+        // channel CLOUD-40 pinned.
+        data_channel: false,
         effect: Effect::Unclassified,
         flags: &[FlagDecl::required_enum(
             "harness",
@@ -441,6 +696,7 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "receipt",
         about: "Verification receipts: SHA-keyed claims a named check passed, invalidated by git facts",
+        data_channel: false,
         effect: Effect::Unclassified,
         flags: &[],
     },
@@ -448,6 +704,8 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "receipt record",
         about: "Record that the named check concluded pass against the current HEAD",
+        // Records state and reports nothing; there is no document to emit.
+        data_channel: false,
         effect: Effect::Write,
         flags: &[FlagDecl::positional(
             "check",
@@ -461,13 +719,34 @@ pub const SURFACE: &[CommandDecl] = &[
     CommandDecl {
         path: "receipt status",
         about: "Judge the named check's recorded receipt against HEAD and origin/main",
+        data_channel: true,
         effect: Effect::Read,
-        flags: &[FlagDecl::positional(
-            "check",
-            "The check whose receipt is judged",
-        )],
+        flags: &[
+            FlagDecl::positional("check", "The check whose receipt is judged"),
+            JSON,
+        ],
     },
 ];
+
+/// Whether `token` is a declared spelling of a flag that consumes the *next*
+/// argument.
+///
+/// Derived from the declaration, so [`crate::output`]'s raw-argv scan cannot
+/// mistake a flag's value for a ladder flag, and a new value-taking flag needs no
+/// second list to be added to. Positionals are excluded: they consume nothing
+/// that follows them.
+#[must_use]
+pub fn consumes_a_value(token: &str) -> bool {
+    std::iter::once(&ROOT)
+        .chain(SURFACE)
+        .flat_map(|decl| decl.flags)
+        .filter(|flag| !flag.positional)
+        .filter(|flag| !matches!(flag.value, ValueDecl::Bool | ValueDecl::Count))
+        .any(|flag| {
+            flag.long.is_some_and(|long| token == format!("--{long}"))
+                || flag.short.is_some_and(|short| token == format!("-{short}"))
+        })
+}
 
 /// Resolve the declared effect for a full command path.
 ///
@@ -512,9 +791,15 @@ fn arg_of(decl: &FlagDecl) -> Arg {
         if let EnvDecl::Clap(name) = decl.env {
             arg = arg.env(name);
         }
+        // Hidden is a `--help` property only: the flag still parses, still
+        // appears in `batten spec`, and still reaches the completions.
+        arg = arg.hide(decl.hidden);
     }
     match decl.value {
         ValueDecl::Bool => arg.action(ArgAction::SetTrue),
+        // `Count` rather than `SetTrue` so a second occurrence is the next rung
+        // rather than a usage error.
+        ValueDecl::Count => arg.action(ArgAction::Count),
         ValueDecl::Str => arg.action(ArgAction::Set),
         ValueDecl::Enum { parser, default } => {
             let arg = arg.action(ArgAction::Set).value_parser(parser());
@@ -724,6 +1009,209 @@ mod tests {
             current = current.find_subcommand(segment)?;
         }
         current.get_about().map(ToString::to_string)
+    }
+
+    // -- The §3/§4 ladder census (CLOUD-42). --
+
+    /// Every declared ladder flag, root and verbs alike.
+    fn rungs() -> Vec<&'static FlagDecl> {
+        std::iter::once(&ROOT)
+            .chain(SURFACE)
+            .flat_map(|decl| decl.flags)
+            .filter(|flag| flag.rung != Rung::None)
+            .collect()
+    }
+
+    #[test]
+    fn every_ladder_rung_is_global_and_counted() {
+        // A per-verb rung would let one verb in a pipeline be quiet and the next
+        // not; a `Bool` one would make `-vv` a usage error instead of `debug`.
+        for flag in rungs() {
+            assert!(flag.global, "--{} is a rung but not global", flag.id);
+            let counted =
+                matches!(flag.value, ValueDecl::Count) || matches!(flag.rung, Rung::Named);
+            assert!(counted, "--{} is a fixed rung but not counted", flag.id);
+        }
+    }
+
+    #[test]
+    fn the_ladder_declares_every_rung_but_normal_exactly_once() {
+        // The census that keeps the ladder total. `normal` is the origin and is
+        // deliberately unselectable: a flag for it would mean "step zero rungs",
+        // which is the absence of a flag.
+        let mut declared: Vec<Verbosity> = rungs()
+            .iter()
+            .filter_map(|flag| match flag.rung {
+                Rung::Fixed(rung) => Some(rung),
+                _ => None,
+            })
+            .collect();
+        let total = declared.len();
+        declared.sort_unstable();
+        declared.dedup();
+        assert_eq!(declared.len(), total, "a rung is declared twice");
+        let expected: Vec<Verbosity> = Verbosity::ALL
+            .iter()
+            .copied()
+            .filter(|rung| *rung != Verbosity::DEFAULT)
+            .collect();
+        assert_eq!(declared, expected, "the ladder is not total");
+        assert_eq!(
+            rungs()
+                .iter()
+                .filter(|flag| matches!(flag.rung, Rung::Named))
+                .count(),
+            1,
+            "exactly one flag names a rung rather than selecting one"
+        );
+    }
+
+    #[test]
+    fn a_ladder_rung_declares_no_boolean_env_equivalent() {
+        // §3's "a key where it makes sense": on a command line the ladder's
+        // tie-break is position, and the environment has none — so five
+        // booleans would reintroduce exactly the ambiguity the ladder removes.
+        // Only the rung-*naming* flag carries a variable.
+        for flag in rungs() {
+            match flag.rung {
+                Rung::Fixed(_) => assert!(
+                    flag.env.name().is_none(),
+                    "--{} is a fixed rung and must carry no env equivalent",
+                    flag.id
+                ),
+                Rung::Named => assert!(
+                    matches!(flag.env, EnvDecl::Presentation(_)),
+                    "--{} names a rung, so its variable is read by `output`",
+                    flag.id
+                ),
+                Rung::None => unreachable!("filtered above"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_presentation_env_is_read_by_the_output_resolver() {
+        // The `Layered` half of this is `every_declared_env_is_actually_read`;
+        // this is the presentation half. A `Presentation` name `output` does not
+        // consult is the CLOUD-31 defect class again.
+        let known = [
+            crate::output::LOG_LEVEL_ENV,
+            crate::output::NO_COLOR_ENV,
+            crate::output::NO_INPUT_ENV,
+        ];
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            for flag in decl.flags {
+                let EnvDecl::Presentation(env) = flag.env else {
+                    continue;
+                };
+                assert!(
+                    known.contains(&env),
+                    "{}: {env} is declared Presentation but `output` reads no such variable",
+                    decl.path
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_data_channel_declares_no_env_equivalent() {
+        // `-J` selects the answer's encoding. An env equivalent would make a
+        // caller's stdout shape depend on ambient state, which is the one thing
+        // a byte-stable data channel cannot allow.
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            for flag in decl.flags {
+                if flag.id != "json" {
+                    continue;
+                }
+                assert!(
+                    flag.env.name().is_none(),
+                    "{}: -J must have no env equivalent",
+                    decl.path
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_data_emitting_verb_declares_the_json_flag() {
+        // Derived from the `data_channel` column in both directions, so neither
+        // half can be forgotten: a verb that declares the intent and omits the
+        // flag fails, and so does one that carries the flag undeclared.
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            let carries = decl.flags.iter().any(|flag| flag.id == "json");
+            assert_eq!(
+                decl.data_channel,
+                carries,
+                "{:?}: data_channel is {} but -J is {}",
+                decl.path,
+                decl.data_channel,
+                if carries { "declared" } else { "absent" }
+            );
+        }
+    }
+
+    #[test]
+    fn spec_switches_format_rather_than_declaring_json() {
+        // `spec` emits data and still declares no data channel: `--format` picks
+        // an encoding, and a row must not acquire both switches for one answer.
+        let spec = SURFACE
+            .iter()
+            .find(|decl| decl.path == "spec")
+            .expect("spec is declared");
+        assert!(!spec.data_channel);
+        assert!(spec.flags.iter().any(|flag| flag.id == "format"));
+    }
+
+    #[test]
+    fn no_row_declares_destructive_so_yes_and_dry_run_are_not_owed() {
+        // §3 owes `-y`/`-n` and `--dry-run` to a *destructive* verb. None exists
+        // yet, so shipping them now would be a confirmation prompt for nothing —
+        // filed as G11 and pinned here, so the first destructive row fails this
+        // test rather than landing unguarded.
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            assert_ne!(
+                decl.effect,
+                Effect::Destructive,
+                "{:?} is destructive: it owes -y/-n and --dry-run (CLOUD-42, G11)",
+                decl.path
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_diagnostic_rung_is_hidden() {
+        // Hidden is for the tiers below the human surface. A hidden flag that a
+        // caller is expected to reach for is an undocumented feature.
+        for decl in std::iter::once(&ROOT).chain(SURFACE) {
+            for flag in decl.flags {
+                if !flag.hidden {
+                    continue;
+                }
+                let diagnostic = matches!(
+                    flag.rung,
+                    Rung::Fixed(Verbosity::Debug | Verbosity::Trace) | Rung::Named
+                );
+                assert!(
+                    diagnostic,
+                    "{}: --{} is hidden for no reason",
+                    decl.path, flag.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_value_taking_flag_is_recognised_by_its_declared_spellings() {
+        // `output`'s argv scan depends on this being derived rather than listed.
+        assert!(consumes_a_value("--strictness"));
+        assert!(consumes_a_value("--config-from"));
+        assert!(consumes_a_value("--log-level"));
+        // Counted and boolean flags consume nothing, so the token after them is
+        // still a token the scan must read.
+        assert!(!consumes_a_value("-v"));
+        assert!(!consumes_a_value("--fail-on-warning"));
+        assert!(!consumes_a_value("-J"));
+        assert!(!consumes_a_value("check"));
     }
 
     #[test]

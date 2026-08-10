@@ -53,7 +53,13 @@ fn flag_of(arg: &Arg) -> FlagSpec {
         short: arg.get_short(),
         long: arg.get_long().map(str::to_owned),
         // A flag that only flips a boolean consumes no value; anything else does.
-        takes_value: !matches!(arg.get_action(), ArgAction::SetTrue | ArgAction::SetFalse),
+        // `Count` belongs here with the boolean actions: `-v` flips a rung, it
+        // does not consume a token. Omitting it reported `takes_value: true` for
+        // every ladder flag, which is a lie a completion script acts on.
+        takes_value: !matches!(
+            arg.get_action(),
+            ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Count
+        ),
         help: arg.get_help().map(ToString::to_string),
     }
 }

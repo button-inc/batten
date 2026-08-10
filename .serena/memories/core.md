@@ -19,12 +19,27 @@ file itself for the "why", this is only the "where":
   builds the live `clap::Command` from it, and `effect_for` resolves the §5
   effect model off the same rows, so the parser, the emitted spec, the derived
   allowlist and the completions cannot disagree. Absence = `Ask`, never `Read`.
+  Since CLOUD-42 a row also carries `data_channel` (does this verb answer through
+  `-J`?), and a flag carries `hidden` plus `Rung` — which §3 ladder rung it
+  selects — so "is this a ladder flag" is a column rather than a naming
+  convention, and the ladder's totality is a census test.
 - `cli.rs` — the other half of the surface: turns parsed `ArgMatches` into the
   typed `Cli`/`Command` enums `lib::run` dispatches on, so dispatch stays an
   exhaustive `match` rather than a lookup on strings. Verbs today: `check`,
   `enforce`, `config show`, `spec`, `generate completions`, `hook`,
   `receipt record|status`. Adding a verb is a `surface.rs` row plus the arm
   here; a row without an arm fails `cli.rs`'s `every_leaf_verb_dispatches`.
+  It does **not** carry the §3/§4 presentation flags: those are read from raw
+  argument order by `output.rs`, because clap's recorded indices are not
+  comparable across the subcommand boundary.
+- `output.rs` — house-style §3/§4 (CLOUD-42): the `Verbosity` ladder
+  (`silent…trace`, a derived `Ord`, so `admits` is a comparison), the §4
+  attended/unattended resolution (`SIGNALS`, `resolve_with` taking the TTY
+  booleans explicitly so CLOUD-107 can drive them), and the three stderr writers.
+  Verbosity shapes **stderr only** — the data-emitting functions take
+  `out: &mut dyn Write` and have no `Mode` to consult, which is what makes `-J`
+  structurally ungatable. `verdict` and `error` are ungated: exit `1` is
+  fail-loud, so `--silent` must not empty it.
 - `effect.rs` — the house-style §5 effect _vocabulary_ (`read`/`write`/
   `destructive`/`unclassified`/`ask`) and its stable tokens. The classification
   itself lives on each `surface.rs` row, not in a second table keyed by the

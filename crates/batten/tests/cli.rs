@@ -141,94 +141,27 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
 /// the same code, since §7 has no per-verb exception. `Internal` (3) has no
 /// command that reaches it at this stage: its numeric contract is pinned in the
 /// `exit` unit tests.
-#[test]
-fn exit_code_contract() {
-    struct Case {
-        /// What the invocation exercises, surfaced on assertion failure.
-        name: &'static str,
-        /// Arguments passed to `batten`.
-        args: &'static [&'static str],
-        /// `batten.toml` contents to place in the run directory, if any.
-        config: Option<&'static str>,
-        /// The exit code the invocation must return.
-        expected: i32,
-    }
+/// One row of the exit-code table: an invocation, its config, and its code.
+struct Case {
+    /// What the invocation exercises, surfaced on assertion failure.
+    name: &'static str,
+    /// Arguments passed to `batten`.
+    args: &'static [&'static str],
+    /// `batten.toml` contents to place in the run directory, if any.
+    config: Option<&'static str>,
+    /// Environment variables set for the invocation.
+    env: &'static [(&'static str, &'static str)],
+    /// The exit code the invocation must return.
+    expected: i32,
+}
 
-    let cases = [
-        Case {
-            name: "no subcommand → usage (subcommand listing offered)",
-            args: &[],
-            config: None,
-            expected: 1,
-        },
-        Case {
-            name: "--help → success (help is an answer, not clap's exit 2)",
-            args: &["--help"],
-            config: None,
-            expected: 0,
-        },
-        Case {
-            name: "--version → success",
-            args: &["--version"],
-            config: None,
-            expected: 0,
-        },
-        Case {
-            name: "spec → success",
-            args: &["spec"],
-            config: None,
-            expected: 0,
-        },
-        Case {
-            name: "config show, valid config → success",
-            args: &["config", "show"],
-            config: Some("version = 1\n"),
-            expected: 0,
-        },
-        Case {
-            name: "unknown flag → usage",
-            args: &["--nope"],
-            config: None,
-            expected: 1,
-        },
-        Case {
-            name: "config show, unsupported version → usage",
-            args: &["config", "show"],
-            config: Some("version = 2\n"),
-            expected: 1,
-        },
-        Case {
-            name: "config show, unknown key → usage",
-            args: &["config", "show"],
-            config: Some("version = 1\nbogus = true\n"),
-            expected: 1,
-        },
-        Case {
-            name: "config show, missing config → usage",
-            args: &["config", "show"],
-            config: None,
-            expected: 1,
-        },
-        Case {
-            name: "config show, rule omitting severity → usage (no implicit fallback)",
-            args: &["config", "show"],
-            config: Some(
-                "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\n",
-            ),
-            expected: 1,
-        },
-        Case {
-            name: "config show, severity token in the scope key → usage (scope ≠ severity)",
-            args: &["config", "show"],
-            config: Some(
-                "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"deny\"\nscope = \"deny\"\n",
-            ),
-            expected: 1,
-        },
-    ];
-
+/// Run every case in its own scratch directory and assert its code.
+///
+/// `label` names the table, so two tables can share the runner without their
+/// scratch directories colliding.
+fn assert_exit_codes(label: &str, cases: &[Case]) {
     for (index, case) in cases.iter().enumerate() {
-        let dir = scratch(&format!("exit-case-{index}"));
+        let dir = scratch(&format!("exit-{label}-{index}"));
         fs::create_dir_all(&dir).expect("create case dir");
         let config_path = dir.join("batten.toml");
         match case.config {
@@ -238,13 +171,160 @@ fn exit_code_contract() {
                 let _ = fs::remove_file(&config_path);
             }
         }
-        let status = batten()
-            .args(case.args)
-            .current_dir(&dir)
-            .status()
-            .expect("run batten");
+        let mut command = batten();
+        command.args(case.args).current_dir(&dir);
+        for (key, value) in case.env {
+            command.env(key, value);
+        }
+        let status = command.status().expect("run batten");
         assert_eq!(status.code(), Some(case.expected), "case: {}", case.name);
     }
+}
+
+#[test]
+fn exit_code_contract() {
+    let cases = [
+        Case {
+            name: "no subcommand → usage (subcommand listing offered)",
+            args: &[],
+            config: None,
+            env: &[],
+            expected: 1,
+        },
+        Case {
+            name: "--help → success (help is an answer, not clap's exit 2)",
+            args: &["--help"],
+            config: None,
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            name: "--version → success",
+            args: &["--version"],
+            config: None,
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            name: "spec → success",
+            args: &["spec"],
+            config: None,
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            name: "config show, valid config → success",
+            args: &["config", "show"],
+            config: Some("version = 1\n"),
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            name: "unknown flag → usage",
+            args: &["--nope"],
+            config: None,
+            env: &[],
+            expected: 1,
+        },
+        Case {
+            name: "config show, unsupported version → usage",
+            args: &["config", "show"],
+            config: Some("version = 2\n"),
+            env: &[],
+            expected: 1,
+        },
+        Case {
+            name: "config show, unknown key → usage",
+            args: &["config", "show"],
+            config: Some("version = 1\nbogus = true\n"),
+            env: &[],
+            expected: 1,
+        },
+        Case {
+            name: "config show, missing config → usage",
+            args: &["config", "show"],
+            config: None,
+            env: &[],
+            expected: 1,
+        },
+        Case {
+            name: "config show, rule omitting severity → usage (no implicit fallback)",
+            args: &["config", "show"],
+            config: Some(
+                "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\n",
+            ),
+            env: &[],
+            expected: 1,
+        },
+        Case {
+            name: "config show, severity token in the scope key → usage (scope ≠ severity)",
+            args: &["config", "show"],
+            config: Some(
+                "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"deny\"\nscope = \"deny\"\n",
+            ),
+            env: &[],
+            expected: 1,
+        },
+    ];
+    assert_exit_codes("contract", &cases);
+}
+
+/// The §3 ladder and the §4 presentation booleans never change a verdict — they
+/// change how much is said about one (CLOUD-42).
+#[test]
+fn the_ladder_never_changes_an_exit_code() {
+    let cases = [
+        // Each case carries a VERB deliberately:
+        // `arg_required_else_help` makes a bare invocation exit 1, so
+        // `["--silent"]` alone would assert 0 and be wrong for a reason that has
+        // nothing to do with the ladder.
+        Case {
+            name: "--silent → the verb's own code, unchanged",
+            args: &["--silent", "spec"],
+            config: None,
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            name: "-q -v → no conflict; last flag wins",
+            args: &["-q", "-v", "spec"],
+            config: None,
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            name: "-vv → the next rung, not a second occurrence error",
+            args: &["-vv", "spec"],
+            config: None,
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            name: "--debug and --trace are hidden but real",
+            args: &["--trace", "spec"],
+            config: None,
+            env: &[],
+            expected: 0,
+        },
+        Case {
+            // Carries a verb so the 1 can only come from the rung parse: with a
+            // bare invocation clap errors first and the case would pass without
+            // `output::resolve` ever reading the variable.
+            name: "a bogus BATTEN_LOG_LEVEL → usage, never a rounded default",
+            args: &["spec"],
+            config: None,
+            env: &[("BATTEN_LOG_LEVEL", "chatty")],
+            expected: 1,
+        },
+        Case {
+            name: "an empty BATTEN_LOG_LEVEL is unset, not invalid",
+            args: &["spec"],
+            config: None,
+            env: &[("BATTEN_LOG_LEVEL", "")],
+            expected: 0,
+        },
+    ];
+    assert_exit_codes("ladder", &cases);
 }
 
 #[test]
@@ -1297,6 +1377,253 @@ fn bare_invocation_lists_subcommands() {
         output.stdout.is_empty(),
         "stdout is the answer channel; a bare invocation has no answer"
     );
+}
+
+// --- the §3 ladder and the §4 attended layer (CLOUD-42) ----------------------
+
+/// Run `batten` in `dir` with extra environment, capturing both streams.
+fn batten_with(dir: &std::path::Path, args: &[&str], env: &[(&str, &str)]) -> Output {
+    let mut command = batten();
+    command.args(args).current_dir(dir);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command.output().expect("run batten")
+}
+
+/// A scratch directory carrying this repository's own `batten.toml`, for the
+/// verbs that need a real authority.
+fn repo_with_committed_config(name: &str) -> PathBuf {
+    let dir = scratch(name);
+    fs::create_dir_all(&dir).expect("create dir");
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("batten.toml"),
+        dir.join("batten.toml"),
+    )
+    .expect("copy the committed authority");
+    dir
+}
+
+#[test]
+fn stdout_bytes_are_identical_at_every_rung() {
+    // The property that makes `-J` safe, asserted rather than promised: the
+    // ladder shapes stderr, and stdout is the answer. If a rung could touch
+    // stdout, a `--quiet` in a wrapper script would silently truncate a document
+    // its caller is parsing.
+    let dir = scratch("ladder-stdout");
+    fs::create_dir_all(&dir).expect("create dir");
+    let baseline = batten_with(&dir, &["spec"], &[]).stdout;
+    assert!(!baseline.is_empty(), "spec emits its answer");
+    for rung in [
+        vec!["--silent", "spec"],
+        vec!["-q", "spec"],
+        vec!["-qq", "spec"],
+        vec!["-v", "spec"],
+        vec!["-vv", "spec"],
+        vec!["--debug", "spec"],
+        vec!["--trace", "spec"],
+        vec!["--log-level", "trace", "spec"],
+        vec!["--no-color", "spec"],
+        vec!["--no-input", "spec"],
+    ] {
+        assert_eq!(
+            batten_with(&dir, &rung, &[]).stdout,
+            baseline,
+            "{rung:?} changed the answer channel"
+        );
+    }
+}
+
+#[test]
+fn json_output_is_identical_under_every_machine_signal() {
+    // Acceptance (d). The §4 signals decide whether a human is watching, which
+    // is a question about *stderr*. A data document that varied with `CI` or
+    // `TERM` would be unparseable by exactly the callers that set them.
+    let dir = repo_with_committed_config("machine-signal-json");
+    let baseline = batten_with(&dir, &["config", "lint", "-J"], &[]).stdout;
+    assert!(!baseline.is_empty());
+    for signal in [
+        ("CI", "1"),
+        ("TERM", "dumb"),
+        ("NO_COLOR", "1"),
+        ("CLICOLOR_FORCE", "1"),
+        ("CLICOLOR", "0"),
+        ("BATTEN_NO_COLOR", "1"),
+        ("BATTEN_NO_INPUT", "1"),
+    ] {
+        assert_eq!(
+            batten_with(&dir, &["config", "lint", "-J"], &[signal]).stdout,
+            baseline,
+            "{signal:?} changed the data channel"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_flag_is_a_usage_error_even_under_silent() {
+    // clap's own usage render cannot be ladder-gated: the flags may not have
+    // parsed, so suppressing it would leave a bare `1` explaining nothing.
+    let dir = scratch("silent-unknown-flag");
+    fs::create_dir_all(&dir).expect("create dir");
+    let output = batten_with(&dir, &["--silent", "--nope", "spec"], &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !output.stderr.is_empty(),
+        "exit 1 is fail-loud; --silent must not empty it"
+    );
+}
+
+#[test]
+fn a_library_usage_error_is_loud_under_silent_too() {
+    // The other half: a `UsageError` raised by the library and reported through
+    // `output::error`, which *does* see the mode. Several gates in this repo read
+    // this message rather than the code (CLOUD-40's DoD, CLOUD-48's fail-loud
+    // test), so the invariant is bundle-wide, not local to clap.
+    let dir = scratch("silent-missing-config");
+    fs::create_dir_all(&dir).expect("create dir");
+    let _ = fs::remove_file(dir.join("batten.toml"));
+    let output = batten_with(&dir, &["--silent", "config", "show"], &[]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("batten:"),
+        "a usage error names itself even at the quietest rung"
+    );
+}
+
+#[test]
+fn the_hidden_rungs_are_absent_from_help_but_still_parse() {
+    let dir = scratch("hidden-rungs");
+    fs::create_dir_all(&dir).expect("create dir");
+    let help = String::from_utf8_lossy(&batten_with(&dir, &["--help"], &[]).stdout).into_owned();
+    for shown in [
+        "--silent",
+        "--quiet",
+        "--verbose",
+        "--no-color",
+        "--no-input",
+    ] {
+        assert!(help.contains(shown), "--help must list {shown}");
+    }
+    for hidden in ["--debug", "--trace", "--log-level"] {
+        assert!(!help.contains(hidden), "--help must not list {hidden}");
+    }
+    // Hidden is a `--help` property, not an undeclared flag: each still parses.
+    // `--log-level` is the one that names a rung, so it carries its value.
+    for argv in [
+        vec!["--debug", "spec"],
+        vec!["--trace", "spec"],
+        vec!["--log-level", "trace", "spec"],
+    ] {
+        assert_eq!(
+            batten_with(&dir, &argv, &[]).status.code(),
+            Some(0),
+            "{argv:?} must still parse"
+        );
+    }
+}
+
+#[test]
+fn the_ladder_is_emitted_in_the_spec_as_taking_no_value() {
+    // `spec.rs` reported `takes_value: true` for every counted flag until
+    // `ArgAction::Count` joined the boolean actions — a lie a completion script
+    // acts on by eating the next word.
+    let dir = scratch("spec-counted");
+    fs::create_dir_all(&dir).expect("create dir");
+    let document: serde_json::Value =
+        serde_json::from_slice(&batten_with(&dir, &["spec"], &[]).stdout).expect("spec is JSON");
+    let flags = document["flags"].as_array().expect("root flags");
+    for id in ["silent", "quiet", "verbose", "debug", "trace"] {
+        let flag = flags
+            .iter()
+            .find(|flag| flag["name"] == id)
+            .unwrap_or_else(|| panic!("{id} is in the spec"));
+        assert_eq!(flag["takes_value"], serde_json::json!(false), "{id}");
+    }
+    let named = flags
+        .iter()
+        .find(|flag| flag["name"] == "log_level")
+        .expect("log_level is in the spec");
+    assert_eq!(named["takes_value"], serde_json::json!(true));
+}
+
+// --- the data channel reaches three more verbs (CLOUD-42) --------------------
+
+#[test]
+fn config_epoch_emits_the_digest_and_the_surface_it_covers() {
+    let dir = scratch("epoch-json");
+    fs::create_dir_all(&dir).expect("create dir");
+    // Its own authority rather than this repository's: the committed `[epoch]`
+    // list names four files that do not exist in a scratch directory, and an
+    // unreadable tracked path is exit 1 by design (never a silent skip).
+    fs::write(
+        dir.join("batten.toml"),
+        "version = 1\n\n[epoch]\ntracked = [\"batten.toml\"]\n",
+    )
+    .expect("write config");
+    let plain = batten_with(&dir, &["config", "epoch"], &[]);
+    assert_eq!(plain.status.code(), Some(0));
+    let value = String::from_utf8_lossy(&plain.stdout).trim().to_owned();
+
+    let output = batten_with(&dir, &["config", "epoch", "-J"], &[]);
+    assert_eq!(output.status.code(), Some(0));
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("epoch -J is JSON");
+    assert_eq!(document["epoch"], serde_json::json!(value));
+    let tracked = document["tracked"].as_array().expect("tracked is a list");
+    assert!(
+        tracked.iter().any(|path| path == "batten.toml"),
+        "the surface names the authority that governs it"
+    );
+    // Paths, never bytes: the digest attributes a surface, it does not carry it.
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("min_batten_version"));
+}
+
+#[test]
+fn config_lint_emits_its_document_even_when_clean() {
+    // A data channel emits unconditionally. JSON that is sometimes absent is
+    // unparseable, which is why the empty case is the one worth pinning.
+    let dir = repo_with_committed_config("lint-json-clean");
+    let output = batten_with(&dir, &["config", "lint", "-J"], &[]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lint -J is JSON");
+    assert_eq!(document["smells"], serde_json::json!([]));
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn config_lint_json_carries_the_same_smells_the_pointer_lines_do() {
+    let dir = scratch("lint-json-smelly");
+    fs::create_dir_all(&dir).expect("create dir");
+    // An empty declared set is a smell, and one that needs no rule to trigger.
+    fs::write(
+        dir.join("batten.toml"),
+        "version = 1
+protected = []
+",
+    )
+    .expect("write config");
+    let plain = batten_with(&dir, &["config", "lint"], &[]);
+    assert_eq!(plain.status.code(), Some(2), "a smell is a policy verdict");
+    let lines = String::from_utf8_lossy(&plain.stdout).into_owned();
+
+    let output = batten_with(&dir, &["config", "lint", "-J"], &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the encoding never changes the verdict"
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("lint -J is JSON");
+    let smells = document["smells"].as_array().expect("smells is a list");
+    assert!(!smells.is_empty());
+    for smell in smells {
+        let id = smell["id"].as_str().expect("an id");
+        let at = smell["at"].as_str().expect("a location");
+        assert!(lines.contains(id), "the human channel names {id} too");
+        assert!(lines.contains(at), "the human channel points at {at} too");
+    }
 }
 
 // --- receipts (CLOUD-203) ----------------------------------------------------

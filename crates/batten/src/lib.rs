@@ -20,6 +20,7 @@ pub mod hook;
 pub mod identity;
 pub mod lint;
 pub mod markers;
+pub mod output;
 pub mod receipt;
 pub mod resolve;
 pub mod rules;
@@ -40,6 +41,7 @@ pub use config::Config;
 pub use effect::Effect;
 pub use error::{Denial, UsageError};
 pub use exit::ExitCode;
+pub use output::{Mode, Presentation, Verbosity};
 pub use resolve::{Overrides, Resolved, Source};
 pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 
@@ -86,7 +88,7 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         // not apply — a receipt records policy (as a digest), it never resolves it.
         Some(Command::Receipt { command }) => match command {
             ReceiptCommand::Record { check } => receipt::run_record(&check),
-            ReceiptCommand::Status { check } => receipt::run_status(&check, out),
+            ReceiptCommand::Status { check, json } => receipt::run_status(&check, json, out),
         },
     }
 }
@@ -239,6 +241,28 @@ struct DeltaView<'a> {
 /// a `warn` finding is reported without failing the run unless the resolved
 /// `fail_on_warning` setting promotes it (CLOUD-49). Reporting is unaffected by
 /// that promotion: a warn finding prints either way, and only the verdict moves.
+/// The `config epoch -J` document: the digest and the surface it covers.
+#[derive(Debug, serde::Serialize)]
+struct EpochReport<'a> {
+    epoch: &'a str,
+    tracked: &'a [String],
+}
+
+/// One smell in the `config lint -J` payload, split into the parts the human
+/// pointer line concatenates.
+#[derive(Debug, serde::Serialize)]
+struct SmellView<'a> {
+    at: String,
+    id: &'a str,
+}
+
+/// The `config lint -J` document. A struct rather than a bare array so the count
+/// is a length a consumer can read without a second convention.
+#[derive(Debug, serde::Serialize)]
+struct LintReport<'a> {
+    smells: Vec<SmellView<'a>>,
+}
+
 fn run_rules(
     out: &mut dyn Write,
     overrides: &Overrides,
@@ -398,23 +422,54 @@ fn run_config(
         // The epoch is a pure function of the tracked files' bytes, so it is
         // read-effect and byte-stable. An unreadable tracked path propagates as
         // an internal error (exit 3) rather than being skipped — see `epoch`.
-        ConfigCommand::Epoch => {
+        ConfigCommand::Epoch { json } => {
             // The epoch covers whichever authority governed the run: under
             // `--config-from` that is the ref's surface, never the working
             // tree's (CLOUD-31). An epoch attributing a run to a config that
             // did not govern it would be worse than none.
-            let value = epoch::compute(Path::new("."), overrides.config_from.as_deref())?;
-            writeln!(out, "{value}")?;
+            let (value, tracked) =
+                epoch::describe(Path::new("."), overrides.config_from.as_deref())?;
+            if *json {
+                // The digest alone cannot say what it covers, and a caller
+                // stamping it onto a record needs both halves — so `-J` adds the
+                // governing surface rather than re-encoding the value. Paths, not
+                // bytes: still a pointer (non-negotiable rule 4).
+                let report = EpochReport {
+                    epoch: &value,
+                    tracked: &tracked,
+                };
+                writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+            } else {
+                writeln!(out, "{value}")?;
+            }
             Ok(ExitCode::Success)
         }
-        ConfigCommand::Lint => {
+        ConfigCommand::Lint { json } => {
             let smells = lint::run(Path::new("."), overrides.config_from.as_deref())?;
-            for smell in &smells {
-                writeln!(out, "{}", smell.line_text())?;
+            if *json {
+                // Emitted unconditionally, including the clean run: JSON that is
+                // sometimes absent is unparseable. `at` is rendered through
+                // `Where`'s own `Display` rather than by deriving `Serialize` on
+                // the domain type, so the line-or-key union has exactly one
+                // spelling across both channels.
+                let report = LintReport {
+                    smells: smells
+                        .iter()
+                        .map(|smell| SmellView {
+                            at: smell.at.to_string(),
+                            id: smell.id,
+                        })
+                        .collect(),
+                };
+                writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+            } else {
+                for smell in &smells {
+                    writeln!(out, "{}", smell.line_text())?;
+                }
+                // The count is stated even at zero: silence would be
+                // indistinguishable from "the lint did not run".
+                writeln!(out, "config-lint: {} smell(s)", smells.len())?;
             }
-            // The count is stated even at zero: silence would be
-            // indistinguishable from "the lint did not run".
-            writeln!(out, "config-lint: {} smell(s)", smells.len())?;
             Ok(ExitCode::verdict(!smells.is_empty()))
         }
     }

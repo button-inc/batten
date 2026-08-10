@@ -101,6 +101,8 @@ pub enum ReceiptCommand {
     Status {
         /// The check whose receipt is judged.
         check: String,
+        /// Emit the verdict as byte-stable JSON instead of a pointer line.
+        json: bool,
     },
 }
 
@@ -114,9 +116,15 @@ pub enum ConfigCommand {
         json: bool,
     },
     /// Report policy smells in `batten.toml`.
-    Lint,
+    Lint {
+        /// Emit the smells as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
     /// Print the content hash of the governing config surface.
-    Epoch,
+    Epoch {
+        /// Emit the epoch and the surface it covers as byte-stable JSON.
+        json: bool,
+    },
 }
 
 /// Subcommands of `generate`.
@@ -189,8 +197,12 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 "show" => Some(ConfigCommand::Show {
                     json: flag(matches, "json"),
                 }),
-                "lint" => Some(ConfigCommand::Lint),
-                "epoch" => Some(ConfigCommand::Epoch),
+                "lint" => Some(ConfigCommand::Lint {
+                    json: flag(matches, "json"),
+                }),
+                "epoch" => Some(ConfigCommand::Epoch {
+                    json: flag(matches, "json"),
+                }),
                 _ => None,
             })
             .map(|command| Command::Config { command }),
@@ -219,7 +231,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 let check = matches.get_one::<String>("check")?.clone();
                 match name {
                     "record" => Some(ReceiptCommand::Record { check }),
-                    "status" => Some(ReceiptCommand::Status { check }),
+                    "status" => Some(ReceiptCommand::Status {
+                        check,
+                        json: flag(matches, "json"),
+                    }),
                     _ => None,
                 }
             })
@@ -254,6 +269,9 @@ mod tests {
             .expect("path is declared");
         for flag in decl.flags {
             let value = match flag.value {
+                // A counted flag consumes nothing, so it never contributes a
+                // token to the minimal argv — and it is never required.
+                ValueDecl::Count => continue,
                 ValueDecl::Bool => {
                     if flag.required {
                         argv.push(format!("--{}", flag.long.expect("a bool flag has a long")));
@@ -340,7 +358,8 @@ mod tests {
             parse(&["receipt", "status", "verify"]).command,
             Some(Command::Receipt {
                 command: ReceiptCommand::Status {
-                    check: "verify".to_owned()
+                    check: "verify".to_owned(),
+                    json: false,
                 }
             })
         );

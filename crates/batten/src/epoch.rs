@@ -102,13 +102,28 @@ pub fn tracked_paths(config: &Config) -> Result<Vec<String>> {
 /// repo-relative path, or cannot be read. See the module docs: skipping an
 /// unreadable path would forge a stable epoch over a changed surface.
 pub fn compute(dir: &Path, base_ref: Option<&str>) -> Result<String> {
+    Ok(describe(dir, base_ref)?.0)
+}
+
+/// The epoch **and** the surface it covers, from one read of the authority.
+///
+/// The pair rather than two calls: `config epoch -J` reports both, and resolving
+/// the tracked list a second time could read a different authority than the one
+/// the digest was taken over — a document whose two halves disagree is worse
+/// than either half alone.
+///
+/// # Errors
+///
+/// As [`compute`].
+pub fn describe(dir: &Path, base_ref: Option<&str>) -> Result<(String, Vec<String>)> {
     let config = authority(dir, base_ref)?;
+    let tracked = tracked_paths(&config)?;
     let mut entries = Vec::new();
-    for path in tracked_paths(&config)? {
-        let contents = read_tracked(dir, &path, base_ref)?;
-        entries.push((path, contents));
+    for path in &tracked {
+        let contents = read_tracked(dir, path, base_ref)?;
+        entries.push((path.clone(), contents));
     }
-    Ok(surface_fingerprint(&entries).to_hex())
+    Ok((surface_fingerprint(&entries).to_hex(), tracked))
 }
 
 /// The config whose `[epoch] tracked` list governs, from the same place its
