@@ -62,12 +62,41 @@ tool_with() {
 	[ "$status" -eq 0 ]
 }
 
-@test "a tool that locks no platform at all is exempt, not a failure" {
-	# npm, pipx and core:rust resolve at install time and lock no URLs.
+@test "a tool that locks no platform is exempt only if its backend cannot lock one" {
+	# npm, pipx and core:rust resolve through their own package manager and lock
+	# no URLs, so locking nothing is the whole truth about them.
 	printf '[[tools.rust]]\nversion = "1.85.0"\nbackend = "core:rust"\n\n' >"$LOCK"
 	printf '[[tools."npm:prettier"]]\nversion = "3.0.0"\nbackend = "npm:prettier"\n\n' >>"$LOCK"
+	printf '[[tools."pipx:serena-agent"]]\nversion = "1.6.1"\nbackend = "pipx:serena-agent"\n\n' >>"$LOCK"
 	run "$GATE" "$LOCK"
 	[ "$status" -eq 0 ]
+}
+
+@test "an asset-fetching backend that locks no platform is unlocked, not exempt" {
+	# CLOUD-281, verbatim: this is the entry that passed for its whole life.
+	printf '[[tools."ubi:rust-cross/cargo-zigbuild"]]\nversion = "0.23.0"\nbackend = "ubi:rust-cross/cargo-zigbuild"\n\n' >"$LOCK"
+	run "$GATE" "$LOCK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"locks no platform"* ]]
+	[[ "$output" == *"unverified download"* ]]
+}
+
+@test "the exemption is an allowlist, so an unrecognised backend must lock" {
+	# Fail-closed: a backend nobody has classified is checked, not waved through.
+	printf '[[tools."newthing:o/n"]]\nversion = "1"\nbackend = "newthing:o/n"\n\n' >"$LOCK"
+	run "$GATE" "$LOCK"
+	[ "$status" -eq 1 ]
+
+	printf '[[tools."github:o/n"]]\nversion = "1"\nbackend = "github:o/n"\n\n' >"$LOCK"
+	run "$GATE" "$LOCK"
+	[ "$status" -eq 1 ]
+}
+
+@test "a tool that locks no platform and declares no backend is a failure" {
+	printf '[[tools.mystery]]\nversion = "1"\n\n' >"$LOCK"
+	run "$GATE" "$LOCK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"declares no backend"* ]]
 }
 
 @test "the required set is overridable, and actually changes the verdict" {

@@ -24,10 +24,15 @@ pkl = "0.32.1"                        # evaluates hk.pkl as a check, not only wh
 # npm tool here, so node comes with it and nothing else depends on either.
 node = "24"
 "npm:prettier" = "3.6.2"
-zig = "0.16"                             # the linker for the macOS release build and the darwin-link gate: zig carries Darwin linker support, so Linux emits a Mach-O with no Apple SDK
-"ubi:rust-cross/cargo-zigbuild" = "0.23" # drives cargo through zig. Prebuilt via ubi, so its own MSRV (1.88) never constrains this repo's pinned 1.85
-zizmor = "1.29.0"                        # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
-uv = "0.8"                               # fast Rust installer the pipx: backend uses to fetch Serena
+zig = "0.16"             # the linker for the macOS release build and the darwin-link gate: zig carries Darwin linker support, so Linux emits a Mach-O with no Apple SDK
+# github:, not ubi: — same upstream release assets, but the github backend locks
+# a url and a per-platform checksum where ubi locked a bare version and nothing
+# else, which made this the one tool installed from an unverified download
+# (CLOUD-281). Prebuilt either way, so its own MSRV (1.88) never constrains this
+# repo's pinned 1.85.
+"github:rust-cross/cargo-zigbuild" = "0.23"
+zizmor = "1.29.0"                           # GitHub Actions static analysis; run via `mise run zizmor` (in `verify` and CI)
+uv = "0.8"                                  # fast Rust installer the pipx: backend uses to fetch Serena
 # Serena's LSP-backed semantic code tools (see .mcp.json). Pinned here — not in
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
 # The pipx backend installs it with `uv` (present above), keeping the fast resolver.

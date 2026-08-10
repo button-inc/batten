@@ -26,9 +26,14 @@
 # The distinguishing test is whether `mise lock` reproduces the entry: it does
 # for the musl stubs, and does not for the cargo-zigbuild key below.
 #
-# A tool with NO platform block is exempt, not a failure: the npm, pipx and
-# core:rust backends resolve at install time and lock no URLs at all. Partiality
-# is only meaningful for a tool that locks any platform.
+# A tool with NO platform block is judged on its BACKEND, not on the absence.
+# The npm, pipx and core:rust backends resolve through their own package manager
+# and lock no URLs at all, so for them it is exempt; a backend that fetches a
+# release asset could lock one, so for them it means unlocked. Keying this on
+# the absence alone is what let `ubi:rust-cross/cargo-zigbuild` sit here with a
+# bare version and no checksum, passing on every run (CLOUD-281) — the same
+# shape as the defect this gate replaced, one level down. Partiality, below, is
+# still only meaningful for a tool that locks at least one platform.
 #
 # Currency — "would regenerating produce something different?" — is a question
 # about upstream, not about the commit, so it does not belong on the landing
@@ -177,6 +182,14 @@ parsed=$(awk '
 		next
 	}
 	/^\[/ { platform = "" ; next }
+	# `backend` appears only in a tool header table; a platform table carries
+	# checksum/url/url_api and never this key.
+	/^backend = / && platform == "" && tool != "" {
+		line = $0
+		sub(/^backend = /, "", line); gsub(/"/, "", line)
+		print "BACK\t" tool "\t" line
+		next
+	}
 	/^url = / && platform != "" { print "URL\t" tool "\t" platform }
 	END { if (tool != "") print "END\t" tool }
 ' "$lockfile")
@@ -186,8 +199,31 @@ tools=$(awk -F'\t' '$1=="TOOL"{print $2"\t"$3}' <<<"$parsed")
 while IFS=$'\t' read -r tool toolline; do
 	[ -n "$tool" ] || continue
 	plats=$(awk -F'\t' -v t="$tool" '$1=="PLAT" && $2==t {print $3"\t"$4}' <<<"$parsed")
-	# No platform block at all: an npm/pipx/core backend that locks no URLs.
-	[ -n "$plats" ] || continue
+	# No platform block at all. Whether that is fine depends on the BACKEND, not
+	# on the absence itself — and keying it on the absence is how `ubi:
+	# rust-cross/cargo-zigbuild` passed this gate for its whole life while
+	# locking a bare version and no checksum, the one tool here installed from an
+	# unverified download (CLOUD-281). `npm:`/`pipx:`/`core:rust` resolve through
+	# their own package manager and CANNOT lock a url; a fetch-an-asset backend
+	# can, so for one of those "locks nothing" means unlocked, not exempt.
+	#
+	# The list is of the exempt backends, so an unrecognised backend is required
+	# to lock. That is the fail-closed direction: a backend added later is
+	# checked by default, and only a deliberate edit here can excuse it.
+	if [ -z "$plats" ]; then
+		backend=$(awk -F'\t' -v t="$tool" '$1=="BACK" && $2==t {print $3; exit}' <<<"$parsed")
+		case $backend in
+		npm:* | pipx:* | cargo:* | go:* | gem:* | core:rust) continue ;;
+		"")
+			report "$label:$toolline: $tool — locks no platform and declares no backend, so what it installs cannot be determined"
+			continue
+			;;
+		*)
+			report "$label:$toolline: $tool — backend \`$backend\` fetches a release asset but locks no platform, so it installs an unverified download"
+			continue
+			;;
+		esac
+	fi
 
 	known_seen=""
 	while IFS=$'\t' read -r plat platline; do

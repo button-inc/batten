@@ -308,6 +308,45 @@ url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323116"
 url = "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip"
 url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323062"
 
+[[tools."github:rust-cross/cargo-zigbuild"]]
+version = "0.23.0"
+backend = "github:rust-cross/cargo-zigbuild"
+
+[tools."github:rust-cross/cargo-zigbuild"."platforms.linux-arm64"]
+checksum = "sha256:5917d5416884cba0f23c2653016f7f2df2ec04e74eb6b259598fecc066f8c429"
+url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/cargo-zigbuild-aarch64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974332"
+
+[tools."github:rust-cross/cargo-zigbuild"."platforms.linux-arm64-musl"]
+checksum = "sha256:5917d5416884cba0f23c2653016f7f2df2ec04e74eb6b259598fecc066f8c429"
+url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/cargo-zigbuild-aarch64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974332"
+
+[tools."github:rust-cross/cargo-zigbuild"."platforms.linux-x64"]
+checksum = "sha256:c636e4f72b6f40a40ddf0414c8c6056f78b87eea3be0edf01f08d65fa028a373"
+url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/cargo-zigbuild-x86_64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974354"
+
+[tools."github:rust-cross/cargo-zigbuild"."platforms.linux-x64-musl"]
+checksum = "sha256:f0aa9cc8220a84788c6e4a9b6d80422f041659227b680fdef982d5a8ddffddb4"
+url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974357"
+
+[tools."github:rust-cross/cargo-zigbuild"."platforms.macos-arm64"]
+checksum = "sha256:3d8f1ad296d3f3e97122607f7c972393c6329801027acb71bb7d17a4e30ef092"
+url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/cargo-zigbuild-aarch64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974334"
+
+[tools."github:rust-cross/cargo-zigbuild"."platforms.macos-x64"]
+checksum = "sha256:f8c746d12dfae79ac0704c5aa13631a05b24c3e4ee7216eb40f70943bd8ca7b1"
+url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/cargo-zigbuild-x86_64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974346"
+
+[tools."github:rust-cross/cargo-zigbuild"."platforms.windows-x64"]
+checksum = "sha256:82ff1207be9e9533267b83dbe33d0b16b30043f116dc336d9a526667fa27622a"
+url = "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.0/cargo-zigbuild-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/rust-cross/cargo-zigbuild/releases/assets/450974351"
+
 [[tools.hk]]
 version = "1.54.0"
 backend = "aqua:jdx/hk"
@@ -427,10 +466,6 @@ backend = "core:rust"
 
 [tools.rust.options]
 components = "clippy,rustfmt"
-
-[[tools."ubi:rust-cross/cargo-zigbuild"]]
-version = "0.23.0"
-backend = "ubi:rust-cross/cargo-zigbuild"
 
 [[tools.uv]]
 version = "0.8.24"
