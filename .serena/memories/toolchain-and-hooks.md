@@ -149,7 +149,7 @@ real failure (`lock-complete` rejecting the un-staged old lockfile) until the
 log was read directly. `pgrep -fa` shows the self-match immediately, and
 `pgrep -f "[h]k fix"` avoids it — but the waiter should not exist at all.
 
-There is nothing to wait *for*: a command already launched with
+There is nothing to wait _for_: a command already launched with
 `run_in_background` re-invokes the session on its exit. A second background call
 that watches the first is pure overhead, and each poll of it burns a turn.
 Launch the long thing, end the turn, act on the notification. When something
