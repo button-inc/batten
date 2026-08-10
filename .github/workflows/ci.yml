@@ -172,7 +172,7 @@ jobs:
           # through it; rust is the compiler. Nothing else is invoked here —
           # and this is the ONLY job that needs zig, the 17.3s pole the other
           # jobs used to pay for nothing. See the ci job.
-          install_args: rust zig ubi:rust-cross/cargo-zigbuild
+          install_args: rust zig github:rust-cross/cargo-zigbuild
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A per-target key: a leg's artifacts are target-specific and would
