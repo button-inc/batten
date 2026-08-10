@@ -208,6 +208,49 @@ pattern = "button-inc"
 severity = "deny"
 scope = "tree"
 
+# Never compile a third-party tool from source in this repository (CLOUD-86).
+#
+# A tool built here is a tool nobody attested: the build happens on whatever
+# toolchain the runner had, produces a binary no checksum covers, and takes as
+# long as the crate takes. Every tool this repo uses is pinned in `mise.toml` as
+# a prebuilt artifact with a locked url and a per-platform checksum — that is the
+# sanctioned path, and CLOUD-281 is the instance where the one tool NOT pinned
+# that way was the one installed from an unverified download.
+#
+# TWO SHAPES, one per file that can express it, because a `forbid` pattern is a
+# literal substring and the two files spell the same mistake differently:
+#
+#   mise.toml   a `cargo:` backend, which builds the crate on install. The
+#               pattern carries the opening quote because TOML bare keys cannot
+#               contain `:`, so a backend key is always quoted — and the quote is
+#               what keeps the row off prose that merely says "cargo".
+#   workflows   `cargo install`, the same thing spelled by hand in a step.
+#
+# NOT gated here, deliberately: whether a *prebuilt* artifact is attested. That is
+# the `[[provision]]` manifest's question (CLOUD-90), and a row here that fired on
+# `ubi:` or on an install-action step would be answering a different one. This
+# rule is about compiling, and `mise.toml`'s `github:` vs `ubi:` distinction is
+# CLOUD-281's.
+#
+# The exemption path is a `[[waiver]]` carrying a reason and an expiry
+# (CLOUD-208), never `severity = "allow"`: switching the rule off records nothing
+# and lapses never, which is the undesigned hatch the waiver surface replaced.
+[[rule]]
+id = "no-source-built-tool"
+kind = "forbid"
+glob = "mise.toml"
+pattern = "\"cargo:"
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "no-cargo-install-in-ci"
+kind = "forbid"
+glob = ".github/workflows/*.yml"
+pattern = "cargo install"
+severity = "deny"
+scope = "tree"
+
 # Which programs change the world, in the one §5 effect vocabulary, each with the
 # sanctioned mutation to point at when it is refused.
 #

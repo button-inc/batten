@@ -128,9 +128,13 @@ jobs:
       #
       # There WAS an install-action step here — a second provisioning path for a
       # mise-pinned tool — and it stopped working (CLOUD-259): upstream dropped
-      # zig, falls back to cargo-binstall (no prebuilt), then to cargo install
-      # (zig is not a crate). Both fallbacks are dead ends, so the step could only
-      # fail, and both Darwin legs died before reaching the build. cargo-zigbuild
+      # zig, falls back to cargo-binstall (no prebuilt), then to a from-source
+      # crate build (zig is not a crate). Both fallbacks are dead ends, so the step
+      # could only fail, and both Darwin legs died before reaching the build. The
+      # source-build fallback is spelled in prose rather than as the literal
+      # command because `no-cargo-install-in-ci` bans that literal in this file —
+      # a gate that fired on its own documentation is a gate people delete.
+      # cargo-zigbuild
       # was already resolving out of mise's install dir on those runs — the step
       # re-found what mise had installed and contributed only a way to fail.
       #
