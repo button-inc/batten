@@ -76,6 +76,11 @@ pub enum Command {
         /// The chosen sub-verb.
         command: GenerateCommand,
     },
+    /// Run a command, passing its streams and exit code through unchanged.
+    Exec {
+        /// The command and its arguments, exactly as the caller wrote them.
+        command: Vec<String>,
+    },
     /// Adjudicate a mediated tool call read from stdin.
     Hook {
         /// The harness whose payload to decode and whose decision channel to answer in.
@@ -222,6 +227,21 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 _ => None,
             })
             .map(|command| Command::Generate { command }),
+        // `get_many`, not `get_one`: the tail is an `Append` action, so every
+        // token after `--` is a separate value and the child's argv is the whole
+        // list. An empty list is unreachable — clap enforces `num_args(1..)` —
+        // and is mapped to `None` rather than an empty exec.
+        "exec" => {
+            let command: Vec<String> = matches
+                .get_many::<String>("command")
+                .map(|values| values.cloned().collect())
+                .unwrap_or_default();
+            if command.is_empty() {
+                None
+            } else {
+                Some(Command::Exec { command })
+            }
+        }
         "hook" => matches
             .get_one::<Harness>("harness")
             .map(|harness| Command::Hook { harness: *harness }),
@@ -272,6 +292,13 @@ mod tests {
                 // A counted flag consumes nothing, so it never contributes a
                 // token to the minimal argv — and it is never required.
                 ValueDecl::Count => continue,
+                // A trailing variadic is required and positional, so the minimal
+                // argv needs `--` plus one token for the child.
+                ValueDecl::Trailing => {
+                    argv.push("--".to_owned());
+                    argv.push("true".to_owned());
+                    continue;
+                }
                 ValueDecl::Bool => {
                     if flag.required {
                         argv.push(format!("--{}", flag.long.expect("a bool flag has a long")));

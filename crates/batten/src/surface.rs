@@ -50,6 +50,13 @@ pub enum ValueDecl {
     Count,
     /// Consumes a free-form string.
     Str,
+    /// Consumes every remaining token, verbatim — a trailing variadic.
+    ///
+    /// For a passthrough (`batten exec -- <cmd> <args>...`), where the tail is
+    /// another program's argv and not Batten's to interpret. `allow_hyphen_values`
+    /// is load-bearing rather than defensive: without it a child's own `-v` parses
+    /// as Batten's verbosity rung, which the §3 ladder makes an active hazard.
+    Trailing,
     /// Consumes one token of a `ValueEnum`.
     ///
     /// The parser is a pointer to the derive itself rather than a list of
@@ -190,6 +197,23 @@ impl FlagDecl {
             hidden: false,
             rung: Rung::None,
             value: ValueDecl::Str,
+        }
+    }
+
+    /// A required trailing variadic: every remaining token, verbatim.
+    const fn trailing(id: &'static str, help: &'static str) -> Self {
+        FlagDecl {
+            id,
+            long: None,
+            short: None,
+            help,
+            env: EnvDecl::None,
+            global: false,
+            positional: true,
+            required: true,
+            hidden: false,
+            rung: Rung::None,
+            value: ValueDecl::Trailing,
         }
     }
 
@@ -561,6 +585,25 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Unclassified,
         flags: &[JSON],
     },
+    // `exec` runs a command the caller names, so it is the second process-spawning
+    // verb after `enforce` and takes the same conservative reading. It is a
+    // TRANSPARENT verb: the child's streams are inherited and the child's exit
+    // code is returned unchanged, which makes it the one place a code outside the
+    // §7 table can appear — see `crate::exit`'s note. Batten still never invents a
+    // `2` here, which is the property fail-open actually depends on.
+    CommandDecl {
+        path: "exec",
+        about: "Run a command, passing its streams and its exit code through unchanged",
+        // The child owns stdout, so Batten must not interleave a document of its
+        // own with the child's bytes. The pointer surface over captured output is
+        // CLOUD-162's, on stderr.
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[FlagDecl::trailing(
+            "command",
+            "The command to run, after `--`, with its own arguments intact",
+        )],
+    },
     CommandDecl {
         path: "config",
         about: "Inspect configuration",
@@ -741,7 +784,14 @@ pub fn consumes_a_value(token: &str) -> bool {
         .chain(SURFACE)
         .flat_map(|decl| decl.flags)
         .filter(|flag| !flag.positional)
-        .filter(|flag| !matches!(flag.value, ValueDecl::Bool | ValueDecl::Count))
+        // `Trailing` consumes the whole tail rather than one token, and it is a
+        // positional besides, so the argv scan has nothing to skip for it.
+        .filter(|flag| {
+            !matches!(
+                flag.value,
+                ValueDecl::Bool | ValueDecl::Count | ValueDecl::Trailing
+            )
+        })
         .any(|flag| {
             flag.long.is_some_and(|long| token == format!("--{long}"))
                 || flag.short.is_some_and(|short| token == format!("-{short}"))
@@ -800,6 +850,22 @@ fn arg_of(decl: &FlagDecl) -> Arg {
         // `Count` rather than `SetTrue` so a second occurrence is the next rung
         // rather than a usage error.
         ValueDecl::Count => arg.action(ArgAction::Count),
+        // The tail belongs to another program, so clap must stop parsing once it
+        // starts: `trailing_var_arg` takes every remaining token as a value and
+        // `allow_hyphen_values` keeps a child's own flags out of Batten's parser.
+        //
+        // `last(true)` rather than `trailing_var_arg(true)` — clap refuses to
+        // combine the two, and `last` is the one that makes `--` MANDATORY. That
+        // matters beyond taste: [`crate::output`] reads the §3 ladder from raw
+        // argv, and without a guaranteed separator it cannot tell a child's `-v`
+        // from Batten's. Measured before this was pinned down: `batten exec cargo
+        // test -v` raised Batten's own verbosity. A required `--` makes the
+        // boundary unambiguous for both parsers.
+        ValueDecl::Trailing => arg
+            .action(ArgAction::Append)
+            .num_args(1..)
+            .last(true)
+            .allow_hyphen_values(true),
         ValueDecl::Str => arg.action(ArgAction::Set),
         ValueDecl::Enum { parser, default } => {
             let arg = arg.action(ArgAction::Set).value_parser(parser());

@@ -40,6 +40,16 @@ file itself for the "why", this is only the "where":
   `out: &mut dyn Write` and have no `Mode` to consult, which is what makes `-J`
   structurally ungatable. `verdict` and `error` are ungated: exit `1` is
   fail-loud, so `--silent` must not empty it.
+- `exec.rs` — `batten exec -- <cmd>` (CLOUD-285): the transparent passthrough two
+  Phase 2 issues were waiting on. Three things pass through untouched — the
+  child's argv (`ValueDecl::Trailing`, with `allow_hyphen_values` so a child's own
+  `-v` is not read as Batten's rung), its inherited streams, and **its exit
+  code**. That last is the one deliberate exception to the §7 table: the code is
+  the child's, so it travels as `error::Passthrough` rather than widening
+  `ExitCode`, which stays total over the four codes Batten _chooses_. Batten never
+  mints a `2` here — an unspawnable program is exit 1 — and `hook` is not
+  reachable from this path, so no host can read a wrapped code as a deny.
+  Capturing the streams is CLOUD-162's, not this module's.
 - `effect.rs` — the house-style §5 effect _vocabulary_ (`read`/`write`/
   `destructive`/`unclassified`/`ask`) and its stable tokens. The classification
   itself lives on each `surface.rs` row, not in a second table keyed by the

@@ -12,6 +12,20 @@
 //! makes fail-open **structural**: [`ExitCode::Usage`] and [`ExitCode::Internal`]
 //! are the only codes a failure of Batten's own can produce, and neither blocks.
 //!
+//! ## The one verb whose code is not in this table
+//!
+//! `batten exec` is a transparent passthrough (CLOUD-285): it returns the wrapped
+//! command's exit code unchanged, so `batten exec -- sh -c 'exit 7'` exits `7`.
+//! That code is **the child's answer, not Batten's**, and it is deliberately not a
+//! variant here — the table stays total over the four codes Batten *chooses*, and
+//! a code it did not choose travels as [`crate::Passthrough`] instead of being
+//! smuggled in as a fifth row.
+//!
+//! The property fail-open rests on is untouched: **Batten never mints a `2` on
+//! that path.** A `2` from `exec` came from the child, and a mediated call is
+//! adjudicated by [`crate::hook`], which is not reachable from `exec`. So no host
+//! can read a wrapped command's status as a policy verdict of Batten's.
+//!
 //! The cost, accepted deliberately: this inverts the `grep`/`eslint` habit of
 //! `1` for findings and `2` for tool error. The two conventions collide on one
 //! byte, and the mediation channel wins it — that is the surface where a wrong

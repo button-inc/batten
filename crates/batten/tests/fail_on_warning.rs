@@ -338,14 +338,16 @@ fn walk_spec(node: &serde_json::Value, promotion_flags: &mut Vec<String>, verbs:
 fn there_is_exactly_one_promotion_knob_and_exec_is_not_a_consumer() {
     // The scope boundary, asserted on the emitted surface itself (§11).
     //
-    // `batten exec` (CLOUD-117) does not exist yet, so the acceptance clause
-    // "the setting does not alter exec behavior" cannot be exercised against a
-    // real exec run today. What *can* be pinned now is the structural half —
-    // the surface declares one promotion setting and no per-verb variant — plus
-    // a tripwire on the verb's arrival. When `exec` lands, this test fails and
-    // must be replaced by the real assertion: an exec output match exits 2
-    // whether or not `fail_on_warning` is set, because a warn-but-pass exec
-    // match would be invisible to an agent reading only the exit code.
+    // This replaces the tripwire that stood here until `batten exec` landed
+    // (CLOUD-285). The clause it was deferring — "the setting does not alter exec
+    // behavior" — is now exercised for real against a running exec below, rather
+    // than only asserted structurally.
+    //
+    // What is still deferred, and re-pointed rather than dropped: an exec OUTPUT
+    // PREDICATE match must fail whether or not `fail_on_warning` is set, because a
+    // warn-but-pass match would be invisible to an agent reading only the exit
+    // code. Predicates are CLOUD-117 and do not exist yet, so the tripwire at the
+    // end of this test now watches for their config key instead of for the verb.
     let dir = repo("fow-surface", &warn_only(), None);
     let spec: serde_json::Value =
         serde_json::from_str(&stdout(&run(&dir, &["spec"], None))).expect("valid spec JSON");
@@ -369,11 +371,57 @@ fn there_is_exactly_one_promotion_knob_and_exec_is_not_a_consumer() {
         "no verb may own a promotion knob: {strays:?}"
     );
 
+    // The verb exists now, so its absence of a promotion knob is a real
+    // assertion rather than a statement about an empty set.
     assert!(
-        !verbs
-            .iter()
-            .any(|path| path == "exec" || path.starts_with("exec ")),
-        "`batten exec` has landed (CLOUD-117): replace this tripwire with the real \
-         assertion that an exec output match fails regardless of fail_on_warning"
+        verbs.iter().any(|path| path == "exec"),
+        "`batten exec` must be in the emitted surface"
+    );
+
+    // And the acceptance clause, exercised rather than asserted: a promoted repo
+    // full of warn findings changes nothing about what a wrapped command returns.
+    // `exec` renders no verdict, so there is nothing for a promotion to promote.
+    let promoted = repo("fow-exec-promoted", &config("", "warn"), None);
+    for env in [None, Some("true")] {
+        let clean = run(
+            &promoted,
+            &["--fail-on-warning", "exec", "--", "sh", "-c", "exit 0"],
+            env,
+        );
+        assert_eq!(
+            clean.status.code(),
+            Some(0),
+            "a promoted warn finding must not touch a clean wrapped command"
+        );
+        let failing = run(
+            &promoted,
+            &["--fail-on-warning", "exec", "--", "sh", "-c", "exit 7"],
+            env,
+        );
+        assert_eq!(
+            failing.status.code(),
+            Some(7),
+            "the child's code is the child's, whatever the promotion setting says"
+        );
+    }
+
+    // The re-pointed tripwire: when CLOUD-117 adds exec output predicates, they
+    // will surface as a resolved config key, and this must become the real
+    // assertion that a match fails regardless of promotion.
+    let document: serde_json::Value = serde_json::from_str(&stdout(&run(
+        &promoted,
+        &["config", "show", "--json"],
+        None,
+    )))
+    .expect("valid config JSON");
+    let keys: Vec<&String> = document
+        .as_object()
+        .map(|map| map.keys().collect())
+        .unwrap_or_default();
+    assert!(
+        !keys.iter().any(|key| key.contains("exec")),
+        "an exec-scoped config key has landed (CLOUD-117): replace this tripwire \
+         with the real assertion that an output-predicate match fails regardless \
+         of fail_on_warning, got {keys:?}"
     );
 }

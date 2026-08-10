@@ -36,8 +36,12 @@ fn main() -> ExitCode {
 
 /// Write a failure to stderr and pick its exit code.
 ///
-/// Three destinations, distinguished by type rather than by message, and **none
+/// Four destinations, distinguished by type rather than by message, and **none
 /// of them gated by the ladder**:
+///
+/// * A wrapped command's own code is not Batten's answer at all: `batten exec` is
+///   transparent, so the code is returned with **no output of Batten's own**.
+///   Saying anything here would be Batten narrating a result it did not produce.
 ///
 /// * A mediation deny is a *verdict*: it prints its reason unprefixed, because a
 ///   hook host hands stderr back to the model as the reason and `batten: ` there
@@ -48,6 +52,9 @@ fn main() -> ExitCode {
 ///   not empty it.
 /// * An internal failure to *complete* prints its full chain for diagnosis.
 fn report(failure: &anyhow::Error, mode: Mode, err: &mut dyn Write) -> ExitCode {
+    if let Some(passthrough) = failure.downcast_ref::<batten::Passthrough>() {
+        return ExitCode::from(passthrough.byte());
+    }
     if let Some(denial) = failure.downcast_ref::<batten::Denial>() {
         let _ = output::verdict(err, &denial.to_string());
         batten::ExitCode::Violation.into()

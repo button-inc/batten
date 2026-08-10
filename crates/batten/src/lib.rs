@@ -14,6 +14,7 @@ pub mod doctor;
 pub mod effect;
 pub mod epoch;
 pub mod error;
+pub mod exec;
 pub mod exit;
 pub mod git;
 pub mod hook;
@@ -39,7 +40,7 @@ use anyhow::Result;
 pub use cli::{Cli, Command, ConfigCommand, GenerateCommand, ReceiptCommand, SpecFormat};
 pub use config::Config;
 pub use effect::Effect;
-pub use error::{Denial, UsageError};
+pub use error::{Denial, Passthrough, UsageError};
 pub use exit::ExitCode;
 pub use output::{Mode, Presentation, Verbosity};
 pub use resolve::{Overrides, Resolved, Source};
@@ -83,6 +84,10 @@ pub fn run(cli: Cli, out: &mut dyn Write) -> Result<ExitCode> {
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Doctor { json }) => run_doctor(json, out),
         Some(Command::Generate { command }) => run_generate(&command, out),
+        // `exec` reads no config and renders no verdict: it runs what the caller
+        // named and reports what that returned. The §8 chain is deliberately not
+        // threaded through it — there is nothing here for policy to decide.
+        Some(Command::Exec { command }) => exec::run(&command),
         Some(Command::Hook { harness }) => run_hook(harness, &overrides, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.

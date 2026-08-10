@@ -56,6 +56,8 @@ fn flag_of(arg: &Arg) -> FlagSpec {
         // `Count` belongs here with the boolean actions: `-v` flips a rung, it
         // does not consume a token. Omitting it reported `takes_value: true` for
         // every ladder flag, which is a lie a completion script acts on.
+        // `Append` is deliberately NOT in this list: a trailing variadic consumes
+        // every remaining token, so `takes_value: true` is the honest answer.
         takes_value: !matches!(
             arg.get_action(),
             ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Count

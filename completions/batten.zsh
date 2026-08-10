@@ -104,6 +104,33 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(exec)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'*::command -- The command to run, after `--`, with its own arguments intact:_default' \
+&& ret=0
+;;
 (config)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -602,6 +629,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(exec)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (config)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__config_commands" \
@@ -708,6 +739,7 @@ _batten_commands() {
     local commands; commands=(
 'check:Run the applicable read-only gates against the repository' \
 'enforce:Run every configured rule, including kinds that execute a configured command' \
+'exec:Run a command, passing its streams and its exit code through unchanged' \
 'config:Inspect configuration' \
 'spec:Print the tool'\''s own command spec' \
 'doctor:Diagnose whether Batten can run in this repository' \
@@ -788,6 +820,11 @@ _batten__subcmd__enforce_commands() {
     local commands; commands=()
     _describe -t commands 'batten enforce commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__exec_commands] )) ||
+_batten__subcmd__exec_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten exec commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__generate_commands] )) ||
 _batten__subcmd__generate_commands() {
     local commands; commands=(
@@ -836,6 +873,7 @@ _batten__subcmd__help_commands() {
     local commands; commands=(
 'check:Run the applicable read-only gates against the repository' \
 'enforce:Run every configured rule, including kinds that execute a configured command' \
+'exec:Run a command, passing its streams and its exit code through unchanged' \
 'config:Inspect configuration' \
 'spec:Print the tool'\''s own command spec' \
 'doctor:Diagnose whether Batten can run in this repository' \
@@ -884,6 +922,11 @@ _batten__subcmd__help__subcmd__doctor_commands() {
 _batten__subcmd__help__subcmd__enforce_commands() {
     local commands; commands=()
     _describe -t commands 'batten help enforce commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__exec_commands] )) ||
+_batten__subcmd__help__subcmd__exec_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help exec commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__generate_commands] )) ||
 _batten__subcmd__help__subcmd__generate_commands() {

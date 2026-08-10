@@ -39,6 +39,10 @@
 //! whose order is the only total one available, with the value-consuming
 //! spellings skipped as *derived* from [`crate::surface`] rather than listed
 //! again here.
+//!
+//! The scan stops at `--`. Everything after it belongs to a wrapped command
+//! (`batten exec`), never to Batten, and `surface`'s trailing-variadic declaration
+//! makes that separator mandatory so the boundary is unambiguous for both parsers.
 
 use std::ffi::OsStr;
 use std::io::Write;
@@ -381,6 +385,13 @@ impl Presentation {
 
         while let Some(raw) = tokens.get(index) {
             index += 1;
+            // `--` ends Batten's argv and begins another program's (`batten exec`).
+            // Everything past it is the child's, so scanning on would let a wrapped
+            // command's own `-v` select Batten's verbosity rung — measured, before
+            // this stop existed, on `batten exec -- cargo test -v`.
+            if raw == "--" {
+                break;
+            }
             // `--log-level=trace` and `--log-level trace` are the same setting.
             let (token, inline) = match raw.split_once('=') {
                 Some((name, value)) if name.starts_with("--") => {
@@ -712,6 +723,20 @@ mod tests {
         // rung must not select one.
         assert_eq!(ladder(&["--strictness", "strict", "check"]), None);
         assert_eq!(ladder(&["--config-from", "-v", "check"]), None);
+    }
+
+    #[test]
+    fn the_scan_stops_at_the_argv_separator() {
+        // A wrapped command's flags are not Batten's. Without this, `batten exec --
+        // cargo test -v` raised Batten's verbosity and the child still got its
+        // flag, so the rung moved for a reason nobody typed.
+        assert_eq!(ladder(&["exec", "--", "cargo", "test", "-v"]), None);
+        assert_eq!(ladder(&["exec", "--", "sh", "-c", "--silent"]), None);
+        // Batten's own flags before the separator still count.
+        assert_eq!(
+            ladder(&["-q", "exec", "--", "cargo", "test", "-v"]),
+            Some(Verbosity::Quiet)
+        );
     }
 
     #[test]

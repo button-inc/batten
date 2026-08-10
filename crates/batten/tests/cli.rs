@@ -1656,6 +1656,179 @@ protected = []
     }
 }
 
+// --- `batten exec`: the transparent passthrough (CLOUD-285) -------------------
+//
+// The verb house style §2 always listed and nothing built, which two Phase 2
+// issues were waiting on. Three things pass through untouched — the child's argv,
+// its streams, and its exit code — and the third is the one deliberate exception
+// to the §7 table, so it is pinned rather than left to a reader's inference.
+
+/// A `#!/bin/sh` fixture child, executable, that runs `body`.
+///
+/// The `tests/doctor.rs` idiom. Unix-only: `PermissionsExt` is the only portable
+/// way to set the mode, so these cases skip on Windows rather than fail there
+/// (CLOUD-113 owns the real matrix).
+#[cfg(unix)]
+fn child_script(name: &str, body: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch(name);
+    fs::create_dir_all(&dir).expect("create dir");
+    let script = dir.join("child.sh");
+    fs::write(&script, format!("#!/bin/sh\n{body}\n")).expect("write child");
+    let mut mode = fs::metadata(&script).expect("stat child").permissions();
+    mode.set_mode(0o755);
+    fs::set_permissions(&script, mode).expect("chmod child");
+    script
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_passes_through_a_code_outside_the_table() {
+    // The exception, stated as a test so it cannot be mistaken for a bug. §7's
+    // table is 0/1/2/3; a wrapped command's code is not Batten's to choose, and
+    // reporting `7` as anything else would make the wrapper lie.
+    let script = child_script("exec-codes", "exit \"$1\"");
+    for code in [0, 1, 2, 3, 7, 42, 255] {
+        let output = batten()
+            .args([
+                "exec",
+                "--",
+                script.to_str().expect("utf-8"),
+                &code.to_string(),
+            ])
+            .output()
+            .expect("run batten exec");
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "the child's code must survive unchanged"
+        );
+        assert!(
+            output.stdout.is_empty() && output.stderr.is_empty(),
+            "a transparent verb adds no output of its own"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_exec_two_is_the_childs_verdict_not_battens() {
+    // `2` is the policy verdict everywhere Batten *renders* one. Here it came from
+    // the child, and no mediation path can reach it: `hook` adjudicates a mediated
+    // call, and `exec` is not reachable from `hook`. Pinned because a host reading
+    // codes alone could otherwise take a wrapped command's `2` for a deny.
+    let script = child_script("exec-two", "exit 2");
+    let output = batten()
+        .args(["exec", "--", script.to_str().expect("utf-8")])
+        .output()
+        .expect("run batten exec");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stderr.is_empty(),
+        "Batten renders no reason, because it rendered no verdict"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_hands_the_child_its_own_argv_including_battens_own_flag_spellings() {
+    // The hazard the §3 ladder created: without `allow_hyphen_values` a child's
+    // `-v` is parsed as Batten's verbosity rung, so the flag the caller meant for
+    // `cargo` vanishes and Batten gets louder for no reason anyone typed.
+    let script = child_script("exec-argv", r#"printf '%s\n' "$@""#);
+    let output = batten()
+        .args([
+            "exec",
+            "--",
+            script.to_str().expect("utf-8"),
+            "-v",
+            "--json",
+            "--silent",
+            "--strictness",
+            "strict",
+        ])
+        .output()
+        .expect("run batten exec");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "-v\n--json\n--silent\n--strictness\nstrict\n",
+        "every token after `--` reaches the child verbatim"
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "and none of them moved Batten's own verbosity rung"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_inherits_both_child_streams_unchanged() {
+    let script = child_script("exec-streams", "echo out; echo err >&2");
+    let output = batten()
+        .args(["exec", "--", script.to_str().expect("utf-8")])
+        .output()
+        .expect("run batten exec");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "err\n");
+}
+
+#[test]
+fn no_exec_failure_path_can_deny() {
+    // The property fail-open actually rests on: Batten never MINTS a `2` here.
+    // Whatever goes wrong with the invocation is a statement about the invocation,
+    // so it is exit 1 — loud, and not a verdict a host can read as a refusal.
+    let cases: [&[&str]; 2] = [
+        // A program that is not there.
+        &["exec", "--", "batten-no-such-program-exists"],
+        // The separator omitted: `--` is mandatory precisely so the ladder scan
+        // can tell Batten's argv from the child's.
+        &["exec", "sh", "-c", "true"],
+    ];
+    for args in cases {
+        let output = batten().args(args).output().expect("run batten exec");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?} must be a usage error"
+        );
+        assert_ne!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must never be reported as a policy verdict"
+        );
+        assert!(!output.stderr.is_empty(), "{args:?}: exit 1 is fail-loud");
+    }
+}
+
+#[test]
+fn a_trailing_arg_takes_values_in_the_emitted_spec() {
+    // `takes_value` is a hand-maintained expression over clap's actions, and it
+    // has already been wrong once for a newly added action (`Count`, CLOUD-42).
+    // A trailing variadic consumes every remaining token, so `true` is the honest
+    // answer and a completion script depends on it.
+    let dir = scratch("exec-spec");
+    fs::create_dir_all(&dir).expect("create dir");
+    let document: serde_json::Value =
+        serde_json::from_slice(&batten_with(&dir, &["spec"], &[]).stdout).expect("spec is JSON");
+    let exec = document["subcommands"]
+        .as_array()
+        .expect("subcommands")
+        .iter()
+        .find(|node| node["path"] == "exec")
+        .expect("exec is in the spec");
+    let command = exec["flags"]
+        .as_array()
+        .expect("flags")
+        .iter()
+        .find(|flag| flag["name"] == "command")
+        .expect("exec declares its trailing argument");
+    assert_eq!(command["takes_value"], serde_json::json!(true));
+    // A positional: no long, no short.
+    assert_eq!(command["long"], serde_json::json!(null));
+    assert_eq!(command["short"], serde_json::json!(null));
+}
+
 // --- the machine-output contract, as a derived census (CLOUD-41) -------------
 //
 // House-style §6-§7 says stdout is the answer and stderr is the messaging, that a
