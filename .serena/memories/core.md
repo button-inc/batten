@@ -12,7 +12,12 @@ file itself for the "why", this is only the "where":
 
 - `main.rs` — binary boundary: parse → `lib::run` → exit status. Only place
   `print*!`/stderr writes are allowed.
-- `lib.rs` — library entry point (`run`), declares the module tree.
+- `lib.rs` — library entry point, declares the module tree. `run(cli, mode, out,
+err)` takes **both** channels and the resolved `Mode`, so a verb can write a
+  ladder-gated message itself instead of that being `main.rs`'s privilege
+  (CLOUD-208; it closed CLOUD-42's G10, "nothing emits at `Verbose` or above
+  yet"). `out` is the answer, `err` the messaging — `batten exec` reports its
+  output matches through `err` for that reason.
 - `surface.rs` — house-style §11, CLOUD-27: the command tree declared **once**,
   as data (`ROOT` + `SURFACE`) — path, summary, effect, and flags (with each
   flag's env equivalent, so §8 precedence is inspectable data). `command()`
@@ -38,7 +43,9 @@ file itself for the "why", this is only the "where":
   booleans explicitly so CLOUD-107 can drive them), and the three stderr writers.
   Verbosity shapes **stderr only** — the data-emitting functions take
   `out: &mut dyn Write` and have no `Mode` to consult, which is what makes `-J`
-  structurally ungatable. `verdict` and `error` are ungated: exit `1` is
+  structurally ungatable. That holds at the _emitter_ layer and is what the
+  guarantee rests on; the _verb_ layer does carry a `Mode` (see `lib.rs`), so a
+  gated message is written through `message` and can never reach `out`. `verdict` and `error` are ungated: exit `1` is
   fail-loud, so `--silent` must not empty it.
 - `outputs.rs` — `exec` output predicates (CLOUD-117): declared literals that,
   found in a wrapped command's captured stream, promote a lying exit `0` to a
@@ -124,7 +131,10 @@ file itself for the "why", this is only the "where":
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_
   config can still carry. Complements `trust.rs` rather than replacing it —
   `--config-from` makes a weakening ineffective, this makes it visible. Two
-  classes: single-tree (a set declared and empty, a rule at `severity = "allow"`)
+  classes: single-tree (a set declared and empty, a rule at `severity = "allow"`,
+  a waiver naming no declared rule, a waiver past its expiry — CLOUD-208, which
+  is why `smells`/`run` take a `waiver::Date`: the verdict is a function of
+  (bytes, date), never of when the process started)
   located by `toml::Spanned` so each smell carries a line, and base-ref smells
   that reuse `trust::weakenings` and its `WeakeningKind` ids, so there is one
   definition of "weakened". **Absent is not empty**: a key the config never
@@ -136,7 +146,12 @@ file itself for the "why", this is only the "where":
   policy out of band of the change under review and a branch cannot lower the
   bar it is judged by. `weakenings` is the base-vs-working comparison — the same
   monotonicity the raise-only clamp uses, so narrowing `scope` is tightening and
-  is not reported. Pointer-only `Weakening`s (key path + two verdict tokens),
+  is not reported. **Which direction is weakening is a property of the key, not of
+  the module**: `removed_entries` covers `protected`/`unlanded`/`rule`, where more
+  entries mean a higher bar, and `added_entries` + `WaiverAdded` cover the one
+  entity whose _presence_ lowers it (CLOUD-208) — reported whether or not it has
+  expired, since the diff is a fact about two files and the lapse is the run's.
+  Pointer-only `Weakening`s (key path + two verdict tokens),
   sorted so the report is byte-stable. `config lint` (CLOUD-87) reuses both
   rather than growing a second trusted-load path.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file >
