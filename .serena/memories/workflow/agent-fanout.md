@@ -66,6 +66,38 @@ each landed change was producing about two commits on `main`; CLOUD-319's
 debounce targets exactly that amplifier. The lever remains the one stated above:
 shorten `verify`, do not add sessions.
 
+## Planners fan out freely; implementers do not
+
+The cap above is a **build** cap, and reading it as a cap on sessions is the
+mistake worth naming. A planning-only session writes no code, takes no lock,
+claims no issue and never rebases — it reads, decides, and posts a plan to the
+issue. Nothing it does is on the contended path, so N planners cost only tokens.
+Landing is what contends. Fan out planning; drain the plans at 2.
+
+Dispatched as `/plan-fleet` (`.claude/commands/plan-fleet.md`), which owns the
+procedure; this section owns why it is shaped that way. Measured 2026-08-11:
+seven planners over CLOUD-333, 224, 218, 249, 328, 46 and 171, one sibling
+session each via `create_session`, partitioned so no two held the same files.
+
+Three things about the harness that the procedure encodes because they are
+invisible until they bite:
+
+- **A child's final chat message is never read by the parent.** Whatever the
+  planner concludes must be written to the issue, or it dies with the session.
+  Naming the durable destination is not a nicety in the prompt; it is the
+  difference between a plan and a lost turn.
+- `permission_mode: "plan"` **stalls a child indefinitely.** It blocks on an
+  approval prompt in the web UI that nobody is watching. Omit it.
+- **In-process subagents are the wrong tool here, for a reason unrelated to
+  caps.** They share the parent's single working tree, and there is no channel
+  for one to put a question to the human — the parent must relay it after the
+  subagent has already stopped. Sibling sessions get their own container, their
+  own clone, and their own thread to ask in.
+
+The partition is by **file domain**, not by topic, and it is only real if it
+reads open PRs' file lists rather than their titles. Two issues that read as
+unrelated but both edit `mise-tasks/land` are one issue for dispatch purposes.
+
 ## What each implementer does
 
 The existing contract, unchanged: claim → build → draft PR → `mise run verify`
