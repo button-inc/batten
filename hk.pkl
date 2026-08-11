@@ -192,9 +192,14 @@ local gate = new Mapping<String, Step> {
   // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
   // rather than a style question. Counted with any memory declared always-load,
   // since moving a section into one of those moves the cost without cutting it.
-  ["context-budget"] {
-    glob = List("AGENTS.md", ".serena/memories/always/*.md")
-    check = "mise run context-budget"
+  //
+  // This was `mise run context-budget`, a ~50-line shell task, until CLOUD-50
+  // moved the predicate into the engine. `batten.toml` now carries the counted
+  // set and both thresholds, so `batten.toml` joins the glob: changing the
+  // budget must re-run the gate that enforces it.
+  ["policy-budget"] {
+    glob = List("AGENTS.md", ".serena/memories/always/*.md", "batten.toml")
+    check = "mise run policy-budget"
   }
   // The macOS release artifacts are linked on Linux by zig with no Apple SDK.
   // A dependency that links a system framework breaks that, and `cross-check`

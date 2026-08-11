@@ -91,6 +91,22 @@ pub enum Command {
         /// The chosen sub-verb.
         command: ReceiptCommand,
     },
+    /// Inspect the thresholds and path sets this repository holds itself to.
+    Policy {
+        /// The chosen sub-verb.
+        command: PolicyCommand,
+    },
+}
+
+/// Subcommands of `policy`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PolicyCommand {
+    /// Judge the always-loaded instruction set against its token budget.
+    Budget {
+        /// Emit the measurement as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
 }
 
 /// Subcommands of `receipt`.
@@ -217,6 +233,15 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "doctor" => Some(Command::Doctor {
             json: flag(matches, "json"),
         }),
+        "policy" => matches
+            .subcommand()
+            .and_then(|(name, matches)| match name {
+                "budget" => Some(PolicyCommand::Budget {
+                    json: flag(matches, "json"),
+                }),
+                _ => None,
+            })
+            .map(|command| Command::Policy { command }),
         "generate" => matches
             .subcommand()
             .and_then(|(name, matches)| match name {

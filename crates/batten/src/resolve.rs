@@ -206,6 +206,13 @@ pub struct Resolved {
     /// committed rule is refused rather than merged — see [`merge_local_waivers`].
     #[serde(rename = "waiver")]
     pub waivers: Vec<crate::waiver::Waiver>,
+    /// The declared thresholds (CLOUD-50), as the authority states them. Not
+    /// layered: a budget is a bar this repository sets for itself, and there is
+    /// no raise-only reading of "tighten a threshold" that a local file could
+    /// be trusted with — lowering it is the weakening, and `trust.rs` compares
+    /// the committed bytes for that.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::budget::Budget>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -655,6 +662,7 @@ fn assemble(
         markers: repo.markers.clone(),
         exec_patterns,
         waivers,
+        budget: repo.budget.clone(),
         sources: attribution(
             repo,
             strictness.source,
@@ -704,6 +712,7 @@ fn attribution(
             authority_set(!repo.exec_patterns.is_empty()),
         ),
         ("waiver", authority_set(!repo.waivers.is_empty())),
+        ("budget", authority_set(repo.budget.is_some())),
     ])
 }
 

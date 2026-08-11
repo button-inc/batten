@@ -2452,7 +2452,24 @@ fn a_local_file_may_add_a_pattern_but_not_redefine_a_committed_one() {
 /// `origin/main`, and `check`/`enforce`/`config *` need an authority. One fixture
 /// satisfying all of them beats a per-verb table that would drift.
 fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
-    receipt_fixture(name)
+    // Shaped like `receipt_fixture`, but with a config every data-emitting verb
+    // can actually answer from. `policy budget` is the reason it diverged: a
+    // budget verb whose config declares no budget measured nothing, and it
+    // refuses (exit 1) rather than reporting a `0` it did not earn — so a
+    // fixture carrying `version = 1` alone would make the census assert about a
+    // usage error instead of about a document. The census is about the output
+    // contract; supplying each verb's minimum input is the fixture's job, the
+    // same way `census_argv` supplies `receipt status` its positional.
+    let root = scratch(name);
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n[budget.instructions]\npaths = [\"AGENTS.md\"]\nmax_tokens = 1000\n")
+        .file("AGENTS.md", "instructions\n")
+        .git()
+        .base_commit()
+        .work_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    (repo, home)
 }
 
 /// The minimal argv that makes `decl` emit its document.
@@ -3252,4 +3269,174 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
             );
         }
     }
+}
+
+// --- `policy budget` (CLOUD-50) -----------------------------------------------
+//
+// The gate over what every agent pays on every turn. The shell task this
+// replaced counted lines and tokens the same way; what the engine adds is a
+// refusal for a dead entry, a `<=` boundary, and silence on success.
+
+/// A fixture whose instruction file loads to *exactly* `tokens` estimated
+/// tokens: the estimator is bytes/4, so 4 bytes per token, and a trailing
+/// newline is one of them.
+fn instructions_of(tokens: usize) -> String {
+    let mut body = "x".repeat(tokens * 4);
+    body.pop();
+    body.push('\n');
+    body
+}
+
+fn budget_config(paths: &str, max_tokens: usize) -> String {
+    format!("version = 1\n[budget.instructions]\npaths = {paths}\nmax_tokens = {max_tokens}\n")
+}
+
+#[test]
+fn a_set_over_budget_exits_2_and_reports_the_files_the_total_and_the_budget() {
+    let dir = repo_with_config("budget-over", &budget_config("[\"AGENTS.md\"]", 100));
+    common::write(&dir, "AGENTS.md", &instructions_of(150));
+
+    let output = common::run(&dir, &["policy", "budget"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "over budget is a policy verdict"
+    );
+
+    let text = common::stdout(&output);
+    // Per-file pointer line, then the total and the budget it was judged
+    // against. Counts and a path — never a byte of what was counted.
+    assert!(
+        text.contains("AGENTS.md ~150 tokens"),
+        "the report must carry the per-file line: {text:?}"
+    );
+    assert!(
+        text.contains("~150 tokens of 100"),
+        "the report must carry the total and the budget: {text:?}"
+    );
+    assert!(
+        !text.contains("xxxx"),
+        "the report must never carry the measured content: {text:?}"
+    );
+}
+
+#[test]
+fn exactly_at_budget_exits_0_with_empty_stdout() {
+    // The boundary is `<=`, and success is silent (§6): a clean run's cheapest
+    // possible signal is no bytes at all.
+    let dir = repo_with_config("budget-at", &budget_config("[\"AGENTS.md\"]", 100));
+    common::write(&dir, "AGENTS.md", &instructions_of(100));
+
+    let output = common::run(&dir, &["policy", "budget"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "exactly at budget is within it"
+    );
+    assert_eq!(common::stdout(&output), "", "success prints nothing");
+}
+
+#[test]
+fn one_entry_matching_nothing_is_exit_1_even_when_its_siblings_match() {
+    // CLOUD-298's defect class: a dead glob contributing nothing while the rest
+    // counted, so the gate measured less than it claimed and still reported
+    // green. Per entry, never per set.
+    let dir = repo_with_config(
+        "budget-dead-entry",
+        &budget_config("[\"AGENTS.md\", \"memories/always/*.md\"]", 10_000),
+    );
+    common::write(&dir, "AGENTS.md", &instructions_of(10));
+
+    let output = common::run(&dir, &["policy", "budget"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a dead entry is a config error, not a verdict and never a pass"
+    );
+    assert!(
+        common::stderr(&output).contains("memories/always/*.md"),
+        "the refusal must name the entry that matched nothing"
+    );
+}
+
+#[test]
+fn two_runs_over_the_same_tree_emit_identical_bytes() {
+    let dir = repo_with_config("budget-stable", &budget_config("[\"AGENTS.md\"]", 10));
+    common::write(&dir, "AGENTS.md", &instructions_of(50));
+
+    let first = common::run(&dir, &["policy", "budget", "--json"]);
+    let second = common::run(&dir, &["policy", "budget", "--json"]);
+    assert_eq!(first.stdout, second.stdout, "the document is byte-stable");
+    assert_eq!(first.status.code(), second.status.code());
+    // The data channel emits unconditionally, including for a run within
+    // budget, so a caller parsing it never sees an absent document.
+    let clean = repo_with_config(
+        "budget-stable-clean",
+        &budget_config("[\"AGENTS.md\"]", 500),
+    );
+    common::write(&clean, "AGENTS.md", &instructions_of(50));
+    let json = common::run(&clean, &["policy", "budget", "--json"]);
+    assert_eq!(json.status.code(), Some(0));
+    assert!(
+        common::stdout(&json).contains("\"tokens\": 50"),
+        "a clean run still emits its document"
+    );
+}
+
+#[test]
+fn frontmatter_and_comment_bytes_alone_never_cross_the_budget() {
+    // Stripped constructs cost nothing: the loader drops both before the file
+    // reaches a context window, so a gate that charged for them could fail for
+    // a construct no agent pays for.
+    let dir = repo_with_config("budget-stripped", &budget_config("[\"AGENTS.md\"]", 10));
+    let padding = "x".repeat(4_000);
+    common::write(
+        &dir,
+        "AGENTS.md",
+        &format!("---\ntitle: {padding}\n---\n<!--\n{padding}\n-->\nkept\n"),
+    );
+
+    let output = common::run(&dir, &["policy", "budget"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "frontmatter and block comments are free: {:?}",
+        common::stdout(&output)
+    );
+}
+
+#[test]
+fn a_config_declaring_no_budget_is_a_usage_error_not_a_silent_pass() {
+    // A budget verb that measured nothing must not report `0`. That is the
+    // false green the whole engine exists to catch.
+    let dir = repo_with_config("budget-undeclared", "version = 1\n");
+    let output = common::run(&dir, &["policy", "budget"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(common::stderr(&output).contains("budget.instructions"));
+}
+
+#[test]
+fn this_repos_own_budget_is_pinned_so_raising_it_is_a_visible_diff() {
+    // The acceptance's "pinned deliberately". These numbers are the bar the
+    // deleted `mise-tasks/context-budget` carried, restated for a `<=`
+    // boundary — the shell gate failed AT 200 lines, so 199 is the same bar.
+    // Changing either one means changing this test in the same diff, which is
+    // what makes the change a decision rather than a drift.
+    let committed = fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("batten.toml"),
+    )
+    .expect("this repository's own config");
+    let config: toml::Value = toml::from_str(&committed).expect("the authority parses");
+    let instructions = &config["budget"]["instructions"];
+
+    assert_eq!(instructions["max_tokens"].as_integer(), Some(3500));
+    assert_eq!(instructions["max_lines"].as_integer(), Some(199));
+    assert_eq!(
+        instructions["paths"].as_array().map(Vec::len),
+        Some(1),
+        "the counted set is AGENTS.md alone; adding an always-load surface is a \
+         decision that shows up here"
+    );
 }

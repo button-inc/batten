@@ -62,6 +62,11 @@ effect = "write"
 [[marker]]
 id = "allow-once"
 token = "batten: allow-once"
+
+[budget.instructions]
+paths = ["AGENTS.md"]
+max_tokens = 3500
+max_lines = 200
 "#;
 
 fn show(dir: &Path, extra: &[&str]) -> Output {
@@ -138,6 +143,7 @@ fn a_config_that_sets_every_key_surfaces_every_key() {
         "epoch",
         "verb",
         "marker",
+        "budget",
     ] {
         let entry = document
             .get(key)

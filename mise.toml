@@ -106,6 +106,16 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # working tree's engine and config together — the pair that ships.
 run = "cargo run --quiet -p batten -- check"
 
+[tasks.policy-budget]
+description = "Gate: the always-loaded context (AGENTS.md + anything else declared always-load) fits its token budget"
+# The successor to `mise-tasks/context-budget`, deleted with CLOUD-50. The whole
+# predicate — which files are counted, what is stripped before counting, and both
+# thresholds — is now `[budget.instructions]` in batten.toml, so the gate is
+# config a reviewer can read rather than arithmetic buried in a shell script.
+# `cargo run` for the same reason `batten-check` uses it: the gate judges the
+# working tree's engine and config together, the pair that ships.
+run = "cargo run --quiet -p batten -- policy budget"
+
 [tasks.completions]
 description = "Regenerate the committed shell completions from the command surface"
 # The binary emits on stdout only, so `generate` stays a read-effect verb (§5)

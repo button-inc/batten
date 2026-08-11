@@ -57,6 +57,22 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   output is the likeliest place in the engine for a secret to appear. Batten only
   ever **adds** failure: a non-zero child passes its code through untouched.
   Raise-only from a local file (add yes, redefine no).
+- `budget.rs` — the instruction-set token budget (CLOUD-50), surfaced as `policy
+budget`. The successor to `mise-tasks/context-budget`, deleted in the same
+  change: two gates counting one surface by different rules is the drift this
+  engine exists to refuse. The estimate is bytes/4 over what actually **loads** —
+  YAML frontmatter and block-level HTML comments stripped first, by a byte scan
+  rather than a regex (the crate carries none; `outputs.rs` set that precedent).
+  Deliberately an approximation: an exact count needs a tokenizer, a vocabulary
+  and a network fetch, and a budget gate that fails because a download failed is
+  worse than one 10% out. What it must be is **stable, offline and monotone**,
+  which is what puts it in house-style §0.3's decidable fragment — a count against
+  a constant guard. Both boundaries are `<=`, so exactly at budget passes, and a
+  clean run prints nothing. The load-bearing refusal is per-entry: **a configured
+  glob matching no file is exit 1**, even when its siblings match, because the
+  whole-set reading let one dead glob contribute nothing while the rest counted
+  and still reported green (CLOUD-298). A config declaring no budget is exit 1
+  too — a budget verb that measured nothing must not report `0`.
 - `capture.rs` — captured child output, content-addressed in out-of-tree state
   (CLOUD-162): the shared substrate CLOUD-117's output predicate and CLOUD-121's
   handles both read, built once so neither grows its own copy. The digest **is**

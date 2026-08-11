@@ -114,8 +114,10 @@ restate its count here), each failing open on anything it can't parse:
 - `memory-guard` denies a direct Write/Edit to `.serena/memories/`; they go
   through the Serena tools, which enforce the size ceiling and rewrite `mem:`
   references on rename. Bypass: `BATTEN_MEMORY_GUARD_BYPASS=1`.
-- `context-budget` gates AGENTS.md plus anything always-loaded against a token
-  budget — what every agent pays every turn.
+- `policy-budget` gates AGENTS.md plus anything always-loaded against a token
+  budget — what every agent pays every turn. It is `batten policy budget`, not a
+  shell task: the counted set and both thresholds are `[budget.instructions]` in
+  `batten.toml`. An entry matching no file is exit 1, never a quiet pass.
 - `issue-guard` denies `gh pr create` and `gh pr ready` unless the work names a
   `CLOUD-<n>` issue — in the branch, in a commit on it, or in the command — and,
   since CLOUD-230, unless that issue is unclaimed: a different **open** PR

@@ -702,6 +702,29 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[],
     },
+    // The `policy` noun only dispatches, and unlike `receipt` it is declared
+    // `read`: every verb in its house-style §2 subtree — scope, protect,
+    // budget — is read, so there is no write for the noun row to smuggle onto
+    // the derived allowlist. Stated rather than assumed, because §5 forbids
+    // inheritance in both directions: this row is a claim about the whole
+    // subtree, and the day a mutating verb joins it, this row changes with it.
+    CommandDecl {
+        path: "policy",
+        about: "Inspect the thresholds and path sets this repository holds itself to",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // File reads over the configured set and arithmetic over what they contain.
+    // Nothing is spawned and no user-supplied code is reachable, which is what
+    // the `read` structural promise requires (CLOUD-50).
+    CommandDecl {
+        path: "policy budget",
+        about: "Judge the always-loaded instruction set against its declared token budget",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // `hook` adjudicates another tool's call: its own execution only reads
     // stdin and config, but its *decision* mediates writes, so it is listed
     // unclassified rather than allowed to leak into the derived read-only

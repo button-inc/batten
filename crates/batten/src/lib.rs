@@ -8,6 +8,7 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
+pub mod budget;
 pub mod capture;
 pub mod cli;
 pub mod config;
@@ -40,7 +41,9 @@ use std::path::Path;
 
 use anyhow::Result;
 
-pub use cli::{Cli, Command, ConfigCommand, GenerateCommand, ReceiptCommand, SpecFormat};
+pub use cli::{
+    Cli, Command, ConfigCommand, GenerateCommand, PolicyCommand, ReceiptCommand, SpecFormat,
+};
 pub use config::Config;
 pub use effect::Effect;
 pub use error::{Denial, Passthrough, UsageError};
@@ -118,7 +121,48 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             ReceiptCommand::Record { check } => receipt::run_record(&check),
             ReceiptCommand::Status { check, json } => receipt::run_status(&check, json, out),
         },
+        Some(Command::Policy { command }) => match command {
+            PolicyCommand::Budget { json } => run_budget(json, &overrides, out),
+        },
     }
+}
+
+/// Judge the always-loaded instruction set against its declared budget
+/// (CLOUD-50).
+///
+/// Three outcomes, and the middle one is the whole point of the verb: no
+/// `[budget.instructions]` at all is a **usage error**, not a silent pass. A
+/// budget verb run against a config that declares no budget measured nothing,
+/// and reporting that as `0` would be the false green this engine exists to
+/// catch — the same reading `rules::run_static` gives a rule it cannot honestly
+/// run.
+fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let declared = config
+        .budget
+        .as_ref()
+        .and_then(|budget| budget.instructions.as_ref())
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "no [budget.instructions] in {}; there is no budget to judge",
+                config::CONFIG_FILE
+            ))
+        })?;
+    let report = budget::measure(Path::new("."), declared)?;
+
+    if json {
+        // Emitted unconditionally, including for a run within budget: JSON that
+        // is sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else if report.over_budget() {
+        // Silence is the success signal on the human channel (§6), so the
+        // per-file breakdown is written only when it explains a verdict.
+        for file in &report.files {
+            writeln!(out, "{}", file.line())?;
+        }
+        writeln!(out, "{}", report.summary())?;
+    }
+    Ok(ExitCode::verdict(report.over_budget()))
 }
 
 /// What a fail-open boundary says on its way out.

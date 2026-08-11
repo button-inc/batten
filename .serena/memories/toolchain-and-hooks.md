@@ -55,23 +55,39 @@ features (batching, caching, scheduling) when they'd tighten this.
 
 ## The always-loaded context budget
 
-`mise run context-budget` fails when AGENTS.md plus anything declared
-always-load exceeds `BATTEN_CONTEXT_BUDGET` (default 3500) estimated tokens, at
-4 chars/token. Tokens, not lines: the cost is what every agent pays on every
-turn, and an exact count would need a tokenizer, a model-specific vocabulary and
-a network fetch — a budget gate that fails because a download failed is worse
-than one that is 10% out.
+`mise run policy-budget` runs `batten policy budget` and fails when the
+always-loaded set exceeds its budget. Since CLOUD-50 this is the engine, not a
+shell task: the counted set and both thresholds are `[budget.instructions]` in
+`batten.toml` (`paths`, `max_tokens`, optional `max_lines`), so a reviewer reads
+the gate as config rather than as arithmetic in bash. `mise-tasks/context-budget`
+and its `BATTEN_CONTEXT_BUDGET`/`BATTEN_CONTEXT_LINE_TARGET` overrides are gone —
+a budget you can lower with an env var is not a budget.
 
-The always-loaded set is AGENTS.md plus `.serena/memories/always/*.md`. That
-directory does not exist yet; creating one is a declaration that every session
-reads that memory, and it then costs exactly what an AGENTS.md section costs.
-Counting it here is the whole point — moving a section into a memory only
-reduces the tax if the memory is genuinely read at a trigger. Ordinary memories
-are not counted, because a session that never hits their trigger never pays for
-them.
+Tokens, not lines, are the primary predicate: the cost is what every agent pays
+on every turn, and an exact count would need a tokenizer, a model-specific
+vocabulary and a network fetch — a budget gate that fails because a download
+failed is worse than one that is 10% out. So the estimate is bytes/4 over the
+content that actually loads, with YAML frontmatter and block-level HTML comments
+stripped first: both are dropped before the file reaches a context window, and
+charging for them would fail the gate for a construct nobody pays for.
+`max_lines` is the second, optional predicate, carried over so the shell gate's
+deletion orphaned nothing; absent means unenforced. Both boundaries are `<=`.
+
+Today `paths` is `AGENTS.md` alone. It used to also glob
+`.serena/memories/always/*.md`, a directory that has never existed — a dead entry
+contributing nothing while the rest counted (CLOUD-298). The engine now refuses
+that outright: **an entry matching no file is exit 1, per entry**, so one dead
+glob cannot hide behind the siblings that still match. Declaring a memory
+always-load therefore means creating that directory AND adding the glob in the
+same change; it then costs exactly what an AGENTS.md section costs, which is the
+point — moving a section into a memory only reduces the tax if the memory is
+genuinely read at a trigger. Ordinary memories are not counted, because a session
+that never hits their trigger never pays for them.
 
 Over budget: cut, or move a section to a triggered memory (sorting rule in
-`mem:prior-art-and-issue-hygiene`). Raising the number is a decision, not a fix.
+`mem:prior-art-and-issue-hygiene`). Raising the number is a decision, not a fix —
+and a visible one: `crates/batten/tests/cli.rs` pins both committed thresholds,
+so raising either is a diff in two files.
 
 ## Memories go through the Serena tools, never a file write
 

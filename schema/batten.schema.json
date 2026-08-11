@@ -4,6 +4,17 @@
   "description": "A parsed, validated `batten.toml`.\n\n`deny_unknown_fields` makes an unrecognised key a hard error (§8): the config\nsurface stays narrow and a typo can never silently disable a gate.",
   "type": "object",
   "properties": {
+    "budget": {
+      "description": "The thresholds this repository holds itself to (CLOUD-50). Today one:\n`[budget.instructions]`, the always-loaded instruction set and what it\nmay cost. Absent means no budget is declared and none is enforced — a\nthreshold nobody wrote down is not a threshold of zero. The type and the\npredicate are [`crate::budget`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Budget"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "epoch": {
       "description": "Which files make up the governing config surface the `config_epoch`\nhashes (CLOUD-32). Absent means the default: this file alone.",
       "anyOf": [
@@ -108,6 +119,24 @@
     "version"
   ],
   "$defs": {
+    "Budget": {
+      "description": "The `[budget]` table: thresholds this repository holds itself to.\n\nOne field today. A future budget over a different surface — the advisory\ndrain's, say (CLOUD-82) — is a sibling key here, not a second meaning loaded\nonto this one; the two share the estimator's discipline and nothing else.",
+      "type": "object",
+      "properties": {
+        "instructions": {
+          "description": "The always-loaded instruction set and what it may cost.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InstructionBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "Effect": {
       "type": "string",
       "enum": [
@@ -131,6 +160,39 @@
         }
       },
       "additionalProperties": false
+    },
+    "InstructionBudget": {
+      "description": "The `[budget.instructions]` table.",
+      "type": "object",
+      "properties": {
+        "max_lines": {
+          "description": "The optional ceiling on loaded lines, the second predicate the shell gate\nthis replaces carried. Absent means unenforced — a threshold nobody\ndeclared is not a threshold of zero.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_tokens": {
+          "description": "The ceiling on estimated tokens over the whole set. The boundary is\n`<=`: exactly at budget passes.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        },
+        "paths": {
+          "description": "The instruction-file set, as globs over repo-relative `/`-separated\npaths. Every entry must match at least one file — see the module docs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "paths",
+        "max_tokens"
+      ]
     },
     "Marker": {
       "description": "One suppression marker declared in `batten.toml`.\n\nThe two fields are deliberately separate axes: `id` is the stable name a\ncount is reported under and may not change when the spelling does, while\n`token` is the literal text scanned for. Collapsing them would make every\nre-spelling of a marker look like a brand-new one whose count starts at\nzero — the ratchet defeated by a rename.",

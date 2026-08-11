@@ -219,6 +219,11 @@ mod tests {
                 "generate".to_owned(),
                 "generate completions".to_owned(),
                 "generate schema".to_owned(),
+                // The `policy` noun is on the list with its verbs, unlike
+                // `receipt`: every verb in its §2 subtree is read, so there is
+                // no write for the noun row to smuggle on (CLOUD-50).
+                "policy".to_owned(),
+                "policy budget".to_owned(),
                 "receipt status".to_owned(),
                 "spec".to_owned(),
             ]

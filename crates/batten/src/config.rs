@@ -169,6 +169,13 @@ pub struct Config {
     /// [`crate::waiver`].
     #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
     pub waivers: Vec<crate::waiver::Waiver>,
+    /// The thresholds this repository holds itself to (CLOUD-50). Today one:
+    /// `[budget.instructions]`, the always-loaded instruction set and what it
+    /// may cost. Absent means no budget is declared and none is enforced — a
+    /// threshold nobody wrote down is not a threshold of zero. The type and the
+    /// predicate are [`crate::budget`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::budget::Budget>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -262,6 +269,11 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // whose expiry nobody could read. Refusing at load is what makes "every
     // waiver carries an expiry" true of the resolved config rather than aspirational.
     crate::waiver::validate(&config.waivers)?;
+    // `[budget]` is a table rather than a list, so the census below (which scans
+    // `Vec<T>` fields) does not reach it — but the failure it guards against is
+    // the same one: a table that parses and gates nothing. A `[budget]` header
+    // with no `[budget.instructions]` under it is refused here (CLOUD-50).
+    crate::budget::validate(config.budget.as_ref())?;
     Ok(config)
 }
 
@@ -357,6 +369,9 @@ impl Config {
             markers: Vec::new(),
             exec_patterns: Vec::new(),
             waivers: Vec::new(),
+            // An authority that declares no budget grants no exemption from one
+            // either — there is simply no threshold, which is what `None` says.
+            budget: None,
         }
     }
 }

@@ -22,7 +22,7 @@ version = 1
 # is what actually forces that — an older build fails on the unknown key — and
 # this floor states the intent so the refusal names the version rather than the
 # key.
-min_batten_version = "0.0.42"
+min_batten_version = "0.0.53"
 
 # ---------------------------------------------------------------------------
 # The protected-path gate (CLOUD-96): {mutating verb} × {protected path}.
@@ -291,6 +291,32 @@ redirect = "write through the surface that owns the file"
 # Every path must be readable. An unreadable one is exit 3, never a silent skip
 # — skipping would compute a stable epoch over a surface that changed, which is
 # precisely the failure the value exists to prevent.
+# What the always-loaded instruction set may cost (CLOUD-50).
+#
+# Every agent pays AGENTS.md on every turn whether or not a word of it applies,
+# so its size is a per-turn tax rather than a style question. This table is the
+# successor to `mise-tasks/context-budget`, deleted in the same change — never
+# two gates counting the same surface by different rules.
+#
+# `paths` is consumer-specific by nature: which files are always loaded is a
+# property of this repository, not of Batten (non-negotiable rule 1). It lists
+# `AGENTS.md` alone. The shell task also globbed `.serena/memories/always/*.md`,
+# a directory that has never existed — a dead entry contributing nothing while
+# the rest counted, which is exactly the defect CLOUD-298 measured and which the
+# engine now refuses outright (exit 1, per entry). Declaring a memory always-load
+# means creating that directory AND adding the glob here in the same change: it
+# then costs exactly what an AGENTS.md section costs, which is the point.
+#
+# Both thresholds carry forward the shell gate's bar unchanged. `max_lines = 199`
+# is the documented 200-line CLAUDE.md target restated for a `<=` boundary — the
+# shell gate failed AT 200, so 199 is the same bar, not a loosening. Raising
+# either number is a visible diff in this file, pinned by a test in
+# `crates/batten/tests/cli.rs`.
+[budget.instructions]
+paths = ["AGENTS.md"]
+max_tokens = 3500
+max_lines = 199
+
 [epoch]
 tracked = [
   "batten.toml",
