@@ -14,6 +14,14 @@ hk = "1.54.0"                                                # git-hook runner (
 "aqua:anchore/syft" = "1.42"                                 # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom)
 "aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
 "aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
+# NOTE: the MSRV gate (`mise run msrv`) deliberately pins NO tool. cargo-msrv
+# would be the obvious choice and cannot be used: upstream ships no
+# aarch64-unknown-linux binary in ANY release, so a release-asset backend locks
+# no `linux-arm64` entry and `mise run lock-complete` rejects it — correctly,
+# since an arm64 sandbox could then not provision at all. Its `cargo:` backend
+# sidesteps that rule but source-builds a large tree (it pulls the AWS SDK):
+# measured 318s here, uncached, on every run. The gate reads the declared floor
+# from `cargo metadata` and drives rustup directly instead.
 # mise-tasks/ holds real bash programs, so they get the same lint+format
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
@@ -69,7 +77,7 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),final"
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,final"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -111,6 +119,55 @@ depends = ["test:cargo", "test:bats"]
 [tasks."test:cargo"]
 description = "Run the Rust workspace test suite"
 run = "cargo test --workspace"
+
+[tasks.msrv]
+description = "Gate: the workspace still builds on the `rust-version` it declares"
+shell = "bash -c"
+# VERIFY the declared floor, never SEARCH for the true one. A search (what
+# `cargo msrv find` does) is a compile per candidate version and answers a
+# question about the world; this asks the one question that is a property of
+# this commit — does the number we publish still hold.
+#
+# WHY THIS IS NOT ALREADY COVERED by the `ci` job's `cargo check`. The pinned
+# toolchain equals the declared MSRV *today*, which makes the coverage look
+# redundant. They are two independent numbers: bump `[tools] rust` to 1.95 and
+# leave `rust-version = "1.85"`, and every other gate compiles happily on 1.95
+# while the published claim quietly becomes false. That is CLOUD-271's shape
+# exactly. This task reads the DECLARED number and builds with THAT compiler, so
+# the two can never silently diverge.
+#
+# Read via `cargo metadata`, not by grepping a manifest: the crate inherits with
+# `rust-version.workspace = true`, so its own file does not carry the number and
+# the root is a virtual workspace. `sort -V | tail -n1` takes the highest
+# declared floor, which is the workspace's effective one.
+#
+# Task bodies do not run under `set -e` (.claude/rules/toolchain.md), and every
+# line here changes the verdict, so the body opts in explicitly.
+run = '''
+set -euo pipefail
+msrv=$(cargo metadata --format-version 1 --no-deps |
+	jq -r '[.packages[].rust_version | select(. != null)] | unique | .[]' |
+	sort -V | tail -n1)
+if [ -z "$msrv" ]; then
+	echo "::error:: msrv: no package declares rust-version, so there is no floor to verify." >&2
+	exit 1
+fi
+# Install only when absent. rustup has no cross-process lock (CLOUD-220), and
+# the cheapest way not to race one is not to mutate the toolchain dir on the
+# common path — where the declared floor equals the pinned toolchain, this is a
+# no-op. `--profile minimal` because a type-check needs no docs or clippy.
+if ! rustup toolchain list | grep -qE "^${msrv}(\.|-)"; then
+	if ! rustup toolchain install "$msrv" --profile minimal; then
+		echo "::error:: msrv: could not install the declared toolchain $msrv, so the floor is unverified." >&2
+		exit 1
+	fi
+fi
+# The shipped surface (lib + bins), which is what an MSRV claim is *about*: a
+# consumer on the floor compiles our crate, not our test harness. `--all-targets`
+# would drag dev-dependencies' own floors into a claim we do not make about them.
+cargo "+$msrv" check --workspace
+echo "msrv: the workspace builds on its declared rust-version ($msrv)"
+'''
 
 [tasks.deny]
 description = "cargo-deny: licenses, advisories, sources"
@@ -283,7 +340,7 @@ shell = "bash -c"
 # leaves the mutation in the tree for the next `git add -A` to sweep up. The
 # completeness question it was named for is now `lock-complete`, a pure gate in
 # hk.pkl; currency runs on a schedule (.github/workflows/lock-currency.yml).
-depends = ["ci", "cross-check", "darwin-link", "zizmor"]
+depends = ["ci", "cross-check", "darwin-link", "zizmor", "msrv"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand. Unguarded,

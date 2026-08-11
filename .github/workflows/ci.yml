@@ -196,12 +196,40 @@ jobs:
           # the Windows std that cross-check's own job owns.
           DOCTOR_TARGETS: ${{ matrix.target }}
 
+  # `rust-version` is a claim this repo publishes, and the other jobs cannot
+  # check it: they compile with the toolchain mise pins, which is a different
+  # number that merely happens to match today. A dependency bump that raises the
+  # required compiler leaves every job above green and the declared floor false.
+  # Its own job rather than a step in `ci` because it drives a second toolchain
+  # through rustup and would otherwise serialize behind that job's cargo chain.
+  msrv:
+    name: msrv
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-11
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # rust supplies the cargo, the rustup that fetches the declared
+          # toolchain, and the compiler itself; jq reads `rust-version` out of
+          # `cargo metadata`. Nothing else is invoked, and no MSRV tool is pinned
+          # — see the note above `[tasks.msrv]` in mise.toml for why cargo-msrv
+          # is not usable here. See the ci job for why these lists are narrow.
+          install_args: rust aqua:jqlang/jq
+      # A distinct key: this job's target dir is built by a different rustc than
+      # every other job's, so sharing an entry would thrash it.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: msrv
+      - run: mise run msrv
+
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
   final:
     name: final
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [ci, cross, darwin-link]
+    needs: [ci, cross, darwin-link, msrv]
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:
