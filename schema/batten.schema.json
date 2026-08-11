@@ -650,6 +650,13 @@
       "description": "The configured transcript path, as `batten.toml` declares it.\n\nA path, not a format selector: which host wrote it is pinned by the fixtures,\nand a repository that points at one is saying \"read this\", not \"read this\ndialect\". Host-specific, never consumer-specific, so rule 1 holds — no\nconsumer's directory layout appears in the engine.",
       "type": "object",
       "properties": {
+        "memory_root": {
+          "description": "The host's memory-root prefix, for CLOUD-267's self-persistence match.\n\nHost-adapter data on the same table rather than a second authority: the\ntranscript's format and the host's memory layout are two facts about one\nhost, and splitting them across tables would be the widening rule 6\nforbids. Omitted, [`crate::selfwrite::DEFAULT_MEMORY_ROOT`] applies.\n\nA **prefix matched against targets the transcript recorded** — never a\npath this engine opens, stats, or globs, which is what keeps the rule\ninside the repo root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
           "description": "Repo-relative path to the completed session transcript.",
           "type": [

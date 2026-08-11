@@ -4957,3 +4957,169 @@ fn no_transcript_text_reaches_any_output_stream() {
         }
     }
 }
+
+// --- unprompted self-persistence (CLOUD-267) --------------------------------
+//
+// A memory write in a turn no user message opened. The intent question ("was
+// this authorized?") is not computable and is permanently out of scope; the
+// structure is, and that is what these assert.
+//
+// The fixture carries a sentinel in every position that would be a disclosure —
+// the memory key, the written body, the target path, the injected message — so
+// the leak test below is total rather than illustrative.
+
+fn unprompted_pack() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/transcripts/unprompted-memory-write.jsonl.in");
+    fs::read_to_string(path).expect("read the unprompted fixture")
+}
+
+/// The `-J` view of the scan, or `None` when the run reported no writes.
+fn self_write_view(dir: &std::path::Path) -> Option<serde_json::Value> {
+    let output = batten()
+        .args(["check", "-J"])
+        .current_dir(dir)
+        .output()
+        .expect("run batten check");
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("-J is a JSON document");
+    document
+        .get("transcript")?
+        .get("unprompted_memory_writes")
+        .cloned()
+}
+
+#[test]
+fn a_memory_write_in_a_turn_no_user_message_opened_is_raised() {
+    let dir = repo_with_transcript("selfwrite-raises", Some(&unprompted_pack()));
+    let view = self_write_view(&dir).expect("the scan reports");
+    // Three raised: the unprompted `edit_memory`, the generic `Write` under the
+    // memory root, and the one following a host-marked injected message.
+    assert_eq!(view["raised"], 3, "{view}");
+    // One unresolved: the turn whose authorship cannot be reconstructed.
+    assert_eq!(view["unresolved"], 1, "{view}");
+}
+
+#[test]
+fn a_turn_a_person_opened_does_not_raise_however_many_calls_follow() {
+    // The fixture's FIRST write is a `write_memory` inside a turn a real user
+    // message opened. If authorization were read per-call rather than per
+    // exchange, this would be a fourth raise.
+    let dir = repo_with_transcript("selfwrite-authorized", Some(&unprompted_pack()));
+    let view = self_write_view(&dir).expect("the scan reports");
+    let lines: Vec<u64> = view["lines"]
+        .as_array()
+        .expect("lines is an array")
+        .iter()
+        .map(|line| line.as_u64().expect("a line number"))
+        .collect();
+    assert!(
+        !lines.contains(&2),
+        "the authorized write on line 2 must not be reported: {lines:?}"
+    );
+}
+
+#[test]
+fn a_non_memory_write_in_an_unprompted_turn_does_not_raise() {
+    // Line 6 writes `/w/src/main.rs` with no user message in sight. It is a
+    // write, it is unprompted, and it is none of this rule's business.
+    let dir = repo_with_transcript("selfwrite-non-memory", Some(&unprompted_pack()));
+    let view = self_write_view(&dir).expect("the scan reports");
+    let lines: Vec<u64> = view["lines"]
+        .as_array()
+        .expect("lines is an array")
+        .iter()
+        .map(|line| line.as_u64().expect("a line number"))
+        .collect();
+    assert!(!lines.contains(&6), "an ordinary source write: {lines:?}");
+}
+
+#[test]
+fn an_unreconstructable_turn_registers_unresolved_rather_than_nothing() {
+    // House style §10: the third value is a real answer. Silence here would be
+    // the false green, and raising would manufacture a finding.
+    let dir = repo_with_transcript("selfwrite-unresolved", Some(&unprompted_pack()));
+    let view = self_write_view(&dir).expect("the scan reports");
+    assert_eq!(view["unresolved"], 1, "{view}");
+}
+
+#[test]
+fn the_scan_never_blocks_the_run() {
+    // Advisory means structurally unable to block (§0.3) — including under
+    // `--fail-on-warning`, which is a promotion path for findings and must have
+    // nothing to promote here.
+    let dir = repo_with_transcript("selfwrite-advisory", Some(&unprompted_pack()));
+    for args in [
+        vec!["check"],
+        vec!["check", "-J"],
+        vec!["--fail-on-warning", "check"],
+    ] {
+        let output = batten()
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .expect("run batten check");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?} must not block on an advisory"
+        );
+    }
+}
+
+#[test]
+fn the_scan_is_byte_identical_across_two_runs() {
+    let dir = repo_with_transcript("selfwrite-stable", Some(&unprompted_pack()));
+    let once = batten()
+        .args(["check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run once");
+    let twice = batten()
+        .args(["check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run twice");
+    assert_eq!(once.stdout, twice.stdout, "the scan is a pure function");
+}
+
+#[test]
+fn no_memory_key_path_or_content_reaches_any_output_stream() {
+    // The disclosure test. What the agent persisted is payload, not a pointer:
+    // reporting the key or the target would leak exactly what the rule is
+    // watching being written.
+    let dir = repo_with_transcript("selfwrite-no-leak", Some(&unprompted_pack()));
+    for args in [
+        vec!["check"],
+        vec!["check", "-J"],
+        vec!["--verbose", "check"],
+    ] {
+        let output = batten()
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .expect("run batten check");
+        let both = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for sentinel in [
+            "AUTHORIZED-KEY-SENTINEL",
+            "AUTHORIZED-BODY-SENTINEL",
+            "UNPROMPTED-KEY-SENTINEL",
+            "UNPROMPTED-BODY-SENTINEL",
+            "PATH-SENTINEL",
+            "PATH-BODY-SENTINEL",
+            "INJECTED-SENTINEL",
+            "INJECTED-WRITE-SENTINEL",
+            "UNRESOLVED-SENTINEL",
+            ".serena/memories",
+        ] {
+            assert!(
+                !both.contains(sentinel),
+                "{args:?} leaked {sentinel}: {both}"
+            );
+        }
+    }
+}

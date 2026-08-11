@@ -541,10 +541,35 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   never `2` — a parse failure must not reach a harness as a deny). The absent
   report rides **both** channels because the stderr half is ladder-gated: `-J` has
   no `Mode` to consult, so `--silent -J` still carries it, which is what stops a
-  skipped gate from exiting 0 in silence. Emits no findings — `FindingKind::Sequence`
-  and `findings::Observation::NotObserved` stay the reserved seam CLOUD-97/98/219/267
+  skipped gate from exiting 0 in silence. Emits no findings itself — `FindingKind::Sequence`
+  and `findings::Observation::NotObserved` stay the reserved seam CLOUD-97/98/219
   occupy. `session` is `Option<String>` with empty normalized to `None`, the same
   degradation `identity::sequence_fingerprint`'s signature already encodes.
+  `Event::Turn` carries an **`Origin` beside its `Role`** (CLOUD-267), because the
+  role alone cannot answer who spoke: a host renders tool results in the _user_
+  role, so a role-only reading finds a user message where nobody typed one, and
+  "a turn carrying no user message" would never fire. Three values plus
+  `Assistant` — `Authored`, `Synthetic` (a host-set `isMeta`/`isSynthetic`, or a
+  block array that is all `tool_result`), and `Unknown`, which is a real answer
+  per §10 rather than a guess in either direction.
+- `selfwrite.rs` — unprompted agent self-persistence (CLOUD-267): a memory write
+  in a turn no genuine user message opened, as a conjunction of two exact
+  structural matches over `transcript.rs`'s stream. **Memory-write event**: exact
+  membership in `MEMORY_TOOLS` after normalizing a host's MCP namespace
+  (`mcp__serena__write_memory` → `write_memory`, so it stays membership and not a
+  substring match), OR a named generic write verb whose `file_path` falls under
+  the declared memory root. **No-user-message turn**: an _exchange_ is delimited
+  by user-role boundaries, not by every turn boundary — tool calls live in the
+  model's own turns, so keying on "the most recent boundary" would raise on every
+  call ever made. A turn a person opened never raises however many calls follow;
+  a host-marked synthetic opener does, because an injected message is not
+  authorization. `Unknown` authorship registers `Disposition::Unresolved`.
+  Advisory and **structurally unable to block**: it rides the transcript view in
+  `-J`, never the `findings` vec, so no `--fail-on-warning` promotion can route it
+  to an exit code. Output is counts plus bare line numbers — the memory key and
+  target are payload, not pointers. The intent question is permanently out of
+  scope (CLOUD-93), not deferred. Store/tier/drain integration waits on
+  CLOUD-81/82.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do. The module

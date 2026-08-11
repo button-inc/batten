@@ -34,6 +34,7 @@ pub mod provision;
 pub mod receipt;
 pub mod resolve;
 pub mod rules;
+pub mod selfwrite;
 pub mod severity;
 pub mod spec;
 pub mod state;
@@ -846,6 +847,27 @@ struct TranscriptView {
     capability: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     counts: Option<transcript::Counts>,
+    /// Unprompted self-persistence (CLOUD-267), as counts and line pointers.
+    ///
+    /// Advisory and structurally unable to block: it rides the transcript view
+    /// rather than the `findings` vec, so no promotion setting and no
+    /// `--fail-on-warning` can route it to an exit code (house style §0.3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unprompted_memory_writes: Option<SelfWriteView>,
+}
+
+/// The self-persistence scan as the `-J` document renders it.
+///
+/// Counts plus bare line numbers. Never the memory key, the target path, the
+/// tool arguments, or the written bytes — those are what the agent persisted,
+/// and disclosing them is the leak the rule exists to avoid.
+#[derive(Debug, serde::Serialize)]
+struct SelfWriteView {
+    #[serde(flatten)]
+    counts: selfwrite::Counts,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
+    lines: Vec<usize>,
 }
 
 /// One weakened key in the `-J` payload, the same pointer the human channel
@@ -855,6 +877,95 @@ struct DeltaView<'a> {
     key: &'a str,
     base: &'a str,
     working: &'a str,
+}
+
+/// The transcript half of the `-J` document.
+///
+/// `None` for an unconfigured repository: a config that never mentions the key
+/// is not missing anything, so the document carries no key either. An **absent**
+/// capability does get a view, because that is the half `--silent` cannot erase
+/// and the whole reason the skip is honest.
+fn transcript_view(
+    capability: &transcript::Capability,
+    self_writes: &[selfwrite::Detection],
+) -> Option<TranscriptView> {
+    match capability {
+        transcript::Capability::Unconfigured => None,
+        transcript::Capability::Absent => Some(TranscriptView {
+            capability: capability.as_str(),
+            counts: None,
+            unprompted_memory_writes: None,
+        }),
+        transcript::Capability::Present(stream) => Some(TranscriptView {
+            capability: capability.as_str(),
+            counts: Some(stream.counts()),
+            // Emitted only when there is something to point at, so a clean
+            // transcript adds no key rather than an empty one.
+            unprompted_memory_writes: (!self_writes.is_empty()).then(|| SelfWriteView {
+                counts: selfwrite::counts(self_writes),
+                // The session pointer the finding anchors to: an id the host
+                // minted, never transcript content.
+                session: stream.session.clone(),
+                lines: self_writes.iter().map(|found| found.line).collect(),
+            }),
+        }),
+    }
+}
+
+/// Scan a resolved transcript capability for unprompted self-persistence.
+///
+/// Split out of [`run_rules`] to keep that function under the line ceiling, and
+/// the split falls on a real seam: this is the whole of CLOUD-267's engine-side
+/// entry, so a reader looking for "where does the rule run" finds one place.
+///
+/// An unconfigured or absent capability yields no detections rather than an
+/// error — the rule simply did not run, and `ABSENT_NOTICE` is what says so.
+fn scan_self_writes(
+    capability: &transcript::Capability,
+    declared: Option<&transcript::TranscriptConfig>,
+) -> Vec<selfwrite::Detection> {
+    match capability {
+        transcript::Capability::Present(stream) => selfwrite::scan(
+            stream,
+            declared
+                .and_then(|config| config.memory_root.as_deref())
+                .unwrap_or(selfwrite::DEFAULT_MEMORY_ROOT),
+        ),
+        transcript::Capability::Unconfigured | transcript::Capability::Absent => Vec::new(),
+    }
+}
+
+/// The human half of the self-persistence report.
+///
+/// Pointer-only: counts alone on this channel. Never the memory key, the target,
+/// the arguments, or the bytes — those are what the agent persisted, and naming
+/// them here would disclose exactly what the rule is watching being written.
+///
+/// Ladder-gated like every other statement-about-Batten, because the `-J` field
+/// is the half that cannot be silenced.
+///
+/// # Errors
+///
+/// Propagates a write failure on the error channel.
+fn report_self_writes(
+    detections: &[selfwrite::Detection],
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<()> {
+    if detections.is_empty() {
+        return Ok(());
+    }
+    let folded = selfwrite::counts(detections);
+    output::message(
+        mode,
+        Verbosity::Normal,
+        err,
+        &format!(
+            "transcript: {} memory write(s) in a turn no user message opened, {} unresolved",
+            folded.raised, folded.unresolved
+        ),
+    )?;
+    Ok(())
 }
 
 /// Run the configured rules against the current directory and report findings.
@@ -962,6 +1073,14 @@ fn run_rules(
         output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
     }
 
+    // The first rule to consume the stream (CLOUD-267), which is what widens the
+    // seam the comment above left open. It joins NEITHER `findings` nor
+    // `any_blocking`: an advisory surface must be structurally unable to block
+    // (§0.3), and routing it through `Finding` would put it behind
+    // `--fail-on-warning`, which is a promotion path, not a tier.
+    let self_writes = scan_self_writes(&capability, config.transcript.as_ref());
+    report_self_writes(&self_writes, mode, err)?;
+
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function
     // is the single funnel `check` and `enforce` share — they differ only in the
     // `runner` above — so one insertion point covers both verbs, both channels and
@@ -1015,17 +1134,7 @@ fn run_rules(
         // human channel's contract; JSON that is sometimes absent is unparseable.
         let report = CheckReport {
             fail_on_warning: config.fail_on_warning,
-            transcript: match &capability {
-                transcript::Capability::Unconfigured => None,
-                transcript::Capability::Absent => Some(TranscriptView {
-                    capability: capability.as_str(),
-                    counts: None,
-                }),
-                transcript::Capability::Present(stream) => Some(TranscriptView {
-                    capability: capability.as_str(),
-                    counts: Some(stream.counts()),
-                }),
-            },
+            transcript: transcript_view(&capability, &self_writes),
             config_delta: delta.as_ref().map(|weakenings| {
                 weakenings
                     .iter()

@@ -81,9 +81,43 @@ pub const ABSENT_NOTICE: &str =
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Role {
-    /// The operator, or a tool result being handed back.
+    /// The operator, or something the host rendered in the user role.
+    ///
+    /// The *role* alone does not say which: see [`Origin`], carried alongside.
     User,
     /// The model.
+    Assistant,
+}
+
+/// Whether a user-role turn was actually opened by a person (CLOUD-267).
+///
+/// The role is not the answer, and conflating the two is the whole reason this
+/// type exists. A host renders tool results in the **user** role, so a span full
+/// of them reads as "the user spoke" to anything that inspects `role` alone —
+/// and "a turn carrying no user message" is exactly the predicate that would
+/// then never fire.
+///
+/// Three values rather than two, because [`Origin::Unknown`] is a real answer.
+/// House style §10's three-valued disposition applies here for the same reason
+/// it applies to a finding: a span whose authorship cannot be reconstructed must
+/// register as unresolved, never silently as either one. Guessing `Authored`
+/// would be the false green; guessing `Synthetic` would manufacture findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Origin {
+    /// A genuine message from the operator.
+    Authored,
+    /// The host rendered this in the user role, but nobody typed it: a tool
+    /// result handed back, or a record the host marked meta.
+    ///
+    /// **An injected message is not authorization.** A turn opened by one of
+    /// these is a turn with no user message, however the host chose to render
+    /// it.
+    Synthetic,
+    /// Authorship could not be reconstructed from the typed fields available.
+    Unknown,
+    /// Not a user turn at all — the model's own.
     Assistant,
 }
 
@@ -106,7 +140,11 @@ const DENY_EXIT: i64 = crate::ExitCode::Violation.code() as i64;
 pub enum Event {
     /// A turn boundary — the unit CLOUD-267's "a turn carrying no user message"
     /// is counted over.
-    Turn(Role),
+    ///
+    /// Carries [`Origin`] beside [`Role`] because the role alone cannot answer
+    /// the question: a host renders tool results in the user role, so a
+    /// role-only reading sees a user message where nobody spoke.
+    Turn(Role, Origin),
     /// A tool call, with the arguments a predicate reads structurally.
     ///
     /// `input` is retained because CLOUD-98's bypass predicate is a JSON boolean
@@ -213,7 +251,7 @@ impl Stream {
         let mut counts = Counts::default();
         for record in &self.records {
             match &record.event {
-                Event::Turn(_) => counts.turns += 1,
+                Event::Turn(..) => counts.turns += 1,
                 Event::ToolCall { .. } => counts.tool_calls += 1,
                 Event::ToolResult { failed, .. } => {
                     if *failed {
@@ -321,7 +359,7 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
     if let Some(role) = role {
         records.push(Record {
             line,
-            event: Event::Turn(role),
+            event: Event::Turn(role, origin_of(parsed, message, role)),
         });
     }
     // Content is an array of blocks, or a bare string when the turn is plain
@@ -362,6 +400,56 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
     }
 }
 
+/// Decide whether a user-role turn was opened by a person (CLOUD-267).
+///
+/// Every branch is an exact read of a typed field — a boolean the host set, or
+/// the `type` discriminant of a content block. Nothing here inspects prose, so
+/// no wording change upstream can flip a verdict.
+///
+/// The ordering matters. A host-set meta marker is checked **first** and wins
+/// outright: it is the host stating that it, not a person, produced the record,
+/// and that statement is more authoritative than anything inferable from the
+/// content. Then the content shape: a block array whose every element is a
+/// `tool_result` is the harness handing work back, which is the common synthetic
+/// case and the one the captured fixture carries.
+///
+/// A bare string is [`Origin::Authored`]: that is the shape a host uses for a
+/// plain typed turn, and it carries no structure that could indicate otherwise.
+///
+/// Where the host supplies neither a marker nor a decodable content shape, the
+/// answer is [`Origin::Unknown`] rather than a guess. Per CLOUD-45 this is a
+/// per-host capability fact — a host that renders injected content in the user
+/// role with no marker simply cannot be separated from one that does — and the
+/// honest response is to surface it, not to pick a side.
+fn origin_of(parsed: &Line, message: &Message, role: Role) -> Origin {
+    if role == Role::Assistant {
+        return Origin::Assistant;
+    }
+    // The host's own statement, and it outranks any inference below.
+    if parsed.is_meta.unwrap_or(false) || parsed.is_synthetic.unwrap_or(false) {
+        return Origin::Synthetic;
+    }
+    match &message.content {
+        // A plain typed turn.
+        Some(Value::String(_)) => Origin::Authored,
+        Some(Value::Array(blocks)) if !blocks.is_empty() => {
+            // Every block a tool result: the harness handing work back, in the
+            // user role, with nobody having spoken.
+            let all_results = blocks
+                .iter()
+                .all(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"));
+            if all_results {
+                Origin::Synthetic
+            } else {
+                Origin::Authored
+            }
+        }
+        // No content at all, or an empty block array: nothing to read, and a
+        // guess either way would be the failure this arm exists to avoid.
+        _ => Origin::Unknown,
+    }
+}
+
 /// One transcript line, typed to what a predicate reads.
 ///
 /// Every field is optional and unknown keys are ignored — the opposite of
@@ -374,6 +462,15 @@ struct Line {
     session_id: Option<String>,
     message: Option<Message>,
     attachment: Option<Attachment>,
+    /// The host marking a record as its own rather than the operator's.
+    ///
+    /// Two spellings because hosts differ and neither is ours to choose; both
+    /// mean the same thing to [`origin_of`], and a host that sets neither lands
+    /// on the content-shape branch.
+    #[serde(rename = "isMeta")]
+    is_meta: Option<bool>,
+    #[serde(rename = "isSynthetic")]
+    is_synthetic: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -415,6 +512,18 @@ pub struct TranscriptConfig {
     /// Repo-relative path to the completed session transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// The host's memory-root prefix, for CLOUD-267's self-persistence match.
+    ///
+    /// Host-adapter data on the same table rather than a second authority: the
+    /// transcript's format and the host's memory layout are two facts about one
+    /// host, and splitting them across tables would be the widening rule 6
+    /// forbids. Omitted, [`crate::selfwrite::DEFAULT_MEMORY_ROOT`] applies.
+    ///
+    /// A **prefix matched against targets the transcript recorded** — never a
+    /// path this engine opens, stats, or globs, which is what keeps the rule
+    /// inside the repo root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_root: Option<String>,
 }
 
 /// Validate the table at load, the way every other config table is.
@@ -550,11 +659,12 @@ mod tests {
     fn a_declared_but_empty_path_is_refused_at_load() {
         assert!(
             validate(Some(&TranscriptConfig {
-                path: Some(String::new())
+                path: Some(String::new()),
+                ..TranscriptConfig::default()
             }))
             .is_err()
         );
-        assert!(validate(Some(&TranscriptConfig { path: None })).is_ok());
+        assert!(validate(Some(&TranscriptConfig::default())).is_ok());
         // No table at all is the ordinary case, not a finding.
         assert!(validate(None).is_ok());
     }
