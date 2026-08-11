@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.60](https://github.com/button-inc/batten/compare/v0.0.59...v0.0.60) - 2026-08-11
+
+### Added
+
+- *(ci)* derive the merge contract from the host, and gate the copy against it
+- *(hook)* make a host's event set a declared capability, not an assumption
+- *(hook)* speak five hosts' payloads into one envelope
+- *(judge)* refuse the invocation a protected span appears in, and cap what crosses
+- *(budget)* name a budget set after its consumer, and make check enforce it
+- *(journal)* fold shards under an advisory lock, and never upgrade a store implicitly
+- *(findings)* give a finding a disposition that merges without adjudication
+- *(transcript)* read a completed session transcript as an optional check input
+- *(provision)* pin, verify, and cache tools out of tree
+
+### Fixed
+
+- *(worktree)* report the facts it can compute when the target resolves to nothing
+- *(identity)* stop the keyed path claiming a guarantee it does not give
+
+### Other
+
+- *(fixtures)* format the host-payload README
+- *(config)* rename the budget key in the every-key fixture
+- *(worktree)* backtick DoD so the doc lint passes
+- *(journal)* let the merged-log read say it cannot fail
+
 ## [0.0.59](https://github.com/button-inc/batten/compare/v0.0.58...v0.0.59) - 2026-08-11
 
 ### Added
