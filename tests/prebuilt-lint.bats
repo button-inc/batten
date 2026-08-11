@@ -33,6 +33,18 @@ setup() {
 	# here would be invisible to it and the entry would read as dead.
 	cp "$REPO/AGENTS.md" "$ROOT/AGENTS.md"
 	export CARGO_TARGET_DIR="$REPO/target"
+	# A git repository with `origin/main` resolving, because the copied
+	# batten.toml carries `ratchet` rows (CLOUD-55) whose `base` is that ref —
+	# and an unresolvable base is exit 1 by design, never a pass. Stripping the
+	# rows instead would make this fixture judge a different config than the one
+	# that ships, which is the whole thing these tests exist to prevent.
+	#
+	# `crates` is a symlink here and the tree walk counts regular files only, so
+	# both sides of every ratchet count zero. The point is that the ref RESOLVES,
+	# not what it contains.
+	git -C "$ROOT" init -q
+	git -C "$ROOT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
+	git -C "$ROOT" update-ref refs/remotes/origin/main HEAD
 }
 
 # `batten check` inside the fixture. Built from the working tree, so the gate
