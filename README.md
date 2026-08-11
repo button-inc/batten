@@ -154,17 +154,26 @@ committed authority declares. A weakening is refused with exit `1`, not applied.
 
 ### Gating on a file's contents — a `command` rule
 
-`glob` selects the files, `run` names the command, and `{{files}}` is substituted
-with the matched paths. Exit `0` passes; any non-zero exit is a violation.
+`glob` selects the files, `check` names the command, and `{{files}}` is
+substituted with the matched paths. Exit `0` passes; any non-zero exit is a
+violation.
 
 ```toml
 [[rule]]
 id = "single-entrypoint"
 kind = "command"
 glob = "src/**/*.rs"
-run = "./scripts/one-entrypoint {{files}}"
+check = "./scripts/one-entrypoint {{files}}"
 severity = "deny"
 ```
+
+The key is `check` rather than `run` because the kind carries a **`check`/`fix`
+duality** (§9): `check` is the inspection-only gate, and an optional `fix` names
+the mutating command that repairs what it condemned. Enforcement is always the
+check side. `fix` is **reserved, not yet executed** — serialised fix execution is
+not a capability this engine has, so `batten enforce` refuses a rule declaring
+one with a usage error rather than accepting a repair that would silently never
+run.
 
 A `command` rule runs under `batten enforce` only. `batten check` **refuses** it
 with a usage error rather than running it, which is what keeps `check`'s

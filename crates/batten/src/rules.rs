@@ -66,9 +66,16 @@ pub enum RuleKind {
     /// the readable one; the expression is for a predicate that genuinely is a
     /// shape, such as a flag cluster judged by its letters.
     Forbid,
-    /// A dynamic check: run the `run` template and treat its exit code as the
+    /// A dynamic check: run the `check` template and treat its exit code as the
     /// predicate — `0` passes, non-zero is a violation. The sanctioned escape
     /// hatch for rules no static shape can express.
+    ///
+    /// The kind carries house style §9's **`check`/`fix` duality**: `check` is
+    /// the inspection-only gate and the only side enforcement ever runs, `fix`
+    /// is the optional mutating half. The duality is a contract with the config
+    /// author that Batten cannot verify — an arbitrary command declared as a
+    /// check may still write — so it governs how a rule is *authored* and never
+    /// licenses the verb that runs it to claim `read`.
     ///
     /// It is an **exit-code predicate, not a judge** (CLOUD-93): the command's
     /// output is never parsed for meaning. Because it executes a process
@@ -160,7 +167,11 @@ impl RuleKind {
             // (CLOUD-283). `validate` carries that check, which is also where
             // the both-columns case is refused.
             RuleKind::Forbid => &["glob"],
-            RuleKind::Command => &["glob", "run"],
+            // `check`, never `fix`: enforcement is always the check side (§9),
+            // so the gate half is what a row cannot load without. A row
+            // carrying only a `fix` declares a mutation with nothing deciding
+            // when it is needed.
+            RuleKind::Command => &["glob", "check"],
             // A shape row's `reason` is required, not optional: the deny it
             // produces reaches a model as the whole explanation, and a refusal
             // with nothing but an id is the un-actionable shape CLOUD-122 exists
@@ -189,7 +200,7 @@ impl RuleKind {
                 "verbatim",
                 "identity_key",
             ],
-            RuleKind::Command => &["glob", "run", "identity_key"],
+            RuleKind::Command => &["glob", "check", "fix", "identity_key"],
             // A shape rule is adjudicated per mediated call and never reaches
             // the store, so an identity column on one is decorative by
             // construction (non-negotiable rule 6).
@@ -359,14 +370,44 @@ pub struct Rule {
     /// An optional link to the policy this rule enforces, appended to the deny.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_url: Option<String>,
-    /// The command template a [`RuleKind::Command`] rule runs. Required by that
-    /// kind, rejected by any other.
+    /// The **inspection-only** command template a [`RuleKind::Command`] rule
+    /// runs as its gate. Required by that kind, rejected by any other.
     ///
     /// Split on whitespace into `program` plus arguments and executed
     /// **directly — never through a shell**, so what runs is exactly what a
     /// reviewer reads (§9: rules "name a command already on the operator's
     /// PATH"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the
     /// matched paths; omit it and the command self-discovers.
+    ///
+    /// Named for the half it is, not for the act of running: §9's duality has
+    /// two commands, and a column called `run` could name either. Enforcement
+    /// is always this one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    /// The **mutating** half of §9's duality: the command that repairs what
+    /// `check` condemned. Optional, [`RuleKind::Command`] only.
+    ///
+    /// Parsed today and **executed by nothing**: serialised fix execution is an
+    /// engine capability that does not exist yet. The key is reserved now
+    /// rather than later because §2 declares no back-compatibility surface, so
+    /// a config author who writes one is writing the final spelling.
+    ///
+    /// A row carrying it is refused by [`run_all`] rather than quietly ignored
+    /// — a declared repair that silently never runs is the false green this
+    /// engine exists to refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+    /// The retired spelling of [`Rule::check`], present only so the refusal can
+    /// name its replacement.
+    ///
+    /// Carried as a field rather than left to `deny_unknown_fields` for the
+    /// same reason [`crate::config::OverrideConfig::min_batten_version`] is:
+    /// "unknown field `run`" reads as a typo, where this is a rename with one
+    /// specific fix. Every deny points to it (CLOUD-122).
+    ///
+    /// Deliberately absent from [`Rule::columns`]: that census classifies the
+    /// columns a kind may *carry*, and no kind carries this one — it is refused
+    /// outright by [`Rule::validate`], ahead of any per-kind question.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
     /// Hash the matched span **verbatim** rather than collapsing its whitespace.
@@ -443,21 +484,25 @@ impl Direction {
 
 impl Rule {
     /// The program a [`RuleKind::Command`] rule invokes: the first
-    /// whitespace-separated token of [`Rule::run`].
+    /// whitespace-separated token of [`Rule::check`].
     ///
     /// Shared rather than re-split at each caller, so `doctor`'s PATH probe
     /// (CLOUD-66) and the runner below can never disagree about which token is
     /// the program — a probe that checked a different word than the one executed
     /// would report health about the wrong binary.
     ///
-    /// `None` for any other kind, and for a `run` with no tokens (which the
+    /// The **check** half, never the fix: enforcement only ever runs that side
+    /// (§9), so a probe over the other one would report health about a command
+    /// this engine cannot invoke at all.
+    ///
+    /// `None` for any other kind, and for a `check` with no tokens (which the
     /// runner refuses as a usage error).
     #[must_use]
     pub fn program(&self) -> Option<&str> {
         if self.kind != RuleKind::Command {
             return None;
         }
-        self.run.as_deref()?.split_whitespace().next()
+        self.check.as_deref()?.split_whitespace().next()
     }
 
     /// Validate that the per-kind fields present match the declared `kind`.
@@ -476,13 +521,14 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 12] {
+    fn columns(&self) -> [(&'static str, bool); 13] {
         [
             ("glob", self.glob.is_some()),
             ("pattern", self.pattern.is_some()),
             ("regex", self.regex.is_some()),
             ("exclude", self.exclude.is_some()),
-            ("run", self.run.is_some()),
+            ("check", self.check.is_some()),
+            ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
             ("reason", self.reason.is_some()),
             ("policy_url", self.policy_url.is_some()),
@@ -495,6 +541,16 @@ impl Rule {
 
     fn validate(&self) -> anyhow::Result<()> {
         let kind = self.kind.as_str();
+        // Ahead of every per-kind question, so the rename is what the author
+        // reads. Left to the census, a `run` on a command rule would report
+        // "requires `check`" — true, and silent about the key already holding
+        // the value.
+        if self.run.is_some() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `run` is now `check` (house style §9's check/fix duality); rename the key",
+                self.id
+            )));
+        }
         for column in self.kind.requires() {
             let present = self
                 .columns()
@@ -693,8 +749,25 @@ pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
 ///
 /// # Errors
 ///
-/// As [`run_static`], minus the spawning-kind refusal.
+/// As [`run_static`], minus the spawning-kind refusal — plus one of its own: a
+/// rule declaring [`Rule::fix`] is refused, because serialised fix execution is
+/// a capability this engine does not have. Returns a [`UsageError`] (→ exit
+/// `1`): a config naming a capability the binary lacks is the config-or-usage
+/// class (§7), never a policy verdict about the repository.
 pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+    // Refuse before any work, the shape `run_static` above already uses: the
+    // alternative is running the check side, exiting on its verdict, and having
+    // silently ignored a repair the config declared. A key that parses and does
+    // nothing is indistinguishable from one the engine honoured.
+    for rule in rules {
+        if rule.fix.is_some() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `fix` declares a repair, and serialised fix execution is not a \
+                 capability this build has; remove the key or run the repair yourself",
+                rule.id
+            )));
+        }
+    }
     run(rules, root)
 }
 
@@ -852,7 +925,7 @@ fn ratchet_rule(
     Ok(())
 }
 
-/// The argument a `run` template uses to mark where the matched paths go.
+/// The argument a `check` template uses to mark where the matched paths go.
 pub const FILES_PLACEHOLDER: &str = "{{files}}";
 
 /// The upper bound, in bytes, on the matched paths handed to one invocation.
@@ -874,13 +947,16 @@ fn command_rule(
     matched: &[&String],
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<()> {
-    let template = rule.run.as_deref().ok_or_else(|| {
-        UsageError::raise(format!("rule {}: kind \"command\" requires `run`", rule.id))
+    let template = rule.check.as_deref().ok_or_else(|| {
+        UsageError::raise(format!(
+            "rule {}: kind \"command\" requires `check`",
+            rule.id
+        ))
     })?;
     let tokens: Vec<&str> = template.split_whitespace().collect();
     let Some((program, args)) = tokens.split_first() else {
         return Err(UsageError::raise(format!(
-            "rule {}: `run` must not be empty",
+            "rule {}: `check` must not be empty",
             rule.id
         )));
     };
@@ -1503,7 +1579,16 @@ mod tests {
         );
         assert!(
             Rule {
-                run: Some("true".to_owned()),
+                check: Some("true".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        // Same for the other half of §9's duality: a ratchet runs nothing.
+        assert!(
+            Rule {
+                fix: Some("true".to_owned()),
                 ..base.clone()
             }
             .validate()
@@ -1572,6 +1657,8 @@ mod tests {
             contains: None,
             reason: None,
             policy_url: None,
+            check: None,
+            fix: None,
             run: None,
             verbatim: None,
             identity_key: None,
@@ -1588,10 +1675,10 @@ mod tests {
         }
     }
 
-    fn command(id: &str, glob: &str, run: &str) -> Rule {
+    fn command(id: &str, glob: &str, check: &str) -> Rule {
         Rule {
             glob: Some(glob.to_owned()),
-            run: Some(run.to_owned()),
+            check: Some(check.to_owned()),
             ..blank(id, RuleKind::Command)
         }
     }
@@ -1776,7 +1863,7 @@ mod tests {
                     match *column {
                         "glob" => rule.glob = Some("**".to_owned()),
                         "pattern" => rule.pattern = Some("x".to_owned()),
-                        "run" => rule.run = Some("true".to_owned()),
+                        "check" => rule.check = Some("true".to_owned()),
                         "reason" => rule.reason = Some("because".to_owned()),
                         "direction" => rule.direction = Some(Direction::NonDecreasing),
                         "base" => rule.base = Some("HEAD".to_owned()),
@@ -1817,12 +1904,13 @@ mod tests {
     }
 
     #[test]
-    fn a_shape_rule_rejects_a_glob_and_a_run() {
-        for column in ["glob", "run"] {
+    fn a_shape_rule_rejects_a_glob_and_a_check() {
+        for column in ["glob", "check", "fix"] {
             let mut rule = shape("s", "gh pr merge", "because");
             match column {
                 "glob" => rule.glob = Some("**".to_owned()),
-                _ => rule.run = Some("true".to_owned()),
+                "fix" => rule.fix = Some("true".to_owned()),
+                _ => rule.check = Some("true".to_owned()),
             }
             let err = rule
                 .validate()
@@ -1890,7 +1978,7 @@ mod tests {
             }
             let rule = Rule {
                 glob: Some("**".to_owned()),
-                run: Some("true".to_owned()),
+                check: Some("true".to_owned()),
                 ..blank("spawner", *kind)
             };
             let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
@@ -2022,13 +2110,60 @@ mod tests {
     }
 
     #[test]
+    fn the_retired_run_key_names_its_replacement() {
+        // §2 declares no back-compatibility surface, so `run` is not an alias —
+        // it is a key that used to work. The refusal has to carry the one fix,
+        // or an author whose config stops loading learns only that it stopped
+        // (CLOUD-122).
+        let rule = Rule {
+            glob: Some("**".to_owned()),
+            run: Some("true".to_owned()),
+            ..blank("retired", RuleKind::Command)
+        };
+        let err = rule.validate().expect_err("`run` no longer loads");
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        let text = err.to_string();
+        assert!(text.contains("`check`"), "the refusal must name `check`");
+        // And it must win over the census, which would otherwise report the
+        // absent `check` and say nothing about the key holding its value.
+        assert!(
+            !text.contains("requires"),
+            "the rename must be reported ahead of the missing-column complaint"
+        );
+    }
+
+    #[test]
+    fn a_declared_fix_is_refused_rather_than_run() {
+        // The key parses — that is the whole point of reserving the vocabulary
+        // now — but the half that would execute it does not exist, and a repair
+        // that silently never runs is the false green this engine refuses.
+        let dir = temp_dir("rules-fix-reserved");
+        write(&dir, "a.rs", "x\n");
+        let rule = Rule {
+            fix: Some("true".to_owned()),
+            ..command("fixer", "**", "true")
+        };
+        rule.validate().expect("`fix` is a loadable column");
+        let err = run_all(std::slice::from_ref(&rule), &dir)
+            .expect_err("an unexecutable repair must not be ignored");
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a capability this build lacks is the config class (exit 1), not a policy verdict"
+        );
+        assert!(
+            err.to_string().contains("`fix`"),
+            "the refusal must name the key it is about"
+        );
+    }
+
+    #[test]
     fn a_kind_only_accepts_its_own_fields() {
         // The flat-struct tension: without a tagged enum, kind/field agreement
         // is asserted here. A field from another kind is an error, never ignored.
         let dir = temp_dir("cmd-schema");
         write(&dir, "a.rs", "x\n");
         let cases = [
-            // command with no `run`
+            // command with no `check`
             Rule {
                 glob: Some("**".into()),
                 ..blank("a", RuleKind::Command)
@@ -2037,7 +2172,7 @@ mod tests {
             Rule {
                 glob: Some("**".into()),
                 pattern: Some("x".into()),
-                run: Some("true".into()),
+                check: Some("true".into()),
                 ..blank("b", RuleKind::Command)
             },
             // forbid with no `pattern`
@@ -2049,7 +2184,7 @@ mod tests {
             Rule {
                 glob: Some("**".into()),
                 pattern: Some("x".into()),
-                run: Some("true".into()),
+                check: Some("true".into()),
                 ..blank("d", RuleKind::Forbid)
             },
         ];

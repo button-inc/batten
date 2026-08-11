@@ -492,7 +492,7 @@ fn spec_marks_enforce_unclassified_and_check_read() {
 }
 
 /// A `batten.toml` carrying one command rule that always fails.
-const COMMAND_RULE_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"false\"\nseverity = \"deny\"\nscope = \"tree\"\n";
+const COMMAND_RULE_CONFIG: &str = "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"false\"\nseverity = \"deny\"\nscope = \"tree\"\n";
 
 #[test]
 fn check_refuses_a_command_rule_rather_than_skipping_it() {
@@ -539,7 +539,7 @@ fn enforce_runs_a_command_rule_and_maps_its_exit_code() {
 fn enforce_passes_when_the_command_exits_zero() {
     let dir = repo_with_config(
         "cmd-enforce-pass",
-        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"true\"\nseverity = \"deny\"\n",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"true\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("lib.rs"), "x\n").expect("write source");
     let output = batten()
@@ -555,7 +555,7 @@ fn enforce_passes_when_the_command_exits_zero() {
 fn enforce_missing_binary_is_a_usage_error() {
     let dir = repo_with_config(
         "cmd-enforce-missing",
-        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\nseverity = \"deny\"\n",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"definitely-not-a-real-binary-xyz\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("lib.rs"), "x\n").expect("write source");
     let output = batten()
@@ -576,7 +576,7 @@ fn command_rule_with_no_glob_match_is_skipped_without_spawning() {
     // it were ever reached, so exit 0 proves nothing spawned.
     let dir = repo_with_config(
         "cmd-no-match",
-        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"definitely-not-a-real-binary-xyz\"\nseverity = \"deny\"\n",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"definitely-not-a-real-binary-xyz\"\nseverity = \"deny\"\n",
     );
     fs::write(dir.join("notes.txt"), "x\n").expect("write source");
     let output = batten()
@@ -585,6 +585,75 @@ fn command_rule_with_no_glob_match_is_skipped_without_spawning() {
         .output()
         .expect("run batten enforce");
     assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn the_retired_run_key_is_refused_by_name_pointing_at_check() {
+    // CLOUD-215. §2 declares no back-compatibility surface, so `run` is not an
+    // alias that still works — it is a key that stopped. The refusal has to
+    // carry the one fix (CLOUD-122), or an author whose config went dark learns
+    // only that it did.
+    let dir = repo_with_config(
+        "rule-run-renamed",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"true\"\nseverity = \"deny\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a config naming a key this build does not have is the usage class (§7)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`check`"),
+        "the refusal must name the replacement key, got: {stderr}"
+    );
+}
+
+#[test]
+fn a_reserved_fix_loads_and_is_refused_rather_than_silently_ignored() {
+    // The other half of CLOUD-215: `fix` parses today — that is what reserves
+    // the vocabulary before external configs exist — while the engine that
+    // would execute it does not. Accepting the key and running only the check
+    // side would report green over a repair nobody performed.
+    let dir = repo_with_config(
+        "rule-fix-reserved",
+        "version = 1\n\n[[rule]]\nid = \"dyn\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"true\"\nfix = \"true\"\nseverity = \"deny\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "x\n").expect("write source");
+
+    // It loads: `config show` reads the same authority and does not refuse it.
+    let shown = batten()
+        .args(["config", "show"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten config show");
+    assert_eq!(
+        shown.status.code(),
+        Some(0),
+        "`fix` must parse, or the vocabulary is not reserved at all"
+    );
+
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unbuilt capability is a config error, never a policy verdict"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`fix`"),
+        "the refusal must name the key it is about, got: {stderr}"
+    );
 }
 
 #[test]

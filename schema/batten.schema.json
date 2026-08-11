@@ -499,6 +499,13 @@
             "null"
           ]
         },
+        "check": {
+          "description": "The **inspection-only** command template a [`RuleKind::Command`] rule\nruns as its gate. Required by that kind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.\n\nNamed for the half it is, not for the act of running: §9's duality has\ntwo commands, and a column called `run` could name either. Enforcement\nis always this one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "contains": {
           "description": "An extra literal that must appear in the mediated command **as written**\nfor a [`RuleKind::Shape`] rule to fire. Optional, that kind only.\n\nIt exists for one real case rather than as a general escape hatch: a\nlanding directive lives inside a quoted `--body`, so it is not one of the\nwords the shape matches, and without this an ordinary `gh pr comment`\nwould be denied alongside the one that carries the directive. Matched\nagainst the raw text of the same segment, quotes included.",
           "type": [
@@ -519,6 +526,13 @@
         },
         "exclude": {
           "description": "A regex that **un**-matches: a matched line carrying it is not a finding.\n\n[`RuleKind::Forbid`] only, and regex-only with no literal twin — an\nexclusion is inherently shape-based, and the measured one (a whole-line\ncomment, `^[[:space:]]*#`) cannot be written as a literal at all.\n\nComment-awareness lives here, in the consumer's config, rather than as a\n`skip_comments` flag in the engine: per-language comment syntax inside\n`crates/batten` would break non-negotiable rule 1, and it would also be\nwrong — `no-conflict-markers` must still fire inside a comment. What a\ncomment looks like is a property of a repository, not of Batten.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fix": {
+          "description": "The **mutating** half of §9's duality: the command that repairs what\n`check` condemned. Optional, [`RuleKind::Command`] only.\n\nParsed today and **executed by nothing**: serialised fix execution is an\nengine capability that does not exist yet. The key is reserved now\nrather than later because §2 declares no back-compatibility surface, so\na config author who writes one is writing the final spelling.\n\nA row carrying it is refused by [`run_all`] rather than quietly ignored\n— a declared repair that silently never runs is the false green this\nengine exists to refuse.",
           "type": [
             "string",
             "null"
@@ -575,7 +589,7 @@
           ]
         },
         "run": {
-          "description": "The command template a [`RuleKind::Command`] rule runs. Required by that\nkind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.",
+          "description": "The retired spelling of [`Rule::check`], present only so the refusal can\nname its replacement.\n\nCarried as a field rather than left to `deny_unknown_fields` for the\nsame reason [`crate::config::OverrideConfig::min_batten_version`] is:\n\"unknown field `run`\" reads as a typo, where this is a rename with one\nspecific fix. Every deny points to it (CLOUD-122).\n\nDeliberately absent from [`Rule::columns`]: that census classifies the\ncolumns a kind may *carry*, and no kind carries this one — it is refused\noutright by [`Rule::validate`], ahead of any per-kind question.",
           "type": [
             "string",
             "null"
@@ -614,7 +628,7 @@
           "const": "forbid"
         },
         {
-          "description": "A dynamic check: run the `run` template and treat its exit code as the\npredicate — `0` passes, non-zero is a violation. The sanctioned escape\nhatch for rules no static shape can express.\n\nIt is an **exit-code predicate, not a judge** (CLOUD-93): the command's\noutput is never parsed for meaning. Because it executes a process\ndeclared in `batten.toml`, it runs only on the non-`read` surface (§5,\nCLOUD-170).",
+          "description": "A dynamic check: run the `check` template and treat its exit code as the\npredicate — `0` passes, non-zero is a violation. The sanctioned escape\nhatch for rules no static shape can express.\n\nThe kind carries house style §9's **`check`/`fix` duality**: `check` is\nthe inspection-only gate and the only side enforcement ever runs, `fix`\nis the optional mutating half. The duality is a contract with the config\nauthor that Batten cannot verify — an arbitrary command declared as a\ncheck may still write — so it governs how a rule is *authored* and never\nlicenses the verb that runs it to claim `read`.\n\nIt is an **exit-code predicate, not a judge** (CLOUD-93): the command's\noutput is never parsed for meaning. Because it executes a process\ndeclared in `batten.toml`, it runs only on the non-`read` surface (§5,\nCLOUD-170).",
           "type": "string",
           "const": "command"
         },

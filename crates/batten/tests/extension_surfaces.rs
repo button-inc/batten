@@ -121,7 +121,7 @@ fn the_command_rule_example_is_refused_by_check_and_run_by_enforce() {
     // `check` refuses it with a usage error rather than running it — which is what
     // keeps `check`'s read-only effect honest.
     let config = "version = 1\n\n[[rule]]\nid = \"single-entrypoint\"\nkind = \"command\"\n\
-                  glob = \"**/*.rs\"\nrun = \"true\"\nseverity = \"deny\"\n";
+                  glob = \"**/*.rs\"\ncheck = \"true\"\nseverity = \"deny\"\n";
     let (repo, home) = repo_with("ext-command-rule", config);
 
     let (code, _, stderr) = run(&repo, &home, &["check"]);
@@ -142,7 +142,7 @@ fn the_command_rule_example_is_refused_by_check_and_run_by_enforce() {
 #[test]
 fn a_failing_command_rule_is_a_policy_verdict() {
     let config = "version = 1\n\n[[rule]]\nid = \"single-entrypoint\"\nkind = \"command\"\n\
-                  glob = \"**/*.rs\"\nrun = \"false\"\nseverity = \"deny\"\n";
+                  glob = \"**/*.rs\"\ncheck = \"false\"\nseverity = \"deny\"\n";
     let (repo, home) = repo_with("ext-command-fails", config);
     let (code, _, _) = run(&repo, &home, &["enforce"]);
     assert_eq!(

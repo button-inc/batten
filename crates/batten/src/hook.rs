@@ -1215,6 +1215,8 @@ mod tests {
             contains: contains.map(ToOwned::to_owned),
             reason: Some(format!("use the sanctioned path for {id}")),
             policy_url: None,
+            check: None,
+            fix: None,
             run: None,
             verbatim: None,
             identity_key: None,

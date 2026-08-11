@@ -164,7 +164,7 @@ fn a_command_rule_naming_a_missing_program_is_reported() {
         "doctor-missing-program",
         true,
         Some(
-            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             run = \"definitely-not-a-real-program-xyz\"\nseverity = \"deny\"\n",
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             check = \"definitely-not-a-real-program-xyz\"\nseverity = \"deny\"\n",
         ),
     );
     let output = doctor(&dir, &[]);
@@ -183,7 +183,7 @@ fn a_command_rule_naming_a_present_program_passes() {
         "doctor-present-program",
         true,
         Some(
-            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             run = \"sh -c true\"\nseverity = \"deny\"\n",
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             check = \"sh -c true\"\nseverity = \"deny\"\n",
         ),
     );
     let output = doctor(&dir, &[]);
@@ -207,7 +207,7 @@ fn the_probe_never_executes_the_program_it_checks() {
     fs::write(
         dir.join("batten.toml"),
         format!(
-            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             run = \"{}\"\nseverity = \"deny\"\n",
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             check = \"{}\"\nseverity = \"deny\"\n",
             script.display()
         ),
     )

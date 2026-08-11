@@ -845,7 +845,7 @@ fn the_acceptance_runner_is_the_landed_rule_engine() {
     // from exiting 0.
     let config = batten::config::parse(
         "version = 1\n\n[[rule]]\nid = \"acceptance\"\nkind = \"command\"\nglob = \"**/*.txt\"\n\
-         run = \"true\"\nseverity = \"deny\"\n",
+         check = \"true\"\nseverity = \"deny\"\n",
         "fixture",
     )
     .expect("fixture config parses");

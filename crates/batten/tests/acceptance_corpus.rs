@@ -16,7 +16,7 @@
 //! with nothing behind it.
 //!
 //! **De-identification is checked, not asserted.** Obligation (f) walks the
-//! materialized ruleset and requires every `run` program and every path-shaped
+//! materialized ruleset and requires every `check` program and every path-shaped
 //! argument to resolve inside the fixture directory. Deliberately not a
 //! denylist of consumer names: that would put those names inside
 //! `crates/batten` and break non-negotiable rule 1 in the act of enforcing it.
@@ -101,7 +101,7 @@ const DISPOSITIONS: &[Disposition] = &[
     },
     Disposition {
         source_name: "ruleset exits non-zero (not a silent 0) on empty input",
-        bucket: Bucket::NegativeTest("an_empty_run_template_is_refused_rather_than_skipped"),
+        bucket: Bucket::NegativeTest("an_empty_check_template_is_refused_rather_than_skipped"),
     },
     Disposition {
         source_name: "defects store is populated and queryable",
@@ -408,11 +408,11 @@ fn every_program_and_path_shaped_argument_resolves_inside_the_fixture() {
     assert!(!config.rules.is_empty(), "an empty ruleset would pass here");
 
     for rule in &config.rules {
-        let run = rule
-            .run
+        let check = rule
+            .check
             .as_deref()
-            .unwrap_or_else(|| panic!("rule {} is a command rule with no run template", rule.id));
-        for token in run.split_whitespace() {
+            .unwrap_or_else(|| panic!("rule {} is a command rule with no check template", rule.id));
+        for token in check.split_whitespace() {
             if token.starts_with('-') || !token.contains('/') {
                 continue;
             }
@@ -457,7 +457,7 @@ fn this_suite_builds_its_invocation_through_the_one_materializer() {
 // pass), not the predecessor's message.
 
 #[test]
-fn an_empty_run_template_is_refused_rather_than_skipped() {
+fn an_empty_check_template_is_refused_rather_than_skipped() {
     // The source handed its runner an empty ruleset source and required a
     // non-zero rather than a silent 0. Here: a `command` rule with nothing to
     // run is a usage error, not a rule that trivially passes.
@@ -465,13 +465,13 @@ fn an_empty_run_template_is_refused_rather_than_skipped() {
     common::write(
         &dir,
         "batten.toml",
-        "version = 1\n\n[[rule]]\nid = \"empty\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"\"\nseverity = \"deny\"\n",
+        "version = 1\n\n[[rule]]\nid = \"empty\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"\"\nseverity = \"deny\"\n",
     );
     let output = common::run(&dir, &["enforce"]);
     assert_eq!(
         output.status.code(),
         Some(1),
-        "an empty run template is a usage error: {}",
+        "an empty check template is a usage error: {}",
         common::stderr(&output)
     );
     assert!(
@@ -489,7 +489,7 @@ fn a_rule_whose_program_is_absent_is_not_a_silent_pass() {
     common::write(
         &dir,
         "batten.toml",
-        "version = 1\n\n[[rule]]\nid = \"absent\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"bin/not-materialized\"\nseverity = \"deny\"\n",
+        "version = 1\n\n[[rule]]\nid = \"absent\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"bin/not-materialized\"\nseverity = \"deny\"\n",
     );
     let output = common::run(&dir, &["enforce"]);
     assert_ne!(
@@ -508,7 +508,7 @@ fn a_per_kind_field_mismatch_is_refused_rather_than_ignored() {
     common::write(
         &dir,
         "batten.toml",
-        "version = 1\n\n[[rule]]\nid = \"mismatch\"\nkind = \"command\"\nglob = \"**/*.rs\"\nrun = \"bin/checker design verify\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
+        "version = 1\n\n[[rule]]\nid = \"mismatch\"\nkind = \"command\"\nglob = \"**/*.rs\"\ncheck = \"bin/checker design verify\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
     );
     let output = common::run(&dir, &["enforce"]);
     assert_eq!(

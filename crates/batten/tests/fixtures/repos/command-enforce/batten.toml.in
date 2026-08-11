@@ -4,6 +4,6 @@ version = 1
 id = "always-passes"
 kind = "command"
 glob = "**/*.rs"
-run = "true"
+check = "true"
 severity = "deny"
 scope = "tree"
