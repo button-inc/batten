@@ -178,7 +178,23 @@ while :; do
 	if mise run verified >/dev/null 2>&1; then
 		echo "land: lap $lap — HEAD already carries a verify receipt; not re-proving it"
 	else
-		mise run verify ||
+		# A non-zero `verify` is not one answer (CLOUD-318). `verify` runs for
+		# ~150s, and on a busy `main` that is long enough for the tip to move
+		# past the one this lap rebased onto — so `linear-check` measures
+		# against a newer main and refuses. Nothing is wrong with the branch and
+		# there is nothing to reproduce: the next lap's rebase fixes it by
+		# construction, which is the same race the wait phase below already
+		# treats as a lap. Exit 2 is that verdict and only that verdict; every
+		# other non-zero is content, and content still stops on lap 1 with the
+		# message unchanged. Measured on #240: run 1 died here, run 2 landed
+		# after three laps with zero edits.
+		verify_rc=0
+		mise run verify || verify_rc=$?
+		if [ "$verify_rc" = 2 ]; then
+			echo "land: lap $lap — verify refused only because main moved past $(git rev-parse --short origin/main) while it ran; that is a rebase, not a defect. Lapping."
+			continue
+		fi
+		[ "$verify_rc" = 0 ] ||
 			die "verify failed on $(git rev-parse --short HEAD). Reproduce and fix locally; CI is not where you discover this."
 		mise run verified || die "no verify receipt for HEAD — something swallowed verify's verdict."
 	fi

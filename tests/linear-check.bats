@@ -54,10 +54,13 @@ EOF
 	chmod +x "$STUB/git"
 }
 
-@test "a failed fetch exits non-zero instead of trusting the stale ref" {
+@test "a failed fetch exits 1 instead of trusting the stale ref" {
+	# Exit 1, not 2, and asserted exactly: a caller laps on "the branch is
+	# behind" and must never lap on "the network is down" (CLOUD-318). A fetch
+	# that did not happen says nothing about where this branch sits.
 	stub_git 1
 	run "$CHECK"
-	[ "$status" -ne 0 ]
+	[ "$status" -eq 1 ]
 	[[ "$output" == *"could not fetch origin/main"* ]]
 }
 
@@ -79,10 +82,14 @@ EOF
 	grep -q "receipt record linear-check" "$CALLS"
 }
 
-@test "a HEAD behind main is refused and leaves no receipt" {
+@test "a HEAD behind main is exit 2 — the input moved, not a broken branch" {
+	# The one code a caller may lap on (CLOUD-318). `land` runs `verify` for
+	# ~150s while `main` advances underneath it; this is how it tells "rebase
+	# and start the next lap" from "stop, something here is broken". A refusal
+	# still leaves no receipt, exactly as before.
 	stub_git 0 aaaa111 bbbb222
 	run "$CHECK"
-	[ "$status" -ne 0 ]
+	[ "$status" -eq 2 ]
 	[[ "$output" == *"not rebased on latest main"* ]]
 	[ ! -e "$CALLS" ]
 }

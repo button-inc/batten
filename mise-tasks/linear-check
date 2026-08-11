@@ -45,9 +45,19 @@ if ! main=$(git rev-parse origin/main 2>/dev/null); then
 	echo "::error:: fetched, but origin/main still does not resolve. That is a checkout problem, not a rebase problem — do not read it as 'not rebased'." >&2
 	exit 1
 fi
+# Exit 2, and the distinction is load-bearing for the caller (CLOUD-318). The
+# two refusals above are about the environment: the ref could not be fetched, or
+# the checkout has no `origin/main` — a branch may well be fine and there is
+# nothing here that says otherwise. This one is different in kind: the branch is
+# measured and found behind, which is the shell tasks' "the input moved" answer
+# rather than a verdict about its content. `land` runs `verify` for ~150s while
+# `main` advances underneath it, and the only way it can tell "rebase and lap"
+# from "stop, something is broken" is by which code came back. Collapsing all
+# three into 1 is what made a lap that loses a race it is designed to lose end
+# the run instead of starting the next one.
 if [ "$(git merge-base origin/main HEAD)" != "$main" ]; then
 	echo "::error:: not rebased on latest main ($main). Run: git rebase origin/main" >&2
-	exit 1
+	exit 2
 fi
 
 # The receipt write is the binary's job (CLOUD-203). It records WHICH main we

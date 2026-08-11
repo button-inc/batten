@@ -22,12 +22,36 @@ setup() {
 @test "every command verify's verdict depends on is guarded, since the body has no set -e" {
 	# A bare `mise run X` (or `cargo run` — the receipt write, CLOUD-203) line
 	# is the defect: its failure would not stop the body.
+	#
+	# Two guard shapes are accepted. `if ! <call>` is the original, and it is
+	# enough whenever "did it fail" is the whole question. `<call> || <name>=$?`
+	# is the second (CLOUD-318): `linear-check` answers 2 for "this branch is
+	# behind" and 1 for a refusal about the environment, `land` laps on the
+	# first and stops on the second, and `if !` throws the code away. The case
+	# below is what makes the capture a guard rather than a record.
 	local unguarded
-	unguarded=$(grep -nE '^[[:space:]]*(BASE_SHA=[^ ]* )?(HEAD_SHA=[^ ]* )?(mise|cargo) run ' <<<"$BODY" || true)
+	unguarded=$(grep -nE '^[[:space:]]*(BASE_SHA=[^ ]* )?(HEAD_SHA=[^ ]* )?(mise|cargo) run ' <<<"$BODY" |
+		grep -vE '\|\|[[:space:]]+[a-z_]+=\$\?[[:space:]]*$' || true)
 	[ -z "$unguarded" ] || {
 		echo "unguarded call in the verify body: $unguarded"
 		false
 	}
+}
+
+@test "a captured exit code is checked and exited on, never merely recorded" {
+	# The other half of the `|| <name>=$?` shape. Capturing a code and then
+	# carrying on is worse than not guarding at all: it looks deliberate. Every
+	# captured name must reach a non-zero test and an `exit` in this body.
+	local names name
+	names=$(grep -oE '\|\|[[:space:]]+[a-z_]+=\$\?' <<<"$BODY" |
+		sed -E 's/.*\|\|[[:space:]]+([a-z_]+)=.*/\1/' | sort -u)
+	while read -r name; do
+		[ -n "$name" ] || continue
+		grep -qE "\[ \"\\\$$name\" != 0 \]" <<<"$BODY" || {
+			echo "\$$name is captured but never tested for non-zero"
+			false
+		}
+	done <<<"$names"
 }
 
 @test "verify writes its receipt only after the guarded steps, never before" {

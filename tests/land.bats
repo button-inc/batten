@@ -168,8 +168,12 @@ stub_mise() {
 echo "\$*" >>"$BATS_TEST_TMPDIR/misecalls"
 rc="$BATS_TEST_TMPDIR/rc.mise.\$2"
 if [ -f "\$rc" ]; then
+  code=\$(cat "\$rc")
+  # A failure can be scripted for ONE call rather than for the whole run, which
+  # is what a lap-and-recover case needs: the second lap must see the task pass.
+  [ ! -f "\$rc.once" ] || rm -f "\$rc" "\$rc.once"
   echo "::error:: \$2 failed" >&2
-  exit "\$(cat "\$rc")"
+  exit "\$code"
 fi
 case "\$2" in
   verify)   : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
@@ -231,6 +235,14 @@ ready_fails() { : >"$BATS_TEST_TMPDIR/rc.ready"; }
 # case skips the check entirely rather than having to opt out of it.
 pr_body() { printf '%s' "$1" >"$BATS_TEST_TMPDIR/prbody"; }
 task_fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.$1"; }
+# A task that fails with a specific code, for one call only. `verify` answering
+# 2 is "main moved while I ran" (CLOUD-318), and a lap that recovers from it is
+# only a real lap if the next call succeeds.
+task_fails_once_with() {
+	echo "$2" >"$BATS_TEST_TMPDIR/rc.mise.$1"
+	: >"$BATS_TEST_TMPDIR/rc.mise.$1.once"
+}
+verify_calls() { grep -c '^run verify$' "$BATS_TEST_TMPDIR/misecalls" || true; }
 not_linear() { echo 1 >"$BATS_TEST_TMPDIR/rc.linear"; }
 comments() { wc -l <"$BATS_TEST_TMPDIR/comments" | tr -d ' '; }
 
@@ -317,6 +329,40 @@ workflow_runs() {
 	run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"verify failed"* ]]
+	[ "$(comments)" -eq 0 ]
+	# The count is the load-bearing half (CLOUD-318): lapping on staleness must
+	# not turn a stop-on-content into a silent retry loop that burns
+	# LAND_MAX_LAPS before reporting the same failure.
+	[ "$(verify_calls)" -eq 1 ]
+}
+
+@test "a verify that failed only because main moved laps instead of stopping" {
+	# CLOUD-318, measured on #240: `verify` takes ~150s, `main` moved past the
+	# tip lap 1 rebased onto, `linear-check` refused, and the loop exited with
+	# advice — "reproduce and fix locally" — that named nothing to reproduce.
+	# Re-running with zero edits landed after three laps. Exit 2 is the one code
+	# that means that, and it is a lap.
+	task_fails_once_with verify 2
+	pr_state OPEN MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"verify refused only because main moved"* ]]
+	# Not the content stop: that message tells the reader to reproduce something
+	# that does not exist, which is half of what CLOUD-318 is about.
+	[[ "$output" != *"Reproduce and fix locally"* ]]
+	# It really lapped: a second verify ran, and the lap reached the push.
+	[ "$(verify_calls)" -eq 2 ]
+	[[ "$(call_order)" == *push* ]]
+}
+
+@test "a verify that keeps losing the race exhausts laps rather than spinning" {
+	# The lap is bounded by the backstop that already exists. A `main` that
+	# never stops moving must reach LAND_MAX_LAPS and say so, not loop forever.
+	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
+	LAND_MAX_LAPS=3 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"still not linear after 3 laps"* ]]
+	[ "$(verify_calls)" -eq 3 ]
 	[ "$(comments)" -eq 0 ]
 }
 
@@ -735,8 +781,8 @@ workflow_runs() {
 	# left the new branch exactly as unwatched as the refusal branch once was,
 	# which is the mistake this assertion exists to stop repeating.
 	laps=$(grep -cE '^[[:space:]]*continue$' "$LAND")
-	[ "$laps" -eq 3 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 3."
+	[ "$laps" -eq 4 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 4."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
