@@ -11,7 +11,7 @@ mod common;
 
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
 use common::{Fixture, batten, git_in, scratch, scratch_outside_tree};
@@ -153,6 +153,21 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
 /// tests passed locally, against the outer repo's `origin/main`, and failed on a
 /// CI runner that has no such ref. A fixture that reads the repository it is
 /// running inside is not a fixture.
+/// Seed the surfaces the committed `[budget.instructions]` set declares.
+///
+/// A fixture standing in for a repository using the committed config owes it
+/// every declared entry, because a dead one is exit 1 per entry (CLOUD-298's
+/// refusal, reaching the main gate since CLOUD-50 wired budgets into `check`).
+/// The embedded key is seeded EMPTY, which is the committed tree's own state:
+/// it contributes nothing and prints no row, so these fixtures keep testing the
+/// rule they are about rather than a budget.
+fn committed_budget_surfaces(dir: &Path) {
+    fs::write(dir.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
+    fs::create_dir_all(dir.join(".serena")).expect("create fixture serena dir");
+    fs::write(dir.join(".serena/project.yml"), "initial_prompt: ''\n")
+        .expect("write fixture project config");
+}
+
 fn committed_config_fixture_git(dir: &std::path::Path) {
     git_in(dir, &["init", "-q"]);
     git_in(dir, &["commit", "-q", "--allow-empty", "-m", "base"]);
@@ -3211,11 +3226,7 @@ fn the_committed_repo_config_gates_a_repository() {
 
     let dir = repo_with_config("config-committed", &contents);
     committed_config_fixture_git(&dir);
-    // The committed config declares `[budget.instructions]` over `AGENTS.md`,
-    // and since CLOUD-50 wired budgets into `check` a dead glob there is exit 1
-    // per entry (CLOUD-298's refusal, now reaching the main gate). A fixture
-    // standing in for a repository using this config owes it that file.
-    fs::write(dir.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
+    committed_budget_surfaces(&dir);
     // A file the committed no-conflict-markers rule must flag. The marker is
     // assembled at runtime so this source file never carries the banned shape
     // itself — the gate this test backs scans the whole tree, including here.
@@ -3278,7 +3289,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // second file straight through.
     // Same reason as the sibling test above: the committed budget names
     // `AGENTS.md`, and `check` now refuses a budget entry that matches nothing.
-    fs::write(dirty.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
+    committed_budget_surfaces(&dirty);
     committed_config_fixture_git(&dirty);
     let src = dirty.join("crates/demo/src");
     fs::create_dir_all(&src).expect("create fixture source tree");
@@ -3313,7 +3324,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-clean"),
     );
     let clean = repo_with_config("config-agnostic-clean", &contents);
-    fs::write(clean.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
+    committed_budget_surfaces(&clean);
     committed_config_fixture_git(&clean);
     let ordinary = clean.join("crates/demo/src");
     fs::create_dir_all(&ordinary).expect("create clean source tree");
