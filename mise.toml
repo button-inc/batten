@@ -514,7 +514,17 @@ shell = "bash -c"
 # leaves the mutation in the tree for the next `git add -A` to sweep up. The
 # completeness question it was named for is now `lock-complete`, a pure gate in
 # hk.pkl; currency runs on a schedule (.github/workflows/lock-currency.yml).
-depends = ["ci", "cross-check", "darwin-link", "zizmor", "msrv"]
+#
+# `tree-clean` is here AND in the body, and the duplication is the design
+# (CLOUD-277). Here it fails a dirty tree in seconds rather than after the ~170s
+# the rest of this list costs. In the body it is load-bearing: `depends` runs
+# before the tree can be dirtied MID-RUN, which is exactly the measured
+# incident — a backgrounded `land` verifying while the session edited the next
+# ticket in the same worktree. One authority, asserted at both ends of the
+# window, the same shape `linear-check` already has in `verify` and
+# `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
+# tree that is dirty by definition.
+depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "msrv"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand. Unguarded,
@@ -527,6 +537,15 @@ run = '''
 # driving a loop laps on the first and stops on the second, and it can only do
 # that if the distinction survives this guard. Everything below stays 1: a
 # content failure is a stop wherever it comes from.
+# First, because it decides whether anything below is ABOUT the commit it names.
+# Every gate above read the working tree; the receipt at the bottom is keyed to
+# HEAD. A dirty tree that FAILS is loud and self-correcting; one that PASSES
+# writes a receipt `verified` matches and `ready-guard` accepts, so CI runs a
+# commit that was never the thing that passed (CLOUD-277).
+if ! mise run tree-clean; then
+  echo "::error:: verify: the working tree is not the bytes at HEAD, so a receipt naming HEAD would attest a run of something else. No receipt written." >&2
+  exit 1
+fi
 linear_rc=0
 mise run linear-check || linear_rc=$?
 if [ "$linear_rc" = 2 ]; then

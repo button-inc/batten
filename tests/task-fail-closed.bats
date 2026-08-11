@@ -11,6 +11,7 @@
 setup() {
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 	BODY=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
+	DEPENDS=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^depends = /{print; exit}' mise.toml)
 }
 
 @test "the verify body was found at all — this suite is not passing vacuously" {
@@ -57,6 +58,22 @@ setup() {
 @test "verify writes its receipt only after the guarded steps, never before" {
 	local guard_line receipt_line
 	guard_line=$(grep -n 'linear-check' <<<"$BODY" | head -1 | cut -d: -f1)
+	receipt_line=$(grep -n 'receipt record' <<<"$BODY" | head -1 | cut -d: -f1)
+	[ "$guard_line" -lt "$receipt_line" ]
+}
+
+@test "the tree-clean precondition guards the receipt from both ends of the run" {
+	# CLOUD-277. The receipt names HEAD; every gate above reads the working tree.
+	# `depends` is the cheap end — a dirty tree fails in seconds instead of after
+	# the ~170s the rest of that list costs — and it is NOT sufficient by itself:
+	# `depends` completes before the body starts, so a tree dirtied mid-run (the
+	# measured incident: a backgrounded `land` verifying while the session edited
+	# the next ticket) is invisible to it. The body call is the load-bearing one,
+	# which is why its position relative to the receipt write is asserted too.
+	[[ "$DEPENDS" == *"tree-clean"* ]]
+	[[ "$BODY" == *"tree-clean"* ]]
+	local guard_line receipt_line
+	guard_line=$(grep -n 'tree-clean' <<<"$BODY" | head -1 | cut -d: -f1)
 	receipt_line=$(grep -n 'receipt record' <<<"$BODY" | head -1 | cut -d: -f1)
 	[ "$guard_line" -lt "$receipt_line" ]
 }
