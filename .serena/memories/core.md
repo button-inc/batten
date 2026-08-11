@@ -550,6 +550,32 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   dedupe still works, emissions carry `persisted:false`, and it maps to
   allow-with-warning, because an out-of-date binary is an operator problem and
   refusing the agent's work does not fix it.
+- `decision.rs` — the guard-decision telemetry record (CLOUD-133): what a gate or
+  hook decision emits, and its append-only home in out-of-tree state. The
+  **observability** plane, not the enforcement one — recording who called is
+  provenance, never judgement, so CLOUD-93/131 are untouched and nothing here
+  participates in a verdict. It is what CLOUD-32 descoped stamping onto, because
+  no decision record existed: `hook.rs` adjudicates and emits nothing,
+  `receipt.rs` records a verification claim, `findings.rs` holds findings.
+  **Rule 4 is structural, not editorial**: no constructor accepts bytes or free
+  text, so `Subject` is a `StoredIdentity` and `ContextPointer` a `Fingerprint`
+  plus a count, both minted by `identity.rs` before they arrive — `judge.rs`'s
+  posture with the one bytes-bearing field removed rather than guarded. The
+  subject **is** the finding identity where one corresponds (CLOUD-123, never a
+  second divergent hash) with `identity_version` beside it, or
+  `Subject::Unattributed`, a real answer rather than a hash minted here.
+  `identity::context_fingerprint` is the sanctioned context pointer and lives
+  there for exactly that reason. Byte-stability survives a timestamp because the
+  clock is an INPUT (`RecordedAt`, `waiver::today`'s idiom). Provenance degrades
+  in its VALUE, never by dropping a field (`unknown`, CLOUD-275) — with the
+  stated limit that a host declaring the literal `unknown` is indistinguishable,
+  which under-attributes, the safe direction. `Outcome::Skipped` maps to **no**
+  exit code rather than `Success`: reading a skipped gate's silence as a pass is
+  `findings::Observation`'s fail-open at the verdict layer. Storage reuses
+  `journal::shard_id` (one shard per writer, no lock, fsync before returning)
+  and `defects::first_divergence` (append-only is a byte PREFIX, one definition
+  in the tree). No CLI verb: surfacing the join is CLOUD-275's, the
+  context-as-embedding capture CLOUD-134's.
 - `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent
   to a model. Config types plus one pure function; **no command, no effect-table
   row, no egress** — enforcement of the config half rides `config lint`'s landed

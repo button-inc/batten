@@ -359,6 +359,15 @@ const SURFACE_TAG: &str = "surface";
 /// domains under one tag could collide across kinds of thing.
 const CAPTURE_TAG: &str = "capture";
 
+/// The domain tag for the **context** a guard decision was taken in (CLOUD-133),
+/// distinct from every other tag here for the reason they are all distinct.
+///
+/// It matters for the same reason [`JUDGE_TAG`] does: the hash stands in for
+/// content the record deliberately does **not** carry, so a collision with a
+/// capture or a finding identity would let a context digest be mistaken for one
+/// of those and joined against it.
+const CONTEXT_TAG: &str = "context";
+
 /// The domain tag for a **secret-class** identity, distinct from every
 /// [`FindingKind`] tag and from [`SURFACE_TAG`]/[`CAPTURE_TAG`] for the same
 /// reason those two are distinct from each other: a keyed identity and an
@@ -594,6 +603,27 @@ pub fn capture_fingerprint(stream: &str, bytes: &[u8]) -> Fingerprint {
 #[must_use]
 pub fn judge_fingerprint(class: &str, bytes: &[u8]) -> Fingerprint {
     tagged_fingerprint(JUDGE_TAG, &[class.as_bytes(), bytes])
+}
+
+/// The identity of the **context a guard decision was taken in** (CLOUD-133).
+///
+/// The one sanctioned way for a caller to point at context, and the reason it
+/// lives here rather than in [`crate::decision`]: a record that accepted context
+/// *bytes* would have to hash them itself, which is the second, divergent
+/// construction over the same bytes that CLOUD-123 forbids. Handing the caller a
+/// fingerprint instead keeps [`crate::decision`] structurally incapable of
+/// holding a payload — it is never given one.
+///
+/// Bytes are hashed **verbatim**, like a capture and a judge payload and unlike
+/// a span: the digest exists so a consumer can reference context it was not
+/// given, and normalizing would make two genuinely different contexts share one
+/// reference.
+///
+/// There is no class field, unlike [`judge_fingerprint`]: a decision record has
+/// exactly one context, so a discriminator would have nothing to discriminate.
+#[must_use]
+pub fn context_fingerprint(bytes: &[u8]) -> Fingerprint {
+    tagged_fingerprint(CONTEXT_TAG, &[bytes])
 }
 
 /// The identity of a **file surface**: an ordered set of `(path, contents)`
@@ -848,6 +878,26 @@ mod tests {
         let scope = scope_fingerprint("r", "x");
         let sequence = sequence_fingerprint("r", "x", None);
         assert_ne!(scope, sequence, "same field bytes, different kinds");
+    }
+
+    #[test]
+    fn a_context_digest_cannot_collide_with_another_domain_over_the_same_bytes() {
+        // CLOUD-133: the digest stands in for content the decision record
+        // deliberately does not carry, so it must not be mistakable for a
+        // capture, a judge payload, or a surface over the same bytes and be
+        // joined against one.
+        let bytes = b"the same bytes seen four ways";
+        let context = context_fingerprint(bytes);
+        assert_ne!(context, capture_fingerprint("", bytes));
+        assert_ne!(context, judge_fingerprint("", bytes));
+        assert_ne!(
+            context,
+            surface_fingerprint(&[(String::new(), bytes.to_vec())])
+        );
+        // And it is a pure function of those bytes, verbatim: whitespace is
+        // context, not noise.
+        assert_eq!(context, context_fingerprint(bytes));
+        assert_ne!(context, context_fingerprint(b"the same bytes seenfourways"));
     }
 
     // -- Length prefixes make field boundaries injective. --

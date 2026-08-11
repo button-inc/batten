@@ -14,6 +14,7 @@ pub mod capture;
 pub mod ci;
 pub mod cli;
 pub mod config;
+pub mod decision;
 pub mod defects;
 pub mod design;
 pub mod doctor;
