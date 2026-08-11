@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every server this repo enables actually ATTACHED this session — reads the CLI's own MCP connection logs, pointer-only"
+#
+# CLOUD-316. `mcp-allow-check` gates that an enabled server has a grant; nothing
+# gated that an enabled server CONNECTED. That gap is the whole defect: Serena
+# was declared, enabled, granted, pinned and startable, and absent for an entire
+# session, because the launch failed and nothing read the record of it. The CLI
+# writes that record and no gate opened the file — sensor without a gate, which
+# non-negotiable rule 2 exists to forbid.
+#
+# Measured on this repo, 2026-08-11, both shapes from the same session:
+#
+#   {"debug":"Connection failed after 30019ms (CONNECT_TIMEOUT): MCP server
+#     \"serena\" connection timed out after 30000ms", …}
+#   {"debug":"Successfully connected (transport: stdio) in 12495ms", …}
+#
+# TWO THINGS THAT LOOK LIKE THE SIGNATURE AND ARE NOT. Both were believed here
+# before being measured, so they are named rather than left to be rediscovered:
+#
+#   * The failure code is NOT fixed at `-32000`. CLOUD-316 was written from a
+#     `-32000: Connection closed` (an exec that died), and the very next
+#     occurrence was `CONNECT_TIMEOUT` (an exec too slow to finish). Both are
+#     "did not attach". Keying on the literal code would have passed the second
+#     one green, so the predicate is the `Connection failed` record and the code
+#     is only carried into the report.
+#   * An `error` KEY does not mean an error. The server's stdout/stderr is
+#     tee'd into records shaped `{"error":"Server stderr: INFO … Starting Serena
+#     server (version=1.6.1…)"}` — routine startup chatter on a healthy launch.
+#     A gate that fired on `has("error")` would fail every green session.
+#
+# So the question is the LAST connection outcome in the newest log, and nothing
+# else: a failure followed by a successful reconnect is a session that has its
+# server.
+#
+# WHY IT IS NOT IN THE hk GATE. This reads session state — logs written by the
+# harness, outside the repo — so it is a property of the WORLD, not of the
+# commit (see .claude/rules/toolchain.md, "which of the two it is"). CI has no
+# MCP session and would be asserting nothing. It runs on `UserPromptSubmit`, the
+# first event after MCP startup, so a lost server is reported in the session's
+# first turn rather than discovered three tasks in — CLOUD-261's principle
+# applied to a server instead of a container. Its LOGIC is still gated: the
+# suite drives it over fixture log trees, the split `gh-guard`/`gh-guard-check`
+# already uses.
+#
+# Output is pointer-only per non-negotiable rule 4: the server name and the
+# failure code. Never a log line — these carry the server's stderr, which is
+# arbitrary content this repo does not control.
+set -uo pipefail
+
+settings=".claude/settings.json"
+logroot=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--settings)
+		settings="${2:-}"
+		shift 2
+		;;
+	--logs)
+		logroot="${2:-}"
+		shift 2
+		;;
+	*)
+		echo "usage: mcp-attach-check [--settings <file>] [--logs <dir>]" >&2
+		exit 2
+		;;
+	esac
+done
+
+# The CLI keys its log tree by the project path with every `/` replaced by `-`,
+# so `/home/user/batten` becomes `-home-user-batten`. Derived rather than
+# hardcoded: a worktree under .claude/worktrees/ is a different project path and
+# writes to a different tree, exactly as Serena itself keys by path.
+if [ -z "$logroot" ]; then
+	logroot="${HOME}/.cache/claude-cli-nodejs/$(pwd | tr '/' '-')"
+fi
+
+if [ ! -f "$settings" ]; then
+	echo "mcp-attach-check: no $settings — nothing to check"
+	exit 0
+fi
+if ! servers=$(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null); then
+	echo "::error:: $settings is not readable JSON" >&2
+	exit 2
+fi
+if [ -z "$servers" ]; then
+	echo "mcp-attach-check: no enabled .mcp.json servers — nothing to check"
+	exit 0
+fi
+
+# FAIL OPEN on a missing log ROOT, and only there. No root at all means this is
+# not a live CLI session — CI, a bare checkout, a different harness — and a gate
+# that cannot look must never report a verdict it did not compute. A root that
+# EXISTS with a server's directory missing is the opposite: the session logged
+# every other server and none for this one, which is the defect itself.
+if [ ! -d "$logroot" ]; then
+	echo "mcp-attach-check: no MCP log tree at $logroot — not a live session, nothing to check"
+	exit 0
+fi
+
+fail=0
+report() {
+	[ "$fail" = 0 ] && echo "::error:: enabled MCP server(s) did not attach this session (see mem:serena-setup):" >&2
+	printf '  %s\n' "$1" >&2
+	fail=1
+}
+
+while IFS= read -r server; do
+	[ -n "$server" ] || continue
+	dir="$logroot/mcp-logs-$server"
+	if [ ! -d "$dir" ]; then
+		report "$server no-log — enabled, but this session logged no connection attempt for it"
+		continue
+	fi
+
+	# Newest by mtime. Each connection attempt opens its own file, so the newest
+	# is this session's; older ones answer a question nobody asked.
+	newest=$(ls -t "$dir"/*.jsonl 2>/dev/null | head -n 1)
+	if [ -z "$newest" ] || [ ! -r "$newest" ]; then
+		report "$server no-log — $dir holds no readable connection log"
+		continue
+	fi
+
+	# The LAST outcome record decides. `Connection failed` carries its reason in
+	# parentheses (`CONNECT_TIMEOUT`, `-32000`, …); that string is the pointer,
+	# and it is the only part of the line that is ever printed.
+	outcome=$(jq -r 'select(has("debug")) | .debug
+		| if startswith("Successfully connected") then "ok"
+		  elif startswith("Connection failed") then
+		      "fail " + ((capture("\\((?<c>[^)]+)\\)") | .c) // "unknown")
+		  else empty end' "$newest" 2>/dev/null | tail -n 1)
+
+	case "$outcome" in
+	ok) ;;
+	"fail "*) report "$server ${outcome#fail }" ;;
+	*) report "$server no-outcome — its newest log records no connection result" ;;
+	esac
+done <<<"$servers"
+
+[ "$fail" = 0 ] && echo "mcp-attach-check: every enabled MCP server attached this session"
+exit "$fail"

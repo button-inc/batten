@@ -4,6 +4,7 @@
       "command": "mise",
       "args": [
         "exec",
+        "pipx:serena-agent@1.6.1",
         "--",
         "serena",
         "start-mcp-server",
