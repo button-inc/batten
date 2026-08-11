@@ -872,6 +872,24 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
 depend on. Prefer adding here over unit tests for anything behavioral
 (`.claude/rules/rust.md`).
 
+`crates/batten/tests/pointer_only.rs` — non-negotiable rule 4 given an exit code
+(CLOUD-92). A corpus in which every byte a check can read is a distinct canary,
+crossed with a **census over every leaf verb of `surface::SURFACE`**, asserted
+total in both directions — so a verb joining the surface fails the suite until
+somebody classifies it. Two canary classes, because the law is about content and
+not about config: content bytes (a matched line, a counted body, a transcript's
+free text, a child's stream, a mediated operand) may reach no verb's output,
+while declaration bytes (a rule's `pattern`, a waiver's `reason`, a ledger's
+`evidence`) are what `config show` and `generate schema` exist to echo —
+collapsing the two makes the gate either vacuous or false. `exec` is held to a
+COUNT rather than to absence: its child's streams are inherited by contract, so
+the defect is Batten's report adding a copy. It sits at the **process boundary**
+rather than at the emitters because there is no shared emission path to put it
+in (CLOUD-371); the bytes the process wrote is where all ~30 `writeln!` sites and
+ten differently-named renderers already converge, so no new emitter can route
+around it. Every verb passed as landed — the engine held the law and only the
+proof was missing.
+
 `crates/batten/tests/primitives.rs` — the CLOUD-9 core primitives over the
 _library_ surface, since they mint no subcommand and the fixture suite is their
 gate (Option A). Carries the hermetic git fixture builder and the keystone: a
