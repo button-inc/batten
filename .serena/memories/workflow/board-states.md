@@ -179,9 +179,20 @@ released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
   did. The earlier model here ("In Progress → Done") described the column it was
   observed leaving, not a precondition it checks.
 
-- **Landing is not Done for a `ci` commit, and the automation cannot know that.**
-  Done means released ([dor-dod]). A `ci`-typed commit releases nothing at any
-  version, so its SHA is in no tag and Done would be a lie the moment the
-  automation writes it; **In Review** is the truthful column until some later
-  release sweeps the commit up. `git tag --contains <sha>` is the check, and an
-  empty answer is the hand-move case this file already names.
+- **Landing is not Done for a commit that cuts no release, and the automation
+  cannot know that.** Done means released ([dor-dod]). A commit that bumps no
+  version is in no tag, so Done would be a lie the moment the automation writes
+  it; **In Review** is the truthful column until some later release sweeps the
+  commit up. `git tag --contains <sha>` is the check, and an empty answer is the
+  hand-move case this file already names.
+
+  **The commit TYPE is not the predictor — the PATH is.** An earlier version of
+  this entry said "a `ci`-typed commit releases nothing", which reads as though
+  `fix`/`feat` always release. They do not: release-plz versions the _package_,
+  so a commit touching nothing under `crates/` leaves it "already up to date"
+  whatever its type. Measured on `3fc2785` (`fix(released)`, zero crate files):
+  release-plz ran green and cut no release. Four earlier task-layer `fix`
+  commits — `6796f61`, `6ec6c4c`, `508fcad`, `fb00a57` — behaved identically and
+  all reached a tag only by being swept into `v0.0.37`. Since the whole
+  `mise-tasks/` layer sits outside the crate, this is the ordinary case for gate
+  work, not an edge one.
