@@ -40,3 +40,7 @@ batten.local.toml
 
 # Distribution archives built by `mise run dist` — never committed (CLOUD-173).
 /dist/
+
+# SBOMs derived by `mise run sbom` — cut from the tagged source at release time and
+# attached to the release, never committed (CLOUD-262).
+/sbom/

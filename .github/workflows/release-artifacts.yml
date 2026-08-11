@@ -219,9 +219,26 @@ jobs:
           cache: false
       - name: Derive the schema from the tagged config types
         run: mise run schema
+      # The SBOM rides this job rather than a new one (CLOUD-262). GitHub rounds
+      # each job up to the nearest minute, and this job already checks out the tag,
+      # already runs mise, already holds `contents: write` and already uploads
+      # exactly this shape of asset — one platform-independent file. A ~2s step
+      # here costs no additional billed minutes; a new job costs one.
+      #
+      # Being outside the `dist` matrix also means an SBOM failure cannot suppress
+      # the binaries — the ordering CLOUD-258 paid six silent releases to learn.
+      #
+      # `sbom` emits spdx=/cdx= KEY=VALUE lines, so the asset paths are decided in
+      # that one file and never re-derived in YAML.
+      - name: Derive the SBOM from the tagged source
+        id: sbom
+        shell: bash
+        run: mise run sbom >>"$GITHUB_OUTPUT"
       - name: Upload to the release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
-        run: gh release upload "$TAG" schema/batten.schema.json --clobber
+          SPDX: ${{ steps.sbom.outputs.spdx }}
+          CDX: ${{ steps.sbom.outputs.cdx }}
+        run: gh release upload "$TAG" schema/batten.schema.json "$SPDX" "$CDX" --clobber

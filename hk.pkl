@@ -118,6 +118,15 @@ local gate = new Mapping<String, Step> {
       )
     check = "mise run schema-check"
   }
+  // The SBOM is published too, and its failure mode is worse than the schema's: a
+  // wrong inventory is a false claim about what shipped, read by whoever is doing
+  // vendor review rather than by anyone here who could notice. Globbed on the two
+  // inputs that can move it — the lockfile it must agree with, and the workflows
+  // whose pinned actions the scan catalogs (CLOUD-262).
+  ["sbom-check"] {
+    glob = List("Cargo.lock", ".github/workflows/*")
+    check = "mise run sbom-check"
+  }
   // An MCP allow rule that matches no tool name grants nothing and says nothing
   // about it — the only symptom is an approval prompt on every call, which
   // reads as harness behaviour rather than as a settings bug. This repo shipped

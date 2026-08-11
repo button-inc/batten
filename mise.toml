@@ -11,6 +11,7 @@ rust = { version = "1.85.0", components = "rustfmt,clippy" }
 hk = "1.54.0"                                                # git-hook runner (see hk.pkl)
 "aqua:cli/cli" = "2.97"                                      # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
 "aqua:EmbarkStudios/cargo-deny" = "0.20"                     # dependency license/advisory policy (deny.toml)
+"aqua:anchore/syft" = "1.42"                                 # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom)
 "aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
 "aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
 # mise-tasks/ holds real bash programs, so they get the same lint+format

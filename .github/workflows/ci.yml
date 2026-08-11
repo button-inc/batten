@@ -76,7 +76,8 @@ jobs:
           # prettier (which needs node) are the step commands; rust covers
           # cargo-fmt/clippy/test and the `cargo metadata` in macos-link-check;
           # jq is used at runtime by the gh-guard program that `test:bats`
-          # exercises. bats itself is the tests/bats submodule, not a tool.
+          # exercises; syft backs the sbom-check step, and jq reads its output.
+          # bats itself is the tests/bats submodule, not a tool.
           #
           # Kept out deliberately: zig and cargo-zigbuild (darwin-link only),
           # zizmor (its own zizmor.yml workflow), and gh, release-plz, uv and
@@ -87,7 +88,7 @@ jobs:
           # lists, and a single-line scalar is unambiguous to parse, where a
           # YAML block scalar's continuation lines are not (several tool names
           # here begin with `aqua:` and read as new keys).
-          install_args: rust hk aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq pkl node npm:prettier
+          install_args: rust hk aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft pkl node npm:prettier
       # Caching is left at its default (save on), which means each PR writes and
       # restores its OWN cache. That is safe without any `save-if` guard because
       # GitHub scopes a cache to the ref that created it: a `pull_request` run

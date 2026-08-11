@@ -22,6 +22,7 @@ setup() {
 		            build-tool: cargo
 		          - target: aarch64-apple-darwin
 		            build-tool: zigbuild
+		        run: gh release upload "$TAG" schema/batten.schema.json "$SPDX" "$CDX" --clobber
 	EOF
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
@@ -44,7 +45,9 @@ EOF
 complete() {
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
-		batten.schema.json
+		batten.schema.json \
+		batten.spdx.json \
+		batten.cdx.json
 }
 
 @test "a release carrying every target's archive passes" {
@@ -75,6 +78,70 @@ complete() {
 	[[ "$output" == *"aarch64-apple-darwin"* ]]
 	[[ "$output" != *"  x86_64-unknown-linux-gnu"* ]]
 	[[ "$output" == *"1 of 2 targets"* ]]
+}
+
+@test "THE CLOUD-262 GAP: every archive present but no SBOM still fails" {
+	# The non-target assets had no coverage at all: the schema has shipped since
+	# CLOUD-33 with nothing asserting it arrived, and the SBOM would have inherited
+	# the same blindness. A release can be complete per-target and still be missing
+	# everything that is not per-target.
+	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
+		batten-9.9.9-aarch64-apple-darwin.tar.gz \
+		batten.schema.json
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"batten.spdx.json"* ]]
+	[[ "$output" == *"batten.cdx.json"* ]]
+	[[ "$output" == *"2 of 3 non-target assets"* ]]
+	# The per-target half must stay clean — the two failures are independent.
+	[[ "$output" != *"targets have no asset"* ]]
+}
+
+@test "the non-target list comes from BOTH sources, not just one" {
+	# The schema is a literal operand on the upload line; the two SBOM names come
+	# from `sbom --names`. If either source silently produced nothing, this release
+	# would pass while missing an asset.
+	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
+		batten-9.9.9-aarch64-apple-darwin.tar.gz
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"batten.schema.json"* ]]
+	[[ "$output" == *"batten.spdx.json"* ]]
+	[[ "$output" == *"3 of 3 non-target assets"* ]]
+}
+
+@test "an upload line the parser cannot read exits 2 rather than covering nothing" {
+	# The half that can silently go to zero. Reformat the upload line and the
+	# schema stops being demanded, with a green result to say everything is fine.
+	complete
+	sed -i '/gh release upload/d' "$BATTEN_RELEASE_WORKFLOW"
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"must not report green"* ]]
+}
+
+@test "an asset name that contains another's does not satisfy it" {
+	# The non-target half matches with -x for this reason: the per-target half
+	# matches on a substring, and reusing that here would let
+	# `batten.spdx.json.sig` stand in for `batten.spdx.json`.
+	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
+		batten-9.9.9-aarch64-apple-darwin.tar.gz \
+		batten.schema.json \
+		batten.spdx.json.sig \
+		batten.cdx.json
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"batten.spdx.json"* ]]
+}
+
+@test "the real workflow publishes the non-target assets this gate derives" {
+	# The fixtures prove the logic; this proves it is pointed at the committed
+	# workflow's actual shape, so the suite cannot pass while production derives
+	# an empty list.
+	unset BATTEN_RELEASE_WORKFLOW
+	run bash -c "grep -F 'gh release upload' .github/workflows/release-artifacts.yml | tr ' ' '\n' | sed -nE 's#^\"?([A-Za-z0-9_./-]+\.json)\"?\$#\1#p' | sed 's#^.*/##' | sort -u"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"batten.schema.json"* ]]
 }
 
 @test "the failure names the recovery, not merely that it refused" {
