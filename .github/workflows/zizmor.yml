@@ -13,7 +13,10 @@ name: zizmor
 
 on:
   pull_request:
-    paths: [".github/workflows/**"]
+    # `action.yml` too: `mise run zizmor` audits the shipped Action alongside the
+    # workflows (CLOUD-68), and a filter that named only the workflows would let
+    # a PR touching just the Action skip the audit that now covers it.
+    paths: [".github/workflows/**", "action.yml"]
 
 # Supersede, don't accumulate. Without this a push that rebases the branch left
 # the previous SHA's run to completion for a verdict nobody would read — the

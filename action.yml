@@ -1,0 +1,286 @@
+name: Batten
+description: Run Batten's policy checks over a repository, with no configuration.
+author: Button Inc.
+
+# The shipped GitHub Action (CLOUD-68). A composite action, at the repository
+# root so `uses: button-inc/batten@<ref>` resolves and so Dependabot's existing
+# `github-actions` ecosystem at `/` already keeps the pinned `uses:` below current.
+#
+# ZERO-CONFIG IS THE ACCEPTANCE CRITERION, not a convenience. Every input below
+# carries a default, so
+#
+#   - uses: button-inc/batten@v0.0.61
+#
+# with no `with:` key at all is a complete invocation: it runs `batten check` in
+# the workspace against that repository's committed `batten.toml`. An Action that
+# needs configuration to do anything useful has not met the bar, and
+# `.github/workflows/test.yml` invokes exactly that bare form so the claim is
+# executed rather than asserted.
+#
+# WHY IT DOWNLOADS A RELEASE ASSET RATHER THAN BUILDING. `mise-tasks/dist` already
+# produces one archive per target on every release, named `batten-v<version>-
+# <target>`, and that name is a contract (house-style §12, CLOUD-65). Building
+# here would compile a binary nobody attested, on whatever toolchain the runner
+# had, for as long as the crate takes — the same objection `no-source-built-tool`
+# raises against a `cargo:` backend.
+#
+# THE VERSION IS THE ACTION'S OWN, and that is what makes zero-config honest. With
+# `version` empty the action reads `[workspace.package] version` from the
+# `Cargo.toml` sitting beside it in `$GITHUB_ACTION_PATH`, and the download origin
+# from that same file's `repository` key. So a consumer pinning `@v0.0.61` gets
+# `batten` v0.0.61 — one authority for both halves, and no `latest` that would let
+# the action's ref and the binary's version disagree. A tag whose asset is missing
+# fails loudly naming the asset; it never falls back to a different version,
+# because a binary that lies about which policy engine ran is worse than no run.
+
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  command:
+    description: The Batten verb to run.
+    required: false
+    default: check
+  args:
+    description: Extra arguments for the verb, split on whitespace.
+    required: false
+    default: ""
+  working-directory:
+    description: Directory the verb runs in. Batten reads the `batten.toml` here — configuration is one committed authority with no upward walk (house-style §8).
+    required: false
+    default: "."
+  version:
+    description: Batten version to run, without a leading `v`. Empty means this action ref's own crate version, which is the pinning that makes an empty `with:` correct.
+    required: false
+    default: ""
+  github-token:
+    description: "Token used to read the release asset. Needs `contents: read` on the Batten repository — see the token note in README.md."
+    required: false
+    default: ${{ github.token }}
+  cache:
+    description: Restore and save the downloaded binary under the key `batten-<version>-<target>`.
+    required: false
+    default: "true"
+  fail:
+    description: Fail the step when Batten exits non-zero. Set `false` to let the run continue and read the code from the `exit-code` output instead — which is how a negative test asserts an exact code rather than merely "it failed".
+    required: false
+    default: "true"
+
+outputs:
+  exit-code:
+    description: Batten's exit code, under the one contract — 0 clean, 1 usage or config error, 2 policy verdict, 3 internal error.
+    value: ${{ steps.run.outputs.exit-code }}
+  version:
+    description: The Batten version that ran.
+    value: ${{ steps.resolve.outputs.version }}
+  binary:
+    description: Absolute path to the binary that ran.
+    value: ${{ steps.resolve.outputs.binary }}
+
+runs:
+  using: composite
+  steps:
+    # NOTHING IS INTERPOLATED INTO A `run:` BODY. A `${{ }}` expansion is textual
+    # substitution into the shell script, so an input carrying shell
+    # metacharacters would execute; every value crosses through `env:` instead.
+    # Same posture as every workflow in this repository, and zizmor gates it at
+    # high severity.
+    - name: Resolve the version, target and cache key
+      id: resolve
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+
+        manifest="$ACTION_PATH/Cargo.toml"
+        [ -f "$manifest" ] || {
+          echo "::error::batten: no Cargo.toml beside the action at $ACTION_PATH — cannot resolve the version to install." >&2
+          exit 1
+        }
+
+        # awk with `exit`, never `sed … | head -n1`: under `pipefail` an early
+        # exiting consumer can SIGPIPE the producer and turn a successful read
+        # into a failed pipeline. Same idiom `mise-tasks/ci-local-parity` uses to
+        # read a single manifest key.
+        version="$INPUT_VERSION"
+        if [ -z "$version" ]; then
+          version=$(awk -F'"' '/^version = /{print $2; exit}' "$manifest")
+        fi
+        [ -n "$version" ] || {
+          echo "::error::batten: could not read a version from $manifest and none was supplied." >&2
+          exit 1
+        }
+
+        url=$(awk -F'"' '/^repository = /{print $2; exit}' "$manifest")
+        origin="${url#https://github.com/}"
+        [ -n "$origin" ] && [ "$origin" != "$url" ] || {
+          echo "::error::batten: $manifest does not name a github.com repository, so there is no release to download from." >&2
+          exit 1
+        }
+
+        # `mise-tasks/dist` keys the archive off the TARGET TRIPLE, so the
+        # mapping below is the one place a runner is turned into an asset name.
+        # musl on Linux deliberately: it is the statically linked build, so it
+        # runs on any runner image regardless of its glibc.
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)    target=x86_64-unknown-linux-musl  ; archive=tar.gz ; exe= ;;
+          Linux/ARM64)  target=aarch64-unknown-linux-musl ; archive=tar.gz ; exe= ;;
+          macOS/X64)    target=x86_64-apple-darwin        ; archive=tar.gz ; exe= ;;
+          macOS/ARM64)  target=aarch64-apple-darwin       ; archive=tar.gz ; exe= ;;
+          Windows/X64)  target=x86_64-pc-windows-gnu      ; archive=zip    ; exe=.exe ;;
+          *)
+            echo "::error::batten: no release asset is built for ${RUNNER_OS}/${RUNNER_ARCH}. Supported: Linux X64/ARM64, macOS X64/ARM64, Windows X64." >&2
+            exit 1
+            ;;
+        esac
+
+        # A stable path, because a cache entry is restored to the path it was
+        # saved from. Keyed by version AND target so two versions, or two
+        # runners, never collide in one directory.
+        #
+        # MIXED FORM ON WINDOWS (`C:/Users/...`), not Git Bash's `/c/Users/...`
+        # and not a backslash path. This string is consumed by two things that
+        # disagree about paths: `actions/cache` is Node and cannot resolve
+        # `/c/...`, while Git Bash eats the backslashes in `C:\...`. Forward
+        # slashes with the drive letter are the one spelling both accept.
+        home="$HOME"
+        if [ "$RUNNER_OS" = Windows ]; then
+          home=$(cygpath -m "$HOME")
+        fi
+        dir="$home/.cache/batten/$version/$target"
+
+        {
+          echo "version=$version"
+          echo "origin=$origin"
+          echo "target=$target"
+          echo "asset=batten-v$version-$target.$archive"
+          echo "archive=$archive"
+          echo "dir=$dir"
+          echo "binary=$dir/batten$exe"
+          # THE CACHE KEY, documented in README.md. Nothing in it varies within a
+          # release, so an entry is valid for as long as the version is — there is
+          # no restore-keys fallback, because a near-miss would restore a
+          # different version's binary under this one's name.
+          echo "cache-key=batten-$version-$target"
+        } >>"$GITHUB_OUTPUT"
+
+    - name: Restore the cached binary
+      id: cache
+      if: ${{ inputs.cache == 'true' }}
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.resolve.outputs.dir }}
+        key: ${{ steps.resolve.outputs.cache-key }}
+
+    - name: Download the release asset
+      # A cache miss, or caching switched off. `steps.cache.outputs.cache-hit` is
+      # empty when the step was skipped, which reads as a miss — correct, since a
+      # skipped restore has restored nothing.
+      if: ${{ steps.cache.outputs.cache-hit != 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ORIGIN: ${{ steps.resolve.outputs.origin }}
+        VERSION: ${{ steps.resolve.outputs.version }}
+        ASSET: ${{ steps.resolve.outputs.asset }}
+        ARCHIVE: ${{ steps.resolve.outputs.archive }}
+        DIR: ${{ steps.resolve.outputs.dir }}
+      run: |
+        set -euo pipefail
+
+        api="https://api.github.com/repos/$ORIGIN"
+        # TWO CALLS, NOT ONE, and the id lookup is the reason. A release asset's
+        # `browser_download_url` is not readable with a token on a PRIVATE
+        # repository; the API asset endpoint with `Accept:
+        # application/octet-stream` is. So resolve the numeric id from the tag,
+        # then fetch by id. `jq` ships on every GitHub-hosted runner image.
+        id=$(curl -fsSL \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/vnd.github+json" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "$api/releases/tags/v$VERSION" |
+          jq -r --arg want "$ASSET" 'first((.assets // [])[] | select(.name == $want) | .id) // empty')
+
+        # Pointer, never payload: the asset name and the tag, never the release body.
+        [ -n "$id" ] || {
+          echo "::error::batten: release v$VERSION carries no asset named $ASSET. The version is taken from the action ref you pinned, so this is a release that did not publish its binaries — not something to work around by installing a different version." >&2
+          exit 1
+        }
+
+        tmp="$(mktemp -d)"
+        curl -fsSL \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "Accept: application/octet-stream" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "$api/releases/assets/$id" -o "$tmp/$ASSET"
+
+        mkdir -p "$DIR"
+        case "$ARCHIVE" in
+          # Git Bash's tar cannot read a zip, so Windows extracts through the
+          # shell that ships with the image rather than through a tool this
+          # action would have to install.
+          zip) powershell.exe -NoProfile -NonInteractive -Command \
+                 "Expand-Archive -Path '$(cygpath -w "$tmp/$ASSET")' -DestinationPath '$(cygpath -w "$DIR")' -Force" ;;
+          *)   tar -xzf "$tmp/$ASSET" -C "$DIR" ;;
+        esac
+        rm -rf "$tmp"
+
+    # Runs on the cache-hit path too: a restored cache is not proof of a usable
+    # binary, and the executable bit does not always survive one.
+    #
+    # DELIBERATELY NOT A `$GITHUB_PATH` WRITE. Prepending an install directory to
+    # PATH is the usual shape for a tool-installer action, and zizmor flags it at
+    # high severity (`github-env`) because a write to that file changes how every
+    # later step in the job resolves a command. This action does not need it — it
+    # invokes the binary by absolute path — so the affordance is the `binary`
+    # output instead, which a later step reads explicitly rather than inheriting.
+    - name: Check the binary is executable
+      shell: bash
+      env:
+        BINARY: ${{ steps.resolve.outputs.binary }}
+      run: |
+        set -euo pipefail
+        [ -f "$BINARY" ] || {
+          echo "::error::batten: no binary at $BINARY after install." >&2
+          exit 1
+        }
+        chmod +x "$BINARY"
+
+    - name: Run Batten
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BINARY: ${{ steps.resolve.outputs.binary }}
+        COMMAND: ${{ inputs.command }}
+        ARGS: ${{ inputs.args }}
+        FAIL: ${{ inputs.fail }}
+      run: |
+        set -uo pipefail
+
+        # Whitespace-split, deliberately and documented as such: `read -ra`
+        # rather than an eval, so `args` can never become a second command.
+        #
+        # The `+` expansion is not decoration: macOS runners still ship bash 3.2,
+        # where `"${extra[@]}"` on an EMPTY array is an unbound-variable error
+        # under `set -u` — so the default `args: ""` would fail on exactly the
+        # zero-config invocation this action exists to serve.
+        read -ra extra <<<"$ARGS"
+
+        "$BINARY" "$COMMAND" ${extra[@]+"${extra[@]}"}
+        code=$?
+
+        # WRITTEN BEFORE THE EXIT, so the code is published whether or not this
+        # step goes on to fail with it.
+        echo "exit-code=$code" >>"$GITHUB_OUTPUT"
+
+        if [ "$FAIL" = "false" ]; then
+          # The code is the answer, carried on the output rather than the step
+          # status. Nothing here decides it is acceptable — that is the caller's
+          # assertion to make, which is the whole point of not failing here.
+          exit 0
+        fi
+        exit "$code"

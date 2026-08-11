@@ -1,0 +1,125 @@
+name: test
+
+# The shipped Action's own self-test (CLOUD-68). `action.yml` is the one thing in
+# this repository that no `mise` task can exercise: its contract is what a GitHub
+# runner does with it, so the only honest proof is a runner doing it.
+#
+# THE POINT OF THIS JOB IS THE LITERAL ABSENCE OF A `with:` KEY. CLOUD-68's
+# acceptance is that the Action works with an empty `with:` block, and a workflow
+# that passed `working-directory:` to reach a fixture would be asserting
+# zero-config rather than executing it. So the repository is checked out into a
+# subdirectory and the fixture is materialized at the workspace root instead —
+# which leaves `- uses: ./action` with nothing to configure, and its default
+# working directory pointing at the fixture repository.
+#
+# Path-filtered, on the same economy as zizmor.yml: it costs nothing on a PR that
+# touches neither the action, this file, nor the corpus it runs. `ci-wait` reads
+# an absent path-filtered check as absent rather than pending, so a required
+# check that produces no run here does not hang a landing.
+
+on:
+  pull_request:
+    paths:
+      - "action.yml"
+      - ".github/workflows/test.yml"
+      - "crates/batten/tests/fixtures/repos/**"
+
+# Supersede, don't accumulate: a landing lap rebases and pushes, and without this
+# the superseded SHA's run is paid out in full for a verdict nobody reads.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  action:
+    name: action
+    # Draft = still being verified locally; no CI. Also the lever a red run
+    # pulls — `land` re-drafts a failing PR, and a job missing this guard would
+    # keep spending while the failure is diagnosed.
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-11
+    permissions:
+      # The action downloads a release asset from this repository with the job
+      # token, which is the whole of what it needs.
+      contents: read
+    steps:
+      # `path: action` frees the workspace root for the fixture. The action then
+      # lives at ./action, and `$GITHUB_ACTION_PATH/Cargo.toml` — which is where
+      # it reads its own version and origin from — is this checkout's manifest,
+      # so the PR's pinned version is what gets installed.
+      #
+      # SPARSE, AND THAT IS LOAD-BEARING RATHER THAN THRIFT. The fixture's rule
+      # is `glob = "**/*.rs"`, `pattern = "TODO"`, and `**` spans path segments —
+      # so a FULL checkout under the workspace would put this repository's own
+      # sources inside the fixture's glob, and eleven of them carry that literal.
+      # The clean fixture would exit 2 for a reason that has nothing to do with
+      # the Action. Measured before the first run rather than discovered by it.
+      #
+      # Three paths, and no more: the action definition, the manifest it reads
+      # its version and origin from, and the corpus it materializes. The corpus
+      # is inert on disk (every file carries `.in`), so it matches no glob a
+      # fixture declares.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: action
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            action.yml
+            Cargo.toml
+            crates/batten/tests/fixtures/repos
+
+      # The corpus commits its files with a trailing `.in` and materialization
+      # strips it, so a fixture may carry a shape this repository's own gates
+      # refuse without tripping them over the same tree
+      # (crates/batten/tests/fixture_repos.rs, "Inertness"). `expected.in` is the
+      # one file that is not materialized: it is the specification, not payload,
+      # and writing it into the tree would put a file in front of the globs under
+      # test.
+      - name: Materialize the clean fixture at the workspace root
+        shell: bash
+        env:
+          FIXTURE: action/crates/batten/tests/fixtures/repos/forbid-clean
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for f in "$FIXTURE"/*.in; do
+            base=$(basename "$f")
+            # An `[ … ] && continue` here would be a `set -e` footgun for no
+            # gain; the `if` says the same thing and cannot bite.
+            if [ "$base" = expected.in ]; then
+              continue
+            fi
+            cp "$f" "${GITHUB_WORKSPACE}/${base%.in}"
+            found=$((found + 1))
+          done
+          # A materializer that silently copied nothing would leave the action
+          # running against an empty directory, and `check` with no batten.toml
+          # is exit 1 — a red job, but for the wrong reason and pointing at the
+          # wrong file.
+          [ "$found" -gt 0 ] || {
+            echo "::error::no fixture files materialized from $FIXTURE" >&2
+            exit 1
+          }
+
+          # The sparse list above is an allow list, and an allow list widened by
+          # hand is one nobody re-checks. This is the sensor on it: the fixture's
+          # glob is `**/*.rs`, so any `.rs` file reaching the checkout would be
+          # judged as if it were fixture content, and the job would go red — or,
+          # worse for a `warn` rule, quietly wrong. Pointer only, never the line.
+          stray=$(find action -name '*.rs' -print -quit)
+          [ -z "$stray" ] || {
+            echo "::error::$stray is inside the fixture's \`**/*.rs\` glob — narrow the sparse-checkout list rather than the fixture." >&2
+            exit 1
+          }
+
+      # THE ACCEPTANCE CRITERION, EXECUTED. No `with:` — not an empty one, none
+      # at all. Every input falls back to its default, so this resolves the
+      # version from the action's own Cargo.toml, downloads that release's
+      # musl asset, and runs `batten check` in the workspace root, which is now
+      # the fixture repository. The step fails unless Batten exits 0.
+      - uses: ./action

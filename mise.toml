@@ -106,7 +106,7 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,final"
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,final,action"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -375,7 +375,11 @@ cargo run --quiet -p batten -- generate schema --surface override >schema/batten
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
 # Same tool + severity CI enforces. GH_TOKEN (set in [env]) enables the online
 # audits. This is the one command CI's zizmor job also runs, so they cannot drift.
-run = "zizmor --min-severity high .github/"
+#
+# `action.yml` is named alongside `.github/` because the shipped Action (CLOUD-68)
+# is a workflow surface with the same injection and unpinned-uses hazards, and
+# zizmor's directory walk does not reach a repository-root action definition.
+run = "zizmor --min-severity high .github/ action.yml"
 
 [tasks.lock-check]
 description = "Currency only: would regenerating mise.lock change it? Runs on a schedule, never on the landing path — it fetches and it writes"

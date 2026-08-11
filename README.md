@@ -293,6 +293,132 @@ CLOUD-292 rather than papered over here.
 against the compiled binary and asserts the exit code it claims. A drifted example
 fails CI, so this documentation cannot rot into fiction.
 
+## Running Batten in GitHub Actions
+
+The shipped Action works with an **empty `with:` block** — that is the bar it is
+held to, not a convenience it happens to offer:
+
+```yaml
+- uses: actions/checkout@v5
+- uses: button-inc/batten@v0.0.61
+```
+
+That runs `batten check` in the workspace against the `batten.toml` committed
+there, and fails the step on a policy verdict. Every input has a default, and the
+defaults are the useful configuration.
+
+The version is not a fourth thing to keep in sync: with `version` unset the Action
+reads its **own** crate version from the `Cargo.toml` beside it, so the ref you
+pin selects the binary. `@v0.0.61` runs Batten `0.0.61`. There is no `latest`
+resolution to let the two disagree, and a tag whose release published no asset
+fails loudly rather than substituting another version.
+
+### Inputs
+
+| input               | default               | meaning                                                           |
+| ------------------- | --------------------- | ----------------------------------------------------------------- |
+| `command`           | `check`               | the verb to run                                                   |
+| `args`              | `""`                  | extra arguments, split on whitespace                              |
+| `working-directory` | `.`                   | where the verb runs, and therefore which `batten.toml` governs    |
+| `version`           | `""`                  | empty means this action ref's own version                         |
+| `github-token`      | `${{ github.token }}` | reads the release asset                                           |
+| `cache`             | `true`                | restore and save the downloaded binary                            |
+| `fail`              | `true`                | fail the step on a non-zero code; `false` reports it as an output |
+
+### Outputs
+
+| output      | meaning                                                  |
+| ----------- | -------------------------------------------------------- |
+| `exit-code` | Batten's code, under the one contract in the table above |
+| `version`   | the version that ran                                     |
+| `binary`    | absolute path to the binary, for a later step to invoke  |
+
+`fail: false` is how a caller asserts an **exact** code rather than merely "the
+step went red" — the run continues and the code arrives on `exit-code`:
+
+```yaml
+- uses: button-inc/batten@v0.0.61
+  id: batten
+  with:
+    fail: false
+- run: test "${{ steps.batten.outputs.exit-code }}" = "2"
+```
+
+The Action does **not** prepend its install directory to `PATH`. A `$GITHUB_PATH`
+write changes how every later step in the job resolves a command, which is a
+hazard disproportionate to the convenience; use the `binary` output instead.
+
+### The cache key
+
+The downloaded binary is cached under
+
+```text
+key:  batten-<version>-<target>
+path: ~/.cache/batten/<version>/<target>
+```
+
+where `<target>` is the Rust target triple the runner maps to — `x86_64`/`aarch64`
+`-unknown-linux-musl` on Linux (the statically linked build, so it runs on any
+image regardless of glibc), `-apple-darwin` on macOS, `x86_64-pc-windows-gnu` on
+Windows.
+
+Both the version and the target are in the key and there are **no restore keys**:
+a near-miss would restore a different version's binary under this one's name,
+which is precisely the confusion a policy engine must not create. An entry is
+therefore valid for exactly as long as its version is. Set `cache: false` to skip
+restore and save entirely; the download is a little over a megabyte.
+
+### The plain CLI alternative
+
+Nothing above requires the Action. The same thing by hand, with no third-party
+action in the path:
+
+```yaml
+- name: Install Batten
+  env:
+    GH_TOKEN: ${{ github.token }}
+    VERSION: 0.0.61
+    TARGET: x86_64-unknown-linux-musl
+  run: |
+    set -euo pipefail
+    asset="batten-v$VERSION-$TARGET.tar.gz"
+    id=$(gh api "repos/button-inc/batten/releases/tags/v$VERSION" \
+      --jq ".assets[] | select(.name == \"$asset\") | .id")
+    gh api "repos/button-inc/batten/releases/assets/$id" \
+      -H "Accept: application/octet-stream" > "$asset"
+    tar -xzf "$asset" -C /usr/local/bin batten
+- run: batten check
+```
+
+The asset name is a contract, not a convenience — `mise-tasks/dist` builds it and
+the release workflow uploads it under exactly that name — so this stays correct
+independently of the Action.
+
+### Tokens, and what a `GITHUB_TOKEN` will not do
+
+`github-token` defaults to `${{ github.token }}`, which needs `contents: read`.
+Inside this repository that is enough to read a release asset. **From another
+repository it is not**: the job token is scoped to the repository running the
+workflow, so a consumer must pass a token that can read releases on
+`button-inc/batten` — which today is private, a recorded decision on the project
+board rather than an oversight.
+
+The note worth carrying past the install step: **events created with
+`GITHUB_TOKEN` do not trigger further workflow runs.** GitHub suppresses them
+deliberately, to stop a workflow recursing into itself. So if you wire Batten's
+result into something that pushes a commit, opens a pull request, or files an
+issue, that downstream event will start no workflow of its own while the default
+token is in play. Reaching for a PAT is the documented way around it, and it is a
+deliberate choice with the recursion the suppression exists to prevent — not a
+configuration detail.
+
+### The Action self-tests, and the test is allowed to fail
+
+`.github/workflows/test.yml` checks this repository out into a subdirectory,
+materializes a fixture repository from `crates/batten/tests/fixtures/repos/` at
+the workspace root, and invokes the Action with **no `with:` key at all** — so the
+empty-`with:` claim above is executed on a real runner rather than asserted here.
+
 ## Roadmap
 
 Work is tracked on the project board across phases:

@@ -338,11 +338,21 @@ local gate = new Mapping<String, Step> {
     depends = List("pkl")
     check_first = true
   }
-  // Markdown only. prettier also handles JS/CSS/YAML/JSON, none of which this
-  // repo has by hand — pointing it at the workflows would churn files that
-  // actionlint and zizmor already own.
+  // Markdown, plus the one hand-written YAML no other tool owns. prettier also
+  // handles JS/CSS/JSON, none of which this repo has by hand — and pointing it
+  // at `.github/workflows/` would churn files that actionlint and zizmor
+  // already own.
+  //
+  // `action.yml` is the exception because NOTHING ELSE PARSES IT (CLOUD-68).
+  // actionlint globs `.github/workflows` only, and zizmor — which `mise run
+  // zizmor` now points at the file — answers an unparseable input with a `WARN
+  // failed to parse input` and exit 0. Measured while writing it: a `contents:
+  // read` inside an unquoted description made the whole file unparseable, and
+  // both tools reported green over a shipped Action no runner could have loaded.
+  // prettier's YAML parser is the gate that refuses it, and formatting it is the
+  // by-product rather than the point.
   ["prettier"] = (Builtins.prettier) {
-    glob = List("**/*.md")
+    glob = List("**/*.md", "action.yml")
     check_first = true
   }
 
