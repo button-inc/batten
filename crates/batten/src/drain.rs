@@ -65,10 +65,17 @@
 //! # Advisory means structurally unable to block
 //!
 //! Nothing here returns a verdict. The drain rides the `hook` surface at
-//! `PostToolUse`, an event no host offers a deny channel for, and every path
-//! through it — including every failure — resolves to allow. A drain that could
-//! fail a call would make an advisory surface a gate, which house-style §0.3
-//! refuses.
+//! `PostToolUse`, an event no host offers a deny channel for, and nothing it
+//! computes reaches [`crate::hook::adjudicate`], which stays a pure function of
+//! config plus argv. A drain that could refuse a call would make an advisory
+//! surface a gate, which house-style §0.3 refuses.
+//!
+//! A drain **failure** is fail-loud rather than swallowed: it propagates to the
+//! binary boundary as an ordinary error, where §7 spends `1` or `3`. Neither is
+//! the deny code, so being loud costs nothing a host reads as a refusal — and
+//! the alternative, a drain that silently did not run, is byte-identical to one
+//! that ran and found nothing. That is the false green this engine exists to
+//! catch, in a place nobody would look.
 //!
 //! Emission is deliberately thin: one pointer line per surfaced identity. The
 //! shape, the per-rule cardinality cap and the token budget are CLOUD-82's
