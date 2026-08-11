@@ -222,14 +222,14 @@ fn authority(spawning: bool) -> String {
         // finding path runs too; `rules.rs` nulls both streams, and this is what
         // pins that it still does.
         //
-        // `run` is split on whitespace, so the child is a script rather than an
+        // `check` is split on whitespace, so the child is a script rather than an
         // `sh -c` one-liner: a quoted argument would not survive the split.
         config.push_str(
             "\n[[rule]]\n\
              id = \"canary-child\"\n\
              kind = \"command\"\n\
              glob = \"**/*.txt\"\n\
-             run = \"sh emit.sh\"\n\
+             check = \"sh emit.sh\"\n\
              severity = \"warn\"\n\
              scope = \"tree\"\n",
         );
