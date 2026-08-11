@@ -105,6 +105,26 @@ fn run_hook_in(dir: &std::path::Path, harness: &str, payload: &str, bypass: bool
     child.wait_with_output().expect("run batten hook")
 }
 
+/// `batten -v hook`, for the ladder-gated notes a default run withholds.
+fn run_hook_verbose(dir: &std::path::Path, harness: &str, payload: &str) -> Output {
+    let mut command = batten();
+    command
+        .current_dir(dir)
+        .args(["-v", "hook", "--harness", harness])
+        .env_remove("BATTEN_GH_GUARD_BYPASS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
 /// A Claude Code `PreToolUse` payload wrapping one Bash command.
 fn claude_payload(command: &str) -> String {
     serde_json::json!({
@@ -1028,6 +1048,22 @@ const EVENTS: &[EventRow] = &[
         spelling: "SessionStart",
         adjudicated: false,
     },
+    // Claude-only (CLOUD-45). Every host is fed every row below, and the four
+    // that do not declare these two allow through the capability path instead of
+    // the adjudication path — which is the same observable answer, deliberately:
+    // an absent capability must be indistinguishable from a declared event
+    // nobody keyed policy on. `an_event_a_host_does_not_declare_degrades_cleanly`
+    // is what tells the two apart, through the ladder.
+    EventRow {
+        event: batten::hook::Event::TaskCompleted,
+        spelling: "TaskCompleted",
+        adjudicated: false,
+    },
+    EventRow {
+        event: batten::hook::Event::ConfigChange,
+        spelling: "ConfigChange",
+        adjudicated: false,
+    },
     EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",
@@ -1677,6 +1713,67 @@ fn a_cursor_payload_with_a_windows_bom_still_denies() {
         String::from_utf8_lossy(&output.stdout).contains("\"permission\":\"deny\""),
         "a BOM must not degrade the guard to an allow"
     );
+}
+
+#[test]
+fn an_event_a_host_does_not_declare_degrades_cleanly() {
+    // CLOUD-45's acceptance over the binary: the same `TaskCompleted` payload
+    // under a host that declares it and one that does not. Both allow — an
+    // absent capability is a statement about the host, never a reason to refuse
+    // the call — and only the host that lacks it says so.
+    let dir = repo_with_gh_policy("capability-degrade");
+    let payload = serde_json::json!({
+        "hook_event_name": "TaskCompleted",
+        "session_id": "sess-1",
+        "cwd": "/repo",
+        "tool_name": "Bash",
+        // A command the fixture policy denies, so an accidental adjudication of
+        // an undeclared event would show up as a deny rather than passing
+        // silently.
+        "tool_input": { "command": "gh pr merge 1" }
+    })
+    .to_string();
+
+    // Declared: no capability note, and the event is simply not adjudicated
+    // (only pre-tool is), so it allows quietly.
+    let declared = run_hook_in(&dir, "claude-code", &payload, false);
+    assert_eq!(declared.status.code(), Some(0));
+    assert!(declared.stdout.is_empty());
+    assert!(
+        !common::stderr(&declared).contains("does not emit"),
+        "the host that has the capability says nothing about lacking it"
+    );
+
+    // Undeclared: still an allow, still nothing on the answer channel.
+    for harness in ["cursor", "copilot-cli", "gemini-cli", "codex-cli"] {
+        let output = run_hook_in(&dir, harness, &payload, false);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{harness}: an absent capability is never an error and never a deny"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{harness}: nothing keyed on the event fired"
+        );
+        assert!(
+            output.stderr.is_empty(),
+            "{harness}: the note is ladder-gated — a default run stays quiet"
+        );
+
+        // Asking for detail produces it, and names the fallback the survey
+        // assigns: a policy keyed on completion watches the Stop family here.
+        let loud = run_hook_verbose(&dir, harness, &payload);
+        let stderr = common::stderr(&loud);
+        assert!(
+            stderr.contains("does not emit task-completed"),
+            "{harness}: the degradation is reportable, got: {stderr}"
+        );
+        assert!(
+            stderr.contains("stop"),
+            "{harness}: and names what stands in for it, got: {stderr}"
+        );
+    }
 }
 
 #[test]

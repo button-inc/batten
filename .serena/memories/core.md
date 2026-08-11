@@ -286,7 +286,26 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   so the channels are exclusive; Cursor assigns stderr no meaning at all, so
   CLOUD-122's "every deny points to the fix" is unsatisfiable there without JSON.
   Fixtures live in `tests/fixtures/hooks/`, checked in rather than reconstructed
-  because the survey measured that model memory of this space is badly stale. The envelope is seven
+  because the survey measured that model memory of this space is badly stale.
+  **Capabilities** (CLOUD-45) is the host × capability row the dispatcher consults
+  before anything keys on an event — NOT a list of Claude-only events, because the
+  survey measured the asymmetry running both ways (Gemini rewrites model traffic;
+  Cursor sees file contents pre-read; neither is a Claude power). An undeclared
+  event allows and fires nothing, with a Verbose-rung note — never an error and
+  never a deny, since an absent capability is a fact about the host. `TaskCompleted`
+  is the one load-bearing Claude-only event (exit 2 prevents completion, the machine
+  form of the completion-signal thesis) and `degrade` maps it to the Stop family
+  elsewhere; `ConfigChange` degrades to NOTHING, because inventing a stand-in is
+  worse than admitting the gap. Two uniform facts the table pins so nobody assumes
+  otherwise: **no host vetoes completion from Stop** (all five only force
+  continuation — "Stop blocks" is wrong everywhere, not degraded somewhere), and
+  `ask` is unavailable on Gemini and Codex, so a policy wanting confirmation must
+  hard-deny there — degrading `ask` to ALLOW would turn "check with a human" into
+  "go ahead". Fail-open edges are capabilities too (Copilot timeouts always fail
+  open, Cursor needs `failClosed`, Gemini reads unparseable stdout as Allow). Two
+  clippy lints are allowed with stated reasons: a matrix row is not a state machine
+  (`struct_excessive_bools`) and rows that coincide today are still separate hosts
+  (`match_same_arms`). The envelope is seven
   fields since CLOUD-43 — a typed `Event` (`const ALL` + `as_str`, the vocabulary
   idiom `Harness`/`Stream`/`RuleKind` use) plus the host's own `raw_event`, which
   is not a second authority: one is what policy dispatches on, the other is the

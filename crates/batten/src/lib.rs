@@ -498,6 +498,32 @@ fn run_hook(
         output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
         return Ok(ExitCode::Success);
     };
+    // The capability table, consulted before anything keys on the event
+    // (CLOUD-45). A host that does not declare this event fires nothing and
+    // allows — never an error, never a deny: an absent capability is a statement
+    // about the host, and refusing the call would make Batten the reason a
+    // session cannot proceed on a host that simply offers less.
+    //
+    // The note rides the ladder above `normal`, because on the hosts where this
+    // is reachable it is the ordinary state rather than news.
+    let capabilities = harness.capabilities();
+    if !capabilities.emits(envelope.event) && envelope.event != hook::Event::Unrecognized {
+        let note = match capabilities.degrade(envelope.event) {
+            Some(fallback) => format!(
+                "{} does not emit {}; a policy keyed on it watches {} here",
+                harness.as_str(),
+                envelope.event.as_str(),
+                fallback.as_str()
+            ),
+            None => format!(
+                "{} does not emit {}; nothing keyed on it fires here",
+                harness.as_str(),
+                envelope.event.as_str()
+            ),
+        };
+        output::message(mode, Verbosity::Verbose, err, &note)?;
+        return Ok(ExitCode::Success);
+    }
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
     // runs on every mediated tool call — and it is also what keeps a bypassed or

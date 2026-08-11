@@ -120,6 +120,181 @@ impl Harness {
     }
 }
 
+/// What one host can and cannot do (CLOUD-45).
+///
+/// A **host × capability** table, not a list of Claude-only events — the survey
+/// (CLOUD-209) measured the asymmetry running both ways, and the issue's original
+/// framing encoded a false premise. Gemini can rewrite model traffic and
+/// constrain tool selection; Cursor sees file contents before a read; neither is
+/// something Claude Code can do.
+///
+/// Declared as data the dispatcher consults, so no behaviour keys on an event
+/// without asking whether the host emits it. A host's event set is stated here
+/// and nowhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+// `struct_excessive_bools` wants these folded into an enum or bitflags. Refused
+// on purpose: this is a **matrix row**, and the lint's premise — that several
+// bools are usually one state machine wearing a disguise — is false here. The
+// fields are mutually independent measured facts about a third party, four of
+// them found on different pages of different vendors' docs. An enum would have
+// to enumerate 2^n combinations that carry no meaning, and bitflags would trade
+// a named field for a bit position, which is exactly the readability this table
+// exists to give the survey's findings.
+#[allow(clippy::struct_excessive_bools)]
+pub struct Capabilities {
+    /// The events this host emits, so Batten can be invoked on them.
+    pub events: &'static [Event],
+    /// Whether the host offers an escalate-to-human verdict.
+    ///
+    /// Absent on Gemini (allow/deny only) and not in effect on Codex (its schema
+    /// lists `ask`; its docs mark it "parsed but not supported yet"). A policy
+    /// wanting confirmation must hard-deny on those two — degrading to *allow*
+    /// would turn "ask a human" into "go ahead".
+    pub ask: bool,
+    /// Whether a stop-family event can veto completion.
+    ///
+    /// **`false` on every surveyed host, Claude included** — all of them can only
+    /// force continuation, with per-host loop caps. The field exists to make that
+    /// checkable rather than remembered: behaviour keyed on "Stop blocks" is
+    /// wrong everywhere, not degraded somewhere, and a table that omitted the
+    /// column would let someone assume the opposite of a uniform fact.
+    pub stop_vetoes_completion: bool,
+    /// Whether a hook timeout fails open no matter what the config says.
+    ///
+    /// Copilot concedes this even for admin-deployed policy hooks, so a Batten
+    /// hook that hangs cannot block there.
+    pub timeout_fails_open: bool,
+    /// Whether the host needs `failClosed` set explicitly to not fail open.
+    pub needs_fail_closed_config: bool,
+    /// Whether stray non-JSON stdout on exit 0 is read as an allow.
+    ///
+    /// Gemini's documented "Golden Rule": any unparseable stdout defaults to
+    /// Allow and is treated as a `systemMessage`. Batten must keep stdout clean
+    /// or exit 2 there.
+    pub stdout_must_stay_clean: bool,
+}
+
+impl Capabilities {
+    /// Whether this host emits `event`.
+    #[must_use]
+    pub fn emits(&self, event: Event) -> bool {
+        self.events.contains(&event)
+    }
+
+    /// The event a policy keyed on `event` should actually watch on this host.
+    ///
+    /// `None` when nothing here stands in for it. The one substitution is the
+    /// load-bearing case the survey named: a policy keyed on `TaskCompleted`
+    /// degrades to the Stop family, which every surveyed host has. Degrading is
+    /// not equivalence — Stop cannot veto anywhere — so a caller still has to
+    /// read [`Capabilities::stop_vetoes_completion`] before assuming it can
+    /// block. What the substitution buys is *observing* the moment, not
+    /// refusing it.
+    #[must_use]
+    pub fn degrade(&self, event: Event) -> Option<Event> {
+        if self.emits(event) {
+            return Some(event);
+        }
+        match event {
+            Event::TaskCompleted if self.emits(Event::Stop) => Some(Event::Stop),
+            _ => None,
+        }
+    }
+}
+
+/// The events every surveyed host emits — the converged core.
+const CONVERGED_EVENTS: &[Event] = &[
+    Event::PreTool,
+    Event::PostTool,
+    Event::Stop,
+    Event::SessionStart,
+];
+
+/// Claude Code's set: the converged core plus the two it alone offers.
+const CLAUDE_EVENTS: &[Event] = &[
+    Event::PreTool,
+    Event::PostTool,
+    Event::Stop,
+    Event::SessionStart,
+    Event::TaskCompleted,
+    Event::ConfigChange,
+];
+
+impl Harness {
+    /// This host's capability row.
+    ///
+    /// Every field is a survey finding (CLOUD-209), not a guess. The neutral
+    /// `exit-code` adapter declares the converged core: it stands for "some host
+    /// whose only channel is an exit status", and claiming a Claude-only event
+    /// for it would be claiming something about a host nobody named.
+    #[must_use]
+    // `match_same_arms` would collapse the rows that happen to agree today.
+    // Refused: two hosts whose measured capabilities coincide are still two
+    // hosts, and each arm carries the citation for *why* its values are what
+    // they are — Codex's `ask` is false because its docs say "parsed but not
+    // supported yet", the neutral adapter's because it stands for a host nobody
+    // named. Collapsing them would delete those reasons and make a future
+    // divergence a structural edit rather than a one-value one.
+    #[allow(clippy::match_same_arms)]
+    pub const fn capabilities(self) -> Capabilities {
+        match self {
+            Harness::ClaudeCode => Capabilities {
+                events: CLAUDE_EVENTS,
+                ask: true,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+            },
+            Harness::Cursor => Capabilities {
+                events: CONVERGED_EVENTS,
+                // On shell and MCP events; `ask` parses but is unenforced on the
+                // generic `preToolUse`, and is coerced to deny on `subagentStart`.
+                ask: true,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: true,
+                stdout_must_stay_clean: false,
+            },
+            Harness::CopilotCli => Capabilities {
+                events: CONVERGED_EVENTS,
+                ask: true,
+                stop_vetoes_completion: false,
+                timeout_fails_open: true,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+            },
+            Harness::GeminiCli => Capabilities {
+                events: CONVERGED_EVENTS,
+                ask: false,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: true,
+            },
+            Harness::CodexCli => Capabilities {
+                events: CONVERGED_EVENTS,
+                // Advertised in the output schema, marked "parsed but not
+                // supported yet" in the docs. Advertised is not available.
+                ask: false,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+            },
+            Harness::ExitCode => Capabilities {
+                events: CONVERGED_EVENTS,
+                ask: false,
+                stop_vetoes_completion: false,
+                timeout_fails_open: false,
+                needs_fail_closed_config: false,
+                stdout_must_stay_clean: false,
+            },
+        }
+    }
+}
+
 /// The lifecycle events the core normalizes, whatever a host spells them.
 ///
 /// A vocabulary enum with a `const ALL`, the shape [`Harness`],
@@ -145,6 +320,15 @@ pub enum Event {
     Stop,
     /// Start of a session.
     SessionStart,
+    /// A task was marked complete. **Claude-only** across the surveyed hosts,
+    /// and the one Claude-exclusive capability that is load-bearing here: exit 2
+    /// prevents the completion, which is the literal machine form of Batten's
+    /// thesis about completion signals. A policy keyed on it degrades to the
+    /// Stop family elsewhere (see [`Capabilities::degrade`]).
+    TaskCompleted,
+    /// A settings file is being edited mid-session. Claude-only; a
+    /// self-protection surface no other surveyed host offers.
+    ConfigChange,
     /// The host named an event this build does not normalize. Distinct from an
     /// absent one: absent means nobody said, this means somebody said something
     /// we do not know, and the two must not collapse.
@@ -158,6 +342,8 @@ impl Event {
         Event::PostTool,
         Event::Stop,
         Event::SessionStart,
+        Event::TaskCompleted,
+        Event::ConfigChange,
         Event::Unrecognized,
     ];
 
@@ -171,6 +357,8 @@ impl Event {
             Event::PostTool => "post-tool",
             Event::Stop => "stop",
             Event::SessionStart => "session-start",
+            Event::TaskCompleted => "task-completed",
+            Event::ConfigChange => "config-change",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -189,6 +377,8 @@ impl Event {
             "PostToolUse" => Event::PostTool,
             "Stop" => Event::Stop,
             "SessionStart" => Event::SessionStart,
+            "TaskCompleted" => Event::TaskCompleted,
+            "ConfigChange" => Event::ConfigChange,
             _ => Event::Unrecognized,
         }
     }
@@ -1856,6 +2046,139 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn every_host_declares_a_row_for_every_event_the_core_normalizes() {
+        // Table totality (CLOUD-45 §7): the dispatcher keys on `Event`, so every
+        // host owes a yes-or-no for each variant. `emits` answering at all is
+        // the property — a host that simply omitted an event from its slice
+        // would answer `false`, which is a decision, where a table missing the
+        // *column* would be a question nobody asked.
+        for harness in Harness::ALL {
+            let capabilities = harness.capabilities();
+            for event in Event::ALL {
+                let _ = capabilities.emits(*event);
+            }
+            assert!(
+                capabilities.emits(Event::PreTool),
+                "{}: pre-tool is the one event every surveyed host emits, and the \
+                 only one a deny can still prevent anything at",
+                harness.as_str()
+            );
+            assert!(
+                !capabilities.emits(Event::Unrecognized),
+                "{}: `unrecognized` is the core's word for 'the host said something \
+                 we do not know', never something a host emits",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn no_surveyed_host_can_veto_completion_from_a_stop_event() {
+        // A uniform fact, pinned as one. The survey's correction to this issue's
+        // original framing: "Stop can block" is wrong on all five hosts, Claude
+        // included — they can only force continuation. A capability keyed on the
+        // opposite would be broken everywhere rather than degraded somewhere.
+        for harness in Harness::ALL {
+            assert!(
+                !harness.capabilities().stop_vetoes_completion,
+                "{}: no host vetoes completion from Stop",
+                harness.as_str()
+            );
+            assert!(
+                harness.capabilities().emits(Event::Stop),
+                "{}: every host has a Stop-family event",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn task_completed_is_claude_only_and_degrades_to_the_stop_family() {
+        // The one Claude-exclusive capability that is load-bearing for Batten's
+        // completion-signal thesis.
+        assert!(
+            Harness::ClaudeCode
+                .capabilities()
+                .emits(Event::TaskCompleted)
+        );
+        for harness in Harness::ALL {
+            let capabilities = harness.capabilities();
+            if *harness == Harness::ClaudeCode {
+                assert_eq!(
+                    capabilities.degrade(Event::TaskCompleted),
+                    Some(Event::TaskCompleted),
+                    "the host that has it watches it"
+                );
+                continue;
+            }
+            assert!(
+                !capabilities.emits(Event::TaskCompleted),
+                "{}: TaskCompleted is Claude-only across the surveyed hosts",
+                harness.as_str()
+            );
+            assert_eq!(
+                capabilities.degrade(Event::TaskCompleted),
+                Some(Event::Stop),
+                "{}: a policy keyed on completion watches the Stop family here",
+                harness.as_str()
+            );
+        }
+        // Degrading is not equivalence: the substitute cannot veto either, which
+        // is why the caller still has to read the other field.
+        assert!(!Harness::GeminiCli.capabilities().stop_vetoes_completion);
+    }
+
+    #[test]
+    fn config_change_degrades_to_nothing_rather_than_to_something_weaker() {
+        // Unlike TaskCompleted there is no honest stand-in for "a settings edit
+        // is happening", so the answer is `None`. Substituting an unrelated
+        // event would be worse than admitting the gap.
+        for harness in Harness::ALL {
+            if *harness == Harness::ClaudeCode {
+                continue;
+            }
+            assert_eq!(
+                harness.capabilities().degrade(Event::ConfigChange),
+                None,
+                "{}: nothing here stands in for ConfigChange",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn the_ask_verdict_is_absent_where_the_survey_found_it_absent() {
+        // A policy wanting human confirmation must hard-deny on these two.
+        // Degrading `ask` to *allow* would turn "check with a human" into "go
+        // ahead", which is the one direction that must never be the fallback.
+        assert!(!Harness::GeminiCli.capabilities().ask);
+        assert!(!Harness::CodexCli.capabilities().ask);
+        assert!(Harness::ClaudeCode.capabilities().ask);
+    }
+
+    #[test]
+    fn the_fail_open_edges_are_per_host_capabilities_too() {
+        // Each of these is a measured host behaviour Batten cannot change and
+        // must not forget.
+        assert!(
+            Harness::CopilotCli.capabilities().timeout_fails_open,
+            "Copilot concedes this even for admin policy hooks"
+        );
+        assert!(
+            Harness::Cursor.capabilities().needs_fail_closed_config,
+            "Cursor is fail-open unless a hook sets failClosed"
+        );
+        assert!(
+            Harness::GeminiCli.capabilities().stdout_must_stay_clean,
+            "Gemini reads unparseable stdout on exit 0 as Allow"
+        );
+        // And they are not universal — a blanket assumption would be as wrong as
+        // forgetting them.
+        assert!(!Harness::ClaudeCode.capabilities().timeout_fails_open);
+        assert!(!Harness::ClaudeCode.capabilities().stdout_must_stay_clean);
     }
 
     #[test]
