@@ -19,7 +19,7 @@ set -uo pipefail
 # risk; a tool we merely invoke by name (release-plz, shellcheck, taplo) is
 # vocabulary, not an authority, and is not listed. Add a name here when a survey
 # adds a source.
-NAMES='jdx|semgrep|opengrep'
+NAMES='jdx|semgrep|opengrep|ast-grep'
 
 # Lines that address a dependency rather than appeal to one: a URL, a package
 # path, a tool pin, a pinned action. These are how we name what we depend on.

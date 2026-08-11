@@ -137,12 +137,23 @@ problem the drift gate then solves. The exception is an artifact a consumer must
 resolve independently — a published JSON schema — which is committed _and_ gated,
 because the copy they fetch has to match the code.
 
-## Worked example: measure the tool against this tree before deciding
+## Portability constrains where instructions live
 
-A structural-matcher survey (CLOUD-310) is the reference instance of step 3,
-"re-derive against our constraints". The tool was excellent and the verdict was
-still mostly reject, because the deciding facts were properties of _this_ tree
-and none of them appear in anyone's documentation:
+Instructions live in vendor-neutral files: `AGENTS.md` (with `CLAUDE.md` a
+symlink to it) and the checked-in Serena memories, all plain markdown any agent
+can read. Do **not** move instructions into a vendor-specific mechanism —
+`.claude/rules/`, or any other single-tool rule format — even when it offers a
+capability the neutral files lack, such as path-scoped loading. Buying a context
+saving with a lock-in is the wrong trade here: the repo is read by more than one
+agent, and an instruction only one of them can see is an instruction the others
+will violate.
+
+## A worked survey: the structural-matcher field (CLOUD-310)
+
+The reference instance of step 3, "re-derive against our constraints". The tool
+was excellent and the verdict was still mostly reject, because the deciding
+facts were properties of _this_ tree and none of them appear in anyone's
+documentation:
 
 - **All 46 `mise-tasks/*` are extensionless.** Language dispatch by file
   extension therefore sees none of them, the directory walk reports
@@ -172,17 +183,6 @@ literal it replaced, so the change that lands the cheap half must _name_ the
 lines it still cannot reach and file them with a re-open predicate. CLOUD-310's
 is stated as one — the upstream crate declares a stable API **and** its MSRV is
 at or below our pin. "Revisit later" is not a predicate and reopens nothing.
-
-## Portability constrains where instructions live
-
-Instructions live in vendor-neutral files: `AGENTS.md` (with `CLAUDE.md` a
-symlink to it) and the checked-in Serena memories, all plain markdown any agent
-can read. Do **not** move instructions into a vendor-specific mechanism —
-`.claude/rules/`, or any other single-tool rule format — even when it offers a
-capability the neutral files lack, such as path-scoped loading. Buying a context
-saving with a lock-in is the wrong trade here: the repo is read by more than one
-agent, and an instruction only one of them can see is an instruction the others
-will violate.
 
 ## A worked survey: the static-analysis and agent-hook field (CLOUD-311/312/314)
 
