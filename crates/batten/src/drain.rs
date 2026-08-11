@@ -8,11 +8,16 @@
 //!
 //! # The batch boundary is a window, not an event
 //!
-//! No surveyed host emits a `PostToolBatch` (the capability table in
-//! [`crate::hook`] is where that is stated as data). What a host emits is one
-//! `PostToolUse` per tool call, so N verifiers in one batch are N separate
-//! processes — and a drain per process is exactly the once-per-verifier
+//! [`crate::hook::Event`] carries no batch variant, so the envelope this rides
+//! delivers one `PostToolUse` per tool call: N verifiers in one batch are N
+//! separate processes, and a drain per process is exactly the once-per-verifier
 //! behaviour this issue exists to remove.
+//!
+//! **Claude Code does emit a batch event** — CLOUD-187 wires a hook on
+//! `PostToolBatch` and measured it firing — and four of the five surveyed hosts
+//! do not. So the vocabulary gap is real for most hosts and closable for one;
+//! riding it where it exists is CLOUD-389, and it changes delivery rather than
+//! the invariant, for the reason below.
 //!
 //! So the boundary is **inferred by a coalescing window** rather than received.
 //! The first wake past the window drains; every wake inside it is
