@@ -24,7 +24,7 @@
 //! since it could not tell "asked and clean" from "never asked".
 //!
 //! Not-computable is at-risk work and **never suppresses the facts beside it**.
-//! This was a usage error until CLOUD-51's DoD audit, which meant a repository
+//! This was a usage error until CLOUD-51's `DoD` audit, which meant a repository
 //! with no target got no report at all — not the dirty tree, not the branch
 //! tracking nothing. The configuration most likely to be a fresh, at-risk
 //! checkout was the one the gate stayed silent about. A target the author *named

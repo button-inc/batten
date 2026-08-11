@@ -216,7 +216,7 @@ fn run_provision_apply(
 /// branch**, and where no target resolves at all the verb still reports every
 /// other fact, with the unlanded component rendered `not-computable`.
 ///
-/// This was a usage error until CLOUD-51's DoD audit: refusing the whole
+/// This was a usage error until CLOUD-51's `DoD` audit: refusing the whole
 /// invocation looked like the safe reading and is the opposite of one. A repo
 /// with no `must_land_on` got *nothing* — not the dirty tree, not the branch
 /// tracking nothing — so the one configuration most likely to be a fresh,
