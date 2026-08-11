@@ -15,11 +15,10 @@
 
 mod common;
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::Output;
 
-use common::{Fixture, batten, git_in, run, stderr, stdout};
+use common::{Fixture, git_in, run, run_with_stdin, stderr, stdout};
 
 /// The declared table every fixture below uses.
 const CONFIG: &str = "version = 1\n\n[defects]\npath = \"defects.jsonl\"\nclasses = [\"false-green\", \"silent-skip\"]\n";
@@ -45,25 +44,6 @@ fn ledger_repo(name: &str, ledger: Option<&str>) -> PathBuf {
 
 fn check(dir: &Path) -> Output {
     run(dir, &["check"])
-}
-
-/// Run `batten` with `stdin` piped in — `defects add` reads its records there.
-fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
-    let mut child = batten()
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn batten");
-    child
-        .stdin
-        .take()
-        .expect("stdin is piped")
-        .write_all(input.as_bytes())
-        .expect("write stdin");
-    child.wait_with_output().expect("wait for batten")
 }
 
 fn ledger_text(dir: &Path) -> String {

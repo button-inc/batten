@@ -37,6 +37,17 @@
         }
       ]
     },
+    "design": {
+      "description": "The design-evidence audit's one bound (CLOUD-53): how large a single\ncapture may be. Absent means the engine default — the corpus arrives on\nstdin and the predicates are the engine's, so a repository that declares\nnothing still gets the full gate. The type and the gates are\n[`crate::design`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Design"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "epoch": {
       "description": "Which files make up the governing config surface the `config_epoch`\nhashes (CLOUD-32). Absent means the default: this file alone.",
       "anyOf": [
@@ -271,6 +282,22 @@
         "path",
         "classes"
       ]
+    },
+    "Design": {
+      "description": "The `[design]` table: the one config key this gate reads.\n\nDeliberately a single key. The corpus is stdin's, the predicates are the\nengine's, and the only thing a repository gets to say is how large a single\ncapture may be before it is worth a second look.",
+      "type": "object",
+      "properties": {
+        "max_capture_bytes": {
+          "description": "The per-capture byte ceiling. Absent means [`DEFAULT_MAX_CAPTURE_BYTES`].",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "Direction": {
       "description": "Which way a ratcheted count may move.\n\nNamed for the *permitted* direction rather than the banned one, so a config\nrow reads as the promise it makes: `non_decreasing` says this count will not\nfall.",

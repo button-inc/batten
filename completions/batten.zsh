@@ -1135,6 +1135,96 @@ esac
     ;;
 esac
 ;;
+(design)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__design_commands" \
+"*::: :->design" \
+&& ret=0
+
+    case $state in
+    (design)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-design-command-$line[1]:"
+        case $line[1] in
+            (audit)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__design__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-design-help-command-$line[1]:"
+        case $line[1] in
+            (audit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (state)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -1536,6 +1626,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(design)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__design_commands" \
+"*::: :->design" \
+&& ret=0
+
+    case $state in
+    (design)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-design-command-$line[1]:"
+        case $line[1] in
+            (audit)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (state)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__state_commands" \
@@ -1598,6 +1708,7 @@ _batten_commands() {
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
 'defects:The append-only defect ledger\: the lessons this repository has already paid for' \
+'design:Design-evidence claims\: the integrity of the record behind a decision' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1706,6 +1817,37 @@ _batten__subcmd__defects__subcmd__query_commands() {
     local commands; commands=()
     _describe -t commands 'batten defects query commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__design_commands] )) ||
+_batten__subcmd__design_commands() {
+    local commands; commands=(
+'audit:Audit a JSONL design-evidence claim stream on stdin for record integrity' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten design commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__design__subcmd__audit_commands] )) ||
+_batten__subcmd__design__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten design audit commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__design__subcmd__help_commands] )) ||
+_batten__subcmd__design__subcmd__help_commands() {
+    local commands; commands=(
+'audit:Audit a JSONL design-evidence claim stream on stdin for record integrity' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten design help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__design__subcmd__help__subcmd__audit_commands] )) ||
+_batten__subcmd__design__subcmd__help__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten design help audit commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__design__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__design__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten design help help commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__doctor_commands] )) ||
 _batten__subcmd__doctor_commands() {
     local commands; commands=()
@@ -1781,6 +1923,7 @@ _batten__subcmd__help_commands() {
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
 'defects:The append-only defect ledger\: the lessons this repository has already paid for' \
+'design:Design-evidence claims\: the integrity of the record behind a decision' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1832,6 +1975,18 @@ _batten__subcmd__help__subcmd__defects__subcmd__add_commands() {
 _batten__subcmd__help__subcmd__defects__subcmd__query_commands() {
     local commands; commands=()
     _describe -t commands 'batten help defects query commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__design_commands] )) ||
+_batten__subcmd__help__subcmd__design_commands() {
+    local commands; commands=(
+'audit:Audit a JSONL design-evidence claim stream on stdin for record integrity' \
+    )
+    _describe -t commands 'batten help design commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__design__subcmd__audit_commands] )) ||
+_batten__subcmd__help__subcmd__design__subcmd__audit_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help design audit commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__doctor_commands] )) ||
 _batten__subcmd__help__subcmd__doctor_commands() {

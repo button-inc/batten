@@ -318,3 +318,26 @@ sha256 = "5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5"
 # The artifact IS the binary — no archive to open.
 unpack = "none"
 binary = "jq"
+
+# --- design-evidence audit ---------------------------------------------------
+#
+# `batten design audit` reads a JSONL stream of typed claim records on stdin and
+# nothing else — no path key here, because stdin subsumes one: a corpus that is a
+# file in your repository reaches the gate as `batten design audit < corpus.jsonl`,
+# with no config and no credential. That keeps the gate offline, byte-stable, and
+# testable with no live data.
+#
+# The gates are exact comparisons over the record's typed fields, never a reading
+# of claim prose: a duplicate id, a claim recorded `verified` whose `polarity` is
+# `absence` (no capture can attest that nothing does X), bytes that do not hash to
+# the recorded digest, a status past `claimed` with no verifier named, and a
+# declared `byte_count` that disagrees with the bytes carried. Four more are
+# advisories: no claimant recorded, a verifier who is the claimant, a `verified`
+# claim whose digest binding cannot be decided, and a capture over the ceiling
+# below. Advisories promote to violations under `--strictness strict`.
+#
+# The one key is that ceiling, in bytes, per capture. Absent means 16384. Lower it
+# to make the gate stricter; a local file may lower it further and may not raise
+# it, since for a budget "may not weaken" means "may not raise".
+[design]
+max_capture_bytes = 16384

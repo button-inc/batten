@@ -72,6 +72,9 @@ max_lines = 200
 [judge]
 raw = ["span_text"]
 
+[design]
+max_capture_bytes = 8192
+
 "#;
 
 fn show(dir: &Path, extra: &[&str]) -> Output {
@@ -151,6 +154,7 @@ fn a_config_that_sets_every_key_surfaces_every_key() {
         "budget",
         "must_land_on",
         "judge",
+        "design",
     ] {
         let entry = document
             .get(key)

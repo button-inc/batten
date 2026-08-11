@@ -585,6 +585,39 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   `lint.rs`'s `judge-over-protected-unstated`: a silent safe default is
   indistinguishable from a decision nobody made, and the next diff widening `raw`
   inherits the omission unseen.
+- `design.rs` — design-evidence integrity gates (CLOUD-53): is the RECORD behind a
+  decision sound, whatever the decision was? Input is a JSONL claim stream on
+  **stdin and nothing else** (CLOUD-324) — stdin SUBSUMES a config path (a corpus
+  that is a file reaches the gate as `< corpus.jsonl`, no key and no credential),
+  so there is no second source and therefore no precedence question, and the
+  module stays a pure function of a string. Nine gates, each an exact comparison
+  over typed fields; the load-bearing consequence of rule 3 is that "the claim
+  asserts an absence" is computable ONLY as a declared `polarity` field —
+  classifying claim text would be a judge, and judges cannot block (§0.3). Five
+  violations (duplicate id, `verified ∧ absence`, digest mismatch, a status past
+  `claimed` with no verifier, declared `byte_count` vs the bytes carried) and four
+  advisories (no claimant, verifier == claimant, binding not computable, capture
+  over the ceiling). `claimant`/`verifier` are OPTIONAL on purpose: their absence
+  is what two gates decide over, and a required field would turn each of those
+  findings into a parse error that refuses the whole corpus. `byte_count` is
+  DECLARED rather than derived, which is what keeps the budget checkable for a
+  record carrying no bytes — and makes the declaration itself falsifiable. A
+  malformed row is exit **1**, not 2, and unlike `defects.rs` it is not a finding:
+  the corpus IS the input, so a row that does not parse leaves the audit with no
+  object. `blocks` is the FIRST consumer of `config::Strictness` and reads all
+  three ranks rather than special-casing `strict`; promotion runs through
+  `rules::any_blocking`, so `--fail-on-warning` and `strict` share one definition
+  of what advisory costs and no bespoke flag exists. `Permissive` is unreachable
+  from an override (resolve clamps raise-only). Findings are ordinary `Finding`s
+  (`Scope`, keyed on gate id + CLAIM id, never the line — a corpus is regenerated
+  wholesale, so a position-keyed identity would re-mint on every unrelated edit).
+  Digest binding reuses `receipt::hex_sha256`, made public rather than respelled:
+  the plain in-toto `sha256` an external attestation tool wrote, deliberately not
+  `identity.rs`'s domain-tagged construction. The one config key is
+  `[design].max_capture_bytes` (default 16 KiB, tighten-only — `judge.rs`'s shape,
+  where §8's "may not weaken" reads as "may not RAISE"). Clean prints NOTHING on
+  the plain channel while `-J` answers unconditionally: the two channels disagree
+  on purpose. `design attest` (write) is not built.
 - `transcript.rs` — completed-session transcripts as an optional `check` input
   (CLOUD-95): a serde parse from a host-provided path to a typed event stream
   (turn boundary, tool call + args, tool result, hook decision). Every event comes

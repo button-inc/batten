@@ -292,6 +292,12 @@ mod tests {
                 "config lint".to_owned(),
                 "config show".to_owned(),
                 "defects query".to_owned(),
+                // A pure function of stdin: it opens no file, spawns nothing,
+                // and reaches no configured command, so it is the narrowest
+                // possible `read` (CLOUD-53). The `design` noun is absent for
+                // `receipt`'s reason — `design attest` is the declared next verb
+                // under it.
+                "design audit".to_owned(),
                 "doctor".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
@@ -401,6 +407,8 @@ mod tests {
                 "defects".to_owned(),
                 "defects add".to_owned(),
                 "defects query".to_owned(),
+                "design".to_owned(),
+                "design audit".to_owned(),
                 "doctor".to_owned(),
                 "enforce".to_owned(),
                 "exec".to_owned(),

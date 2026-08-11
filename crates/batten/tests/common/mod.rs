@@ -97,6 +97,34 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
         .expect("run batten")
 }
 
+/// Run `batten` with `args` in `dir`, feeding `input` on stdin.
+///
+/// Here rather than per-suite for this module's founding reason: `defects add`
+/// and `design audit` both read a JSONL stream on stdin, and two copies of a
+/// spawn-and-pipe helper are two places the environment scrubbing can drift out
+/// of agreement with [`batten`].
+#[must_use]
+pub(crate) fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    let mut child = batten()
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn batten");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(input.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("wait for batten")
+}
+
 /// `output.stdout` as a `String`.
 #[must_use]
 pub(crate) fn stdout(output: &Output) -> String {
