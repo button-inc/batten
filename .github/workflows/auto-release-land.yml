@@ -15,6 +15,24 @@ name: auto-release-land
 # `release-plz-*` branches, so ordinary PRs still land on an explicit human
 # `/fast-forward`.
 #
+# AND IT NO LONGER LANDS ON SIGHT (CLOUD-319). Green was the only condition, so
+# every crate-touching commit shipped its own tag — 57 of them, most one or two
+# commits apart, each paying a `fast-forward` run, a `release-plz` run and a
+# seven-leg `release-artifacts` matrix. `mise run release-due` is the debounce:
+# land once `main` has been quiet for 30 minutes, or once the last release is 24h
+# old, whichever comes first. Holding is not a failure — the release PR stays open
+# and release-plz keeps accumulating into it, so a hold costs nothing and the
+# eventual tag covers the whole batch. Its header carries the reasoning.
+#
+# QUIET IS THE ABSENCE OF EVENTS, so something has to ask: the `schedule` trigger
+# below is that asker, and the only reason this workflow has a clock at all. It is
+# deliberately coarse — one tick per half hour, a job that shallow-checks-out,
+# reads two endpoints and stops — because the lag it buys (a release goes out
+# 30–60 minutes after `main` settles) is worth less than the runner minutes a
+# tighter poll would spend. The `workflow_run` path is the free ride: it fires on
+# an event already paid for, and lands immediately whenever the max-wait has
+# already elapsed.
+#
 # Token split: check status is read with the Actions GITHUB_TOKEN (which carries
 # checks:read — a fine-grained PAT does not), but the `/fast-forward` comment is
 # posted with RELEASE_PLZ_TOKEN, a real identity (repo owner) that both satisfies
@@ -24,44 +42,93 @@ name: auto-release-land
 on:
   # zizmor flags workflow_run as dangerous because it runs privileged and is
   # usually paired with checking out and executing PR-controlled content. This
-  # workflow does neither: it never checks out the repo or runs any PR content —
-  # it only reads check status and posts a fixed `/fast-forward` string to a
-  # release-plz-owned branch. head_sha/head_branch are used only in API queries
-  # and a startsWith filter, never interpolated into a run script, so the
-  # injection/exfiltration this audit guards against cannot occur here.
-  workflow_run:  # zizmor: ignore[dangerous-triggers]
+  # workflow checks out the repo at a fixed ref — `main`, never the PR head — to
+  # get the `release-due` task, and runs no PR content. head_sha/head_branch are
+  # used only in API queries and a startsWith filter, never interpolated into a
+  # run script, so the injection/exfiltration this audit guards against cannot
+  # occur here.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI, commit-lint]
     types: [completed]
+  # The debounce's trailing edge. Nothing fires when `main` goes quiet, so this
+  # asks. Half-hourly: the quiet window is 30 minutes, and a tighter cron would
+  # only shorten the tail of an already-batched release for a linear increase in
+  # billed minutes.
+  schedule:
+    - cron: "*/30 * * * *"
 
 permissions:
   contents: read
   checks: read
   pull-requests: write
 
+# One constant group, not the per-SHA key this used to carry. With two triggers a
+# cron tick and a `workflow_run` tick can now reach the same release PR at the
+# same moment, and a per-SHA group would let both post `/fast-forward`. Still
+# `cancel-in-progress: false`: a tick that is already deciding should finish.
 concurrency:
-  group: auto-release-land-${{ github.event.workflow_run.head_sha }}
+  group: auto-release-land
   cancel-in-progress: false
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). A runner
+  # should install locked, and its checkout is disposable, so a write here
+  # costs nothing; the clone being protected is a developer's.
+  MISE_LOCKFILE: "true"
 
 jobs:
   fast-forward-release-pr:
     if: >-
-      github.event.workflow_run.event == 'pull_request' &&
+      github.event_name == 'schedule' ||
+      (github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.head_branch, 'release-plz-')
+      startsWith(github.event.workflow_run.head_branch, 'release-plz-'))
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     env:
       REPO: ${{ github.repository }}
-      SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
+      # One resolution step for both triggers, so everything after it is written
+      # once. `workflow_run` arrives holding the SHA and looks up its PR; the cron
+      # arrives holding nothing and finds the open `release-plz-*` PR, which is
+      # the same object approached from the other end. A cron tick with no release
+      # PR open — the ordinary case between releases — stops here, before the
+      # checkout, so an idle tick is a few seconds of runner and nothing else.
+      - name: Resolve the release PR and the SHA to judge
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "schedule" ]; then
+            pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" \
+              --jq '[.[] | select(.head.ref | startswith("release-plz-"))] | .[0] // {}')
+            num=$(jq -r '.number // empty' <<<"$pr")
+            sha=$(jq -r '.head.sha // empty' <<<"$pr")
+            [ -n "$num" ] || echo "no open release-plz PR; nothing to land"
+          else
+            sha="$RUN_SHA"
+            num=$(gh api "repos/$REPO/commits/$sha/pulls" \
+              --jq 'map(select(.state == "open")) | .[0].number // empty')
+            [ -n "$num" ] || echo "no open PR for $sha; skipping"
+          fi
+          echo "num=$num" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
       # This fires per gating workflow; require that *every* non-skipped check-run
       # on the SHA is completed and successful before landing, so the first
       # workflow to finish can't land while another is still running or has failed.
+      # The cron path needs the same answer for a different reason: it can arrive
+      # mid-refresh, while release-plz's latest push is still being checked.
       # Read with GITHUB_TOKEN — it carries checks:read; the release PAT does not.
       - name: Confirm every check on the head SHA is green
+        if: steps.target.outputs.num != ''
         id: checks
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
         run: |
           set -euo pipefail
           outstanding=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
@@ -75,23 +142,42 @@ jobs:
           else
             echo "green=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Find the open release PR for this SHA
+      # `main`, not the PR head — the default ref for both of this workflow's
+      # triggers. The debounce must be the one committed to trunk, never a copy a
+      # release branch could carry, and no credential outlives the step.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.checks.outputs.green == 'true'
-        id: pr
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        if: steps.checks.outputs.green == 'true'
+      # THE DEBOUNCE. Exit 1 is a hold, which is the ordinary outcome and must not
+      # fail the run — only exit 2, "could not look", is allowed to. Dispatched
+      # through mise so CI runs the exact task an agent runs locally, per the
+      # workflow contract; the reasoning lives in the task's header, not here.
+      - name: Is the release due, or is it still being debounced?
+        if: steps.checks.outputs.green == 'true'
+        id: debounce
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
-            --jq 'map(select(.state == "open")) | .[0].number // empty')
-          [ -n "$num" ] || echo "no open PR for $SHA; skipping"
-          echo "num=$num" >> "$GITHUB_OUTPUT"
+          # `set +e` on purpose: the default shell is `bash -e`, under which a
+          # hold would abort the step before its exit code could be read as a
+          # verdict at all.
+          set +e
+          mise run release-due
+          verdict=$?
+          case "$verdict" in
+            0) echo "due=true" >> "$GITHUB_OUTPUT" ;;
+            1) echo "due=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$verdict" ;;
+          esac
       # Post with the release PAT (repo owner): fast-forward.yml only acts on a
       # comment from OWNER/MEMBER/COLLABORATOR, and a GITHUB_TOKEN comment would
       # not trigger that workflow at all.
       - name: Comment /fast-forward to land the release PR
-        if: steps.checks.outputs.green == 'true' && steps.pr.outputs.num != ''
+        if: steps.debounce.outputs.due == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_NUM: ${{ steps.pr.outputs.num }}
+          PR_NUM: ${{ steps.target.outputs.num }}
         run: gh pr comment "$PR_NUM" --repo "$REPO" --body '/fast-forward'

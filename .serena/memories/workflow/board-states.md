@@ -196,3 +196,15 @@ released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
   all reached a tag only by being swept into `v0.0.37`. Since the whole
   `mise-tasks/` layer sits outside the crate, this is the ordinary case for gate
   work, not an edge one.
+
+  **And a crate-touching commit no longer tags promptly either (CLOUD-319).**
+  The release PR used to land the instant its CI went green, so every such commit
+  shipped its own tag within minutes. `auto-release-land` now gates that automated
+  `/fast-forward` on `mise run release-due`: the PR lands once `main` has been
+  quiet for 30 minutes (`RELEASE_QUIET_MINUTES`) or the last release is 24h old
+  (`RELEASE_MAX_WAIT_HOURS`), whichever comes first, and a half-hourly cron is
+  what asks. So **In Review is the truthful column for longer**, by design — a
+  batch is accumulating in the open release PR, and one tag sweeps all of it.
+  Nothing about the sweep changes; what changes is that "landed, not yet tagged"
+  is the ordinary state for up to a day rather than a few minutes. A maintainer
+  commenting `/fast-forward` on the release PR still lands it immediately.
