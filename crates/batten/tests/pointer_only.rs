@@ -72,33 +72,66 @@ fn canary(tag: &str) -> String {
     format!("{HEAD}{tag}{TAIL}")
 }
 
+/// One seeded canary: its tag, and where in the corpus those bytes come from.
+///
+/// The provenance is a **field** rather than a comment beside the tag, because a
+/// failure message is the only place anyone reads it — the assertion that fires
+/// has to be able to say *what kind of byte* leaked, and a comment cannot travel
+/// into a panic. It also cannot be relocated by a formatter onto the wrong entry,
+/// which a trailing comment on a short array element demonstrably can.
+struct Canary {
+    tag: &'static str,
+    source: &'static str,
+}
+
 /// Bytes a check read as its **subject**. No verb may emit one of these.
-const CONTENT: &[&str] = &[
-    // The rest of the line a `forbid` rule matched, and the line a declared
-    // suppression marker sits on — the same line, because a leak of either is
-    // the same emitter printing the same bytes.
-    "matched",
-    // The body of a file counted against a declared budget.
-    "counted",
-    // Free text inside a completed-session transcript.
-    "spoken",
-    // A wrapped or configured child's own stdout and stderr.
-    "childout",
-    "childerr",
-    // The operand of a mediated tool call, read from a `hook` payload.
-    "mediated",
+const CONTENT: &[Canary] = &[
+    Canary {
+        tag: "matched",
+        // Also the line a declared suppression marker sits on: one line, because
+        // a leak of either is the same emitter printing the same bytes.
+        source: "the line a `forbid` rule matched",
+    },
+    Canary {
+        tag: "counted",
+        source: "the body of a file counted against a declared budget",
+    },
+    Canary {
+        tag: "spoken",
+        source: "free text inside a completed-session transcript",
+    },
+    Canary {
+        tag: "childout",
+        source: "a wrapped or configured child's own stdout",
+    },
+    Canary {
+        tag: "childerr",
+        source: "a wrapped or configured child's own stderr",
+    },
+    Canary {
+        tag: "mediated",
+        source: "the operand of a mediated tool call, read from a `hook` payload",
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
-const DECLARATION: &[&str] = &[
-    // A `[[rule]]` pattern.
-    "rulepat",
-    // A second `[[rule]]` pattern, doubling as a `[[marker]]` token.
-    "markertok",
-    // A `[[waiver]]` reason.
-    "waived",
-    // A ledger row's `evidence` pointer.
-    "logged",
+const DECLARATION: &[Canary] = &[
+    Canary {
+        tag: "rulepat",
+        source: "a `[[rule]]` pattern",
+    },
+    Canary {
+        tag: "markertok",
+        source: "a second `[[rule]]` pattern, doubling as a `[[marker]]` token",
+    },
+    Canary {
+        tag: "waived",
+        source: "a `[[waiver]]` reason",
+    },
+    Canary {
+        tag: "logged",
+        source: "a ledger row's `evidence` pointer",
+    },
 ];
 
 // -- The corpus --------------------------------------------------------------
@@ -599,8 +632,8 @@ fn a_canary_is_searchable_as_written() {
     // survives JSON escaping unchanged. Pinned rather than assumed: a future tag
     // carrying punctuation would silently weaken every assertion in this file to
     // "the escaped form did not appear".
-    for tag in CONTENT.iter().chain(DECLARATION) {
-        let token = canary(tag);
+    for seeded in CONTENT.iter().chain(DECLARATION) {
+        let token = canary(seeded.tag);
         assert!(
             token.chars().all(char::is_alphanumeric),
             "canary {token} must be alphanumeric, or serde would re-spell it in `-J` and the \
@@ -657,7 +690,10 @@ fn no_verb_emits_content_it_merely_read() {
     // emitters, and `output.rs` gives the ladder no reach over the first.
     for verb in CENSUS {
         let spawning = verb.path == "enforce";
-        let corpus = Corpus::build(&format!("pointer-only-{}", verb.path.replace(' ', "-")), spawning);
+        let corpus = Corpus::build(
+            &format!("pointer-only-{}", verb.path.replace(' ', "-")),
+            spawning,
+        );
 
         let mut argvs: Vec<Vec<&str>> = Vec::new();
         let base: Vec<&str> = verb
@@ -684,23 +720,24 @@ fn no_verb_emits_content_it_merely_read() {
 
             match verb.disposition {
                 Disposition::PointerOnly => {
-                    for tag in CONTENT.iter().chain(DECLARATION) {
+                    for seeded in CONTENT.iter().chain(DECLARATION) {
                         assert!(
-                            !contains(&emitted, &canary(tag)),
-                            "{argv:?} emitted the `{tag}` canary. Output is a pointer, never the \
-                             payload (non-negotiable rule 4, house-style §6): report a count, a \
-                             `path:line`, or a boolean."
+                            !contains(&emitted, &canary(seeded.tag)),
+                            "{argv:?} emitted {}. Output is a pointer, never the payload \
+                             (non-negotiable rule 4, house-style §6): report a count, a \
+                             `path:line`, or a boolean.",
+                            seeded.source,
                         );
                     }
                 }
                 Disposition::Echoes(reason) => {
-                    for tag in CONTENT {
+                    for seeded in CONTENT {
                         assert!(
-                            !contains(&emitted, &canary(tag)),
+                            !contains(&emitted, &canary(seeded.tag)),
                             "{argv:?} is classified as echoing the caller's own declarations \
-                             ({reason}) — but it emitted the `{tag}` canary, which is content a \
-                             check READ. That is the half rule 4 is about, and no disposition \
-                             exempts it."
+                             ({reason}) — but it emitted {}, which is content a check READ. That \
+                             is the half rule 4 is about, and no disposition exempts it.",
+                            seeded.source,
                         );
                     }
                 }
@@ -708,12 +745,13 @@ fn no_verb_emits_content_it_merely_read() {
                     // Held to a count rather than to absence: the caller's own
                     // bytes are the point of the verb, so what would be a defect
                     // is Batten adding a copy of them to its own report.
-                    for tag in CONTENT {
+                    for seeded in CONTENT {
                         assert!(
-                            count(&emitted, &canary(tag)) <= 1,
-                            "{argv:?} relays its child's streams ({reason}), so the `{tag}` \
-                             canary may appear exactly as often as the child wrote it — once. A \
-                             second copy is Batten's own report carrying the payload."
+                            count(&emitted, &canary(seeded.tag)) <= 1,
+                            "{argv:?} relays its child's streams ({reason}), so {} may appear \
+                             exactly as often as the child wrote it — once. A second copy is \
+                             Batten's own report carrying the payload.",
+                            seeded.source,
                         );
                     }
                 }
