@@ -10,7 +10,9 @@ project's direction lives on its issue board.
   consumer's own `batten.toml`.
 - **Rules ship with their mechanism.** A new rule without a gate (a runnable
   check with an exit code) is only half a change.
-- **Gates are computable predicates, not model judgements.**
+- **Gates decide, they do not estimate.** A predicate that only approximates its
+  own question — a model judgement, or a match over open-ended content — may
+  advise; it never blocks.
 - Machine-readable output must be **byte-stable** and pointer-only for sensitive
   checks — never emit the sensitive content itself.
 

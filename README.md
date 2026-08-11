@@ -40,7 +40,9 @@ first-class rules.
 - **Zero-config by default** _(planned — CLOUD-70, CLOUD-66)_: `check` on
   built-in defaults, opt-in `init`, and a `doctor` with `--json`. Today `check`
   requires a `batten.toml` in the working directory.
-- **Gates are computable predicates, not model judgements.**
+- **Gates decide, they do not estimate.** A predicate that only approximates its
+  own question — a model judgement, or a match over open-ended content — may
+  advise; it never blocks.
 - **Consumer #1 is Batten itself** — its own checked-in `batten.toml` runs
   against its own repository.
 

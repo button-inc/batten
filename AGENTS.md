@@ -166,8 +166,8 @@ is the only state that survives a VM reclaim**, so commit before a long run.
 2. **Rules ship with their mechanism.** A new rule without a runnable gate (a
    check with an exit code) is half a change. Prose is feedforward only; a log
    without a gate is sensor only.
-3. **Gates are computable predicates.** A gate resolves to a command and an exit
-   code, never a model classification. _(Spec: house-style §0.3, §5.)_
+3. **Gates decide, never estimate.** A gate resolves to a command and an exit
+   code over an object it decides, never a model verdict. _(house-style §5.)_
 4. **Output is a pointer, never the payload.** Checks over sensitive content emit
    a count, `path:line`, or boolean — never the content itself. _(house-style §6.)_
 5. **Exit codes and output follow the one contract** — byte-stable output, the
