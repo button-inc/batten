@@ -84,10 +84,12 @@ const MARKER_FILE: &str = "batten-store";
 /// from repository facts — a value that could be recomputed from a path would be
 /// derived rather than minted, and would move when the path moved.
 ///
-/// CLOUD-164 says "UUID"; this is a 256-bit minted identifier rendered as hex
-/// instead. It is opaque, minted-once and path-independent — every property the
-/// issue asks of it — and it avoids a dependency added for 128 bits of opacity
-/// when [`identity`]'s framing already mints exactly this shape.
+/// 256 bits, rendered as hex, minted through [`identity`]'s framing rather than
+/// as an RFC-4122 UUID: no consumer parses a version nibble or reads the variant
+/// bits, so the layout would be a promise to future readers that nothing here
+/// keeps. A `uuid` dependency would buy 128 bits of opacity that framing already
+/// produces. CLOUD-164's scope says "an opaque identifier minted at first
+/// write" and deliberately does not specify the rendering (CLOUD-321).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StoreId(String);
