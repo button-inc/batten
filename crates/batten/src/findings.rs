@@ -66,6 +66,14 @@
 //! observing a finding an Nth time changes [`Instance::occurrences`] and must
 //! never change [`FindingRecord::tier`] (CLOUD-80's no-escalation law, which is
 //! testable for the first time here because this is what counts duplicates).
+//!
+//! The law has a second half only a *stored* record can express: severity is not
+//! an identity input, so a **re-rated rule** routes its next scan to the same
+//! record — and [`record`] reuses that record rather than re-deriving from the
+//! rule now firing. Re-rating a rule therefore cannot re-tier the findings it
+//! already settled. Both halves are asserted over the bytes on disk, not over an
+//! in-memory struct, because a write path that re-derived the tier is invisible
+//! to a test that never writes.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -719,6 +727,41 @@ mod tests {
         }
     }
 
+    /// A scratch store directory, the same idiom [`crate::journal`]'s suite
+    /// uses: one convention for one need, rather than two suites inventing two.
+    fn store(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "batten-findings-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn finding_for(severity: RuleSeverity) -> Finding {
+        Finding {
+            rule: "r".to_owned(),
+            severity,
+            path: "src/a.rs".to_owned(),
+            line: Some(1),
+            identity: identity_for("r", "src/a.rs", "TODO"),
+        }
+    }
+
+    /// The `"tier"` line as it sits in the record file — the *stored* bytes,
+    /// which is the thing CLOUD-80 §7 asks to be byte-identical across
+    /// observations. A `PartialEq` over a deserialized enum cannot see a write
+    /// path that re-serialized the field differently.
+    fn stored_tier_bytes(dir: &Path, fingerprint: Fingerprint) -> String {
+        let text = std::fs::read_to_string(record_path(dir, fingerprint)).unwrap();
+        text.lines()
+            .find(|line| line.trim_start().starts_with("\"tier\""))
+            .expect("the record persists a tier")
+            .to_owned()
+    }
+
     fn record_of(instances: Vec<Instance>) -> FindingRecord {
         FindingRecord {
             schema: FINDINGS_SCHEMA,
@@ -1020,6 +1063,117 @@ mod tests {
             AdvisoryTier::Advisory,
             "the weakest tier: a legacy record carries no evidence for urgency"
         );
+    }
+
+    #[test]
+    fn an_nth_observation_never_re_tiers_the_stored_record() {
+        // CLOUD-80 §7, over the STORE rather than over a struct. The in-memory
+        // sibling above drives `upsert` directly, so it can never see the two
+        // ways a stored tier could actually move: a write path that re-derives
+        // it, and a later scan that re-rates the rule. Both need a real store
+        // dir, which is why this test exists alongside that one rather than
+        // instead of it.
+        //
+        // Total over the axis: every RuleSeverity, so every one of
+        // AdvisoryTier::ALL is exercised — not just the deny/warning rank a
+        // single-severity fixture would reach.
+        for &severity in RuleSeverity::ALL {
+            let dir = store(&format!("no-escalation-{}", severity.as_str()));
+            let context = Context::new("refs/heads/a");
+            let finding = finding_for(severity);
+            let fingerprint = finding.identity.fingerprint;
+            let expected = row_for_rule(severity).tier;
+            let mut first_bytes = None;
+
+            for n in 1..=5_u64 {
+                // The same identity n times in one scan: `record` folds them to
+                // one finding with a count, which is what makes n the
+                // occurrence count rather than n records.
+                let findings = vec![finding.clone(); usize::try_from(n).unwrap()];
+                record(
+                    &dir,
+                    &context,
+                    &"0".repeat(40),
+                    None,
+                    &findings,
+                    FINDINGS_SCHEMA,
+                )
+                .unwrap();
+
+                let stored = load_one(&dir, fingerprint).unwrap().unwrap();
+                assert_eq!(
+                    stored.tier,
+                    expected,
+                    "observation {n} re-tiered a finding minted at {}",
+                    severity.as_str()
+                );
+                // Byte-identical to the first observation, not merely equal:
+                // the stored bytes are the compatibility surface (§6).
+                let bytes = stored_tier_bytes(&dir, fingerprint);
+                match &first_bytes {
+                    None => first_bytes = Some(bytes),
+                    Some(first) => assert_eq!(&bytes, first, "the stored tier bytes moved"),
+                }
+                // …and the axis that IS supposed to move did, so this cannot
+                // pass by the store having recorded nothing at all.
+                assert_eq!(
+                    stored.instance(&context).unwrap().occurrences,
+                    Observation::Observed(n),
+                    "the count is the axis that moves"
+                );
+            }
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_re_rated_rule_never_re_tiers_a_settled_finding() {
+        // "Escalation on re-touch is absent" in its sharpest form. Severity is
+        // not an identity input, so re-rating a rule routes the next scan to
+        // the SAME record — and `record` reuses that record rather than
+        // re-deriving from the rule now firing. A refactor that "refreshed" it
+        // would silently re-tier every settled finding in the store, and until
+        // this test nothing failed when it did.
+        let dir = store("re-rated");
+        let context = Context::new("refs/heads/a");
+        let commit = "0".repeat(40);
+        let fingerprint = finding_for(RuleSeverity::Warn).identity.fingerprint;
+
+        record(
+            &dir,
+            &context,
+            &commit,
+            None,
+            &[finding_for(RuleSeverity::Warn)],
+            FINDINGS_SCHEMA,
+        )
+        .unwrap();
+        let minted = load_one(&dir, fingerprint).unwrap().unwrap();
+        assert_eq!(minted.tier, AdvisoryTier::Caution);
+
+        record(
+            &dir,
+            &context,
+            &commit,
+            None,
+            &[finding_for(RuleSeverity::Deny)],
+            FINDINGS_SCHEMA,
+        )
+        .unwrap();
+        let after = load_one(&dir, fingerprint).unwrap().unwrap();
+        assert_eq!(
+            after.tier,
+            AdvisoryTier::Caution,
+            "a re-rated rule must not re-tier a finding already in the store"
+        );
+        assert_eq!(
+            after.severity,
+            RuleSeverity::Warn,
+            "the recorded severity is the one the finding was minted under"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
