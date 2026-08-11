@@ -144,6 +144,21 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
     Fixture::new(name).config(contents).build()
 }
 
+/// Give a fixture that carries the *committed* `batten.toml` a git repository
+/// with `origin/main` resolving.
+///
+/// The committed config's `ratchet` rows (CLOUD-55) count against that ref, and
+/// an unresolvable base is exit 1 by design. Without this the fixture inherits
+/// whatever repository encloses the scratch directory — which is how these two
+/// tests passed locally, against the outer repo's `origin/main`, and failed on a
+/// CI runner that has no such ref. A fixture that reads the repository it is
+/// running inside is not a fixture.
+fn committed_config_fixture_git(dir: &std::path::Path) {
+    git_in(dir, &["init", "-q"]);
+    git_in(dir, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    git_in(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+}
+
 /// The exit-code contract (§7), asserted as one table over the compiled binary.
 ///
 /// The contract is CLI-wide, so each command's invocations are pinned together
@@ -3188,6 +3203,7 @@ fn the_committed_repo_config_gates_a_repository() {
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
 
     let dir = repo_with_config("config-committed", &contents);
+    committed_config_fixture_git(&dir);
     // The committed config declares `[budget.instructions]` over `AGENTS.md`,
     // and since CLOUD-50 wired budgets into `check` a dead glob there is exit 1
     // per entry (CLOUD-298's refusal, now reaching the main gate). A fixture
@@ -3256,6 +3272,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // Same reason as the sibling test above: the committed budget names
     // `AGENTS.md`, and `check` now refuses a budget entry that matches nothing.
     fs::write(dirty.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
+    committed_config_fixture_git(&dirty);
     let src = dirty.join("crates/demo/src");
     fs::create_dir_all(&src).expect("create fixture source tree");
     fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
@@ -3290,6 +3307,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     );
     let clean = repo_with_config("config-agnostic-clean", &contents);
     fs::write(clean.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
+    committed_config_fixture_git(&clean);
     let ordinary = clean.join("crates/demo/src");
     fs::create_dir_all(&ordinary).expect("create clean source tree");
     fs::write(ordinary.join("lib.rs"), "pub fn ok() {}\n").expect("write clean source");

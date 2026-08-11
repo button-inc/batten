@@ -62,6 +62,17 @@ jobs:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
           # has no bats to run.
           submodules: true
+      # The committed `ratchet` rows count against `origin/main` (CLOUD-55), and
+      # `actions/checkout` fetches only this PR's head — so that ref does not
+      # exist here. An unresolvable base is exit 1 by design, never a pass, which
+      # is the correct behaviour and precisely why the ref has to be supplied
+      # rather than the refusal softened.
+      #
+      # `--depth=1` because a ratchet reads one tree, not a history: this is the
+      # whole cost of the trunk comparison, and it is one commit rather than the
+      # full clone `fetch-depth: 0` would pull on every run.
+      - name: Fetch the ratchet base
+        run: git fetch --depth=1 origin main:refs/remotes/origin/main
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
         with:
           # Install only what this job's gates actually invoke, not the whole
