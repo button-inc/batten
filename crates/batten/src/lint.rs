@@ -304,6 +304,60 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
     smells(&text, &path.display().to_string(), base.as_ref(), today)
 }
 
+/// Compare the committed `[ci]` against a host ruleset payload (CLOUD-54).
+///
+/// The payload comes from the caller — a path, or `-` for stdin — because
+/// **agents fetch, gates decide**. Deriving it here would put a credentialed
+/// network call inside a gate, and a gate that can fail because a token expired
+/// is not a gate.
+///
+/// The committed `[ci]` is read through the **resolved** config, so
+/// `--config-from` applies: a branch cannot edit its own projection to agree
+/// with itself.
+///
+/// # Errors
+///
+/// Returns a [`crate::UsageError`] (→ exit `1`) when the payload cannot be read
+/// or is not a rules-API array, and when the config declares no `[ci]` at all —
+/// the caller asked for a comparison one side cannot participate in, and
+/// answering "no drift" there would be a pass over nothing.
+pub fn host_drift(
+    dir: &Path,
+    source: &str,
+    overrides: &crate::resolve::Overrides,
+) -> Result<Vec<Smell>> {
+    let payload = if source == "-" {
+        let mut buffer = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)?;
+        buffer
+    } else {
+        std::fs::read_to_string(source).map_err(|err| {
+            crate::UsageError::raise(format!("cannot read host rules from {source}: {err}"))
+        })?
+    };
+    let host = crate::ci::derive(&payload)?;
+
+    let resolved = crate::resolve::resolve(dir, overrides)?;
+    let Some(committed) = resolved.ci.as_ref() else {
+        return Err(crate::UsageError::raise(format!(
+            "--host-rules asked for a comparison, but {} declares no [ci] table",
+            config::CONFIG_FILE
+        )));
+    };
+
+    Ok(crate::ci::drift(committed, &host)
+        .into_iter()
+        .map(|drift| Smell {
+            // Located by key path rather than line: the drift is about a *value*
+            // the host disagrees with, and the key plus the differing tokens is
+            // what tells an author exactly what to write. `trust`'s weakenings
+            // use the same location shape for the same reason.
+            at: Where::Key(format!("{} {}", drift.key, drift.rendered())),
+            id: drift.id,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {

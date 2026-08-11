@@ -180,6 +180,7 @@ complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_su
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l no-color -d 'Never colour stderr, whatever it is attached to'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from epoch" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l host-rules -d 'Compare the committed [ci] table against a host ruleset payload (path, or - for stdin)' -r
 complete -c batten -n "__fish_batten_using_subcommand config; and __fish_seen_subcommand_from lint" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

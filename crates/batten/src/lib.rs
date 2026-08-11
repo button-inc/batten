@@ -10,6 +10,7 @@
 
 pub mod budget;
 pub mod capture;
+pub mod ci;
 pub mod cli;
 pub mod config;
 pub mod doctor;
@@ -970,14 +971,21 @@ fn run_config(
             }
             Ok(ExitCode::Success)
         }
-        ConfigCommand::Lint { json } => {
+        ConfigCommand::Lint { json, host_rules } => {
             // The date the expiry smell is computed against, read once at this
             // boundary and threaded in as data (`waiver`'s module docs say why).
-            let smells = lint::run(
+            let mut smells = lint::run(
                 Path::new("."),
                 overrides.config_from.as_deref(),
                 waiver::today()?,
             )?;
+            // The drift half (CLOUD-54), added only when the caller supplied a
+            // payload — so lint's behaviour without the flag is byte-identical
+            // to what it was.
+            if let Some(source) = host_rules {
+                smells.extend(lint::host_drift(Path::new("."), source, overrides)?);
+                smells.sort();
+            }
             if *json {
                 // Emitted unconditionally, including the clean run: JSON that is
                 // sometimes absent is unparseable. `at` is rendered through

@@ -412,6 +412,25 @@ const FAIL_ON_WARNING: FlagDecl = FlagDecl {
 /// Global because it selects *which* config the whole run resolves from —
 /// scoping it per verb would let one verb be judged by the base and another by
 /// the working tree in the same invocation.
+/// `--host-rules <path|->` on `config lint` (CLOUD-54).
+///
+/// Data in, verdict out. The payload is the host ruleset the caller already
+/// fetched, so the gate stays pure, credential-free and byte-stable — a gate that
+/// could fail because a token expired is not a gate.
+const HOST_RULES: FlagDecl = FlagDecl {
+    id: "host_rules",
+    long: Some("host-rules"),
+    short: None,
+    help: "Compare the committed [ci] table against a host ruleset payload (path, or - for stdin)",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 const CONFIG_FROM: FlagDecl = FlagDecl {
     id: "config_from",
     long: Some("config-from"),
@@ -673,8 +692,11 @@ pub const SURFACE: &[CommandDecl] = &[
         path: "config lint",
         about: "Report policy smells in batten.toml (any smell is a violation)",
         data_channel: true,
+        // Still `read` with `--host-rules`: the flag names a file or `-` the
+        // CALLER supplies. Agents fetch, gates decide — nothing here reaches the
+        // network, so the verb stays on the derived read-only allowlist.
         effect: Effect::Read,
-        flags: &[JSON],
+        flags: &[JSON, HOST_RULES],
     },
     CommandDecl {
         path: "spec",

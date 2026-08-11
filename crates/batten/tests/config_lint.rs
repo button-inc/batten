@@ -446,3 +446,227 @@ fn a_protected_set_with_no_judge_owes_no_answer_either() {
     let output = lint(&dir, &[]);
     assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
 }
+
+// --- the merge-contract drift gate (CLOUD-54) --------------------------------
+//
+// The host ruleset is the authority; `[ci]` is a projection a gate polices. The
+// payload arrives from the caller — agents fetch, gates decide — so every case
+// below is a pure comparison over bytes on disk or stdin, with no network.
+
+/// A config declaring `[ci]`, with `extra` appended inside the table.
+fn ci_config(extra: &str) -> String {
+    format!("version = 1\n\n[ci]\nrequired_checks = [\"final\"]\n{extra}")
+}
+
+/// One of the committed rules-API fixtures, by file stem.
+fn rules_fixture(stem: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ci")
+        .join(format!("{stem}.json"))
+}
+
+/// `config lint --host-rules <fixture>` in `dir`.
+fn lint_against(dir: &Path, stem: &str) -> Output {
+    lint(
+        dir,
+        &[
+            "--host-rules",
+            rules_fixture(stem).to_str().expect("fixture path is UTF-8"),
+        ],
+    )
+}
+
+#[test]
+fn a_projection_matching_the_host_is_silent_and_clean() {
+    let dir = repo_with_config("ci-agrees", &ci_config(""));
+    let output = lint_against(&dir, "rules-required-checks");
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("0 smell(s)"),
+        "agreement is the count stated at zero, never silence that could be a \
+         lint which did not run"
+    );
+}
+
+#[test]
+fn a_check_the_host_requires_and_the_config_lacks_is_drift() {
+    let dir = repo_with_config(
+        "ci-missing-check",
+        "version = 1\n\n[ci]\nrequired_checks = [\"other\"]\n",
+    );
+    let output = lint_against(&dir, "rules-required-checks");
+    assert_eq!(output.status.code(), Some(2), "drift is a policy verdict");
+    let text = stdout(&output);
+    assert!(
+        text.contains("ci-required-checks-drift"),
+        "the smell names itself: {text:?}"
+    );
+    assert!(
+        text.contains("ci.required_checks"),
+        "and the key to edit: {text:?}"
+    );
+    assert!(
+        text.contains("+final") && text.contains("-other"),
+        "signed by which side has each token — `+` host, `-` config: {text:?}"
+    );
+}
+
+#[test]
+fn a_check_the_config_claims_and_the_host_does_not_require_is_drift_too() {
+    // Not harmless: a stale name in the projection is exactly what a downstream
+    // reader would wait on forever.
+    let dir = repo_with_config(
+        "ci-stale-check",
+        "version = 1\n\n[ci]\nrequired_checks = [\"final\", \"ghost\"]\n",
+    );
+    let output = lint_against(&dir, "rules-required-checks");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout(&output).contains("-ghost"));
+}
+
+#[test]
+fn a_host_that_constrains_merge_methods_while_the_config_omits_them_is_drift() {
+    // The dangerous direction: the projection silently claims freedom the host
+    // does not grant.
+    let dir = repo_with_config("ci-omits-methods", &ci_config(""));
+    let output = lint_against(&dir, "rules-merge-methods");
+    assert_eq!(output.status.code(), Some(2));
+    let text = stdout(&output);
+    assert!(text.contains("ci-allowed-merge-methods-drift"), "{text:?}");
+    assert!(text.contains("+squash"), "{text:?}");
+}
+
+#[test]
+fn a_config_claiming_a_method_the_host_does_not_allow_is_drift() {
+    let dir = repo_with_config(
+        "ci-extra-method",
+        &ci_config("allowed_merge_methods = [\"merge\", \"squash\"]\n"),
+    );
+    let output = lint_against(&dir, "rules-merge-methods");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout(&output).contains("-merge"));
+}
+
+#[test]
+fn a_legacy_payload_is_clean_on_the_method_half_and_still_compares_checks() {
+    // No `pull_request` rule at all — the shape legacy branch protection
+    // produces. A config that omits the key agrees with it.
+    let dir = repo_with_config(
+        "ci-legacy",
+        "version = 1\n\n[ci]\nrequired_checks = [\"build\", \"test\"]\n",
+    );
+    assert_eq!(
+        lint_against(&dir, "rules-legacy").status.code(),
+        Some(0),
+        "omitting the key agrees with a host that constrains no method"
+    );
+
+    // The check half is still compared, so a legacy payload is not a free pass.
+    let wrong = repo_with_config(
+        "ci-legacy-wrong",
+        "version = 1\n\n[ci]\nrequired_checks = [\"build\"]\n",
+    );
+    let output = lint_against(&wrong, "rules-legacy");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout(&output).contains("+test"));
+}
+
+#[test]
+fn a_payload_that_is_not_a_rules_array_is_a_usage_error() {
+    let dir = repo_with_config("ci-bad-payload", &ci_config(""));
+    let path = dir.join("not-rules.json");
+    fs::write(&path, "{\"message\":\"Not Found\"}").expect("write payload");
+    let output = lint(&dir, &["--host-rules", path.to_str().unwrap()]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a gate handed the wrong document says so rather than deriving an empty \
+         contract from it"
+    );
+    assert!(stderr(&output).contains("rules-API array"));
+}
+
+#[test]
+fn asking_for_a_comparison_the_config_cannot_join_is_a_usage_error() {
+    // `--host-rules` with no committed `[ci]`: the caller asked for a comparison
+    // one side cannot participate in, and answering "no drift" would be a pass
+    // over nothing.
+    let dir = repo_with_config("ci-absent", "version = 1\n");
+    let output = lint_against(&dir, "rules-required-checks");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("[ci]"));
+}
+
+#[test]
+fn a_malformed_ci_table_is_refused_at_parse() {
+    for (name, table) in [
+        (
+            "ci-unknown-key",
+            "[ci]\nrequired_checks = [\"a\"]\nbogus = 1\n",
+        ),
+        ("ci-empty", "[ci]\nrequired_checks = []\n"),
+        ("ci-duplicate", "[ci]\nrequired_checks = [\"a\", \"a\"]\n"),
+        (
+            "ci-bad-method",
+            "[ci]\nrequired_checks = [\"a\"]\nallowed_merge_methods = [\"fast-forward\"]\n",
+        ),
+    ] {
+        let dir = repo_with_config(name, &format!("version = 1\n\n{table}"));
+        let output = lint(&dir, &[]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: a malformed table is refused, never ignored"
+        );
+    }
+}
+
+#[test]
+fn the_drift_report_is_byte_stable_and_reads_stdin() {
+    let dir = repo_with_config(
+        "ci-stable",
+        "version = 1\n\n[ci]\nrequired_checks = [\"other\"]\n",
+    );
+    let payload = fs::read_to_string(rules_fixture("rules-required-checks")).expect("fixture");
+
+    // `-` is stdin, which is how the CI task pipes a live fetch in.
+    let piped = |args: &[&str]| -> Output {
+        let mut command = batten();
+        command
+            .current_dir(&dir)
+            .args(["config", "lint", "--host-rules", "-"])
+            .args(args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("spawn batten");
+        std::io::Write::write_all(
+            &mut child.stdin.take().expect("piped stdin"),
+            payload.as_bytes(),
+        )
+        .expect("write payload");
+        child.wait_with_output().expect("run batten")
+    };
+
+    let first = piped(&["-J"]);
+    let second = piped(&["-J"]);
+    assert_eq!(first.status.code(), Some(2));
+    assert_eq!(
+        first.stdout, second.stdout,
+        "identical input must produce identical bytes"
+    );
+    assert!(
+        String::from_utf8_lossy(&first.stdout).contains("ci-required-checks-drift"),
+        "the machine channel carries the smell too"
+    );
+}
+
+#[test]
+fn lint_without_the_flag_is_unchanged() {
+    // The drift half is additive: a run that does not ask for it must behave
+    // exactly as it did before this landed.
+    let dir = repo_with_config("ci-no-flag", &ci_config(""));
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!stdout(&output).contains("ci-"), "no drift smell appears");
+}

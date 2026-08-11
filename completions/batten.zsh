@@ -223,6 +223,7 @@ trace\:"Add everything"))' \
 ;;
 (lint)
 _arguments "${_arguments_options[@]}" : \
+'--host-rules=[Compare the committed \[ci\] table against a host ruleset payload (path, or - for stdin)]: :_default' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \

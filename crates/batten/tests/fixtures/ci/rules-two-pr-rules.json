@@ -1,0 +1,16 @@
+[
+  {
+    "type": "required_status_checks",
+    "parameters": {
+      "required_status_checks": [{ "context": "final" }]
+    }
+  },
+  {
+    "type": "pull_request",
+    "parameters": { "allowed_merge_methods": ["squash", "rebase"] }
+  },
+  {
+    "type": "pull_request",
+    "parameters": { "allowed_merge_methods": ["squash", "merge"] }
+  }
+]

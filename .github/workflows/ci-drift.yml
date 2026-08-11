@@ -1,0 +1,49 @@
+name: ci-drift
+
+# "Does the committed [ci] table still match the host ruleset?" (CLOUD-54) — a
+# question about the *host*, not about any branch, so it runs on a clock rather
+# than on the landing path.
+#
+# The reasoning is `lock-currency.yml`'s, and it is the same mistake avoided
+# twice: putting a remote round trip on the landing path makes an outside change
+# fail whichever PR happens to be in flight, for a drift that PR did not cause
+# and cannot fix. Somebody editing the ruleset in the GitHub UI is exactly that
+# shape.
+#
+# The split stays the repo's standing one: agents fetch, gates decide. The
+# fetching lives in `mise run ci-drift`, where a credential is expected; the
+# comparison is `batten config lint --host-rules -`, a pure offline read over
+# stdin that any developer can run against a saved payload with no token at all.
+#
+# Failure here means the projection and the host disagree. The finding names the
+# key and the exact tokens, signed by which side has each: `+` is the host's,
+# `-` is the config's.
+
+on:
+  schedule:
+    # Mondays, 06:15 UTC — a quarter hour after lock-currency, so two scheduled
+    # gates do not contend for the same runner minute.
+    - cron: "15 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  MISE_LOCKFILE: "true"
+
+jobs:
+  ci-drift:
+    name: ci-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-11
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - run: mise run ci-drift
+        env:
+          # The rules API is a repository read; the job token carries it.
+          GH_TOKEN: ${{ github.token }}

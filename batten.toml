@@ -22,7 +22,13 @@ version = 1
 # is what actually forces that — an older build fails on the unknown key — and
 # this floor states the intent so the refusal names the version rather than the
 # key.
-min_batten_version = "0.0.54"
+#
+# Raised again for `[ci]` (CLOUD-54), to the version that introduces it. Not the
+# version that will *release* it: release-plz bumps on landing, so naming the
+# next tag would make this file refuse the very build that has to lint it. The
+# floor is documentation-grade either way — `deny_unknown_fields` is what
+# actually refuses an older binary.
+min_batten_version = "0.0.59"
 
 # The ref work must land on (CLOUD-51) — the target `batten worktree status`
 # judges uncommitted, unpushed, and unlanded work against.
@@ -342,6 +348,29 @@ redirect = "write through the surface that owns the file"
 files = ["AGENTS.md"]
 max_tokens = 3500
 max_lines = 199
+
+# The merge contract, DERIVED from this repository's GitHub ruleset (CLOUD-54).
+#
+# The host is the authority; this is a projection a gate polices. `mise run
+# ci-drift` pipes `gh api repos/{owner}/{repo}/rules/branches/main` into
+# `batten config lint --host-rules -`, so an edit on either side that the other
+# does not follow fails the build rather than drifting quietly.
+#
+# `required_checks` is `final` alone: the ruleset requires that one check-run,
+# and `final` is the aggregating job every other CI job reports through. There
+# is no `allowed_merge_methods` key because the ruleset carries no
+# `pull_request` rule — the host constrains no merge method, which is a
+# different claim from constraining none of them, and writing an empty list here
+# would assert the second.
+#
+# Landing is by `/fast-forward` regardless (see AGENTS.md): the merge button is
+# blocked so `main` only ever advances to a SHA that already passed CI. That is
+# repository discipline, not a host constraint, and it is deliberately not
+# encoded here — this table records what the HOST enforces, and recording a
+# convention as a host rule would be the second authority the whole issue exists
+# to prevent.
+[ci]
+required_checks = ["final"]
 
 [epoch]
 tracked = [

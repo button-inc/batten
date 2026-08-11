@@ -204,6 +204,9 @@ pub enum ConfigCommand {
     Lint {
         /// Emit the smells as byte-stable JSON instead of pointer lines.
         json: bool,
+        /// Where to read the host ruleset payload from, when the caller asked
+        /// for the drift comparison. `-` is stdin.
+        host_rules: Option<String>,
     },
     /// Print the content hash of the governing config surface.
     Epoch {
@@ -282,6 +285,9 @@ fn config_of(matches: &ArgMatches) -> Option<ConfigCommand> {
         }),
         ("lint", matches) => Some(ConfigCommand::Lint {
             json: flag(matches, "json"),
+            host_rules: matches
+                .get_one::<String>("host_rules")
+                .map(ToOwned::to_owned),
         }),
         ("epoch", matches) => Some(ConfigCommand::Epoch {
             json: flag(matches, "json"),

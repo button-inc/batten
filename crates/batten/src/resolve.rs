@@ -222,6 +222,12 @@ pub struct Resolved {
     /// trusted with — `trust.rs` compares the committed bytes instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge: Option<crate::judge::Judge>,
+    /// The derived merge contract (CLOUD-54), as the authority states it. Not
+    /// layered: a local file cannot change what the host requires, and a copy
+    /// that disagreed with the committed one would be a third answer to a
+    /// question that already has one authority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ci: Option<crate::ci::Ci>,
     /// The provisioning manifest (CLOUD-90), as the authority states it.
     #[serde(rename = "provision", skip_serializing_if = "Vec::is_empty")]
     pub provisions: Vec<crate::provision::Provision>,
@@ -685,6 +691,7 @@ fn assemble(
         must_land_on: repo.must_land_on.clone(),
         transcript: repo.transcript.clone(),
         judge: repo.judge.clone(),
+        ci: repo.ci.clone(),
         provisions: repo.provisions.clone(),
         sources: attribution(
             repo,
@@ -739,6 +746,7 @@ fn attribution(
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
         ("transcript", authority_set(repo.transcript.is_some())),
         ("judge", authority_set(repo.judge.is_some())),
+        ("ci", authority_set(repo.ci.is_some())),
         ("provision", authority_set(!repo.provisions.is_empty())),
     ])
 }

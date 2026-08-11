@@ -458,12 +458,16 @@ _batten() {
             return 0
             ;;
         batten__subcmd__config__subcmd__lint)
-            opts="-J -q -v -h --json --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --help"
+            opts="-J -q -v -h --json --host-rules --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --host-rules)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
                     return 0

@@ -198,6 +198,13 @@ pub struct Config {
     /// already crossed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<crate::judge::Judge>,
+    /// The merge contract this repository commits to (CLOUD-54), **derived**
+    /// from the host ruleset. Absent means the contract is not projected here;
+    /// present, it is what `config lint --host-rules` compares against. The host
+    /// is always the authority — this is a copy a gate polices, never a second
+    /// place the fact is decided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci: Option<crate::ci::Ci>,
     /// Pinned tools this repository provisions (CLOUD-90): version, URL,
     /// checksum, unpack behaviour, binary name. Consumer-specific by nature —
     /// which tools a repository needs is that repository's business, never
@@ -312,6 +319,11 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // the same one: a table that parses and gates nothing. A `[budget]` header
     // with no `[budget.instructions]` under it is refused here (CLOUD-50).
     crate::budget::validate(config.budget.as_ref())?;
+    // Validated at parse, like `[[verb]]` and `[[marker]]`: CLOUD-242's lesson
+    // is that a table nothing validates is coverage that means nothing.
+    if let Some(ci) = &config.ci {
+        ci.validate()?;
+    }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
@@ -420,6 +432,7 @@ impl Config {
             budget: None,
             must_land_on: None,
             judge: None,
+            ci: None,
             provisions: Vec::new(),
             // Declaring no transcript is the ordinary case, and it is not the
             // same as pointing at one that is missing: the first says the

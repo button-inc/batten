@@ -86,6 +86,27 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   whole-set reading let one dead glob contribute nothing while the rest counted
   and still reported green (CLOUD-298). A config declaring no budget is exit 1
   too — a budget verb that measured nothing must not report `0`.
+- `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54). The HOST
+  is the authority; `[ci]` in `batten.toml` is a projection a gate polices, never
+  the reverse. Committed rather than fetched per run because a gate that can fail
+  when a token expires is not a gate — so `derive` is a pure function of a payload
+  the CALLER supplies (`config lint --host-rules <path|->`), keeping the gate
+  offline, credential-free and byte-stable. Required checks are the UNION over
+  `required_status_checks` rules (each adds an obligation); merge methods are the
+  INTERSECTION over `pull_request` rules that carry the key (each NARROWS what may
+  be used — union would widen the contract past what one rule allows, the
+  dangerous direction). No such rule = `None`, "the host constrains none", which
+  is a different claim from an empty set and only agrees with `None`. Unknown rule
+  types are ignored: the host adds them over time and failing on one would break
+  the gate on a change nobody made. A non-array payload is exit 1, never an empty
+  contract — that would read as agreement against an absent `[ci]` and as drift
+  against a real one. Drift is SYMMETRIC and signed (`+` host, `-` config): a
+  stale name the config claims is what a downstream reader waits on forever.
+  Consumer #1's row is `required_checks = ["final"]` with no method key, matching
+  the live ruleset. The fetch lives in `mise-tasks/ci-drift` on a SCHEDULE
+  (`.github/workflows/ci-drift.yml`), not the landing path — `lock-currency`'s
+  recorded lesson: a remote round trip there fails whichever PR is in flight for a
+  change it did not cause.
 - `capture.rs` — captured child output, content-addressed in out-of-tree state
   (CLOUD-162): the shared substrate CLOUD-117's output predicate and CLOUD-121's
   handles both read, built once so neither grows its own copy. The digest **is**
