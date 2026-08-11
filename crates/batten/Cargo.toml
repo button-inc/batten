@@ -40,13 +40,12 @@ unicode-normalization.workspace = true
 yaml-rust2.workspace = true
 
 [dev-dependencies]
-# The provision suite builds a tarball fixture in memory rather than committing
-# a binary artifact into the tree.
-flate2.workspace = true
+# Only what the *tests* need and the crate itself does not. A normal dependency
+# is already in scope for every test target, so re-listing one here declares
+# nothing — `flate2`, `tar`, `serde_json` and `toml` all sat in both tables and
+# every one of them was dead text (CLOUD-217 (42)). `jsonschema` is the one crate
+# the shipped binary genuinely does not link.
 jsonschema.workspace = true
-tar.workspace = true
-serde_json.workspace = true
-toml.workspace = true
 
 [lints]
 workspace = true
