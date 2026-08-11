@@ -17,9 +17,17 @@
 //!   *tighten*, never weaken: raising [`Strictness`] is accepted, lowering it is
 //!   a [`UsageError`] (→ exit `1`), and the local file may only *add* rules —
 //!   redefining a committed rule is refused, so the worst an uncommitted file can
-//!   do is make a gate stricter. This extends §5's `max_effect` invariant to the
-//!   config layer, which is what keeps config the trust boundary even with a
-//!   local override present.
+//!   do is make a gate stricter — which is what keeps config the trust boundary
+//!   even with a local override present.
+//!
+//!   That monotonicity is the *same shape* §5 states for effects, but this layer
+//!   owns it outright rather than inheriting it: §5's `max_effect` — per-flag
+//!   effect annotations and a monotone maximum over them — is **specified, not
+//!   implemented**. [`crate::effect::Effect`] is declared per command and
+//!   carries no ordering, so there is nothing here to take a maximum of; the
+//!   implementation rides CLOUD-27's spec work (CLOUD-217 (22)). Read the
+//!   raise-only rule above as load-bearing on its own, not as a corollary of
+//!   something already in the tree.
 //!
 //! `batten config show` prints the resolved config **with its sources**, so
 //! which layer won a key is an answer the tool gives rather than one a reader

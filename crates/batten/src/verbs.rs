@@ -16,8 +16,12 @@
 //!   Batten's own table lives in Batten's own `batten.toml`, as consumer #1.
 //! * **The severity axis is [`Effect`]**, the house-style §5 vocabulary, not a
 //!   second one invented here. A verb is `write` or `destructive` — the same
-//!   words a command's own effect entry uses — so `-y --yes` and the raise-only
-//!   `max_effect` rule keep meaning one thing across the tool.
+//!   words a command's own effect entry uses — so `-y --yes` keeps meaning one
+//!   thing across the tool. §5's raise-only `max_effect` rule is **specified,
+//!   not implemented**: [`Effect`] carries no ordering to take a maximum over,
+//!   and the implementation rides CLOUD-27's spec work (CLOUD-217 (22)).
+//!   Sharing the vocabulary now is precisely what makes that a later *addition*
+//!   rather than a later reconciliation of two.
 //! * **A verb carries its redirect.** The refusal contract (CLOUD-122) is that
 //!   every deny names the fix, and the sanctioned mutation for a path class is
 //!   knowledge the config author has and the core does not. Declaring it beside
