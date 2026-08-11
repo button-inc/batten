@@ -239,6 +239,8 @@ pub enum ConfigCommand {
     Epoch {
         /// Emit the epoch and the surface it covers as byte-stable JSON.
         json: bool,
+        /// Ignore the cached value and rehash the tracked files' bytes.
+        no_cache: bool,
     },
 }
 
@@ -324,6 +326,7 @@ fn config_of(matches: &ArgMatches) -> Option<ConfigCommand> {
         }),
         ("epoch", matches) => Some(ConfigCommand::Epoch {
             json: flag(matches, "json"),
+            no_cache: flag(matches, "no_cache"),
         }),
         _ => None,
     }

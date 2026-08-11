@@ -334,3 +334,276 @@ fn this_repositorys_own_epoch_is_computable() {
     );
     assert_eq!(value(&output).len(), 64);
 }
+
+// --- the cache, and the equality that makes it safe (CLOUD-232) --------------
+//
+// A cache over an attribution value is only admissible if it cannot answer
+// differently from the recompute it replaces. So these assert an *equality*
+// against `--no-cache` rather than asserting that caching "works": a cache that
+// is fast and wrong is strictly worse than no cache, and the failure would be
+// silent exactly when attribution mattered.
+//
+// Every case runs with `XDG_DATA_HOME` pointed at scratch. The cache lives in
+// the OS data directory by design (never in the checkout), and a suite that
+// wrote into the developer's real one would both pollute it and let two tests
+// collide through it.
+
+/// Run `config epoch` with the cache isolated to `home`.
+fn epoch_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
+    let mut command = batten();
+    command.args(["config", "epoch"]).args(args);
+    command.env("XDG_DATA_HOME", home);
+    command
+        .current_dir(dir)
+        .output()
+        .expect("run batten config epoch")
+}
+
+/// A scratch `XDG_DATA_HOME`, wiped so each test starts with no cache.
+fn cache_home(name: &str) -> PathBuf {
+    let home = std::env::temp_dir().join("batten-epoch-cache").join(name);
+    let _ = fs::remove_dir_all(&home);
+    fs::create_dir_all(&home).expect("create cache home");
+    home
+}
+
+/// The cache file for the repo at `dir`, wherever it landed under `home`.
+fn cache_file(home: &Path, dir: &Path) -> PathBuf {
+    let repo = dir.file_name().expect("repo dir has a name");
+    home.join("batten").join(repo).join("epoch.json")
+}
+
+#[test]
+fn a_cache_hit_equals_the_cold_recompute() {
+    // The safety bar. The second run is served from the cache written by the
+    // first; if the two ever diverge the epoch stops meaning "produced under
+    // provably the same rules", which is the only thing it is for.
+    let dir = repo(
+        "cache-equals-cold",
+        "version = 1\n",
+        &[("AGENTS.md", "a\n")],
+    );
+    let home = cache_home("cache-equals-cold");
+
+    let cold = epoch_in(&dir, &home, &["--no-cache"]);
+    let warm_write = epoch_in(&dir, &home, &[]);
+    let warm_read = epoch_in(&dir, &home, &[]);
+
+    assert_eq!(cold.status.code(), Some(0));
+    assert_eq!(warm_read.status.code(), Some(0));
+    assert_eq!(
+        cold.stdout, warm_write.stdout,
+        "the run that populates the cache already disagrees with the cold path"
+    );
+    assert_eq!(
+        cold.stdout, warm_read.stdout,
+        "a cache HIT disagrees with the cold recompute"
+    );
+    assert!(cache_file(&home, &dir).exists(), "nothing was cached");
+}
+
+#[test]
+fn editing_a_tracked_file_invalidates_the_cache() {
+    let dir = repo(
+        "cache-invalidates",
+        "version = 1\n[epoch]\ntracked = [\"batten.toml\", \"AGENTS.md\"]\n",
+        &[("AGENTS.md", "before\n")],
+    );
+    let home = cache_home("cache-invalidates");
+
+    let before = value(&epoch_in(&dir, &home, &[]));
+    fs::write(dir.join("AGENTS.md"), "after, and a different length\n").expect("rewrite");
+    let after = epoch_in(&dir, &home, &[]);
+
+    assert_ne!(before, value(&after), "a stale hash was served");
+    assert_eq!(
+        value(&after),
+        value(&epoch_in(&dir, &home, &["--no-cache"])),
+        "the post-edit cached value disagrees with the recompute"
+    );
+}
+
+#[test]
+fn a_tracked_path_that_goes_unreadable_after_a_cache_write_is_refused() {
+    // THE case this whole design turns on. A warm cache plus a vanished tracked
+    // path must exit 1 naming it — never a stale-but-successful hash. Serving
+    // the cached value here would forge a stable epoch over a surface that
+    // changed and exit 0 doing it, which is the precise false green the module
+    // exists to prevent, reintroduced as an optimization.
+    let dir = repo(
+        "cache-unreadable",
+        "version = 1\n[epoch]\ntracked = [\"batten.toml\", \"GONE.md\"]\n",
+        &[("GONE.md", "here for now\n")],
+    );
+    let home = cache_home("cache-unreadable");
+
+    let warm = epoch_in(&dir, &home, &[]);
+    assert_eq!(warm.status.code(), Some(0), "setup: the cache must be warm");
+    assert!(
+        cache_file(&home, &dir).exists(),
+        "setup: nothing was cached"
+    );
+
+    fs::remove_file(dir.join("GONE.md")).expect("remove the tracked path");
+    let after = epoch_in(&dir, &home, &[]);
+
+    assert_eq!(
+        after.status.code(),
+        Some(1),
+        "a cached hash was served over an unreadable tracked path; stdout: {}",
+        String::from_utf8_lossy(&after.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&after.stderr).contains("GONE.md"),
+        "the refusal must name the path it could not read"
+    );
+    assert!(after.stdout.is_empty(), "a refusal printed a value");
+}
+
+#[test]
+fn a_corrupt_cache_costs_the_run_nothing() {
+    // Derived out-of-tree state: unreadable, truncated, or written by a future
+    // format are all the same answer — recompute. A cache that can fail a run is
+    // worse than no cache.
+    let dir = repo("cache-corrupt", "version = 1\n", &[]);
+    let home = cache_home("cache-corrupt");
+
+    let expected = value(&epoch_in(&dir, &home, &["--no-cache"]));
+    epoch_in(&dir, &home, &[]);
+    fs::write(cache_file(&home, &dir), "{ not json at all").expect("corrupt the cache");
+
+    let after = epoch_in(&dir, &home, &[]);
+    assert_eq!(
+        after.status.code(),
+        Some(0),
+        "a corrupt cache failed the run"
+    );
+    assert_eq!(value(&after), expected);
+}
+
+#[test]
+fn a_future_cache_format_is_a_miss_rather_than_a_misread() {
+    let dir = repo("cache-future", "version = 1\n", &[]);
+    let home = cache_home("cache-future");
+
+    let expected = value(&epoch_in(&dir, &home, &["--no-cache"]));
+    epoch_in(&dir, &home, &[]);
+    let path = cache_file(&home, &dir);
+    let mut record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("read cache"))
+            .expect("cache is JSON");
+    record["schema"] = serde_json::json!(u32::MAX);
+    record["epoch"] = serde_json::json!("0".repeat(64));
+    fs::write(&path, record.to_string()).expect("write cache");
+
+    assert_eq!(
+        value(&epoch_in(&dir, &home, &[])),
+        expected,
+        "a record from an unrecognised format version was believed"
+    );
+}
+
+#[test]
+fn adding_a_tracked_path_invalidates_even_when_no_file_changed() {
+    // The stamped set carries the tracked LIST, not just each file's state. A
+    // cache keyed only on the surviving files' stamps would serve the old hash
+    // over a surface that provably grew.
+    let dir = repo(
+        "cache-list-grows",
+        "version = 1\n[epoch]\ntracked = [\"batten.toml\"]\n",
+        &[("AGENTS.md", "unchanged throughout\n")],
+    );
+    let home = cache_home("cache-list-grows");
+
+    let before = value(&epoch_in(&dir, &home, &[]));
+    fs::write(
+        dir.join("batten.toml"),
+        "version = 1\n[epoch]\ntracked = [\"batten.toml\", \"AGENTS.md\"]\n",
+    )
+    .expect("widen the tracked list");
+
+    let after = epoch_in(&dir, &home, &[]);
+    assert_ne!(before, value(&after));
+    assert_eq!(
+        value(&after),
+        value(&epoch_in(&dir, &home, &["--no-cache"])),
+        "the widened surface's cached value disagrees with the recompute"
+    );
+}
+
+#[test]
+fn the_json_document_is_identical_warm_and_cold() {
+    // `-J` carries the tracked list as well as the digest, so the cached path
+    // must reproduce BOTH halves — a hit that served the right hash with a
+    // stale surface would be a document whose two halves disagree.
+    let dir = repo(
+        "cache-json",
+        "version = 1\n[epoch]\ntracked = [\"batten.toml\", \"AGENTS.md\"]\n",
+        &[("AGENTS.md", "a\n")],
+    );
+    let home = cache_home("cache-json");
+
+    let cold = epoch_in(&dir, &home, &["-J", "--no-cache"]);
+    epoch_in(&dir, &home, &["-J"]);
+    let warm = epoch_in(&dir, &home, &["-J"]);
+
+    assert_eq!(cold.status.code(), Some(0));
+    assert_eq!(
+        cold.stdout, warm.stdout,
+        "the -J document differs warm vs cold"
+    );
+}
+
+#[test]
+fn config_from_neither_reads_nor_writes_the_cache() {
+    // The stamps describe the working tree; under `--config-from` the epoch
+    // covers a git ref instead. Revalidating a ref's hash against the worktree's
+    // mtimes would compare two different things — so that path is cold, and it
+    // must also leave no record a later worktree run could hit.
+    let dir = repo("cache-config-from", "version = 1\n", &[]);
+    let home = cache_home("cache-config-from");
+    for args in [
+        &["init", "-q"][..],
+        &["config", "user.email", "t@example.com"],
+        &["config", "user.name", "t"],
+        &["add", "-A"],
+        &["commit", "-q", "-m", "base"],
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    ] {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("run git");
+        assert!(output.status.success(), "git {args:?} failed");
+    }
+
+    // Diverge the working tree from the ref, so a cache confusion between them
+    // is observable rather than hidden behind two equal answers.
+    fs::write(
+        dir.join("batten.toml"),
+        "version = 1\nstrictness = \"strict\"\n",
+    )
+    .expect("edit working config");
+
+    let from_ref = epoch_in(&dir, &home, &["--config-from", "origin/main"]);
+    assert_eq!(from_ref.status.code(), Some(0));
+    assert!(
+        !cache_file(&home, &dir).exists(),
+        "the --config-from path wrote a cache entry keyed to the working tree"
+    );
+
+    // And it does not READ one either: warm the cache from the worktree, then
+    // ask for the ref again — the answer must still be the ref's.
+    let worktree = value(&epoch_in(&dir, &home, &[]));
+    assert_ne!(
+        worktree,
+        value(&from_ref),
+        "setup: the two surfaces must differ"
+    );
+    assert_eq!(
+        value(&epoch_in(&dir, &home, &["--config-from", "origin/main"])),
+        value(&from_ref),
+        "a worktree cache entry was served for a --config-from run"
+    );
+}

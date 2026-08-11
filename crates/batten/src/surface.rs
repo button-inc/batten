@@ -463,6 +463,29 @@ const JSON: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--no-cache` on `config epoch` (CLOUD-232).
+///
+/// The escape from the stat-based revalidation, and the reference oracle the
+/// cache is tested against: a hit must equal what this prints, byte for byte.
+/// Without it the equality could only be asserted by reading the code, and a
+/// cache whose correctness is an argument rather than a test is not one.
+///
+/// It buys no policy — the epoch is identical either way — so it raises nothing
+/// under §5 and `config epoch` stays `read`.
+const NO_CACHE: FlagDecl = FlagDecl {
+    id: "no_cache",
+    long: Some("no-cache"),
+    short: None,
+    help: "Recompute the epoch from the tracked files' bytes, ignoring the cached value",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `--class <token>`: narrow a defect query to one taxonomy class.
 const CLASS: FlagDecl = FlagDecl {
     id: "class",
@@ -734,7 +757,7 @@ pub const SURFACE: &[CommandDecl] = &[
         // The value alone is already machine-readable, so `-J` is not a second
         // rendering of it: it names *which surface* the hash covers, which a
         // caller stamping a record needs and a bare digest cannot carry.
-        flags: &[JSON],
+        flags: &[JSON, NO_CACHE],
     },
     CommandDecl {
         path: "config lint",

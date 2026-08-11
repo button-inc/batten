@@ -47,7 +47,7 @@
 //! adding an empty file to the tracked set still moves the epoch, because the
 //! *set* is part of what governs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -105,6 +105,54 @@ pub fn compute(dir: &Path, base_ref: Option<&str>) -> Result<String> {
     Ok(describe(dir, base_ref)?.0)
 }
 
+/// The epoch and its surface, served from the cache when it revalidates.
+///
+/// Identical output to [`describe`] or it is a bug — that equality is the whole
+/// safety bar, and `--no-cache` exists so a test can assert it rather than argue
+/// it. Everything here is an optimization over a value [`describe`] alone
+/// already defines; nothing about *what* the epoch is lives in this path.
+///
+/// # Errors
+///
+/// As [`compute`]. A cache that cannot be read, parsed, or written is **not**
+/// an error: it is derived out-of-tree state, so every such failure degrades to
+/// the cold recompute. A cache that can fail a run is worse than no cache.
+pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Vec<String>)> {
+    // Under `--config-from` the epoch covers a git ref, not the working tree, so
+    // a filesystem stamp describes the wrong bytes entirely. Cold path only.
+    if base_ref.is_some() {
+        return describe(dir, base_ref);
+    }
+    let config = authority(dir, base_ref)?;
+    let tracked = tracked_paths(&config)?;
+
+    // A stamp we cannot take is a MISS, never a hit. If a tracked path has gone
+    // unreadable, falling through re-reads it and raises the `UsageError` that
+    // names it — where returning the cached hash would forge a stable epoch over
+    // a surface that changed, and exit 0 doing it. That is the exact false green
+    // this module exists to prevent (see the module docs), reintroduced by a
+    // shortcut rather than by a skip.
+    let stamps = stamp_tracked(dir, &tracked);
+
+    if let Some(stamps) = stamps.as_ref() {
+        if let Some(cached) = read_cache(dir) {
+            if cached.schema == CACHE_SCHEMA && cached.tracked == *stamps {
+                return Ok((cached.epoch, tracked));
+            }
+        }
+    }
+
+    let (epoch, tracked) = describe(dir, base_ref)?;
+    // Re-stamped AFTER the read, never reusing the pre-read stamps: a file
+    // rewritten between the two would otherwise be cached under the mtime it had
+    // before the change, and the next run would serve a hash of bytes that are
+    // already gone.
+    if let Some(stamps) = stamp_tracked(dir, &tracked) {
+        write_cache(dir, &epoch, &stamps);
+    }
+    Ok((epoch, tracked))
+}
+
 /// The epoch **and** the surface it covers, from one read of the authority.
 ///
 /// The pair rather than two calls: `config epoch -J` reports both, and resolving
@@ -124,6 +172,121 @@ pub fn describe(dir: &Path, base_ref: Option<&str>) -> Result<(String, Vec<Strin
         entries.push((path.clone(), contents));
     }
     Ok((surface_fingerprint(&entries).to_hex(), tracked))
+}
+
+/// The cache record's on-disk format version.
+///
+/// Its own number, not `batten.toml`'s config version: the cache's layout and
+/// the config schema move for unrelated reasons. An unrecognised value is a
+/// miss, so an older or newer binary recomputes rather than misreading a record
+/// it does not understand.
+const CACHE_SCHEMA: u32 = 1;
+
+/// The cache file's name inside the repository's state directory.
+const CACHE_FILE: &str = "epoch.json";
+
+/// One tracked path's staleness stamp: the etag, not the content.
+///
+/// `len` alongside the timestamp because either alone is weak — a same-second
+/// rewrite usually changes the length, and a length-preserving rewrite usually
+/// changes the timestamp. Seconds and nanoseconds as separate integers rather
+/// than one 128-bit value so the record stays ordinary JSON.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Stamp {
+    path: String,
+    len: u64,
+    secs: u64,
+    nanos: u32,
+}
+
+/// The cached epoch and the stamps that vouch for it.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct CacheRecord {
+    schema: u32,
+    epoch: String,
+    /// The stamped set, which carries the tracked **list** as well as each
+    /// file's state — so adding or removing a path invalidates even when every
+    /// surviving file is byte-identical.
+    tracked: Vec<Stamp>,
+}
+
+/// Stamp every tracked path, or `None` if any one of them cannot be stamped.
+///
+/// All-or-nothing on purpose: a partial stamp set would revalidate against the
+/// paths that still exist and say nothing about the one that does not, which is
+/// the silent-skip failure wearing a different hat.
+fn stamp_tracked(dir: &Path, tracked: &[String]) -> Option<Vec<Stamp>> {
+    tracked
+        .iter()
+        .map(|path| {
+            let meta = std::fs::metadata(dir.join(path)).ok()?;
+            let modified = meta.modified().ok()?;
+            let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+            Some(Stamp {
+                path: path.clone(),
+                len: meta.len(),
+                secs: since.as_secs(),
+                nanos: since.subsec_nanos(),
+            })
+        })
+        .collect()
+}
+
+/// This repository's cache file, or `None` when no state directory resolves.
+///
+/// Canonicalized first, and that is load-bearing rather than tidy: callers reach
+/// this with `Path::new(".")`, whose final component is `None`, so
+/// [`crate::state::derive_repo_name`] refuses it and every run would silently
+/// take the no-cache path. A cache that is never written is not a safe default —
+/// it is a feature that reports success and does nothing.
+fn cache_path(dir: &Path) -> Option<PathBuf> {
+    let absolute = std::fs::canonicalize(dir).ok()?;
+    crate::state::repo_state_dir(&absolute)
+        .ok()
+        .map(|state| state.join(CACHE_FILE))
+}
+
+/// The cached record, or `None` for absent, unreadable, or unparseable.
+///
+/// Every failure is the same answer — recompute — so none of them is
+/// distinguished, and a corrupted cache costs a run nothing but the work it was
+/// meant to save.
+fn read_cache(dir: &Path) -> Option<CacheRecord> {
+    let text = std::fs::read_to_string(cache_path(dir)?).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Publish the cache record, ignoring every failure.
+///
+/// Temp file plus rename within the state directory, the same construction
+/// `store::write_record` uses: a concurrent reader sees either the old record or
+/// the new one, never a torn one that would parse as garbage and be discarded.
+///
+/// Nothing here can fail the run. A read-only state directory, a full disk, or a
+/// racing writer all leave the epoch already computed and correct — the cache is
+/// an optimization, and an optimization that can refuse the answer is a defect.
+fn write_cache(dir: &Path, epoch: &str, tracked: &[Stamp]) {
+    let Some(path) = cache_path(dir) else { return };
+    let Some(parent) = path.parent() else { return };
+    if std::fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let record = CacheRecord {
+        schema: CACHE_SCHEMA,
+        epoch: epoch.to_owned(),
+        tracked: tracked.to_vec(),
+    };
+    let Ok(json) = serde_json::to_string_pretty(&record) else {
+        return;
+    };
+    let temp = parent.join(format!("{CACHE_FILE}.{}.tmp", std::process::id()));
+    if std::fs::write(&temp, format!("{json}\n")).is_err() {
+        return;
+    }
+    if std::fs::rename(&temp, &path).is_err() {
+        // Leaving the temp behind would accumulate one file per failed publish.
+        let _ = std::fs::remove_file(&temp);
+    }
 }
 
 /// The config whose `[epoch] tracked` list governs, from the same place its

@@ -1272,13 +1272,20 @@ fn run_config(
         // a Usage error (exit 1) rather than being skipped: the `[epoch]
         // tracked` set is config, so a path it names that cannot be read is
         // unreadable config, which §7 routes to 1 — see `epoch`.
-        ConfigCommand::Epoch { json } => {
+        ConfigCommand::Epoch { json, no_cache } => {
             // The epoch covers whichever authority governed the run: under
             // `--config-from` that is the ref's surface, never the working
             // tree's (CLOUD-31). An epoch attributing a run to a config that
             // did not govern it would be worse than none.
-            let (value, tracked) =
-                epoch::describe(Path::new("."), overrides.config_from.as_deref())?;
+            //
+            // The cached path is byte-identical to the cold one or it is a bug
+            // (CLOUD-232); `--no-cache` selects the cold one so a test can hold
+            // the two side by side.
+            let (value, tracked) = if *no_cache {
+                epoch::describe(Path::new("."), overrides.config_from.as_deref())?
+            } else {
+                epoch::describe_cached(Path::new("."), overrides.config_from.as_deref())?
+            };
             if *json {
                 // The digest alone cannot say what it covers, and a caller
                 // stamping it onto a record needs both halves — so `-J` adds the

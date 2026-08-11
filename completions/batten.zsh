@@ -207,6 +207,7 @@ debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '-J[Emit byte-stable JSON instead of pointer lines]' \
 '--json[Emit byte-stable JSON instead of pointer lines]' \
+'--no-cache[Recompute the epoch from the tracked files'\'' bytes, ignoring the cached value]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
