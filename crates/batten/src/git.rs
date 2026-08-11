@@ -811,6 +811,50 @@ pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
     query_optional(dir, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
 }
 
+/// The remote's default branch, as a full remote-tracking ref.
+///
+/// The fallback landing target when a consumer declares no `must_land_on`
+/// (CLOUD-51): work lands on the trunk unless told otherwise, and making every
+/// consumer spell that out is a config tax that buys nothing.
+///
+/// Read from `refs/remotes/<remote>/HEAD`, which is what `git clone` and
+/// `git remote set-head` maintain. **Not** guessed from a hardcoded `main` or
+/// `master`: a guess that resolves to a ref that happens to exist would answer
+/// "not landed" against the wrong trunk, silently, which is the failure mode
+/// `landing` was built to avoid on the ancestry axis.
+///
+/// `None` when the remote has no recorded HEAD, or there is no remote at all —
+/// both are ordinary states (a fresh local repository has neither), and the
+/// caller owes the absent case its own reading rather than a pass.
+///
+/// # Errors
+///
+/// Internal only — an unresolvable default is `None`, not a failure.
+pub fn remote_default_branch(dir: &Path) -> Result<Option<String>> {
+    let remotes = remotes(dir)?;
+    // `origin` when it exists, else the first configured remote in the sorted
+    // listing — deterministic, so the answer is byte-stable for a given repo.
+    let remote = if remotes.iter().any(|(name, _)| name == "origin") {
+        "origin".to_owned()
+    } else {
+        let Some((name, _)) = remotes.first() else {
+            return Ok(None);
+        };
+        name.clone()
+    };
+    // `--quiet` so a missing HEAD is a non-zero exit rather than a message on
+    // stderr; `query_optional` reads that exit as the answer.
+    Ok(query_optional(
+        dir,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            &format!("refs/remotes/{remote}/HEAD"),
+        ],
+    )?
+    .filter(|found| !found.is_empty()))
+}
+
 /// Resolve `rev` to the full SHA of a commit.
 ///
 /// `--verify` yields exactly one line or a failure; the `^{commit}` peel

@@ -3625,10 +3625,15 @@ fn a_target_that_resolves_to_no_commit_is_exit_1_never_a_vacuous_pass() {
 }
 
 #[test]
-fn a_local_only_branch_with_no_upstream_never_reads_as_safe() {
+fn a_local_only_branch_raises_no_upstream_as_its_own_fact() {
     // Absence of an upstream is not safety. This is the branch that disappears
     // with the container it lived in, and the one an upstream-only check misses
     // entirely.
+    //
+    // §5 names the line `no-upstream <branch>` — its own category, not a
+    // flavour of `unpushed`. The two have different fixes: `unpushed` says push,
+    // `no-upstream` says set a tracking branch first, and a reader told only
+    // "unpushed" runs `git push` and gets an error rather than a fix.
     let dir = worktree_repo("worktree-local-only", "main");
     git_in(&dir, &["checkout", "-q", "-b", "orphan"]);
     commit_file(&dir, "orphan.txt", "never pushed\n", "feat: orphan work");
@@ -3637,17 +3642,74 @@ fn a_local_only_branch_with_no_upstream_never_reads_as_safe() {
     assert_eq!(output.status.code(), Some(2));
     let text = common::stdout(&output);
     assert!(
-        text.contains("unpushed:") && text.contains("unlanded:"),
-        "a branch with no upstream is both unpushed and unlanded: {text:?}"
+        text.contains("no-upstream: orphan"),
+        "a branch tracking nothing raises its own fact: {text:?}"
     );
     assert!(
-        text.contains("orphan@"),
-        "the pointer names the branch: {text:?}"
+        text.contains("unlanded:") && text.contains("orphan@"),
+        "and it is still unlanded, with a pointer naming the branch: {text:?}"
+    );
+    assert!(
+        !text.contains("unpushed:"),
+        "there is nowhere to have pushed it to, so that fact does not fire: {text:?}"
     );
 }
 
 #[test]
-fn a_missing_target_key_is_a_usage_error_not_a_silent_pass() {
+fn an_absent_target_key_falls_back_to_the_remotes_default_branch() {
+    // The DoD's fallback: work lands on the trunk unless told otherwise, so an
+    // absent `must_land_on` resolves `refs/remotes/<remote>/HEAD` rather than
+    // refusing the invocation.
+    let dir = Fixture::new("worktree-default-branch")
+        .config("version = 1\n")
+        .file("README.md", "base\n")
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git_in(&dir, &["config", "remote.origin.url", "."]);
+    git_in(
+        &dir,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    );
+
+    // Landed against the resolved default: silent 0, no config line required.
+    let clean = worktree_status(&dir);
+    assert_eq!(
+        clean.status.code(),
+        Some(0),
+        "the fallback resolves, and the branch is landed on it: {:?}",
+        common::stdout(&clean)
+    );
+    assert!(clean.stdout.is_empty());
+
+    // Work the default does not carry is unlanded against it, named as such.
+    git_in(&dir, &["checkout", "-q", "-b", "feature"]);
+    commit_file(&dir, "work.txt", "the work\n", "feat: the work");
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("unlanded:") && text.contains("origin/main"),
+        "the fallback target is named in the verdict: {text:?}"
+    );
+}
+
+#[test]
+fn no_resolvable_target_reports_not_computable_and_never_suppresses_the_rest() {
+    // The clause this issue was demoted from Done for. A repository with no
+    // `must_land_on` AND no remote default used to be a usage error, which meant
+    // the verb reported *nothing at all* — not the dirty tree, not the branch
+    // tracking nothing. The one configuration most likely to be a fresh, at-risk
+    // checkout was the one the gate stayed silent about.
+    //
+    // Not-computable must never read as clean, and it must never suppress the
+    // facts beside it.
     let dir = Fixture::new("worktree-no-target")
         .config("version = 1\n")
         .file("README.md", "base\n")
@@ -3655,10 +3717,42 @@ fn a_missing_target_key_is_a_usage_error_not_a_silent_pass() {
         .build();
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-q", "-m", "base"]);
+    common::write(&dir, "scratch.txt", "dirty\n");
 
     let output = worktree_status(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "unknown landedness is at-risk work, not a pass and not a usage error"
+    );
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("unlanded: not-computable"),
+        "the unknown says it is unknown: {text:?}"
+    );
+    assert!(
+        text.contains("must_land_on"),
+        "and names what would make it computable: {text:?}"
+    );
+    assert!(
+        text.contains("uncommitted: 1 paths"),
+        "the facts that COULD be computed still report — the whole point: {text:?}"
+    );
+    assert!(
+        text.contains("no-upstream:"),
+        "including the branch tracking nothing: {text:?}"
+    );
+}
+
+#[test]
+fn a_target_the_author_named_and_got_wrong_is_still_a_usage_error() {
+    // Naming no target and naming a broken one are different mistakes. The
+    // fallback covers the first; the second stays exit 1, because a target the
+    // author wrote down and misspelled is a config error they need told about.
+    let dir = worktree_repo("worktree-bad-target-still", "refs/heads/no-such-branch");
+    let output = worktree_status(&dir);
     assert_eq!(output.status.code(), Some(1));
-    assert!(common::stderr(&output).contains("must_land_on"));
+    assert!(common::stderr(&output).contains("does not resolve to a commit"));
 }
 
 #[test]

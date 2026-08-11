@@ -340,7 +340,20 @@ status`. Three categories as one read gate: **uncommitted** (the tree is not
   Config is one key, `must_land_on` — deliberately NOT the landed `unlanded`
   key, which is path membership over tree content; VCS state and path membership
   are orthogonal and one key meaning both is the conflation CLOUD-37 avoided.
-  An absent key is exit 1, never a pass over nothing.
+  An absent key resolves the remote's recorded default (`refs/remotes/<remote>/HEAD`,
+  read not guessed — a hardcoded `main` that happens to exist answers against the
+  wrong trunk silently). Where NO target resolves the verdict is `Unlanded::
+NotComputable`, a third answer `Option` cannot express because it cannot tell
+  "asked and clean" from "never asked"; it is at-risk and never suppresses the
+  other facts. That last part is what the DoD audit demoted this for: an absent
+  key used to be exit 1, so a repo with no target got NO report — not the dirty
+  tree, not the branch tracking nothing — and the configuration likeliest to be a
+  fresh at-risk checkout was the one the gate stayed silent about. A target the
+  author NAMED and got wrong is still exit 1; that is a config error, a different
+  mistake from naming none. `no-upstream` is its own line, not a flavour of
+  `unpushed` (different fixes: push vs. set a tracking branch), and fires only
+  when the target cannot account for the work — a landed branch loses nothing by
+  tracking nothing, and flagging it would mark every finished local branch forever.
 - `journal.rs` — the store's durable plumbing (CLOUD-78): append shards, a merged
   log with `(generation, seqno)` cursors, and the store-format version. Writers
   append to their **own** shard, so the concurrent path shares no mutable file and

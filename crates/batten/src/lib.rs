@@ -212,19 +212,22 @@ fn run_provision_apply(
 
 /// Report work that is uncommitted, unpushed, or not landed (CLOUD-51).
 ///
-/// An absent `must_land_on` is a **usage error**, the same reading `policy
-/// budget` gives an absent budget: there is no target to judge against, and a
-/// gate that answered `0` there would report "nothing is at risk" having checked
-/// nothing — the false green this engine exists to catch. A configured target
-/// that resolves to no commit is exit 1 too, raised by `git::landing`.
+/// An absent `must_land_on` **falls back to the remote's recorded default
+/// branch**, and where no target resolves at all the verb still reports every
+/// other fact, with the unlanded component rendered `not-computable`.
+///
+/// This was a usage error until CLOUD-51's DoD audit: refusing the whole
+/// invocation looked like the safe reading and is the opposite of one. A repo
+/// with no `must_land_on` got *nothing* — not the dirty tree, not the branch
+/// tracking nothing — so the one configuration most likely to be a fresh,
+/// at-risk checkout was also the one the gate stayed silent about. Not-computable
+/// must never read as clean, and it must never suppress the facts beside it. A
+/// configured target that resolves to no commit is still exit 1, raised by
+/// `git::landing`: a target the author named and got wrong is a config error,
+/// which is a different thing from naming none.
 fn run_worktree_status(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let target = config.must_land_on.as_deref().ok_or_else(|| {
-        UsageError::raise(format!(
-            "no `must_land_on` in {}; there is no target to judge work against",
-            config::CONFIG_FILE
-        ))
-    })?;
+    let target = config.must_land_on.as_deref();
     // The repo root, not the process directory: the three categories are
     // properties of the repository, and answering from a subdirectory would
     // report a clean tree for a dirty one one level up.
