@@ -3426,7 +3426,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // Full stdout equality is the load-bearing part. Findings sort by the
     // `(path, line, rule)` pointer tuple, so the expected bytes are fixed, and
     // every way a rule can stop working changes them. A `contains` assertion
-    // would pass with one of the two rules deleted.
+    // would pass with one of the rules deleted.
     //
     // The banned shapes are assembled at runtime rather than written as source
     // text — the same dodge the conflict marker above uses. This file sits under
@@ -3435,7 +3435,14 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // the rule works.
     let account = format!("e{}bc", "tax");
     let entity_path = format!("entit{}/", "ies");
-    let payload = format!("let id = \"{account}\";\nuse crate::{entity_path}mod;\n");
+    // CLOUD-73's row, and the only one of the three whose predicate is a `regex`
+    // rather than a literal. Spelled here with a CAPITAL, which is the half a
+    // case-sensitive literal could not have caught and the reason the row waited
+    // for `regex` to exist.
+    let repo_name = format!("C{}ce", "omplian");
+    let payload = format!(
+        "let id = \"{account}\";\nuse crate::{entity_path}mod;\n// ported from {repo_name}\n"
+    );
 
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
@@ -3476,8 +3483,10 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         String::from_utf8_lossy(&output.stdout),
         "crates/demo/notes.txt:1 no-consumer-account-literal\n\
          crates/demo/notes.txt:2 no-consumer-entity-path\n\
+         crates/demo/notes.txt:3 no-consumer-repo-name\n\
          crates/demo/src/lib.rs:1 no-consumer-account-literal\n\
-         crates/demo/src/lib.rs:2 no-consumer-entity-path\n",
+         crates/demo/src/lib.rs:2 no-consumer-entity-path\n\
+         crates/demo/src/lib.rs:3 no-consumer-repo-name\n",
         "one sorted pointer per banned shape per file, and nothing else"
     );
 

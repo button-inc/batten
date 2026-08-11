@@ -184,16 +184,42 @@ scope = "tree"
 # segments` in crates/batten/src/rules.rs), and the match is anchored at the
 # first segment, so `crates/**` selects all of crates/ and nothing outside it.
 #
-# WHY ONLY THESE TWO LITERALS, out of the four CLOUD-26's acceptance listed:
-# membership turns on one question — does the literal name a consumer, or is it a
-# word this repo uses in its own right? `forbid` is a case-sensitive literal
-# substring check (`forbid_in_file`), so a literal with an English reading is
-# wrong in both directions at once: it fires on ordinary prose while missing the
-# capitalised form. The vendor name fails that test (it names the vendor, not a
-# consumer; `git grep -Fn button -- crates/` already hits src/hook.rs and the
-# changelog), and so does the predecessor repo's name (`git grep -in complian`
-# finds the noun in AGENTS.md and LICENSE-APACHE). What survives is the shapes
-# with no English reading: an account identifier and an entity path.
+# WHICH OF THE FOUR LITERALS CLOUD-26's ACCEPTANCE LISTED ARE ROWS, and why —
+# the boundary CLOUD-73 exists to record. Membership turns on one question: does
+# the literal name a CONSUMER, or is it a word this repo uses in its own right?
+#
+# That question used to be pre-empted by a capability limit, and the limit is
+# gone. This comment said `forbid` was a case-sensitive literal substring check,
+# so a literal with an English reading was "wrong in both directions at once" —
+# firing on ordinary prose while missing the capitalised form — and dropped two
+# of the four on that ground. CLOUD-283 gave `forbid` a `regex` alternative to
+# `pattern` (plus an `exclude` column), so both directions are now expressible
+# and the two exclusions are re-decided on the merits:
+#
+#   etaxbc      IN — an account identifier, no English reading.
+#   entities/   IN — an entity path, no English reading.
+#   complian…   IN, since CLOUD-73 — the predecessor consumer's repo name, which
+#               is squarely what rule 1 forbids. `(?i)` catches the capitalised
+#               form the old literal would have missed. It costs nothing to
+#               adopt: zero lines under crates/ carry it, and this engine's
+#               vocabulary is policy / gate / predicate / verdict, never this
+#               word. The Apache boilerplate's "in compliance with the License"
+#               is in LICENSE-APACHE, outside the glob.
+#   button      OUT — a DECISION, not a gap, and the difference matters now that
+#               a mechanism exists. It names the vendor rather than a consumer:
+#               github.com/button-inc/batten is Batten's own home, so
+#               src/store.rs's URL-canonicalization test and the changelog's
+#               release links carry it legitimately. Its consumer-facing half —
+#               a fixture quietly depending on THIS repository — is already
+#               gated, by `no-origin-literal-in-fixtures` below.
+#
+# The domain modules CLOUD-73's other criterion names (entity grep, pdfium, CA
+# privacy detectors, evidence and provenance semantics, the ICM design protocol)
+# get no rows: none has ever been in this repository, which was scaffolded fresh
+# rather than split out of the consumer's tree, so a row for `pdfium` or `icm`
+# could never fire and configuration stays narrow (non-negotiable rule 6). The
+# standing mechanism against one arriving is rule 1's grep over `crates/**` —
+# these rows.
 #
 # The rule IDs deliberately do not embed the literals they ban. A finding prints
 # `<path>:<line> <rule-id>`, so the id reaches the fixture test's expected-stdout
@@ -220,6 +246,17 @@ id = "no-consumer-entity-path"
 kind = "forbid"
 glob = "crates/**"
 pattern = "entities/"
+severity = "deny"
+scope = "tree"
+
+# `regex` rather than `pattern`, which is the whole reason this row can exist:
+# the shape is the stem, so one expression covers every ending the name takes,
+# and `(?i)` covers the capitalised form a literal would have to enumerate.
+[[rule]]
+id = "no-consumer-repo-name"
+kind = "forbid"
+glob = "crates/**"
+regex = "(?i)complian"
 severity = "deny"
 scope = "tree"
 
