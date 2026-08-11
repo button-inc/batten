@@ -99,6 +99,8 @@ branch="${LAND_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 interval="${LAND_INTERVAL:-10}"
 workflow="${LAND_WORKFLOW:-fast-forward.yml}"
 max_laps="${LAND_MAX_LAPS:-8}"
+# Consecutive whole lease waits lost before landing reports the fleet saturated.
+max_waits="${LAND_LOCK_MAX_WAITS:-8}"
 
 die() {
 	echo "::error:: land: $*" >&2
@@ -112,6 +114,29 @@ redraft() {
 	gh pr ready "$pr" --undo >/dev/null 2>&1 &&
 		echo "land: re-drafted #$pr — CI does not run on drafts, so nothing more is spent until this is fixed locally"
 }
+
+# --- the landing lease (CLOUD-393) ----------------------------------------
+#
+# Only one branch at a time may spend CI on a landing attempt. Measured before
+# this existed: 248 attempts in 30 minutes produced 5 merges, because every
+# branch that finished CI had already gone behind by the time it asked. Waiting
+# is free; a lost lap costs a whole CI matrix, and this converts the second into
+# the first.
+#
+# `heartbeat_pid` renews the lease for as long as this lap holds it. It must be
+# reaped on EVERY way out — the merged path, a die, a signal — or a dead session
+# leaves a beating lease that nobody can steal, which is the one failure mode
+# that would wedge the fleet rather than merely slow it.
+heartbeat_pid=
+drop_lease() {
+	if [ -n "$heartbeat_pid" ]; then
+		kill -- -"$heartbeat_pid" 2>/dev/null || true
+		heartbeat_pid=
+	fi
+	mise run land-lock release >/dev/null 2>&1 || true
+}
+trap drop_lease EXIT
+trap 'exit 1' INT TERM
 
 # "Does this SHA carry an answer yet?" — the conclusions `ci-wait` grades, over
 # the checks `ci-wait` requires, so the two agree by construction on what counts
@@ -147,10 +172,18 @@ set -m
 [ "$branch" != "main" ] || die "refusing to land from main — work happens on a short-lived branch."
 
 lap=0
+lease_waits=0
 while :; do
 	lap=$((lap + 1))
 	[ "$lap" -le "$max_laps" ] ||
 		die "still not linear after $max_laps laps; main is moving faster than a lap takes. Look before lapping again."
+
+	# A lap holds the lease only across its own CI window. Dropping it here — at
+	# the top, covering every `continue` below uniformly — means a lap that lost
+	# re-queues behind whoever is landing now instead of holding the fleet
+	# through its own rebase and re-verify. Idempotent, so the laps that never
+	# acquired pay nothing.
+	drop_lease
 
 	# --- be a direct descendant of origin/main, or stop for the one decision ---
 	git fetch -q origin main ||
@@ -242,6 +275,44 @@ while :; do
 		die "#$pr defers a decision with no ticket. File it and name the issue in that paragraph, then run land again."
 	fi
 
+	# --- take the lease before anything can start a run -----------------------
+	#
+	# Here, and not later: the push below is what starts CI, so acquiring first
+	# is what makes "only the holder's matrix runs" true. Not earlier either —
+	# `verify` above is ~150s of purely local work touching no shared resource,
+	# and holding across it would lengthen every hold for no exclusivity.
+	#
+	# Before the ready/push pair rather than between them, because that pair is
+	# load-bearing and adjacent (CLOUD-254): readying first makes the push's own
+	# `synchronize` the confirming run, and anything inserted between them risks
+	# the two events landing in one `concurrency: ci-<ref>` group.
+	#
+	# A lease we cannot win is an ordinary lap, not a failure: `acquire` already
+	# waited, so someone else is mid-landing and `main` is about to move. Lapping
+	# re-fetches and rebases, and the receipt short-circuit skips `verify` when
+	# `main` did not move — so the wait costs a poll, never a CI run.
+	if ! mise run land-lock acquire; then
+		echo "land: lap $lap — another branch holds the landing lease; lapping rather than spending a run behind it"
+		# This lap spent no CI, so it does not count against a backstop that
+		# exists to catch "main is moving faster than a lap takes". Counting it
+		# would make a busy fleet exhaust LAND_MAX_LAPS on waiting alone and give
+		# up without ever having attempted — the opposite of what the lease is
+		# for.
+		lap=$((lap - 1))
+		# Waits get their own backstop instead, because "never counted" is how a
+		# loop becomes unbounded with no condition that can fire: a lease nobody
+		# ever releases would spin here forever. This is not a wall clock on a
+		# poll — each wait already ran its full LAND_LOCK_WAIT — it is a count of
+		# consecutive whole waits lost, which is a real and diagnosable state: the
+		# fleet is landing faster than this branch can get a turn.
+		lease_waits=$((lease_waits + 1))
+		[ "$lease_waits" -le "$max_waits" ] ||
+			die "never won the landing lease in $max_waits attempts; the fleet is saturated. Look before lapping again."
+		continue
+	fi
+	mise run land-lock hold >/dev/null 2>&1 &
+	heartbeat_pid=$!
+
 	readied=0
 	if [ "$(graded_runs "$sha")" = "0" ] &&
 		[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
@@ -296,7 +367,13 @@ while :; do
 		echo $? >"$rc_main"
 	) &
 	main_pid=$!
-	wait -n
+	# Named pids, not a bare `wait -n`. A bare one returns on the FIRST job of
+	# any kind to exit, and the lease heartbeat is also a job of this shell — so
+	# a heartbeat that ends (its lease lost, or a stub in the suite that returns
+	# at once) would be read as this race concluding, leaving both result files
+	# empty and the lap reporting "no verdict". Measured: it turned every lap of
+	# tests/land.bats into a no-verdict lap.
+	wait -n "$ci_pid" "$main_pid"
 	kill -- -"$ci_pid" -"$main_pid" 2>/dev/null
 	wait 2>/dev/null
 	ci_rc="$(cat "$rc_ci" 2>/dev/null)"
@@ -330,6 +407,17 @@ while :; do
 	# instantly, turning the old hang into a livelock.
 	SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	export SINCE
+
+	# THE FENCE. Ask for the merge only while the lease is still ours. A session
+	# paused past its TTL — a throttled VM, a long stall — has been stolen from,
+	# and commenting anyway would put two branches in the fast-forward queue at
+	# once, which is the collision the lease exists to remove. Cheap stand-in for
+	# a fencing token: the lock cannot stop a comment, so the holder checks
+	# immediately before making one.
+	if ! mise run land-lock held; then
+		echo "land: lap $lap — the landing lease was lost before the comment; lapping rather than racing its new holder"
+		continue
+	fi
 
 	gh pr comment "$pr" --body "/fast-forward"
 	echo "land: lap $lap — commented /fast-forward on #$pr ($sha); waiting for the merge"

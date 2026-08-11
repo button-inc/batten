@@ -777,8 +777,8 @@ workflow_runs() {
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 13 ] || {
-		echo "land has $stops stopping conditions; this suite covers 13."
+	[ "$stops" -eq 14 ] || {
+		echo "land has $stops stopping conditions; this suite covers 14."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -787,9 +787,13 @@ workflow_runs() {
 	# and CLOUD-246's exit is one of those. Counting only the dies would have
 	# left the new branch exactly as unwatched as the refusal branch once was,
 	# which is the mistake this assertion exists to stop repeating.
+	# 14 and 6 since CLOUD-393: the landing lease adds one stop (the fleet is
+	# saturated — every turn lost) and two laps (the lease is held by someone
+	# else, and the lease was lost before the comment). This assertion caught all
+	# three the moment they were added, which is the whole point of it.
 	laps=$(grep -cE '^[[:space:]]*continue$' "$LAND")
-	[ "$laps" -eq 4 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 4."
+	[ "$laps" -eq 6 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 6."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
@@ -832,4 +836,73 @@ deletes() { grep -c . "$BATS_TEST_TMPDIR/deletes" || true; }
 	run "$LAND"
 	[ "$status" -eq 1 ]
 	[ "$(deletes)" -eq 0 ]
+}
+
+# --- the landing lease (CLOUD-393) -----------------------------------------
+#
+# `land`'s side of the lock, not the lock itself: tests/land-lock.bats owns the
+# atomicity claim against a real remote. What these pin is the discipline — the
+# lease is taken before anything can start a run, re-checked before the merge is
+# asked for, and never leaked on a way out.
+
+lock_calls() { grep -c "^run land-lock $1\$" "$BATS_TEST_TMPDIR/misecalls" || true; }
+
+@test "the lease is taken before the push, so no run starts unheld" {
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	# The acquire must precede the first push in the recorded order; a lease
+	# taken after the push would let CI start on a branch that never held it.
+	acq=$(grep -n '^run land-lock acquire$' "$BATS_TEST_TMPDIR/misecalls" | head -1 | cut -d: -f1)
+	[ -n "$acq" ]
+	[ "$(lock_calls acquire)" -ge 1 ]
+}
+
+@test "a lease held by someone else waits instead of pushing, and says so" {
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=2 run "$LAND"
+	# No push, so no CI was spent on a branch that could not have landed.
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"another branch holds the landing lease"* ]]
+	[ "$(call_order)" = "" ]
+	# And it ends on the saturation signal, not the lap cap: a wait is not a lap,
+	# but "never won a turn" still has to be a condition that can fire.
+	[[ "$output" == *"never won the landing lease in 2 attempts"* ]]
+}
+
+@test "a lost lease is caught BEFORE the merge is asked for" {
+	# The fence. `held` fails only after the acquire has succeeded, which is the
+	# stolen-lease shape: the lap must lap rather than comment.
+	cat >"$STUB/mise" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"$BATS_TEST_TMPDIR/misecalls"
+case "\$2" in
+  verify)     : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
+  verified)   [ -f "$BATS_TEST_TMPDIR/receipt" ] || exit 1; exit 0 ;;
+  land-lock)  [ "\$3" != held ] || exit 1; exit 0 ;;
+  main-watch) while :; do sleep 1; done ;;
+esac
+exit 0
+EOF
+	chmod +x "$STUB/mise"
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"lease was lost before the comment"* ]]
+	[ ! -s "$BATS_TEST_TMPDIR/comments" ]
+}
+
+@test "the lease is released on the merged path" {
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ "$(lock_calls release)" -ge 1 ]
+}
+
+@test "the lease is released on a die path too — a leak would wedge the fleet" {
+	not_linear
+	fails rebase
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[ "$(lock_calls release)" -ge 1 ]
 }

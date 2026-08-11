@@ -119,8 +119,30 @@ That second shape is what makes the ceiling bite sooner than the N ≈ 2.9 model
 predicts: the model prices a lap at verify + CI, and the bot's silence is a third
 term nobody measured. Raising `LAND_MAX_LAPS` (the task's own documented bound)
 buys more attempts within one invocation but does not change the per-lap odds —
-it spends CI minutes against a losing bet. The lever is unchanged and now more
-urgent: **shorten the lap, or quiet `main`; never add sessions.**
+it spends CI minutes against a losing bet.
+
+**Then the bot was measured, and it is not the term. Superseded 2026-08-11
+22:01Z (CLOUD-399).** Over `fast-forward.yml`'s full available history — **400
+runs, 21:31→22:01Z**, 248 executed, 152 skipped by the `author_association` gate
+— the bot answered **every** attempt: dispatch lag 0s, answer time median
+**12s**, **max 23s**. It is never slow. And it is not silent: **243 of the 248
+concluded `failure`**, the failing step being `sequoia-pgp/fast-forward` itself —
+real "not a fast-forward" refusals against a branch that had gone behind.
+
+So "the bot is not rejecting the fast-forward; it is slower than `main`" above is
+**wrong**. The reading it came from is explained by a second defect (CLOUD-409):
+`land` picks its refusal verdict out of an unfiltered 20-run window, which at 13
+runs/minute is ~90s of history containing every PR's refusals — so a lap cannot
+reliably tell its own verdict from a stranger's, and the log stops being evidence.
+
+The measured shape is a **thundering herd**: 248 landing attempts in 30 minutes
+producing **5 merges**, a ~2% per-attempt success rate. That falsifies — rather
+than merely argues with — "in a fast-forward trunk nothing queues there" above.
+The queue already exists; it is implemented as 243 discarded CI matrices per half
+hour instead of as a lease, which is the expensive way to have one. Shortening the
+lap is still worth doing and is no longer sufficient: at 2% per attempt, halving
+`L` does not converge. CLOUD-393 builds the lease; **the lever is now: serialise
+the landing, shorten the lap, quiet `main` — never add sessions.**
 
 One term that measurement prices too high, from a second branch lapping the same
 window (CLOUD-68): **the lap gets cheaper as it goes.** Cargo caches warm across

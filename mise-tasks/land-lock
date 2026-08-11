@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+#MISE description="Effect: hold a rolling fleet-wide landing lease, so exactly one branch at a time spends CI on a landing attempt"
+#
+# WHY THIS EXISTS. Landing is fast-forward only, so a branch wins only while it
+# is still a direct descendant of `main`. With several sessions landing at once
+# every attempt races every other, and the loser has already paid for a full CI
+# matrix by the time it asks. Measured 2026-08-11 21:31->22:01Z over the whole
+# available `fast-forward.yml` history: 400 runs, 248 executed, **243 refusals
+# against 5 merges** — a ~2% success rate per attempt. The bot was never the
+# problem; it answered every one of those 248 within 23s (median 12s). The cost
+# is a thundering herd (CLOUD-393, CLOUD-399).
+#
+# So the queue already exists — it is just implemented as 243 discarded CI
+# matrices per half hour instead of as a lease. This is the lease. Waiting costs
+# nothing; a lost lap costs a CI run, and turning the second into the first is
+# the entire point.
+#
+# WHAT IT IS NOT. It does not change what CI proves, which SHA may land, or how
+# `main` advances — `final` still gates the fast-forward and `main` still only
+# ever takes an already-graded commit. It decides who goes first, nothing else.
+# It also deliberately does NOT red or cancel anyone else's PR: red must keep
+# meaning "this change is broken", and cancelling another ref's runs would
+# reverse CLOUD-240's "supersede your own runs, never someone else's".
+#
+# THE PRIMITIVE, and why the lease is a BRANCH. Two properties are needed, and
+# both were measured here rather than assumed:
+#
+#   1. Create must be an atomic test-and-set. Pushing a parentless commit to an
+#      absent ref creates it; pushing one to a ref that exists is rejected as a
+#      non-fast-forward. Measured: exit 0 then exit 1 against the real remote.
+#   2. Renewal must be compare-and-swap, or a heartbeat can clobber a lease that
+#      changed hands. `git push --force-with-lease=<ref>:<observed>` is exactly
+#      that. Measured: the correct expected value wins, a stale one is rejected
+#      with `stale info`.
+#
+# Both hold ONLY under `refs/heads/`. A custom namespace fails on both counts
+# here: the agent proxy answers 403 to a push at any ref outside `refs/heads`,
+# and GitHub's ref API does not enforce the fast-forward rule off `refs/heads`
+# at all — a PATCH of a parentless orphan with `force: false` was accepted (422
+# "Update is not a fast forward" came back only for a branch). So the lease is a
+# branch, and `branch-age-check` is taught to skip it rather than the lease being
+# bent to fit the gate.
+#
+# The one thing that does NOT go through git is the delete: the proxy answers 403
+# to a delete-push too, so `release` goes through the REST API. That asymmetry is
+# environmental, not a design choice.
+#
+# The holder id in the lease body is load-bearing rather than decorative: git
+# addresses objects by content, so two sessions building an identical lease would
+# build the SAME sha, and the second push would succeed as a no-op with both
+# believing they hold it.
+#
+# LIVENESS: the TTL rolls, and that changes what the number has to mean. A static
+# TTL has to bound how long a hold might legitimately take — a guess about the
+# future, wrong in both directions: too low and a slow CI run has its lease stolen
+# mid-flight, too high and a reclaimed VM blocks the fleet for the whole window. A
+# rolling lease only has to bound how long until we NOTICE a holder stopped
+# beating, which is small, stable, and independent of how long CI takes. Hence a
+# 30s beat against a 120s TTL: three missed beats before a lease is declared dead
+# is the usual Raft/etcd margin, so one transient failure never drops a live
+# lease, and a dead holder blocks landing for ~2 minutes rather than ~17.
+#
+# Output is pointer-only (non-negotiable 4): a holder id and an age in seconds,
+# never a ref body. Exit codes follow the one contract: 0 acquired/held, 1 held
+# by someone else, 2 could not look.
+set -euo pipefail
+
+verb="${1:-}"
+case "$verb" in
+acquire | hold | renew | held | release | status) ;;
+*)
+	echo "::error:: usage: land-lock <acquire|hold|renew|held|release|status>" >&2
+	exit 2
+	;;
+esac
+
+remote="${LAND_LOCK_REMOTE:-origin}"
+branch="${LAND_LOCK_BRANCH:-batten-land-lock}"
+ref="refs/heads/$branch"
+ttl="${LAND_LOCK_TTL:-120}"
+beat="${LAND_LOCK_HEARTBEAT:-30}"
+# How long `acquire` waits before handing the caller its turn back. Past one TTL
+# the holder is either beating (and the wait is legitimate) or dead (and the
+# lease is stealable), so a longer wait can only mean something more waiting will
+# not fix.
+wait_for="${LAND_LOCK_WAIT:-$ttl}"
+
+git rev-parse --git-dir >/dev/null 2>&1 || {
+	echo "::error:: land-lock: not a git repository" >&2
+	exit 2
+}
+
+state_dir="$(git rev-parse --git-dir)/batten-land-lock"
+holder_file="$state_dir/holder"
+
+now() { date -u +%s; }
+
+# One id per clone, minted once and reused by every later verb, because `hold`,
+# `held` and `release` run as separate processes from the `acquire` that won: a
+# per-process id would leave the holder unable to recognise its own lease.
+holder_id() {
+	if [ ! -s "$holder_file" ]; then
+		mkdir -p "$state_dir"
+		printf '%s-%s-%s\n' "${HOSTNAME:-host}" "$$" \
+			"$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')" >"$holder_file"
+	fi
+	cat "$holder_file"
+}
+
+# A lease is a parentless commit over the empty tree, so it shares no history
+# with anything and can never fast-forward over a live lease.
+#
+# The nonce is not decoration. Git addresses objects by content, so two mints
+# agreeing on holder and expiry — the same clone renewing twice inside one
+# second, or two clones colliding on both fields — produce the SAME sha, and
+# pushing a sha the ref already points at is an "up to date" no-op that reports
+# success. That turns a rejected claim into an apparent win. Measured: without
+# it, a second `acquire` from the holder reported "acquired" rather than
+# recognising its own lease, and a renew left the ref unmoved.
+mint() {
+	local tree
+	tree=$(git hash-object -t tree /dev/null)
+	printf 'land-lock\nholder: %s\nexpires: %s\nnonce: %s\n' \
+		"$(holder_id)" "$(($(now) + ttl))" \
+		"$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')" |
+		git commit-tree "$tree"
+}
+
+observed_sha=
+observed_holder=
+observed_expires=
+# Reads the remote lease, leaving the three `observed_*` empty when it is absent.
+# Exit 2 is reserved for "could not look" — an unreachable remote must never read
+# as an unheld lock, since that is precisely the misread that would let two
+# sessions land at once.
+observe() {
+	local ls body
+	observed_sha=
+	observed_holder=
+	observed_expires=
+	ls=$(git ls-remote "$remote" "$ref" 2>/dev/null) || {
+		echo "::error:: land-lock: cannot reach $remote; read mem:github-access before concluding the network is blocked." >&2
+		return 2
+	}
+	[ -n "$ls" ] || return 0
+	observed_sha=${ls%%$'\t'*}
+	git fetch -q "$remote" "$ref" 2>/dev/null || {
+		echo "::error:: land-lock: lease present but unreadable" >&2
+		return 2
+	}
+	body=$(git show -s --format=%B FETCH_HEAD)
+	observed_holder=$(printf '%s\n' "$body" | sed -n 's/^holder: //p')
+	observed_expires=$(printf '%s\n' "$body" | sed -n 's/^expires: //p')
+	# A lease we cannot parse is one we do not understand, and treating it as
+	# free would be the same misread as an unreachable remote. Give it a full
+	# TTL from now so it is respected until it ages out, never ignored.
+	[ -n "$observed_expires" ] || observed_expires=$(($(now) + ttl))
+	return 0
+}
+
+# Compare-and-swap the lease from $1 to a fresh one. The expected value is what
+# makes this safe to call from a heartbeat: a lease that changed hands under us
+# is rejected rather than clobbered.
+swap() { git push --quiet --force-with-lease="$ref:$1" "$remote" "$(mint):$ref" 2>/dev/null; }
+claim() { git push --quiet "$remote" "$(mint):$ref" 2>/dev/null; }
+# Deleting goes through the API because the proxy 403s a delete-push. There is no
+# lease guard available on this path, so every caller checks `mine` first.
+drop() { gh api -X DELETE "repos/{owner}/{repo}/git/$ref" >/dev/null 2>&1; }
+
+expired() { [ "$(now)" -gt "${observed_expires:-0}" ]; }
+mine() { [ -n "$observed_holder" ] && [ "$observed_holder" = "$(holder_id)" ]; }
+age() { echo $((ttl - (observed_expires - $(now)))); }
+
+case "$verb" in
+acquire)
+	deadline=$(($(now) + wait_for))
+	# Jittered exponential backoff — the CSMA/CD posture mem:workflow/agent-fanout
+	# already argues for. The jitter is the load-bearing half: without it every
+	# waiter wakes on the same schedule and re-collides the instant a lease drops,
+	# which is the herd this task exists to disperse.
+	delay=2
+	while :; do
+		if claim; then
+			echo "land-lock: acquired by $(holder_id), ${ttl}s lease"
+			exit 0
+		fi
+		observe || exit 2
+		if [ -z "$observed_sha" ]; then
+			continue # released between our claim and our look; try again at once
+		fi
+		if mine; then
+			echo "land-lock: already held by this clone"
+			exit 0
+		fi
+		# Stealing is the same compare-and-swap as a heartbeat, so two sessions
+		# stealing one dead lease cannot both win: the second sees stale info.
+		# Seconds past the VICTIM's expiry, computed directly rather than through
+		# `age`: that helper measures a lease against OUR ttl, which is not the
+		# one the dead holder was running under.
+		if expired && swap "$observed_sha"; then
+			echo "land-lock: stole a lease $(($(now) - observed_expires))s past expiry from $observed_holder"
+			exit 0
+		fi
+		if [ "$(now)" -ge "$deadline" ]; then
+			echo "land-lock: still held by $observed_holder after ${wait_for}s"
+			exit 1
+		fi
+		sleep $((delay + RANDOM % delay))
+		[ "$delay" -ge 30 ] || delay=$((delay * 2))
+	done
+	;;
+
+renew)
+	observe || exit 2
+	{ [ -n "$observed_sha" ] && mine; } || exit 1
+	swap "$observed_sha" || exit 1
+	exit 0
+	;;
+
+hold)
+	# The heartbeat. `land` backgrounds this for the length of the hold and kills
+	# it from the same trap that releases. It exits non-zero the moment the lease
+	# stops being ours, which is the signal that something took it — the `held`
+	# check before the comment is the backstop that acts on that.
+	while :; do
+		sleep "$beat"
+		observe || continue # a blip is not a lost lease; the TTL is 3 beats wide
+		{ [ -n "$observed_sha" ] && mine; } || {
+			echo "land-lock: lease lost to ${observed_holder:-nobody}"
+			exit 1
+		}
+		swap "$observed_sha" || {
+			echo "land-lock: lease changed hands while renewing"
+			exit 1
+		}
+	done
+	;;
+
+held)
+	# The pre-comment re-check, and the cheap stand-in for a fencing token. A
+	# holder that was paused past its TTL and stolen from MUST discover that
+	# before it comments `/fast-forward`, not after — acting on a lease you no
+	# longer hold is how a lock protocol reintroduces the collision it removed.
+	observe || exit 2
+	{ [ -n "$observed_sha" ] && mine && ! expired; } || exit 1
+	exit 0
+	;;
+
+release)
+	observe || exit 2
+	# Releasing a lease we do not hold is not an error: the trap that calls this
+	# fires on every exit path, including ones that never acquired. Exiting
+	# non-zero there would turn an orderly cleanup into a reported failure.
+	{ [ -n "$observed_sha" ] && mine; } || exit 0
+	drop || {
+		echo "land-lock: could not release; it expires in $((observed_expires - $(now)))s"
+		exit 0
+	}
+	echo "land-lock: released after $(age)s"
+	exit 0
+	;;
+
+status)
+	observe || exit 2
+	if [ -z "$observed_sha" ]; then
+		echo "land-lock: unheld"
+		exit 0
+	fi
+	if expired; then
+		echo "land-lock: held by $observed_holder, EXPIRED $(($(now) - observed_expires))s ago"
+	else
+		echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left"
+	fi
+	mine && exit 0
+	exit 1
+	;;
+esac
