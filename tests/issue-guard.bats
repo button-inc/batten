@@ -32,11 +32,18 @@ setup() {
 	# exactly as it did.
 	STUB="$BATS_TEST_TMPDIR/bin-$BATS_TEST_NUMBER"
 	mkdir -p "$STUB"
+	# A competitor's title, body and commits are three separate reads since
+	# CLOUD-378 — the guard asks `claimed-keys` which of them is a CLAIM, and a
+	# stub that answered one blob for all three could not tell the cases apart.
+	# `STUB_BODY` keeps its name and its meaning (the competitor's body), so
+	# every case written before that split reads the same.
 	cat >"$STUB/gh" <<-'EOF'
 		#!/usr/bin/env bash
 		case "$*" in
 		*"pr view --json number"*) printf '{"number":%s,"title":"","body":"%s"}\n' "${STUB_SELF:-0}" "${STUB_SELF_BODY:-}" ;;
 		*"pr list"*) printf '%s\n' "${STUB_PRS:-}" ;;
+		*"pr view "*"--json title "*) printf '%s\n' "${STUB_TITLE:-}" ;;
+		*"pr view "*"--json commits "*) printf '%s\n' "${STUB_COMMITS:-}" ;;
 		*"pr view "*) printf '%s\n' "${STUB_BODY:-}" ;;
 		*) exit 1 ;;
 		esac
@@ -162,15 +169,17 @@ Refs: CLOUD-178"
 # a single `Refs:` trailer is a claim.
 
 @test "an issue already claimed by another open PR is denied" {
+	# The competitor's TITLE names the issue — this repo ends every PR title
+	# with `(CLOUD-<n>)`, so a title is a self-declaration the way a branch is.
 	STUB_SELF=144 STUB_PRS="145 claude/fail-on-warning-setting-wc1wdx" \
-		STUB_BODY="feat: promote warn findings (CLOUD-49)" \
+		STUB_TITLE="feat: promote warn findings (CLOUD-49)" \
 		run guard 'gh pr create --draft --body Closes CLOUD-49'
 	denied "$output"
 	[[ "$output" == *"#145"* ]]
 }
 
 @test "the duplicate denial names the competing PR and the way out" {
-	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_BODY="CLOUD-49" \
+	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_TITLE="CLOUD-49" \
 		run guard 'gh pr create --body Fixes CLOUD-49'
 	[[ "$output" == *"claim-check"* ]]
 	[[ "$output" == *"BATTEN_ISSUE_GUARD_BYPASS"* ]]
@@ -199,8 +208,54 @@ Refs: CLOUD-178"
 
 @test "a near-miss issue number does not collide" {
 	# CLOUD-4 must not match a PR claiming CLOUD-49.
-	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_BODY="CLOUD-49" \
+	STUB_SELF=144 STUB_PRS="145 some-branch" STUB_TITLE="CLOUD-49" \
 		run guard 'gh pr create --body Closes CLOUD-4'
+	! denied "$output"
+}
+
+# --- The competitor is asked the same question this branch is (CLOUD-378) -----
+#
+# The narrowing above was applied to THIS branch and not to the other one, so a
+# PR citing the key as evidence read as racing it. Measured on #306, whose only
+# mention of CLOUD-133 is a row of an evidence table, refusing CLOUD-133's own
+# first PR.
+
+@test "a competitor that merely CITES the issue in its body is not a claim" {
+	# The measured case. The competitor claims CLOUD-268 by branch and title,
+	# and names CLOUD-133 once as evidence.
+	STUB_SELF=144 \
+		STUB_PRS="306 wenzowski/cloud-268-design-agent-neutral-attribution" \
+		STUB_TITLE="docs(agents): point at the attribution decision record (CLOUD-268)" \
+		STUB_BODY="| Provenance records (CLOUD-133 fields, joined by SHA) | CLOUD-275 |" \
+		run guard 'gh pr create --draft --body Closes CLOUD-133'
+	! denied "$output"
+}
+
+@test "a competitor whose body CLOSES the issue is a claim, whatever its branch says" {
+	# The escape hatch `claimed-keys` documents, applied to the other side: a
+	# branch whose name no longer reflects the work says so in the body.
+	STUB_SELF=144 STUB_PRS="150 some-bundle-branch" STUB_TITLE="chore: unrelated" \
+		STUB_BODY="Closes CLOUD-49 — the fail-on-warning setting." \
+		run guard 'gh pr create --body Closes CLOUD-49'
+	denied "$output"
+	[[ "$output" == *"#150"* ]]
+}
+
+@test "a competitor whose commits carry the Refs: trailer is a claim" {
+	# Source 3, which the inline derivation could not reach at all: a PR whose
+	# branch and title name nothing and whose body cites nothing.
+	STUB_SELF=144 STUB_PRS="151 claude/some-branch" STUB_TITLE="chore: tidy" \
+		STUB_COMMITS="chore: tidy the thing"$'\n'"Refs: CLOUD-49" \
+		run guard 'gh pr create --body Closes CLOUD-49'
+	denied "$output"
+	[[ "$output" == *"#151"* ]]
+}
+
+@test "a competitor citing the key in a commit message is still not a claim" {
+	# The same conflation one level down: a commit body may cite prior work.
+	STUB_SELF=144 STUB_PRS="152 claude/some-branch" STUB_TITLE="chore: tidy" \
+		STUB_COMMITS="chore: tidy"$'\n'"Measured against CLOUD-49 and CLOUD-37." \
+		run guard 'gh pr create --body Closes CLOUD-49'
 	! denied "$output"
 }
 
@@ -220,7 +275,7 @@ Refs: CLOUD-178"
 	# which issue it is actually for.
 	git checkout -q -b claude/cloud-37-49-config-7ssbsh
 	STUB_SELF=999 STUB_PRS="150 claude/git-state-core-primitives" \
-		STUB_BODY="feat: git state primitives (CLOUD-37)" \
+		STUB_TITLE="feat: git state primitives (CLOUD-37)" \
 		run guard 'gh pr create --draft --body Closes CLOUD-230'
 	! denied "$output"
 }
@@ -230,7 +285,7 @@ Refs: CLOUD-178"
 	# available, so a live PR for it is a genuine collision to report.
 	git checkout -q -b claude/cloud-37-49-config-7ssbsh
 	STUB_SELF=999 STUB_PRS="150 claude/git-state-core-primitives" \
-		STUB_BODY="feat: git state primitives (CLOUD-37)" \
+		STUB_TITLE="feat: git state primitives (CLOUD-37)" \
 		run guard 'gh pr create --draft'
 	denied "$output"
 	[[ "$output" == *"#150"* ]]
@@ -238,7 +293,7 @@ Refs: CLOUD-178"
 
 @test "a single-issue branch is an unambiguous claim" {
 	git checkout -q -b wenzowski/cloud-49-add-fail-on-warning
-	STUB_SELF=999 STUB_PRS="145 other" STUB_BODY="CLOUD-49" \
+	STUB_SELF=999 STUB_PRS="145 other" STUB_TITLE="CLOUD-49" \
 		run guard 'gh pr create --draft'
 	denied "$output"
 	[[ "$output" == *"#145"* ]]
@@ -248,7 +303,7 @@ Refs: CLOUD-178"
 	git commit -q --allow-empty -m "fix: a thing
 
 Refs: CLOUD-49"
-	STUB_SELF=999 STUB_PRS="145 other" STUB_BODY="CLOUD-49" \
+	STUB_SELF=999 STUB_PRS="145 other" STUB_TITLE="CLOUD-49" \
 		run guard 'gh pr create --draft'
 	denied "$output"
 }
@@ -281,7 +336,7 @@ Refs: CLOUD-49"
 	git checkout -q -b claude/cloud-37-49-config-7ssbsh
 	STUB_SELF=159 STUB_SELF_BODY="Closes CLOUD-230" \
 		STUB_PRS="150 claude/git-state-core-primitives" \
-		STUB_BODY="feat: git state primitives (CLOUD-37)" \
+		STUB_TITLE="feat: git state primitives (CLOUD-37)" \
 		run guard 'gh pr ready 159'
 	! denied "$output"
 }
@@ -289,7 +344,7 @@ Refs: CLOUD-49"
 @test "a competitor is still caught when the claim comes from our own PR body" {
 	git checkout -q -b some-branch
 	STUB_SELF=160 STUB_SELF_BODY="Closes CLOUD-49" \
-		STUB_PRS="145 other" STUB_BODY="CLOUD-49" \
+		STUB_PRS="145 other" STUB_TITLE="CLOUD-49" \
 		run guard 'gh pr ready 160'
 	denied "$output"
 	[[ "$output" == *"#145"* ]]

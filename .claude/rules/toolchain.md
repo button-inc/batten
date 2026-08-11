@@ -158,10 +158,14 @@ restate its count here), each failing open on anything it can't parse. Most are
 - `issue-guard` denies `gh pr create` and `gh pr ready` unless the work names a
   `CLOUD-<n>` issue — in the branch, in a commit on it, or in the command — and,
   since CLOUD-230, unless that issue is unclaimed: a different **open** PR
-  naming the key (title, body, or branch) is refused, because CLOUD-49 was
-  implemented twice in one cycle and one side was thrown away. GitHub is the
-  source for that lookup, not the tracker, and it fails open when `gh` is
-  absent or failing. It is the _earliest_ computable moment, not an early one:
+  **claiming** the key is refused, because CLOUD-49 was implemented twice in one
+  cycle and one side was thrown away. Claiming, never merely naming — both sides
+  of that comparison go through `claimed-keys`, which is what the key is checked
+  against; the competitor's branch, title and `Refs:` trailers are
+  self-declarations, its body counts only through a closing keyword. Applying
+  the narrowing to one side and not the other made a PR citing the key as
+  evidence read as racing it (CLOUD-378). GitHub is the source for that lookup,
+  not the tracker, and it fails open when `gh` is absent or failing. It is the _earliest_ computable moment, not an early one:
   no artifact exists at pull time for a hook to inspect, so opening the draft PR
   before the work is what makes the refusal cheap. The
   board rule was prose, and prose is feedforward only: a session followed every

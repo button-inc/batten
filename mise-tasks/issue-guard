@@ -254,10 +254,30 @@ while read -r key; do
 		# Our own PR is not a competitor — otherwise `pr ready` would deny the
 		# very PR it is readying, every time.
 		[ "$number" = "$self" ] && continue
-		# A branch-name hit only counts when the branch actually carries the key;
-		# the unfiltered listing above is deliberately broad and filtered here.
-		if grep -qiE "(^|[^0-9])${key}([^0-9]|$)" <<<"$head" ||
-			grep -qiE "(^|[^0-9])${key}([^0-9]|$)" <<<"$(gh pr view "$number" --json title,body --jq '.title + " " + .body' 2>/dev/null || true)"; then
+		# The competitor is asked the SAME question, through the same authority
+		# (CLOUD-378). This used to be a bare mention of the key in the other
+		# PR's branch, title or body — so the narrowing above was applied to one
+		# side of the comparison and not the other, and a PR citing the key as
+		# evidence read as racing it. Measured: #306 (`docs(agents): … at the
+		# attribution decision record (CLOUD-268)`) names CLOUD-133 in one row of
+		# an evidence table, and refused CLOUD-133's own PR.
+		#
+		# Every source is passed explicitly because none of them is local: the
+		# head branch and the title are the PR's self-declaration, its commit
+		# messages carry the `Refs:` trailer, and the body is stdin — evidence
+		# that counts only through a closing keyword.
+		theirs=$(
+			"$(dirname "$0")/claimed-keys" \
+				--branch "$head" \
+				--title "$(gh pr view "$number" --json title --jq '.title' 2>/dev/null || true)" \
+				--log "$(gh pr view "$number" --json commits \
+					--jq '.commits | map(.messageHeadline + "\n" + .messageBody) | join("\n")' 2>/dev/null || true)" \
+				<<<"$(gh pr view "$number" --json body --jq '.body' 2>/dev/null || true)" 2>/dev/null || true
+		)
+		# Exact line match: `claimed-keys` emits one uppercased key per line, and
+		# `$key` came out of the same function, so no substring rule is needed and
+		# CLOUD-4 cannot match CLOUD-49.
+		if grep -qxF "$key" <<<"$theirs"; then
 			deny "Refused: $key is already claimed by open PR #$number (branch \`$head\`). Two agents on one issue is work that gets thrown away — it has happened in this repo, and the discarded side had already been written and verified before anyone noticed.
 
 Check the board before opening a second front: pipe the issue's payload to \`mise run claim-check\`, and take the frontier from \`mise run graph-check\` rather than a stale snapshot read at session start. If #$number is stale or abandoned, say so on the issue and close it rather than racing it.

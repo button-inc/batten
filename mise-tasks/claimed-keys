@@ -19,13 +19,38 @@
 #      commit on the branch. It OVERRIDES the branch, which is the escape hatch
 #      for a branch whose name no longer reflects the work.
 #   2. failing that, the branch name — the tracker's own `gitBranchName` shape
-#      names the issue being worked, so a branch is a claim.
+#      names the issue being worked, so a branch is a claim — together with the
+#      PR TITLE where a caller supplies one (see the explicit sources below).
 #   3. failing that, a `Refs:` trailer on a commit.
 #
 # When none resolves, the answer is EMPTY and that is not an error: every caller
 # treats "no claim" as "do not judge", because a guard that guesses is one that
 # blocks correct work. Outside a git repo the same applies — exit 0, print
 # nothing, and let the caller behave exactly as it did before it asked.
+#
+# EXPLICIT SOURCES, for a PR this checkout did not author (CLOUD-378).
+# `issue-guard` asks the same question about a COMPETING PR — which issue does
+# *it* claim — and had no way to ask it here, because the three sources above are
+# all read from the local repository. So it re-derived the answer inline with a
+# bare mention of the key in the other PR's title or body, which is the
+# conflation this whole file exists to refuse, applied to the other side of the
+# comparison. Measured: PR #306 (`docs(agents): … (CLOUD-268)`) cites CLOUD-133
+# in one row of an evidence table and was reported as claiming it.
+#
+#   --branch <name>   the head branch, standing in for source 2
+#   --title <text>    the PR title, ALSO source 2 — for a PR you did not author
+#                     the title is the other self-declaration of what the work
+#                     is, and this repo's own convention ends every title with
+#                     `(CLOUD-<n>)`. A body is not: a body cites evidence.
+#   --log <text>      commit messages, standing in for sources 1 and 3
+#
+# Passing ANY of them switches to explicit mode: git is not consulted at all and
+# an unsupplied source is empty. All-or-nothing rather than per-source fallback,
+# because a remote PR silently answered from the local branch would be the
+# worst kind of wrong — a confident verdict about the wrong repository state.
+# Source 2 is the UNION of branch and title, not a precedence between them: they
+# are two spellings of one self-declaration, and picking one would make the
+# answer depend on which the author happened to fill in.
 #
 # Output is the keys alone, uppercased and sorted, one per line — a pointer set,
 # never the prose they were extracted from (rule 4).
@@ -45,15 +70,43 @@ extract() { grep -oiE "$ISSUE_RE" <<<"$1" | tr '[:lower:]' '[:upper:]' | sort -u
 extra=""
 [ -t 0 ] || extra=$(cat || true)
 
-branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
-
+explicit=0
+branch=""
+title=""
 log=""
-if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
-	log=$(git log --format='%B' origin/main..HEAD 2>/dev/null || true)
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--branch | --title | --log)
+		# A flag with no value is a caller bug, not an empty source: silently
+		# reading the next flag as the value would answer about the wrong text.
+		[ "$#" -ge 2 ] || {
+			echo "::error:: claimed-keys: $1 needs a value" >&2
+			exit 2
+		}
+		case "$1" in
+		--branch) branch="$2" ;;
+		--title) title="$2" ;;
+		--log) log="$2" ;;
+		esac
+		explicit=1
+		shift 2
+		;;
+	*)
+		echo "::error:: claimed-keys: unknown argument" >&2
+		exit 2
+		;;
+	esac
+done
+
+if [ "$explicit" -eq 0 ]; then
+	branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+	if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
+		log=$(git log --format='%B' origin/main..HEAD 2>/dev/null || true)
+	fi
 fi
 
 claimed=$(extract "$(grep -oiE "$CLAIM_RE" <<<"$extra $log" || true)")
-[ -n "$claimed" ] || claimed=$(extract "$branch")
+[ -n "$claimed" ] || claimed=$(extract "$branch $title")
 [ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
 
 [ -n "$claimed" ] && printf '%s\n' "$claimed"
