@@ -49,8 +49,29 @@ Build WIP cap: **2**, enforced at claim time, re-checked after claiming (on an
 overshoot the holder of the lexically-highest id yields). Past ~2–3
 implementers the binding constraint is **land contention**, not compute: every
 land forces siblings to rebase and re-run `verify`, so N ≈ time-between-lands ÷
-verify-duration. A rising re-verify rate is the stop signal, and shortening
-`verify` buys more parallelism than adding sessions. There is deliberately no
+verify-duration. **A rising re-verify rate is NOT the stop signal** — an
+earlier version of this file said it was, and that optimises against the wrong
+cost. `land` laps unattended: a fast-forward refusal rebases and re-verifies
+with no model turn, so a moved base costs CPU and wall-clock, both of which are
+free here, and zero tokens. Re-verifying is the loop working.
+
+What actually costs is narrower, and each has its own control:
+
+| Cost                                  | Control                                                    |
+| ------------------------------------- | ---------------------------------------------------------- |
+| a rebase **conflict** (needs a human) | file-domain partitioning of bundles                        |
+| **CI minutes** on a run `main` voids  | draft until plausibly next; `main-watch` cancels in flight |
+| **tokens**                            | bundles, and `land` lapping without returning to the model |
+
+So the objective is pace of landed work per token, not collision avoidance.
+Coordination between sessions is impossible by construction — there is no
+dispatcher and no lock — so collisions are designed for rather than prevented,
+in the CSMA/CD sense: detect, back off, retry, keep the medium saturated. The
+target state is that **every time a merge lands, at least one sibling is already
+rebased, verified and ready to go in behind it**.
+
+Shortening `verify` still helps, but as latency to that ready state, not as
+headroom for more sessions. There is deliberately no
 cap on In Review: in a fast-forward trunk nothing queues there.
 
 **Measured 2026-08-11, and the model held.** Over three hours `main` took 25
@@ -99,10 +120,14 @@ bundle degrades to a skip rather than a collision.
 Three things about the harness that the procedure encodes because they are
 invisible until they bite:
 
-- **A child's final chat message is never read by the parent.** Whatever the
-  planner concludes must be written to the issue, or it dies with the session.
-  Naming the durable destination is not a nicety in the prompt; it is the
-  difference between a plan and a lost turn.
+- **A child's final chat message is never read by the parent.** Under plan mode
+  this costs nothing — the plan goes to the approval UI and the work goes to
+  commits and PRs, all durable. It matters only for a child that produces a
+  conclusion and no artifact: a research or decision ticket must be told to
+  write to the issue, or its output dies with the session. Do NOT reflexively
+  tell an implementing child to post its plan as a Linear comment; plan mode
+  already has a destination, and a duplicate copy on the issue is a second
+  authority that goes stale the moment the plan changes under review.
 - `permission_mode: "plan"` **is the right default, and is already this
   environment's.** Measured 2026-08-11: children dispatched without it came up
   `PERMISSION_MODE_PLAN` anyway and parked at "Waiting on permission:
