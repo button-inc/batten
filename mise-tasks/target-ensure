@@ -10,13 +10,17 @@
 # testable without a toolchain); this script is the effect half.
 #
 # The lock lives inside the sysroot it protects: each toolchain gets its own
-# lock, and a toolchain swap cannot deadlock on a stale path. The primitive is a
-# DIRECTORY, not flock(1): `mkdir` is an atomic create-or-fail on every
-# filesystem that matters and costs no binary, where `flock` ships with
-# util-linux and simply does not exist on macOS — so the refusal that guarded it
-# fired before any other gate on a Mac (CLOUD-286). The installed-check runs
-# INSIDE the critical section so a caller that queued behind the winner re-reads
-# fresh state and no-ops instead of re-installing.
+# lock, and a toolchain swap cannot deadlock on a stale path. Holding it is
+# `with-lock`'s job — the primitive was written here first and moved out when
+# `doctor` needed the same thing for its own writers (CLOUD-201), because two
+# copies of a lock is two copies of its edge cases and the edges are where the
+# defects are. It is a DIRECTORY rather than flock(1) for the reason recorded
+# there: `flock` does not exist on macOS (CLOUD-286).
+#
+# This script re-execs itself under the lock rather than wrapping a block, so
+# the installed-check below runs INSIDE the critical section — a caller that
+# queued behind the winner re-reads fresh state and no-ops instead of
+# re-installing. The env marker is what stops the child re-exec'ing again.
 #
 # Output is pointer-only (triple + verdict). rustup's download spew is
 # captured; on failure exactly one ::error:: line carries the triple and
@@ -31,61 +35,11 @@ check="$(dirname "$0")/doctor-check"
 mkdir -p "$rustlib"
 lock="$rustlib/.batten-target-lock"
 
-# Legacy transition. Before CLOUD-286 this same path was a regular FILE that
-# flock(1) held, and that file survives on every machine which ever ran doctor.
-# `mkdir` against it can never succeed, so waiting for it to become a directory
-# is a guaranteed timeout on every existing checkout. The file carries no state
-# — the lock was the kernel's, not the bytes' — so drop it. The one hazard is a
-# pre-CLOUD-286 target-ensure running concurrently on this machine, which is a
-# single upgrade's window; a permanent wedge would be forever.
-if [ -e "$lock" ] && [ ! -d "$lock" ]; then
-	rm -f "$lock"
+if [ -z "${BATTEN_TARGET_LOCK_HELD:-}" ]; then
+	export BATTEN_TARGET_LOCK_HELD="$lock"
+	export WITH_LOCK_LABEL="the toolchain lock ($target)"
+	exec "$(dirname "$0")/with-lock" "$lock" -- "$0" "$target"
 fi
-
-# What the kernel used to do for free — drop the flock when the holder dies — is
-# explicit now. The trap covers every ordinary exit including a signal, and a
-# holder that took SIGKILL is reclaimed by the stale check in the wait loop, so
-# an abandoned lock is a delay measured in one poll rather than in the timeout.
-held=no
-release() {
-	if [ "$held" = yes ]; then
-		held=no
-		rm -rf "${lock:?}"
-	fi
-}
-trap release EXIT
-trap 'exit 1' INT TERM
-
-deadline=$((SECONDS + ${TARGET_LOCK_TIMEOUT:-600}))
-dead_seen=
-while ! mkdir "$lock" 2>/dev/null; do
-	holder="$(cat "$lock/pid" 2>/dev/null || true)"
-	# An EMPTY pid file is a holder caught between its mkdir and its write, not
-	# a corpse: absence of evidence is "held", never "free".
-	if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-		# Two consecutive sightings of the SAME dead pid, so a holder that
-		# exited cleanly between the read and the check — its trap already
-		# removing the directory — is never mistaken for one that died holding.
-		# Residual race: two waiters can reclaim one abandoned lock in the same
-		# poll. That costs a rustup conflict in the already-abnormal SIGKILL
-		# case, where the alternative costs every later run the full timeout.
-		if [ "$dead_seen" = "$holder" ]; then
-			rm -rf "${lock:?}"
-			dead_seen=
-			continue
-		fi
-		dead_seen="$holder"
-	else
-		dead_seen=
-	fi
-	if [ "$SECONDS" -ge "$deadline" ]; then
-		echo "::error:: target-ensure: timed out waiting for the toolchain lock ($target)." >&2
-		exit 1
-	fi
-	sleep 0.1
-done
-held=yes
-echo "$$" >"$lock/pid"
 
 installed=no
 if grep -qxF "$target" <<<"$(rustup target list --installed)"; then
