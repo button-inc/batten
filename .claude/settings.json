@@ -12,6 +12,16 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mise run -q mcp-attach-check"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

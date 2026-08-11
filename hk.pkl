@@ -136,6 +136,18 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json")
     check = "mise run mcp-allow-check"
   }
+  // .mcp.json launches Serena through a SCOPED `mise exec` — naming the tool, so
+  // one unrelated tool failing to install cannot take the server down with it
+  // (CLOUD-316: a bare exec provisions the whole toolchain first, and a
+  // transient release-plz network error cost a whole session's Serena). Scoping
+  // writes the pin down a second time, and a drift there is silent in the worst
+  // way: `mise exec` installs whatever version it is handed, so the server keeps
+  // running the old one while mise.lock and the SBOM describe the new. This
+  // gates both halves — the versions agree, and the launch stays scoped.
+  ["mise-pin-agreement"] {
+    glob = List(".mcp.json", "mise.toml")
+    check = "mise run mise-pin-agreement"
+  }
   // A pattern reaching awk through `-v` goes through assignment escape
   // processing first, and what that does to a backslash is undefined across
   // implementations — gawk strips it, mawk keeps it. ready-lint matched its §8

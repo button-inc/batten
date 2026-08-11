@@ -28,12 +28,48 @@ why the first fix was validated green and Serena stayed absent anyway.
    Closed by the synchronous `SessionStart` hook (`.claude/hooks/session-start.sh`)
    running `mise install` **before** the session starts.
 2. **Approval.** A `.mcp.json` server is project-scoped and needs per-project
-   approval. A cold container gets a fresh `~/.claude.json` whose
-   `enabledMcpjsonServers` is `[]`, and a remote session has nobody to answer the
-   prompt — so the server is never launched at all. Closed by committing
-   `"enabledMcpjsonServers": ["serena"]` in `.claude/settings.json`.
+   approval, closed by committing `"enabledMcpjsonServers": ["serena"]` in
+   `.claude/settings.json`. Keep that line.
 
-**Diagnosing "Serena is missing" — do this in order, it is easy to get wrong:**
+   **But `~/.claude.json` is NOT how you check it, and reading `[]` there means
+   nothing** (CLOUD-316). This harness does not record enablement in that file:
+   measured 2026-08-11, `projects["/home/user/batten"].enabledMcpjsonServers`
+   read `[]` while the CLI launched serena anyway. That `[]` is the CLOUD-196
+   signature and it is now a **false** one — it has sent two sessions down the
+   approval path for a launch failure. Evidence that approval worked is a
+   `Starting connection` record in the log, nothing else.
+
+3. **A scoped launch (CLOUD-316).** The one that actually cost a whole session.
+   `.mcp.json` ran a bare `mise exec`, which provisions **every** tool in the
+   active config before it execs anything — so Serena waited on twenty tools and
+   died when one unrelated one failed to install, having itself installed
+   successfully inside the window. `.mcp.json` now names the tool
+   (`mise exec "pipx:serena-agent@<pinned>" -- serena …`), and `mise run
+mise-pin-agreement` gates both that the version agrees with `mise.toml` and
+   that the launch stays scoped — a revert to a bare exec fails the gate.
+
+**Diagnosing "Serena is missing" — do this in order, it is easy to get wrong.**
+**Read the logs FIRST.** Every wrong answer below was reached by reasoning about
+config instead of opening the file that records what happened:
+
+- `~/.cache/claude-cli-nodejs/<cwd with / as ->/mcp-logs-<server>/*.jsonl`, newest
+  file. `Successfully connected` = attached. `Connection failed (…)` = the launch
+  lost, and the parenthesised code says how. `mise run mcp-attach-check` is this
+  read with an exit code, and it fires on `UserPromptSubmit` so a lost server is
+  reported in the session's first turn.
+- Two record shapes mislead, both measured: an `error` **key** usually carries
+  routine `Server stderr: INFO …` chatter on a healthy launch, and the failure
+  code is **not** fixed at `-32000` — the next real occurrence was
+  `CONNECT_TIMEOUT`. Judge the last `Connection failed` / `Successfully
+connected` record, not the presence of an error key or a literal code.
+- `/tmp/claude-code.log` for the harness side: the `Starting connection with
+timeout of 30000ms` line and its timestamp.
+- **A server absent from the tool list at the top of a turn may simply still be
+  connecting.** Measured 2026-08-11: a healthy attach took 12.5s and the tools
+  appeared mid-session. Do not conclude "absent" from an early snapshot — check
+  the log, or just try a tool.
+
+Only after the logs say the launch failed:
 
 - Do **not** reach for `mem:connector-allowlist-recovery`. That covers claude.ai
   connectors (Linear/Gmail/Xero) flipping to UUID tool names. Serena is neither:
@@ -44,8 +80,9 @@ why the first fix was validated green and Serena stayed absent anyway.
 claude-code --project . </dev/null`. A server that starts in ~1s and advertises
   21 tools while absent in-session means the **handshake** lost — not that Serena
   is down. That exact misdiagnosis has been made.
-- Check `~/.claude.json` → `projects["<repo path>"].enabledMcpjsonServers`. `[]`
-  means gate 2 is open regardless of how healthy the binary is.
+- Do **not** check `~/.claude.json` → `projects["<repo path>"]`. Demoted to
+  non-evidence above: this harness does not record enablement there, so `[]` is
+  the normal reading on a session whose server attached fine.
 - Timestamps that establish cold vs warm: `ps -o lstart= -p 1` (container start)
   vs `stat -c '%y' /root/.local/share/mise/installs/pipx-serena-agent/*`. An
   install _after_ container start = cold. **A warm container cannot test any of

@@ -39,22 +39,20 @@ if [ ! -f "$toml" ]; then
 	echo "::error:: $toml is missing; cannot resolve the authoritative pins" >&2
 	exit 2
 fi
-if ! pinned=$(jq -e -r '[.mcpServers // {} | to_entries[] | .key as $s | (.value.args // [])[]
-	| select(type == "string") | select(test("^[a-z0-9]+:.+@.+$")) | "\($s)\t\(.)"] | .[]' "$mcp" 2>/dev/null); then
-	# jq -e exits 1 on an empty result, which is the ordinary "no pins" case and
-	# not a parse failure. Distinguish the two so an unparseable .mcp.json is
-	# never reported as a clean pass.
-	if ! jq -e . "$mcp" >/dev/null 2>&1; then
-		echo "::error:: $mcp is not readable JSON" >&2
-		exit 2
-	fi
-	echo "mise-pin-agreement: no versioned tool references in $mcp — nothing to check"
-	exit 0
+# An unparseable .mcp.json must never be reported as a clean pass; an EMPTY
+# result must never short-circuit the shape check below, which is the predicate
+# that catches a revert to a bare exec (that revert removes every pin, so an
+# early `exit 0` here would greenlight exactly the defect this gate is for).
+if ! jq -e . "$mcp" >/dev/null 2>&1; then
+	echo "::error:: $mcp is not readable JSON" >&2
+	exit 2
 fi
+pinned=$(jq -r '[.mcpServers // {} | to_entries[] | .key as $s | (.value.args // [])[]
+	| select(type == "string") | select(test("^[a-z0-9]+:.+@.+$")) | "\($s)\t\(.)"] | .[]' "$mcp" 2>/dev/null)
 
 fail=0
 report() {
-	[ "$fail" = 0 ] && echo "::error:: $mcp names a tool version that $toml does not pin:" >&2
+	[ "$fail" = 0 ] && echo "::error:: $mcp disagrees with $toml, or launches a server unscoped:" >&2
 	printf '  %s\n' "$1" >&2
 	fail=1
 }
@@ -78,5 +76,25 @@ while IFS=$'\t' read -r server ref; do
 	fi
 done <<<"$pinned"
 
-[ "$fail" = 0 ] && echo "mise-pin-agreement: $checked tool reference(s) in $mcp agree with $toml"
+# --- the shape that made the pin necessary ------------------------------------
+#
+# The pin exists because the exec is SCOPED. Reverting to a bare `mise exec --`
+# would remove every reference above and leave this gate reporting "nothing to
+# check" — green, with the defect restored. So the shape is gated directly: a
+# server launched through `mise exec` must name at least one tool before `--`.
+#
+# This is the regression the issue is actually about. Checking only the versions
+# would gate the cost of the fix and not the fix.
+while IFS= read -r server; do
+	[ -n "$server" ] || continue
+	args=$(jq -r --arg s "$server" '[.mcpServers[$s].args // [] | .[] | select(type == "string")] | .[]' "$mcp" 2>/dev/null)
+	# Everything up to the first `--` is mise's own argv: the subcommand plus
+	# the tools it is scoped to. A bare exec has nothing between them.
+	scoped=$(awk 'BEGIN{seen=0} /^--$/{exit} {if (seen) print} /^exec$/{seen=1}' <<<"$args")
+	if [ -z "$scoped" ]; then
+		report "$server: \`mise exec\` names no tool — a bare exec provisions the whole toolchain and dies with any one of it (CLOUD-316)"
+	fi
+done < <(jq -r '[.mcpServers // {} | to_entries[] | select((.value.command // "") == "mise") | select(((.value.args // [])[0] // "") == "exec") | .key] | .[]' "$mcp" 2>/dev/null)
+
+[ "$fail" = 0 ] && echo "mise-pin-agreement: $checked tool reference(s) in $mcp agree with $toml, and every \`mise exec\` launch is scoped"
 exit "$fail"
