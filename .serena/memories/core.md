@@ -277,7 +277,28 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   `rejected-by-design` is GC-exempt — the decision outlives the branch it was made
   on, and the unbounded retention that buys is accepted and stated.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
-  predicates over the repo. `run_static` (read-effect, no process spawn) backs
+  predicates over the repo. **`Ratchet`** (CLOUD-55) is the fourth kind: a count
+  of `pattern` over `glob`, at a `base` rev vs the working tree, that may only
+  move the declared `direction`. It exists because a test suite cannot be a
+  `protected` path — tests are edited daily — so the computable property is
+  DIRECTION of change, the shape `trust.rs` already uses for config. Counted in
+  AGGREGATE per rule, never per file: a test moved between two matching files
+  changes nothing, so renames are clean with no rename tracking, and the price is
+  that the finding names counts (`glob 2->1`) while `git diff` names locations.
+  The finding's `rule` field stays the plain id — decorating it would make a
+  ratchet the one finding no waiver could suppress, and the waiver is the designed
+  hatch for a legitimate reduction. It is evaluated BEFORE the empty-match early
+  return, which is load-bearing: for every other kind an empty match set is
+  "nothing to inspect", but for a ratchet it is the maximal deletion.
+  `spawns_processes` stays false — it reaches git plumbing, which is a process,
+  but CLOUD-170's invariant is about USER-SUPPLIED CODE (`receipt status` reads
+  the same way), and the strict reading would make the kind enforce-only and cost
+  it `check`. Two traps measured while adopting it: an unanchored literal counts
+  PROSE (a bare `#[ignore]` matched 5 mentions in a tree with zero disabled
+  tests, so the row would have failed on its own documentation — anchor to a
+  newline), and a glob spanning a SUBMODULE counts one side only (`ls-tree` sees a
+  gitlink, the walker sees 228 files: base 637 vs working 1404, a gate that
+  cannot fail — CLOUD-328). `run_static` (read-effect, no process spawn) backs
   `check`; `run_all` (every kind) backs `enforce`. `check` refuses a
   command-executing rule rather than silently skipping it. Each rule pins a
   required `severity` (`RuleSeverity`, no implicit fallback) and a separate

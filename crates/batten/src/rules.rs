@@ -76,6 +76,22 @@ pub enum RuleKind {
     /// This one runs nothing — it is a string match over a command line the
     /// host handed us, so it cannot spawn and stays on the read-safe surface.
     Shape,
+    /// A **count that may only move one way** (CLOUD-55): the total occurrences
+    /// of `pattern` across files matching `glob`, compared between a base rev
+    /// and the working tree, must not move in the banned `direction`.
+    ///
+    /// The kind exists because the property worth gating on a test suite is not
+    /// immutability — tests are edited every day, so a protected path would
+    /// block writing them — but *direction of change*. That is the same shape
+    /// `trust.rs` already encodes for config: which way is weakening is a
+    /// property of the key.
+    ///
+    /// Counted in **aggregate per rule**, never per file: a test moved between
+    /// two files matching the glob changes nothing, so renames and
+    /// consolidations that preserve the suite are clean with no rename tracking.
+    /// The price is that the finding names counts rather than locations, and
+    /// `git diff` answers *where*.
+    Ratchet,
 }
 
 impl RuleKind {
@@ -84,7 +100,12 @@ impl RuleKind {
     /// A new variant must be added here or [`tests::all_covers_every_kind`]
     /// fails — which is what keeps [`RuleKind::spawns_processes`] from silently
     /// defaulting a spawning kind to "safe".
-    pub const ALL: &'static [RuleKind] = &[RuleKind::Forbid, RuleKind::Command, RuleKind::Shape];
+    pub const ALL: &'static [RuleKind] = &[
+        RuleKind::Forbid,
+        RuleKind::Command,
+        RuleKind::Shape,
+        RuleKind::Ratchet,
+    ];
 
     /// The stable lowercase token used in config and machine output (§6).
     #[must_use]
@@ -93,6 +114,7 @@ impl RuleKind {
             RuleKind::Forbid => "forbid",
             RuleKind::Command => "command",
             RuleKind::Shape => "shape",
+            RuleKind::Ratchet => "ratchet",
         }
     }
 
@@ -107,7 +129,17 @@ impl RuleKind {
     #[must_use]
     pub const fn spawns_processes(self) -> bool {
         match self {
-            RuleKind::Forbid | RuleKind::Shape => false,
+            // `Ratchet` reaches git plumbing, which is a *process* — and still
+            // `false`, because this predicate is about user-supplied code, not
+            // about spawning at all. `receipt status` already carries the same
+            // reading with its own `rev-parse`: a read verb may run a fixed VCS
+            // query, and what it must never reach is a command a config named.
+            // A ratchet's git invocations are fixed literals in this crate; the
+            // only configured value that reaches them is a rev, which is data.
+            // Reading this as "no process at all" would make the kind
+            // enforce-only and cost it `check`, which is the surface the gate is
+            // worth having on (CLOUD-55, stated assumption 1).
+            RuleKind::Forbid | RuleKind::Shape | RuleKind::Ratchet => false,
             RuleKind::Command => true,
         }
     }
@@ -123,6 +155,7 @@ impl RuleKind {
             // with nothing but an id is the un-actionable shape CLOUD-122 exists
             // to prevent.
             RuleKind::Shape => &["pattern", "reason"],
+            RuleKind::Ratchet => &["glob", "pattern", "direction", "base"],
         }
     }
 
@@ -143,6 +176,17 @@ impl RuleKind {
             // the store, so an identity column on one is decorative by
             // construction (non-negotiable rule 6).
             RuleKind::Shape => &["pattern", "reason", "contains", "policy_url"],
+            // No `identity_key` or `verbatim`: a ratchet hashes no span — its
+            // finding is a pair of integers about a whole rule — so either
+            // column would name a normalization that applies to nothing.
+            RuleKind::Ratchet => &[
+                "glob",
+                "pattern",
+                "direction",
+                "base",
+                "reason",
+                "policy_url",
+            ],
         }
     }
 
@@ -155,7 +199,7 @@ impl RuleKind {
     #[must_use]
     pub const fn scopes(self) -> &'static [RuleScope] {
         match self {
-            RuleKind::Forbid | RuleKind::Command => &[RuleScope::Tree],
+            RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet => &[RuleScope::Tree],
             RuleKind::Shape => &[RuleScope::MediatedCall],
         }
     }
@@ -304,6 +348,55 @@ pub struct Rule {
     /// is a deliberate re-mint, not a rename.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_key: Option<String>,
+    /// Which way a [`RuleKind::Ratchet`] count may move. Required by that kind,
+    /// rejected by every other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<Direction>,
+    /// The git rev a [`RuleKind::Ratchet`] counts against. Any rev git resolves;
+    /// one it cannot is a usage error naming the rev, never a pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+}
+
+/// Which way a ratcheted count may move.
+///
+/// Named for the *permitted* direction rather than the banned one, so a config
+/// row reads as the promise it makes: `non_decreasing` says this count will not
+/// fall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Direction {
+    /// The count may rise or hold, never fall. The test-deletion guard.
+    NonDecreasing,
+    /// The count may fall or hold, never rise. The new-`#[ignore]` guard.
+    NonIncreasing,
+}
+
+impl Direction {
+    /// Every direction, so a census is derived rather than hand-maintained.
+    pub const ALL: &'static [Direction] = &[Direction::NonDecreasing, Direction::NonIncreasing];
+
+    /// The stable config token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Direction::NonDecreasing => "non_decreasing",
+            Direction::NonIncreasing => "non_increasing",
+        }
+    }
+
+    /// Whether moving from `base` to `working` broke the promise.
+    ///
+    /// Equality is never a violation in either direction — a ratchet bans
+    /// movement, not stasis.
+    #[must_use]
+    pub const fn violated(self, base: usize, working: usize) -> bool {
+        match self {
+            Direction::NonDecreasing => working < base,
+            Direction::NonIncreasing => working > base,
+        }
+    }
 }
 
 impl Rule {
@@ -341,7 +434,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 8] {
+    fn columns(&self) -> [(&'static str, bool); 10] {
         [
             ("glob", self.glob.is_some()),
             ("pattern", self.pattern.is_some()),
@@ -351,6 +444,8 @@ impl Rule {
             ("policy_url", self.policy_url.is_some()),
             ("verbatim", self.verbatim.is_some()),
             ("identity_key", self.identity_key.is_some()),
+            ("direction", self.direction.is_some()),
+            ("base", self.base.is_some()),
         ]
     }
 
@@ -573,6 +668,17 @@ fn run_rule(
         return Ok(());
     }
     let matched: Vec<&String> = files.iter().filter(|path| glob_match(glob, path)).collect();
+
+    // A ratchet is evaluated BEFORE the empty-match skip below, and the
+    // distinction is the whole gate: for every other kind an empty match set
+    // means "nothing to inspect", but for a ratchet it means the working tree
+    // now contains none of the files the base did — which is the maximal
+    // deletion this kind exists to catch. Skipping there would make the gate
+    // silent in exactly its worst case.
+    if rule.kind == RuleKind::Ratchet {
+        return ratchet_rule(rule, root, glob, &matched, findings);
+    }
+
     // The glob is a gate before it is an argv source (§4 "cheap when
     // irrelevant"): no match means the rule is skipped entirely — for a command
     // rule, without ever spawning.
@@ -586,10 +692,79 @@ fn run_rule(
             }
         }
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
-        // Unreachable: a shape rule is `mediated_call`-scoped, and the scope
-        // guard above returned before the walk. Stated rather than caught by a
-        // wildcard so adding a kind that *is* tree-scoped has to come here.
-        RuleKind::Shape => {}
+        // Unreachable: a shape rule is `mediated_call`-scoped and a ratchet
+        // returned above. Stated rather than caught by a wildcard so adding a
+        // kind that *is* tree-scoped has to come here.
+        RuleKind::Shape | RuleKind::Ratchet => {}
+    }
+    Ok(())
+}
+
+/// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
+/// tree, and report if the aggregate moved the banned way.
+///
+/// Both counts use the crate's single glob matcher and the single git entry
+/// point; the working-tree side reuses the walk the caller already did. There is
+/// no second implementation of any of the three.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `base` names a rev git cannot
+/// resolve — never a pass. A ratchet that cannot see its own baseline has not
+/// established that the count held.
+fn ratchet_rule(
+    rule: &Rule,
+    root: &Path,
+    glob: &str,
+    matched: &[&String],
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<()> {
+    // An `allow` row is configured off. Checked here rather than inherited from
+    // the caller's guard, because the ratchet path returns before it.
+    if rule.severity == RuleSeverity::Allow {
+        return Ok(());
+    }
+    let (Some(pattern), Some(direction), Some(base)) = (
+        rule.pattern.as_deref(),
+        rule.direction,
+        rule.base.as_deref(),
+    ) else {
+        // Unreachable: the census requires all three for this kind.
+        return Ok(());
+    };
+
+    let base_count = crate::git::count_at_rev(root, base, glob, pattern)?;
+    let mut working_count = 0;
+    for path in matched {
+        let text = fs::read_to_string(root.join(path)).unwrap_or_default();
+        working_count += text.matches(pattern).count();
+    }
+
+    if direction.violated(base_count, working_count) {
+        findings.push(Finding {
+            // The plain rule id, deliberately: `waiver::apply` matches on this
+            // field, so decorating it would make a ratchet the one finding kind
+            // no waiver could suppress — and the waiver is the designed hatch
+            // for a legitimate reduction.
+            rule: rule.id.clone(),
+            severity: rule.severity,
+            // The glob plus the two counts. The glob is the tightest honest
+            // pointer — the finding is about the whole matched set, not a file,
+            // and naming one would misdirect — and the counts ride here because
+            // a line-less finding renders as `<path> <rule>`, so this is the one
+            // field that can carry them without a second output shape. `git
+            // diff` answers *where*; the deleted text itself is payload and
+            // never appears (rule 4).
+            path: format!("{glob} {base_count}->{working_count}"),
+            line: None,
+            identity: identity::StoredIdentity::new(
+                identity::FindingKind::Scope,
+                // Keyed on the rule and its glob, never the counts: the same
+                // ratchet breaking again is one finding, not a new one per
+                // integer pair.
+                identity::scope_fingerprint(&rule.id, glob),
+            ),
+        });
     }
     Ok(())
 }
@@ -1088,6 +1263,126 @@ fn wildcard(pat: &[char], seg: &[char]) -> bool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    // --- the ratchet kind (CLOUD-55) -----------------------------------------
+
+    #[test]
+    fn a_ratchet_bans_movement_never_stasis() {
+        // Equality passes in both directions: a ratchet is about direction of
+        // change, so "unchanged" is the case it exists to permit.
+        for direction in Direction::ALL {
+            assert!(
+                !direction.violated(3, 3),
+                "{}: equal counts are never a violation",
+                direction.as_str()
+            );
+            assert!(!direction.violated(0, 0));
+        }
+
+        // non_decreasing: falling is the violation, rising is fine.
+        assert!(Direction::NonDecreasing.violated(2, 1));
+        assert!(Direction::NonDecreasing.violated(1, 0));
+        assert!(!Direction::NonDecreasing.violated(1, 2));
+
+        // non_increasing: the mirror. This is the `#[ignore]` guard, where the
+        // dangerous direction is the one that adds.
+        assert!(Direction::NonIncreasing.violated(0, 1));
+        assert!(!Direction::NonIncreasing.violated(1, 0));
+    }
+
+    #[test]
+    fn every_direction_token_round_trips() {
+        for direction in Direction::ALL {
+            let json = format!("\"{}\"", direction.as_str());
+            assert_eq!(
+                serde_json::from_str::<Direction>(&json).unwrap(),
+                *direction
+            );
+        }
+        // The two vocabularies do not overlap: a severity token in `direction`
+        // is a usage error, never a reinterpretation.
+        assert!(serde_json::from_str::<Direction>("\"deny\"").is_err());
+        assert!(serde_json::from_str::<Direction>("\"decreasing\"").is_err());
+    }
+
+    #[test]
+    fn a_ratchet_requires_its_own_columns_and_rejects_the_others() {
+        let base = Rule {
+            glob: Some("**/*.rs".to_owned()),
+            pattern: Some("#[test]".to_owned()),
+            direction: Some(Direction::NonDecreasing),
+            base: Some("origin/main".to_owned()),
+            ..blank("r", RuleKind::Ratchet)
+        };
+        assert!(base.validate().is_ok());
+
+        // Each required column, omitted in turn.
+        for missing in [
+            Rule {
+                direction: None,
+                ..base.clone()
+            },
+            Rule {
+                base: None,
+                ..base.clone()
+            },
+            Rule {
+                pattern: None,
+                ..base.clone()
+            },
+            Rule {
+                glob: None,
+                ..base.clone()
+            },
+        ] {
+            assert!(
+                missing.validate().is_err(),
+                "a ratchet missing a required column is a usage error"
+            );
+        }
+
+        // A column this kind does not accept. `verbatim` names a span
+        // normalization, and a ratchet hashes no span — so accepting it would
+        // let a reviewer believe something was configured that is not.
+        assert!(
+            Rule {
+                verbatim: Some(true),
+                ..base.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Rule {
+                run: Some("true".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_err()
+        );
+
+        // `direction`/`base` on a kind that is not a ratchet is equally refused.
+        assert!(
+            Rule {
+                kind: RuleKind::Forbid,
+                direction: Some(Direction::NonDecreasing),
+                base: None,
+                ..base.clone()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_ratchet_is_tree_scoped_and_spawns_no_configured_command() {
+        // The two properties that keep it on `check`'s read surface: it looks at
+        // the tree, and it reaches no user-supplied code. Reading
+        // `spawns_processes` as "no process at all" would make it enforce-only
+        // and cost it the surface worth having (CLOUD-55, assumption 1).
+        assert_eq!(RuleKind::Ratchet.scopes(), &[RuleScope::Tree]);
+        assert!(!RuleKind::Ratchet.spawns_processes());
+    }
+
     use std::fs;
     use std::path::PathBuf;
 
@@ -1128,6 +1423,8 @@ mod tests {
             run: None,
             verbatim: None,
             identity_key: None,
+            direction: None,
+            base: None,
         }
     }
 
@@ -1329,6 +1626,8 @@ mod tests {
                         "pattern" => rule.pattern = Some("x".to_owned()),
                         "run" => rule.run = Some("true".to_owned()),
                         "reason" => rule.reason = Some("because".to_owned()),
+                        "direction" => rule.direction = Some(Direction::NonDecreasing),
+                        "base" => rule.base = Some("HEAD".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
                     }
                 }
@@ -1405,12 +1704,12 @@ mod tests {
         // The match is exhaustive by the compiler; this asserts `ALL` agrees.
         for kind in RuleKind::ALL {
             match kind {
-                RuleKind::Forbid | RuleKind::Command | RuleKind::Shape => {}
+                RuleKind::Forbid | RuleKind::Command | RuleKind::Shape | RuleKind::Ratchet => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            3,
+            4,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

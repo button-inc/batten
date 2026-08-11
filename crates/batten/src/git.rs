@@ -811,6 +811,59 @@ pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
     query_optional(dir, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
 }
 
+/// Count occurrences of `pattern` across files matching `glob` at `rev`
+/// (CLOUD-55).
+///
+/// The base half of a ratchet. Paths come from `ls-tree`, bytes from `show` —
+/// both through this module's one invoker, so a ratchet adds no second way to
+/// read git. The working-tree half is the caller's, using the crate's one tree
+/// walker; neither side re-implements the other's glob matching.
+///
+/// Byte-level and case-sensitive, matching `forbid`'s discipline: the pattern is
+/// a literal a consumer wrote, and a count that silently normalized it would be
+/// counting something else.
+///
+/// A file at `rev` whose bytes are not UTF-8 contributes zero rather than
+/// failing the run: a binary blob matching a text pattern is not a fact anyone
+/// is asserting, and refusing the whole gate over one would make an unrelated
+/// asset able to disable it.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `rev` does not resolve — never a
+/// pass. A ratchet that cannot see its baseline has not established that the
+/// count held, and reporting zero would read as "nothing was deleted" having
+/// looked at nothing.
+pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<usize> {
+    let listing = query(
+        dir,
+        &["ls-tree", "-r", "--name-only", "--end-of-options", rev],
+        &format!("ratchet base {rev:?} does not resolve to a tree in this repository"),
+    )?;
+
+    let mut total = 0;
+    for path in listing.lines().filter(|path| !path.is_empty()) {
+        if !crate::rules::glob_match(glob, path) {
+            continue;
+        }
+        // `show <rev>:<path>`. The path comes from `ls-tree` at the same rev, so
+        // it exists by construction; a read that fails anyway is treated as an
+        // empty file rather than aborting, for the same reason non-UTF-8 is.
+        let Ok(bytes) = query_bytes(
+            dir,
+            &["show", &format!("{rev}:{path}")],
+            "read a file at the ratchet base",
+        ) else {
+            continue;
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        total += text.matches(pattern).count();
+    }
+    Ok(total)
+}
+
 /// The remote's default branch, as a full remote-tracking ref.
 ///
 /// The fallback landing target when a consumer declares no `must_land_on`

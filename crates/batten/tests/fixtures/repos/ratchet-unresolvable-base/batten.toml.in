@@ -1,0 +1,22 @@
+# The `ratchet` kind's corpus row (CLOUD-55).
+#
+# The case pinned here is the refusal, not the count: a ratchet whose `base`
+# does not resolve is exit 1 and NEVER a pass. A gate that cannot see its own
+# baseline has not established that the count held, and reporting zero would
+# read as "nothing was deleted" having looked at nothing.
+#
+# This is also the one ratchet behaviour the corpus harness can express: it
+# materializes files with no git history, and every other case needs a real
+# base commit. The behavioural suite is `crates/batten/tests/ratchet.rs`, which
+# builds fixtures with genuine history for exactly that reason.
+version = 1
+
+[[rule]]
+id = "tests-not-deleted"
+kind = "ratchet"
+glob = "**/*.rs"
+pattern = "#[test]"
+direction = "non_decreasing"
+base = "no-such-rev"
+severity = "deny"
+scope = "tree"

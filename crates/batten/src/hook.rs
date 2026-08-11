@@ -1216,6 +1216,8 @@ mod tests {
             run: None,
             verbatim: None,
             identity_key: None,
+            direction: None,
+            base: None,
         }
     }
 

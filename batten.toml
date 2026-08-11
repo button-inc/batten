@@ -349,6 +349,84 @@ files = ["AGENTS.md"]
 max_tokens = 3500
 max_lines = 199
 
+# The test suite is half of this repository's definition of green, and was the
+# unguarded half (CLOUD-55). It cannot be a `protected` path — tests are edited
+# every day, so a protected glob would block writing them — so the computable
+# property is DIRECTION of change, the same shape `trust.rs` encodes for config.
+#
+# The token is consumer config, not an engine fact: `#[test]` is this
+# repository's test marker, and another language's marker works with no engine
+# change (non-negotiable rule 1).
+#
+# `base = "origin/main"`: the trunk this branch will land on, so the comparison
+# is against what is already released rather than against this branch's own
+# history. A legitimate reduction goes through a `[[waiver]]` with a reason and
+# an expiry — never `severity = "allow"`, which switches the row off forever and
+# tells nobody.
+[[rule]]
+id = "tests-not-deleted"
+kind = "ratchet"
+glob = "crates/**/*.rs"
+pattern = "#[test]"
+direction = "non_decreasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+
+# `tests/*.bats`, single-segment, NOT `tests/**/*.bats`. `tests/bats` is a
+# vendored submodule carrying 228 of its own `.bats` files, and the two sides of
+# a ratchet disagree about submodules: `git ls-tree -r` at the base sees one
+# gitlink, while the working-tree walk sees every file inside it. Measured with
+# the recursive glob: base 637, working 1404 — a permanent +767 skew that no
+# realistic deletion could ever pull back under, i.e. a gate that cannot fail.
+# Every one of this repository's own bats suites sits directly in `tests/`, so a
+# single-segment glob is both correct and sufficient here. The engine-level
+# asymmetry is CLOUD-328.
+[[rule]]
+id = "bats-tests-not-deleted"
+kind = "ratchet"
+glob = "tests/*.bats"
+pattern = "@test \""
+direction = "non_decreasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+
+# The mirror direction: a disabled test is a deleted test that still counts, so
+# the guard is on the token RISING.
+#
+# The pattern is newline-anchored, and that is load-bearing rather than tidy. A
+# bare `#[ignore]` is a literal substring, so it also matches every prose mention
+# of the attribute — including the sentence you are reading and the fixtures in
+# `crates/batten/tests/ratchet.rs` that exercise this very row. Measured: the
+# unanchored form counts 5 in a tree containing zero disabled tests, so the row
+# would have failed on its own documentation. An attribute always begins a line;
+# a mention does not. (`budget.rs` anchors its HTML-comment scan for the same
+# reason.)
+[[rule]]
+id = "no-new-ignores"
+kind = "ratchet"
+glob = "crates/**/*.rs"
+pattern = "\n#[ignore]"
+direction = "non_increasing"
+base = "origin/main"
+severity = "deny"
+scope = "tree"
+
+# Advisory rather than blocking: assertions thinning out while the `#[test]`
+# count holds is the gutting shape, and it is worth saying without blocking —
+# a refactor legitimately merges assertions. `--fail-on-warning` and
+# `--strictness strict` promote it when a run wants the stricter reading.
+[[rule]]
+id = "assertions-not-gutted"
+kind = "ratchet"
+glob = "crates/batten/tests/**/*.rs"
+pattern = "assert"
+direction = "non_decreasing"
+base = "origin/main"
+severity = "warn"
+scope = "tree"
+
 # The merge contract, DERIVED from this repository's GitHub ruleset (CLOUD-54).
 #
 # The host is the authority; this is a projection a gate polices. `mise run

@@ -233,6 +233,21 @@
         "required_checks"
       ]
     },
+    "Direction": {
+      "description": "Which way a ratcheted count may move.\n\nNamed for the *permitted* direction rather than the banned one, so a config\nrow reads as the promise it makes: `non_decreasing` says this count will not\nfall.",
+      "oneOf": [
+        {
+          "description": "The count may rise or hold, never fall. The test-deletion guard.",
+          "type": "string",
+          "const": "non_decreasing"
+        },
+        {
+          "description": "The count may fall or hold, never rise. The new-`#[ignore]` guard.",
+          "type": "string",
+          "const": "non_increasing"
+        }
+      ]
+    },
     "Effect": {
       "type": "string",
       "enum": [
@@ -419,11 +434,29 @@
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
       "type": "object",
       "properties": {
+        "base": {
+          "description": "The git rev a [`RuleKind::Ratchet`] counts against. Any rev git resolves;\none it cannot is a usage error naming the rev, never a pass.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "contains": {
           "description": "An extra literal that must appear in the mediated command **as written**\nfor a [`RuleKind::Shape`] rule to fire. Optional, that kind only.\n\nIt exists for one real case rather than as a general escape hatch: a\nlanding directive lives inside a quoted `--body`, so it is not one of the\nwords the shape matches, and without this an ordinary `gh pr comment`\nwould be denied alongside the one that carries the directive. Matched\nagainst the raw text of the same segment, quotes included.",
           "type": [
             "string",
             "null"
+          ]
+        },
+        "direction": {
+          "description": "Which way a [`RuleKind::Ratchet`] count may move. Required by that kind,\nrejected by every other.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Direction"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "glob": {
@@ -517,6 +550,11 @@
           "description": "A banned **command shape**: the mediated call `batten hook` is\nadjudicating matches `pattern` read as an effective program plus the\nadjacent words that must follow it.\n\nDistinct from [`RuleKind::Command`], which *runs* a declared command.\nThis one runs nothing — it is a string match over a command line the\nhost handed us, so it cannot spawn and stays on the read-safe surface.",
           "type": "string",
           "const": "shape"
+        },
+        {
+          "description": "A **count that may only move one way** (CLOUD-55): the total occurrences\nof `pattern` across files matching `glob`, compared between a base rev\nand the working tree, must not move in the banned `direction`.\n\nThe kind exists because the property worth gating on a test suite is not\nimmutability — tests are edited every day, so a protected path would\nblock writing them — but *direction of change*. That is the same shape\n`trust.rs` already encodes for config: which way is weakening is a\nproperty of the key.\n\nCounted in **aggregate per rule**, never per file: a test moved between\ntwo files matching the glob changes nothing, so renames and\nconsolidations that preserve the suite are clean with no rename tracking.\nThe price is that the finding names counts rather than locations, and\n`git diff` answers *where*.",
+          "type": "string",
+          "const": "ratchet"
         }
       ]
     },
