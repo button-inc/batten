@@ -540,18 +540,39 @@ cargo run --quiet -p batten -- generate schema --surface override >schema/batten
 
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"
-# Same tool + severity CI enforces. GH_TOKEN (set in [env]) enables the online
-# audits. This is the one command CI's zizmor job also runs, so they cannot drift.
+# Same tool + severity CI enforces. This is the one command CI's zizmor job also
+# runs, so they cannot drift.
 #
 # `action.yml` is named alongside `.github/` because the shipped Action (CLOUD-68)
 # is a workflow surface with the same injection and unpinned-uses hazards, and
 # zizmor's directory walk does not reach a repository-root action definition.
 # Receipt-gated (CLOUD-424) on the workflow surface and zizmor's version.
+#
+# `--offline` is load-bearing, and it is the lock-check split applied here
+# (CLOUD-410). GH_TOKEN in [env] used to enable zizmor's ONLINE audits, which
+# means `known-vulnerable-actions` reached api.github.com — so this gate's
+# verdict depended on that API being up. Measured: two laps of one `land` run,
+# same tree, `No findings to report` then `403 Forbidden` on
+# `/advisories?affects=actions%2Fcheckout%40v7.0.1`, failing `verify` and
+# stopping the landing with "reproduce and fix locally" over a commit that had
+# nothing wrong with it. A gate on the landing path answers a question about
+# THIS COMMIT; whether a pinned action has an advisory today is a question about
+# the world, it changes with no diff, and it belongs on a clock — which is
+# `.github/workflows/zizmor-advisories.yml`, beside lock-currency and ci-drift.
 run = '''
 if mise run step-receipt check zizmor; then exit 0; fi
-if ! zizmor --min-severity high .github/ action.yml; then exit 1; fi
+if ! zizmor --offline --min-severity high .github/ action.yml; then exit 1; fi
 mise run step-receipt record zizmor || true
 '''
+
+[tasks.zizmor-advisories]
+description = "Currency only: is any pinned action the subject of a published advisory? Runs on a schedule, never on the landing path — it needs the network"
+# The other half of CLOUD-410's split. Same tool, same severity, same targets —
+# the ONLY difference is that this one is allowed to reach the network, so its
+# failure means "an action you pin has an advisory" rather than "your commit is
+# bad". Never added to `verify`; `ci-local-parity` would (correctly) then demand
+# CI run it too, which is exactly the coupling this split removes.
+run = "zizmor --min-severity high .github/ action.yml"
 
 [tasks.lock-check]
 description = "Currency only: would regenerating mise.lock change it? Runs on a schedule, never on the landing path — it fetches and it writes"

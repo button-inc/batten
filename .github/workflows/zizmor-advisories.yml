@@ -1,0 +1,56 @@
+name: zizmor-advisories
+
+# "Is any action we pin the subject of a published advisory?" — a question about
+# the world, not about any commit, so it runs on a clock rather than on the
+# landing path (CLOUD-410).
+#
+# It used to run inside `mise run verify`, as part of the one zizmor invocation.
+# That made an unrelated rate limit fail whichever change happened to be in
+# flight: measured over two laps of a single `land` run, the same tree audited
+# clean and then died on `403 Forbidden` from
+# `api.github.com/advisories?affects=actions%2Fcheckout%40v7.0.1` — and `land`
+# reported it as "verify failed … reproduce and fix locally", over a commit with
+# nothing to reproduce.
+#
+# The offline audits — unpinned uses, injection sinks, dangerous triggers — are
+# properties of the committed text and stayed behind as `mise run zizmor`, which
+# now passes `--offline` and cannot be broken by a network failure.
+#
+# Failure here is informational: it means an action this repository pins has an
+# advisory against it, which is true no matter whose branch is in flight. Fix it
+# by bumping the pin, not by re-running this.
+
+on:
+  schedule:
+    # Mondays, 07:45 UTC — after ci-drift and timeout-drift, so the weekly
+    # property-of-the-world sweep reads as one block in the Actions list.
+    - cron: "45 7 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223).
+  MISE_LOCKFILE: "true"
+
+jobs:
+  zizmor-advisories:
+    name: zizmor-advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-11
+    permissions:
+      contents: read
+    env:
+      # The whole point of this job: zizmor performs its online audits only with
+      # a token. The offline invocation on the landing path deliberately has no
+      # use for one.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          install_args: zizmor
+      - run: mise run zizmor-advisories
