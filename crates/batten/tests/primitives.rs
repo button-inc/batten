@@ -1070,3 +1070,190 @@ fn no_session_scoped_field_enters_a_code_log_or_scope_identity() {
         );
     }
 }
+
+// --- CLOUD-249: a permission drop is a premise, and a premise gets asserted --
+
+/// The drop-to-`0o000` needle, assembled by concatenation so this file's own
+/// fixtures — which have to carry the literal text to be worth anything — are
+/// not themselves found by the scan below. `state.rs` and `git.rs` play the
+/// same trick, for the same reason.
+fn drop_needle() -> String {
+    ["from_mode(0o", "000)"].concat()
+}
+
+/// The body of the `fn` enclosing byte offset `at`, plus `at` re-based into it.
+///
+/// The tree is rustfmt'd — `lint:fmt` is in the gate — so a function ends at the
+/// first line that is exactly its own indent followed by `}`. That is exact for
+/// formatted source and needs no brace matching, which a brace inside a string
+/// or char literal would otherwise fool.
+fn enclosing_fn(source: &str, at: usize) -> (&str, usize) {
+    let mut start = 0;
+    let mut indent = 0;
+    let mut offset = 0;
+    for line in source.lines() {
+        if offset > at {
+            break;
+        }
+        let trimmed = line.trim_start();
+        let signature = trimmed
+            .trim_start_matches("pub(crate) ")
+            .trim_start_matches("pub ")
+            .trim_start_matches("async ");
+        if signature.starts_with("fn ") {
+            start = offset;
+            indent = line.len() - trimmed.len();
+        }
+        offset += line.len() + 1;
+    }
+    let closing = format!("\n{}}}\n", " ".repeat(indent));
+    let end = source[start..]
+        .find(&closing)
+        .map_or(source.len(), |rel| start + rel + closing.len());
+    (&source[start..end], at - start)
+}
+
+/// The predicate, over one function body: between the drop at `drop_at` and the
+/// read-back that decides whether the conclusion is reachable, there must be an
+/// assertion that the drop landed.
+///
+/// Order is the whole discipline. Prove the setup took effect, *then* ask
+/// whether it bites, and only then assert the conclusion — because a permission
+/// drop is a premise the environment may refuse to create, and a conclusion
+/// asserted over an uncreated premise is a green that certifies nothing.
+fn premise_asserted(body: &str, drop_at: usize) -> Result<(), &'static str> {
+    let after = &body[drop_at..];
+    let read_back = ["read_to_string(", "File::open("]
+        .iter()
+        .filter_map(|token| after.find(token))
+        .min()
+        .ok_or(
+            "no read-back after the permission drop — nothing establishes whether the bits bit, \
+             so whatever follows is asserted over a precondition that may never have existed",
+        )?;
+    if ["assert!(", "assert_eq!(", "assert_ne!("]
+        .iter()
+        .filter_map(|token| after.find(token))
+        .any(|assertion| assertion < read_back)
+    {
+        return Ok(());
+    }
+    Err(
+        "no premise assertion between the permission drop and the read-back — assert that the \
+         drop landed before asking whether it bites, or the setup can evaporate silently",
+    )
+}
+
+/// 1-based line number of `at`, for a pointer-only failure message.
+fn line_of(source: &str, at: usize) -> usize {
+    source[..at].lines().count().max(1)
+}
+
+/// Every `*.rs` under `dir`, recursively, in a stable order — a gate's failure
+/// message must not depend on `read_dir`'s filesystem-defined ordering.
+fn rust_sources(dir: &Path) -> Vec<PathBuf> {
+    let mut sources = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(next) = stack.pop() {
+        for entry in fs::read_dir(&next).expect("read a source directory") {
+            let path = entry.expect("read dir entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                sources.push(path);
+            }
+        }
+    }
+    sources.sort();
+    sources
+}
+
+/// The audit's own fixtures: one well-formed shape and the two failing ones that
+/// really shipped. `__DROP__` stands in for the needle so these are invisible to
+/// the scan over the real tree.
+const ASSERTS_ITS_PREMISE: &str = r#"    fn t() {
+        fs::set_permissions(&p, fs::Permissions::__DROP__).expect("drop");
+        assert_eq!(mode(&p), 0, "the drop landed");
+        if fs::read_to_string(&p).is_ok() {
+            return;
+        }
+        find(&d).expect_err("an unreadable file is not clean");
+    }
+"#;
+const NO_READ_BACK: &str = r#"    fn t() {
+        fs::set_permissions(&p, fs::Permissions::__DROP__).expect("drop");
+        find(&d).expect_err("an unreadable file is not clean");
+    }
+"#;
+const NO_PREMISE: &str = r#"    fn t() {
+        fs::set_permissions(&p, fs::Permissions::__DROP__).expect("drop");
+        if fs::read_to_string(&p).is_ok() {
+            return;
+        }
+        find(&d).expect_err("an unreadable file is not clean");
+    }
+"#;
+
+#[test]
+fn every_permission_drop_asserts_its_own_premise() {
+    // CLOUD-249. This environment runs as root, and root ignores the permission
+    // bits: a `set_permissions(0o000)` followed by `expect_err` passed here
+    // without ever entering the branch under test, so a green suite certified a
+    // fix it never exercised. The obvious mitigation — an early return when the
+    // setup did not take — only converts a silent pass into a silent skip.
+    //
+    // `from_mode(0o755)` sites are deliberately out of scope. They *grant*
+    // rather than deny, and a grant that fails to bite fails its own test
+    // loudly: the stub simply does not run.
+    let needle = drop_needle();
+
+    // (a) The audit is exercised before it is trusted — a check that cannot fail
+    // certifies nothing, which is this test's own subject.
+    for (label, fixture, holds) in [
+        ("asserts its premise", ASSERTS_ITS_PREMISE, true),
+        ("conclusion asserted with no read-back", NO_READ_BACK, false),
+        ("read-back with no premise assertion", NO_PREMISE, false),
+    ] {
+        let source = fixture.replace("__DROP__", &needle);
+        let at = source.find(&needle).expect("the fixture carries a drop");
+        let (body, drop_at) = enclosing_fn(&source, at);
+        let verdict = premise_asserted(body, drop_at);
+        assert_eq!(
+            verdict.is_ok(),
+            holds,
+            "the audit's own {label} fixture is judged wrong: {verdict:?}"
+        );
+    }
+
+    // (b) The real sites.
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut files = 0;
+    let mut sites = 0;
+    for dir in ["src", "tests"] {
+        for path in rust_sources(&crate_dir.join(dir)) {
+            let source = fs::read_to_string(&path).expect("read source");
+            files += 1;
+            let mut from = 0;
+            while let Some(rel) = source[from..].find(&needle) {
+                let at = from + rel;
+                sites += 1;
+                let (body, drop_at) = enclosing_fn(&source, at);
+                let verdict = premise_asserted(body, drop_at);
+                assert!(
+                    verdict.is_ok(),
+                    "{}:{}: {} (CLOUD-249)",
+                    path.display(),
+                    line_of(&source, at),
+                    verdict.unwrap_err()
+                );
+                from = at + needle.len();
+            }
+        }
+    }
+    assert!(files > 0, "the audit must actually have read the crate");
+    assert!(
+        sites > 0,
+        "the audit found no permission drop to judge — if the last one went away, remove the \
+         audit with it rather than leaving behind a check that cannot fail"
+    );
+}

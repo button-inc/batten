@@ -353,10 +353,11 @@ mod tests {
 
     #[test]
     fn an_unreadable_file_propagates_through_the_walk() {
-        // The end-to-end companion to the classifier test. Root ignores the
-        // permission bits, so on a root-run suite the condition cannot be
-        // created; the premise is asserted rather than the conclusion, because
-        // passing regardless would be its own false-clean answer.
+        // The end-to-end companion to the classifier test, and the site
+        // CLOUD-249 exists for: a permission drop is a *premise*, and this test
+        // asserts it rather than assuming it. The order below is the whole
+        // discipline — prove the setup landed, then ask whether it bites, and
+        // only then assert the conclusion.
         let dir = scratch("markers-unreadable");
         let unreadable = dir.join("locked.rs");
         fs::write(&unreadable, "A\n").expect("write file");
@@ -365,7 +366,26 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000))
                 .expect("drop the permission bits");
+            // The premise, asserted: the drop must at minimum have landed on
+            // disk. This holds for every caller including root, so a setup that
+            // silently did nothing fails here instead of downstream.
+            assert_eq!(
+                fs::metadata(&unreadable)
+                    .expect("stat the file whose bits were just dropped")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0,
+                "the permission drop did not land: the premise this test needs was never created"
+            );
         }
+        // Whether those bits *bite* is a property of the caller, not the file.
+        // Root ignores them, so on a root-run suite the branch below is
+        // unreachable and this test is inert — which is why the root-proof
+        // coverage of the same decision lives in
+        // `the_two_read_failures_are_classified_apart`, over synthesized
+        // `io::Error`s. Asserting the conclusion here regardless would be the
+        // false-clean answer this module's own doc forbids.
         if fs::read_to_string(&unreadable).is_ok() {
             return;
         }
