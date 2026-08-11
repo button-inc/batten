@@ -1,0 +1,48 @@
+name: branch-hygiene
+
+# "Is any branch outliving its story?" — a question about the REMOTE, not about
+# any commit, so it runs on a clock rather than on the landing path. The same
+# split `lock-complete`/`lock-currency` made: on the landing path this would
+# fail whichever PR happened to be in flight over somebody else's leftover
+# branch, a finding that PR did not cause and cannot fix (CLOUD-349).
+#
+# Failure here is informational: it means branches are accumulating, not that
+# anything is broken. `land` deletes the head of a PR it merges, so a growing
+# list means branches abandoned without landing, or names reused across stories.
+# Run `mise run branch-age-check` locally and delete what has landed.
+
+on:
+  schedule:
+    # Mondays, 07:30 UTC — after lock-currency, ci-drift and timeout-drift, so
+    # the weekly hygiene sweep reads as one block in the Actions list.
+    - cron: "30 7 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223).
+  MISE_LOCKFILE: "true"
+
+jobs:
+  branch-hygiene:
+    name: branch-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-11
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # `gh` for both readings, `jq` for the GraphQL projection. Narrow, for
+          # the reason ci.yml states: the whole toolchain is ~10s a job that
+          # this one has no use for.
+          install_args: aqua:cli/cli aqua:jqlang/jq
+      - run: mise run branch-age-check

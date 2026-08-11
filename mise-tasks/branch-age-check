@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+#MISE description="Gate: no remote branch outlives its story — none older than BRANCH_MAX_AGE_DAYS, and no name heading more than one merged PR"
+#
+# CLOUD-349. Trunk-based development says a review branch "can (and should) be
+# deleted after the code review is complete and be very short-lived", and names
+# the hazard this measures: a short-lived feature branch "sleepwalking into a
+# long-lived feature branch". Its own words on the tooling — "You cannot with
+# tools today, but it would be cool if you could have a ticking clock or count
+# down on those branches at creation to enforce its 'temporary' intention."
+#
+# This is that clock, after the fact. Branch lifetime was the one quantity in
+# this repository's whole trunk-based apparatus with no number attached: build
+# time has a p95 and a budget grammar, the landing loop has LAND_MAX_LAPS, the
+# instruction set has a token budget, and a branch had nothing. Measured on
+# 2026-08-11, before `land` learned to delete: 23 remote branches, ten of them
+# `release-plz-*` from five days earlier.
+#
+# TWO PROPERTIES, because staleness is the smaller half:
+#
+#   stale    a branch whose tip is older than BRANCH_MAX_AGE_DAYS (2, which is
+#            the source's "a couple of days"). The ordinary leftover.
+#   reused   a branch name that is the head of more than one MERGED pull
+#            request. This is the one the per-PR lifetime metric cannot see:
+#            `claude/phase-3-sequential-landing-h26kx0` headed eight consecutive
+#            PRs, each landing inside an hour, while the branch itself lived for
+#            hours across unrelated stories. Reuse is also the stale-tracking-ref
+#            deadlock CLOUD-345 records.
+#
+# NOT IN THE hk GATE, deliberately, and this is the same split `lock-complete`
+# and `lock-currency` made: the answer here is a property of the WORLD (the
+# remote's refs), not of the commit being judged. On the landing path it would
+# fail whichever PR happened to be in flight over somebody else's leftover
+# branch — a finding that PR did not cause and cannot fix. So it runs on a
+# clock (.github/workflows/branch-hygiene.yml) and by hand.
+#
+# Both readings are injectable so the suite runs offline and with no `gh`:
+#   BRANCH_AGE_REFS  file of `<branch><TAB><ISO-8601 tip date>` lines
+#   BRANCH_AGE_PRS   file of merged pull requests' head branch names, one a line
+#   BRANCH_AGE_TODAY today as YYYY-MM-DD
+#
+# Exit 0 clean / 1 over threshold / 2 could-not-look — never a silent pass, per
+# the rule that a gate which cannot run must exit non-zero and leave no receipt.
+set -uo pipefail
+
+max_age="${BRANCH_MAX_AGE_DAYS:-2}"
+trunk="${BRANCH_AGE_TRUNK:-main}"
+
+cannot_look() {
+	echo "::error:: branch-age-check: $1" >&2
+	exit 2
+}
+
+today="${BRANCH_AGE_TODAY:-$(date -u +%Y-%m-%d)}"
+case "$today" in
+[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+*) cannot_look "cannot read today's date ('$today')" ;;
+esac
+
+# --- the two readings ---------------------------------------------------------
+#
+# One GraphQL call for the refs rather than a REST branch list plus one commit
+# lookup per branch: the tip date is not on the REST branch object, and 23
+# follow-up calls to learn it is the shape `mem:github-rest-etiquette` warns
+# about.
+if [ -n "${BRANCH_AGE_REFS:-}" ]; then
+	refs=$(cat "$BRANCH_AGE_REFS" 2>/dev/null) ||
+		cannot_look "cannot read BRANCH_AGE_REFS ($BRANCH_AGE_REFS)"
+else
+	slug=$(gh repo view --json owner,name --jq '.owner.login + " " + .name' 2>/dev/null) ||
+		cannot_look "cannot resolve the repository — is \`gh\` authenticated?"
+	# shellcheck disable=SC2016  # $owner/$name are GraphQL variables, not shell
+	refs=$(gh api graphql \
+		-f query='query($owner:String!,$name:String!){
+                    repository(owner:$owner,name:$name){
+                      refs(refPrefix:"refs/heads/",first:100){
+                        nodes{ name target{ ... on Commit { committedDate } } }
+                      }
+                    }
+                  }' \
+		-F owner="${slug% *}" -F name="${slug#* }" \
+		--jq '.data.repository.refs.nodes[] | [.name, .target.committedDate] | @tsv' 2>/dev/null) ||
+		cannot_look "cannot list the remote's branches"
+fi
+[ -n "$refs" ] || cannot_look "the remote reports no branches at all, which cannot be true of a repository with a trunk"
+
+if [ -n "${BRANCH_AGE_PRS:-}" ]; then
+	prs=$(cat "$BRANCH_AGE_PRS" 2>/dev/null) ||
+		cannot_look "cannot read BRANCH_AGE_PRS ($BRANCH_AGE_PRS)"
+else
+	prs=$(gh pr list --state merged --limit 200 --json headRefName --jq '.[].headRefName' 2>/dev/null) ||
+		cannot_look "cannot list merged pull requests"
+fi
+
+# --- the arithmetic -----------------------------------------------------------
+#
+# Days-since-epoch by the civil-calendar formula, in integer arithmetic only.
+# `mktime` would be shorter and is a gawk extension mawk does not carry — the
+# same portability trap `awk-regex-check` exists for, and the reason CLOUD-282
+# lists two GNU-only gates as macOS blockers. This runs identically on both.
+findings=$(printf '%s\n' "$refs" | awk -F'\t' -v today="$today" -v trunk="$trunk" -v max="$max_age" '
+	function days(y, m, d,   era, yoe, doy, doe) {
+		if (m <= 2) y -= 1
+		era = int((y >= 0 ? y : y - 399) / 400)
+		yoe = y - era * 400
+		doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+		doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+		return era * 146097 + doe - 719468
+	}
+	function daynum(iso,   p, s) {
+		# Shape first, then split. A field count alone is not a validation:
+		# `not-a-date` splits into three parts on the hyphen just as
+		# `2026-08-11` does, and the arithmetic then answers 740236 days
+		# instead of admitting it cannot read the value.
+		s = substr(iso, 1, 10)
+		if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) return "NaN"
+		split(s, p, "-")
+		return days(p[1] + 0, p[2] + 0, p[3] + 0)
+	}
+	BEGIN { now = daynum(today) }
+	$1 == "" { next }
+	$1 == trunk { next }
+	{
+		d = daynum($2)
+		if (d == "NaN") { print "unreadable\t" $1 "\t" $2; next }
+		age = now - d
+		if (age > max) print "stale\t" $1 "\t" age
+	}
+')
+
+reused=$(printf '%s\n' "$prs" | sed '/^$/d' | sort | uniq -c |
+	awk -v trunk="$trunk" '$1 > 1 && $2 != trunk { print "reused\t" $2 "\t" $1 }')
+
+# --- the verdict --------------------------------------------------------------
+#
+# Pointer-only per non-negotiable rule 4: a branch name, a rule id and a count.
+# Never a commit message, never a diff — a branch name is already the most a
+# reader needs to act.
+all=$(printf '%s\n%s\n' "$findings" "$reused" | sed '/^$/d')
+if [ -n "$all" ]; then
+	printf '%s\n' "$all" >&2
+	stale_n=$(printf '%s\n' "$all" | grep -c '^stale' || true)
+	reused_n=$(printf '%s\n' "$all" | grep -c '^reused' || true)
+	echo "::error:: branch-age-check: $stale_n branch(es) older than ${max_age}d, $reused_n name(s) heading more than one merged PR. Delete what has landed; a branch that outlives its story is a long-lived branch." >&2
+	exit 1
+fi
+
+echo "branch-age-check: no branch older than ${max_age}d and no name heading more than one merged PR"

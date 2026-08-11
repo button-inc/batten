@@ -123,9 +123,10 @@ EOF
 stub_git() {
 	printf 'feat\n' >"$BATS_TEST_TMPDIR/branch"
 	local step
-	for step in fetch linear rebase push; do
+	for step in fetch linear rebase push delete; do
 		echo 0 >"$BATS_TEST_TMPDIR/rc.$step"
 	done
+	: >"$BATS_TEST_TMPDIR/deletes"
 	# The remote branch ref is modelled, not assumed: `land` compares it across
 	# the push to tell "this lap emitted a synchronize event" from "this lap
 	# moved nothing", and those two take different paths (CLOUD-254). A
@@ -145,6 +146,12 @@ case "\$*" in
   "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.linear")" ;;
   "rebase --abort")              exit 0 ;;
   "rebase"*)                     exit "\$(cat "$BATS_TEST_TMPDIR/rc.rebase")" ;;
+  "push -q origin --delete "*)
+    # The post-merge cleanup (CLOUD-349). Recorded separately from the landing
+    # push: it is not part of the lap, and folding it into \`calls\` would move
+    # the ready/push ORDER the CLOUD-254 cases assert on.
+    echo "\$*" >>"$BATS_TEST_TMPDIR/deletes"
+    exit "\$(cat "$BATS_TEST_TMPDIR/rc.delete")" ;;
   "push"*)
     echo "push" >>"$BATS_TEST_TMPDIR/calls"
     rc=\$(cat "$BATS_TEST_TMPDIR/rc.push")
@@ -786,4 +793,43 @@ workflow_runs() {
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
+}
+
+# --- post-merge branch cleanup (CLOUD-349) -----------------------------------
+
+deletes() { grep -c . "$BATS_TEST_TMPDIR/deletes" || true; }
+
+@test "a merged PR's branch is deleted from the remote" {
+	# Trunk-based development keeps the review's commentary and not the branch.
+	# A name left behind is how a short-lived branch becomes a long-lived one —
+	# and reusing one after its PR merged is the stale-tracking-ref deadlock
+	# CLOUD-345 records.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ "$(deletes)" -eq 1 ]
+	grep -q '^push -q origin --delete feat$' "$BATS_TEST_TMPDIR/deletes"
+	[[ "$output" == *"deleted origin/feat"* ]]
+}
+
+@test "a delete the remote refuses does not change land's exit code" {
+	# The PR has already landed. Reporting failure over cleanup would make a
+	# successful landing look like a broken one, and the next run would have
+	# nothing left to retry.
+	fails delete
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ "$(deletes)" -eq 1 ]
+	[[ "$output" == *"could not delete origin/feat"* ]]
+}
+
+@test "a run that stops instead of merging deletes nothing" {
+	# An abandoned branch is evidence and has to survive: the delete is on the
+	# MERGED path only, never on a `die` path.
+	not_linear
+	fails rebase
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[ "$(deletes)" -eq 0 ]
 }

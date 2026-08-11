@@ -376,6 +376,22 @@ while :; do
 			git fetch -q origin main
 			echo "land: PR #$pr is $state after $lap lap(s); origin/main is now $(git rev-parse --short origin/main)"
 			[ "$state" = "MERGED" ] || die "PR #$pr is $state — closed without merging."
+			# The branch has done its whole job and trunk-based development is
+			# explicit that it should not outlive it: keep the review's
+			# commentary, delete the branch (CLOUD-349). A name left behind is
+			# how a short-lived branch becomes a long-lived one, and reusing one
+			# after its PR merged is the stale-tracking-ref deadlock CLOUD-345
+			# records.
+			#
+			# ONLY here, never on a `die` path: an abandoned branch is evidence
+			# and has to survive. And a failure to delete is a warning, not a
+			# `die` — the PR has already landed, so reporting failure over
+			# cleanup would make a successful landing look like a broken one.
+			if git push -q origin --delete "$branch" 2>/dev/null; then
+				echo "land: deleted origin/$branch"
+			else
+				echo "land: could not delete origin/$branch (already gone, or the remote refused) — the PR has landed either way." >&2
+			fi
 			exit 0
 		fi
 

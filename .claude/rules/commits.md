@@ -23,7 +23,7 @@ chore, ci, docs, feat, fix, perf, refactor, revert, style, test`. Enforced
   never needs a ruleset change. Which legs feed it is `ci.yml`'s business, and
   which check-runs carry a verdict for `ci-wait` is `CI_REQUIRED_CHECKS`'s; the
   host ruleset is the one authority for what blocks a merge, and `mise run
-  ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
+ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
   rules. There is deliberately no third copy in the tree — one was there, naming
   a set that predated `final`, read by nothing and gated by nothing (CLOUD-350).
 - **Semver + changelog are automated.** `release-plz` reads commits since the
