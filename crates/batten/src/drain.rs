@@ -445,7 +445,8 @@ pub fn save_wake(store_dir: &Path, session: &str, state: &WakeState) -> Result<(
     Ok(())
 }
 
-/// Journal every withheld identity as not-shown, before anything is emitted.
+/// Journal every newly withheld identity as not-shown, before anything is
+/// emitted.
 ///
 /// **Persist before emit**, and the reason is the false-positive rate rather
 /// than durability: a finding the engine withheld never had the chance to be
@@ -453,6 +454,15 @@ pub fn save_wake(store_dir: &Path, session: &str, state: &WakeState) -> Result<(
 /// both sides of the ratio. An unrecorded suppression is silently counted as the
 /// agent ignoring something it was never shown, which lets the drain inflate the
 /// number the store exists to measure.
+///
+/// **Newly** is load-bearing. A finding outside the changed scope stays outside
+/// it for as long as the agent works elsewhere, so an unconditional append would
+/// write one entry per identity per drain, for every drain of a long session —
+/// and shards are read whole and replayed into the merged log, so that growth is
+/// not merely disk, it is every cursor delta from then on. A record already
+/// carrying this disposition is already saying what the append would say, so the
+/// append carries no information. Returns how many entries were actually
+/// written, which is what tells the caller whether a fold is worth running.
 ///
 /// # Errors
 ///
@@ -463,7 +473,11 @@ pub fn record_suppressions(
     withheld: &[FindingRecord],
     why: NotShown,
 ) -> Result<usize> {
+    let mut appended = 0;
     for record in withheld {
+        if record.presentation == Presentation::NotShown(why) {
+            continue;
+        }
         journal::append(
             store_dir,
             shard,
@@ -474,8 +488,9 @@ pub fn record_suppressions(
                 presentation: Presentation::NotShown(why),
             },
         )?;
+        appended += 1;
     }
-    Ok(withheld.len())
+    Ok(appended)
 }
 
 /// The payload as the agent sees it: the pointer lines, one per line.
@@ -791,6 +806,47 @@ mod tests {
         let drained = cycle(&[one.clone(), one.clone(), one], &changed(&["src/a.rs"]), None);
         assert_eq!(drained.lines.len(), 1);
         assert_eq!(drained.duplicates, 2);
+    }
+
+    #[test]
+    fn a_suppression_already_recorded_is_not_journalled_again() {
+        // A finding outside the changed scope stays outside it for as long as
+        // the agent works elsewhere, so an unconditional append writes one entry
+        // per identity per drain — and shards are replayed whole into the merged
+        // log, so that is not disk, it is every cursor delta from then on. An
+        // entry saying what the record already says carries no information.
+        let dir = std::env::temp_dir().join(format!("batten-suppress-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let fresh = record(FindingKind::Code, "r", "src/a.rs", "TODO");
+        assert_eq!(
+            record_suppressions(&dir, "shard", &[fresh.clone()], NotShown::DrainSuppressed)
+                .unwrap(),
+            1,
+            "the first suppression is news"
+        );
+        let already = FindingRecord {
+            presentation: Presentation::NotShown(NotShown::DrainSuppressed),
+            ..fresh.clone()
+        };
+        assert_eq!(
+            record_suppressions(&dir, "shard", &[already], NotShown::DrainSuppressed).unwrap(),
+            0,
+            "saying it again is not"
+        );
+        // A DIFFERENT reason still is: the engine withheld it for a new cause,
+        // and the two are distinguishable in the rate that reads them.
+        let capped = FindingRecord {
+            presentation: Presentation::NotShown(NotShown::OverCardinalityCap),
+            ..fresh
+        };
+        assert_eq!(
+            record_suppressions(&dir, "shard", &[capped], NotShown::DrainSuppressed).unwrap(),
+            1
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

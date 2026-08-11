@@ -241,10 +241,9 @@ fn filters_a_code_finding_whose_file_is_not_in_the_changed_scope() {
     assert_eq!(output.status.code(), Some(0));
     assert!(payload(&output).is_empty(), "nothing to emit prints nothing");
 
-    // And it is recorded as withheld BY THE ENGINE, which is what keeps the
-    // drain's own filtering out of the per-check false-positive rate.
-    let listed = state_cmd(&repo, &home, &["state", "record"]);
-    assert_eq!(listed.status.code(), Some(0));
+    // And it is recorded as withheld BY THE ENGINE — visible in the store
+    // immediately, with no later verb needed to fold it, because the rate this
+    // feeds reads records rather than shards.
     let shown = state_cmd(&repo, &home, &["state", "list", "-J"]);
     let document: serde_json::Value =
         serde_json::from_slice(&shown.stdout).expect("state list -J is JSON");

@@ -604,6 +604,43 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   and `defects::first_divergence` (append-only is a byte PREFIX, one definition
   in the tree). No CLI verb: surfacing the join is CLOUD-275's, the
   context-as-embedding capture CLOUD-134's.
+- `drain.rs` — the advisory drain (CLOUD-79): the first thing that reads the
+  store back TO the agent, and the producer `NotShown::DrainSuppressed` had been
+  waiting for. **The batch boundary is a window, not an event**: `hook::Event`
+  carries no batch variant, so N verifiers in one batch are N separate processes,
+  and a drain per process IS the once-per-verifier behaviour the issue removes.
+  (Claude Code DOES emit `PostToolBatch` — CLOUD-187 wires a hook on it — and the
+  other four surveyed hosts do not; riding it where it exists is CLOUD-389, and
+  it changes delivery rather than the invariant below.)
+  The first wake past the window drains, every wake inside it is `Coalesced` and
+  records that a follow-up is owed — so the MASK, not the event, enforces
+  once-per-batch, which is why a host that never grows a batch event still gets
+  batch behaviour. Each wake being its own process is also why the window is
+  persisted per session under the bound store (`drain/<hash>.json`, the session
+  id HASHED — it is a host-chosen string and must not choose a path). Two
+  short-circuits that are deliberately not one: `resultId` (CLOUD-166) declines
+  to repeat a byte-identical payload, the empty-poll give-up stops paying for a
+  drain AT ALL until the merged log moves — collapsing them loses one, since a
+  resultId that also stopped looking could never notice the store had changed.
+  `pending` suppresses the give-up: a masked wake was promised a follow-up, and
+  giving up instead is the window silently becoming a loss. The scope filter is
+  **per kind and the exception is the point** — only `Code` is filtered against
+  `git::changed_paths`; sequence/log/scope bypass unconditionally because the
+  flagship wrong-completion class (done-not-landed, deny-then-bypass) attaches to
+  no changed file BY CONSTRUCTION, so filtering on "no changed file" would drop
+  exactly what the engine exists to raise. An unclassifiable kind bypasses too:
+  showing costs a line, filtering is a silent false negative. Not built on
+  `findings::pointer_lines` — that renders per INSTANCE (right for `state list`),
+  where the drain's contract is one line per IDENTITY with a repeat suppressed
+  and counted. `[drain]` absent means the DEFAULTS, unlike every other optional
+  table (a budget nobody declared is not a budget of zero): this is engine
+  pacing, not consumer policy, and it is unlayered because an interval has no
+  monotone direction for a raise-only clamp to read. Rides `hook` at the
+  post-tool event — an event no host offers a deny channel for — so it is
+  structurally unable to block (§0.3). Emission shape, the cardinality cap and
+  the token budget are CLOUD-82's. A record with no `check` or no `remediation`
+  is never emitted (CLOUD-81's `is_emittable`) and is NOT counted as a
+  suppression — the engine did not choose to withhold it.
 - `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent
   to a model. Config types plus one pure function; **no command, no effect-table
   row, no egress** — enforcement of the config half rides `config lint`'s landed

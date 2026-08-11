@@ -48,6 +48,17 @@
         }
       ]
     },
+    "drain": {
+      "description": "How the advisory drain paces itself (CLOUD-79): the coalescing window and\nthe empty-poll give-up count.\n\nAbsent means the defaults apply, which is **not** the reading every other\noptional table here takes. Those are consumer policy — a budget nobody\ndeclared is not a budget of zero — where this is engine pacing: the drain\nruns on the `hook` surface whether or not a repository has an opinion\nabout how often, and an absent table means \"no opinion\", not \"do not\ndrain\". The type and the state machine are [`crate::drain`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DrainConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "epoch": {
       "description": "Which files make up the governing config surface the `config_epoch`\nhashes (CLOUD-32). Absent means the default: this file alone.",
       "anyOf": [
@@ -344,6 +355,27 @@
           "const": "non_increasing"
         }
       ]
+    },
+    "DrainConfig": {
+      "description": "The `[drain]` table: how often the advisory drain may wake, and when it stops\nasking.\n\nBoth keys are **pacing**, which is why neither is layered raise-only by\n[`crate::resolve`]: \"raise\" has no meaning for an interval — a longer one is\nquieter and a shorter one is louder, and neither direction is a weakening of\na bar. The committed authority sets it, and a local file does not move it.",
+      "type": "object",
+      "properties": {
+        "empty_poll_giveup": {
+          "description": "How many consecutive silent drains before wakes stop draining until the\nstore moves.\n\n`0` means the give-up applies immediately once a drain says nothing, so a\nquiet session pays a format read per wake and nothing more.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 3,
+          "minimum": 0
+        },
+        "interval_ms": {
+          "description": "The coalescing window in milliseconds. Every wake inside it after a drain\nis masked.\n\n`0` disables coalescing: every wake drains. That is a legitimate setting\n— it is what a host that really does deliver one wake per batch would\nwant — and not a disabled feature, which is why it is spelled as the\nbottom of the range rather than as an `enabled` flag.",
+          "type": "integer",
+          "format": "uint64",
+          "default": 2000,
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "Effect": {
       "type": "string",

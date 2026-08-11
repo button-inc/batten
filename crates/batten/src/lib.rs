@@ -1046,13 +1046,26 @@ fn drain_advisories(
     // must not: writing a record version it cannot represent would drop fields.
     // The emission still happens — dedupe and reporting work read-only — so the
     // agent is not silenced by an out-of-date binary.
-    if access.is_writable() {
-        drain::record_suppressions(
+    if access.is_writable()
+        && drain::record_suppressions(
             &dir,
             &journal::shard_id(here),
             &drained.scope_filtered,
             findings::NotShown::DrainSuppressed,
-        )?;
+        )? > 0
+    {
+        // Fold the entries into their records now rather than leaving them for
+        // whenever `state record` next runs. Two reasons, and the second is the
+        // load-bearing one: the false-positive rate reads the *records*, so an
+        // unfolded suppression is invisible to the measurement it exists for;
+        // and `record_suppressions` skips a record that already carries the
+        // disposition, which only stops the per-drain re-append once the fold
+        // has happened. A lost lock race is not a failure — the entries are
+        // already durable in this worktree's shard and the next fold picks them
+        // up — so it is silent here rather than reported, since a hook that
+        // narrated its own bookkeeping to an agent would be spending context on
+        // a non-event.
+        let _ = journal::merge(&dir)?;
     }
 
     // The `resultId` cheap path: a payload byte-identical to the last one is
