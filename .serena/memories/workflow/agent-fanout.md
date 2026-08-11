@@ -122,6 +122,14 @@ buys more attempts within one invocation but does not change the per-lap odds â€
 it spends CI minutes against a losing bet. The lever is unchanged and now more
 urgent: **shorten the lap, or quiet `main`; never add sessions.**
 
+One term that measurement prices too high, from a second branch lapping the same
+window (CLOUD-68): **the lap gets cheaper as it goes.** Cargo caches warm across
+laps, so `verify` fell from ~240s on lap 1 to **86s** by lap 8 â€” a lap of ~10
+minutes becoming ~7.5 against the same 7.3-minute gap. So the odds a re-invoked
+`land` faces are not the odds its first lap faced, and re-invoking it as written
+is not the same bet as raising `LAND_MAX_LAPS`. Neither is a substitute for the
+lever; both beat engineering around the loop.
+
 ## Planners fan out freely; implementers do not
 
 The cap above is a **build** cap, and reading it as a cap on sessions is the
