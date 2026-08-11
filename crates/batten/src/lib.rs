@@ -31,6 +31,7 @@ pub mod rules;
 pub mod severity;
 pub mod spec;
 pub mod state;
+pub mod store;
 pub mod surface;
 pub mod trust;
 pub mod verbs;
@@ -44,7 +45,7 @@ use anyhow::Result;
 
 pub use cli::{
     Cli, Command, ConfigCommand, GenerateCommand, PolicyCommand, ReceiptCommand, SpecFormat,
-    WorktreeCommand,
+    StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -128,6 +129,12 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
+        },
+        // The store resolves itself from git facts and the OS state dir; the §8
+        // config chain does not apply, because which store a checkout owns is
+        // not a policy question and no `batten.toml` may answer it.
+        Some(Command::State { command }) => match command {
+            StateCommand::Adopt { store } => store::run_adopt(store.as_deref(), err),
         },
     }
 }

@@ -465,6 +465,110 @@ pub fn repo_root(start: &Path) -> Result<PathBuf> {
     }
 }
 
+/// The repository's common git directory — shared by the main checkout and
+/// every linked worktree, which is what makes worktree siblings resolve to one
+/// store rather than one each (CLOUD-164).
+///
+/// Recorded by [`crate::store`] as *metadata*. It is deliberately not a key: a
+/// repository that moves on disk changes this string while remaining the same
+/// repository, and a store keyed on it would orphan itself on a `mv`.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] when `dir` is not a directory or not inside a git
+/// repository.
+pub fn common_dir(dir: &Path) -> Result<String> {
+    if !dir.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    query(
+        dir,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        &format!("{} is not inside a git repository", dir.display()),
+    )
+}
+
+/// Every configured remote as `(name, url)` pairs, sorted by name.
+///
+/// `git remote -v` is deliberately not used: it prints each remote twice (fetch
+/// and push) in a format that has to be re-parsed. `config --get-regexp` names
+/// the fetch URL exactly once per remote.
+///
+/// A repository with no remotes is the *normal* empty case, not a failure —
+/// CLOUD-164's fixture (c) is a no-remote repository — so a non-zero exit from
+/// `config --get-regexp` (which is how git reports "no matching keys") yields an
+/// empty list rather than an error.
+///
+/// # Errors
+///
+/// Returns an error only when `git` itself cannot run or emits non-UTF-8.
+pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
+    let listing = match query(
+        dir,
+        &["config", "--get-regexp", r"^remote\..*\.url$"],
+        "read the configured remotes",
+    ) {
+        Ok(listing) => listing,
+        // No remotes configured. `--get-regexp` exits 1 for "no match", which is
+        // not distinguishable here from a bad invocation — but the invocation is
+        // a fixed literal, so "no match" is the only reachable cause.
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut found: Vec<(String, String)> = listing
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .filter_map(|(key, url)| {
+            let name = key.strip_prefix("remote.")?.strip_suffix(".url")?;
+            (!name.is_empty() && !url.is_empty()).then(|| (name.to_owned(), url.to_owned()))
+        })
+        .collect();
+    // `read`-order from git config is file order; a recorded value that a gate
+    // compares must not depend on it.
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
+/// The repository's root commits (`rev-list --max-parents=0 --all`), sorted.
+///
+/// The strongest continuity evidence a store has: a repository keeps its root
+/// commits across a move, a rename, and a remote change, and two unrelated
+/// repositories sharing one is not a case that arises from ordinary work. This
+/// is what lets a moved no-remote checkout be *adopted* rather than orphaned.
+///
+/// **Selecting commits, not deciding reachability.** `rev-list` ranges are
+/// explicitly legal under this module's ancestry gate; what is forbidden is
+/// deciding merged-ness from a reachability answer, which this does not do.
+///
+/// An empty repository has no commits, so an empty list is a normal answer.
+///
+/// # Errors
+///
+/// Returns an error only when `git` itself cannot run or emits non-UTF-8.
+pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
+    let listing = match query(
+        dir,
+        &["rev-list", "--max-parents=0", "--all"],
+        "list the repository root commits",
+    ) {
+        Ok(listing) => listing,
+        // An unborn HEAD with no refs at all: no commits to list, not a failure.
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut found: Vec<String> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
 /// Read a tracked file's contents at a git ref, without touching the working
 /// tree (`git show <reference>:<path>`).
 ///

@@ -200,6 +200,19 @@ impl FlagDecl {
         }
     }
 
+    /// A positional argument the command runs without.
+    ///
+    /// Distinct from [`FlagDecl::positional`] in exactly one column, which is
+    /// why it is a second constructor rather than a boolean at every call site:
+    /// an optional positional is how a verb offers a *deliberate* override of an
+    /// answer it can otherwise work out for itself.
+    const fn positional_optional(id: &'static str, help: &'static str) -> Self {
+        FlagDecl {
+            required: false,
+            ..FlagDecl::positional(id, help)
+        }
+    }
+
     /// A required trailing variadic: every remaining token, verbatim.
     const fn trailing(id: &'static str, help: &'static str) -> Self {
         FlagDecl {
@@ -814,6 +827,31 @@ pub const SURFACE: &[CommandDecl] = &[
             FlagDecl::positional("check", "The check whose receipt is judged"),
             JSON,
         ],
+    },
+    // The noun only dispatches, and it takes the same posture `receipt` does:
+    // its subtree carries a write verb, so classifying the parent `read` would
+    // advertise a write-bearing prefix on the derived allowlist (CLOUD-170).
+    CommandDecl {
+        path: "state",
+        about: "The out-of-tree findings store: which store belongs to this checkout",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // Re-binds recorded key material to the minted store id. `write`, not
+    // `destructive`: it creates state the caller can recreate by re-running it,
+    // and it removes nothing — the store it binds is the one that already
+    // existed.
+    CommandDecl {
+        path: "state adopt",
+        about: "Bind this checkout to its findings store, minting one only if none exists",
+        // Reports what it bound on stderr; there is no document to emit.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[FlagDecl::positional_optional(
+            "store",
+            "The store id to bind, when resolution cannot decide for itself",
+        )],
     },
 ];
 

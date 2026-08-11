@@ -293,6 +293,29 @@ const SECRET_TAG: &str = "secret";
 /// The domain tag for a per-rule identity **override**.
 const OVERRIDE_TAG: &str = "override";
 
+/// The domain tag for a **minted store identity**, distinct from every other tag
+/// for the reason they are all distinct: a store id and a finding identity are
+/// different kinds of thing and must not collide.
+const STORE_TAG: &str = "store";
+
+/// Mint an opaque identity from caller-supplied seed material.
+///
+/// The one place a store's identity is derived, and it is a *mint*, not a
+/// derivation of anything the caller could reproduce: [`crate::store`] seeds it
+/// with a clock and a process id alongside the repository facts, precisely so
+/// the value cannot be recomputed from a path. That is what makes a store
+/// identity survive the repository moving, which is the whole point of minting
+/// one (CLOUD-164).
+///
+/// It lives here rather than in the store because the length-prefixed framing in
+/// [`tagged_fingerprint`] is the one hashing construction this crate has, and a
+/// second one would be a second authority on how bytes become an identity.
+#[must_use]
+pub fn store_fingerprint(seed: &[&str]) -> Fingerprint {
+    let fields: Vec<&[u8]> = seed.iter().map(|field| field.as_bytes()).collect();
+    tagged_fingerprint(STORE_TAG, &fields)
+}
+
 /// An HMAC key for secret-class identity inputs.
 ///
 /// Opaque on purpose: the bytes have no accessor and no [`Debug`] rendering.

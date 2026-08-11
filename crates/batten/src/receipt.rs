@@ -330,7 +330,7 @@ fn hex_sha256(bytes: &[u8]) -> String {
 /// leaves no git trace, which is why [`crate::waiver`] does evaluate a clock — at
 /// its boundary, with the date threaded in as data. Different claims, different
 /// invalidators (CLOUD-208).
-fn rfc3339_utc(unix_seconds: u64) -> String {
+pub(crate) fn rfc3339_utc(unix_seconds: u64) -> String {
     let date = crate::waiver::Date::from_unix_seconds(unix_seconds);
     let second_of_day = unix_seconds % 86_400;
     let (hour, minute, second) = (

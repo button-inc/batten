@@ -101,6 +101,11 @@ pub enum Command {
         /// The chosen sub-verb.
         command: WorktreeCommand,
     },
+    /// The out-of-tree findings store.
+    State {
+        /// The chosen sub-verb.
+        command: StateCommand,
+    },
 }
 
 /// Subcommands of `worktree`.
@@ -122,6 +127,19 @@ pub enum PolicyCommand {
     Budget {
         /// Emit the measurement as byte-stable JSON instead of pointer lines.
         json: bool,
+    },
+}
+
+/// Subcommands of `state`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StateCommand {
+    /// Bind this checkout to its findings store.
+    Adopt {
+        /// The store id to bind. `None` binds whatever resolution found, which
+        /// is the ordinary case; naming one is how an operator overrides a
+        /// resolution that refused to decide for itself.
+        store: Option<String>,
     },
 }
 
@@ -309,6 +327,17 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 }
             })
             .map(|command| Command::Receipt { command }),
+        // Unlike `receipt`, the positional is optional and belongs to one
+        // sub-verb, so it is read inside the arm rather than ahead of the match.
+        "state" => matches
+            .subcommand()
+            .and_then(|(name, matches)| match name {
+                "adopt" => Some(StateCommand::Adopt {
+                    store: matches.get_one::<String>("store").cloned(),
+                }),
+                _ => None,
+            })
+            .map(|command| Command::State { command }),
         _ => None,
     }
 }

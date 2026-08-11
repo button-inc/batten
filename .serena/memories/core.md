@@ -198,6 +198,22 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   and omitting the flag costs nothing.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<repo-name>/`, CLOUD-23),
   via `etcetera`; repo-name derived at runtime, never baked in (rule 1).
+- `store.rs` — _which_ store belongs to this checkout (CLOUD-164); it holds
+  nothing, and CLOUD-78 extends the contents without touching identity. The id
+  is MINTED at first write and seeded with a clock, so it cannot be recomputed
+  from a path — that irreproducibility is what lets a store survive the repo
+  moving. Common dir, remotes and root commits are recorded as `KeyMaterial`
+  metadata, never keyed on: each changes under ordinary work, and a store keyed
+  on one orphans itself, silently resurrecting every `rejected-by-design`
+  finding. So a key-material change is a MIGRATION event, never a fresh store.
+  Basename decides only _where to look first_ (`state.rs`'s path, unchanged);
+  the repo->store direction is a marker in the common git dir, beside
+  `receipt.rs`'s `batten-receipts`. `resolve` reads and never writes, which is
+  what keeps `check`'s `read` effect honest; `commit` is the write half. Only
+  `Opened::Fresh` mints, and it is reachable only after every criterion has been
+  asked. A root commit or remote URL is identity-bearing and auto-adopts; a
+  matching common dir ALONE is not (a path can be reused by a stranger) and
+  yields `Candidate`, bound only by `batten state adopt`.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
   predicates over the repo. `run_static` (read-effect, no process spawn) backs
   `check`; `run_all` (every kind) backs `enforce`. `check` refuses a
