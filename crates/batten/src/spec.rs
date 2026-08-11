@@ -215,6 +215,7 @@ mod tests {
                 "config epoch".to_owned(),
                 "config lint".to_owned(),
                 "config show".to_owned(),
+                "defects query".to_owned(),
                 "doctor".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
