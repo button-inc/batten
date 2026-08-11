@@ -39,6 +39,7 @@ use common::Fixture;
 const EVERY_KEY: &str = r#"version = 1
 min_batten_version = "0.0.1"
 strictness = "strict"
+must_land_on = "origin/main"
 fail_on_warning = true
 scope = ["src/**"]
 protected = ["policy/**"]
@@ -67,6 +68,10 @@ token = "batten: allow-once"
 paths = ["AGENTS.md"]
 max_tokens = 3500
 max_lines = 200
+
+[judge]
+raw = ["span_text"]
+over_protected = "pointer"
 "#;
 
 fn show(dir: &Path, extra: &[&str]) -> Output {
@@ -144,6 +149,8 @@ fn a_config_that_sets_every_key_surfaces_every_key() {
         "verb",
         "marker",
         "budget",
+        "must_land_on",
+        "judge",
     ] {
         let entry = document
             .get(key)

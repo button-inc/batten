@@ -3874,3 +3874,35 @@ fn adopting_a_store_id_that_does_not_exist_is_refused() {
         "the refusal names what was not found"
     );
 }
+
+// --- the `[judge]` loader surface (CLOUD-135) ---------------------------------
+
+#[test]
+fn an_unknown_judge_key_is_a_hard_schema_error() {
+    // The config surface stays narrow: a typo inside `[judge]` must never
+    // silently widen — or silently fail to widen — the payload boundary.
+    let dir = repo_with_config(
+        "judge-unknown-key",
+        "version = 1\n\n[judge]\nbogus = true\n",
+    );
+    let output = common::run(&dir, &["config", "lint"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unknown key is a usage error"
+    );
+    assert!(common::stderr(&output).contains("bogus"));
+}
+
+#[test]
+fn an_unknown_payload_class_is_refused_rather_than_ignored() {
+    // A class the engine does not know is not a class it may quietly drop: the
+    // author asked for something, and silently admitting nothing would read in
+    // the file as an opt-in that is not one.
+    let dir = repo_with_config(
+        "judge-unknown-class",
+        "version = 1\n\n[judge]\nraw = [\"everything\"]\n",
+    );
+    let output = common::run(&dir, &["config", "lint"]);
+    assert_eq!(output.status.code(), Some(1));
+}

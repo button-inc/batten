@@ -120,6 +120,17 @@ const WAIVER_NAMES_NO_RULE: &str = "waiver-names-no-rule";
 /// A waiver whose expiry has passed. It has already stopped suppressing — this is
 /// the alarm that says so, rather than leaving a dead row in the file forever.
 const WAIVER_EXPIRED: &str = "waiver-expired";
+/// A `[judge]` table over a non-empty `protected` set that never says what
+/// happens to protected content (CLOUD-135).
+///
+/// The one smell here that is about a question left *unanswered* rather than
+/// answered wrongly. Payload construction already treats the absent key as
+/// pointer-only, so nothing leaks while it is missing — which is exactly why it
+/// needs a smell: a silent safe default is indistinguishable from a decision
+/// nobody made, and the next person to widen `raw` inherits the omission without
+/// ever seeing it. Naming `over_protected` explicitly is cheap; discovering it
+/// was never named, after content has crossed, is not.
+const JUDGE_OVER_PROTECTED_UNSTATED: &str = "judge-over-protected-unstated";
 
 /// The spans of the keys the lint locates.
 ///
@@ -140,6 +151,17 @@ struct Located {
     rules: Vec<LocatedRule>,
     #[serde(default, rename = "waiver")]
     waivers: Vec<LocatedWaiver>,
+    #[serde(default)]
+    judge: Option<Spanned<LocatedJudge>>,
+}
+
+/// The `[judge]` table's span, plus the one key whose *absence* is the smell.
+/// Every other field is ignored here — `config::parse` has already validated
+/// them, and this view only has to find where the table is.
+#[derive(Debug, Deserialize)]
+struct LocatedJudge {
+    #[serde(default)]
+    over_protected: Option<crate::judge::OverProtected>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,6 +277,22 @@ pub fn smells(
         // question about the tree, not about this file, and answering it here
         // would be the runtime diagnostic above wearing a disguise.
         let _ = &waiver.path;
+    }
+
+    // The judge boundary's unanswered question (CLOUD-135). Located at the
+    // `[judge]` table rather than at `protected`, because the table is the thing
+    // that has to answer: a `protected` set on its own owes nothing.
+    //
+    // A function of this file's bytes alone, like every smell here — it asks
+    // whether two keys are present, never whether a glob matches a file, so
+    // `config lint` stays decidable over the config and never consults the tree.
+    if let Some(judge) = &located.judge {
+        if judge.get_ref().over_protected.is_none() && !config.protected.is_empty() {
+            found.push(Smell {
+                at: Where::Line(line_of(text, judge.span().start)),
+                id: JUDGE_OVER_PROTECTED_UNSTATED,
+            });
+        }
     }
 
     // The base-ref class, reusing the one definition of "weakened" — and its

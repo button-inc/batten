@@ -40,6 +40,17 @@
         "null"
       ]
     },
+    "judge": {
+      "description": "The optional LLM judge's payload-privacy boundary (CLOUD-135): what may\ncross into a model call. Absent means no judge is configured; present and\nempty means pointers and hashes only, which is also what every field\ndefaults to. The type and the pure builder are [`crate::judge`].\n\nThis table lands **before** the judge that reads it, deliberately: a\nboundary written after the code it bounds is a boundary that code has\nalready crossed.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Judge"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "marker": {
       "description": "The suppression markers to count (CLOUD-36). Which comment shape waves\na rule through is a property of the repository being gated, never of\nBatten; the type and the counting are [`crate::markers`].",
       "type": "array",
@@ -201,6 +212,31 @@
         "max_tokens"
       ]
     },
+    "Judge": {
+      "description": "The `[judge]` table: what the judge may put in a model call.\n\nEvery field defaults to the refusing reading, so a `[judge]` table that\nmerely exists sends nothing but pointers and hashes.",
+      "type": "object",
+      "properties": {
+        "over_protected": {
+          "description": "What happens to a span the `protected` set covers.\n\n**Absent is not a default here, it is an unanswered question**, and\n`config lint` reports it as one whenever `protected` is non-empty\n(`judge-over-protected-unstated`). Payload construction still treats\nabsent as [`OverProtected::Pointer`] — fail-closed — so the unanswered\ncase is safe *and* visible rather than either alone.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OverProtected"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "raw": {
+          "description": "The content classes admitted **raw** into a model call. Empty — the\ndefault — means pointer-only: no span bytes cross at all.\n\nA class named here is admitted and nothing else is. There is deliberately\nno \"all\" spelling: a config that wants both classes names both, so the\ndiff that widens the boundary shows what it widened.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PayloadClass"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Marker": {
       "description": "One suppression marker declared in `batten.toml`.\n\nThe two fields are deliberately separate axes: `id` is the stable name a\ncount is reported under and may not change when the spelling does, while\n`token` is the literal text scanned for. Collapsing them would make every\nre-spelling of a marker look like a brand-new one whose count starts at\nzero — the ratchet defeated by a rename.",
       "type": "object",
@@ -280,6 +316,36 @@
         "id",
         "pattern",
         "reason"
+      ]
+    },
+    "OverProtected": {
+      "description": "What a protected span may become in a payload.",
+      "oneOf": [
+        {
+          "description": "A pointer and a hash only. The bytes never leave.",
+          "type": "string",
+          "const": "pointer"
+        },
+        {
+          "description": "Protected spans may also use the classes [`Judge::raw`] admits.\n\nThe loud spelling of \"yes, send my protected content to a model\", which\nis exactly how loud that decision should have to be.",
+          "type": "string",
+          "const": "raw"
+        }
+      ]
+    },
+    "PayloadClass": {
+      "description": "A class of content that could cross into a model call.",
+      "oneOf": [
+        {
+          "description": "The bytes of one matched span.",
+          "type": "string",
+          "const": "span_text"
+        },
+        {
+          "description": "The bytes of a whole file.",
+          "type": "string",
+          "const": "file_text"
+        }
       ]
     },
     "Rule": {

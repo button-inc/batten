@@ -216,6 +216,12 @@ pub struct Resolved {
     /// The ref work must land on (CLOUD-51), as the authority states it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
+    /// The judge payload boundary (CLOUD-135), as the authority states it. Not
+    /// layered: every field is refusing by default and widening it is the
+    /// weakening, so there is no raise-only reading a local file could be
+    /// trusted with — `trust.rs` compares the committed bytes instead.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge: Option<crate::judge::Judge>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -667,6 +673,7 @@ fn assemble(
         waivers,
         budget: repo.budget.clone(),
         must_land_on: repo.must_land_on.clone(),
+        judge: repo.judge.clone(),
         sources: attribution(
             repo,
             strictness.source,
@@ -718,6 +725,7 @@ fn attribution(
         ("waiver", authority_set(!repo.waivers.is_empty())),
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
+        ("judge", authority_set(repo.judge.is_some())),
     ])
 }
 

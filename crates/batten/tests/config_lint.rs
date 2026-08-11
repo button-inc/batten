@@ -375,3 +375,78 @@ fn the_two_verbs_agree_on_where_a_weakening_is() {
     );
     assert_eq!(pointer(&lint_out), "batten.toml:rule[no-todo].severity");
 }
+
+// --- the judge payload boundary's unanswered question (CLOUD-135) -------------
+
+/// A config with a protected set and a `[judge]` table, with `extra` appended
+/// inside that table.
+fn judge_config(extra: &str) -> String {
+    format!("version = 1\nprotected = [\"secrets/**\"]\n\n[judge]\nraw = [\"span_text\"]\n{extra}")
+}
+
+#[test]
+fn a_judge_over_a_protected_set_that_never_says_what_happens_to_it_is_a_smell() {
+    // The acceptance's "cannot be silently enabled over protected content". The
+    // absent key is *safe* — payload construction withholds — which is exactly
+    // why it needs to be *visible*: a silent safe default is indistinguishable
+    // from a decision nobody made, and the next diff that widens `raw` inherits
+    // the omission without ever seeing it.
+    let dir = repo_with_config("judge-unstated", &judge_config(""));
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(2), "a smell is a policy verdict");
+
+    let text = stdout(&output);
+    assert!(
+        text.contains("judge-over-protected-unstated"),
+        "the smell names itself: {text:?}"
+    );
+    // Located at the `[judge]` table, which is the thing that owes the answer —
+    // a `protected` set on its own owes nothing.
+    assert!(
+        text.contains("batten.toml:4 "),
+        "the pointer locates the table: {text:?}"
+    );
+}
+
+#[test]
+fn stating_the_answer_clears_the_smell_either_way() {
+    // Both answers clear it. The smell is about the question being unanswered,
+    // not about which answer was given — a lint that only accepted the cautious
+    // one would be a gate wearing a diagnostic's clothes.
+    for answer in ["pointer", "raw"] {
+        let dir = repo_with_config(
+            &format!("judge-stated-{answer}"),
+            &judge_config(&format!("over_protected = \"{answer}\"\n")),
+        );
+        let output = lint(&dir, &[]);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "`over_protected = {answer:?}` answers the question: {}",
+            stdout(&output)
+        );
+    }
+}
+
+#[test]
+fn a_judge_with_no_protected_set_owes_no_answer() {
+    // Absent is not empty, the rule this whole module runs on: a config with
+    // nothing marked protected has no protected content to decide about, and
+    // firing there would make the smell noise on every minimal config.
+    let dir = repo_with_config(
+        "judge-no-protected",
+        "version = 1\n\n[judge]\nraw = [\"span_text\"]\n",
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}
+
+#[test]
+fn a_protected_set_with_no_judge_owes_no_answer_either() {
+    let dir = repo_with_config(
+        "judge-absent",
+        "version = 1\nprotected = [\"secrets/**\"]\n",
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+}

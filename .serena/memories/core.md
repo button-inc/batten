@@ -313,6 +313,27 @@ status`. Three categories as one read gate: **uncommitted** (the tree is not
   key, which is path membership over tree content; VCS state and path membership
   are orthogonal and one key meaning both is the conflation CLOUD-37 avoided.
   An absent key is exit 1, never a pass over nothing.
+- `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent
+  to a model. Config types plus one pure function; **no command, no effect-table
+  row, no egress** — enforcement of the config half rides `config lint`'s landed
+  `read` row. Landed BEFORE the judge that reads it (CLOUD-56), because a
+  boundary written after the code it bounds is one that code has already crossed.
+  Two independent gates, and both must pass: `[judge] raw` names which classes
+  may ever cross (default none), `over_protected` says whether a protected span
+  may use that permission. Collapsing them would let one opt-in imply the other.
+  A span is protected when its path matches the committed `protected` globs — a
+  structural match, never an inference — **or when it carries no path provenance
+  at all**, the fail-closed half: cannot-show-it-is-safe resolves to withheld.
+  A withheld span still leaves a pointer and a hash (`identity::
+judge_fingerprint`, its own domain tag), so a caller can reference content it
+  did not send. `PayloadEntry::text` is the only field that can carry bytes, so a
+  caller cannot leak by accident, only by configuration. The justification bar is
+  high because the verdict bought is advisory-only (house style §0.3) — egress
+  that cannot even block argues for a refusing default, not a balanced one.
+  Absent `over_protected` is safe (builds pointer-only) AND smelled by
+  `lint.rs`'s `judge-over-protected-unstated`: a silent safe default is
+  indistinguishable from a decision nobody made, and the next diff widening `raw`
+  inherits the omission unseen.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do. The module

@@ -316,6 +316,15 @@ pub fn store_fingerprint(seed: &[&str]) -> Fingerprint {
     tagged_fingerprint(STORE_TAG, &fields)
 }
 
+/// The domain tag for a **judge payload** entry (CLOUD-135), distinct from every
+/// other tag here for the same reason they are distinct from each other.
+///
+/// It matters more than usual for this one: the hash stands in for content that
+/// was deliberately *not* sent to a model, so a collision with a finding or a
+/// capture identity would let a payload digest be mistaken for one of those and
+/// joined against it.
+const JUDGE_TAG: &str = "judge";
+
 /// An HMAC key for secret-class identity inputs.
 ///
 /// Opaque on purpose: the bytes have no accessor and no [`Debug`] rendering.
@@ -460,6 +469,21 @@ pub fn override_fingerprint(default: Fingerprint, discriminator: &str) -> Finger
 #[must_use]
 pub fn capture_fingerprint(stream: &str, bytes: &[u8]) -> Fingerprint {
     tagged_fingerprint(CAPTURE_TAG, &[stream.as_bytes(), bytes])
+}
+
+/// The identity of a **judge payload** entry: its class and the bytes it stands
+/// for (CLOUD-135).
+///
+/// Bytes are hashed **verbatim**, like a capture and unlike a span: the digest
+/// exists so a model call can reference content it was not given, and
+/// normalizing would make two genuinely different contents share one reference.
+///
+/// The class is in the tuple, so the same bytes seen as a matched span and as a
+/// whole file are distinct identities — they are different claims about what was
+/// withheld.
+#[must_use]
+pub fn judge_fingerprint(class: &str, bytes: &[u8]) -> Fingerprint {
+    tagged_fingerprint(JUDGE_TAG, &[class.as_bytes(), bytes])
 }
 
 /// The identity of a **file surface**: an ordered set of `(path, contents)`

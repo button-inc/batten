@@ -188,6 +188,16 @@ pub struct Config {
     /// them together would give one key two meanings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
+    /// The optional LLM judge's payload-privacy boundary (CLOUD-135): what may
+    /// cross into a model call. Absent means no judge is configured; present and
+    /// empty means pointers and hashes only, which is also what every field
+    /// defaults to. The type and the pure builder are [`crate::judge`].
+    ///
+    /// This table lands **before** the judge that reads it, deliberately: a
+    /// boundary written after the code it bounds is a boundary that code has
+    /// already crossed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<crate::judge::Judge>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -385,6 +395,7 @@ impl Config {
             // either — there is simply no threshold, which is what `None` says.
             budget: None,
             must_land_on: None,
+            judge: None,
         }
     }
 }

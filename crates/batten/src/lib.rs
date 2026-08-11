@@ -21,6 +21,7 @@ pub mod exit;
 pub mod git;
 pub mod hook;
 pub mod identity;
+pub mod judge;
 pub mod lint;
 pub mod markers;
 pub mod output;
