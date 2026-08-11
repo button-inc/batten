@@ -147,3 +147,74 @@ capability the neutral files lack, such as path-scoped loading. Buying a context
 saving with a lock-in is the wrong trade here: the repo is read by more than one
 agent, and an instruction only one of them can see is an instruction the others
 will violate.
+
+## A worked survey: the static-analysis and agent-hook field (CLOUD-311/312/314)
+
+Kept because the survey's _reasoning_ has no other home, and because four of its
+five candidates were **rejected** — the rejections are what future surveys need,
+since each names a mechanism this repo already shipped. Evidence and sources live
+in the project doc; only the transferable judgement is here.
+
+**Separate a tool's engine from its rules before asking whether to adopt it.**
+The engines surveyed (Semgrep, and the Opengrep fork) are LGPL-2.1 — dependable
+as a subprocess, since nothing links. The maintained rule corpus is not: it
+permits "internal business purposes" only and forbids making the rules available
+as a service, which excludes shipping them with anything open-sourceable. The
+agent plugin has _no license at all_, which grants nothing and makes it
+readable-but-not-vendorable. One product, three licenses, three different
+answers. **Ask the question per layer, never per vendor** — the licensing FAQ
+page said "LGPL-2.1" and would have been read as clearance for all three.
+
+**A survey's most useful output can be an argument for a rule we already have.**
+That plugin's fleet-rollout documentation ships managed settings with
+`autoUpdate` against a git repo — no version pin, no checksum, no attestation —
+deployed so users cannot override them, executing a stripped 16 MB binary on
+every agent tool call. That is `no-source-built-tool` and the locked-url +
+per-platform-checksum discipline argued from the opposite direction by someone
+with every incentive to find a cheaper way. Record that; it is worth more than
+another adoption.
+
+**"They have a knob we lack" is usually a channel we already factor.** Their
+four-mode finding vocabulary looked like a rank we were missing; the fourth mode
+turned out to describe _where a finding is displayed_, which our report level and
+exit contract already separate. But their _precedence_ rule — highest mode wins
+when a rule appears in several policies — is max-severity resolution, i.e.
+independent confirmation that raise-only is the stable resolution for layered
+policy. **A rejected candidate can still yield evidence for a decision already
+made**, and that evidence is worth more than the feature would have been.
+
+**Measure the wrapped tool; never infer its contract from its docs.** Measured,
+not read: it exits 0 with findings by default (a false green unless `--error`);
+`--error` alone _still_ exits 0 on a file it could not parse (only `--strict`
+surfaces it, and a silently-skipped file is the exact false green we exist to
+kill); its JSON is not byte-stable and the flag documented to fix that does not;
+an absolute config path leaks into rule identifiers; and its auto-config mode
+refuses to run with telemetry disabled. Every one of those would have been missed
+by reading. **The gating question was not behaviour but distribution shape** — it
+publishes no standalone binary, so there is nothing to pin, which disqualified it
+on our own toolchain rules before any of the above mattered.
+
+**A tool-side privacy behaviour is not a mechanism.** Its logged-out output
+happens to redact matched bytes, which looked like it satisfied
+output-is-a-pointer. It is a _licensing_ gate, reversible in any release, and it
+does not cover the other output format at all. The durable answer was already
+ours: a `command` rule discards the child's streams, so the payload cannot reach
+our output whatever the tool prints. **When a constraint appears to be satisfied
+by someone else's configuration, check whether one of our surfaces satisfies it
+structurally** — that is the version that cannot be revoked.
+
+**The adoption test's step 1 is load-bearing and it is where this survey ended.**
+Nothing was adopted for Button to _run_, because no security failure in these
+repositories was ever named. Their threat model is injected or insecure code
+patterns; ours is honest agent or human error — wrong entity, wrong time, wrong
+completion signal. A tool can be excellent, licensed cleanly, and pinnable, and
+still fail at "which observed problem here does it fix". The revisit trigger is
+recorded in the doc rather than left implicit, because "no" without a trigger
+becomes "no" forever by default.
+
+The one adoption was a _defect_ their design exposed in ours: a fingerprint whose
+preimage includes matched values is an offline-guessable commitment to a matched
+credential, so for a secret-class finding the primary key carries the payload the
+finding exists to avoid printing — rule 4 violated by the key rather than by the
+output line, and the key is the more durable of the two. **The best thing a
+survey finds is often not their feature but our bug.**
