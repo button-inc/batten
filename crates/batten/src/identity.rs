@@ -558,17 +558,32 @@ impl fmt::Debug for IdentityKey {
 /// rotation is meant to re-mint.
 ///
 /// **The version coordinate a store records beside this is
-/// [`FindingKind::Code`]'s.** A secret-class finding is the code kind with its
-/// span keyed and the key id appended — not a fifth kind — so it versions with the
-/// code tuple and the two evolve together. [`override_fingerprint`] inherits the
-/// version of whichever kind produced the default it wraps, for the same reason.
-/// Neither mints a version of its own, and a store must not invent one.
+/// [`FindingKind::Code`]'s**, because a secret-class finding is the code kind with
+/// its span keyed and the key id appended — not a fifth kind.
+/// [`override_fingerprint`] likewise inherits the version of whichever kind
+/// produced the default it wraps. Neither mints a version of its own, and a store
+/// must not invent one.
+///
+/// **But the version does not settle replayability, and for this kind that is a
+/// separate question.** The migration law above partitions on whether a scan can
+/// be replayed, and it puts the code kind in the replayable half — re-scan the
+/// authoritative context, equality-join old hash to new. A secret-class identity
+/// is replayable **only while the key that minted it is still held**: the span
+/// comes back from the re-scan, the old HMAC does not come back without the old
+/// key. So an orphaned key moves those identities into the non-replayable half,
+/// where a version bump must never close, GC, or re-mint them — the loud orphan
+/// event, not a silent migration. A store reading the code version off a
+/// secret-class record must therefore check key custody before treating a bump as
+/// replayable.
 ///
 /// A **secret-tagged** identity cannot be minted without a key: that much is
 /// structural, and it is all this signature buys. The **routing** is not. A span
-/// is keyed only if a classifier sends it here, and [`code_fingerprint`] takes
-/// this parameter list minus the key — so a caller who drops one argument hashes
-/// the same secret bytes unkeyed, into the same journal that cannot be expunged.
+/// is keyed only if a classifier sends it here, and [`code_fingerprint`] is public
+/// and hashes the same `(rule_id, repo_path, span)` unkeyed — so any span the
+/// classifier does not route here gets an unkeyed digest in the same journal that
+/// cannot be expunged. The hazard is a call to the wrong function, not a mistyped
+/// argument list: dropping `key` from this call no longer compiles, because the
+/// two signatures differ by a key *and* a `mode` in opposite directions.
 /// Classifier recall is therefore the load-bearing control, and the residual risk
 /// is a missed classification rather than a forgotten key. Making the routing
 /// structural takes a span type only a classifier can mint, which belongs with
@@ -576,8 +591,11 @@ impl fmt::Debug for IdentityKey {
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] when `repo_path` is not a clean repo-relative path
-/// (see [`canonical_repo_path`]).
+/// Returns a [`UsageError`] (exit `1`) when `repo_path` is not a clean
+/// repo-relative path (see [`canonical_repo_path`]). The unreachable HMAC
+/// key-length branch in [`keyed_span`] surfaces instead as a plain internal error
+/// (exit `3`) — both classes reach a caller of this function, and they are not the
+/// same answer.
 pub fn secret_code_fingerprint(
     key: &IdentityKey,
     rule_id: &str,
@@ -1119,9 +1137,12 @@ mod tests {
     }
 
     #[test]
-    fn an_override_cannot_merge_two_default_identities() {
-        // The split-only law. A force-merge is not a rejected configuration, it
-        // is unconstructable: the default is a field of the override's preimage.
+    fn an_override_has_no_colliding_preimage_for_two_defaults() {
+        // The split-only law, in the strength the construction actually gives: the
+        // default is a field of the override's preimage, so no colliding preimage
+        // exists and merging two would take a SHA-256 collision. Not
+        // "unconstructable" — that overstates it, and the assertion below is a
+        // preimage-inequality check rather than a proof of impossibility.
         let a = code_fingerprint("r", "src/a.rs", "x", SpanNormalization::Collapsed).unwrap();
         let b = code_fingerprint("r", "src/b.rs", "x", SpanNormalization::Collapsed).unwrap();
         assert_ne!(a, b);
