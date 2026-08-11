@@ -526,7 +526,7 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
     let commit = git::head_commit(Path::new("."))?;
 
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let found = rules::run_static(&config.rules, Path::new("."))?;
+    let scan = rules::run_static(&config.rules, Path::new("."))?;
 
     let bound = store::commit(store::resolve(&repo)?)?;
     if let Some(note) = &bound.note {
@@ -553,8 +553,11 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
         &context,
         &commit,
         here.as_deref().and_then(Path::to_str),
-        &found,
+        &scan.findings,
         schema,
+        // The rules that never looked. Without this the pass below reads their
+        // silence as "clean" and resolves every finding they cover (CLOUD-81).
+        &scan.not_evaluated,
     )?;
 
     // Fold any dispositions this worktree journalled since the last record. A
@@ -592,8 +595,9 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
     // stdout channel stays empty for it.
     writeln!(
         err,
-        "batten: state record {context}: {} minted, {} updated, {} resolved, {dropped} instances GC'd",
-        recorded.minted, recorded.updated, recorded.resolved
+        "batten: state record {context}: {} minted, {} updated, {} resolved, {} held, \
+         {dropped} instances GC'd",
+        recorded.minted, recorded.updated, recorded.resolved, recorded.held
     )?;
     Ok(ExitCode::Success)
 }
@@ -1170,7 +1174,7 @@ fn run_rules(
     err: &mut dyn Write,
     mode: Mode,
     overrides: &Overrides,
-    runner: fn(&[rules::Rule], &Path) -> Result<Vec<rules::Finding>>,
+    runner: fn(&[rules::Rule], &Path) -> Result<rules::Scan>,
     json: bool,
 ) -> Result<ExitCode> {
     // The *resolved* rule set, so a local override's added rules are gates a run
@@ -1178,7 +1182,7 @@ fn run_rules(
     // setting comes off the same resolution, so one §8 chain decides both.
     let base_ref = overrides.config_from.as_deref();
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let mut findings = runner(&config.rules, Path::new("."))?;
+    let mut findings = runner(&config.rules, Path::new("."))?.findings;
 
     // Declared budgets are gates, evaluated here rather than only under `policy
     // budget` (CLOUD-50). Reading files and summing them spawns nothing, so this

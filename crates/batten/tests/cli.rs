@@ -4985,10 +4985,15 @@ fn stored_findings(dir: &std::path::Path, home: &std::path::Path) -> Vec<StoredF
 }
 
 /// A repo whose config forbids `TODO`, with one offending file.
+///
+/// It carries `no_fix_reason` because these fixtures record to the store, and a
+/// stored finding is one something later has to close (CLOUD-81). A rule with
+/// neither remediation column still gates — see
+/// [`state_record_refuses_a_finding_with_no_remediation`] for that half.
 fn ledger_fixture(name: &str) -> (PathBuf, PathBuf) {
     let root = scratch(name);
     let repo = Fixture::at(root.join("repo"))
-        .config("version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n")
+        .config("version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nno_fix_reason = \"delete the marker by hand\"\n")
         .file("src/a.rs", "fn main() {}\n// TODO fix me\n")
         .git()
         .base_commit()
@@ -5034,6 +5039,49 @@ fn check_and_state_list_name_the_same_finding_by_the_same_key() {
     // line must not appear anywhere in the document that now carries it.
     let text = serde_json::to_string(&report).expect("re-serialize");
     assert!(!text.contains("TODO fix me"), "pointer-only: {text}");
+}
+
+#[test]
+fn state_record_refuses_a_finding_with_no_remediation() {
+    // CLOUD-81 acceptance (c)/(d), over the compiled binary — the exit code a
+    // consumer actually sees. A rule with neither `fix` nor `no_fix_reason`
+    // still loads and still gates, because refusing at load would turn a
+    // store-shaped requirement into a gate outage; what it cannot do is put a
+    // finding in the store that nothing can close.
+    let root = scratch("ledger-no-remediation");
+    let repo = Fixture::at(root.join("repo"))
+        .config(
+            "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\n\
+             glob = \"**/*.rs\"\npattern = \"TODO\"\n",
+        )
+        .file("src/a.rs", "fn main() {}\n// TODO fix me\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+
+    // The gate still renders its verdict: exit 2, the policy code.
+    assert_eq!(
+        store_cmd(&repo, &home, &["check"]).status.code(),
+        Some(2),
+        "an un-remediated rule still gates"
+    );
+
+    // Storing it does not. Exit 1 — the config-error code, never the 2 that is
+    // the deny channel (house style §7): a malformed rule must not be able to
+    // deny a call.
+    let recorded = store_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(
+        recorded.status.code(),
+        Some(1),
+        "no remediation is a config error, not a policy verdict"
+    );
+    let stderr = String::from_utf8(recorded.stderr).expect("stderr is UTF-8");
+    assert!(stderr.contains("no_fix_reason"), "it names the remedy");
+    assert!(
+        !stderr.contains("TODO fix me"),
+        "pointer-only, never the flagged content: {stderr}"
+    );
 }
 
 #[test]

@@ -199,6 +199,13 @@
           "description": "Which predicate to apply to the matched files.",
           "$ref": "#/$defs/RuleKind"
         },
+        "no_fix_reason": {
+          "description": "Why this rule's findings have no fix — the stated answer, which is not\nthe same as an absent one (CLOUD-81).\n\nA finding a caller can neither clear nor act on spends attention for\nnothing, so \"there is no fix\" must be *said*. The **alternative** to\n[`Rule::fix`], never an addition: a row carrying both is a load error\nrather than a precedence rule nobody can read.\n\nThis is the only column CLOUD-81 adds. `fix` already exists — CLOUD-215\nreserved it as the `command` kind's repair side — and\n[`Rule::remediation`] reads it rather than declaring a second spelling of\nthe same thing. Recording a repair on a finding is not *running* one, so\nthis does not disturb `run_all`'s refusal of a rule that declares it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "pattern": {
           "description": "The literal shape this rule bans — one meaning, two domains.\n\nFor [`RuleKind::Forbid`] it is a substring banned from matched *files*.\nFor [`RuleKind::Shape`] it is a banned *command line*: the first word is\nthe effective program (matched after wrapper look-through) and the rest\nare the adjacent non-flag words that must follow it, so\n`pattern = \"gh pr merge\"` reads exactly as a reviewer would say it aloud.\nRequired by both kinds, rejected by [`RuleKind::Command`].",
           "type": [

@@ -170,6 +170,7 @@ glob = "crates/**/*.rs"
 pattern = "<<<<<<< "
 severity = "deny"
 scope = "tree"
+no_fix_reason = "resolve the conflict by hand: choosing a side is a judgement no command can make"
 
 # Non-negotiable rule 1 as a standing gate, not prose (CLOUD-7). "The core stays
 # repo-agnostic … a grep for a specific consumer's names must return zero hits"
@@ -240,6 +241,7 @@ glob = "crates/**"
 pattern = "etaxbc"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
 
 [[rule]]
 id = "no-consumer-entity-path"
@@ -248,6 +250,7 @@ glob = "crates/**"
 pattern = "entities/"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "delete the literal; a consumer fact belongs in that consumer's own batten.toml, never in the core"
 
 # `regex` rather than `pattern`, which is the whole reason this row can exist:
 # the shape is the stem, so one expression covers every ending the name takes,
@@ -276,6 +279,7 @@ glob = "crates/batten/tests/**"
 pattern = "button-inc"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "rewrite the fixture so it does not name where this repository is hosted"
 
 # Never compile a third-party tool from source in this repository (CLOUD-86).
 #
@@ -311,6 +315,7 @@ glob = "mise.toml"
 pattern = "\"cargo:"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "pin an attested binary in mise.toml instead; what to pin is a supply-chain decision, not a rewrite"
 
 [[rule]]
 id = "no-cargo-install-in-ci"
@@ -319,6 +324,7 @@ glob = ".github/workflows/*.yml"
 pattern = "cargo install"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockfile names"
 
 # Which programs change the world, in the one §5 effect vocabulary, each with the
 # sanctioned mutation to point at when it is refused.
@@ -427,6 +433,7 @@ direction = "non_decreasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
 
 # `tests/**/*.bats`, recursive — and the recursion is safe now rather than by
 # this glob's care. `tests/bats` is a vendored submodule carrying 227 of its own
@@ -448,6 +455,7 @@ direction = "non_decreasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "restore the tests, or waive the reduction deliberately; which of the two is the whole question"
 
 # The mirror direction: a disabled test is a deleted test that still counts, so
 # the guard is on the token RISING.
@@ -469,6 +477,7 @@ direction = "non_increasing"
 base = "origin/main"
 severity = "deny"
 scope = "tree"
+no_fix_reason = "delete the new ignore, or waive it deliberately; an ignore is a decision, not a defect to rewrite"
 
 # Advisory rather than blocking: assertions thinning out while the `#[test]`
 # count holds is the gutting shape, and it is worth saying without blocking —
@@ -483,6 +492,7 @@ direction = "non_decreasing"
 base = "origin/main"
 severity = "warn"
 scope = "tree"
+no_fix_reason = "restore the assertions, or waive the reduction deliberately"
 
 # The merge contract, DERIVED from this repository's GitHub ruleset (CLOUD-54).
 #

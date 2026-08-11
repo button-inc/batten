@@ -702,6 +702,8 @@ mod tests {
             tier: AdvisoryTier::Warning,
             disposition: None,
             presentation: Presentation::Shown,
+            check: Some(crate::findings::Check::Reevaluate),
+            remediation: Some(crate::findings::Remediation::NoFix("fixture".to_owned())),
             instances: vec![Instance {
                 context: Context::new("refs/heads/a"),
                 occurrences: Observation::Observed(1),

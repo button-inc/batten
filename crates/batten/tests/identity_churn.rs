@@ -76,7 +76,9 @@ impl Scan {
     /// written against the whole matched line, and they still pass, so the
     /// engine demonstrably picks the same span the test used to.
     fn of(root: &Path, rules: &[Rule]) -> Self {
-        let findings = rules::run_static(rules, root).expect("scan the tree");
+        let findings = rules::run_static(rules, root)
+            .expect("scan the tree")
+            .findings;
         let identities = identity::count_occurrences(
             findings.iter().map(|finding| finding.identity.fingerprint),
         );

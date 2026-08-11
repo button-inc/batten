@@ -250,6 +250,13 @@ impl Report {
             path: self.name.clone(),
             line: None,
             identity,
+            // Engine-produced (no `[[rule]]` row): re-measuring the set is the
+            // check, and the fix is cutting instructions — prose a command cannot
+            // write.
+            check: crate::findings::Check::Reevaluate,
+            remediation: Some(crate::findings::Remediation::NoFix(
+                "cut instruction text until the set is under its budget".to_owned(),
+            )),
         })
     }
 }

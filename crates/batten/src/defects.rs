@@ -225,6 +225,13 @@ impl Problem {
             path: path.to_owned(),
             line: Some(self.line),
             identity,
+            // Engine-produced, so there is no `[[rule]]` row to read these from.
+            // Re-reading the ledger is the check; the fix is editing the row this
+            // points at, which is a human judgement rather than an argv.
+            check: crate::findings::Check::Reevaluate,
+            remediation: Some(crate::findings::Remediation::NoFix(
+                "resolve or rewrite the ledger row this points at".to_owned(),
+            )),
         }
     }
 }

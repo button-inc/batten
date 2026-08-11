@@ -37,6 +37,7 @@
 //! unlanded sets is a separate concern (CLOUD-36, CLOUD-37) that layers on top of
 //! this walk without changing the rule model.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -45,6 +46,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity;
 use crate::refusal::{Fix, Refusal};
 use crate::severity::{self, ReportLevel, RuleSeverity};
@@ -200,8 +202,9 @@ impl RuleKind {
                 "exclude",
                 "verbatim",
                 "identity_key",
+                "no_fix_reason",
             ],
-            RuleKind::Command => &["glob", "check", "fix", "identity_key"],
+            RuleKind::Command => &["glob", "check", "fix", "identity_key", "no_fix_reason"],
             // A shape rule is adjudicated per mediated call and never reaches
             // the store, so an identity column on one is decorative by
             // construction (non-negotiable rule 6).
@@ -216,6 +219,7 @@ impl RuleKind {
                 "base",
                 "reason",
                 "policy_url",
+                "no_fix_reason",
             ],
         }
     }
@@ -440,6 +444,21 @@ pub struct Rule {
     /// one it cannot is a usage error naming the rev, never a pass.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// Why this rule's findings have no fix — the stated answer, which is not
+    /// the same as an absent one (CLOUD-81).
+    ///
+    /// A finding a caller can neither clear nor act on spends attention for
+    /// nothing, so "there is no fix" must be *said*. The **alternative** to
+    /// [`Rule::fix`], never an addition: a row carrying both is a load error
+    /// rather than a precedence rule nobody can read.
+    ///
+    /// This is the only column CLOUD-81 adds. `fix` already exists — CLOUD-215
+    /// reserved it as the `command` kind's repair side — and
+    /// [`Rule::remediation`] reads it rather than declaring a second spelling of
+    /// the same thing. Recording a repair on a finding is not *running* one, so
+    /// this does not disturb `run_all`'s refusal of a rule that declares it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_fix_reason: Option<String>,
 }
 
 /// Which way a ratcheted count may move.
@@ -522,8 +541,9 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 13] {
+    fn columns(&self) -> [(&'static str, bool); 14] {
         [
+            ("no_fix_reason", self.no_fix_reason.is_some()),
             ("glob", self.glob.is_some()),
             ("pattern", self.pattern.is_some()),
             ("regex", self.regex.is_some()),
@@ -588,7 +608,88 @@ impl Rule {
                 self.id
             )));
         }
-        self.validate_forbid_predicate()
+        self.validate_forbid_predicate()?;
+        self.validate_remediation()
+    }
+
+    /// `fix` and `no_fix_reason` are alternatives, never both (CLOUD-81).
+    ///
+    /// Not expressible in [`RuleKind::requires`] for the same reason
+    /// `pattern`-xor-`regex` is not: that list is columns that must *all* be
+    /// present. [`RuleKind::permits`] carries the other half — a `shape` row is
+    /// refused both columns there, because it is adjudicated per mediated call
+    /// and never reaches the store, the same reasoning that already denies it
+    /// `identity_key`.
+    ///
+    /// **Carrying neither is refused at ingest, not here** (§5). A rule with no
+    /// remediation still loads and still gates: `check` and `enforce` render its
+    /// findings and exit on them exactly as before. What it cannot do is put one
+    /// in the store, because a *stored* finding is one something later has to
+    /// close. Refusing at load would instead make an un-actionable rule
+    /// un-runnable, which turns a store-shaped requirement into a gate outage
+    /// for every consumer whose config predates this field.
+    fn validate_remediation(&self) -> anyhow::Result<()> {
+        if self.fix.is_some() && self.no_fix_reason.is_some() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `fix` and `no_fix_reason` are alternatives; a row carries exactly one, \
+                 never both",
+                self.id
+            )));
+        }
+        Ok(())
+    }
+
+    /// The predicate that settles this rule's findings (CLOUD-81).
+    ///
+    /// Derived rather than declared, and that is the whole design. A
+    /// [`RuleKind::Command`] rule already carries an exit-code predicate — its
+    /// [`Rule::check`] column, which CLOUD-215 named for exactly this role — so
+    /// reusing it keeps one authority for what that rule executes (house style
+    /// §9's check/fix duality). Every other storable kind is re-evaluated by the
+    /// engine, whose own verdict is the exit code; demanding an argv there would
+    /// mean writing "the banned literal is *gone*" as a command, which needs a
+    /// shell negation this engine deliberately does not offer.
+    ///
+    /// Named `settling_check` rather than `check` because that spelling is the
+    /// column itself: this answers what settles a *finding*, which for two of
+    /// the three storable kinds is not a command at all.
+    ///
+    /// `None` for [`RuleKind::Shape`], which never reaches the store.
+    #[must_use]
+    pub fn settling_check(&self) -> Option<Check> {
+        match self.kind {
+            RuleKind::Command => Some(Check::Argv(
+                self.check
+                    .as_deref()
+                    .unwrap_or_default()
+                    .split_whitespace()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+            )),
+            RuleKind::Forbid | RuleKind::Ratchet => Some(Check::Reevaluate),
+            RuleKind::Shape => None,
+        }
+    }
+
+    /// The fix, or the stated reason there is none.
+    ///
+    /// Reads the existing [`Rule::fix`] column rather than declaring a second
+    /// spelling of it. CLOUD-215 reserved `fix` and has `run_all` refuse a rule
+    /// that declares one, because serialised fix execution is not a capability
+    /// this build has — but *recording* a repair on a finding is not running it,
+    /// so the two coexist: the column says what would fix this, and nothing here
+    /// executes it.
+    ///
+    /// `None` for a row carrying neither, which is what
+    /// [`crate::findings::record`] refuses at ingest.
+    #[must_use]
+    pub fn remediation(&self) -> Option<Remediation> {
+        if let Some(fix) = &self.fix {
+            return Some(Remediation::Fix(
+                fix.split_whitespace().map(ToOwned::to_owned).collect(),
+            ));
+        }
+        self.no_fix_reason.clone().map(Remediation::NoFix)
     }
 
     /// The `pattern`-xor-`regex` rule, and the regexes' own well-formedness.
@@ -709,6 +810,30 @@ pub struct Finding {
     /// extractor, and deleting that test-side join is how the pack now proves it
     /// picks the right span.
     pub identity: crate::identity::StoredIdentity,
+    /// The predicate that settles this finding, captured from the producing rule
+    /// (CLOUD-81). Carried on the finding rather than looked up later, so the
+    /// store never has to reach back into a config it cannot see.
+    pub check: Check,
+    /// The fix, or the stated reason there is none. `None` only for a rule
+    /// [`Rule::validate`] would have refused; [`crate::findings::record`]
+    /// refuses to store one.
+    pub remediation: Option<Remediation>,
+}
+
+/// One run's findings, plus which rules never actually looked (CLOUD-81).
+///
+/// The second half is what keeps the store fail-closed. A rule that did not
+/// evaluate reports no findings, and a consumer reading that silence as "clean"
+/// resolves every finding the rule covers — the fail-open this type exists to
+/// make inexpressible. Absence from `not_evaluated` means the rule ran, so a
+/// caller cannot forget to ask.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Scan {
+    /// Everything the run found, sorted for byte-stability.
+    pub findings: Vec<Finding>,
+    /// The rules that did **not** run, by id, and why. Empty when every
+    /// configured rule evaluated.
+    pub not_evaluated: BTreeMap<String, NotObserved>,
 }
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
@@ -728,7 +853,7 @@ pub const SPAWNING_VERB: &str = "batten enforce";
 /// Returns a [`UsageError`] (→ exit `1`) when any configured rule's kind spawns
 /// processes, naming [`SPAWNING_VERB`] as the verb that runs it, and for a
 /// malformed rule. An I/O failure propagates as an internal error (→ exit `3`).
-pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
     // Refuse before any work: the read-only surface must not even begin a run
     // it cannot complete honestly.
     for rule in rules {
@@ -765,7 +890,7 @@ pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
 /// a capability this engine does not have. Returns a [`UsageError`] (→ exit
 /// `1`): a config naming a capability the binary lacks is the config-or-usage
 /// class (§7), never a policy verdict about the repository.
-pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
     // Refuse before any work, the shape `run_static` above already uses: the
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
@@ -783,34 +908,40 @@ pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
-/// findings sorted for byte-stability.
+/// findings sorted for byte-stability plus the rules that never looked.
 ///
 /// # Errors
 ///
 /// Returns a [`UsageError`] (→ exit `1`) for a malformed rule (e.g. an empty
 /// `glob`). An I/O failure while walking the tree propagates as an internal
 /// error (→ exit `3`).
-fn run(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+fn run(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
     let files = tree_files(root)?;
 
-    let mut findings = Vec::new();
+    let mut scan = Scan::default();
     for rule in rules {
-        run_rule(rule, root, &files, &mut findings)?;
+        if let Some(why) = run_rule(rule, root, &files, &mut scan.findings)? {
+            scan.not_evaluated.insert(rule.id.clone(), why);
+        }
     }
     // Sort by the pointer tuple so identical input yields identical output.
-    findings.sort_by(|a, b| {
+    scan.findings.sort_by(|a, b| {
         (a.path.as_str(), a.line, a.rule.as_str()).cmp(&(b.path.as_str(), b.line, b.rule.as_str()))
     });
-    Ok(findings)
+    Ok(scan)
 }
 
 /// Apply one rule to the pre-collected, sorted `files` list.
+///
+/// Returns `Some(reason)` when the rule **did not evaluate** — which is not the
+/// same as evaluating to nothing. Only that distinction lets the store hold a
+/// finding whose rule never looked instead of resolving it (CLOUD-81).
 fn run_rule(
     rule: &Rule,
     root: &Path,
     files: &[String],
     findings: &mut Vec<Finding>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<NotObserved>> {
     // Validation first, and it owns the empty-glob refusal now: the census in
     // `Rule::validate` is the one place that knows which columns a kind needs,
     // so a second check here could only disagree with it.
@@ -819,11 +950,11 @@ fn run_rule(
     // `validate` has already refused an unevaluable kind/scope pairing, so a
     // skip here is a rule another surface owns, never one nothing runs.
     if rule.scope != RuleScope::Tree {
-        return Ok(());
+        return Ok(Some(NotObserved::RuleSkipped));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
-        return Ok(());
+        return Ok(Some(NotObserved::RuleSkipped));
     };
     // An `allow` rule is configured off: a match is not a finding at all. It is
     // still validated above — a malformed rule is a config error even when off,
@@ -832,7 +963,7 @@ fn run_rule(
     // surface admits a rule: `run_static`'s spawning refusal fires first,
     // regardless of severity, so the two axes stay independent.
     if rule.severity == RuleSeverity::Allow {
-        return Ok(());
+        return Ok(Some(NotObserved::RuleSkipped));
     }
     let matched: Vec<&String> = files.iter().filter(|path| glob_match(glob, path)).collect();
 
@@ -843,14 +974,17 @@ fn run_rule(
     // deletion this kind exists to catch. Skipping there would make the gate
     // silent in exactly its worst case.
     if rule.kind == RuleKind::Ratchet {
-        return ratchet_rule(rule, root, glob, &matched, findings);
+        ratchet_rule(rule, root, glob, &matched, findings)?;
+        return Ok(None);
     }
 
     // The glob is a gate before it is an argv source (§4 "cheap when
     // irrelevant"): no match means the rule is skipped entirely — for a command
-    // rule, without ever spawning.
+    // rule, without ever spawning. **Skipped, not clean**: the rule never read a
+    // file, so its silence is not evidence the defect is gone, and reporting
+    // that here is what keeps the store from resolving on it (CLOUD-81).
     if matched.is_empty() {
-        return Ok(());
+        return Ok(Some(NotObserved::RuleSkipped));
     }
     match rule.kind {
         RuleKind::Forbid => {
@@ -864,7 +998,7 @@ fn run_rule(
         // kind that *is* tree-scoped has to come here.
         RuleKind::Shape | RuleKind::Ratchet => {}
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Evaluate a [`RuleKind::Ratchet`]: count at the base rev, count in the working
@@ -924,6 +1058,8 @@ fn ratchet_rule(
             // never appears (rule 4).
             path: format!("{glob} {base_count}->{working_count}"),
             line: None,
+            check: rule.settling_check().unwrap_or(Check::Reevaluate),
+            remediation: rule.remediation(),
             identity: identity::StoredIdentity::new(
                 identity::FindingKind::Scope,
                 // Keyed on the rule and its glob, never the counts: the same
@@ -1073,6 +1209,8 @@ fn run_once(
             // than an empty string keeps it a usable pointer if it ever is not.
             path: rule.glob.as_deref().unwrap_or(&rule.id).to_owned(),
             line: None,
+            check: rule.settling_check().unwrap_or(Check::Reevaluate),
+            remediation: rule.remediation(),
         });
     }
     Ok(())
@@ -1231,6 +1369,8 @@ fn forbid_in_file(
                 path: rel_path.to_owned(),
                 line: Some(index + 1),
                 identity: identity_of(rule, identity::FindingKind::Code, default),
+                check: rule.settling_check().unwrap_or(Check::Reevaluate),
+                remediation: rule.remediation(),
             });
         }
     }
@@ -1712,7 +1852,26 @@ mod tests {
             identity_key: None,
             direction: None,
             base: None,
+            // The one that needs no argv, so a fixture about a different column
+            // does not have to invent a fix command. A `shape` row is refused
+            // this column (CLOUD-81), so it gets none — and a kind that also
+            // permits `fix` gets none either, so a fixture setting `fix` is not
+            // silently pushed into the both-columns state the xor refuses.
+            no_fix_reason: (kind.permits().contains(&"no_fix_reason")
+                && !kind.permits().contains(&"fix"))
+            .then(|| "fixture".to_owned()),
         }
+    }
+
+    /// The findings half of a scan. Every assertion below is about what was
+    /// found; [`Scan::not_evaluated`] has its own tests, so shadowing keeps the
+    /// suite reading as it did before that half existed.
+    fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+        super::run_static(rules, root).map(|scan| scan.findings)
+    }
+
+    fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
+        super::run_all(rules, root).map(|scan| scan.findings)
     }
 
     fn forbid(id: &str, glob: &str, pattern: &str) -> Rule {
@@ -1737,6 +1896,185 @@ mod tests {
             reason: Some(reason.to_owned()),
             ..blank(id, RuleKind::Shape)
         }
+    }
+
+    #[test]
+    fn the_two_remediation_columns_are_alternatives_never_both() {
+        // CLOUD-81's config half. Carrying both is a contradiction with two
+        // answers, refused here; carrying neither is refused at *ingest*
+        // instead (§5), so a rule that predates the field still gates.
+        //
+        // Total over every kind whose findings reach the store, and over all
+        // four present/absent combinations — the exactly-one-of shape
+        // `requires()` structurally cannot express, the same reason
+        // `pattern`-xor-`regex` needs a check of its own.
+        for kind in [RuleKind::Forbid, RuleKind::Command, RuleKind::Ratchet] {
+            let base = match kind {
+                RuleKind::Forbid => forbid("r", "**", "TODO"),
+                RuleKind::Command => command("r", "**", "true"),
+                _ => Rule {
+                    glob: Some("**".to_owned()),
+                    pattern: Some("TODO".to_owned()),
+                    direction: Some(Direction::NonDecreasing),
+                    base: Some("HEAD".to_owned()),
+                    ..blank("r", RuleKind::Ratchet)
+                },
+            };
+            let with = |fix: Option<&str>, reason: Option<&str>| Rule {
+                fix: fix.map(ToOwned::to_owned),
+                no_fix_reason: reason.map(ToOwned::to_owned),
+                ..base.clone()
+            };
+
+            assert!(with(None, Some("by hand")).validate().is_ok());
+            assert!(
+                with(None, None).validate().is_ok(),
+                "neither loads and still gates; the store is what refuses it"
+            );
+            assert_eq!(
+                with(None, None).remediation(),
+                None,
+                "…and it reaches ingest as the absence ingest refuses"
+            );
+
+            // `fix` is CLOUD-215's reserved repair column, and `permits` puts it
+            // on the `command` kind alone. So the xor only has a second column to
+            // contradict there; on the other two the census refuses `fix` before
+            // this check is reached, which is the same answer one layer earlier.
+            let with_fix = with(Some("cargo fmt"), None).validate();
+            let both = with(Some("cargo fmt"), Some("by hand")).validate();
+            if kind == RuleKind::Command {
+                assert!(with_fix.is_ok());
+                assert_eq!(
+                    with(Some("cargo fmt"), None).remediation(),
+                    Some(Remediation::Fix(vec!["cargo".to_owned(), "fmt".to_owned()])),
+                    "the reserved repair column is READ here, never run — recording a \
+                     repair on a finding is not executing one"
+                );
+                let err = both.unwrap_err();
+                assert!(
+                    err.to_string().contains("alternatives"),
+                    "a row carries exactly one, never both: {err}"
+                );
+            } else {
+                for refused in [with_fix, both] {
+                    let err = refused.unwrap_err();
+                    assert!(
+                        err.to_string().contains("`fix` is not valid"),
+                        "the census refuses `fix` on {}: {err}",
+                        kind.as_str()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_shape_rule_is_refused_both_remediation_columns() {
+        // A shape rule is adjudicated per mediated call and never reaches the
+        // store, so a remediation on one is decorative by construction — the
+        // same reasoning that already denies it `identity_key`.
+        for column in ["fix", "no_fix_reason"] {
+            let rule = Rule {
+                fix: (column == "fix").then(|| "cargo fmt".to_owned()),
+                no_fix_reason: (column == "no_fix_reason").then(|| "by hand".to_owned()),
+                ..shape("s", "gh pr merge", "use the task")
+            };
+            let err = rule.validate().unwrap_err();
+            assert!(
+                err.to_string().contains(column),
+                "`{column}` must be refused on a shape rule: {err}"
+            );
+        }
+        assert!(shape("s", "gh pr merge", "use the task").validate().is_ok());
+        assert_eq!(
+            shape("s", "gh pr merge", "use the task").settling_check(),
+            None,
+            "a rule that never reaches the store has no check to carry"
+        );
+    }
+
+    #[test]
+    fn a_check_is_derived_from_the_kind_never_declared_twice() {
+        // The design decision this issue turns on: a `command` rule already IS
+        // an exit-code predicate, so its `check` column is reused rather than
+        // restated as a second column that could disagree with it (house style
+        // §9's duality, which CLOUD-215 named the column for). Every other
+        // storable kind is re-evaluated by the
+        // engine, whose own verdict is the exit code — which is what avoids
+        // writing "the banned literal is gone" as a shell negation the engine
+        // deliberately does not offer.
+        assert_eq!(
+            command("r", "**", "cargo fmt --check").settling_check(),
+            Some(Check::Argv(vec![
+                "cargo".to_owned(),
+                "fmt".to_owned(),
+                "--check".to_owned(),
+            ])),
+            "the command rule's own `check`, split exactly as it is executed"
+        );
+        assert_eq!(
+            forbid("r", "**", "TODO").settling_check(),
+            Some(Check::Reevaluate)
+        );
+
+        // The remediation is data on the rule, split the same way. `fix` lives
+        // on the `command` kind alone (CLOUD-215's reserved repair column), so
+        // that is where the argv form is expressible.
+        assert_eq!(
+            Rule {
+                fix: Some("cargo fmt".to_owned()),
+                no_fix_reason: None,
+                ..command("r", "**", "true")
+            }
+            .remediation(),
+            Some(Remediation::Fix(vec!["cargo".to_owned(), "fmt".to_owned()]))
+        );
+        assert_eq!(
+            forbid("r", "**", "TODO").remediation(),
+            Some(Remediation::NoFix("fixture".to_owned()))
+        );
+    }
+
+    #[test]
+    fn a_rule_that_matched_nothing_reports_skipped_rather_than_clean() {
+        // The producer side of CLOUD-81's fail-closed law. A rule whose glob
+        // matched no file emits exactly what a clean rule emits — nothing — so
+        // the findings list alone cannot tell the two apart. `Scan` carries the
+        // difference, and the store holds on it rather than resolving.
+        let dir = temp_dir("scan-skipped");
+        write(&dir, "src/a.rs", "fine\n");
+
+        let clean = super::run_static(&[forbid("looked", "**/*.rs", "TODO")], &dir).unwrap();
+        assert!(clean.findings.is_empty());
+        assert!(
+            clean.not_evaluated.is_empty(),
+            "a rule that read a file and found nothing DID evaluate"
+        );
+
+        let skipped =
+            super::run_static(&[forbid("never-looked", "**/*.md", "TODO")], &dir).unwrap();
+        assert!(skipped.findings.is_empty());
+        assert_eq!(
+            skipped.not_evaluated.get("never-looked"),
+            Some(&NotObserved::RuleSkipped),
+            "an empty match set is a rule that did not look, not a clean one"
+        );
+
+        // An `allow` row is configured off, which is also not an evaluation: it
+        // must not clear the findings it covered while it was on.
+        let off = super::run_static(
+            &[Rule {
+                severity: RuleSeverity::Allow,
+                ..forbid("switched-off", "**/*.rs", "TODO")
+            }],
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(
+            off.not_evaluated.get("switched-off"),
+            Some(&NotObserved::RuleSkipped)
+        );
     }
 
     #[test]

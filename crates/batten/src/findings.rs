@@ -85,6 +85,42 @@ use crate::identity::{CountChange, Fingerprint, StoredIdentity, compare_to_ancho
 use crate::rules::Finding;
 use crate::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
 
+/// How a finding settles itself — the predicate whose verdict clears it
+/// (CLOUD-81).
+///
+/// Two variants rather than a required argv column on every rule, because the
+/// two rule families answer "is it still there?" in genuinely different ways and
+/// forcing one shape onto both would need a shell negation the engine does not
+/// offer (§9: a rule names a command on the operator's PATH, run without a
+/// shell).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Check {
+    /// Re-run the producing rule over the finding's context; the engine's own
+    /// verdict is the exit code. A `forbid` or `ratchet` finding clears when the
+    /// re-evaluation no longer produces it.
+    Reevaluate,
+    /// Run this argv — never through a shell — and let its exit code settle the
+    /// finding: `0` clears, non-zero holds. A `command` rule's `run` is already
+    /// exactly this predicate, so it is reused rather than restated.
+    Argv(Vec<String>),
+}
+
+/// What to do about a finding, or why nothing can be.
+///
+/// Every stored finding carries one. "No fix exists" is a **stated** answer, not
+/// an absent one: a finding with neither is un-actionable, which is the shape a
+/// drain refuses to emit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Remediation {
+    /// The argv that fixes it, run without a shell.
+    Fix(Vec<String>),
+    /// Why no fix exists. Free text from the rule's author, and a pointer's
+    /// worth of it — never the flagged content (rule 4).
+    NoFix(String),
+}
+
 /// The on-disk record's schema version, versioned independently of the store's
 /// own: the ledger's shape and the store's identity evolve for unrelated
 /// reasons.
@@ -94,7 +130,7 @@ use crate::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
 /// window; which version is actually written is the store's recorded format
 /// (see [`crate::journal`]), never this constant, so upgrading a binary does not
 /// silently upgrade a store.
-pub const FINDINGS_SCHEMA: u32 = 2;
+pub const FINDINGS_SCHEMA: u32 = 3;
 
 /// The oldest record version this binary can still read.
 pub const FINDINGS_SCHEMA_MIN: u32 = 1;
@@ -371,6 +407,19 @@ pub struct FindingRecord {
     /// and were all emitted, so the default is the honest answer for them.
     #[serde(default = "default_presentation")]
     pub presentation: Presentation,
+    /// The predicate that settles this finding (CLOUD-81).
+    ///
+    /// `None` **only** for a record written before schema 3, which carries no
+    /// evidence of one and where inventing a check during a read would invent a
+    /// verdict. A record minted today always has one — [`record`] refuses a
+    /// finding without it — so absence is exactly "checkless", and
+    /// [`FindingRecord::is_emittable`] is what a drain refuses on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<Check>,
+    /// The fix, or the stated reason there is none. `None` on the same terms as
+    /// [`FindingRecord::check`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remediation: Option<Remediation>,
     /// One instance per context, sorted by context so the file is byte-stable.
     pub instances: Vec<Instance>,
 }
@@ -435,6 +484,18 @@ impl FindingRecord {
     #[must_use]
     pub fn is_gc_exempt(&self) -> bool {
         self.disposition.is_some_and(Disposition::is_gc_exempt)
+    }
+
+    /// Whether a drain may emit this record (CLOUD-81).
+    ///
+    /// A finding with no check cannot be settled and a finding with no stated
+    /// remediation cannot be acted on, so emitting either would spend an agent's
+    /// attention on something it has no way to close. [`record`] already refuses
+    /// both at ingest; this is the emission-side half, so the drain
+    /// (CLOUD-79/82) refuses on the schema rather than re-typing it.
+    #[must_use]
+    pub fn is_emittable(&self) -> bool {
+        self.check.is_some() && self.remediation.is_some()
     }
 
     /// Apply a concurrent write's disposition, converging by precedence.
@@ -551,6 +612,9 @@ pub struct Recorded {
     pub updated: usize,
     /// Identities that previously had an instance here and no longer occur.
     pub resolved: usize,
+    /// Identities this context recorded before whose rule did **not** evaluate,
+    /// so they hold rather than resolving (CLOUD-81).
+    pub held: usize,
 }
 
 /// Fold one scan's findings into the store as this context's instances.
@@ -566,9 +630,25 @@ pub struct Recorded {
 /// here: write-old is what keeps a newer binary from silently upgrading a store
 /// an older sibling worktree is still reading.
 ///
+/// # Absence is only a clear when the rule actually looked (CLOUD-81)
+///
+/// `not_evaluated` names the rules that did **not** run this scan, and why —
+/// a rule whose glob matched nothing was skipped, an erroring gate reports
+/// Internal. A stored finding whose rule is in that map **holds**: its instance
+/// is written as [`Observation::NotObserved`], not resolved to zero.
+///
+/// This is the fail-closed law at the store layer, and it was the live defect
+/// this parameter exists to close. Every unseen identity used to resolve
+/// unconditionally, so a rule that never looked cleared every finding it
+/// covers — reading a silence as evidence. [`Observation::NotObserved`] had no
+/// producer anywhere in the engine until this map.
+///
 /// # Errors
 ///
-/// Returns an error when a record cannot be read or written.
+/// Returns a [`crate::UsageError`] (→ exit `1`) for a finding carrying no check
+/// or no remediation — a config defect, so the config-error code, never the `2`
+/// that is the deny channel. Returns an error when a record cannot be read or
+/// written.
 pub fn record(
     store_dir: &Path,
     context: &Context,
@@ -576,7 +656,23 @@ pub fn record(
     worktree: Option<&str>,
     findings: &[Finding],
     schema: u32,
+    not_evaluated: &BTreeMap<String, NotObserved>,
 ) -> Result<Recorded> {
+    // Ingest refuses an un-settleable finding rather than storing one nothing
+    // can close. `rules::validate` already refuses the rule that would produce
+    // it, so reaching here means a producer this crate owns skipped a column —
+    // and pointer-only (rule id + identity hash), never the finding's content.
+    for finding in findings {
+        if finding.remediation.is_none() {
+            return Err(crate::UsageError::raise(format!(
+                "finding {} from rule {}: no `fix` and no `no_fix_reason`; a finding a caller \
+                 cannot act on is not storable",
+                finding.identity.fingerprint.to_hex(),
+                finding.rule
+            )));
+        }
+    }
+
     // Fold to a multiset first: identical spans in one file are ONE identity
     // with a count, never several findings.
     let mut counted: BTreeMap<&StoredIdentity, (u64, &Finding)> = BTreeMap::new();
@@ -606,6 +702,12 @@ pub fn record(
                 tier: row_for_rule(finding.severity).tier,
                 disposition: None,
                 presentation: Presentation::Shown,
+                // What settles it and what to do about it, captured at mint from
+                // the rule that produced it — so the store never has to reach
+                // back into a config it cannot see, and a later config edit does
+                // not silently redefine how a settled finding clears.
+                check: Some(finding.check.clone()),
+                remediation: finding.remediation.clone(),
                 instances: Vec::new(),
             }
         });
@@ -624,8 +726,8 @@ pub fn record(
     }
 
     // Anything this context recorded before and did not see now is observed at
-    // zero HERE. Not deleted: another context may still be seeing it, and the
-    // record is what carries that.
+    // zero HERE — *if its rule looked*. Not deleted: another context may still
+    // be seeing it, and the record is what carries that.
     for mut existing in load_all(store_dir)? {
         if seen.contains(&existing.identity.fingerprint) {
             continue;
@@ -633,6 +735,30 @@ pub fn record(
         let Some(previous) = existing.instance(context) else {
             continue;
         };
+        // The fail-closed branch. A rule that did not run reports nothing, and
+        // nothing is not zero: resolving here would let a rule whose glob
+        // matched no files clear every finding it covers. The instance says so
+        // rather than keeping a stale count, because "not looked at" is a real
+        // observation and this is the only thing in the engine that makes one.
+        if let Some(&why) = not_evaluated.get(&existing.rule) {
+            let already =
+                matches!(previous.occurrences, Observation::NotObserved(seen) if seen == why);
+            if already {
+                continue;
+            }
+            let (path, line) = (previous.path.clone(), previous.line);
+            existing.upsert(Instance {
+                context: context.clone(),
+                occurrences: Observation::NotObserved(why),
+                observed_at_commit: commit.to_owned(),
+                worktree_path: worktree.map(ToOwned::to_owned),
+                path,
+                line,
+            });
+            write_record(store_dir, &existing)?;
+            summary.held += 1;
+            continue;
+        }
         if previous.occurrences == Observation::Observed(0) {
             continue;
         }
@@ -747,7 +873,15 @@ mod tests {
             path: "src/a.rs".to_owned(),
             line: Some(1),
             identity: identity_for("r", "src/a.rs", "TODO"),
+            check: Check::Reevaluate,
+            remediation: Some(Remediation::NoFix("fixture".to_owned())),
         }
+    }
+
+    /// Every configured rule evaluated — the ordinary scan, where absence really
+    /// is a clear. The hold path has its own fixtures.
+    fn all_evaluated() -> BTreeMap<String, NotObserved> {
+        BTreeMap::new()
     }
 
     /// The `"tier"` line as it sits in the record file — the *stored* bytes,
@@ -771,6 +905,8 @@ mod tests {
             tier: row_for_rule(RuleSeverity::Deny).tier,
             disposition: None,
             presentation: Presentation::Shown,
+            check: Some(Check::Reevaluate),
+            remediation: Some(Remediation::NoFix("fixture".to_owned())),
             instances,
         }
     }
@@ -1097,6 +1233,7 @@ mod tests {
                     None,
                     &findings,
                     FINDINGS_SCHEMA,
+                    &all_evaluated(),
                 )
                 .unwrap();
 
@@ -1147,6 +1284,7 @@ mod tests {
             None,
             &[finding_for(RuleSeverity::Warn)],
             FINDINGS_SCHEMA,
+            &all_evaluated(),
         )
         .unwrap();
         let minted = load_one(&dir, fingerprint).unwrap().unwrap();
@@ -1159,6 +1297,7 @@ mod tests {
             None,
             &[finding_for(RuleSeverity::Deny)],
             FINDINGS_SCHEMA,
+            &all_evaluated(),
         )
         .unwrap();
         let after = load_one(&dir, fingerprint).unwrap().unwrap();
@@ -1174,6 +1313,198 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_finding_clears_when_the_rule_looked_and_no_longer_finds_it() {
+        // Acceptance (a), CLOUD-81. The rule ran and produced nothing, so its
+        // silence IS evidence: the instance resolves to zero, recorded against
+        // this identity in this context. This is the self-clear.
+        let dir = store("clears");
+        let context = Context::new("refs/heads/a");
+        let commit = "0".repeat(40);
+        let finding = finding_for(RuleSeverity::Deny);
+        let fingerprint = finding.identity.fingerprint;
+
+        record(
+            &dir,
+            &context,
+            &commit,
+            None,
+            &[finding],
+            FINDINGS_SCHEMA,
+            &all_evaluated(),
+        )
+        .unwrap();
+
+        // The same rule, evaluated again, finding nothing.
+        let after = record(
+            &dir,
+            &context,
+            &commit,
+            None,
+            &[],
+            FINDINGS_SCHEMA,
+            &all_evaluated(),
+        )
+        .unwrap();
+        assert_eq!(after.resolved, 1, "an evaluated absence is a clear");
+        assert_eq!(after.held, 0);
+        assert_eq!(
+            load_one(&dir, fingerprint)
+                .unwrap()
+                .unwrap()
+                .instance(&context)
+                .unwrap()
+                .occurrences,
+            Observation::Observed(0),
+            "the clear is recorded against the identity, in this context"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_rule_that_did_not_evaluate_never_clears_its_findings() {
+        // Acceptance (b), and the fail-open this issue exists to close. A rule
+        // whose glob matched nothing reports exactly what a clean rule reports —
+        // nothing — so absence alone cannot be the clear. Before this, every
+        // unseen identity resolved unconditionally, which let a rule that never
+        // read a file close every finding it covers.
+        //
+        // Both non-evaluation reasons, because a caller must not have to know
+        // which one it is: "did not evaluate" is the whole predicate.
+        for why in [NotObserved::RuleSkipped, NotObserved::RuleErrored] {
+            let dir = store(&format!("holds-{why:?}"));
+            let context = Context::new("refs/heads/a");
+            let commit = "0".repeat(40);
+            let finding = finding_for(RuleSeverity::Deny);
+            let fingerprint = finding.identity.fingerprint;
+            let rule = finding.rule.clone();
+
+            record(
+                &dir,
+                &context,
+                &commit,
+                None,
+                &[finding],
+                FINDINGS_SCHEMA,
+                &all_evaluated(),
+            )
+            .unwrap();
+
+            let not_evaluated = BTreeMap::from([(rule, why)]);
+            let after = record(
+                &dir,
+                &context,
+                &commit,
+                None,
+                &[],
+                FINDINGS_SCHEMA,
+                &not_evaluated,
+            )
+            .unwrap();
+            assert_eq!(after.resolved, 0, "a silence that is not evidence");
+            assert_eq!(after.held, 1);
+
+            let stored = load_one(&dir, fingerprint).unwrap().unwrap();
+            let observed = stored.instance(&context).unwrap().occurrences;
+            assert_eq!(
+                observed,
+                Observation::NotObserved(why),
+                "the instance says the rule did not look"
+            );
+            assert_eq!(
+                observed.count(),
+                None,
+                "and so declines to vouch for any count"
+            );
+            assert!(
+                observed.compare(1).is_none(),
+                "a caller comparing this must hold, never resolve"
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn a_finding_with_no_remediation_is_refused_at_ingest() {
+        // Acceptance (c)/(d). `rules::validate` already refuses the rule that
+        // would produce one, so reaching the store means a producer inside this
+        // crate skipped a column — refused rather than stored, because a finding
+        // nothing can close is attention spent for nothing.
+        let dir = store("checkless");
+        let finding = Finding {
+            remediation: None,
+            ..finding_for(RuleSeverity::Deny)
+        };
+        let err = record(
+            &dir,
+            &Context::new("refs/heads/a"),
+            &"0".repeat(40),
+            None,
+            &[finding],
+            FINDINGS_SCHEMA,
+            &all_evaluated(),
+        )
+        .unwrap_err();
+
+        // Exit 1, the config-error code — never the 2 that is the deny channel
+        // (house style §7, non-negotiable rule 5). A malformed rule must not be
+        // able to deny a call.
+        assert!(
+            err.downcast_ref::<crate::error::UsageError>().is_some(),
+            "a missing remediation is a config error (exit 1), not a policy verdict (exit 2): a \
+             malformed rule must not be able to deny a call"
+        );
+        // Pointer-only: the rule id and the identity hash, never the flagged
+        // content (rule 4).
+        let message = err.to_string();
+        assert!(message.contains("no_fix_reason"), "it names the remedy");
+        assert!(
+            load_all(&dir).unwrap().is_empty(),
+            "and nothing was stored on the way to refusing"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_record_predating_the_check_fields_loads_and_is_not_emittable() {
+        // The rolling window's other half: a schema-2 record still loads, and
+        // reads as exactly what it is — checkless. Defaulting a check here would
+        // invent a verdict during a read, so absence stays absence and the drain
+        // (CLOUD-79/82) refuses on this predicate rather than re-typing it.
+        let legacy = serde_json::json!({
+            "schema": 2,
+            "identity": serde_json::to_value(identity_for("r", "src/a.rs", "TODO")).unwrap(),
+            "rule": "r",
+            "severity": "deny",
+            "tier": "warning",
+            "presentation": "shown",
+            "instances": [],
+        });
+        let record: FindingRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(record.check, None);
+        assert_eq!(record.remediation, None);
+        assert!(!record.is_emittable(), "checkless is not emittable");
+
+        // A record minted today is, and both halves are required — either one
+        // missing is a finding a caller cannot close.
+        assert!(record_of(Vec::new()).is_emittable());
+        for stripped in [
+            FindingRecord {
+                check: None,
+                ..record_of(Vec::new())
+            },
+            FindingRecord {
+                remediation: None,
+                ..record_of(Vec::new())
+            },
+        ] {
+            assert!(!stripped.is_emittable());
+        }
     }
 
     #[test]

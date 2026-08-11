@@ -364,6 +364,14 @@ impl Problem {
             path: STREAM.to_owned(),
             line: Some(self.line),
             identity,
+            // Engine-produced, so there is no `[[rule]]` row to read these from
+            // (CLOUD-81). Re-parsing the claim stream is the check; the fix is
+            // rewriting the claim it points at, which is a judgement rather than
+            // an argv.
+            check: crate::findings::Check::Reevaluate,
+            remediation: Some(crate::findings::Remediation::NoFix(
+                "rewrite or withdraw the design claim this points at".to_owned(),
+            )),
         }
     }
 }

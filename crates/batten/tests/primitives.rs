@@ -860,6 +860,7 @@ fn the_acceptance_runner_is_the_landed_rule_engine() {
     assert!(
         batten::rules::run_all(&config.rules, &repo.dir)
             .expect("the spawning surface runs it")
+            .findings
             .is_empty(),
         "an acceptance item that exits 0 produces no finding"
     );
