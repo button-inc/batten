@@ -63,6 +63,17 @@ local gate = new Mapping<String, Step> {
   ["attribution-check"] {
     check = "mise run attribution-check"
   }
+  // The third half of the same non-negotiable. CONTRIBUTING.md's license table
+  // ends "Confirm each _to confirm_ entry before that tool is adopted in a
+  // shipped release" — a release precondition stated in prose, which nothing
+  // enforced while three of five rows sat unresolved (CLOUD-325). The table
+  // stays the authority; this only asserts that no row is still an open
+  // question. It cannot check that a recorded license is *correct* — that is a
+  // human reading an upstream LICENSE — so it proves the narrower thing an exit
+  // code can carry: nobody shipped while the question was open.
+  ["license-table-check"] {
+    check = "mise run license-table-check"
+  }
   // The checked-in memories are a graph navigated by mem: references, and the
   // reference tooling's own check is advisory (always exits 0) — so a memory
   // renamed without reference propagation, however it was renamed, dangles

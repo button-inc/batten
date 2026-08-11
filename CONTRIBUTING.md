@@ -78,11 +78,19 @@ open-sourceable:
 
 | Tool       | Role                                     | License           | Compatible with Apache-2.0 |
 | ---------- | ---------------------------------------- | ----------------- | -------------------------- |
-| alint      | file-shape, merge-marker, naming rules   | _to confirm_      | _to confirm_               |
-| Probity    | red-green-refactor discipline, LLM judge | _to confirm_      | _to confirm_               |
+| alint      | file-shape, merge-marker, naming rules   | Apache-2.0        | ✅                         |
+| Probity    | red-green-refactor discipline, LLM judge | MIT               | ✅                         |
 | cargo-deny | dependency severity model                | Apache-2.0 OR MIT | ✅                         |
 | ripsecrets | secret pointer adapter                   | MIT               | ✅                         |
-| rulesync   | harness-to-hook-file mapping             | _to confirm_      | _to confirm_               |
+| rulesync   | harness-to-hook-file mapping             | MIT               | ✅                         |
 
 Confirm each _to confirm_ entry before that tool is adopted in a shipped
-release.
+release. `mise run license-table-check` is that confirmation as a predicate: it
+fails while any row is unresolved, so the precondition cannot be skipped by
+forgetting it.
+
+A verdict is read from the upstream **license file**, never from a registry facet,
+a search result, or a project's own summary of itself. One surveyed project
+carried three different licenses across its engine, its rule corpus, and its
+plugin, and the summary page named only the first — so the question is asked per
+artifact, and the row records what the file said.
