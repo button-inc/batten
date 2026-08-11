@@ -112,6 +112,10 @@ const CONTENT: &[Canary] = &[
         tag: "mediated",
         source: "the operand of a mediated tool call, read from a `hook` payload",
     },
+    Canary {
+        tag: "briefed",
+        source: "free prose inside a delegation brief read by `lint brief`",
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
@@ -305,6 +309,20 @@ fn mediated_call() -> String {
     )
 }
 
+/// The brief `lint brief` reads. Deliberately incomplete — it carries no
+/// required section at all — so the lint reports its maximum rather than staying
+/// silent, and there is something to leak in the first place.
+///
+/// A brief is free prose a caller pastes in, which is the shape most likely to
+/// carry something private; `lib.rs` says the report is ids and counts only, and
+/// this is what decides it.
+fn delegation_brief() -> String {
+    format!(
+        "Please pick up the work described here: {}\n",
+        canary("briefed")
+    )
+}
+
 /// A ledger row read on stdin by `defects add -n`. The caller wrote it, so its
 /// bytes are a declaration.
 fn incoming_record() -> String {
@@ -338,6 +356,7 @@ enum Stdin {
     Nothing,
     MediatedCall,
     DefectRecord,
+    DelegationBrief,
 }
 
 struct Verb {
@@ -428,6 +447,14 @@ const CENSUS: &[Verb] = &[
             "the schema is derived from the config TYPES, so it describes the shape a \
              declaration may take and never a value one carries",
         ),
+    },
+    Verb {
+        path: "lint brief",
+        // Reads stdin when the positional is omitted, the same `-` convention
+        // `config lint --host-rules` uses.
+        args: &[],
+        stdin: Stdin::DelegationBrief,
+        disposition: Disposition::PointerOnly,
     },
     Verb {
         path: "policy budget",
@@ -577,6 +604,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::Nothing => String::new(),
         Stdin::MediatedCall => mediated_call(),
         Stdin::DefectRecord => incoming_record(),
+        Stdin::DelegationBrief => delegation_brief(),
     };
     child
         .stdin
