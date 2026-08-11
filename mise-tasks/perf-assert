@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-#MISE description="Gate: every measured invocation path is inside its latency budget, and README publishes the budget this gate enforces (reads `bench` records on stdin)"
+#MISE description="Gate: every measured invocation path is inside its latency budget, and README publishes the budget this gate enforces (reads `perf` records on stdin)"
 #
-# CLOUD-207. The other half of `mise run bench`, and the half that makes the
+# CLOUD-207. The other half of `mise run perf`, and the half that makes the
 # published number mean anything: a latency figure with no assertion behind it
 # decays in silence, because nothing about a slower binary announces itself.
 # Nobody notices 8ms becoming 40ms; they notice, months later, that the hook got
@@ -10,9 +10,9 @@
 # A PURE FUNCTION OF STDIN, the `graph-check`/`claim-check` interface: agents
 # fetch, gates decide. The measurement needs a release build, a quiet machine and
 # a couple of minutes; this needs none of them, which is the whole point of the
-# split. `tests/bench-assert.bats` therefore runs in the hk gate on every commit
+# split. `tests/perf-assert.bats` therefore runs in the hk gate on every commit
 # — the DECISION is defended per-commit at zero cost, while the MEASUREMENT runs
-# on a schedule (.github/workflows/bench.yml) where a shared runner's noise can
+# on a schedule (.github/workflows/perf.yml) where a shared runner's noise can
 # be absorbed rather than paid for on the landing path.
 #
 # THE BUDGET IS AN ABSOLUTE CEILING, NOT A RATCHET, and that is deliberate.
@@ -42,7 +42,7 @@
 # and fails when it disagrees with the data below, the same shape `hk-version`
 # uses to hold mise.toml and hk.pkl in agreement. It judges the BUDGET, never the
 # measured figures: those are a snapshot of one machine at one commit and are
-# expected to be stale between bench runs, so gating them would fail the repo for
+# expected to be stale between perf runs, so gating them would fail the repo for
 # the passage of time.
 #
 # Exit 0 pass / 1 a path over budget or a README disagreement / 2 could not look.
@@ -77,7 +77,7 @@ report() {
 # redirected nothing into this gate needs to hear that rather than "green".
 records=$(cat)
 if [ -z "${records//[[:space:]]/}" ]; then
-	echo "::error:: bench-assert: stdin is empty — pipe \`mise run bench\` records in (redirect to a file, then read it back; a pipeline would hand this gate's exit status to its last stage)." >&2
+	echo "::error:: perf-assert: stdin is empty — pipe \`mise run perf\` records in (redirect to a file, then read it back; a pipeline would hand this gate's exit status to its last stage)." >&2
 	exit 2
 fi
 
@@ -88,7 +88,7 @@ fi
 #
 # A line that does not parse is a malformed record, not an absent one, and the
 # difference matters: absent means "this run measured less than it claims",
-# malformed means "something other than bench wrote here". Both are exit 2.
+# malformed means "something other than perf wrote here". Both are exit 2.
 parsed=$(awk '
 	/^path=/ {
 		id = ""; p95 = ""
@@ -111,7 +111,7 @@ parsed=$(awk '
 
 malformed=$(awk -F'\t' '$1=="MALFORMED"{print $2}' <<<"$parsed")
 if [ -n "$malformed" ]; then
-	echo "::error:: bench-assert: stdin carries lines that are not \`bench\` records, so the measurement cannot be judged:" >&2
+	echo "::error:: perf-assert: stdin carries lines that are not \`perf\` records, so the measurement cannot be judged:" >&2
 	while IFS= read -r line; do
 		[ -n "$line" ] || continue
 		echo "  stdin:$line: not a \`path=<id> p50=… p95=… mean=… runs=…\` record" >&2
@@ -129,9 +129,9 @@ while read -r id _; do
 		missing="$missing $id"
 done <<<"$BUDGETS"
 if [ -n "$missing" ]; then
-	echo "::error:: bench-assert: the records carry no measurement for a budgeted path, so this run judged less than it claims:" >&2
+	echo "::error:: perf-assert: the records carry no measurement for a budgeted path, so this run judged less than it claims:" >&2
 	for id in $missing; do
-		echo "  $id: budgeted here, absent from stdin — did \`mise run bench\` complete?" >&2
+		echo "  $id: budgeted here, absent from stdin — did \`mise run perf\` complete?" >&2
 	done
 	exit 2
 fi
@@ -145,7 +145,7 @@ while read -r id budget; do
 	p95=$(awk -F'\t' -v want="$id" '$1=="OK" && $2==want {print $3; exit}' <<<"$parsed")
 	if awk -v measured="$p95" -v limit="$budget" 'BEGIN { exit !(measured > limit) }'; then
 		if [ "$reported" = 0 ]; then
-			echo "::error:: bench-assert: a measured invocation path is over its latency budget (see README, Performance):" >&2
+			echo "::error:: perf-assert: a measured invocation path is over its latency budget (see README, Performance):" >&2
 			reported=1
 		fi
 		report "$id: p95=${p95}ms exceeds the ${budget}ms budget"
@@ -156,7 +156,7 @@ done <<<"$BUDGETS"
 # budget column, whose cell is written as `≤ <n> ms` for a gated path and `—` for
 # an ungated one, so the two states are distinguishable in the table itself.
 if [ ! -f "$README" ]; then
-	echo "::error:: bench-assert: $README not found, so the published budget cannot be held to the enforced one." >&2
+	echo "::error:: perf-assert: $README not found, so the published budget cannot be held to the enforced one." >&2
 	exit 2
 fi
 
@@ -186,7 +186,7 @@ while read -r id budget; do
 	row=$(awk -F'\t' -v want="$id" '$1==want {print $2; exit}' <<<"$published")
 	if [ -z "$row" ]; then
 		if [ "$reported" = 0 ]; then
-			echo "::error:: bench-assert: the enforced budget and the published one disagree (non-negotiable rule 2 — the rule ships with its mechanism):" >&2
+			echo "::error:: perf-assert: the enforced budget and the published one disagree (non-negotiable rule 2 — the rule ships with its mechanism):" >&2
 			reported=1
 		fi
 		report "$id: budgeted at ${budget}ms here, but $README's Performance table has no row for it"
@@ -197,7 +197,7 @@ while read -r id budget; do
 	value=$(printf '%s' "$row" | tr -cd '0-9.')
 	if [ "$value" != "$budget" ]; then
 		if [ "$reported" = 0 ]; then
-			echo "::error:: bench-assert: the enforced budget and the published one disagree (non-negotiable rule 2 — the rule ships with its mechanism):" >&2
+			echo "::error:: perf-assert: the enforced budget and the published one disagree (non-negotiable rule 2 — the rule ships with its mechanism):" >&2
 			reported=1
 		fi
 		report "$id: enforced ${budget}ms, $README publishes '$row'"
@@ -205,4 +205,4 @@ while read -r id budget; do
 done <<<"$BUDGETS"
 
 [ "$fail" = 0 ] || exit 1
-echo "bench-assert: every budgeted path is inside its budget, and $README publishes the budget this gate enforces"
+echo "perf-assert: every budgeted path is inside its budget, and $README publishes the budget this gate enforces"

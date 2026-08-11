@@ -2,7 +2,7 @@
 # The decision half of CLOUD-207's latency mechanism, exercised without ever
 # measuring anything.
 #
-# That separation is the point of the suite, not an economy: `mise run bench`
+# That separation is the point of the suite, not an economy: `mise run perf`
 # needs a release build, hyperfine and a quiet machine, none of which belong on
 # the landing path — but the thing that can silently rot is the DECISION, and it
 # is a pure function of stdin. So this runs in the hk gate on every commit, over
@@ -10,7 +10,7 @@
 # would look exactly like a published latency number.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/bench-assert"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/perf-assert"
 	README="$BATS_TEST_TMPDIR/README.md"
 	# The published table this gate holds its own budgets against. Written per
 	# test so a case can make it disagree; the real file is asserted separately.

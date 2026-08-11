@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+#MISE description="Measure this branch and its merge base back to back on one machine, and print both arms as paired records"
+#
+# CLOUD-172. The driver behind `perf-compare`: it produces the two measurements,
+# the gate decides over them. Same split as `perf`/`perf-assert`, for the same
+# reason — the decision has to be exercisable without a build, and the
+# measurement has to happen somewhere a measurement means something.
+#
+# WHY BOTH ARMS IN ONE RUN. Wall clock is the only metric available (`mise
+# registry valgrind` -> "tool not found in registry", and `no-source-built-tool`
+# forbids compiling one), and a shared runner's absolute wall clock is exactly
+# the number CLOUD-172 warns "both hides real regressions and invents fake
+# ones". The fix is not a better clock, it is a better experiment: build BOTH
+# binaries and measure them on the same machine within the same few seconds, so
+# whatever that machine is doing to one arm it is doing to the other. The
+# comparison then divides the noise out. Measuring the base on some other run,
+# or reading it from the series, would put a machine change inside the number
+# and is precisely what this avoids.
+#
+# THE EARLY EXIT IS A CORRECTNESS ARGUMENT, NOT AN ECONOMY. `verify` is the
+# inner loop of every landing lap, and `mem:workflow/agent-fanout` measures that
+# shortening `verify` buys more parallelism than adding sessions — two release
+# builds on every lap would be a throughput tax on the whole fleet. But the
+# reason it is safe to skip is not the cost: a commit that changes no Rust
+# source, no manifest and no lockfile cannot change the binary, and a binary
+# that is byte-identical cannot have got slower. So the skip is sound where it
+# applies and absent where it does not, which is the shape CLOUD-224 gives the
+# gate steps one level down. Task-layer, workflow and documentation changes —
+# most of this repository's traffic — pay a `git diff --name-only`.
+#
+# `--null` measures HEAD against ITSELF: a comparison of a binary with its own
+# copy, whose ratio is by construction 1.0 plus pure noise. That is how
+# `perf-compare`'s threshold was derived, and the flag exists so the noise floor
+# stays a thing anyone can re-measure rather than a number in a comment.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+readonly BASE_REF="${PERF_BASE_REF:-origin/main}"
+readonly RUNS="${PERF_RUNS:-100}"
+readonly WARMUP="${PERF_WARMUP:-10}"
+
+null=0
+if [ "${1:-}" = "--null" ]; then
+	null=1
+fi
+
+for tool in hyperfine jq; do
+	if ! command -v "$tool" >/dev/null 2>&1; then
+		echo "::error:: perf-pair: $tool is not installed — run \`mise install\`; it is pinned in mise.toml." >&2
+		exit 2
+	fi
+done
+
+# The comparison's base. Exit 2 rather than 1 when it cannot be resolved: an
+# unresolvable base is "the gate could not look", a property of the checkout
+# (a shallow clone, a missing fetch), not a verdict about the branch.
+if ! base_sha="$(git merge-base HEAD "$BASE_REF" 2>/dev/null)" || [ -z "$base_sha" ]; then
+	echo "::error:: perf-pair: no merge base between HEAD and $BASE_REF — fetch it first (\`git fetch origin main\`). No measurement." >&2
+	exit 2
+fi
+
+head_sha="$(git rev-parse HEAD)"
+
+# A branch that has not committed anything yet IS its merge base, so there is no
+# change to have regressed and the two arms would be the same bytes. Its own
+# exit rather than a case of the skip below, because the diff is empty for a
+# different reason — nothing was authored, not "nothing that matters".
+if [ "$null" = 0 ] && [ "$base_sha" = "$head_sha" ]; then
+	echo "perf-pair: HEAD is its own merge base (${head_sha:0:8}) — no change to compare. Nothing measured."
+	exit 0
+fi
+
+# THE SKIP. Anything that can end up compiled into the binary: the crate
+# sources, either manifest layer, and the lockfile that pins what they build
+# against. A path outside that set cannot change a single byte of the artifact.
+if [ "$null" = 0 ]; then
+	if ! changed="$(git diff --name-only "$base_sha" HEAD)"; then
+		echo "::error:: perf-pair: could not diff $BASE_REF..HEAD, so the skip could not be decided. No measurement." >&2
+		exit 2
+	fi
+	# Literal grep patterns, and `-c` rather than `-q`: an early-exiting `grep -q`
+	# under `pipefail` can report failure ON A MATCH when the producer is still
+	# writing (`mise run pipefail-grep-check`).
+	touching="$(grep -cE '^(crates/|Cargo\.lock$|Cargo\.toml$)' <<<"$changed" || true)"
+	if [ "$touching" = 0 ]; then
+		echo "perf-pair: no change to crates/, Cargo.toml or Cargo.lock between ${base_sha:0:8} and ${head_sha:0:8} — the binary is unchanged, so its latency is too. Nothing measured."
+		exit 0
+	fi
+fi
+
+out_dir="${PERF_OUT_DIR:-target/perf}/pair"
+rm -rf "$out_dir"
+mkdir -p "$out_dir"
+OUT_DIR="$(cd "$out_dir" && pwd)"
+readonly OUT_DIR
+
+# The head binary, in the ordinary target dir so it shares the cache every other
+# task warms.
+if ! cargo build --quiet --release -p batten; then
+	echo "::error:: perf-pair: the head release build failed, so there is nothing to compare. No measurement." >&2
+	exit 2
+fi
+head_bin="$PWD/target/release/batten"
+
+if [ "$null" = 1 ]; then
+	# The null experiment: the same bytes as both arms. Copied rather than aliased
+	# so hyperfine sees two distinct commands and cannot short-circuit anything,
+	# and so the two arms differ in exactly nothing.
+	base_bin="$OUT_DIR/batten-null"
+	cp "$head_bin" "$base_bin"
+	base_sha="$head_sha"
+else
+	# The base binary, built from a detached worktree at the merge base. Its own
+	# CARGO_TARGET_DIR: sharing the main one would make the two builds evict each
+	# other's artifacts on every lap, and would race the target-dir lock against
+	# whatever else `verify` is running.
+	worktree="$OUT_DIR/base-tree"
+	if ! git worktree add -q --detach "$worktree" "$base_sha"; then
+		echo "::error:: perf-pair: could not create a worktree at ${base_sha:0:8}. No measurement." >&2
+		exit 2
+	fi
+	# Removed however this exits — a leaked worktree makes the NEXT run fail on a
+	# path that already exists, which reads as a broken gate rather than as
+	# leftover state.
+	trap 'git worktree remove --force "$worktree" >/dev/null 2>&1 || true' EXIT
+	if ! (cd "$worktree" && CARGO_TARGET_DIR="$OUT_DIR/base-target" cargo build --quiet --release -p batten); then
+		echo "::error:: perf-pair: the base release build failed at ${base_sha:0:8}, so there is nothing to compare against. No measurement." >&2
+		exit 2
+	fi
+	base_bin="$OUT_DIR/base-target/release/batten"
+fi
+
+if [ ! -x "$base_bin" ] || [ ! -x "$head_bin" ]; then
+	echo "::error:: perf-pair: one of the two binaries is missing after a successful build — refusing to measure something else." >&2
+	exit 2
+fi
+
+# The check path's fixture, materialised exactly as `perf` materialises it, so
+# the two tasks measure the same input and a difference between them is never
+# the corpus.
+readonly FIXTURE_REPO="crates/batten/tests/fixtures/repos/forbid-clean"
+readonly FIXTURE_HOOK="$PWD/crates/batten/tests/fixtures/hooks/claude-code.json"
+check_repo="$OUT_DIR/check-repo"
+mkdir -p "$check_repo"
+cp "$FIXTURE_REPO/batten.toml.in" "$check_repo/batten.toml"
+cp "$FIXTURE_REPO/lib.rs.in" "$check_repo/lib.rs"
+
+# One hyperfine invocation per path carrying BOTH commands, so the two arms are
+# measured back to back rather than in separate runs. `results[0]` is base and
+# `results[1]` is head, in the order they are passed.
+pair() {
+	local id="$1" dir="$2" args="$3"
+	local json="$OUT_DIR/$id.json"
+	local -a flags=(
+		--warmup "$WARMUP"
+		--runs "$RUNS"
+		--shell=none
+		--export-json "$json"
+		--style none
+	)
+	if [ "$id" = hook ]; then
+		flags+=(--input "$FIXTURE_HOOK")
+	fi
+
+	if ! (cd "$dir" && hyperfine "${flags[@]}" "$base_bin $args" "$head_bin $args" >/dev/null 2>"$OUT_DIR/$id.err"); then
+		echo "::error:: perf-pair: measuring the $id pair failed — see $OUT_DIR/$id.err. No measurement." >&2
+		exit 2
+	fi
+
+	# Same units and same rounding as `perf`, plus the `arm=` field that makes a
+	# record half of a pair. p50 from the sorted times for the same reason.
+	if ! jq -er --arg id "$id" '
+		["base", "head"] as $arms
+		| range(0; 2) as $i
+		| .results[$i] as $r
+		| ($r.times | sort) as $t
+		| ($t | length) as $n
+		| (($n - 1) * 0.5 | floor) as $i50
+		| (($n - 1) * 0.95 | ceil) as $i95
+		| "arm=\($arms[$i]) path=\($id) p50=\($t[$i50] * 1000 | . * 100 | round / 100) p95=\($t[$i95] * 1000 | . * 100 | round / 100) mean=\($r.mean * 1000 | . * 100 | round / 100) runs=\($n)"
+	' "$json"; then
+		echo "::error:: perf-pair: could not read the $id pair out of $json. No measurement." >&2
+		exit 2
+	fi
+}
+
+pair noop "$PWD" "--help"
+pair check "$check_repo" "check"
+pair hook "$PWD" "hook --harness claude-code"

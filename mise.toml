@@ -14,7 +14,7 @@ hk = "1.54.0"                                                # git-hook runner (
 "aqua:anchore/syft" = "1.42"                                 # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom)
 "aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
 "aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
-# The measurement instrument for `mise run bench` (CLOUD-207). Batten runs as a
+# The measurement instrument for `mise run perf` (CLOUD-207). Batten runs as a
 # PreToolUse hook, so its startup cost is paid on every mediated tool call, and
 # that number is only defensible if the thing producing it is fixed: a change in
 # how the sampler warms, discards outliers, or computes a quantile enters the
@@ -25,7 +25,7 @@ hk = "1.54.0"                                                # git-hook runner (
 # tool compiled here, and hyperfine ships prebuilt linux-arm64/x64 and macOS
 # assets, so `mise run lock-complete` can hold every platform this repo installs
 # on. Deliberately NOT in ci.yml's install lists: nothing on the landing path
-# measures (see .github/workflows/bench.yml for why measurement is scheduled).
+# measures (see .github/workflows/perf.yml for why measurement is scheduled).
 "aqua:sharkdp/hyperfine" = "1.20.0"
 # NOTE: the MSRV gate (`mise run msrv`) deliberately pins NO tool. cargo-msrv
 # would be the obvious choice and cannot be used: upstream ships no
@@ -106,7 +106,7 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,final,action"
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,perf,final,action"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -573,6 +573,18 @@ if [ "$linear_rc" != 0 ]; then
 fi
 if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint; then
   echo "::error:: verify: commit-lint failed. No receipt written." >&2
+  exit 1
+fi
+# The latency regression gate (CLOUD-172). Guarded like every step above, and in
+# the BODY rather than in `depends` so its failure lands before the receipt.
+#
+# It costs almost nothing on the common change: `perf-gate` exits early and
+# clean when the diff against the merge base touches no crate source, manifest
+# or lockfile, because a binary that cannot have changed cannot have got slower.
+# The two release builds are paid only by a commit that could actually regress
+# the hook path — which is the commit worth paying for.
+if ! mise run perf-gate; then
+  echo "::error:: verify: perf-gate failed — this branch made an invocation path measurably slower than its merge base, or the measurement could not run. No receipt written." >&2
   exit 1
 fi
 # The receipt write is the binary's job (CLOUD-203): `batten receipt record`

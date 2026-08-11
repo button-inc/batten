@@ -227,12 +227,51 @@ jobs:
           key: msrv
       - run: mise run msrv
 
+  # The latency regression gate (CLOUD-172). Batten runs as a PreToolUse hook,
+  # so a commit that makes the hook path slower is paid on every mediated tool
+  # call forever after — and the person who can still cheaply fix it is the
+  # author of the pull request, which is why this is here and not only on the
+  # trunk's schedule.
+  #
+  # Its own job rather than a step in `ci` because it builds a SECOND release
+  # binary (the merge base, in a worktree) and would otherwise serialize behind
+  # that job's cargo chain for the whole matrix.
+  #
+  # `fetch-depth: 0`: the comparison is against `git merge-base HEAD
+  # origin/main`, and a shallow clone has no such commit to build. An
+  # unresolvable base is exit 2 by design — never a pass — so the history has to
+  # be supplied rather than the refusal softened, the same trade the `ci` job
+  # makes for the ratchet base one commit deep.
+  #
+  # Cheap on most pull requests: `perf-gate` exits clean without building
+  # anything when the diff touches no crate source, manifest or lockfile.
+  perf:
+    name: perf
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # budget: grandfathered measured=2026-08-11
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # rust builds both binaries, hyperfine measures the pair, jq reads the
+          # sampler's JSON back out. See the ci job for why these lists are narrow.
+          install_args: rust aqua:sharkdp/hyperfine aqua:jqlang/jq
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A release profile, which no other job builds, so a shared cache entry
+          # would thrash.
+          key: perf
+      - run: mise run perf-gate
+
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
   final:
     name: final
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [ci, cross, darwin-link, msrv]
+    needs: [ci, cross, darwin-link, msrv, perf]
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:

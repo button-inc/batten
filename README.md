@@ -154,7 +154,7 @@ per-clone setup and the task tour.
 
 Batten runs as a `PreToolUse` hook, so its cost is paid on **every** mediated
 tool call rather than once per commit. These are measured numbers, not targets —
-`mise run bench` reproduces them, and `mise run bench-assert` fails when a
+`mise run perf` reproduces them, and `mise run perf-assert` fails when a
 measured p95 leaves its budget.
 
 | path    | what it does                                    | p50    | p95    | budget   |
@@ -176,7 +176,7 @@ ceiling here could tell a large tree apart from a regression.
 > release build, 10 warmup runs discarded, 100 timed runs per path, p95 from
 > the sorted run times. Your machine will differ; the budget is what the gate
 > holds, and the schedule in
-> [`.github/workflows/bench.yml`](.github/workflows/bench.yml) is what keeps
+> [`.github/workflows/perf.yml`](.github/workflows/perf.yml) is what keeps
 > holding it.
 
 [clig]: https://clig.dev/#responsiveness

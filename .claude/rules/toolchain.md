@@ -236,6 +236,43 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   whose cost is paid in CI minutes when it is skipped. Bypass:
   `BATTEN_READY_GUARD_BYPASS=1`.
 
+## Latency: the number, the series, and the regression gate
+
+`mise run perf` measures batten's invocation cost (hyperfine over a release
+build, three paths: `noop`, `check`, `hook`); `perf-assert` holds it to the
+budget README publishes; `perf-pair` measures this branch against its merge base
+on one machine; `perf-compare` decides that ratio; `perf-gate` composes the last
+two and is the one name `verify` and CI call. The measure/decide split is the
+same agents-fetch-gates-decide shape the board gates use — each decider is a
+pure function of stdin, so its bats suite runs in the gate unconditionally while
+the measurement runs where a measurement means something.
+
+**Wall clock, not instruction counts, and the label is load-bearing.**
+CLOUD-172 specified callgrind with wall clock as a fallback. `mise registry
+valgrind` reports "tool not found in registry", so it cannot be pinned, and
+`batten.toml`'s `no-source-built-tool` rule forbids compiling one — the fallback
+is the only branch. What makes wall clock usable anyway is the PAIRING: both
+arms are built and measured back to back on the same runner, so machine noise is
+common-mode and divides out. The verdict is therefore a ratio and never an
+absolute, and `perf-record` stamps `metric=wall-clock` into every series entry so
+a later instruction-count series can never be diffed against it as a regression.
+The threshold is derived, not chosen: a null comparison (identical binary as
+both arms, n=30) spread 0.966–1.102, and `perf-compare`'s 1.30 clears that
+measured maximum. Re-measure with `mise run perf-pair --null`.
+
+**The recording trigger is the schedule, and that was a decision.** A per-commit
+series implies a push-to-`main` workflow, which AGENTS.md forbids — and the
+reason holds rather than merely applying: `main` only advances by fast-forward
+to a SHA CI already judged, so a push trigger buys a runner per merge for a
+measurement a clock can take instead. `.github/workflows/perf.yml` records daily
+from `main` into `refs/notes/perf`. The cost is resolution, and it is affordable
+because the series is not the attribution mechanism: `perf-gate` catches a
+regression on the pull request that caused it, at the commit that caused it.
+`perf-record` refuses to run off the trunk, because a series mixing a branch's
+numbers with the trunk's cannot be read at all. (This decision belongs in
+AGENTS.md beside the rule it honours; AGENTS.md is at its budgeted line ceiling,
+so it lives here, where the rest of the workshop detail lives.)
+
 `mise run landed-check` is a board gate on the same stdin pattern: an
 issue In Progress whose ref appears on `main` has landed, and landed is In
 Review. It exists because the tracker's open-side automation fires on "a commit

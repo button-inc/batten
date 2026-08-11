@@ -1,4 +1,4 @@
-name: bench
+name: perf
 
 # The measurement half of CLOUD-207, on a clock rather than on the landing path.
 #
@@ -14,7 +14,7 @@ name: bench
 #     minutes are metered; `ci-local-parity` exists to keep the landing path to
 #     things a local `mise run verify` already proved.
 #
-# WHAT DEFENDS THE NUMBER PER-COMMIT, then, is `tests/bench-assert.bats`: the
+# WHAT DEFENDS THE NUMBER PER-COMMIT, then, is `tests/perf-assert.bats`: the
 # gate is a pure function of records on stdin, so its decision runs in the hk
 # gate on every commit in milliseconds, with no build and no hyperfine. This
 # workflow supplies the one thing that suite cannot — a real measurement of the
@@ -52,24 +52,40 @@ env:
   MISE_LOCKFILE: "true"
 
 jobs:
-  bench:
-    name: bench
+  perf:
+    name: perf
     runs-on: ubuntu-latest
     # `grandfathered` rather than a derived budget, and deliberately so: this job
     # has no run history, so there is no p95 to multiply and any number written
     # here would be the asserted-instead-of-measured claim this very ticket
-    # exists to delete. Locally a full `mise run bench` — cold release build,
+    # exists to delete. Locally a full `mise run perf` — cold release build,
     # three paths, 110 invocations each — measured 48.7s on four cores; the
     # runner adds checkout and install on top, and pays the full dependency
     # build whenever the cache misses. `mise run timeout-drift` is the mechanism
     # that replaces this with a measured budget once runs exist to measure.
     timeout-minutes: 20 # budget: grandfathered measured=2026-08-11
     permissions:
-      contents: read
+      # `write`, and only here: the recording step below pushes the series to
+      # `refs/notes/perf`. Every other workflow in this repository reads, and
+      # this one writes exactly one ref that no branch protection covers and no
+      # build consumes — a note is not a commit, so nothing this pushes can
+      # change what `main` builds.
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          persist-credentials: false
+          # Credentials ARE persisted here, unlike every other scheduled job:
+          # the recording step pushes. Scoped by the `contents: write` above and
+          # by the single refspec that push names.
+          #
+          # `refs/notes/perf` is fetched up front because `git notes append`
+          # needs the existing note to append TO — without it every run would
+          # start a fresh note and the series would be a list of singletons.
+          # `|| true`: on the very first run the ref does not exist yet, and a
+          # missing ref is the empty series, not a failure.
+          fetch-depth: 0
+      - name: Fetch the existing series
+        run: git fetch origin "refs/notes/perf:refs/notes/perf" || true
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
         with:
           # rust builds the binary under measurement, hyperfine samples it, jq
@@ -80,16 +96,34 @@ jobs:
         with:
           # A release profile, which no other job builds, so a shared cache entry
           # would thrash.
-          key: bench
+          key: perf
       # Redirected into a file and read back, never piped into the gate. A
-      # pipeline hands its exit status to the LAST stage, so `bench |
-      # bench-assert` would discard exactly the measurement failure that must
+      # pipeline hands its exit status to the LAST stage, so `perf |
+      # perf-assert` would discard exactly the measurement failure that must
       # stop this job — the false-green shape `mise run run-shape-guard` refuses
       # locally, and no less wrong in a workflow.
       - name: Measure
-        run: mise run bench >"$RUNNER_TEMP/bench.txt"
+        run: mise run perf >"$RUNNER_TEMP/perf.txt"
       - name: Assert the budget
-        run: mise run bench-assert <"$RUNNER_TEMP/bench.txt"
+        run: mise run perf-assert <"$RUNNER_TEMP/perf.txt"
+      # The series (CLOUD-172). AFTER the assertion, deliberately: a measurement
+      # that broke its budget is a defect to fix, not a datum to enshrine, and a
+      # series carrying known-bad readings is one nobody can read a trend from.
+      #
+      # `perf-record` refuses to run off the trunk by itself, so the schedule's
+      # main-only guarantee is belt and braces rather than the only guard.
+      - name: Record the series
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mise run perf-record <"$RUNNER_TEMP/perf.txt"
+        env:
+          PERF_RUNNER: ubuntu-latest
+      # Its own step, so a push that fails is distinguishable from a measurement
+      # that failed. The refspec is explicit and singular: this job may write the
+      # series and nothing else.
+      - name: Push the series
+        run: git push origin "refs/notes/perf:refs/notes/perf"
       # Always, including on a budget violation: the records are the evidence
       # for the failure, and a run that fails without publishing what it measured
       # sends the reader to re-run it by hand.
@@ -103,9 +137,9 @@ jobs:
             # backtick pair inside single quotes reads as legacy command
             # substitution to shellcheck (SC2016), which actionlint runs over
             # every `run:` block.
-            echo "Budgets are enforced by \`mise run bench-assert\` — see README, Performance."
+            echo "Budgets are enforced by \`mise run perf-assert\` — see README, Performance."
             echo
             echo '```'
-            cat "$RUNNER_TEMP/bench.txt"
+            cat "$RUNNER_TEMP/perf.txt"
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
