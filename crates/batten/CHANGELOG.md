@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.52](https://github.com/button-inc/batten/compare/v0.0.51...v0.0.52) - 2026-08-11
+
+### Other
+
+- *(identity)* drive the identity-churn pack from real tree edits
+
 ## [0.0.51](https://github.com/button-inc/batten/compare/v0.0.50...v0.0.51) - 2026-08-10
 
 ### Added
