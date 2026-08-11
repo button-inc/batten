@@ -225,7 +225,23 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   fail-closed becomes fail-open. Every comparison is per (identity × context), so
   interleaved scans from different refs never read as change. GC is by ref
   EXISTENCE, never reachability — these repos land by fast-forward, so a landed
-  branch is an ancestor of nothing. No disposition field: that is CLOUD-78's.
+  branch is an ancestor of nothing. CLOUD-78 added the disposition half:
+  `Disposition` is declared weakest-first so derived `Ord` IS the precedence
+  `acted > rejected-by-design > rejected-wrong`, and `merge` is `max` — a join on
+  a total order, so it commutes, associates and is idempotent by construction
+  rather than by a policy each call site could get subtly wrong. `Presentation`
+  is the second axis: a finding the ENGINE withheld (drain-suppressed, over the
+  cardinality cap, capability-absent) never had the chance to be acted on, so
+  `effective_fp_rates` excludes it from BOTH sides of the ratio — otherwise the
+  suppression machinery inflates the number it exists to measure. Not-acted is a
+  false positive *including* `rejected-by-design`; exempting the agent's own
+  by-design call is what would make the measurement worthless. A zero denominator
+  is no rate rather than a perfect one. `tier` is the ONE stored severity axis,
+  derived through the rank table at mint and never recomputed: an Nth occurrence
+  moves the count and never the tier (CLOUD-80's no-escalation law, testable for
+  the first time here because this is what counts duplicates).
+  `rejected-by-design` is GC-exempt — the decision outlives the branch it was made
+  on, and the unbounded retention that buys is accepted and stated.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
   predicates over the repo. `run_static` (read-effect, no process spawn) backs
   `check`; `run_all` (every kind) backs `enforce`. `check` refuses a
@@ -325,6 +341,28 @@ status`. Three categories as one read gate: **uncommitted** (the tree is not
   key, which is path membership over tree content; VCS state and path membership
   are orthogonal and one key meaning both is the conflation CLOUD-37 avoided.
   An absent key is exit 1, never a pass over nothing.
+- `journal.rs` — the store's durable plumbing (CLOUD-78): append shards, a merged
+  log with `(generation, seqno)` cursors, and the store-format version. Writers
+  append to their **own** shard, so the concurrent path shares no mutable file and
+  needs no lock; only the shard->record fold is single-writer, under an **OS
+  advisory lock** (`fs4`, the one reason that crate is in the tree). Advisory,
+  never a bare lockfile: the kernel releases it on process death, and the ambient
+  ~2-minute foreground kill would otherwise strand a lockfile and brick the store
+  for every worktree from one timeout. A lost race is `Merge::Busy` — an outcome,
+  not an error and never a deny, since the entry is already durable in its shard
+  and the next merge folds it; the §7 table stays total over `0/1/2/3` (rule 5),
+  so busy maps to allow at the boundary rather than minting a fifth code.
+  `append` fsyncs before returning (persist-before-emit). GC does not rewrite
+  history, it **rotates the generation**, invalidating every outstanding cursor by
+  construction — so `since` answers `FullResync` rather than computing a delta
+  against records that are gone; a cursor past the end resyncs too, never
+  underflows. Versioning is **write-old/read-both**: a binary writes the store's
+  recorded version and reads a window around it, and `state migrate` is the ONLY
+  upgrade — an implicit one on a read path would rewrite a store an older sibling
+  worktree is still using. A store newer than the binary is `DegradedReadOnly`:
+  dedupe still works, emissions carry `persisted:false`, and it maps to
+  allow-with-warning, because an out-of-date binary is an operator problem and
+  refusing the agent's work does not fix it.
 - `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent
   to a model. Config types plus one pure function; **no command, no effect-table
   row, no egress** — enforcement of the config half rides `config lint`'s landed
