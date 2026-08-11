@@ -77,6 +77,19 @@ archive_stem() {
 	printf '%s-v%s-%s' "$BIN" "$1" "$2"
 }
 
+# The archive extension for a target, keyed off the same predicate as the stem.
+# A function rather than an inline conditional in `main` because the naming
+# contract now has a second reader: `install.sh` resolves an asset by name and
+# `mise run install-check` proves the two agree by calling BOTH — which it can
+# only do if the extension rule is callable rather than embedded in the build.
+archive_ext() {
+	if is_windows_target "$1"; then
+		printf '.zip'
+	else
+		printf '.tar.gz'
+	fi
+}
+
 main() {
 	local target="${1:-}"
 	case "$target" in
@@ -96,11 +109,10 @@ main() {
 
 	if is_windows_target "$target"; then
 		bin_name="${BIN}.exe"
-		archive="${OUT_DIR}/${stem}.zip"
 	else
 		bin_name="${BIN}"
-		archive="${OUT_DIR}/${stem}.tar.gz"
 	fi
+	archive="${OUT_DIR}/${stem}$(archive_ext "$target")"
 
 	# --locked so a release build resolves the exact dependency versions the
 	# lockfile pins; a release that silently floated a dependency is not the

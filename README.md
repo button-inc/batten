@@ -20,6 +20,38 @@ release.
 > repository is private, so there is no public install path yet — distribution
 > is a recorded, deferred decision on the project board.
 
+## Install
+
+Binary first: a release archive holds a single static executable, and every
+package manager below is a convenience over the same asset. **While the
+repository is private a GitHub token is required** — the script reads
+`BATTEN_GITHUB_TOKEN`, `GH_TOKEN` or `GITHUB_TOKEN`, and needs none of them once
+the repository is public.
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/button-inc/batten/main/install.sh | sh
+```
+
+It detects your platform, downloads that target's archive, **verifies it against
+the SHA-256 digest the release reports and refuses to install on a mismatch**,
+and puts `batten` in `${XDG_BIN_HOME:-$HOME/.local/bin}`. `BATTEN_VERSION`
+selects a tag other than the latest, `BATTEN_INSTALL_DIR` a different
+destination, and `BATTEN_TARGET` overrides platform detection — Linux resolves to
+the statically linked `musl` build, which runs whatever the host's glibc version.
+
+`cargo binstall` reads the same assets through `[package.metadata.binstall]`:
+
+```sh
+cargo binstall --git https://github.com/button-inc/batten batten
+```
+
+The plain `cargo binstall batten` form needs the crate on a registry, which the
+distribution decision defers along with the public repository.
+
+Binaries are never committed to this repository; they come from a release, and
+`mise run install-check` is the gate that keeps every reader of an asset name
+agreeing with the one that writes it.
+
 ## Why
 
 Repo-config-driven **conformance gates** that can judge an agent's tool call

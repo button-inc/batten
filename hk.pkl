@@ -171,6 +171,23 @@ local gate = new Mapping<String, Step> {
     glob = List("Cargo.lock", ".github/workflows/*")
     check = "mise run sbom-check"
   }
+  // The install path resolves a release asset BY NAME from a machine that has
+  // never seen this repository, so a rename in `dist` that forgets one of its
+  // two readers — `install.sh` and `[package.metadata.binstall]` — is green
+  // everywhere here and a 404 on a user's machine (CLOUD-65). Globbed on all
+  // four files that can move the contract, plus the workflow whose matrix
+  // decides which targets a release carries at all.
+  ["install-check"] {
+    glob =
+      List(
+        "install.sh",
+        "mise-tasks/dist",
+        "crates/batten/Cargo.toml",
+        "Cargo.toml",
+        ".github/workflows/release-artifacts.yml",
+      )
+    check = "mise run install-check"
+  }
   // An MCP allow rule that matches no tool name grants nothing and says nothing
   // about it — the only symptom is an approval prompt on every call, which
   // reads as harness behaviour rather than as a settings bug. This repo shipped

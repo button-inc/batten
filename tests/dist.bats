@@ -38,6 +38,20 @@ setup() {
 	[ "$output" = "batten-v1.2.3-x86_64-unknown-linux-gnu" ]
 }
 
+# The extension is a function rather than an inline conditional because the
+# naming contract has a second reader: `install.sh` resolves a release asset by
+# name, and `mise run install-check` proves the two agree by calling both
+# (CLOUD-65). A rule embedded in `main` could not be called, so the agreement
+# could not be checked.
+@test "archive extension is keyed off the target, not the host" {
+	run archive_ext x86_64-unknown-linux-musl
+	[ "$status" -eq 0 ]
+	[ "$output" = ".tar.gz" ]
+	run archive_ext x86_64-pc-windows-gnu
+	[ "$status" -eq 0 ]
+	[ "$output" = ".zip" ]
+}
+
 @test "archive stem carries the target, so two targets never collide" {
 	a=$(archive_stem 0.1.0 aarch64-apple-darwin)
 	b=$(archive_stem 0.1.0 x86_64-apple-darwin)
