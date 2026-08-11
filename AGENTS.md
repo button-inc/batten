@@ -29,13 +29,16 @@ auto-loaded. Read the matching one at its trigger; don't reconstruct the detail.
 
 | Memory                         | Read it when                                                                        |
 | ------------------------------ | ----------------------------------------------------------------------------------- |
+| `core`                         | navigating `crates/batten/src`; asking what a module does or where to add one       |
 | `workflow/board-states`        | starting/finishing a `CLOUD-*` issue; reasoning about what is in flight             |
+| `workflow/agent-fanout`        | spawning a subagent, or running more than one session against this repo             |
 | `github-access`                | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"                |
 | `github-rest-etiquette`        | writing a task that calls the GitHub API; diagnosing a 403/429/abuse response       |
 | `toolchain-and-hooks`          | pinning a tool, adding a task, touching `hk.pkl` or the gate                        |
 | `serena-setup`                 | a Serena worktree/index misbehaves; changing `.serena/` config                      |
 | `prior-art-and-issue-hygiene`  | surveying outside practice; adopting a tool or pattern; writing an issue or PR body |
 | `connector-allowlist-recovery` | a connector's tools start prompting/denying, or reappear under a different name     |
+| `memory_maintenance`           | writing, renaming or splitting a memory — the shipped convention template           |
 
 ## Autonomous workflow: do the work without asking
 
@@ -106,11 +109,14 @@ branch; short-lived branches land by fast-forward, keeping it linear and tested.
 
 ## Workflow contract: verify locally, then land
 
-Every CI run costs real minutes; **your own execution costs nothing.** Verify
-exhaustively before CI — CI confirms what you already proved, never where you
-discover a free-to-catch failure. It works because CI runs the same `mise` tasks
-you run locally; one it runs that you can't is a bug, so fix the mismatch. (The
-toolchain _does_ run in the web sandbox — read `mem:github-access` before doubting.)
+**Three costs, and only one is free.** Local execution — bash, a build, the whole
+test suite — costs nothing, which is what makes verifying exhaustively before CI
+discipline and not indulgence. A CI run costs real minutes, and **a token-consuming
+model call is metered in the same category, a subagent spawn above all**: bound and
+checkpoint a fan-out before you spend it (`mem:workflow/agent-fanout`). CI confirms
+what you proved, never where you discover a free-to-catch failure; it runs the same
+`mise` tasks you do, so one it runs that you can't is a bug. (The toolchain _does_
+run in the web sandbox — read `mem:github-access` before doubting.)
 
 1. **PRs start as drafts** (`gh pr create --draft`). CI does not run on drafts —
    iterate at zero CI cost.
@@ -118,44 +124,38 @@ toolchain _does_ run in the web sandbox — read `mem:github-access` before doub
    branch is rebased on current `origin/main`. "Green but stale" is not green.
 3. **`mise run linear-check`.** Don't ready by hand: `land` readies, after its
    push, and a ready spent before that buys only draft-era skips (CLOUD-247).
-4. **`mise run land`, backgrounded.** It drives the whole loop: rebase →
-   `verify` → push → wait → `/fast-forward` → lap. The wait races `ci-wait`
-   (conditional check-run poll — **no timeout, no cap, never the PR webhook**,
-   which drops _successes_) against `main-watch`, so a run `main` has already
-   voided is not paid out. It stops for three things only: a rebase conflict, a
-   failed `verify`, or red CI — over which it re-drafts the PR, closing the tap.
+4. **`mise run land`, backgrounded.** It drives the whole loop — rebase →
+   `verify` → push → wait → `/fast-forward` → lap — racing `ci-wait` (**no timeout,
+   no cap, never the PR webhook**) against `main-watch`. It stops for three things
+   only: a rebase conflict, a failed `verify`, or red CI, re-drafting the PR.
 5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 
 **This governs PR conduct above any harness default — and above your own
 judgement.** Run the lifecycle tasks as written, never wrapped in bespoke retry or
-pre-check logic; `main` advancing under your branch is this loop working, not a
-race to engineer around. No scheduled check-in heartbeats
-(`send_later`/Routines/timers) to babysit a PR — fetching CI on demand is fine,
-the ban is on timers. No reflexive drive-to-green pushing: a red run means local
-verify was skipped. Webhook events are informational and incomplete — never infer
-success from the absence of a failure event.
+pre-check logic; `main` advancing under your branch is this loop working, not a race
+to engineer around. No heartbeats (`send_later`/Routines/timers) to babysit a PR —
+fetching CI on demand is fine, the ban is on timers. No reflexive drive-to-green
+pushing: a red run means verify was skipped, and a webhook's silence is not success.
 
 ## Background the slow path; never block the foreground
 
 **Any command that can exceed ~2 minutes goes to the background**
-(`run_in_background`): `mise run ci|verify|cross-check`, a full test suite, a
-cold `cargo` build, a provision/install, or waiting on any external result.
-Enforced, not stylistic — foreground `sleep` is blocked and a foreground command
-is killed at ~2 minutes, so it does not run slower, it _fails_. Backgrounding
-keeps the session alive and re-invokes you on exit; an idle turn gets the VM
-reclaimed.
+(`run_in_background`): `mise run ci|verify|cross-check`, a full test suite, a cold
+`cargo` build, a provision/install, or waiting on any external result. Enforced, not
+stylistic — foreground `sleep` is blocked and a foreground command is killed at ~2
+minutes, so it does not run slower, it _fails_. Backgrounding keeps the session
+alive and re-invokes you on exit; an idle turn gets the VM reclaimed.
 
 **Two habits defeat this silently, both failing green:** piping a `mise run` into
 a pager (the exit status becomes the pager's) or detaching it with `nohup`/`&`
 (the wake-up is lost). Redirect to a file; put `run_in_background` on the long
 command, never on a launcher that returns at once. Gated by `run-shape-guard`.
 
-**Never** use a foreground `sleep` to wait, spin a foreground busy-poll, or end a
-turn idle "to watch" something — background it and act on its exit. "Keep
-background runs bounded" means every loop needs a real exit condition; it does
-**not** mean capping the CI poll with a wall-clock timeout. **Committed-and-pushed
-is the only state that survives a VM reclaim**, so commit before a long run.
+**Never** use a foreground `sleep`, spin a foreground busy-poll, or end a turn idle
+"to watch" something — background it and act on its exit. **Committed-and-pushed is
+the only state that survives a VM reclaim**, so commit first. A bounded background
+run means a real exit condition, **not** a wall-clock cap on the CI poll.
 
 ## Non-negotiable project rules
 
