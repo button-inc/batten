@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.53](https://github.com/button-inc/batten/compare/v0.0.52...v0.0.53) - 2026-08-11
+
+### Added
+
+- *(hook)* dispatch on the normalized event, and widen the envelope to carry it
+
 ## [0.0.52](https://github.com/button-inc/batten/compare/v0.0.51...v0.0.52) - 2026-08-11
 
 ### Other
