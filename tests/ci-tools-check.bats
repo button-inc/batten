@@ -15,6 +15,9 @@
 # too — that one is the regression test for the workflow itself.
 
 setup() {
+	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
+	# tools a stock macOS does not ship (CLOUD-282).
+	load helpers
 	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/ci-tools-check"
 	WORKFLOW="$BATS_TEST_TMPDIR/ci.yml"
 	CONFIG="$BATS_TEST_TMPDIR/mise.toml"
@@ -82,7 +85,7 @@ setup() {
 # --- fail: the drift this gate exists for ------------------------------------
 
 @test "a renamed tool leaves install_args naming something undeclared" {
-	sed -i 's/^zig = .*/zig-lang = "0.16"/' "$CONFIG"
+	sed_i 's/^zig = .*/zig-lang = "0.16"/' "$CONFIG"
 	run "$CHECK" "$WORKFLOW" "$CONFIG"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"::error::"* ]]
@@ -91,7 +94,7 @@ setup() {
 
 @test "the error names the tool and both files, not the file contents" {
 	# Output is a pointer, never a payload (non-negotiable 4).
-	sed -i 's|^"npm:prettier" = .*||' "$CONFIG"
+	sed_i 's|^"npm:prettier" = .*||' "$CONFIG"
 	run "$CHECK" "$WORKFLOW" "$CONFIG"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"npm:prettier"* ]]
@@ -102,7 +105,7 @@ setup() {
 
 @test "a key from another table does not count as declared" {
 	# `zig` appears under [env] too; only the [tools] table declares tools.
-	sed -i 's/^zig = "0.16"$//' "$CONFIG"
+	sed_i 's/^zig = "0.16"$//' "$CONFIG"
 	run "$CHECK" "$WORKFLOW" "$CONFIG"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"zig"* ]]

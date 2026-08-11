@@ -3789,6 +3789,120 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
 }
 
 #[test]
+fn the_committed_portability_rules_fire_on_every_banned_shape() {
+    // CLOUD-282. `mise run verify` is the authorization the workflow contract
+    // rests on, and on macOS it could not pass: two gates used sed's GNU-only
+    // NUL-separated mode, two used bash 4's `mapfile` against a 3.2 /bin/bash,
+    // one used xargs' short --no-run-if-empty, and three fixture repos
+    // force-created a checked-out branch. CI runs ubuntu, so CI is structurally
+    // blind to every one of them — which is exactly why the standing gate is a
+    // property of the COMMITTED TREE rather than a job.
+    //
+    // Same shape as `the_committed_repo_agnosticism_rules_fire_on_every_banned_
+    // shape` above, and full stdout equality is the load-bearing part for the
+    // same reason: findings sort by the `(path, line, rule)` pointer tuple, so
+    // the expected bytes are fixed, and a rule that is deleted, renamed,
+    // mis-globbed or set to `severity = "allow"` changes them. A `contains`
+    // assertion would pass with five of the six rules gone.
+    //
+    // Unlike that test, the banned literals CAN be written as source text here:
+    // both globs are anchored at a first segment (`mise-tasks/`, `tests/`) that
+    // this file, at `crates/batten/tests/cli.rs`, does not sit under.
+    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+
+    let _ = fs::remove_dir_all(
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-dirty"),
+    );
+    let dirty = repo_with_config("config-portability-dirty", &contents);
+    committed_budget_surfaces(&dirty);
+    committed_config_fixture_git(&dirty);
+
+    // One file per glob, each carrying every literal its rules ban, so a rule
+    // scoped to the wrong directory shows up as a missing line rather than as a
+    // silent pass. The task file's five are written in the order they sort by
+    // line, and the sed rows are on separate lines because a single line can
+    // only ever produce one finding per rule.
+    fs::create_dir_all(dirty.join("mise-tasks")).expect("create fixture task dir");
+    fs::write(
+        dirty.join("mise-tasks/seed"),
+        "printf x | sed -zE 's/a/b/'\n\
+         sed -i 's/a/b/' file\n\
+         mapfile -t lines < <(printf 'x')\n\
+         git ls-files | xargs -r grep x\n\
+         flock /tmp/lock true\n",
+    )
+    .expect("write fixture task");
+    fs::create_dir_all(dirty.join("tests")).expect("create fixture test dir");
+    fs::write(dirty.join("tests/seed.bats"), "\tgit branch -f main\n")
+        .expect("write fixture suite");
+
+    let output = batten()
+        .arg("check")
+        .current_dir(&dirty)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a construct that cannot run on macOS is a policy violation"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "mise-tasks/seed:1 no-gnu-sed-z\n\
+         mise-tasks/seed:2 no-gnu-sed-in-place\n\
+         mise-tasks/seed:3 no-bash4-mapfile\n\
+         mise-tasks/seed:4 no-gnu-xargs-r\n\
+         mise-tasks/seed:5 no-util-linux-flock\n\
+         tests/seed.bats:1 no-branch-f-main\n",
+        "one sorted pointer per banned construct, and nothing else"
+    );
+
+    // The discriminator: the portable spellings this change adopted must be
+    // SILENT, or the rows would forbid their own replacements. `-i.bak` is the
+    // one in-place form BSD accepts, a `read` loop replaces `mapfile`, bare
+    // `xargs` replaces the short flag, and a plain `branch main` off an explicitly
+    // named branch replaces the force.
+    let _ = fs::remove_dir_all(
+        PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-portability-clean"),
+    );
+    let clean = repo_with_config("config-portability-clean", &contents);
+    committed_budget_surfaces(&clean);
+    committed_config_fixture_git(&clean);
+    fs::create_dir_all(clean.join("mise-tasks")).expect("create clean task dir");
+    fs::write(
+        clean.join("mise-tasks/seed"),
+        "printf x | perl -0777 -pe 's/a/b/'\n\
+         sed -i.bak 's/a/b/' file\n\
+         while IFS= read -r l; do :; done < <(printf 'x\\n')\n\
+         git ls-files | xargs grep x\n",
+    )
+    .expect("write clean task");
+    fs::create_dir_all(clean.join("tests")).expect("create clean test dir");
+    fs::write(clean.join("tests/seed.bats"), "\tgit branch main\n").expect("write clean suite");
+
+    let output = batten()
+        .arg("check")
+        .current_dir(&clean)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the portable spellings are not violations"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a portable tree prints nothing, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn the_committed_example_config_loads_over_the_binary() {
     // DoD: `batten.example.toml` loads and round-trips — asserted against the
     // shipped file itself, so an example that drifts from the schema fails here.

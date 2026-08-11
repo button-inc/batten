@@ -7,6 +7,9 @@
 # catch the gate drifting away from what it guards.
 
 setup() {
+	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
+	# tools a stock macOS does not ship (CLOUD-282).
+	load helpers
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ci-local-parity"
 	WF="$BATS_TEST_TMPDIR/workflows"
 	MANIFEST="$BATS_TEST_TMPDIR/mise.toml"
@@ -208,7 +211,7 @@ scheduled() {
 	# The other direction, and it fails differently: `ci-wait` waits forever for
 	# a run nothing will ever create.
 	workflow ci
-	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,gone"/' "$MANIFEST"
+	sed_i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,gone"/' "$MANIFEST"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"names 'gone', which is no job"* ]]
@@ -218,8 +221,8 @@ scheduled() {
 	# A check-run's name carries the leg in parentheses and no committed text
 	# can expand the template, so the comparison is over the base name.
 	workflow ci
-	sed -i 's/^    name: ci$/    name: ci (${{ matrix.target }})/' "$WF/ci.yml"
-	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci (aarch64-apple-darwin)"/' "$MANIFEST"
+	sed_i 's/^    name: ci$/    name: ci (${{ matrix.target }})/' "$WF/ci.yml"
+	sed_i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci (aarch64-apple-darwin)"/' "$MANIFEST"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
@@ -228,7 +231,7 @@ scheduled() {
 	# An empty required set makes every check unrequired — the false green
 	# stated as a default rather than a bug.
 	workflow ci
-	sed -i '/^CI_REQUIRED_CHECKS = /d' "$MANIFEST"
+	sed_i '/^CI_REQUIRED_CHECKS = /d' "$MANIFEST"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"no CI_REQUIRED_CHECKS"* ]]
@@ -276,7 +279,7 @@ scheduled() {
 fanin() {
 	workflow ci
 	workflow cross "    if: \${{ github.event.pull_request.draft == false }}" "cancel-in-progress: true" "cross-check"
-	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,cross,final"/' "$MANIFEST"
+	sed_i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,cross,final"/' "$MANIFEST"
 	cat >"$WF/final.yml" <<-EOF
 		name: final
 
@@ -317,8 +320,8 @@ fanin() {
 	[ "$status" -eq 0 ]
 
 	workflow msrv "    if: \${{ github.event.pull_request.draft == false }}" "cancel-in-progress: true" "ci"
-	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,cross,final,msrv"/' "$MANIFEST"
-	sed -i 's/^    needs: \[ci, cross\]$/    needs: [ci, cross, msrv]/' "$WF/final.yml"
+	sed_i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,cross,final,msrv"/' "$MANIFEST"
+	sed_i 's/^    needs: \[ci, cross\]$/    needs: [ci, cross, msrv]/' "$WF/final.yml"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }

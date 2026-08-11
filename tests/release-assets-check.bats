@@ -8,6 +8,9 @@
 # blip is the failure mode that gets a scheduled gate switched off.
 
 setup() {
+	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
+	# tools a stock macOS does not ship (CLOUD-282).
+	load helpers
 	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/release-assets-check"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
@@ -156,7 +159,7 @@ complete() {
 	# The half that can silently go to zero. Reformat the upload line and the
 	# schema stops being demanded, with a green result to say everything is fine.
 	complete
-	sed -i '/gh release upload/d' "$BATTEN_RELEASE_WORKFLOW"
+	sed_i '/gh release upload/d' "$BATTEN_RELEASE_WORKFLOW"
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"must not report green"* ]]

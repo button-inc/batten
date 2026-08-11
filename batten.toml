@@ -419,6 +419,116 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockfile names"
 
+# Portability: the shell layer must run on a machine that is not the CI runner
+# (CLOUD-282).
+#
+# `mise run verify` is the authorization the whole workflow contract rests on —
+# "verify exhaustively before CI", "the gates ARE your authorization". On macOS
+# it could not pass, for reasons no branch caused: two gates used sed's
+# NUL-separated mode (GNU only, BSD exits `illegal option -- z`), two used
+# `mapfile` (bash 4; macOS ships 3.2), one used xargs' short
+# `--no-run-if-empty`, and three fixture repos force-created a branch that git
+# refuses to force while it is checked out. An agent there either stopped on a
+# red `verify` it did not break, or landed on CI's word alone — the exact
+# failure the contract exists to prevent. CI runs ubuntu, so CI is
+# STRUCTURALLY BLIND to every one of these: the same "verdict is a property of
+# the machine" shape as CLOUD-227.
+#
+# These are `forbid` rows and not a 50th `mise-tasks/*-check` program, per the
+# 2026-08-07 engine-first amendment: `batten check` already runs in the shared hk
+# gate with no glob, so the whole construct set is config a reviewer can read
+# (§9) rather than a second copy inside a shell script. That amendment exists
+# because the older wording made a bash task the cheapest satisfying artifact,
+# and CLOUD-202 is in flight moving the existing guards OUT of that layer.
+#
+# WHY THE GLOBS ARE `mise-tasks/*` AND `tests/*.bats`, both single-segment:
+#
+#   * two or more segments, so neither can match the root `batten.toml` and make
+#     the rule fire on its own definition — the walk is `fs::read_dir` and skips
+#     only `.git`.
+#   * `tests/*.bats` and NOT `tests/**/*.bats`, because `tests/bats` is a
+#     vendored submodule carrying 228 of its own `.bats` files written against a
+#     different portability posture. Every one of this repository's own suites
+#     sits directly in `tests/`. Same reasoning `bats-tests-not-deleted` records.
+#
+# WHAT IS DELIBERATELY NOT HERE, and why it is a gap rather than an oversight:
+# the `tests/*.bats` half of the sed and flock rows. `tests/memory-guard.bats`
+# carries the in-place form five times as FIXTURE STRINGS — it is the suite
+# proving `memory-guard` denies that shape — and `tests/target-ensure.bats` names
+# the util-linux lock in a test title. A `forbid` pattern is a literal substring
+# with no `exclude` column, so those rows cannot be written today without firing
+# on the tests that prove the guards work. That is exactly CLOUD-283. The
+# `mise-tasks/*` half — the layer that actually could not run — lands now.
+#
+# The rationale comments in the guarded files deliberately do NOT spell the
+# literals they explain, for the same reason the agnosticism rules above do not
+# embed theirs: a substring rule over a directory fires on its own explanation.
+[[rule]]
+id = "no-gnu-sed-z"
+kind = "forbid"
+glob = "mise-tasks/*"
+pattern = "sed -zE"
+severity = "deny"
+scope = "tree"
+
+# The trailing space is load-bearing: it is what distinguishes the GNU-only
+# no-suffix spelling from `sed -i.bak`, which BSD accepts and which
+# `tests/helpers.bash` uses.
+[[rule]]
+id = "no-gnu-sed-in-place"
+kind = "forbid"
+glob = "mise-tasks/*"
+pattern = "sed -i "
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "no-bash4-mapfile"
+kind = "forbid"
+glob = "mise-tasks/*"
+pattern = "mapfile "
+severity = "deny"
+scope = "tree"
+
+[[rule]]
+id = "no-gnu-xargs-r"
+kind = "forbid"
+glob = "mise-tasks/*"
+pattern = "xargs -r"
+severity = "deny"
+scope = "tree"
+
+# CLOUD-286 replaced flock(1) with a `mkdir` mutex and named this row as its own
+# standing half: the refusal that fired before every other gate on a Mac was
+# correct behaviour over a Linux-only primitive.
+[[rule]]
+id = "no-util-linux-flock"
+kind = "forbid"
+glob = "mise-tasks/*"
+pattern = "flock "
+severity = "deny"
+scope = "tree"
+
+# git refuses `branch -f` on the branch that is currently checked out. Three
+# fixture setups did it anyway, and passed only because the runner's git still
+# defaults to `master`, which made `main` a different branch — an accident of the
+# runner's configuration, not a property of the test. It is a `setup()` failure,
+# so every case in the suite errors, not one.
+#
+# The replacement is `git init -b <name>` plus a plain `git branch main`, NOT
+# `branch -M main`: `-M` renames the current branch, and these fixtures want a
+# SECOND branch marking the trunk while HEAD stays on the feature branch. That
+# distinction is measured, not assumed — rewriting them to `-M` first made
+# `tests/verified.bats`'s moved-main case fail, because it checks that other
+# branch out.
+[[rule]]
+id = "no-branch-f-main"
+kind = "forbid"
+glob = "tests/*.bats"
+pattern = "branch -f main"
+severity = "deny"
+scope = "tree"
+
 # Which programs change the world, in the one §5 effect vocabulary, each with the
 # sanctioned mutation to point at when it is refused.
 #
