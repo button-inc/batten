@@ -148,6 +148,31 @@ saving with a lock-in is the wrong trade here: the repo is read by more than one
 agent, and an instruction only one of them can see is an instruction the others
 will violate.
 
+## Which survey tools actually reach the evidence (CLOUD-381)
+
+Measured on the rules-engine defaults census. Both findings cost a wasted call
+to discover, and neither is inferable from the tool descriptions.
+
+- **Scholar Gateway is Wiley-only — near-useless for software engineering.**
+  Two on-topic articles across 24 passages over two queries; the rest was
+  intrusion detection, genome browsers, and Cray provisioning, matched on the
+  words "rule set". **Consensus is the one to reach for** (Semantic Scholar +
+  Scopus + ArXiv): the same two themes returned Vassallo, Tómasdóttir, Hu,
+  Liargkovas and Ueda on the first try. Consensus rate-limits at ~2 concurrent
+  calls — batch two, not three.
+- **GitHub reaction counts are out of reach for outside repos.** API access is
+  scoped to `button-inc/batten`, and `add_repo` on a survey target is declined
+  by the permission classifier, so `search_issues` sorted by reactions — the
+  obvious reception signal — is unavailable for every repo being surveyed. A
+  shallow `git clone` of the target still works, so Track A (read the source)
+  is unaffected; only the issue-reaction channel is closed. Substitute
+  countable signals that are reachable: HN item points/comments, named figures
+  in write-ups, and issue/PR numbers via plain fetch.
+
+The transferable rule: **a survey's evidence plan must name signals the
+environment can actually produce.** An unreachable signal silently becomes an
+unattested claim, which is exactly what the grading exists to catch.
+
 ## A worked survey: the structural-matcher field (CLOUD-310)
 
 The reference instance of step 3, "re-derive against our constraints". The tool
