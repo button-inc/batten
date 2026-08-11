@@ -351,6 +351,22 @@ files = ["AGENTS.md"]
 max_tokens = 3500
 max_lines = 199
 
+# The other half of what loads on every session, and the half `files` cannot
+# reach: Serena's project file documents `initial_prompt` as content that "will
+# always be given to the LLM upon activating the project (contrary to the
+# memories, which are loaded on demand)". The cost is a string inside a document,
+# not a document, so it is declared as an embedded entry rather than a glob
+# (CLOUD-298).
+#
+# It is empty today, and that is the reason to gate it rather than fix it in
+# passing: an empty value contributes nothing and prints no row, so this costs
+# nothing now — and the first person to put text there pays for it against the
+# same budget as an AGENTS.md section instead of getting it free past a green
+# gate. A file the engine cannot parse is exit 1, never a silent zero.
+[[budget.instructions.embedded]]
+path = ".serena/project.yml"
+key = "initial_prompt"
+
 # The test suite is half of this repository's definition of green, and was the
 # unguarded half (CLOUD-55). It cannot be a `protected` path — tests are edited
 # every day, so a protected glob would block writing them — so the computable

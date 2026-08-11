@@ -3806,6 +3806,206 @@ fn frontmatter_and_comment_bytes_alone_never_cross_the_budget() {
     );
 }
 
+// --- embedded always-loaded strings (CLOUD-298) -------------------------------
+//
+// A host that injects a key from its own config on every session is an
+// always-loaded surface `files` cannot reach: the cost is a string inside a
+// document, not a document. Left unmeasured it is the budget's own false green —
+// a gate reporting green over content it never looked at.
+
+/// A config counting `AGENTS.md` and one embedded key, with a token ceiling.
+fn embedded_config(path: &str, key: &str, max_tokens: usize) -> String {
+    format!(
+        "version = 1\n[budget.instructions]\nfiles = [\"AGENTS.md\"]\nmax_tokens = \
+         {max_tokens}\n\n[[budget.instructions.embedded]]\npath = \"{path}\"\nkey = \"{key}\"\n"
+    )
+}
+
+/// A YAML document whose `prompt` key holds exactly `tokens` estimated tokens.
+fn prompt_of(tokens: usize) -> String {
+    format!("prompt: '{}'\nunrelated: 1\n", "x".repeat(tokens * 4))
+}
+
+#[test]
+fn a_non_empty_embedded_value_is_counted_and_names_itself_in_the_report() {
+    // Acceptance one and three together: the characters reach the total under
+    // the same convention a file gets, and the surface appears as its own row —
+    // so a counted surface names itself and an uncounted one cannot hide behind
+    // a total.
+    let dir = repo_with_config(
+        "budget-embedded-counted",
+        &embedded_config("host.yml", "prompt", 100),
+    );
+    common::write(&dir, "AGENTS.md", &instructions_of(10));
+    common::write(&dir, "host.yml", &prompt_of(25));
+
+    let output = common::run(&dir, &["policy", "budget", "-J"]);
+    assert_eq!(output.status.code(), Some(0), "35 of 100 is within budget");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&common::stdout(&output)).expect("policy budget -J is JSON");
+    assert_eq!(
+        parsed[0]["tokens"], 35,
+        "the embedded value's tokens join the total: {parsed}"
+    );
+    let rows = parsed[0]["files"].as_array().expect("per-file rows");
+    assert!(
+        rows.iter()
+            .any(|row| row["path"] == "host.yml#prompt" && row["tokens"] == 25),
+        "the embedded surface carries its own row, keyed path#key: {rows:?}"
+    );
+}
+
+#[test]
+fn an_embedded_value_can_cross_the_bound_on_its_own() {
+    // The anti-vacuity partner of the test above, and the one that proves the
+    // characters reach the *total* rather than only the report: the file half is
+    // exactly at budget, so only the embedded half can carry it over.
+    let dir = repo_with_config(
+        "budget-embedded-over",
+        &embedded_config("host.yml", "prompt", 100),
+    );
+    common::write(&dir, "AGENTS.md", &instructions_of(100));
+    common::write(&dir, "host.yml", &prompt_of(1));
+
+    let output = common::run(&dir, &["policy", "budget"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "over budget is a policy verdict: {:?}",
+        common::stdout(&output)
+    );
+    assert!(
+        common::stdout(&output).contains("host.yml#prompt"),
+        "the report names the surface that carried it over"
+    );
+}
+
+#[test]
+fn an_empty_absent_or_null_embedded_value_contributes_nothing_and_adds_no_row() {
+    // The tree's current state, and why this is a gate rather than a fix in
+    // passing: the key exists and is empty, so the gate must stay completely
+    // quiet — a zero row would claim a surface was measured and free.
+    for (case, document) in [
+        ("empty", "prompt: ''\n"),
+        ("absent", "unrelated: 1\n"),
+        ("null", "prompt:\n"),
+        ("empty-document", "\n"),
+    ] {
+        let dir = repo_with_config(
+            &format!("budget-embedded-{case}"),
+            &embedded_config("host.yml", "prompt", 100),
+        );
+        common::write(&dir, "AGENTS.md", &instructions_of(10));
+        common::write(&dir, "host.yml", document);
+
+        let output = common::run(&dir, &["policy", "budget", "-J"]);
+        assert_eq!(output.status.code(), Some(0), "{case} contributes nothing");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&common::stdout(&output)).expect("policy budget -J is JSON");
+        assert_eq!(parsed[0]["tokens"], 10, "{case} adds no tokens: {parsed}");
+        let rows = parsed[0]["files"].as_array().expect("per-file rows");
+        assert!(
+            rows.iter().all(|row| row["path"] != "host.yml#prompt"),
+            "{case} adds no row: {rows:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unparseable_or_unreadable_embedded_source_is_exit_1_never_a_zero() {
+    // The defect restated: an uncountable surface must not read as an empty one.
+    // A silent zero here is indistinguishable from a genuinely empty key, which
+    // is exactly the reading that made the dead glob pass as measured.
+    for (case, file, document) in [
+        ("malformed", "host.yml", "prompt: 'unterminated\n"),
+        ("unknown-extension", "host.conf", "prompt = 1\n"),
+    ] {
+        let dir = repo_with_config(
+            &format!("budget-embedded-{case}"),
+            &embedded_config(file, "prompt", 10_000),
+        );
+        common::write(&dir, "AGENTS.md", &instructions_of(10));
+        common::write(&dir, file, document);
+
+        let output = common::run(&dir, &["policy", "budget"]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{case} is a config error, not a verdict and never a pass"
+        );
+        assert!(
+            common::stderr(&output).contains(file),
+            "{case}: the refusal must name the path it could not read"
+        );
+    }
+
+    // A declared source that is not there at all is the same dead-entry refusal
+    // `files` already gives, for the same reason.
+    let dir = repo_with_config(
+        "budget-embedded-missing",
+        &embedded_config("host.yml", "prompt", 10_000),
+    );
+    common::write(&dir, "AGENTS.md", &instructions_of(10));
+    let output = common::run(&dir, &["policy", "budget"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(common::stderr(&output).contains("host.yml"));
+}
+
+#[test]
+fn an_embedded_key_is_read_from_toml_and_json_by_the_same_rule() {
+    // The dispatch is by extension, which is what makes the rule total: a path
+    // either names a format the engine reads or is refused. TOML and JSON are
+    // vendored already, so covering them costs nothing and keeps "YAML only"
+    // from reading as a rule about one consumer's host.
+    for (file, document) in [
+        ("host.toml", "prompt = 'xxxxxxxx'\n"),
+        ("host.json", "{\"prompt\": \"xxxxxxxx\"}\n"),
+    ] {
+        let dir = repo_with_config(
+            &format!("budget-embedded-{file}"),
+            &embedded_config(file, "prompt", 100),
+        );
+        common::write(&dir, "AGENTS.md", &instructions_of(10));
+        common::write(&dir, file, document);
+
+        let output = common::run(&dir, &["policy", "budget", "-J"]);
+        assert_eq!(output.status.code(), Some(0));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&common::stdout(&output)).expect("policy budget -J is JSON");
+        assert_eq!(parsed[0]["tokens"], 12, "{file}: 10 + 2 = 12: {parsed}");
+    }
+}
+
+#[test]
+fn a_dotted_embedded_key_walks_maps_and_a_non_string_leaf_is_a_miss() {
+    // Dotted for a nested key; maps only, so a leaf that is not a string is
+    // absent rather than guessed at — a number's decimal spelling is not the
+    // content a host injects.
+    let dir = repo_with_config(
+        "budget-embedded-nested",
+        &embedded_config("host.yml", "a.b", 100),
+    );
+    common::write(&dir, "AGENTS.md", &instructions_of(10));
+    common::write(&dir, "host.yml", "a:\n  b: 'xxxxxxxx'\n");
+    let output = common::run(&dir, &["policy", "budget", "-J"]);
+    assert_eq!(output.status.code(), Some(0));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&common::stdout(&output)).expect("policy budget -J is JSON");
+    assert_eq!(parsed[0]["tokens"], 12, "the nested key is read: {parsed}");
+
+    let dir = repo_with_config(
+        "budget-embedded-nonstring",
+        &embedded_config("host.yml", "a.b", 100),
+    );
+    common::write(&dir, "AGENTS.md", &instructions_of(10));
+    common::write(&dir, "host.yml", "a:\n  b: 42\n");
+    let output = common::run(&dir, &["policy", "budget", "-J"]);
+    assert_eq!(output.status.code(), Some(0));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&common::stdout(&output)).expect("policy budget -J is JSON");
+    assert_eq!(parsed[0]["tokens"], 10, "a non-string leaf is a miss");
+}
+
 #[test]
 fn a_config_declaring_no_budget_is_a_usage_error_not_a_silent_pass() {
     // A budget verb that measured nothing must not report `0`. That is the

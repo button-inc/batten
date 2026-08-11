@@ -399,7 +399,7 @@ fn embedded_value(root: &Path, name: &str, decl: &EmbeddedDecl) -> Result<Option
             Ok(node.as_str().map(ToOwned::to_owned))
         }
         "toml" => {
-            let value: toml::Value = text.parse().map_err(|_| unreadable("TOML"))?;
+            let value: toml::Value = toml::from_str(&text).map_err(|_| unreadable("TOML"))?;
             let mut node = &value;
             for key in keys {
                 match node.get(key) {

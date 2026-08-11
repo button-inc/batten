@@ -188,8 +188,15 @@
       "description": "One `[budget.<name>]` table.",
       "type": "object",
       "properties": {
+        "embedded": {
+          "description": "Always-loaded strings carried *inside* a config file rather than in a\nfile of their own. Empty by default: a repository with no such surface\ndeclares nothing (CLOUD-298).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EmbeddedDecl"
+          }
+        },
         "files": {
-          "description": "The counted file set, as globs over repo-relative `/`-separated paths.\nEvery entry must match at least one file — see the module docs.",
+          "description": "The counted file set, as globs over repo-relative `/`-separated paths.\nEvery entry must match at least one file — see the module docs. Defaulted\nbecause a set may count only `embedded` entries; the two being empty\n*together* is what `measure` refuses.",
           "type": "array",
           "items": {
             "type": "string"
@@ -213,7 +220,6 @@
       },
       "additionalProperties": false,
       "required": [
-        "files",
         "max_tokens"
       ]
     },
@@ -289,6 +295,25 @@
         "destructive",
         "unclassified",
         "ask"
+      ]
+    },
+    "EmbeddedDecl": {
+      "description": "One `[[budget.<name>.embedded]]` entry: a string inside a config file that a\nhost loads on every session.\n\nBoth fields are the **consumer's**. A host that always injects a key from its\nown config — Serena's project file, an editor's workspace settings — is a\nproperty of the repository using that host, not of Batten, so naming either\none in `crates/batten` would be the consumer-specific identifier\nnon-negotiable rule 1 forbids. The engine knows only \"parse this file, read\nthis key, count the string\".",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The key whose string value is counted. Dotted for a nested key\n(`a.b.c`); the engine walks maps only, so a key under a sequence is a\nmiss rather than a guess.",
+          "type": "string"
+        },
+        "path": {
+          "description": "The repo-relative, `/`-separated path of the config file to read. A\nliteral path and never a glob: a key is read from one document, and a\npattern would leave \"which file's key\" unanswered.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "key"
       ]
     },
     "Epoch": {
