@@ -128,9 +128,11 @@ jobs:
           # the event: it is what the whole debounce now turns on, and the two
           # triggers reach the same PR from opposite ends.
           draft=$(jq -r 'if .draft == true then "true" else "false" end' <<<"$pr")
-          echo "num=$num" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          {
+            echo "num=$num"
+            echo "sha=$sha"
+            echo "draft=$draft"
+          } >> "$GITHUB_OUTPUT"
       # `main`, not the PR head — the default ref for both of this workflow's
       # triggers. The debounce must be the one committed to trunk, never a copy a
       # release branch could carry, and no credential outlives the step.
