@@ -270,6 +270,14 @@ pub struct Resolved {
     /// evidence, which is the weakening `trust.rs` compares committed bytes for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<crate::transcript::TranscriptConfig>,
+    /// The advisory drain's pacing (CLOUD-79), as the authority states it. Not
+    /// layered, and for a reason unlike its neighbours': theirs is that lowering
+    /// a bar is the weakening, where **an interval has no direction at all** — a
+    /// longer window is quieter and a shorter one is louder, and neither is a
+    /// weakening of anything the raise-only clamp could measure. A key with no
+    /// monotone reading does not belong in a monotone layer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drain: Option<crate::drain::DrainConfig>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -871,6 +879,7 @@ fn assemble(
         ci: repo.ci.clone(),
         defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),
+        drain: repo.drain.clone(),
         sources,
     }
 }
@@ -927,6 +936,7 @@ fn attribution(
         ("ci", authority_set(repo.ci.is_some())),
         ("defects", authority_set(repo.defects.is_some())),
         ("provision", authority_set(!repo.provisions.is_empty())),
+        ("drain", authority_set(repo.drain.is_some())),
     ])
 }
 

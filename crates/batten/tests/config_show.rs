@@ -77,6 +77,10 @@ model = "some-model"
 [design]
 max_capture_bytes = 8192
 
+[drain]
+interval_ms = 500
+empty_poll_giveup = 2
+
 "#;
 
 fn show(dir: &Path, extra: &[&str]) -> Output {
@@ -157,6 +161,7 @@ fn a_config_that_sets_every_key_surfaces_every_key() {
         "must_land_on",
         "judge",
         "design",
+        "drain",
     ] {
         let entry = document
             .get(key)

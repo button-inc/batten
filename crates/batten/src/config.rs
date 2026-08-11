@@ -246,6 +246,17 @@ pub struct Config {
     /// nothing, which is why `resolve` answers with three states and not two.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript: Option<crate::transcript::TranscriptConfig>,
+    /// How the advisory drain paces itself (CLOUD-79): the coalescing window and
+    /// the empty-poll give-up count.
+    ///
+    /// Absent means the defaults apply, which is **not** the reading every other
+    /// optional table here takes. Those are consumer policy — a budget nobody
+    /// declared is not a budget of zero — where this is engine pacing: the drain
+    /// runs on the `hook` surface whether or not a repository has an opinion
+    /// about how often, and an absent table means "no opinion", not "do not
+    /// drain". The type and the state machine are [`crate::drain`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain: Option<crate::drain::DrainConfig>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -576,6 +587,14 @@ impl Config {
             // capability was never claimed, the second that it was claimed and
             // is unavailable. Only the second is worth reporting.
             transcript: None,
+            // Declaring no drain pacing is "no opinion", which resolves to the
+            // engine's defaults — NOT "do not drain". The asymmetry with the
+            // keys above is deliberate: those are policy this authority grants,
+            // and an authority granting nothing must grant nothing, where this
+            // is pacing for a surface that runs regardless. An authority that
+            // cannot be read still has a drain; it simply has no view on how
+            // often it speaks.
+            drain: None,
         }
     }
 }

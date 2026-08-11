@@ -127,6 +127,30 @@ pub enum FindingKind {
 }
 
 impl FindingKind {
+    /// Every kind, so anything ranging over them is derived rather than
+    /// re-typed — the vocabulary idiom [`crate::hook::Event`],
+    /// [`crate::hook::Harness`] and [`crate::findings::Disposition`] already
+    /// use. [`FindingKind::from_tag`] reads it, so a fifth kind cannot land
+    /// with a parse that silently does not know it.
+    pub const ALL: &'static [FindingKind] = &[
+        FindingKind::Code,
+        FindingKind::Log,
+        FindingKind::Scope,
+        FindingKind::Sequence,
+    ];
+
+    /// The kind named by `tag`, or `None` if it names none.
+    ///
+    /// Derived from [`FindingKind::ALL`] and [`FindingKind::as_tag`], so the
+    /// accepted spellings are exactly the emitted ones by construction.
+    #[must_use]
+    pub fn from_tag(tag: &str) -> Option<FindingKind> {
+        FindingKind::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.as_tag() == tag)
+    }
+
     /// The stable lowercase tag hashed as the preimage's first field.
     #[must_use]
     pub const fn as_tag(self) -> &'static str {
@@ -267,6 +291,24 @@ impl StoredIdentity {
             version: kind.identity_version().to_owned(),
         }
     }
+
+    /// The kind that minted this identity, recovered from the version's tag.
+    ///
+    /// [`FindingKind::identity_version`] is `<tag>:<date>`, so the tag is
+    /// recoverable without a second stored field — and it must be, because the
+    /// changed-scope filter is a **per-kind** rule (code-anchored kinds are
+    /// filtered, sequence/log/scope kinds bypass it unconditionally) and the
+    /// store persists a record's version rather than its kind.
+    ///
+    /// `None` for a version whose tag names no kind this binary knows: a record
+    /// written by a future binary carrying a fifth kind. Callers must read that
+    /// as "cannot classify", never as a default kind — guessing `Code` there
+    /// would scope-filter away a finding whose kind is meant to bypass.
+    #[must_use]
+    pub fn kind(&self) -> Option<FindingKind> {
+        let tag = self.version.split(':').next()?;
+        FindingKind::from_tag(tag)
+    }
 }
 
 /// Canonicalize a repo-relative path for use in an identity tuple: `\` becomes
@@ -377,6 +419,12 @@ const SECRET_TAG: &str = "secret";
 /// The domain tag for a per-rule identity **override**.
 const OVERRIDE_TAG: &str = "override";
 
+/// The domain tag for an advisory **drain result** (CLOUD-79/166), distinct from
+/// every other tag for the reason they are all distinct from each other: a
+/// result id summarizes a whole finding-set, and a collision with any single
+/// finding's identity would let a set be mistaken for a member of itself.
+const DRAIN_TAG: &str = "drain";
+
 /// The domain tag for a **minted store identity**, distinct from every other tag
 /// for the reason they are all distinct: a store id and a finding identity are
 /// different kinds of thing and must not collide.
@@ -398,6 +446,30 @@ const STORE_TAG: &str = "store";
 pub fn store_fingerprint(seed: &[&str]) -> Fingerprint {
     let fields: Vec<&[u8]> = seed.iter().map(|field| field.as_bytes()).collect();
     tagged_fingerprint(STORE_TAG, &fields)
+}
+
+/// The identity of a whole **drain result**: the ordered set of pointer lines a
+/// drain cycle would emit (CLOUD-79's `resultId` short-circuit, CLOUD-166).
+///
+/// Not a finding, so it carries its own domain tag rather than a
+/// [`FindingKind`]; it reuses the length-prefixed framing above rather than
+/// minting a second hash of the same bytes.
+///
+/// **Over the rendered pointers, deliberately, and not over the store.** The
+/// question the short-circuit asks is "would this drain say anything the last
+/// one did not", so the digest has to be a function of exactly what would be
+/// emitted. A digest over the store's whole contents would move on a change the
+/// scope filter drops, re-emitting an identical payload; one over identities
+/// alone would miss a count that changed, which is the re-raise the drain exists
+/// to surface.
+///
+/// Order participates, because the emission is ordered: two payloads differing
+/// only in line order are different bytes, and the caller sorts before hashing
+/// precisely so that never happens by accident.
+#[must_use]
+pub fn drain_result_fingerprint(lines: &[String]) -> Fingerprint {
+    let fields: Vec<&[u8]> = lines.iter().map(|line| line.as_bytes()).collect();
+    tagged_fingerprint(DRAIN_TAG, &fields)
 }
 
 /// The domain tag for a **judge payload** entry (CLOUD-135), distinct from every

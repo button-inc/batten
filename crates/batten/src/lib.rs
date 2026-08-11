@@ -18,6 +18,7 @@ pub mod decision;
 pub mod defects;
 pub mod design;
 pub mod doctor;
+pub mod drain;
 pub mod effect;
 pub mod epoch;
 pub mod error;
@@ -917,6 +918,16 @@ fn run_hook(
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
+    // The advisory drain rides this surface at the post-tool event (CLOUD-79).
+    // It is not part of adjudication and cannot become part of it: `adjudicate`
+    // stays a pure function of config plus argv, this is a side effect at the
+    // boundary, and it returns nothing the decision reads. The post-tool event
+    // is where it belongs precisely because no host offers a deny channel there
+    // — an advisory surface at an event that cannot refuse anything is
+    // structurally unable to block (house-style §0.3).
+    if envelope.event == hook::Event::PostTool {
+        drain_advisories(&envelope, overrides, mode, err)?;
+    }
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
     // runs on every mediated tool call — and it is also what keeps a bypassed or
@@ -948,6 +959,112 @@ fn run_hook(
         receipt::verdicts(&required)
     };
     decide(harness, &envelope, &policy, bypass, &receipts, out)
+}
+
+/// Wake the advisory drain for this batch boundary (CLOUD-79).
+///
+/// **Every early return here is a decision, not an omission.** This runs on every
+/// post-tool event of every session on every host, most of them in directories
+/// that are not Batten repositories, so the ladder of refusals below is ordered
+/// cheapest-first (§4) and each one is the honest reading of its condition:
+///
+/// * not a repository, or no committed authority → the drain has no policy to
+///   pace itself from and no store to read;
+/// * no bound store → nothing has ever been recorded here, so there is nothing
+///   to drain. An unbound store is an ordinary first-run state, not an error;
+/// * no session id → the host reported none, so there is no key under which a
+///   window could be remembered. CLOUD-43's contract is that a missing session
+///   degrades to **per-invocation** handling, and per-invocation is precisely
+///   the once-per-verifier behaviour a coalescing window exists to prevent — so
+///   the honest degradation is to hold the wake rather than to drain on each
+///   one. It is reported on the verbose rung, because on a host that never sends
+///   a session this is the ordinary state rather than news.
+///
+/// A drain failure is **fail-loud and never a deny**: the error propagates to the
+/// binary boundary as an ordinary failure, where §7 spends `1`/`3`, neither of
+/// which any host reads as a refusal.
+fn drain_advisories(
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let here = Path::new(".");
+    if !here.join(config::CONFIG_FILE).exists() {
+        return Ok(());
+    }
+    let Ok(repo) = git::repo_root(here) else {
+        return Ok(());
+    };
+    let Some(dir) = store::bound_dir(&store::resolve(&repo)?) else {
+        return Ok(());
+    };
+    let Some(session) = envelope.session.as_deref() else {
+        output::message(
+            mode,
+            Verbosity::Verbose,
+            err,
+            "hook: the host reported no session, so the advisory drain has no \
+             boundary to coalesce against; nothing drained",
+        )?;
+        return Ok(());
+    };
+
+    let config = resolve::resolve(here, overrides)?.drain.unwrap_or_default();
+    let access = journal::open(&dir)?;
+    let seqno = access.format().seqno;
+    let mut state = drain::load_wake(&dir, session);
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+
+    match drain::decide_wake(&state, &config, now_ms, seqno) {
+        drain::Wake::Coalesced => {
+            state.coalesce();
+            drain::save_wake(&dir, session, &state)?;
+            return Ok(());
+        }
+        // Nothing is read, which is the whole saving: the give-up is measured
+        // against a one-file format read that has already happened above.
+        drain::Wake::GaveUp => return Ok(()),
+        drain::Wake::Drain => {}
+    }
+
+    // The ref this checkout is on, so the count shown is the one for the tree in
+    // front of the agent. A detached `HEAD` has none, and the cycle falls back to
+    // a deterministic instance rather than to silence.
+    let context = git::current_branch(here)?
+        .map(|branch| findings::Context::new(format!("refs/heads/{branch}")));
+    let drained = drain::cycle(
+        &findings::load_all(&dir)?,
+        &git::changed_paths(here)?,
+        context.as_ref(),
+    );
+
+    // Persist before emit. A degraded store cannot record the suppression, and
+    // must not: writing a record version it cannot represent would drop fields.
+    // The emission still happens — dedupe and reporting work read-only — so the
+    // agent is not silenced by an out-of-date binary.
+    if access.is_writable() {
+        drain::record_suppressions(
+            &dir,
+            &journal::shard_id(here),
+            &drained.scope_filtered,
+            findings::NotShown::DrainSuppressed,
+        )?;
+    }
+
+    // The `resultId` cheap path: a payload byte-identical to the last one is
+    // repetition, and repeating it spends the agent's context to say nothing.
+    let repeat = state.result_id.as_deref() == Some(drained.result_id.as_str());
+    let emitted = !drained.lines.is_empty() && !repeat;
+    if emitted {
+        output::verdict(err, &drain::render(&drained))?;
+    }
+    state.drained(now_ms, seqno, drained.result_id, emitted);
+    drain::save_wake(&dir, session, &state)?;
+    Ok(())
 }
 
 /// Resolve the mediated-call policy for this run.

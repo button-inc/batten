@@ -62,7 +62,7 @@
 //!
 //! [`no_ancestry_decides_merged_ness`]: tests::no_ancestry_decides_merged_ness
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -923,6 +923,54 @@ pub fn worktree_remove(dir: &Path, path: &Path) -> Result<()> {
         "cannot remove the worktree",
     )?;
     Ok(())
+}
+
+/// The repo-relative paths the working tree has changed against `HEAD`.
+///
+/// The changed-scope set the advisory drain filters code-anchored findings
+/// against (CLOUD-79). **A list where [`uncommitted`] is deliberately a count**,
+/// and the difference is not an inconsistency: that report says `uncommitted: N
+/// paths`, so a primitive that could not return one could not leak one. A
+/// scope filter has to name the files it is scoping to, and a repo-relative path
+/// is a pointer — the shape rule 4 permits — never the content at it.
+///
+/// **NUL-delimited, never `--porcelain`.** The quoting in that format is the one
+/// part of it that is not trivially parseable, which is exactly what
+/// [`uncommitted`] sidesteps by counting lines. `-z` removes the problem instead
+/// of parsing around it: a pathname containing a quote, a newline or a non-UTF-8
+/// byte arrives verbatim between NULs. A path that is not UTF-8 is **dropped**
+/// rather than lossily converted — a mangled path would silently fail to match a
+/// stored finding's path and scope-filter it away, which is a false negative
+/// wearing a filter's clothes.
+///
+/// Tracked modifications and untracked files both count: an agent that has just
+/// written a new file has changed that scope as surely as one that edited an
+/// existing one. Staged and unstaged alike, since `diff HEAD` spans both.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository, or
+/// is one with no commits.
+pub fn changed_paths(dir: &Path) -> Result<BTreeSet<String>> {
+    let mut changed = BTreeSet::new();
+    for args in [
+        &["diff", "--name-only", "-z", "--end-of-options", "HEAD"][..],
+        &["ls-files", "--others", "--exclude-standard", "-z"][..],
+    ] {
+        let bytes = query_bytes(
+            dir,
+            args,
+            "cannot read the changed paths; this is not a git repository, or it has no commits",
+        )?;
+        changed.extend(
+            bytes
+                .split(|byte| *byte == 0)
+                .filter(|path| !path.is_empty())
+                .filter_map(|path| std::str::from_utf8(path).ok())
+                .map(ToOwned::to_owned),
+        );
+    }
+    Ok(changed)
 }
 
 /// The branch `HEAD` is on, or `None` on a detached `HEAD`.
