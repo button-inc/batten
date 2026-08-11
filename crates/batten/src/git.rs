@@ -506,16 +506,15 @@ pub fn common_dir(dir: &Path) -> Result<String> {
 ///
 /// Returns an error only when `git` itself cannot run or emits non-UTF-8.
 pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
-    let listing = match query(
+    // No remotes configured. `--get-regexp` exits 1 for "no match", which is not
+    // distinguishable here from a bad invocation — but the invocation is a fixed
+    // literal, so "no match" is the only reachable cause.
+    let Ok(listing) = query(
         dir,
         &["config", "--get-regexp", r"^remote\..*\.url$"],
         "read the configured remotes",
-    ) {
-        Ok(listing) => listing,
-        // No remotes configured. `--get-regexp` exits 1 for "no match", which is
-        // not distinguishable here from a bad invocation — but the invocation is
-        // a fixed literal, so "no match" is the only reachable cause.
-        Err(_) => return Ok(Vec::new()),
+    ) else {
+        return Ok(Vec::new());
     };
     let mut found: Vec<(String, String)> = listing
         .lines()
@@ -549,14 +548,13 @@ pub fn remotes(dir: &Path) -> Result<Vec<(String, String)>> {
 ///
 /// Returns an error only when `git` itself cannot run or emits non-UTF-8.
 pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
-    let listing = match query(
+    // An unborn HEAD with no refs at all: no commits to list, not a failure.
+    let Ok(listing) = query(
         dir,
         &["rev-list", "--max-parents=0", "--all"],
         "list the repository root commits",
-    ) {
-        Ok(listing) => listing,
-        // An unborn HEAD with no refs at all: no commits to list, not a failure.
-        Err(_) => return Ok(Vec::new()),
+    ) else {
+        return Ok(Vec::new());
     };
     let mut found: Vec<String> = listing
         .lines()
