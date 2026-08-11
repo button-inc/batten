@@ -571,6 +571,10 @@ fn spec_format_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::cli::SpecFormat>::new())
 }
 
+fn config_surface_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<crate::cli::ConfigSurface>::new())
+}
+
 fn shell_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<clap_complete::Shell>::new())
 }
@@ -827,10 +831,21 @@ pub const SURFACE: &[CommandDecl] = &[
     // so the schema cannot describe a `batten.toml` the binary would refuse.
     CommandDecl {
         path: "generate schema",
-        about: "Emit the JSON Schema for batten.toml, derived from the config types",
+        about: "Emit the JSON Schema for a config surface, derived from the config types",
         data_channel: false,
         effect: Effect::Read,
-        flags: &[],
+        // `--surface`, not a `generate override-schema` sub-verb: the override
+        // layer is a second SURFACE of the same artifact, and §2 and the landed
+        // tree already disagree about where schema emission lives (CLOUD-244).
+        // A selector adds no row to the command table; a verb would deepen a
+        // divergence that is not settled yet.
+        flags: &[FlagDecl::defaulted_enum(
+            "surface",
+            "surface",
+            "Which config surface to describe: the committed authority, or the override layer",
+            config_surface_parser,
+            "authority",
+        )],
     },
     // The `policy` noun only dispatches, and unlike `receipt` it is declared
     // `read`: every verb in its house-style §2 subtree — scope, protect,

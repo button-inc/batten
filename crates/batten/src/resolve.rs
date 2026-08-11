@@ -182,11 +182,15 @@ pub struct Resolved {
     /// The effective rule set: the committed rules plus any the local file adds.
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
-    /// The scope path set, as the authority declares it.
+    /// The scope path set: the authority's list, plus any `!` excludes the
+    /// local file added. Raise-only — see [`merge_local_scope`] for why a local
+    /// include is refused rather than appended.
     pub scope: Vec<String>,
-    /// The protected path set, as the authority declares it.
+    /// The protected path set: the authority's paths, plus any the local file
+    /// **added**. §8's "add protected paths" verbatim; adding to an include-only
+    /// set can only guard more.
     pub protected: Vec<String>,
-    /// The unlanded path set, as the authority declares it.
+    /// The unlanded path set, layered exactly as [`Resolved::protected`] is.
     pub unlanded: Vec<String>,
     /// The governing config surface hashed into `config epoch` (CLOUD-32).
     pub epoch: Option<config::Epoch>,
@@ -491,19 +495,34 @@ pub fn resolve_with_env(
         Source::RepoConfig
     };
 
+    // The three policy-bearing path sets (CLOUD-37), seeded from the authority
+    // and narrowable by the local layer below (CLOUD-239).
+    let mut scope = repo.scope.clone();
+    let mut protected = repo.protected.clone();
+    let mut unlanded = repo.unlanded.clone();
+    let authority_set = |present: bool| {
+        if present {
+            Source::RepoConfig
+        } else {
+            Source::Default
+        }
+    };
+    let mut scope_source = authority_set(!scope.is_empty());
+    let mut protected_source = authority_set(!protected.is_empty());
+    let mut unlanded_source = authority_set(!unlanded.is_empty());
+
     // Layer 2 — the git-ignored local file. Optional, and raise-only.
     let local_path = dir.join(LOCAL_CONFIG_FILE);
     if local_path.exists() {
         // Ungated: `min_batten_version` is authority-only, and the refusal below
         // names that specifically. Gating here would replace it with "this build
         // is too old" — true of the value, useless about the mistake (CLOUD-33).
+        // `OverrideConfig` IS the override surface (CLOUD-239), so a key this
+        // layer cannot honour never reaches here: `deny_unknown_fields` refused
+        // it at parse. What used to be a silently dropped tightening — a local
+        // `protected` that looked applied and wasn't — is now either applied
+        // below or a load error, with no third outcome.
         let local = config::load_override(&local_path)?;
-        // The override layer honours `strictness` and `rule`; every other key
-        // belongs to the committed authority alone. Refuse the ones it cannot
-        // honour rather than parsing and dropping them — a setting that looks
-        // applied but isn't is the same failure `deny_unknown_fields` exists to
-        // prevent, and it is worse here because the key *is* valid in the file
-        // it was copied from.
         if local.min_batten_version.is_some() {
             return Err(UsageError::raise(format!(
                 "{LOCAL_CONFIG_FILE}: `min_batten_version` is set by the committed authority ({}) \
@@ -549,6 +568,24 @@ pub fn resolve_with_env(
         }
         merge_local_patterns(&mut exec_patterns, local.exec_patterns)?;
         merge_local_waivers(&mut waivers, local.waivers, &repo.rules)?;
+        // §8's three policy-bearing path sets, raise-only. Before CLOUD-239
+        // these were parsed and discarded: an author who wrote `protected` here
+        // got no complaint from the editor, none from `taplo lint`, none from
+        // `batten check` — and no effect. A tightening lost without a word is
+        // worse than one refused, because the operator's intent vanishes.
+        if merge_local_scope(&mut scope, local.scope)? {
+            scope_source = Source::LocalFile;
+        }
+        if !local.protected.is_empty() {
+            // Union: "add protected paths" is §8's own wording, and adding to an
+            // include-only set can only guard more paths.
+            protected.extend(local.protected);
+            protected_source = Source::LocalFile;
+        }
+        if !local.unlanded.is_empty() {
+            unlanded.extend(local.unlanded);
+            unlanded_source = Source::LocalFile;
+        }
     }
 
     // Layer 3 — the environment. An *empty* variable is "not set", not a bad
@@ -590,7 +627,65 @@ pub fn resolve_with_env(
         rules_source,
         exec_patterns,
         waivers,
+        Paths {
+            scope,
+            protected,
+            unlanded,
+            scope_source,
+            protected_source,
+            unlanded_source,
+        },
     ))
+}
+
+/// The three policy-bearing path sets after layering, with their attribution.
+///
+/// Grouped so [`assemble`] takes one parameter rather than six. Nothing here
+/// derives one set from another — a path's membership in `scope`, `protected`
+/// and `unlanded` are three separate answers (CLOUD-37).
+struct Paths {
+    scope: Vec<String>,
+    protected: Vec<String>,
+    unlanded: Vec<String>,
+    scope_source: Source,
+    protected_source: Source,
+    unlanded_source: Source,
+}
+
+/// Narrow the committed scope with a local file's excludes.
+///
+/// Returns whether anything was narrowed, so the caller can attribute the key.
+///
+/// **Excludes only, and a plain include is refused.** `scope` is one ordered
+/// include/exclude list whose includes *union*: appending an include can only
+/// add paths, so a local include is either a widening — exactly what §8's
+/// raise-only clause forbids — or a no-op that reads as policy. Excludes are
+/// purely subtractive, so appending them is provably narrowing whatever the
+/// authority declared, with no reasoning about entry order required.
+///
+/// This is deliberately narrower than §8's "narrow scope" read at its widest: an
+/// author cannot express "restrict to `src/**`" in one entry, only "exclude what
+/// I do not want". The trade is soundness — there is no local `scope` this
+/// function accepts that can enlarge the set.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) for a local entry that is not a `!`
+/// exclude, naming the entry.
+fn merge_local_scope(scope: &mut Vec<String>, local: Vec<String>) -> Result<bool> {
+    if local.is_empty() {
+        return Ok(false);
+    }
+    for entry in &local {
+        if !entry.starts_with('!') {
+            return Err(UsageError::raise(format!(
+                "scope: `{entry}` — {LOCAL_CONFIG_FILE} may only NARROW scope, so every entry must \
+                 be a `!` exclude; an include would widen the set an override may not widen (§8)",
+            )));
+        }
+    }
+    scope.extend(local);
+    Ok(true)
 }
 
 /// Append a local file's output predicates to the committed ones.
@@ -678,6 +773,7 @@ fn assemble(
     rules_source: Source,
     exec_patterns: Vec<crate::outputs::OutputPattern>,
     waivers: Vec<crate::waiver::Waiver>,
+    paths: Paths,
 ) -> Resolved {
     Resolved {
         version: repo.version,
@@ -685,9 +781,9 @@ fn assemble(
         strictness: strictness.value,
         fail_on_warning: fail_on_warning.value,
         rules,
-        scope: repo.scope.clone(),
-        protected: repo.protected.clone(),
-        unlanded: repo.unlanded.clone(),
+        scope: paths.scope.clone(),
+        protected: paths.protected.clone(),
+        unlanded: paths.unlanded.clone(),
         epoch: repo.epoch.clone(),
         verbs: repo.verbs.clone(),
         markers: repo.markers.clone(),
@@ -705,6 +801,7 @@ fn assemble(
             strictness.source,
             fail_on_warning.source,
             rules_source,
+            &paths,
         ),
     }
 }
@@ -719,6 +816,7 @@ fn attribution(
     strictness: Source,
     fail_on_warning: Source,
     rules: Source,
+    paths: &Paths,
 ) -> BTreeMap<&'static str, Source> {
     let authority_set = |present: bool| {
         if present {
@@ -738,9 +836,11 @@ fn attribution(
         ("strictness", strictness),
         ("fail_on_warning", fail_on_warning),
         ("rule", rules),
-        ("scope", authority_set(!repo.scope.is_empty())),
-        ("protected", authority_set(!repo.protected.is_empty())),
-        ("unlanded", authority_set(!repo.unlanded.is_empty())),
+        // Layered since CLOUD-239: these three carry the local file's source
+        // when it narrowed them, so `config show` names the layer that did.
+        ("scope", paths.scope_source),
+        ("protected", paths.protected_source),
+        ("unlanded", paths.unlanded_source),
         ("epoch", authority_set(repo.epoch.is_some())),
         ("verb", authority_set(!repo.verbs.is_empty())),
         ("marker", authority_set(!repo.markers.is_empty())),

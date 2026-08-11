@@ -333,10 +333,19 @@ echo "completions: regenerated for bash, zsh, fish"
 '''
 
 [tasks.schema]
-description = "Regenerate the committed JSON Schema for batten.toml from the config types"
+description = "Regenerate the committed JSON Schemas for both config surfaces from the config types"
 # Same shape as `completions`: the binary emits on stdout only, so `generate`
 # stays a read-effect verb (§5) and the redirect lives here, in the caller.
-run = "cargo run --quiet -p batten -- generate schema >schema/batten.schema.json"
+#
+# Two surfaces, two artifacts (CLOUD-239): `batten.toml` is the committed
+# authority, `batten.local.toml` the raise-only override that accepts a strict
+# subset. Both are regenerated together so neither can be refreshed alone and
+# drift while the other looks current.
+run = '''
+set -eu
+cargo run --quiet -p batten -- generate schema --surface authority >schema/batten.schema.json
+cargo run --quiet -p batten -- generate schema --surface override >schema/batten.local.schema.json
+'''
 
 [tasks.zizmor]
 description = "Static-analyse the GitHub Actions workflows (dangerous triggers, unpinned actions, injection sinks)"

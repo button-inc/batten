@@ -338,3 +338,270 @@ fn the_schema_cannot_express_per_kind_requirements() {
         );
     }
 }
+
+// --- the override surface is its own schema, and the loader agrees (CLOUD-239)
+//
+// One authority describing two surfaces is what let a validator green-light
+// keys the loader refuses and say nothing about keys it silently dropped. These
+// assert the two halves separately, because they mislead in opposite directions:
+// `min_batten_version` was vouched for and then refused (loud), while a local
+// `protected` was accepted everywhere and applied nowhere (silent, and worse —
+// the operator's tightening vanished without a word).
+
+/// The override schema as the binary derives it, parsed.
+fn derived_override_schema() -> serde_json::Value {
+    let output = batten()
+        .args(["generate", "schema", "--surface", "override"])
+        .output()
+        .expect("run batten generate schema --surface override");
+    assert_eq!(output.status.code(), Some(0));
+    serde_json::from_slice(&output.stdout).expect("the override schema is JSON")
+}
+
+/// A repo with both an authority and a local override.
+fn repo_with_local(name: &str, authority: &str, local: &str) -> PathBuf {
+    let dir = Fixture::new(name).config(authority).build();
+    fs::write(dir.join("batten.local.toml"), local).expect("write batten.local.toml");
+    dir
+}
+
+/// `batten config show -J` in `dir`.
+fn show_in(dir: &std::path::Path) -> Output {
+    common::run(dir, &["config", "show", "--json"])
+}
+
+#[test]
+fn the_committed_override_schema_is_the_one_the_binary_derives() {
+    let committed = fs::read_to_string(at_root("schema/batten.local.schema.json"))
+        .expect("read the committed override schema");
+    let output = batten()
+        .args(["generate", "schema", "--surface", "override"])
+        .output()
+        .expect("run batten generate schema --surface override");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        committed.trim(),
+        "the committed override schema drifted; run `mise run schema`"
+    );
+}
+
+#[test]
+fn the_two_surfaces_are_different_schemas() {
+    // The defect in one assertion: if these were equal, one document would be
+    // describing two surfaces again and every case below would be vacuous.
+    assert_ne!(derived_schema(), derived_override_schema());
+}
+
+#[test]
+fn the_override_schema_describes_only_keys_the_loader_honours() {
+    let schema = derived_override_schema();
+    let properties = schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object)
+        .expect("the override schema has properties");
+    let mut keys: Vec<&str> = properties.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "exec_pattern",
+            "fail_on_warning",
+            "min_batten_version",
+            "protected",
+            "rule",
+            "scope",
+            "strictness",
+            "unlanded",
+            "version",
+            "waiver",
+        ],
+        "the override surface changed; every key here must be one `resolve` reads"
+    );
+    // Every authority-only key is absent, so a validator cannot vouch for one.
+    for authority_only in [
+        "epoch",
+        "marker",
+        "verb",
+        "budget",
+        "must_land_on",
+        "judge",
+        "ci",
+        "defects",
+        "provision",
+        "transcript",
+    ] {
+        assert!(
+            !properties.contains_key(authority_only),
+            "the override schema vouches for `{authority_only}`, which the loader refuses"
+        );
+    }
+    assert_eq!(
+        schema.get("additionalProperties"),
+        Some(&serde_json::json!(false)),
+        "without this an unknown key would validate and then fail to load"
+    );
+}
+
+#[test]
+fn a_local_protected_is_applied_rather_than_dropped() {
+    // THE silent-drop case, which no test covered — which is why it shipped. A
+    // developer adding a protected path got no complaint from the editor, none
+    // from `taplo lint`, none from `batten check`, and no effect.
+    let dir = repo_with_local(
+        "override-protected",
+        "version = 1\nprotected = [\"a/**\"]\n",
+        "version = 1\nprotected = [\"migrations/**\"]\n",
+    );
+    let output = show_in(&dir);
+    assert_eq!(output.status.code(), Some(0));
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("config show emits JSON");
+    assert_eq!(
+        doc["protected"]["value"],
+        serde_json::json!(["a/**", "migrations/**"]),
+        "the local tightening was dropped"
+    );
+    assert_eq!(
+        doc["protected"]["source"],
+        serde_json::json!("local-file"),
+        "an applied override must be attributed to the layer that applied it"
+    );
+}
+
+#[test]
+fn a_local_unlanded_is_applied_too() {
+    let dir = repo_with_local(
+        "override-unlanded",
+        "version = 1\n",
+        "version = 1\nunlanded = [\"wip/**\"]\n",
+    );
+    let output = show_in(&dir);
+    assert_eq!(output.status.code(), Some(0));
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("config show emits JSON");
+    assert_eq!(doc["unlanded"]["value"], serde_json::json!(["wip/**"]));
+    assert_eq!(doc["unlanded"]["source"], serde_json::json!("local-file"));
+}
+
+#[test]
+fn a_local_scope_narrows_by_excluding() {
+    let dir = repo_with_local(
+        "override-scope-narrows",
+        "version = 1\nscope = [\"src/**\"]\n",
+        "version = 1\nscope = [\"!src/vendor/**\"]\n",
+    );
+    let output = show_in(&dir);
+    assert_eq!(output.status.code(), Some(0));
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("config show emits JSON");
+    assert_eq!(
+        doc["scope"]["value"],
+        serde_json::json!(["src/**", "!src/vendor/**"]),
+        "the exclude must be appended to the authority's ordered list"
+    );
+    assert_eq!(doc["scope"]["source"], serde_json::json!("local-file"));
+}
+
+#[test]
+fn a_local_scope_may_not_widen() {
+    // Includes union, so a local include could only ever ADD paths — which is
+    // the widening §8's raise-only clause exists to make impossible. Refused
+    // rather than accepted-and-ignored, so the author learns the file cannot do
+    // what they asked.
+    let dir = repo_with_local(
+        "override-scope-widens",
+        "version = 1\nscope = [\"src/**\"]\n",
+        "version = 1\nscope = [\"extra/**\"]\n",
+    );
+    let output = show_in(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a widening scope must refuse"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("extra/**"),
+        "the refusal must name the entry"
+    );
+    assert!(
+        stderr.contains("NARROW"),
+        "and say which direction is allowed"
+    );
+    assert!(output.stdout.is_empty(), "a refusal printed a document");
+}
+
+#[test]
+fn an_authority_only_key_in_the_local_file_is_refused_by_name() {
+    // `deny_unknown_fields` on the override type, doing the work a hand-written
+    // refusal list would drift away from.
+    let dir = repo_with_local(
+        "override-epoch",
+        "version = 1\n",
+        "version = 1\n[epoch]\ntracked = [\"batten.toml\"]\n",
+    );
+    let output = show_in(&dir);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("epoch"), "the refusal must name the key");
+}
+
+#[test]
+fn min_batten_version_keeps_its_specific_refusal() {
+    // The loud half of the original defect: the validator called it valid and
+    // the loader refused the file. Both now refuse — and the message stays the
+    // specific one, because "unknown field" would read as a typo when the real
+    // mistake is that the key belongs to the committed authority alone.
+    let dir = repo_with_local(
+        "override-min-version",
+        "version = 1\n",
+        &format!("version = 1\nmin_batten_version = \"{VERSION}\"\n"),
+    );
+    let output = show_in(&dir);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("authority"),
+        "the refusal must say the key is authority-only, not merely unknown: {stderr}"
+    );
+
+    // And the schema now agrees with the loader about it: the key is present in
+    // the override schema only so the message can name it, so a validator must
+    // not treat the file as clean either.
+    let schema = derived_override_schema();
+    assert!(
+        schema["properties"].get("min_batten_version").is_some(),
+        "carried deliberately, so the refusal can be specific"
+    );
+}
+
+#[test]
+fn the_honoured_keys_still_load_together() {
+    // The positive case: a local file carrying only honoured keys validates and
+    // applies, so this change refuses nothing it should accept.
+    let dir = repo_with_local(
+        "override-honoured",
+        "version = 1\nscope = [\"src/**\"]\nprotected = [\"a/**\"]\nstrictness = \"permissive\"\n",
+        "version = 1\nstrictness = \"strict\"\nfail_on_warning = true\nscope = [\"!src/gen/**\"]\n\
+         protected = [\"b/**\"]\nunlanded = [\"wip/**\"]\n",
+    );
+    let output = show_in(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("config show emits JSON");
+    assert_eq!(doc["strictness"]["value"], serde_json::json!("strict"));
+    assert_eq!(doc["fail_on_warning"]["value"], serde_json::json!(true));
+    assert_eq!(
+        doc["scope"]["value"],
+        serde_json::json!(["src/**", "!src/gen/**"])
+    );
+    assert_eq!(
+        doc["protected"]["value"],
+        serde_json::json!(["a/**", "b/**"])
+    );
+}

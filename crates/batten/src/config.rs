@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 use crate::rules::Rule;
+use crate::{outputs, waiver};
 
 /// The config schema version this build understands. A file declaring any other
 /// version is refused rather than partially interpreted.
@@ -261,6 +262,72 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
     Ok(config)
 }
 
+/// The override surface: exactly what `batten.local.toml` may carry.
+///
+/// A **second type**, not a second reading of [`Config`], and that is the whole
+/// point (CLOUD-239). The subset used to exist only as `local.*` reads inside
+/// [`crate::resolve`] — invisible to a validator, so the published schema
+/// vouched for keys the loader silently dropped and for one it refused outright.
+/// With the surface written as a type, the schema derives from it and the two
+/// cannot disagree.
+///
+/// `deny_unknown_fields` is what makes the refusal total and free: every
+/// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,
+/// `judge`, `ci`, `defects`, `provision`, `transcript`) becomes a hard parse
+/// error here rather than a silently discarded tightening. A hand-maintained
+/// refusal list would be a second authority, and would drift the moment a field
+/// is added to [`Config`].
+///
+/// Every key here is **raise-only**; [`crate::resolve`] holds that invariant,
+/// and the per-field docs say which direction "raise" means.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OverrideConfig {
+    /// The schema version, required exactly as the authority requires it.
+    pub version: u32,
+    /// Present only so the refusal can name it.
+    ///
+    /// Carried as a field rather than left to `deny_unknown_fields` because
+    /// "authority-only, an override may not restate it" tells the author what
+    /// they did wrong, where "unknown field" would suggest a typo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_batten_version: Option<String>,
+    /// Raised, never lowered: a committed `strict` cannot be relaxed here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strictness: Option<Strictness>,
+    /// Raised, never lowered: a committed `true` cannot be turned off here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fail_on_warning: Option<bool>,
+    /// Rules this file **adds**. Redefining a committed id is refused.
+    #[serde(default, rename = "rule", skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<Rule>,
+    /// Scope narrowing, and **excludes only** — a plain include is refused.
+    ///
+    /// Includes union, so a local include could only ever *widen* the set,
+    /// which is exactly what §8's raise-only clause forbids. Excludes are purely
+    /// subtractive, so appending them to the authority's ordered list is
+    /// provably narrowing and needs no reasoning about entry order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<String>,
+    /// Protected paths this file **adds** — §8's "add protected paths" verbatim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protected: Vec<String>,
+    /// Unlanded paths this file **adds**; an include-only set, like `protected`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unlanded: Vec<String>,
+    /// `exec` output predicates this file **adds**. A duplicate id is refused.
+    #[serde(
+        default,
+        rename = "exec_pattern",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub exec_patterns: Vec<outputs::OutputPattern>,
+    /// Waivers this file adds, for rules the authority does not declare. A
+    /// waiver over a committed rule lowers that bar and is refused.
+    #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
+    pub waivers: Vec<waiver::Waiver>,
+}
+
 /// Parse an *override* layer, without the [`Config::min_batten_version`] gate.
 ///
 /// `min_batten_version` is an **authority-only** key: [`crate::resolve`] refuses
@@ -272,9 +339,41 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 ///
 /// # Errors
 ///
-/// As [`parse`], minus the version gate.
-pub fn parse_override(text: &str, source: &str) -> Result<Config> {
-    parse_ungated(text, source)
+/// Returns a [`UsageError`] (→ exit `1`) for a malformed file, an unsupported
+/// `version`, a table that fails its own validator, or **any key outside the
+/// override surface** — including one that is perfectly valid in the file it was
+/// copied from, which is the case this type exists to catch.
+pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
+    let config: OverrideConfig = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    if config.version != SUPPORTED_VERSION {
+        return Err(UsageError::raise(format!(
+            "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
+            config.version
+        )));
+    }
+    // The same validators the authority runs, over the same tables. An override
+    // row is a policy row: one that loads here and gates nothing is the defect
+    // CLOUD-242 named, and it does not become acceptable for being uncommitted.
+    crate::rules::validate(&config.rules)?;
+    crate::outputs::validate(&config.exec_patterns)?;
+    crate::waiver::validate(&config.waivers)?;
+    Ok(config)
+}
+
+/// The override surface's JSON schema, derived from [`OverrideConfig`].
+///
+/// A second artifact rather than a second reading of the first: `.taplo.toml`
+/// binds `batten.local.toml` to this one, so an editor and `taplo lint` agree
+/// with the loader about which keys that file may carry.
+///
+/// # Errors
+///
+/// Returns an error when the schema cannot be serialized.
+pub fn override_schema() -> Result<String> {
+    Ok(serde_json::to_string_pretty(&schemars::schema_for!(
+        OverrideConfig
+    ))?)
 }
 
 /// The shared body: deserialize and check the schema `version`.
@@ -470,7 +569,7 @@ pub fn load(path: &Path) -> Result<Config> {
 /// # Errors
 ///
 /// As [`load`], minus the version gate.
-pub fn load_override(path: &Path) -> Result<Config> {
+pub fn load_override(path: &Path) -> Result<OverrideConfig> {
     parse_override(&read(path)?, &path.display().to_string())
 }
 

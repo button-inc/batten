@@ -1,0 +1,365 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OverrideConfig",
+  "description": "The override surface: exactly what `batten.local.toml` may carry.\n\nA **second type**, not a second reading of [`Config`], and that is the whole\npoint (CLOUD-239). The subset used to exist only as `local.*` reads inside\n[`crate::resolve`] — invisible to a validator, so the published schema\nvouched for keys the loader silently dropped and for one it refused outright.\nWith the surface written as a type, the schema derives from it and the two\ncannot disagree.\n\n`deny_unknown_fields` is what makes the refusal total and free: every\nauthority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,\n`judge`, `ci`, `defects`, `provision`, `transcript`) becomes a hard parse\nerror here rather than a silently discarded tightening. A hand-maintained\nrefusal list would be a second authority, and would drift the moment a field\nis added to [`Config`].\n\nEvery key here is **raise-only**; [`crate::resolve`] holds that invariant,\nand the per-field docs say which direction \"raise\" means.",
+  "type": "object",
+  "properties": {
+    "exec_pattern": {
+      "description": "`exec` output predicates this file **adds**. A duplicate id is refused.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/OutputPattern"
+      }
+    },
+    "fail_on_warning": {
+      "description": "Raised, never lowered: a committed `true` cannot be turned off here.",
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "min_batten_version": {
+      "description": "Present only so the refusal can name it.\n\nCarried as a field rather than left to `deny_unknown_fields` because\n\"authority-only, an override may not restate it\" tells the author what\nthey did wrong, where \"unknown field\" would suggest a typo.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "protected": {
+      "description": "Protected paths this file **adds** — §8's \"add protected paths\" verbatim.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rule": {
+      "description": "Rules this file **adds**. Redefining a committed id is refused.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Rule"
+      }
+    },
+    "scope": {
+      "description": "Scope narrowing, and **excludes only** — a plain include is refused.\n\nIncludes union, so a local include could only ever *widen* the set,\nwhich is exactly what §8's raise-only clause forbids. Excludes are purely\nsubtractive, so appending them to the authority's ordered list is\nprovably narrowing and needs no reasoning about entry order.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "strictness": {
+      "description": "Raised, never lowered: a committed `strict` cannot be relaxed here.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Strictness"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unlanded": {
+      "description": "Unlanded paths this file **adds**; an include-only set, like `protected`.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "version": {
+      "description": "The schema version, required exactly as the authority requires it.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "waiver": {
+      "description": "Waivers this file adds, for rules the authority does not declare. A\nwaiver over a committed rule lowers that bar and is refused.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Waiver"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "version"
+  ],
+  "$defs": {
+    "Direction": {
+      "description": "Which way a ratcheted count may move.\n\nNamed for the *permitted* direction rather than the banned one, so a config\nrow reads as the promise it makes: `non_decreasing` says this count will not\nfall.",
+      "oneOf": [
+        {
+          "description": "The count may rise or hold, never fall. The test-deletion guard.",
+          "type": "string",
+          "const": "non_decreasing"
+        },
+        {
+          "description": "The count may fall or hold, never rise. The new-`#[ignore]` guard.",
+          "type": "string",
+          "const": "non_increasing"
+        }
+      ]
+    },
+    "OutputPattern": {
+      "description": "One declared output predicate: a literal that must not appear.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The stable identifier a match is reported under.\n\nRequired, and it is what keeps the report pointer-only: a finding names\n`stream:line` plus this id, never the line that matched. Without an id the\nonly way to say *which* pattern fired would be to echo the bytes.",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "The case-sensitive literal that must not appear in the watched stream.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "What the caller should do about it.\n\nRequired, unlike on a file rule. A file finding is a `path:line` a reader\ncan open; a promoted exit code is all a caller gets back, so a refusal\nnaming only its id would be un-actionable (CLOUD-122).",
+          "type": "string"
+        },
+        "stream": {
+          "description": "Which stream to watch. Defaults to both.",
+          "$ref": "#/$defs/Watched",
+          "default": "both"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "pattern",
+        "reason"
+      ]
+    },
+    "Rule": {
+      "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
+      "type": "object",
+      "properties": {
+        "base": {
+          "description": "The git rev a [`RuleKind::Ratchet`] counts against. Any rev git resolves;\none it cannot is a usage error naming the rev, never a pass.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contains": {
+          "description": "An extra literal that must appear in the mediated command **as written**\nfor a [`RuleKind::Shape`] rule to fire. Optional, that kind only.\n\nIt exists for one real case rather than as a general escape hatch: a\nlanding directive lives inside a quoted `--body`, so it is not one of the\nwords the shape matches, and without this an ordinary `gh pr comment`\nwould be denied alongside the one that carries the directive. Matched\nagainst the raw text of the same segment, quotes included.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "direction": {
+          "description": "Which way a [`RuleKind::Ratchet`] count may move. Required by that kind,\nrejected by every other.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Direction"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "glob": {
+          "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.\n\nOptional at the type level and required per-kind: a file kind cannot load\nwithout it, and [`RuleKind::Shape`] — which inspects no files — rejects it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "A stable identifier for the rule, surfaced in findings so a violation\npoints back at the policy that produced it.",
+          "type": "string"
+        },
+        "identity_key": {
+          "description": "A per-rule identity discriminator: split one identity into several.\n\n**Split-only by construction, not by validation.** The default identity\nis hashed as a field of the override's preimage\n([`crate::identity::override_fingerprint`]), so two spans with different\ndefault identities cannot collide under any discriminator — this can\nfragment a group and is mathematically unable to merge two. Changing it\nis a deliberate re-mint, not a rename.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Which predicate to apply to the matched files.",
+          "$ref": "#/$defs/RuleKind"
+        },
+        "pattern": {
+          "description": "The literal shape this rule bans — one meaning, two domains.\n\nFor [`RuleKind::Forbid`] it is a substring banned from matched *files*.\nFor [`RuleKind::Shape`] it is a banned *command line*: the first word is\nthe effective program (matched after wrapper look-through) and the rest\nare the adjacent non-flag words that must follow it, so\n`pattern = \"gh pr merge\"` reads exactly as a reviewer would say it aloud.\nRequired by both kinds, rejected by [`RuleKind::Command`].",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_url": {
+          "description": "An optional link to the policy this rule enforces, appended to the deny.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why this rule refuses, and what to do instead — the deny's whole text.\n\nRequired by [`RuleKind::Shape`], where the refusal is all a caller gets;\noptional elsewhere, where a `path:line` pointer plus the id already says\nwhere to look.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run": {
+          "description": "The command template a [`RuleKind::Command`] rule runs. Required by that\nkind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "Which file domain the rule evaluates over. Independent of `severity` —\nscope says *where* the rule looks, severity says *what a match does* —\nand neither key's vocabulary parses as the other's. Defaults to\n[`RuleScope::Tree`], the pinned per-field default.",
+          "$ref": "#/$defs/RuleScope",
+          "default": "tree"
+        },
+        "severity": {
+          "description": "What a match does: `deny` fails the run, `warn` reports without failing\n(until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the\nrule off (cargo-deny's model, CLOUD-61).\n\n**Required, deliberately**: every committed rule states its severity\ndefault explicitly, and there is no implicit fallback — omitting the key\nis a usage error (exit `1`), never a silently assumed level.",
+          "$ref": "#/$defs/RuleSeverity"
+        },
+        "verbatim": {
+          "description": "Hash the matched span **verbatim** rather than collapsing its whitespace.\n\nFor a rule whose subject *is* literal content, where a reformat genuinely\nchanges the thing being flagged. The default collapses whitespace on the\n`git patch-id` model, so a formatter reflow does not re-mint an identity;\na `verbatim` rule trades that for sensitivity to the bytes it is about.\n`Option<bool>` rather than `bool` so the column census can see presence\n(`Rule::columns`), which is what makes a `verbatim` on a kind that hashes\nno span a usage error instead of an ignored key.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "severity"
+      ]
+    },
+    "RuleKind": {
+      "description": "The kind of predicate a [`Rule`] applies to its matched files.\n\nSerialized as a lowercase `kind = \"...\"` token in `batten.toml`. Marked\n`#[non_exhaustive]` because the engine is designed to grow kinds (the dynamic\n`command` kind is CLOUD-89) without that being a breaking change.",
+      "oneOf": [
+        {
+          "description": "A static banned shape: every line of a matched file that contains the\nliteral `pattern` is a finding. The check is inspection-only.",
+          "type": "string",
+          "const": "forbid"
+        },
+        {
+          "description": "A dynamic check: run the `run` template and treat its exit code as the\npredicate — `0` passes, non-zero is a violation. The sanctioned escape\nhatch for rules no static shape can express.\n\nIt is an **exit-code predicate, not a judge** (CLOUD-93): the command's\noutput is never parsed for meaning. Because it executes a process\ndeclared in `batten.toml`, it runs only on the non-`read` surface (§5,\nCLOUD-170).",
+          "type": "string",
+          "const": "command"
+        },
+        {
+          "description": "A banned **command shape**: the mediated call `batten hook` is\nadjudicating matches `pattern` read as an effective program plus the\nadjacent words that must follow it.\n\nDistinct from [`RuleKind::Command`], which *runs* a declared command.\nThis one runs nothing — it is a string match over a command line the\nhost handed us, so it cannot spawn and stays on the read-safe surface.",
+          "type": "string",
+          "const": "shape"
+        },
+        {
+          "description": "A **count that may only move one way** (CLOUD-55): the total occurrences\nof `pattern` across files matching `glob`, compared between a base rev\nand the working tree, must not move in the banned `direction`.\n\nThe kind exists because the property worth gating on a test suite is not\nimmutability — tests are edited every day, so a protected path would\nblock writing them — but *direction of change*. That is the same shape\n`trust.rs` already encodes for config: which way is weakening is a\nproperty of the key.\n\nCounted in **aggregate per rule**, never per file: a test moved between\ntwo files matching the glob changes nothing, so renames and\nconsolidations that preserve the suite are clean with no rename tracking.\nThe price is that the finding names counts rather than locations, and\n`git diff` answers *where*.",
+          "type": "string",
+          "const": "ratchet"
+        }
+      ]
+    },
+    "RuleScope": {
+      "description": "Which file domain a rule evaluates over — *where a rule looks*, never what a\nmatch does (CLOUD-61).\n\nScope and severity are two independent keys on a [`Rule`], deliberately: the\nquestion \"which files does this gate watch\" and the question \"what happens\nwhen it matches\" ([`RuleSeverity`]) are different axes, and conflating them\nis the config bug this type makes inexpressible. Neither vocabulary\ndeserializes as the other, so a severity token in the `scope` key (or the\nreverse) is a usage error (exit `1`), never a silent reinterpretation.\n\nMarked `#[non_exhaustive]` like [`RuleKind`]: the git change-set / protected\n/ unlanded domains (CLOUD-36, CLOUD-37) slot in as new variants without a\nbreaking change. The default is pinned as data —\n[`tests::scope_default_is_pinned`] asserts it — so it is an explicit,\nper-field default rather than an implicit fallback buried in code.",
+      "oneOf": [
+        {
+          "description": "The whole working tree: every file the walk yields. The pinned default.",
+          "type": "string",
+          "const": "tree"
+        },
+        {
+          "description": "The single command `batten hook` is adjudicating — not a file domain at\nall, which is why a rule declaring it reads no `glob`.\n\nSpelled `mediated_call` rather than `command` on purpose: `command` is\nalready a [`RuleKind`] token meaning \"run this\", and one word meaning two\nunrelated things across two keys is the cross-vocabulary confusion\n[`tests::severity_and_scope_vocabularies_do_not_cross`] exists to prevent.",
+          "type": "string",
+          "const": "mediated_call"
+        }
+      ]
+    },
+    "RuleSeverity": {
+      "description": "Config-time rule severity — *what fails a check* (cargo-deny's model,\nCLOUD-61).\n\nDeclared weakest-first: derived [`Ord`] is the severity rank.",
+      "oneOf": [
+        {
+          "description": "The rule is configured off: a match is not a finding at all.",
+          "type": "string",
+          "const": "allow"
+        },
+        {
+          "description": "A match is reported but does not by itself fail the run (it can be\npromoted by `--fail-on-warning`, CLOUD-49).",
+          "type": "string",
+          "const": "warn"
+        },
+        {
+          "description": "A match fails the run.",
+          "type": "string",
+          "const": "deny"
+        }
+      ]
+    },
+    "Strictness": {
+      "description": "How strictly Batten applies its gates — the ordered, policy-bearing key the\n§8 raise-only rule is defined over.\n\nThe ordering **is** the policy semantics: `Permissive < Standard < Strict`,\nso \"tighten\" is the computable predicate `candidate >= current` rather than a\njudgement call. Derived `Ord` follows declaration order, which is why the\nvariants are declared weakest-first; [`tests::strictness_orders_weakest_first`]\npins that so a reordering cannot silently invert the clamp.\n\nResolution is this issue's deliverable (CLOUD-29); the verbs that *read* the\nresolved value attach as they land (`--fail-on-warning` is CLOUD-49).",
+      "oneOf": [
+        {
+          "description": "Advisory: findings are reported without failing the run.",
+          "type": "string",
+          "const": "permissive"
+        },
+        {
+          "description": "The default: a finding is a violation.",
+          "type": "string",
+          "const": "standard"
+        },
+        {
+          "description": "Everything `Standard` fails on, plus anything advisory.",
+          "type": "string",
+          "const": "strict"
+        }
+      ]
+    },
+    "Waiver": {
+      "description": "One declared waiver: which rule, why, until when, and optionally where.",
+      "type": "object",
+      "properties": {
+        "expires": {
+          "description": "The last day this waiver applies, `YYYY-MM-DD`. Required — see the module\ndocs on why a waiver with no expiry is the rot rather than a convenience.",
+          "type": "string"
+        },
+        "path": {
+          "description": "A glob narrowing the waiver to some of the rule's findings.\n\nAbsent means the whole rule, which is the widest a waiver can be and\ntherefore the one that must be typed deliberately rather than reached by\nomitting a field nobody noticed. Matched with\n[`crate::rules::glob_match`], so a waiver's path vocabulary is the one the\nrules use and not a second dialect.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why the finding is being waived. Required, and required to be non-empty:\nan unjustified waiver is the undesigned hatch this table replaces, and a\nreason nobody had to write is one nobody can review.",
+          "type": "string"
+        },
+        "rule": {
+          "description": "The [`crate::rules::Rule::id`] this waiver suppresses findings of.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "reason",
+        "expires"
+      ]
+    },
+    "Watched": {
+      "description": "Which captured stream a pattern is matched against.",
+      "oneOf": [
+        {
+          "description": "The child's standard output only.",
+          "type": "string",
+          "const": "stdout"
+        },
+        {
+          "description": "The child's standard error only.",
+          "type": "string",
+          "const": "stderr"
+        },
+        {
+          "description": "Both streams.\n\nThe default, and deliberately the *widest* reading: a tool that moves a\nwarning from one stream to the other between releases would otherwise\nsilently stop being gated, and a pattern that quietly matches nothing is\nthe failure this whole feature exists to prevent.",
+          "type": "string",
+          "const": "both"
+        }
+      ]
+    }
+  }
+}

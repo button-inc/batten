@@ -19,7 +19,6 @@
 set -euo pipefail
 
 cd "${SCHEMA_ROOT:-$(git rev-parse --show-toplevel)}"
-committed="schema/batten.schema.json"
 
 # Emit into a scratch file rather than over the committed one: a gate that
 # rewrites the tree it is judging cannot fail twice, and would launder drift
@@ -27,23 +26,39 @@ committed="schema/batten.schema.json"
 scratch=$(mktemp)
 trap 'rm -f "$scratch"' EXIT
 
-if [ ! -f "$committed" ]; then
-	echo "$committed:0 schema-missing" >&2
-	echo "::error:: schema-check: no committed schema; run 'mise run schema'" >&2
-	exit 1
-fi
+# Both surfaces, judged the same way (CLOUD-239). `batten.toml` is the committed
+# authority and `batten.local.toml` is the raise-only override, which accepts a
+# strict subset — two types, so two derivations. Checking only the first is how
+# the published schema came to vouch for override keys the loader drops.
+check_surface() {
+	surface=$1
+	committed=$2
 
-if ! cargo run --quiet -p batten -- generate schema >"$scratch"; then
-	echo "::error:: schema-check: the binary could not derive the schema" >&2
-	exit 1
-fi
+	if [ ! -f "$committed" ]; then
+		echo "$committed:0 schema-missing" >&2
+		echo "::error:: schema-check: no committed $surface schema; run 'mise run schema'" >&2
+		return 1
+	fi
 
-# Pointer-only (rule 4): the gate names the file that drifted, never the diff
-# body — the remedy is always the same one command, and a schema diff would put
-# the config surface itself in the log.
-if ! cmp -s "$committed" "$scratch"; then
-	echo "$committed:0 schema-drift" >&2
-	echo "::error:: schema-check: the committed schema differs from the config types; run 'mise run schema'" >&2
-	exit 1
-fi
-echo "schema-check: the committed schema matches the config types"
+	if ! cargo run --quiet -p batten -- generate schema --surface "$surface" >"$scratch"; then
+		echo "::error:: schema-check: the binary could not derive the $surface schema" >&2
+		return 1
+	fi
+
+	# Pointer-only (rule 4): the gate names the file that drifted, never the diff
+	# body — the remedy is always the same one command, and a schema diff would put
+	# the config surface itself in the log.
+	if ! cmp -s "$committed" "$scratch"; then
+		echo "$committed:0 schema-drift" >&2
+		echo "::error:: schema-check: the committed $surface schema differs from the config types; run 'mise run schema'" >&2
+		return 1
+	fi
+}
+
+# Both are checked before exiting, so one run names every drifted artifact
+# rather than only the first.
+failed=0
+check_surface authority schema/batten.schema.json || failed=1
+check_surface override schema/batten.local.schema.json || failed=1
+[ "$failed" -eq 0 ] || exit 1
+echo "schema-check: both committed schemas match the config types"

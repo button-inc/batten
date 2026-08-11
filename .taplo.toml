@@ -38,6 +38,20 @@ trailing_newline = true
 # at a release would validate the working tree against the last tag, so a config
 # key added in an unreleased commit would read as invalid.
 [[rule]]
-include = ["batten.toml", "batten.example.toml", "batten.local.toml"]
+include = ["batten.toml", "batten.example.toml"]
 [rule.schema]
 path = "schema/batten.schema.json"
+
+# `batten.local.toml` is a DIFFERENT surface, and binding it to the authority's
+# schema was a live defect (CLOUD-239): the validator green-lit `min_batten_version`,
+# which the loader refuses outright, and said nothing about `protected`, which the
+# loader silently dropped. Both halves misled — one loudly, one worse.
+#
+# The override layer is now its own Rust type (`config::OverrideConfig`), so this
+# schema is derived rather than hand-narrowed, and `mise run schema-check` diffs
+# it byte-for-byte like the authority's. A key this schema accepts is a key the
+# loader honours; every other key is a parse error naming itself.
+[[rule]]
+include = ["batten.local.toml"]
+[rule.schema]
+path = "schema/batten.local.schema.json"

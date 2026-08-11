@@ -1395,7 +1395,12 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         GenerateCommand::Completions { shell } => {
             clap_complete::generate(*shell, &mut surface::command(), "batten", out);
         }
-        GenerateCommand::Schema => writeln!(out, "{}", config::schema()?)?,
+        // Two surfaces, two derivations (CLOUD-239): one schema describing both
+        // is what let a validator vouch for override keys the loader drops.
+        GenerateCommand::Schema { surface } => match surface {
+            cli::ConfigSurface::Authority => writeln!(out, "{}", config::schema()?)?,
+            cli::ConfigSurface::Override => writeln!(out, "{}", config::override_schema()?)?,
+        },
     }
     Ok(ExitCode::Success)
 }

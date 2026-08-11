@@ -253,8 +253,12 @@ pub enum GenerateCommand {
         /// The shell whose completion script to emit.
         shell: clap_complete::Shell,
     },
-    /// Emit the JSON Schema for `batten.toml`.
-    Schema,
+    /// Emit the JSON Schema for a config surface.
+    Schema {
+        /// Which surface to describe: the committed authority, or the
+        /// raise-only override layer.
+        surface: ConfigSurface,
+    },
 }
 
 /// The formats `batten spec` can emit.
@@ -269,6 +273,25 @@ pub enum GenerateCommand {
 pub enum SpecFormat {
     /// Byte-stable JSON — the agent-facing contract (§6).
     Json,
+}
+
+/// The two config surfaces a schema can describe (CLOUD-239).
+///
+/// Two surfaces, two derivations. `batten.toml` is the committed authority;
+/// `batten.local.toml` is the raise-only override, which accepts a strict subset
+/// and refuses the rest. One schema describing both is what let a validator
+/// green-light keys the loader drops.
+///
+/// A flag on the existing emitter rather than a second sub-verb: CLOUD-244
+/// records that §2 and the landed surface already disagree about where schema
+/// emission lives, and adding a verb would deepen that before it is settled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[non_exhaustive]
+pub enum ConfigSurface {
+    /// The committed authority: `batten.toml`.
+    Authority,
+    /// The raise-only override layer: `batten.local.toml`.
+    Override,
 }
 
 /// Parse the process arguments into a [`Cli`].
@@ -382,7 +405,12 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
         ("completions", matches) => matches
             .get_one::<clap_complete::Shell>("shell")
             .map(|shell| GenerateCommand::Completions { shell: *shell }),
-        ("schema", _) => Some(GenerateCommand::Schema),
+        ("schema", matches) => Some(GenerateCommand::Schema {
+            surface: matches
+                .get_one::<ConfigSurface>("surface")
+                .copied()
+                .unwrap_or(ConfigSurface::Authority),
+        }),
         _ => None,
     }
 }

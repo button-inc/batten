@@ -405,6 +405,8 @@ trace\:"Add everything"))' \
 ;;
 (schema)
 _arguments "${_arguments_options[@]}" : \
+'--surface=[Which config surface to describe\: the committed authority, or the override layer]: :((authority\:"The committed authority\: \`batten.toml\`"
+override\:"The raise-only override layer\: \`batten.local.toml\`"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -1611,7 +1613,7 @@ _batten__subcmd__exec_commands() {
 _batten__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
-'schema:Emit the JSON Schema for batten.toml, derived from the config types' \
+'schema:Emit the JSON Schema for a config surface, derived from the config types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten generate commands' commands "$@"
@@ -1625,7 +1627,7 @@ _batten__subcmd__generate__subcmd__completions_commands() {
 _batten__subcmd__generate__subcmd__help_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
-'schema:Emit the JSON Schema for batten.toml, derived from the config types' \
+'schema:Emit the JSON Schema for a config surface, derived from the config types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten generate help commands' commands "$@"
@@ -1737,7 +1739,7 @@ _batten__subcmd__help__subcmd__exec_commands() {
 _batten__subcmd__help__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
-'schema:Emit the JSON Schema for batten.toml, derived from the config types' \
+'schema:Emit the JSON Schema for a config surface, derived from the config types' \
     )
     _describe -t commands 'batten help generate commands' commands "$@"
 }
