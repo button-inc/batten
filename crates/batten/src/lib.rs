@@ -353,7 +353,7 @@ fn run_defects_add(
     let (declared, path) = declared_ledger(overrides)?;
 
     let mut raw = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)?;
+    std::io::stdin().read_to_string(&mut raw)?;
     let incoming = defects::parse(&raw)?;
     if incoming.is_empty() {
         return Err(UsageError::raise(
@@ -396,7 +396,6 @@ fn run_defects_add(
         }
         // Append, never rewrite: the file is opened in append mode, so this verb
         // is structurally incapable of the edit the gate refuses.
-        use std::io::Write as _;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

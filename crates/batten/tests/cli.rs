@@ -2754,6 +2754,13 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
             "[budget.instructions]\n",
             "files = [\"AGENTS.md\"]\n",
             "max_tokens = 1000\n",
+            // `defects query` is the second verb with a minimum input, for the
+            // same reason: a ledger nobody declared is a usage error, never an
+            // empty answer. The file itself stays absent — that is the ledger's
+            // legitimate bootstrap state, and `-J` still emits `[]`.
+            "[defects]\n",
+            "path = \"defects.jsonl\"\n",
+            "classes = [\"example\"]\n",
         ))
         .file("AGENTS.md", "instructions\n")
         .git()

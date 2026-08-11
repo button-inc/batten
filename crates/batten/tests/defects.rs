@@ -15,6 +15,7 @@
 
 mod common;
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
@@ -56,7 +57,6 @@ fn run_with_stdin(dir: &Path, args: &[&str], input: &str) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn batten");
-    use std::io::Write as _;
     child
         .stdin
         .take()
