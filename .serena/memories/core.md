@@ -379,6 +379,10 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   A leading UTF-8 BOM is stripped on EVERY host: Cursor's Windows stdin emits one,
   it broke strict parsers, and (staff-confirmed) degraded guards to allow-all.
   Emitter: `encode_deny` returns `None` where the exit code is the whole channel.
+  Since CLOUD-122 `Decision::Deny` carries a `refusal::Refusal`, not a string, so
+  neither deny path can ship a bare "no"; `deny_text` is the projection every
+  channel carries and is the one place the bypass hatch is appended (a mediation
+  fact, not a refusal field, which is why `check`'s refusal carries none).
   Two hosts read a body, for DIFFERENT reasons — Claude discards stdout on exit 2
   so the channels are exclusive; Cursor assigns stderr no meaning at all, so
   CLOUD-122's "every deny points to the fix" is unsatisfiable there without JSON.
@@ -440,6 +444,29 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   crate↔config contract, hence the constant. Stated limits: no `cwd`, so an
   absolute or `..` path is compared as written, and expansion/substitution hide
   operands. Both under-deny, the sanctioned direction.
+- `refusal.rs` — the refusal contract (CLOUD-122): ONE `Refusal` value —
+  `{rule, reason, fix}` — constructed at every deny site and projected onto
+  whatever channel a host reads, so the shape is never re-typed per harness.
+  **Completeness is structural, not tested**: `Refusal::new` is the only
+  constructor and takes a `Fix` positionally with no default and no `Option`, so
+  a deny that declares no disposition does not compile; a deny with no safe
+  remedy spells `Fix::None`, which serializes as an explicit `"fix": null` rather
+  than a dropped key (a consumer cannot tell an omitted field from one the
+  producer forgot). `render()` is the one text projection — `Refused by <rule>:
+<reason> Fix: <fix>.` — with the terminator normalised once so a config
+  author's paragraph and a bare command splice into the same slot byte-stably
+  (§6). Three deny sites feed it: `hook.rs`'s `shape_refusal` (the row's REQUIRED
+  `reason` column is the fix, since `RuleKind::requires` mandates it and its doc
+  is "what to do instead" — CLOUD-215 owns splitting it into `reason` + `fix` and
+  the `--fix` affordance, deliberately not pre-empted), `hook.rs`'s
+  `protected_refusal` (the verb's `redirect`, `Fix::None` where none is declared
+  — the tier CLOUD-280 re-sources per path class), and `rules::run_static`'s
+  refusal of a spawning kind under `check` (`Fix::Run("batten enforce")`, exit 1).
+  A leaf module rather than a field of `hook.rs` — where the issue's Ready block
+  put it — because `hook` already imports `rules` and `rules` is a deny site, so
+  housing it there would close a module cycle. Bound (CLOUD-211): a mediated deny
+  comes only from a computable predicate, never a judge verdict, so the shape
+  models no advisory output — no confidence, no severity, no "maybe".
 - `markers.rs` — counted suppression markers (CLOUD-36): how many times policy
   was waved through, and where. Tokens are config, never crate constants (rule
   1); hits are pointer-only (`path:line` + marker id, rule 4) and `counts`

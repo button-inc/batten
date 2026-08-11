@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
 use crate::identity;
+use crate::refusal::{Fix, Refusal};
 use crate::severity::{self, ReportLevel, RuleSeverity};
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
@@ -732,11 +733,21 @@ pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
     // it cannot complete honestly.
     for rule in rules {
         if rule.kind.spawns_processes() {
-            return Err(UsageError::raise(format!(
-                "rule {}: this rule kind runs a configured command, which `batten check` \
-                 (a read-effect verb) will not do; run `{SPAWNING_VERB}` instead",
-                rule.id
-            )));
+            // The refusal contract (CLOUD-122) covers this deny site too, and it
+            // is the one that most needed it: a refusal naming only what it would
+            // not do leaves the caller to guess the verb that would. Exit 1 rather
+            // than 2 — this is a statement about the invocation, not a policy
+            // verdict — and the `batten:` prefix the boundary adds is correct for
+            // that code (§7).
+            return Err(UsageError::raise(
+                Refusal::new(
+                    &rule.id,
+                    "this rule kind runs a configured command, which `batten check` \
+                     (a read-effect verb) will not do",
+                    Fix::Run(SPAWNING_VERB.to_owned()),
+                )
+                .render(),
+            ));
         }
     }
     run(rules, root)

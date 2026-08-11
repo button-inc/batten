@@ -29,17 +29,13 @@ fn run_hook(harness: &str, payload: &str, bypass: bool) -> Output {
     )
 }
 
-/// A fixture repo whose `batten.toml` carries the `gh` lifecycle shape rows.
+/// The `gh` lifecycle shape rows a hook fixture adjudicates against.
 ///
-/// Since CLOUD-48 the policy is config, not Rust, so a hook test that wants a
-/// deny has to supply one. Deliberately *not* this repo's own `batten.toml`: a
-/// test that read the committed file would pass or fail with an edit to
-/// production policy, and the committed rows have their own gate
-/// (`the_committed_shape_rules_fire_on_every_banned_shape`).
-fn repo_with_gh_policy(name: &str) -> PathBuf {
-    repo_with_config(
-        name,
-        r#"version = 1
+/// A `const` rather than an inline literal so the refusal-contract census
+/// (`every_hook_policy_table_deny_names_its_fix`) can count the rows it owes a
+/// case for. A table whose coverage is asserted against a hand-written number is
+/// the same defect the decision matrix's own totality test exists to prevent.
+const GH_POLICY_CONFIG: &str = r#"version = 1
 [[rule]]
 id = "gh-pr-merge"
 kind = "shape"
@@ -72,8 +68,17 @@ scope = "mediated_call"
 severity = "deny"
 pattern = "gh run watch"
 reason = "use `mise run ci-wait`"
-"#,
-    )
+"#;
+
+/// A fixture repo whose `batten.toml` carries the `gh` lifecycle shape rows.
+///
+/// Since CLOUD-48 the policy is config, not Rust, so a hook test that wants a
+/// deny has to supply one. Deliberately *not* this repo's own `batten.toml`: a
+/// test that read the committed file would pass or fail with an edit to
+/// production policy, and the committed rows have their own gate
+/// (`the_committed_shape_rules_fire_on_every_banned_shape`).
+fn repo_with_gh_policy(name: &str) -> PathBuf {
+    repo_with_config(name, GH_POLICY_CONFIG)
 }
 
 /// [`run_hook`], with the directory the policy is resolved from.
@@ -514,6 +519,20 @@ fn check_refuses_a_command_rule_rather_than_skipping_it() {
     assert!(
         stderr.contains("batten enforce"),
         "the refusal must point at the verb that runs it, got: {stderr}"
+    );
+    // And in the one refusal shape (CLOUD-122), not a second one invented for
+    // this surface: the id that refused, the cause, and the fix clause. Exit 1
+    // rather than 2 is correct here — a rule `check` cannot honestly run is a
+    // statement about the invocation, not a policy verdict (§7) — so this
+    // refusal carries the `batten:` prefix that belongs to 1 and 3, and no
+    // bypass hatch, because a read-only run has nothing to bypass.
+    assert!(
+        stderr.contains("Refused by dyn:") && stderr.contains("Fix: batten enforce."),
+        "the refusal must adopt the one shape, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Bypass with"),
+        "a check refusal has no mediation hatch, got: {stderr}"
     );
 }
 
@@ -1145,6 +1164,135 @@ fn the_matrix_covers_every_supported_harness() {
     assert_eq!(
         covered, required,
         "every declared harness needs a row for every case the matrix distinguishes"
+    );
+}
+
+// --- the refusal contract (CLOUD-122) ---------------------------------------
+//
+// Every deny points to the fix. The shape is one type in the crate and the
+// constructor makes the fix disposition mandatory, so a deny with no disposition
+// cannot compile — but "did the fix clause survive the projection onto the
+// channel this host actually reads" is observable only by spawning the binary,
+// which is what these cases are for. A refusal is a contract only where a host
+// reads it.
+
+/// One hook policy-table row, and the sanctioned command its deny must name.
+struct FixCase {
+    /// A mediated command the row refuses.
+    command: &'static str,
+    /// The remedy that row declares, which the refusal must carry.
+    fix: &'static str,
+}
+
+const FIX_CASES: &[FixCase] = &[
+    FixCase {
+        command: "gh pr merge 42",
+        fix: "use `mise run land`",
+    },
+    FixCase {
+        command: "gh pr comment 7 --body /fast-forward",
+        fix: "use `mise run land`",
+    },
+    FixCase {
+        command: "gh pr checks --watch",
+        fix: "use `mise run ci-wait`",
+    },
+    FixCase {
+        command: "gh run watch 123",
+        fix: "use `mise run ci-wait`",
+    },
+];
+
+#[test]
+fn every_hook_policy_table_deny_names_its_fix() {
+    // One case per row of the policy table, and the count is *derived* from the
+    // fixture config rather than written down: a fifth row added with no case
+    // would otherwise ship its deny unexercised, which is the same defect class
+    // the decision matrix's totality test guards one level up.
+    let rows = GH_POLICY_CONFIG
+        .matches("scope = \"mediated_call\"")
+        .count();
+    assert_eq!(
+        FIX_CASES.len(),
+        rows,
+        "every mediated_call row in the fixture policy owes a refusal case"
+    );
+
+    let dir = repo_with_gh_policy("refusal-fix-pointer");
+    for case in FIX_CASES {
+        let output = run_hook_in(&dir, "exit-code", &claude_payload(case.command), false);
+        assert_eq!(output.status.code(), Some(2), "{}: deny", case.command);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("Fix: {}", case.fix)),
+            "{}: the refusal must name the sanctioned command, got: {stderr}",
+            case.command
+        );
+    }
+}
+
+#[test]
+fn the_in_band_hosts_carry_the_fix_in_their_decision_document() {
+    // The contract is not stderr-only. Claude discards stdout on exit 2 and
+    // Cursor assigns stderr no meaning at all, so on those two hosts the decision
+    // document is the ONLY place a fix pointer can travel — the case that would
+    // silently regress to a bare "deny" if the projection happened per channel
+    // instead of once.
+    let dir = repo_with_gh_policy("refusal-in-band");
+    for (harness, pointer) in [
+        (
+            "claude-code",
+            "/hookSpecificOutput/permissionDecisionReason",
+        ),
+        ("cursor", "/agent_message"),
+    ] {
+        let output = run_hook_in(&dir, harness, &claude_payload("gh pr merge 42"), false);
+        assert_eq!(output.status.code(), Some(0), "{harness}: in-band deny");
+        let body: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|err| panic!("{harness}: the deny document must parse: {err}"));
+        let reason = body
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_else(|| panic!("{harness}: no reason at {pointer}: {body}"));
+        assert!(
+            reason.contains("Fix: use `mise run land`"),
+            "{harness}: the document must carry the fix, got: {reason}"
+        );
+    }
+}
+
+/// A protected-path gate whose verb declares **no** sanctioned alternative.
+const NO_REMEDY_CONFIG: &str = r#"version = 1
+protected = ["guarded/**"]
+
+[[verb]]
+verb = "mv"
+effect = "destructive"
+"#;
+
+#[test]
+fn a_deny_with_no_safe_remedy_declares_it_rather_than_omitting_the_clause() {
+    // The half of the contract that is easy to get wrong: where nothing is
+    // declared, the refusal says so. An omitted fix clause is indistinguishable
+    // from a producer that forgot one, which is exactly the bare "no" the
+    // contract exists to prevent — so the absence is a value, not a silence.
+    // (CLOUD-280 is what gives this case a per-path-class answer to give.)
+    let dir = repo_with_config("refusal-no-remedy", NO_REMEDY_CONFIG);
+    let output = run_hook_in(
+        &dir,
+        "exit-code",
+        &claude_payload("mv notes.md guarded/thing"),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(2), "the protected gate denies");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Refused by protected-mutation:"),
+        "names the gate, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("Fix: none declared"),
+        "the absence is stated, not omitted, got: {stderr}"
     );
 }
 

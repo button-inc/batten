@@ -33,6 +33,7 @@ pub mod output;
 pub mod outputs;
 pub mod provision;
 pub mod receipt;
+pub mod refusal;
 pub mod resolve;
 pub mod rules;
 pub mod selfwrite;
@@ -62,6 +63,7 @@ pub use effect::Effect;
 pub use error::{Denial, Passthrough, UsageError};
 pub use exit::ExitCode;
 pub use output::{Mode, Presentation, Verbosity};
+pub use refusal::{Fix, Refusal};
 pub use resolve::{Overrides, Resolved, Source};
 pub use severity::{AdvisoryTier, Mapping, ReportLevel, RuleSeverity};
 
@@ -856,7 +858,12 @@ fn decide(
         // decision document is read by the host, which knows only its own
         // vocabulary. Normalizing inward and echoing outward are different
         // directions, which is why the envelope carries both.
-        hook::Decision::Deny(reason) => {
+        // One refusal value, projected onto whichever channel this host reads
+        // (CLOUD-122). The projection happens once, here, so the in-band document
+        // and the stderr line cannot disagree about what the refusal said or
+        // whether it named a fix.
+        hook::Decision::Deny(refusal) => {
+            let reason = hook::deny_text(&refusal);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;

@@ -27,6 +27,10 @@
 //!   repository refuses are readable without reading Rust (§9) and the engine
 //!   carries no consumer's task names (non-negotiable rule 1). This module owns
 //!   the matcher; the table lives in the consumer's config.
+//! * the refusal — **one value, projected per channel** (CLOUD-122). Both deny
+//!   paths here build a [`Refusal`] rather than a string, so neither can ship a
+//!   bare "no": the constructor requires a [`Fix`], and a deny with none spells
+//!   it. [`deny_text`] is the projection every host's channel carries.
 //!
 //! **Posture: fail open.** Unreadable stdin, unparseable JSON, an envelope with
 //! no command — all resolve to [`Decision::Allow`]. A guard must never be the
@@ -40,6 +44,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
 use crate::rules::{PathSet, Rule, RuleScope};
 use crate::severity::{self, ReportLevel, RuleSeverity};
@@ -435,15 +440,20 @@ pub struct Envelope {
     pub session: Option<String>,
 }
 
-/// The adjudication verdict. `Deny` carries the reason, which by the refusal
-/// contract (CLOUD-122) names the redirect — the exact command to run instead —
-/// and the bypass hatch.
+/// The adjudication verdict.
+///
+/// `Deny` carries a [`Refusal`], not a string: by the refusal contract
+/// (CLOUD-122) every deny names what refused, why, and what to run instead, and
+/// carrying the *value* is what makes that structural — a deny site cannot
+/// construct one without stating a [`Fix`]. The text a host reads is
+/// [`deny_text`], a projection of the same value, so the two channels this
+/// module encodes for cannot disagree about what the refusal said.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     /// Let the mediated call proceed.
     Allow,
-    /// Block the mediated call, with an actionable reason.
-    Deny(String),
+    /// Block the mediated call, with an actionable refusal.
+    Deny(Refusal),
 }
 
 /// Decode a harness payload into the normalized envelope.
@@ -708,9 +718,21 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, bypass: bool) -> Decisio
     // should be the one they see quoted back, and its reason is more specific
     // than the generic protected-path message.
     match shape_rules(policy, &envelope.command) {
-        Decision::Deny(reason) => Decision::Deny(reason),
+        Decision::Deny(refusal) => Decision::Deny(refusal),
         Decision::Allow => protected_mutation(policy, &envelope.command),
     }
+}
+
+/// The text a host reads for one refusal — the deny's whole projection.
+///
+/// [`Refusal::render`] is the shared shape; this adds the one thing that is a
+/// fact about *mediation* rather than about the refusal, and so has no place in
+/// the payload: the escape hatch. `check`'s refusal of a rule it cannot honestly
+/// run carries the same [`Refusal`] and no hatch, which is correct — there is
+/// nothing to bypass in a read-only run.
+#[must_use]
+pub fn deny_text(refusal: &Refusal) -> String {
+    format!("{} Bypass with {BYPASS_ENV}=1.", refusal.render())
 }
 
 /// The first shape row that matches the mediated command, in declaration order.
@@ -757,7 +779,7 @@ fn shape_rules(policy: &Policy, command: &str) -> Decision {
                     continue;
                 }
             }
-            return Decision::Deny(deny_reason(rule));
+            return Decision::Deny(shape_refusal(rule));
         }
     }
     Decision::Allow
@@ -809,7 +831,7 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
             if !policy.protected.contains(normalise(path)) {
                 continue;
             }
-            return Decision::Deny(protected_reason(program, path, verb));
+            return Decision::Deny(protected_refusal(program, path, verb));
         }
     }
     Decision::Allow
@@ -887,14 +909,18 @@ fn normalise(path: &str) -> &str {
 /// The path is a *pointer* and rule 4 permits it — it is what the caller already
 /// typed, and naming it is the difference between an actionable refusal and a
 /// riddle. The file's contents never appear.
-fn protected_reason(program: &str, path: &str, verb: &MutatingVerb) -> String {
-    let mutation = verb
-        .redirect
-        .as_deref()
-        .unwrap_or("change it through the surface that owns it, or restore it with git");
-    format!(
-        "Refused by {PROTECTED_MUTATION}: `{program}` targets the protected path \
-         {path} — {mutation}. Bypass with {BYPASS_ENV}=1."
+///
+/// The fix is the verb's own declared `redirect`, and [`Fix::None`] where the
+/// consumer declared none — stated rather than papered over with a catch-all
+/// that pretends to be specific. That absence is the seam CLOUD-280 fills: the
+/// useful redirect is a property of what is being protected, not of the verb
+/// reaching for it, so a per-path-class table lands *here* and this fallback
+/// becomes the third tier rather than the second.
+fn protected_refusal(program: &str, path: &str, verb: &MutatingVerb) -> Refusal {
+    Refusal::new(
+        PROTECTED_MUTATION,
+        format!("`{program}` targets the protected path {path}"),
+        Fix::declared(verb.redirect.as_deref()),
     )
 }
 
@@ -907,25 +933,30 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
     severity::promote(severity::row_for_rule(severity).report, fail_on_warning) == ReportLevel::Fail
 }
 
-/// Compose a deny reason: the rule that refused, why, and where the policy lives.
+/// Compose a shape row's refusal: the rule that refused, why, and what to run.
 ///
 /// Pointer-only (rule 4) — it names the rule and the fix, never the mediated
 /// command, which is the caller's own text and could carry anything.
-fn deny_reason(rule: &Rule) -> String {
-    let mut reason = format!(
-        "Refused by {}: {}",
-        rule.id,
-        rule.reason.as_deref().unwrap_or("policy")
-    );
+///
+/// **The row's `reason` column is the fix**, which looks like a liberty and is
+/// not: [`RuleKind::Shape`] *requires* that column
+/// ([`crate::rules::RuleKind::requires`]) and it is documented as "why this rule
+/// refuses, **and what to do instead** — the deny's whole text". So a shape deny
+/// carries a declared remedy by construction, with no new config column, and the
+/// crate supplies the cause clause it was never going to get from a consumer.
+/// Splitting the column into a separate `reason` and `fix` — and the `--fix`
+/// apply affordance that rides on it — is CLOUD-215's, deliberately not
+/// pre-empted here. [`Fix::declared`] is what keeps a row whose reason is somehow
+/// blank from rendering a fix clause that says nothing.
+///
+/// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
+fn shape_refusal(rule: &Rule) -> Refusal {
+    let mut cause = "the mediated call matches a refused command shape".to_owned();
     if let Some(url) = rule.policy_url.as_deref() {
-        reason.push_str(" See ");
-        reason.push_str(url);
-        reason.push('.');
+        cause.push_str(". See ");
+        cause.push_str(url);
     }
-    reason.push_str(" Bypass with ");
-    reason.push_str(BYPASS_ENV);
-    reason.push_str("=1.");
-    reason
+    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
 }
 
 /// One shell-separated span of a mediated command, in the two forms policy needs.
@@ -1306,6 +1337,29 @@ mod tests {
         matches!(adjudicate_command(command), Decision::Deny(_))
     }
 
+    /// The text a host would read for a deny — what every assertion below reads.
+    ///
+    /// Since CLOUD-122 a deny carries a [`Refusal`] rather than a string, and the
+    /// string is a projection. Asserting over the projection rather than over the
+    /// struct's fields is deliberate: the projection is what reaches the model,
+    /// so a change that kept every field and dropped the fix clause would still
+    /// fail here.
+    fn denial_text(decision: Decision) -> String {
+        match decision {
+            Decision::Deny(refusal) => deny_text(&refusal),
+            Decision::Allow => panic!("expected a deny"),
+        }
+    }
+
+    /// The refusal a deny carries, for the assertions that are about the value
+    /// rather than its rendering.
+    fn denial(decision: Decision) -> Refusal {
+        match decision {
+            Decision::Deny(refusal) => refusal,
+            Decision::Allow => panic!("expected a deny"),
+        }
+    }
+
     #[test]
     fn blocked_shapes_are_denied() {
         assert!(is_deny("gh pr merge 42"));
@@ -1541,12 +1595,25 @@ mod tests {
     fn the_deny_names_the_rule_and_its_reason() {
         // Acceptance (c). The id is what a reviewer greps for in `batten.toml`;
         // the reason is what the model acts on.
-        let Decision::Deny(reason) = adjudicate_command("gh pr merge 42") else {
-            panic!("a configured shape must deny");
-        };
+        let reason = denial_text(adjudicate_command("gh pr merge 42"));
         assert!(reason.contains("gh-pr-merge"), "names the rule: {reason}");
         assert!(reason.contains("sanctioned path"), "names why: {reason}");
         assert!(reason.contains(BYPASS_ENV), "names the hatch: {reason}");
+    }
+
+    #[test]
+    fn a_shape_denys_fix_is_the_rows_declared_remedy() {
+        // CLOUD-122's contract at the shape path. `reason` is a REQUIRED column
+        // on this kind and is documented as "what to do instead", so a shape deny
+        // carries a declared fix by construction — no new column, and no deny
+        // site left free to ship a bare "no".
+        let refusal = denial(adjudicate_command("gh pr merge 42"));
+        assert_eq!(refusal.rule(), "gh-pr-merge");
+        assert_eq!(
+            refusal.fix().declared_alternative(),
+            Some("use the sanctioned path for gh-pr-merge"),
+            "the row's declared remedy is the fix pointer"
+        );
     }
 
     #[test]
@@ -1555,9 +1622,7 @@ mod tests {
         // and can carry anything — a token, a path, a customer name — so a deny
         // names the policy that refused, never the thing refused.
         let secret = "gh pr merge --repo o/r-SENTINEL-9f3a";
-        let Decision::Deny(reason) = adjudicate_command(secret) else {
-            panic!("a configured shape must deny");
-        };
+        let reason = denial_text(adjudicate_command(secret));
         assert!(
             !reason.contains("SENTINEL"),
             "the deny echoed the mediated command: {reason}"
@@ -1627,9 +1692,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
         };
-        let Decision::Deny(reason) = adjudicate(&policy, &envelope("gh pr merge"), false) else {
-            panic!("must deny");
-        };
+        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false));
         assert!(reason.contains("first"), "got: {reason}");
     }
 
@@ -1658,9 +1721,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
         };
-        let Decision::Deny(reason) = adjudicate(&policy, &envelope("gh pr merge"), false) else {
-            panic!("must deny");
-        };
+        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false));
         assert!(reason.contains("example.invalid/policy"), "got: {reason}");
     }
 
@@ -1722,9 +1783,7 @@ mod tests {
 
     #[test]
     fn the_deny_names_the_sanctioned_mutation_declared_beside_the_verb() {
-        let Decision::Deny(reason) = guarded("rm .serena/memories/core.md") else {
-            panic!("must deny");
-        };
+        let reason = denial_text(guarded("rm .serena/memories/core.md"));
         assert!(
             reason.contains(PROTECTED_MUTATION),
             "names the gate: {reason}"
@@ -1737,15 +1796,63 @@ mod tests {
             reason.contains(".serena/memories/core.md"),
             "names where: {reason}"
         );
+        // And as a value, not only as prose: the fix slot IS the verb's declared
+        // redirect, which is what CLOUD-280 later re-sources per path class.
+        assert_eq!(
+            denial(guarded("rm .serena/memories/core.md"))
+                .fix()
+                .declared_alternative(),
+            Some("restore it with git")
+        );
     }
 
     #[test]
-    fn a_verb_with_no_redirect_names_a_fallback_rather_than_nothing() {
+    fn both_deny_paths_render_one_shape_and_neither_can_drop_the_fix_clause() {
+        // The contract's totality over this module's two deny paths — the
+        // explicit `[[rule]]` rows and the derived protected-path gate. There is
+        // no third, and a fourth could not be added without stating a `Fix`,
+        // because `Refusal::new` requires one. This asserts the projection they
+        // share: a `Refused by` clause, a `Fix:` clause, and the hatch.
+        for decision in [
+            adjudicate_command("gh pr merge 42"),
+            guarded("rm .serena/memories/core.md"),
+            guarded("mv batten.toml elsewhere"),
+        ] {
+            let text = denial_text(decision);
+            assert!(text.starts_with("Refused by "), "got: {text}");
+            assert!(
+                text.contains(" Fix: "),
+                "every deny points to a fix: {text}"
+            );
+            assert!(
+                text.ends_with(&format!("Bypass with {BYPASS_ENV}=1.")),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_verb_with_no_redirect_declares_the_absence_rather_than_omitting_it() {
         // `redirect` is optional on a verb, so the refusal must still say
         // something actionable — CLOUD-280 is the per-path-class version.
-        let Decision::Deny(reason) = guarded("mv batten.toml elsewhere") else {
-            panic!("must deny");
-        };
+        //
+        // Since CLOUD-122 the absence is a VALUE (`Fix::None`), not a missing
+        // field: the payload carries `"fix": null` and the rendering says so and
+        // then gives the crate's general recourse. A consumer cannot tell an
+        // omitted key from one the producer forgot, which is why the explicit
+        // none is the contract rather than a nicety.
+        let decision = guarded("mv batten.toml elsewhere");
+        let refusal = denial(decision.clone());
+        assert_eq!(refusal.fix(), &Fix::None, "nothing is declared for `mv`");
+        assert!(
+            refusal
+                .to_json()
+                .expect("the fixed shape serializes")
+                .contains("\"fix\":null"),
+            "the key is present and null"
+        );
+        let reason = denial_text(decision);
+        assert!(reason.contains("Fix: none declared"), "got: {reason}");
         assert!(reason.contains("surface that owns it"), "got: {reason}");
     }
 
@@ -1807,11 +1914,11 @@ mod tests {
         // generic protected-path message, so it should be the one quoted back.
         let mut policy = protected_policy(vec![verb("rm", Some("restore it with git"))]);
         policy.shapes = vec![shape("no-rm-memories", "rm .serena/memories/core.md", None)];
-        let Decision::Deny(reason) =
-            adjudicate(&policy, &envelope("rm .serena/memories/core.md"), false)
-        else {
-            panic!("must deny");
-        };
+        let reason = denial_text(adjudicate(
+            &policy,
+            &envelope("rm .serena/memories/core.md"),
+            false,
+        ));
         assert!(reason.contains("no-rm-memories"), "got: {reason}");
     }
 
