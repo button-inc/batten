@@ -24,7 +24,37 @@ setup() {
 @test "a committed schema matching the config types exits 0" {
 	run "$CHECK"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"matches the config types"* ]]
+	[[ "$output" == *"match the config types"* ]]
+}
+
+# The override surface is a SECOND artifact with its own derivation (CLOUD-239).
+# Checking only the authority's is how the published schema came to vouch for
+# `batten.local.toml` keys the loader refuses or silently drops, so the gate owes
+# the second one every property it owes the first.
+@test "a drifted override schema is reported with its own pointer" {
+	printf '{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"OverrideConfig","type":"object"}\n' \
+		>"$ROOT/schema/batten.local.schema.json"
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"schema/batten.local.schema.json:0 schema-drift"* ]]
+}
+
+@test "a missing override schema is reported rather than silently skipped" {
+	rm -f "$ROOT/schema/batten.local.schema.json"
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"schema-missing"* ]]
+}
+
+@test "both surfaces are judged in one run, not just the first to fail" {
+	# Fixing the authority's copy and re-running must not be how you discover the
+	# override's is stale too.
+	printf '{"title":"Drifted"}\n' >"$ROOT/schema/batten.schema.json"
+	printf '{"title":"AlsoDrifted"}\n' >"$ROOT/schema/batten.local.schema.json"
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"schema/batten.schema.json:0 schema-drift"* ]]
+	[[ "$output" == *"schema/batten.local.schema.json:0 schema-drift"* ]]
 }
 
 @test "a drifted schema is reported with a pointer" {

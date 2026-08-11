@@ -486,106 +486,43 @@ pub fn resolve_with_env(
         };
     }
 
-    let mut exec_patterns = repo.exec_patterns.clone();
-    let mut waivers = repo.waivers.clone();
-    let mut rules = repo.rules.clone();
-    let mut rules_source = if rules.is_empty() {
-        Source::Default
-    } else {
-        Source::RepoConfig
+    let mut tables = Tables {
+        rules_source: if repo.rules.is_empty() {
+            Source::Default
+        } else {
+            Source::RepoConfig
+        },
+        rules: repo.rules.clone(),
+        exec_patterns: repo.exec_patterns.clone(),
+        waivers: repo.waivers.clone(),
     };
 
     // The three policy-bearing path sets (CLOUD-37), seeded from the authority
     // and narrowable by the local layer below (CLOUD-239).
-    let mut scope = repo.scope.clone();
-    let mut protected = repo.protected.clone();
-    let mut unlanded = repo.unlanded.clone();
-    let authority_set = |present: bool| {
-        if present {
-            Source::RepoConfig
-        } else {
-            Source::Default
-        }
-    };
-    let mut scope_source = authority_set(!scope.is_empty());
-    let mut protected_source = authority_set(!protected.is_empty());
-    let mut unlanded_source = authority_set(!unlanded.is_empty());
+    let mut paths = Paths::from_authority(&repo);
 
     // Layer 2 — the git-ignored local file. Optional, and raise-only.
     let local_path = dir.join(LOCAL_CONFIG_FILE);
     if local_path.exists() {
-        // Ungated: `min_batten_version` is authority-only, and the refusal below
-        // names that specifically. Gating here would replace it with "this build
-        // is too old" — true of the value, useless about the mistake (CLOUD-33).
+        // Ungated: `min_batten_version` is authority-only, and the refusal in
+        // `apply_local` names that specifically. Gating here would replace it
+        // with "this build is too old" — true of the value, useless about the
+        // mistake (CLOUD-33).
+        //
         // `OverrideConfig` IS the override surface (CLOUD-239), so a key this
         // layer cannot honour never reaches here: `deny_unknown_fields` refused
         // it at parse. What used to be a silently dropped tightening — a local
-        // `protected` that looked applied and wasn't — is now either applied
-        // below or a load error, with no third outcome.
+        // `protected` that looked applied and wasn't — is now either applied or
+        // a load error, with no third outcome.
         let local = config::load_override(&local_path)?;
-        if local.min_batten_version.is_some() {
-            return Err(UsageError::raise(format!(
-                "{LOCAL_CONFIG_FILE}: `min_batten_version` is set by the committed authority ({}) \
-                 only; an override may not restate it",
-                config::CONFIG_FILE,
-            )));
-        }
-        if let Some(value) = local.strictness {
-            strictness = strictness.raise(
-                value,
-                Source::LocalFile,
-                LOCAL_CONFIG_FILE,
-                "strictness",
-                token,
-            )?;
-        }
-        if let Some(value) = local.fail_on_warning {
-            // The raise-only clause this issue's acceptance names directly: a
-            // committed `on` cannot be turned off by an uncommitted file.
-            fail_on_warning = fail_on_warning.raise(
-                value,
-                Source::LocalFile,
-                LOCAL_CONFIG_FILE,
-                "fail_on_warning",
-                bool_token,
-            )?;
-        }
-        for rule in local.rules {
-            if rules.iter().any(|committed| committed.id == rule.id) {
-                // Redefining a committed rule could weaken it (a narrower glob,
-                // a pattern that no longer matches) and Batten cannot tell
-                // tightening from weakening across arbitrary predicates — so the
-                // conservative reading refuses rather than guesses.
-                return Err(UsageError::raise(format!(
-                    "rule {}: {LOCAL_CONFIG_FILE} may not redefine a rule from {}; an override may \
-                     only add rules, never weaken a committed gate (§8)",
-                    rule.id,
-                    config::CONFIG_FILE,
-                )));
-            }
-            rules.push(rule);
-            rules_source = Source::LocalFile;
-        }
-        merge_local_patterns(&mut exec_patterns, local.exec_patterns)?;
-        merge_local_waivers(&mut waivers, local.waivers, &repo.rules)?;
-        // §8's three policy-bearing path sets, raise-only. Before CLOUD-239
-        // these were parsed and discarded: an author who wrote `protected` here
-        // got no complaint from the editor, none from `taplo lint`, none from
-        // `batten check` — and no effect. A tightening lost without a word is
-        // worse than one refused, because the operator's intent vanishes.
-        if merge_local_scope(&mut scope, local.scope)? {
-            scope_source = Source::LocalFile;
-        }
-        if !local.protected.is_empty() {
-            // Union: "add protected paths" is §8's own wording, and adding to an
-            // include-only set can only guard more paths.
-            protected.extend(local.protected);
-            protected_source = Source::LocalFile;
-        }
-        if !local.unlanded.is_empty() {
-            unlanded.extend(local.unlanded);
-            unlanded_source = Source::LocalFile;
-        }
+        apply_local(
+            local,
+            &repo,
+            &mut strictness,
+            &mut fail_on_warning,
+            &mut tables,
+            &mut paths,
+        )?;
     }
 
     // Layer 3 — the environment. An *empty* variable is "not set", not a bad
@@ -619,23 +556,106 @@ pub fn resolve_with_env(
             fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
 
-    Ok(assemble(
-        &repo,
-        strictness,
-        fail_on_warning,
-        rules,
-        rules_source,
-        exec_patterns,
-        waivers,
-        Paths {
-            scope,
-            protected,
-            unlanded,
-            scope_source,
-            protected_source,
-            unlanded_source,
-        },
-    ))
+    Ok(assemble(&repo, strictness, fail_on_warning, tables, paths))
+}
+
+/// The append-only tables, carried as one value through the layering.
+///
+/// One parameter rather than four, so [`apply_local`] and [`assemble`] both stay
+/// inside the argument budget. Each table is merged by its own rule — see the
+/// `merge_local_*` helpers and the rule loop — and none may have a committed row
+/// redefined by the local layer.
+struct Tables {
+    rules: Vec<Rule>,
+    rules_source: Source,
+    exec_patterns: Vec<crate::outputs::OutputPattern>,
+    waivers: Vec<crate::waiver::Waiver>,
+}
+
+/// Apply the git-ignored local file over the authority's values, raise-only.
+///
+/// Extracted from [`resolve_with_env`] because that function is the §8
+/// precedence chain and has to read as one: five layers in sequence, each a few
+/// lines. Inlining a per-key merge for every layered table is what pushed it
+/// past the line limit, and the chain is the thing a reader comes here for.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the local file restates
+/// `min_batten_version`, lowers a clamped value, redefines a committed row, or
+/// writes a `scope` entry that would widen rather than narrow.
+fn apply_local(
+    local: config::OverrideConfig,
+    repo: &config::Config,
+    strictness: &mut Layered<Strictness>,
+    fail_on_warning: &mut Layered<bool>,
+    tables: &mut Tables,
+    paths: &mut Paths,
+) -> Result<()> {
+    if local.min_batten_version.is_some() {
+        return Err(UsageError::raise(format!(
+            "{LOCAL_CONFIG_FILE}: `min_batten_version` is set by the committed authority ({}) \
+             only; an override may not restate it",
+            config::CONFIG_FILE,
+        )));
+    }
+    if let Some(value) = local.strictness {
+        *strictness = strictness.raise(
+            value,
+            Source::LocalFile,
+            LOCAL_CONFIG_FILE,
+            "strictness",
+            token,
+        )?;
+    }
+    if let Some(value) = local.fail_on_warning {
+        // The raise-only clause §8 names directly: a committed `on` cannot be
+        // turned off by an uncommitted file.
+        *fail_on_warning = fail_on_warning.raise(
+            value,
+            Source::LocalFile,
+            LOCAL_CONFIG_FILE,
+            "fail_on_warning",
+            bool_token,
+        )?;
+    }
+    for rule in local.rules {
+        if tables.rules.iter().any(|committed| committed.id == rule.id) {
+            // Redefining a committed rule could weaken it (a narrower glob, a
+            // pattern that no longer matches) and Batten cannot tell tightening
+            // from weakening across arbitrary predicates — so the conservative
+            // reading refuses rather than guesses.
+            return Err(UsageError::raise(format!(
+                "rule {}: {LOCAL_CONFIG_FILE} may not redefine a rule from {}; an override may \
+                 only add rules, never weaken a committed gate (§8)",
+                rule.id,
+                config::CONFIG_FILE,
+            )));
+        }
+        tables.rules.push(rule);
+        tables.rules_source = Source::LocalFile;
+    }
+    merge_local_patterns(&mut tables.exec_patterns, local.exec_patterns)?;
+    merge_local_waivers(&mut tables.waivers, local.waivers, &repo.rules)?;
+    // §8's three policy-bearing path sets, raise-only. Before CLOUD-239 these
+    // were parsed and discarded: an author who wrote `protected` here got no
+    // complaint from the editor, none from `taplo lint`, none from `batten
+    // check` — and no effect. A tightening lost without a word is worse than one
+    // refused, because the operator's intent vanishes.
+    if merge_local_scope(&mut paths.scope, local.scope)? {
+        paths.scope_source = Source::LocalFile;
+    }
+    if !local.protected.is_empty() {
+        // Union: "add protected paths" is §8's own wording, and adding to an
+        // include-only set can only guard more paths.
+        paths.protected.extend(local.protected);
+        paths.protected_source = Source::LocalFile;
+    }
+    if !local.unlanded.is_empty() {
+        paths.unlanded.extend(local.unlanded);
+        paths.unlanded_source = Source::LocalFile;
+    }
+    Ok(())
 }
 
 /// The three policy-bearing path sets after layering, with their attribution.
@@ -650,6 +670,31 @@ struct Paths {
     scope_source: Source,
     protected_source: Source,
     unlanded_source: Source,
+}
+
+impl Paths {
+    /// Seed all three from the committed authority, before any layering.
+    ///
+    /// Attribution follows the same present-means-`repo-config` rule every
+    /// authority key gets, so a set the local layer never touches reads exactly
+    /// as it did before these keys became layerable.
+    fn from_authority(repo: &config::Config) -> Self {
+        let authority_set = |present: bool| {
+            if present {
+                Source::RepoConfig
+            } else {
+                Source::Default
+            }
+        };
+        Paths {
+            scope_source: authority_set(!repo.scope.is_empty()),
+            protected_source: authority_set(!repo.protected.is_empty()),
+            unlanded_source: authority_set(!repo.unlanded.is_empty()),
+            scope: repo.scope.clone(),
+            protected: repo.protected.clone(),
+            unlanded: repo.unlanded.clone(),
+        }
+    }
 }
 
 /// Narrow the committed scope with a local file's excludes.
@@ -769,26 +814,32 @@ fn assemble(
     repo: &config::Config,
     strictness: Layered<Strictness>,
     fail_on_warning: Layered<bool>,
-    rules: Vec<Rule>,
-    rules_source: Source,
-    exec_patterns: Vec<crate::outputs::OutputPattern>,
-    waivers: Vec<crate::waiver::Waiver>,
+    tables: Tables,
     paths: Paths,
 ) -> Resolved {
+    // Sources read off before the lists move, so every layered value is moved
+    // into the document rather than cloned beside it.
+    let sources = attribution(
+        repo,
+        strictness.source,
+        fail_on_warning.source,
+        tables.rules_source,
+        &paths,
+    );
     Resolved {
         version: repo.version,
         min_batten_version: repo.min_batten_version.clone(),
         strictness: strictness.value,
         fail_on_warning: fail_on_warning.value,
-        rules,
-        scope: paths.scope.clone(),
-        protected: paths.protected.clone(),
-        unlanded: paths.unlanded.clone(),
+        rules: tables.rules,
+        scope: paths.scope,
+        protected: paths.protected,
+        unlanded: paths.unlanded,
         epoch: repo.epoch.clone(),
         verbs: repo.verbs.clone(),
         markers: repo.markers.clone(),
-        exec_patterns,
-        waivers,
+        exec_patterns: tables.exec_patterns,
+        waivers: tables.waivers,
         budget: repo.budget.clone(),
         must_land_on: repo.must_land_on.clone(),
         transcript: repo.transcript.clone(),
@@ -796,13 +847,7 @@ fn assemble(
         ci: repo.ci.clone(),
         defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),
-        sources: attribution(
-            repo,
-            strictness.source,
-            fail_on_warning.source,
-            rules_source,
-            &paths,
-        ),
+        sources,
     }
 }
 
