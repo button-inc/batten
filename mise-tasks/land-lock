@@ -115,6 +115,11 @@ git rev-parse --git-dir >/dev/null 2>&1 || {
 
 state_dir="$(git rev-parse --git-dir)/batten-land-lock"
 holder_file="$state_dir/holder"
+# Per-process observation ref (see `observe`). Namespaced under refs/batten-lock
+# so it is local bookkeeping and never confusable with the lease itself, and
+# swept on exit so a clone does not accumulate one per land.
+obs_ref="refs/batten-lock-obs/$$"
+trap 'git update-ref -d "$obs_ref" 2>/dev/null || true' EXIT
 
 now() { date -u +%s; }
 
@@ -145,8 +150,14 @@ holder_id() {
 mint() {
 	local tree
 	tree=$(git hash-object -t tree /dev/null)
+	# A lifetime of 0 writes a literal `expires: 0` rather than "now", because a
+	# release is a DECLARATION and an expiry is an INFERENCE, and only the second
+	# needs a clock. Epoch 0 is unmistakable under any clock and on any machine,
+	# so a released lease hands over immediately while a merely expired one still
+	# has to be corroborated (see `sha_held_for`). Conflating the two made a
+	# release wait a full beat before anyone could take it.
 	printf 'land-lock\nholder: %s\nexpires: %s\nnonce: %s\n' \
-		"$(holder_id)" "$(($(now) + ${1:-$ttl}))" \
+		"$(holder_id)" "$([ "${1:-}" = 0 ] && echo 0 || echo "$(($(now) + ${1:-$ttl}))")" \
 		"$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')" |
 		git commit-tree "$tree"
 }
@@ -168,12 +179,37 @@ observe() {
 		return 2
 	}
 	[ -n "$ls" ] || return 0
-	observed_sha=${ls%%$'\t'*}
-	git fetch -q "$remote" "$ref" 2>/dev/null || {
+	# NOT FETCH_HEAD, and this is a correctness fix rather than a tidy-up.
+	# FETCH_HEAD is ONE FILE PER CLONE, and this task runs concurrently inside a
+	# single clone by design: `land` backgrounds the heartbeat's observe loop and
+	# then runs `held` and `release` in the foreground of the same checkout. Two
+	# fetches racing means a reader can be handed the other one's result.
+	# Measured on a local remote: 16 of 40 concurrent reads returned the WRONG
+	# lease body.
+	#
+	# What that costs is not a bad message. The sha comes from `ls-remote` and
+	# the body came from FETCH_HEAD, so a collision pairs THIS lease's sha with
+	# ANOTHER lease's holder — and `release` CASes against that sha while judging
+	# ownership from that holder. It could tombstone a live lease belonging to
+	# someone else, which is precisely the theft the CAS exists to prevent.
+	#
+	# A per-process ref has no such sharing. It is force-updated because a stale
+	# one from an earlier run of the same pid must never be read as current.
+	git fetch -q --force "$remote" "+$ref:$obs_ref" 2>/dev/null || {
 		echo "::error:: land-lock: lease present but unreadable" >&2
 		return 2
 	}
-	body=$(git show -s --format=%B FETCH_HEAD)
+	# Both readings come from the fetched ref, so the sha and the body are
+	# guaranteed to describe the same lease. Taking the sha from `ls-remote` and
+	# the body from the fetch is what allowed them to disagree at all.
+	observed_sha=$(git rev-parse "$obs_ref" 2>/dev/null) || {
+		echo "::error:: land-lock: lease fetched but unreadable" >&2
+		return 2
+	}
+	body=$(git cat-file commit "$observed_sha" 2>/dev/null) || {
+		echo "::error:: land-lock: lease object missing after fetch" >&2
+		return 2
+	}
 	observed_holder=$(printf '%s\n' "$body" | sed -n 's/^holder: //p')
 	observed_expires=$(printf '%s\n' "$body" | sed -n 's/^expires: //p')
 	# A lease we cannot parse is one we do not understand, and treating it as
@@ -204,6 +240,38 @@ swap() { git push --quiet --force-with-lease="$ref:$1" "$remote" "$(mint "${2:-}
 # for one more second, so a release did not free the lease until the clock
 # ticked — measured, as a release the releaser itself still saw as held.
 expired() { [ "$(now)" -ge "${observed_expires:-0}" ]; }
+# Explicitly handed over, as opposed to merely lapsed. No clock involved.
+released() { [ "${observed_expires:-1}" = 0 ]; }
+
+# How long THIS sha has been the lease, measured only on our own clock.
+#
+# Expiry alone is not safe to steal on, because `expires` is an absolute instant
+# minted on the HOLDER's clock and compared against ours. Skew in one direction
+# makes a live lease look expired, and stealing on that reading produces exactly
+# the two holders this task exists to prevent. (Skew the other way makes a lease
+# look far-future, which `land-lock-check` reports as WEDGED — so a WEDGED
+# verdict on a healthy fleet is a clock complaint, not a vandalism report.)
+#
+# A heartbeat mints a new nonce every beat, so a live holder CHANGES THE SHA
+# every beat. "This exact sha has been sitting there for longer than a beat" is
+# therefore evidence of the same thing expiry claims, derived entirely from
+# durations on one clock, and no skew can forge it. Cost is one extra beat before
+# a dead lease can be taken, which `acquire` spends waiting anyway.
+sha_held_for() {
+	local seen prev_sha prev_at
+	seen="$state_dir/seen"
+	mkdir -p "$state_dir"
+	read -r prev_sha prev_at <"$seen" 2>/dev/null || {
+		prev_sha=
+		prev_at=
+	}
+	if [ "$prev_sha" != "$observed_sha" ] || [ -z "$prev_at" ]; then
+		printf '%s %s\n' "$observed_sha" "$(now)" >"$seen"
+		echo 0
+		return 0
+	fi
+	echo $(($(now) - prev_at))
+}
 mine() { [ -n "$observed_holder" ] && [ "$observed_holder" = "$(holder_id)" ]; }
 age() { echo $((ttl - (observed_expires - $(now)))); }
 
@@ -226,7 +294,19 @@ acquire)
 		# holder stopped beating. Two sessions racing the same free state CAS
 		# from the same expected value, so exactly one wins and the other is told
 		# `stale info` — which is why there is no separate create path to race.
-		if [ -z "$observed_sha" ] || expired; then
+		# An absent ref is unambiguous and needs no corroboration. An EXPIRED one
+		# does: see `sha_held_for`. Requiring the sha to have sat unchanged for a
+		# beat costs a dead lease one extra beat and makes the steal immune to a
+		# holder whose clock disagrees with ours.
+		steal=no
+		if [ -z "$observed_sha" ] || released; then
+			# Absent, or explicitly handed over. Both are statements rather than
+			# deductions, so neither needs corroboration or a clock.
+			steal=yes
+		elif expired && [ "$(sha_held_for)" -ge "$beat" ]; then
+			steal=yes
+		fi
+		if [ "$steal" = yes ]; then
 			if swap "$observed_sha"; then
 				if [ -n "$observed_holder" ] && [ "$observed_holder" != "$(holder_id)" ]; then
 					# Seconds since the previous holder's expiry, computed here
@@ -264,15 +344,35 @@ hold)
 	# it from the same trap that releases. It exits non-zero the moment the lease
 	# stops being ours, which is the signal that something took it — the `held`
 	# check before the comment is the backstop that acts on that.
+	#
+	# A FAILED PUSH IS NOT A LOST LEASE, and treating it as one was a real
+	# fragility: `swap` returns non-zero both when the lease genuinely changed
+	# hands AND when the push simply did not go through — a dropped connection, a
+	# proxy hiccup, a rate limit. Exiting on the second hands the lease away over
+	# a blip, and the whole reason the TTL is three beats wide is to survive
+	# exactly that. So a push failure retries on the next beat, and only a lease
+	# that is demonstrably no longer OURS ends the loop. Two consecutive failures
+	# are tolerated; a third means the remaining TTL is about to run out anyway,
+	# and continuing to believe we hold it past that point is the one thing this
+	# must never do.
+	misses=0
 	while :; do
 		sleep "$beat"
-		observe || continue # a blip is not a lost lease; the TTL is 3 beats wide
-		{ [ -n "$observed_sha" ] && mine; } || {
-			echo "land-lock: lease lost to ${observed_holder:-nobody}"
+		if ! observe; then
+			misses=$((misses + 1))
+		elif [ -n "$observed_sha" ] && ! mine; then
+			# Unambiguous: somebody else's id is on the lease. No retry can undo
+			# that, and pretending otherwise is how two sessions both comment.
+			echo "land-lock: lease lost to $observed_holder"
 			exit 1
-		}
-		swap "$observed_sha" || {
-			echo "land-lock: lease changed hands while renewing"
+		elif swap "$observed_sha"; then
+			misses=0
+			continue
+		else
+			misses=$((misses + 1))
+		fi
+		[ "$misses" -lt 3 ] || {
+			echo "land-lock: could not renew for $misses beats; letting the lease lapse rather than assuming it"
 			exit 1
 		}
 	done
@@ -283,8 +383,24 @@ held)
 	# holder that was paused past its TTL and stolen from MUST discover that
 	# before it comments `/fast-forward`, not after — acting on a lease you no
 	# longer hold is how a lock protocol reintroduces the collision it removed.
+	#
+	# It demands MARGIN, not merely a lease that has not expired yet. "Not
+	# expired" is a fact about the instant of the check, and the caller then goes
+	# on to do something — post a comment, wait for a bot — so a lease with one
+	# second left passes this and is gone before the action it authorised takes
+	# effect. That is the same time-of-check/time-of-use gap the fence exists to
+	# close, just moved a few lines later.
+	#
+	# One beat is the right margin because it is the interval at which the holder
+	# proves it is alive: with at least a beat left, either the heartbeat renews
+	# and the lease keeps rolling, or it does not and this check would have failed
+	# anyway. Less than a beat means the next renewal is already overdue.
 	observe || exit 2
-	{ [ -n "$observed_sha" ] && mine && ! expired; } || exit 1
+	{ [ -n "$observed_sha" ] && mine; } || exit 1
+	[ "$((observed_expires - $(now)))" -ge "$beat" ] || {
+		echo "land-lock: lease has under ${beat}s left — too little to act on"
+		exit 1
+	}
 	exit 0
 	;;
 

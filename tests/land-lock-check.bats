@@ -31,10 +31,20 @@ lease() { printf 'land-lock\nholder: %s\nexpires: %s\nnonce: deadbeef\n' "$1" "$
 	[[ "$output" == *"60s left"* ]]
 }
 
-@test "a tombstoned lease is FREE, not a failure — that is what release leaves" {
+@test "a RELEASED lease is free, and is reported as a handover rather than an expiry" {
+	# The `expires: 0` sentinel. Reading it as an ordinary timestamp would print
+	# an age of 56 years, which is how a healthy state comes to look alarming.
+	LAND_LOCK_BODY="$(lease vm-1 0)" run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"released by vm-1"* ]]
+	[[ "$output" != *"ago"* ]]
+}
+
+@test "a LAPSED lease is free too — a holder that stopped without releasing" {
 	LAND_LOCK_BODY="$(lease vm-1 $((NOW - 30)))" run "$CHECK"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"free"* ]]
+	[[ "$output" == *"lapsed"* ]]
 	[[ "$output" == *"30s ago"* ]]
 }
 

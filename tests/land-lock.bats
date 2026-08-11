@@ -124,13 +124,16 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 	[ "$(lease_sha)" = "$before" ]
 }
 
-@test "an expired lease is stolen rather than waited out" {
+@test "an expired lease is taken once its death is corroborated, not waited out forever" {
+	# Expiry alone no longer authorises a steal — see the clock-skew case below.
+	# A short beat makes the corroboration accrue in a second rather than thirty,
+	# which is the same contract at test speed.
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
-	run lock "$RIVAL" acquire
+	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=6 run lock "$RIVAL" acquire
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"took the lease"* ]]
-	run lock "$RIVAL" held
+	LAND_LOCK_HEARTBEAT=1 run lock "$RIVAL" held
 	[ "$status" -eq 0 ]
 }
 
@@ -145,7 +148,7 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 @test "THE FENCE: a holder whose lease was stolen reports not-held" {
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
-	lock "$RIVAL" acquire
+	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=6 lock "$RIVAL" acquire
 	# This is the check `land` runs immediately before commenting /fast-forward.
 	# Without it the original holder would act on a lease it no longer has, which
 	# is the collision the lock exists to remove.
@@ -205,4 +208,80 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 	[ "$output" -ge 1 ]
 	run bash -c "sed 's/#.*//' '$LOCK' | grep -n -- '--force-with-lease[^=]'"
 	[ "$status" -ne 0 ]
+}
+
+@test "SHA AND BODY COME FROM ONE SOURCE — never ls-remote paired with FETCH_HEAD" {
+	# `land` backgrounds the heartbeat's observe loop and then runs `held` and
+	# `release` in the FOREGROUND of the same clone, so two observes overlap by
+	# design. FETCH_HEAD is one file per clone, so the loser of that race reads the
+	# winner's fetch.
+	#
+	# Every process here fetches the SAME lease ref, so a crossed read yields a
+	# different GENERATION of the lease rather than a foreign one — harmless while
+	# the holder is unchanged, and a theft exactly when a handover is in flight:
+	# the sha names the new holder's lease while the body still names the old one,
+	# so `mine` says yes and `release` CASes a live lease belonging to someone else
+	# out from under them.
+	#
+	# That interleaving cannot be forced deterministically from a test, so the
+	# assertion is structural: both readings must come from the per-process ref, and
+	# FETCH_HEAD must not appear in the code at all. Comments are stripped first so
+	# this file's own rationale cannot trip the rule it explains.
+	run bash -c "sed 's/#.*//' '$LOCK' | grep -n FETCH_HEAD"
+	[ "$status" -ne 0 ]
+	run bash -c "sed 's/#.*//' '$LOCK' | grep -c 'git cat-file commit \"\$observed_sha\"'"
+	[ "$output" -ge 1 ]
+}
+
+@test "observe leaves no per-process ref behind" {
+	lock "$MINE" acquire
+	lock "$MINE" status >/dev/null
+	# A ref per land would accumulate forever in a long-lived clone.
+	run git -C "$MINE" for-each-ref --format='%(refname)' refs/batten-lock-obs
+	[ -z "$output" ]
+}
+
+@test "the fence demands MARGIN, not merely an unexpired lease" {
+	# "Not expired" is true at the instant of the check; the caller then goes on
+	# to comment and wait. A lease with a second left passes a bare check and is
+	# gone before the action it authorised lands — the same TOCTOU gap the fence
+	# exists to close, moved a few lines later.
+	LAND_LOCK_TTL=40 LAND_LOCK_HEARTBEAT=30 lock "$MINE" acquire
+	# 40s of lease against a 30s beat: still comfortably in hand.
+	LAND_LOCK_HEARTBEAT=30 run lock "$MINE" held
+	[ "$status" -eq 0 ]
+	# 20s of lease against the same beat: alive, but too thin to act on.
+	LAND_LOCK_TTL=20 lock "$MINE" renew
+	LAND_LOCK_HEARTBEAT=30 run lock "$MINE" held
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"too little to act on"* ]]
+}
+
+@test "an expired lease is not stolen on the first sighting — clocks are not shared" {
+	# `expires` is minted on the HOLDER's clock and read against ours, so skew in
+	# one direction makes a live lease look expired. Stealing on that reading is
+	# the two-holders bug. Corroboration is that the sha has sat unchanged for a
+	# beat, which is a duration on one clock and cannot be forged by skew.
+	LAND_LOCK_TTL=1 lock "$MINE" acquire
+	sleep 2
+	# First sighting: expired by the body, but no persistence evidence yet.
+	LAND_LOCK_HEARTBEAT=30 LAND_LOCK_WAIT=1 run lock "$RIVAL" acquire
+	[ "$status" -eq 1 ]
+	run lock "$MINE" held
+	[ "$status" -eq 0 ] || true # margin may refuse it; ownership is the point
+	run lock "$RIVAL" status
+	[[ "$output" != *"held by $(cat "$RIVAL/.git/batten-land-lock/holder" 2>/dev/null)"* ]]
+}
+
+@test "a dead lease IS taken once the sha has demonstrably stopped moving" {
+	# The other half: corroboration must not become a deadlock. With a short beat
+	# the evidence accrues quickly and the lease is claimable.
+	LAND_LOCK_TTL=1 lock "$MINE" acquire
+	sleep 2
+	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=1 lock "$RIVAL" acquire >/dev/null 2>&1 || true
+	sleep 2
+	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=6 run lock "$RIVAL" acquire
+	[ "$status" -eq 0 ]
+	run lock "$RIVAL" held
+	[ "$status" -eq 0 ]
 }

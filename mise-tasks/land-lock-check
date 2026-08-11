@@ -15,7 +15,11 @@
 # THE STATES, and which are healthy:
 #
 #   absent            nobody has ever taken it. Healthy.
-#   tombstoned        expiry in the past. That is what a release leaves. Healthy.
+#   released          the `expires: 0` sentinel a holder writes on the way out.
+#                     Healthy, and clock-free by construction.
+#   lapsed            expiry in the past. A holder that stopped without
+#                     releasing — its VM reclaimed, most likely. Healthy: the
+#                     next claimant takes it once the death is corroborated.
 #   live              expiry in the future, body parses, held for less than one
 #                     TTL. Healthy — somebody is landing right now.
 #   WEDGED            expiry in the future but further out than one TTL allows.
@@ -94,10 +98,18 @@ if [ -z "$holder" ]; then
 	exit 1
 fi
 
+# The release sentinel. `land-lock` writes a literal `expires: 0` when a holder
+# hands the lease back, because a release is a declaration and needs no clock —
+# so it is reported as one rather than as an expiry 56 years in the past.
+if [ "$expires" = 0 ]; then
+	echo "land-lock: free — released by $holder"
+	exit 0
+fi
+
 left=$((expires - now))
 
 if [ "$left" -le 0 ]; then
-	echo "land-lock: free — tombstoned by $holder ${left#-}s ago"
+	echo "land-lock: free — lapsed by $holder ${left#-}s ago"
 	exit 0
 fi
 
