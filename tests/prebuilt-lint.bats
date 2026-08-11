@@ -32,6 +32,13 @@ setup() {
 	# entry (CLOUD-298). The tree walk counts regular files only, so a symlink
 	# here would be invisible to it and the entry would read as dead.
 	cp "$REPO/AGENTS.md" "$ROOT/AGENTS.md"
+	# Same obligation, second surface: the copied config also declares an
+	# `[[embedded]]` entry over the project file's always-given prompt
+	# (CLOUD-298), and a declared source that is not there is the same exit 1.
+	# Copied with its real (empty) value, so it contributes nothing and prints
+	# no row — these fixtures judge the rules they are about, not a budget.
+	mkdir -p "$ROOT/.serena"
+	cp "$REPO/.serena/project.yml" "$ROOT/.serena/project.yml"
 	export CARGO_TARGET_DIR="$REPO/target"
 	# A git repository with `origin/main` resolving, because the copied
 	# batten.toml carries `ratchet` rows (CLOUD-55) whose `base` is that ref —
