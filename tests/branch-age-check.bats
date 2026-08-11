@@ -62,8 +62,31 @@ ref() { printf '%s\t%s\n' "$1" "$2" >>"$REFS"; }
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"reused	busy	3"* ]]
-	[[ "$output" == *"1 name(s) heading more than one merged PR"* ]]
+	[[ "$output" == *"1 live branch(es) reused across merged PRs"* ]]
 	[[ "$output" != *"other"* ]]
+}
+
+@test "a reused name whose branch is already gone is not counted" {
+	# THE PROPERTY THAT KEEPS THIS A GATE. Merged PRs are immutable, so a name
+	# that headed three of them and was then deleted stays in the PR list
+	# forever. Counting it would make the gate red on its first scheduled run
+	# and red on every run after it, with no action anyone could take to clear
+	# it — and a gate that cannot reach green stops being read, then gets
+	# switched off. Only a name that still exists is a name someone can delete.
+	printf 'ghost\nghost\nghost\n' >"$PRS"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"ghost"* ]]
+}
+
+@test "a clean remote reaches green, which is the state the gate must be able to reach" {
+	# Asserted directly rather than inferred from the cases above: the whole
+	# point of the intersection is that deleting the offending branches is
+	# sufficient. If nothing is stale and nothing live is reused, green.
+	ref fresh 2026-08-10T09:00:00Z
+	printf 'gone\ngone\nfresh\n' >"$PRS"
+	run "$GATE"
+	[ "$status" -eq 0 ]
 }
 
 @test "the trunk is never counted, however old or however many PRs it heads" {

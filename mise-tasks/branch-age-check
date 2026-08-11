@@ -20,7 +20,10 @@
 #   stale    a branch whose tip is older than BRANCH_MAX_AGE_DAYS (2, which is
 #            the source's "a couple of days"). The ordinary leftover.
 #   reused   a branch name that is the head of more than one MERGED pull
-#            request. This is the one the per-PR lifetime metric cannot see:
+#            request AND still exists on the remote. The second conjunct is
+#            what keeps this a gate rather than a permanent alarm: merged PRs
+#            are immutable, so an unintersected count could never be cleared by
+#            any action. This is the one the per-PR lifetime metric cannot see:
 #            `claude/phase-3-sequential-landing-h26kx0` headed eight consecutive
 #            PRs, each landing inside an hour, while the branch itself lived for
 #            hours across unrelated stories. Reuse is also the stale-tracking-ref
@@ -127,8 +130,24 @@ findings=$(printf '%s\n' "$refs" | awk -F'\t' -v today="$today" -v trunk="$trunk
 	}
 ')
 
+# Reuse counts only while the name STILL EXISTS on the remote, and that
+# intersection is the whole difference between a gate and a permanent alarm.
+# Merged PRs are immutable: a name that headed three of them and was then
+# deleted stays in the PR list forever, so an unintersected count can never be
+# cleared by any action anyone can take. It would have made this gate red on its
+# first scheduled run and red on every run after it — and a gate that cannot
+# reach green stops being read, then gets switched off (the desensitising shape
+# CLOUD-245 names). Intersected, the count means "a live branch you can delete",
+# which is a thing a person can finish.
+live=$(printf '%s\n' "$refs" | cut -f1 | sed '/^$/d' | sort -u)
 reused=$(printf '%s\n' "$prs" | sed '/^$/d' | sort | uniq -c |
-	awk -v trunk="$trunk" '$1 > 1 && $2 != trunk { print "reused\t" $2 "\t" $1 }')
+	awk -v trunk="$trunk" '$1 > 1 && $2 != trunk { print $2 "\t" $1 }' |
+	while IFS=$'\t' read -r name count; do
+		# A here-string, not a pipe: `grep -q` exits at the first match and a
+		# still-writing producer would take SIGPIPE, which pipefail promotes
+		# into a failure ON A MATCH (`pipefail-grep-check`).
+		grep -qxF "$name" <<<"$live" && printf 'reused\t%s\t%s\n' "$name" "$count"
+	done)
 
 # --- the verdict --------------------------------------------------------------
 #
@@ -140,8 +159,8 @@ if [ -n "$all" ]; then
 	printf '%s\n' "$all" >&2
 	stale_n=$(printf '%s\n' "$all" | grep -c '^stale' || true)
 	reused_n=$(printf '%s\n' "$all" | grep -c '^reused' || true)
-	echo "::error:: branch-age-check: $stale_n branch(es) older than ${max_age}d, $reused_n name(s) heading more than one merged PR. Delete what has landed; a branch that outlives its story is a long-lived branch." >&2
+	echo "::error:: branch-age-check: $stale_n branch(es) older than ${max_age}d, $reused_n live branch(es) reused across merged PRs. Delete what has landed; a branch that outlives its story is a long-lived branch." >&2
 	exit 1
 fi
 
-echo "branch-age-check: no branch older than ${max_age}d and no name heading more than one merged PR"
+echo "branch-age-check: no branch older than ${max_age}d and no live branch reused across merged PRs"
