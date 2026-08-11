@@ -242,3 +242,54 @@ jobs:
           SPDX: ${{ steps.sbom.outputs.spdx }}
           CDX: ${{ steps.sbom.outputs.cdx }}
         run: gh release upload "$TAG" schema/batten.schema.json "$SPDX" "$CDX" --clobber
+
+  # The checksum manifest (CLOUD-278), the value every packaging channel consumes:
+  # a Homebrew formula pins it, an aqua/mise registry entry carries it, and
+  # `cargo binstall` resolves assets whose integrity nobody could check before.
+  #
+  # ITS OWN JOB, AND IT RUNS LAST. `mise run checksums` hashes the release's own
+  # assets read back after upload, so it can only run once everything that
+  # publishes one has finished — hence `needs`. The seven dist legs are
+  # independent and `fail-fast: false`, so no leg can see the whole release, and a
+  # manifest assembled from a list restated here would be a second authority that
+  # goes stale the first time a job starts uploading something new.
+  #
+  # Being strictly downstream is also what keeps CLOUD-258's ordering hazard away:
+  # this job cannot suppress an artifact, because every artifact is already
+  # uploaded before it starts.
+  #
+  # No `if: always()`. A manifest cut over a knowingly-partial release is a claim
+  # about an incomplete set; `release-assets-check` already fails that release on
+  # the missing target, and the recovery is unchanged — a workflow_dispatch re-run
+  # rebuilds every asset and this manifest with them.
+  checksums:
+    name: checksums
+    needs: [dist, schema]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-11
+    permissions:
+      contents: write # upload the manifest to the release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.event.release.tag_name }}
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          cache: false
+      # `checksums` emits a sums= KEY=VALUE line, so the asset path is decided in
+      # that one file and never re-derived in YAML.
+      - name: Derive the manifest from the release's own assets
+        id: checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: mise run checksums "$TAG" >>"$GITHUB_OUTPUT"
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          SUMS: ${{ steps.checksums.outputs.sums }}
+        run: gh release upload "$TAG" "$SUMS" --clobber

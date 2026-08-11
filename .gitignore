@@ -44,3 +44,7 @@ batten.local.toml
 # SBOMs derived by `mise run sbom` — cut from the tagged source at release time and
 # attached to the release, never committed (CLOUD-262).
 /sbom/
+
+# The checksum manifest derived by `mise run checksums` — hashed from a release's
+# own assets after upload and attached to it, never committed (CLOUD-278).
+/checksums/

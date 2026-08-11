@@ -27,19 +27,60 @@ setup() {
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
 
-# `gh release view --json assets` answers with the named asset list; anything
-# else answers the tag name. A case that wants the lookup to fail says so.
+# `gh release view --json assets` answers with the named asset list, `gh release
+# download` copies the fixture release into --dir, and anything else answers the
+# tag name. A case that wants either lookup to fail says so.
+#
+# The fixture release is a DIRECTORY OF REAL FILES, not merely a name list
+# (CLOUD-278): the manifest rules hash bytes, so a stub that could only answer
+# names would leave the half that reads them untested.
 stub_gh() {
+	RELEASE="$BATS_TEST_TMPDIR/release"
+	rm -rf "$RELEASE"
+	mkdir -p "$RELEASE"
+	local name
+	for name in "$@"; do
+		printf 'bytes of %s\n' "$name" >"$RELEASE/$name"
+	done
+	printf '%s\n' "$@" >"$BATS_TEST_TMPDIR/assets"
 	cat >"$STUB/gh" <<EOF
 #!/usr/bin/env bash
 [ ! -f "$BATS_TEST_TMPDIR/gh.fails" ] || exit 1
 case "\$*" in
+  *"release download"*)
+    [ ! -f "$BATS_TEST_TMPDIR/download.fails" ] || exit 1
+    dir=""
+    while [ \$# -gt 0 ]; do
+      [ "\$1" != --dir ] || dir="\$2"
+      shift
+    done
+    mkdir -p "\$dir"
+    cp "$RELEASE"/* "\$dir/"
+    ;;
   *tagName*) printf 'v9.9.9\n' ;;
   *assets*)  cat "$BATS_TEST_TMPDIR/assets" ;;
 esac
 EOF
 	chmod +x "$STUB/gh"
-	printf '%s\n' "$@" >"$BATS_TEST_TMPDIR/assets"
+}
+
+# The manifest the release job publishes: `sha256sum` over the release's own
+# assets, attached as one more asset. Named arguments override the default of
+# "everything the release currently carries".
+add_manifest() {
+	local names=("$@")
+	if [ "${#names[@]}" -eq 0 ]; then
+		mapfile -t names < <(LC_ALL=C sort "$BATS_TEST_TMPDIR/assets")
+	fi
+	(cd "$RELEASE" && LC_ALL=C sha256sum -- "${names[@]}" >SHA256SUMS)
+	grep -qxF SHA256SUMS "$BATS_TEST_TMPDIR/assets" ||
+		printf 'SHA256SUMS\n' >>"$BATS_TEST_TMPDIR/assets"
+}
+
+# An entry for a file the release does not carry. Hand-written rather than
+# hashed, because the whole point is that the named bytes are not there.
+add_manifest_entry() {
+	printf '%064d  %s\n' 0 "$1" >>"$RELEASE/SHA256SUMS"
 }
 
 complete() {
@@ -48,6 +89,7 @@ complete() {
 		batten.schema.json \
 		batten.spdx.json \
 		batten.cdx.json
+	add_manifest
 }
 
 @test "a release carrying every target's archive passes" {
@@ -175,6 +217,120 @@ complete() {
 	: >"$BATS_TEST_TMPDIR/gh.fails"
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 2 ]
+}
+
+# --- the checksum manifest (CLOUD-278) ---------------------------------------
+
+@test "a complete release with a valid manifest reports the verified count" {
+	complete
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"manifest covering all 5 asset(s) (sha256 verified)"* ]]
+}
+
+@test "THE CLOUD-278 GAP: every asset present but no manifest fails" {
+	# What every release carried before this: seven archives, a schema, two SBOM
+	# documents, and no checksum of any kind — so no packaging channel could pin
+	# a single one of them.
+	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
+		batten-9.9.9-aarch64-apple-darwin.tar.gz \
+		batten.schema.json \
+		batten.spdx.json \
+		batten.cdx.json
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"SHA256SUMS checksums-missing"* ]]
+	# The other two halves must stay clean — this release is complete but unpinned.
+	[[ "$output" != *"targets have no asset"* ]]
+	[[ "$output" != *"non-target assets are absent"* ]]
+}
+
+@test "a manifest that omits an asset the release carries fails, naming only it" {
+	complete
+	# Re-cut the manifest over everything but the schema, the way a manifest
+	# written before a later job's upload would read.
+	add_manifest batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
+		batten-9.9.9-aarch64-apple-darwin.tar.gz \
+		batten.spdx.json \
+		batten.cdx.json
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"batten.schema.json checksums-omits"* ]]
+	[[ "$output" != *"batten.cdx.json checksums-omits"* ]]
+	[[ "$output" == *"1 checksum-manifest violation(s)"* ]]
+}
+
+@test "a manifest entry naming no asset on the release fails" {
+	# The stale-manifest shape: a per-target workflow_dispatch re-run renames an
+	# archive and the manifest keeps describing the set it was cut over.
+	complete
+	add_manifest_entry batten-9.9.9-x86_64-pc-windows-gnu.zip
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"batten-9.9.9-x86_64-pc-windows-gnu.zip checksums-orphan"* ]]
+}
+
+@test "a manifest whose only entry is itself is the vacuous case, not a pass" {
+	# With the manifest excluded from both sides this leaves nothing to compare,
+	# and a release carrying nothing else would agree with it perfectly.
+	complete
+	printf '%064d  SHA256SUMS\n' 0 >"$RELEASE/SHA256SUMS"
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"SHA256SUMS checksums-self"* ]]
+	[[ "$output" == *"SHA256SUMS checksums-empty"* ]]
+	[[ "$output" == *"covers nothing"* ]]
+}
+
+@test "corrupting one byte of one asset fails, naming only that asset" {
+	# The acceptance criterion, asserted over THIS gate rather than over
+	# sha256sum: names alone would still agree, so only reading the bytes catches
+	# an asset replaced by a --clobber re-upload after the manifest was cut.
+	complete
+	printf 'tampered\n' >"$RELEASE/batten-9.9.9-aarch64-apple-darwin.tar.gz"
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"batten-9.9.9-aarch64-apple-darwin.tar.gz checksums-mismatch"* ]]
+	[[ "$output" != *"x86_64-unknown-linux-gnu.tar.gz checksums-mismatch"* ]]
+	[[ "$output" == *"1 checksum-manifest violation(s)"* ]]
+}
+
+@test "a download that fails exits 2 — could not look is not a verdict" {
+	# Same distinction the release lookup already draws: reporting a shipping
+	# release as corrupt on a network blip is what gets a scheduled gate ignored.
+	complete
+	: >"$BATS_TEST_TMPDIR/download.fails"
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"unverified"* ]]
+}
+
+@test "the manifest name comes from checksums --names, not from this gate" {
+	# One authority for the name. The literal scrape recognises `.json` operands
+	# only, so widening it to admit an extensionless asset was the alternative
+	# this deliberately avoids.
+	run mise-tasks/checksums --names
+	[ "$status" -eq 0 ]
+	[ "$output" = "sums=checksums/SHA256SUMS" ]
+}
+
+@test "the real workflow publishes the manifest this gate demands" {
+	# The fixtures prove the logic; this proves production actually uploads it, so
+	# the suite cannot pass while every release ships unpinned.
+	run grep -c 'mise run checksums' .github/workflows/release-artifacts.yml
+	[ "$status" -eq 0 ]
+	[ "$output" -ge 1 ]
+	run grep -F 'gh release upload "$TAG" "$SUMS" --clobber' .github/workflows/release-artifacts.yml
+	[ "$status" -eq 0 ]
+}
+
+@test "the manifest job runs after everything that uploads an asset" {
+	# It hashes the release's own assets read back after upload, so a job that
+	# published after it would be left uncovered with nothing to say so.
+	run sed -nE 's/^[[:space:]]*needs:[[:space:]]*(.+)$/\1/p' .github/workflows/release-artifacts.yml
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"dist"* ]]
+	[[ "$output" == *"schema"* ]]
 }
 
 @test "a matrix with no targets exits 2 rather than passing vacuously" {
