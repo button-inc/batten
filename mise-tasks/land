@@ -19,9 +19,10 @@
 # per-lap rather than declared as `#MISE depends`, because a dependency runs
 # once and a loop needs them every time round.
 #
-# **The stops are the three things bash cannot reason about**: a rebase that
-# CONFLICTS, a local `verify` that fails, and a CI run that comes back red on a
-# branch whose `verify` was green. Everything else in a lap is mechanical, so
+# **The stops are the things bash cannot reason about**: a rebase that CONFLICTS,
+# a local `verify` that fails, a CI run that comes back red on a branch whose
+# `verify` was green, and — since CLOUD-323 — a PR body that defers a decision
+# without naming the issue that owns it, which needs a human to file one. Everything else in a lap is mechanical, so
 # this runs unattended and halts exactly at the steps that need a decision (AGENTS.md, "When you SHOULD still stop") — which is also the
 # step frequent lapping keeps small. CLOUD-238: ending the lap and leaving the
 # caller to rebase and retry was only half the design. Measured over one
@@ -197,6 +198,22 @@ while :; do
 	# event. `graded` is `ci-wait`'s own list, and deliberately so: "is this set
 	# an answer" has one definition, and a second copy here that drifted would
 	# put this task back to waiting on runs that will never be graded.
+	# --- a deferred decision must have a ticket before review is asked for ---
+	#
+	# CLOUD-323, and the FOURTH stop this task has. Readying is the commitment to
+	# review, which is exactly when "we will decide this later" has to name where
+	# later lives. Checked per lap and before the ready block rather than inside
+	# it, because that block is conditional and a deferral must not slip through
+	# on a lap that happened not to re-ready.
+	#
+	# `gh pr view` is a read `gh-guard` allows. A body that cannot be fetched
+	# fails OPEN — this gate is about what a body says, and a body it never saw
+	# is not evidence of anything.
+	body=$(gh pr view "$pr" --json body --jq .body 2>/dev/null || true)
+	if [ -n "$body" ] && ! printf '%s' "$body" | mise run deferral-check; then
+		die "#$pr defers a decision with no ticket. File it and name the issue in that paragraph, then run land again."
+	fi
+
 	readied=0
 	if [ "$(graded_runs "$sha")" = "0" ] &&
 		[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then

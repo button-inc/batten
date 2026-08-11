@@ -132,10 +132,21 @@ restate its count here), each failing open on anything it can't parse:
   issue moved and an existing issue (carrying measurements that contradicted the
   fix) never read. You cannot name an issue you have not looked up, so the gate
   that blocks landing is what forces the search. It does NOT gate whether
-  outstanding items reach the issue — not computable over any artifact the repo
-  can see; the compensating control is that a durable home now always exists.
-  Bypass: `BATTEN_ISSUE_GUARD_BYPASS=1`, for a PR that genuinely precedes its
-  issue.
+  outstanding items reach the issue: nothing in the **tree** carries that, and
+  its compensating control is that a durable home always exists by then.
+  **Half of that is now gated after all** — the claim used to read "not
+  computable over any artifact the repo can see", and the PR body is an artifact
+  `gh` can see. `deferral-check` reads it (CLOUD-323). Bypass:
+  `BATTEN_ISSUE_GUARD_BYPASS=1`, for a PR that genuinely precedes its issue.
+- `deferral-check` is the finish-side half of that pair (CLOUD-323): `land`
+  pipes the PR body in before readying, and a paragraph containing `judgement
+call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
+  decisions had landed on `main` with a PR paragraph as their only record, and
+  the board showed a clean Done. Paragraph-local is the whole design — measured
+  over 60 merged PRs, "a deferral phrase and no key in the BODY" fires on zero,
+  because `issue-guard` already forces a key onto every one. `worth checking`
+  (2 firings, both review prompts) and `deliberate` (16) were measured and
+  dropped; one shape survived, firing once, correctly.
 - `ready-guard` denies `gh pr ready` unless `verify` and `linear-check` have both
   passed against this exact HEAD. Each writes a receipt under
   `.git/batten-receipts/` keyed to the commit it validated, and linear-check's

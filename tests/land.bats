@@ -91,6 +91,11 @@ case "\$sub" in
   "pr view")
     case "\$all" in
       *isDraft*) printf '%s' "\$(cat "$BATS_TEST_TMPDIR/isdraft")" ;;
+      # Not sequenced, for the same reason isDraft is not: the body is a
+      # property of the PR, not an observation whose Nth answer a case scripts.
+      # Letting it fall through would consume a \`state.N\` slot and shift every
+      # transition after it — measured, when CLOUD-323's check was wired in.
+      *body*)    printf '%s' "\$(cat "$BATS_TEST_TMPDIR/prbody" 2>/dev/null)" ;;
       *)         emit "\$(nth state)" ;;
     esac ;;
   api*)
@@ -176,6 +181,9 @@ case "\$2" in
       exit 1
     fi
     exit 0 ;;
+  # CLOUD-323's stop. Passes by default; a case that wants the refusal
+  # writes rc.mise.deferral-check, the same lever every other task uses.
+  deferral-check) exit 0 ;;
   ci-wait)  [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
   main-watch)
     # A lap starts two watchers, and they are told apart by WHEN: the one
@@ -219,6 +227,9 @@ push_moves_nothing() { echo cafe1234cafe1234 >"$BATS_TEST_TMPDIR/remote_ref"; }
 call_order() { tr '\n' ' ' <"$BATS_TEST_TMPDIR/calls"; }
 undo_fails() { : >"$BATS_TEST_TMPDIR/rc.undo"; }
 ready_fails() { : >"$BATS_TEST_TMPDIR/rc.ready"; }
+# The PR body `deferral-check` reads. Empty by default, which is why every other
+# case skips the check entirely rather than having to opt out of it.
+pr_body() { printf '%s' "$1" >"$BATS_TEST_TMPDIR/prbody"; }
 task_fails() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.$1"; }
 not_linear() { echo 1 >"$BATS_TEST_TMPDIR/rc.linear"; }
 comments() { wc -l <"$BATS_TEST_TMPDIR/comments" | tr -d ' '; }
@@ -306,6 +317,22 @@ workflow_runs() {
 	run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"verify failed"* ]]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "a body that defers a decision with no ticket stops before review is asked for" {
+	# CLOUD-323's stop. Readying is the commitment to review, which is when "we
+	# will decide this later" has to name where later lives — two decisions
+	# landed on `main` during CLOUD-164 with a PR paragraph as their only record.
+	#
+	# Asserted before the comment count for the same reason the verify stop is:
+	# stopping AFTER asking for the merge would have already spent the thing the
+	# stop exists to withhold.
+	pr_body "The format is a judgement call and nobody owns it."
+	task_fails deferral-check
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"defers a decision with no ticket"* ]]
 	[ "$(comments)" -eq 0 ]
 }
 
@@ -697,8 +724,8 @@ workflow_runs() {
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 12 ] || {
-		echo "land has $stops stopping conditions; this suite covers 12."
+	[ "$stops" -eq 13 ] || {
+		echo "land has $stops stopping conditions; this suite covers 13."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
