@@ -41,6 +41,22 @@
 //! evaluating an expression in their head. `markers.rs` states the sibling case
 //! in its own words — a count must not become a function of an expression.
 //!
+//! ## Pointer-only is decided elsewhere, and that is the point
+//!
+//! [`Hit::line_text`] renders `stream:line <id>` and never the matched bytes, and
+//! this module's own tests say so. That was the whole of the guarantee for a
+//! while, and it was the wrong shape for it: a per-module assertion answers "does
+//! *this* emitter leak", when the law (non-negotiable rule 4, house-style §6) is
+//! a claim about **every** check. An emitter that leaked would have been caught
+//! here only if somebody thought to write the case here.
+//!
+//! `crates/batten/tests/pointer_only.rs` decides it instead, at the process
+//! boundary every emitter converges on: a corpus in which every byte a check can
+//! read is a canary, crossed with a census over the whole verb surface. A wrapped
+//! command's output is the likeliest place in this engine for a secret to appear,
+//! which is why this module is one of the canary's seeded sources rather than the
+//! judge of its own compliance.
+//!
 //! ## Batten only ever ADDS failure
 //!
 //! A child that already exited non-zero passes its code through untouched: there

@@ -17,7 +17,7 @@
 //! `writeln!(out, …)` sites in `lib.rs`, fed by ten independently-named renderers
 //! (`line`, `line_text`, `summary`) plus `rules::Finding`, which has none and is
 //! formatted inline. Unifying those is real work and a different change
-//! (CLOUD-330); it would also not *decide* anything, because no trait can stop a
+//! (CLOUD-371); it would also not *decide* anything, because no trait can stop a
 //! `String` carrying content.
 //!
 //! So the gate goes where every one of those sites already converges: the bytes
