@@ -639,6 +639,128 @@ esac
     ;;
 esac
 ;;
+(provision)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__provision_commands" \
+"*::: :->provision" \
+&& ret=0
+
+    case $state in
+    (provision)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-provision-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(apply)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-n[Preview what would be applied, writing nothing]' \
+'--dry-run[Preview what would be applied, writing nothing]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__provision__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-provision-help-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(apply)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (hook)
 _arguments "${_arguments_options[@]}" : \
 '--harness=[The harness whose payload to decode and whose decision channel to answer in]: :((claude-code\:"Claude Code'\''s \`PreToolUse\` payload; a deny is returned as the \`hookSpecificOutput.permissionDecision\` JSON object on stdout with exit \`0\` — the channel the production shell guards already use"
@@ -1064,6 +1186,30 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(provision)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__provision_commands" \
+"*::: :->provision" \
+&& ret=0
+
+    case $state in
+    (provision)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-provision-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(apply)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (hook)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1145,6 +1291,7 @@ _batten_commands() {
 'generate:Emit artifacts derived from the command spec, on stdout' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'worktree:Worktrees and the work in them\: what is at risk, and the hygiene verbs over them' \
+'provision:Pinned tools this repository provisions, cached out of tree' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
@@ -1282,6 +1429,7 @@ _batten__subcmd__help_commands() {
 'generate:Emit artifacts derived from the command spec, on stdout' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
 'worktree:Worktrees and the work in them\: what is at risk, and the hygiene verbs over them' \
+'provision:Pinned tools this repository provisions, cached out of tree' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
@@ -1372,6 +1520,24 @@ _batten__subcmd__help__subcmd__policy_commands() {
 _batten__subcmd__help__subcmd__policy__subcmd__budget_commands() {
     local commands; commands=()
     _describe -t commands 'batten help policy budget commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__provision_commands] )) ||
+_batten__subcmd__help__subcmd__provision_commands() {
+    local commands; commands=(
+'status:Report which provisioned tools do not match the manifest' \
+'apply:Fetch, verify against the pinned checksum, and install into the out-of-tree cache' \
+    )
+    _describe -t commands 'batten help provision commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__provision__subcmd__apply_commands] )) ||
+_batten__subcmd__help__subcmd__provision__subcmd__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help provision apply commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__provision__subcmd__status_commands] )) ||
+_batten__subcmd__help__subcmd__provision__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help provision status commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__receipt_commands] )) ||
 _batten__subcmd__help__subcmd__receipt_commands() {
@@ -1467,6 +1633,49 @@ _batten__subcmd__policy__subcmd__help__subcmd__budget_commands() {
 _batten__subcmd__policy__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten policy help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__provision_commands] )) ||
+_batten__subcmd__provision_commands() {
+    local commands; commands=(
+'status:Report which provisioned tools do not match the manifest' \
+'apply:Fetch, verify against the pinned checksum, and install into the out-of-tree cache' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten provision commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__provision__subcmd__apply_commands] )) ||
+_batten__subcmd__provision__subcmd__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten provision apply commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__provision__subcmd__help_commands] )) ||
+_batten__subcmd__provision__subcmd__help_commands() {
+    local commands; commands=(
+'status:Report which provisioned tools do not match the manifest' \
+'apply:Fetch, verify against the pinned checksum, and install into the out-of-tree cache' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten provision help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__provision__subcmd__help__subcmd__apply_commands] )) ||
+_batten__subcmd__provision__subcmd__help__subcmd__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten provision help apply commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__provision__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__provision__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten provision help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__provision__subcmd__help__subcmd__status_commands] )) ||
+_batten__subcmd__provision__subcmd__help__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten provision help status commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__provision__subcmd__status_commands] )) ||
+_batten__subcmd__provision__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten provision status commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__receipt_commands] )) ||
 _batten__subcmd__receipt_commands() {

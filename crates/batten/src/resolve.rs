@@ -222,6 +222,9 @@ pub struct Resolved {
     /// trusted with — `trust.rs` compares the committed bytes instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge: Option<crate::judge::Judge>,
+    /// The provisioning manifest (CLOUD-90), as the authority states it.
+    #[serde(rename = "provision", skip_serializing_if = "Vec::is_empty")]
+    pub provisions: Vec<crate::provision::Provision>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -674,6 +677,7 @@ fn assemble(
         budget: repo.budget.clone(),
         must_land_on: repo.must_land_on.clone(),
         judge: repo.judge.clone(),
+        provisions: repo.provisions.clone(),
         sources: attribution(
             repo,
             strictness.source,
@@ -726,6 +730,7 @@ fn attribution(
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
         ("judge", authority_set(repo.judge.is_some())),
+        ("provision", authority_set(!repo.provisions.is_empty())),
     ])
 }
 

@@ -106,6 +106,27 @@ pub enum Command {
         /// The chosen sub-verb.
         command: StateCommand,
     },
+    /// Pinned tools this repository provisions.
+    Provision {
+        /// The chosen sub-verb.
+        command: ProvisionCommand,
+    },
+}
+
+/// Subcommands of `provision`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ProvisionCommand {
+    /// Report which provisioned tools do not match the manifest.
+    Status {
+        /// Emit the report as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
+    /// Fetch, verify, and install into the out-of-tree cache.
+    Apply {
+        /// Preview what would be applied, writing nothing.
+        dry_run: bool,
+    },
 }
 
 /// Subcommands of `worktree`.
@@ -245,6 +266,96 @@ fn flag(matches: &ArgMatches, id: &str) -> bool {
     matches.try_get_one::<bool>(id).ok().flatten() == Some(&true)
 }
 
+/// The nesting nouns, each mapping its own sub-verb.
+///
+/// Split out of [`command_of`] one function per noun rather than inlined as
+/// closures: the flat match grew past `clippy::too_many_lines` when `provision`
+/// landed, and a noun's sub-verbs are the natural seam. Each stays total —
+/// an unrecognised sub-verb is `None`, which `clap` has already made
+/// unreachable for a declared surface.
+fn config_of(matches: &ArgMatches) -> Option<ConfigCommand> {
+    match matches.subcommand()? {
+        ("show", matches) => Some(ConfigCommand::Show {
+            json: flag(matches, "json"),
+        }),
+        ("lint", matches) => Some(ConfigCommand::Lint {
+            json: flag(matches, "json"),
+        }),
+        ("epoch", matches) => Some(ConfigCommand::Epoch {
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
+fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
+    match matches.subcommand()? {
+        ("budget", matches) => Some(PolicyCommand::Budget {
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
+fn provision_of(matches: &ArgMatches) -> Option<ProvisionCommand> {
+    match matches.subcommand()? {
+        ("status", matches) => Some(ProvisionCommand::Status {
+            json: flag(matches, "json"),
+        }),
+        ("apply", matches) => Some(ProvisionCommand::Apply {
+            dry_run: flag(matches, "dry_run"),
+        }),
+        _ => None,
+    }
+}
+
+fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
+    match matches.subcommand()? {
+        ("status", matches) => Some(WorktreeCommand::Status {
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
+fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
+    match matches.subcommand()? {
+        ("completions", matches) => matches
+            .get_one::<clap_complete::Shell>("shell")
+            .map(|shell| GenerateCommand::Completions { shell: *shell }),
+        ("schema", _) => Some(GenerateCommand::Schema),
+        _ => None,
+    }
+}
+
+fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
+    let (name, matches) = matches.subcommand()?;
+    let check = matches.get_one::<String>("check")?.clone();
+    match name {
+        "record" => Some(ReceiptCommand::Record { check }),
+        "status" => Some(ReceiptCommand::Status {
+            check,
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
+/// Unlike [`receipt_of`], the positional is optional and belongs to one
+/// sub-verb, so it is read inside the arm rather than ahead of the match.
+fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
+    match matches.subcommand()? {
+        ("adopt", matches) => Some(StateCommand::Adopt {
+            store: matches.get_one::<String>("store").cloned(),
+        }),
+        ("record", _) => Some(StateCommand::Record),
+        ("list", matches) => Some(StateCommand::List {
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
 fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
     match name {
         "check" => Some(Command::Check {
@@ -253,55 +364,17 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "enforce" => Some(Command::Enforce {
             json: flag(matches, "json"),
         }),
-        "config" => matches
-            .subcommand()
-            .and_then(|(name, matches)| match name {
-                "show" => Some(ConfigCommand::Show {
-                    json: flag(matches, "json"),
-                }),
-                "lint" => Some(ConfigCommand::Lint {
-                    json: flag(matches, "json"),
-                }),
-                "epoch" => Some(ConfigCommand::Epoch {
-                    json: flag(matches, "json"),
-                }),
-                _ => None,
-            })
-            .map(|command| Command::Config { command }),
+        "config" => config_of(matches).map(|command| Command::Config { command }),
         "spec" => matches
             .get_one::<SpecFormat>("format")
             .map(|format| Command::Spec { format: *format }),
         "doctor" => Some(Command::Doctor {
             json: flag(matches, "json"),
         }),
-        "policy" => matches
-            .subcommand()
-            .and_then(|(name, matches)| match name {
-                "budget" => Some(PolicyCommand::Budget {
-                    json: flag(matches, "json"),
-                }),
-                _ => None,
-            })
-            .map(|command| Command::Policy { command }),
-        "worktree" => matches
-            .subcommand()
-            .and_then(|(name, matches)| match name {
-                "status" => Some(WorktreeCommand::Status {
-                    json: flag(matches, "json"),
-                }),
-                _ => None,
-            })
-            .map(|command| Command::Worktree { command }),
-        "generate" => matches
-            .subcommand()
-            .and_then(|(name, matches)| match name {
-                "completions" => matches
-                    .get_one::<clap_complete::Shell>("shell")
-                    .map(|shell| GenerateCommand::Completions { shell: *shell }),
-                "schema" => Some(GenerateCommand::Schema),
-                _ => None,
-            })
-            .map(|command| Command::Generate { command }),
+        "policy" => policy_of(matches).map(|command| Command::Policy { command }),
+        "provision" => provision_of(matches).map(|command| Command::Provision { command }),
+        "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
+        "generate" => generate_of(matches).map(|command| Command::Generate { command }),
         // `get_many`, not `get_one`: the tail is an `Append` action, so every
         // token after `--` is a separate value and the child's argv is the whole
         // list. An empty list is unreachable — clap enforces `num_args(1..)` —
@@ -320,35 +393,8 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "hook" => matches
             .get_one::<Harness>("harness")
             .map(|harness| Command::Hook { harness: *harness }),
-        "receipt" => matches
-            .subcommand()
-            .and_then(|(name, matches)| {
-                let check = matches.get_one::<String>("check")?.clone();
-                match name {
-                    "record" => Some(ReceiptCommand::Record { check }),
-                    "status" => Some(ReceiptCommand::Status {
-                        check,
-                        json: flag(matches, "json"),
-                    }),
-                    _ => None,
-                }
-            })
-            .map(|command| Command::Receipt { command }),
-        // Unlike `receipt`, the positional is optional and belongs to one
-        // sub-verb, so it is read inside the arm rather than ahead of the match.
-        "state" => matches
-            .subcommand()
-            .and_then(|(name, matches)| match name {
-                "adopt" => Some(StateCommand::Adopt {
-                    store: matches.get_one::<String>("store").cloned(),
-                }),
-                "record" => Some(StateCommand::Record),
-                "list" => Some(StateCommand::List {
-                    json: flag(matches, "json"),
-                }),
-                _ => None,
-            })
-            .map(|command| Command::State { command }),
+        "receipt" => receipt_of(matches).map(|command| Command::Receipt { command }),
+        "state" => state_of(matches).map(|command| Command::State { command }),
         _ => None,
     }
 }

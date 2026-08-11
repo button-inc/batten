@@ -27,6 +27,7 @@ pub mod lint;
 pub mod markers;
 pub mod output;
 pub mod outputs;
+pub mod provision;
 pub mod receipt;
 pub mod resolve;
 pub mod rules;
@@ -46,8 +47,8 @@ use std::path::Path;
 use anyhow::Result;
 
 pub use cli::{
-    Cli, Command, ConfigCommand, GenerateCommand, PolicyCommand, ReceiptCommand, SpecFormat,
-    StateCommand, WorktreeCommand,
+    Cli, Command, ConfigCommand, GenerateCommand, PolicyCommand, ProvisionCommand, ReceiptCommand,
+    SpecFormat, StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -132,6 +133,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
         },
+        Some(Command::Provision { command }) => match command {
+            ProvisionCommand::Status { json } => run_provision_status(json, &overrides, out),
+            ProvisionCommand::Apply { dry_run } => run_provision_apply(dry_run, &overrides, err),
+        },
         // The store resolves itself from git facts and the OS state dir; the §8
         // config chain does not apply, because which store a checkout owns is
         // not a policy question and no `batten.toml` may answer it.
@@ -141,6 +146,65 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             StateCommand::List { json } => run_state_list(json, mode, out, err),
         },
     }
+}
+
+/// Report which provisioned tools do not match the manifest (CLOUD-90).
+///
+/// A manifest with **no entries is not an error**, unlike `policy budget`'s
+/// absent budget: zero entries is a complete and honest answer — this repository
+/// provisions nothing — where a budget verb with no budget would be claiming to
+/// have measured something it did not. The two absences are different claims.
+fn run_provision_status(
+    json: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let repo = git::repo_root(Path::new("."))?;
+    let report = provision::status(&config.provisions, &provision::cache_root(&repo)?)?;
+
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        // Only the stale entries: a fresh one is not news, and an all-fresh run
+        // prints nothing at all.
+        for line in report.stale_lines() {
+            writeln!(out, "{line}")?;
+        }
+    }
+    Ok(ExitCode::verdict(report.any_stale()))
+}
+
+/// Fetch, verify, and install every stale manifest entry (CLOUD-90).
+///
+/// Reports through `err`, never `out`: this verb writes to the cache and has no
+/// document to emit, so its progress belongs on the messaging channel. That also
+/// keeps the one thing it could print — what it installed — off a stream a
+/// caller might be parsing.
+fn run_provision_apply(
+    dry_run: bool,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let repo = git::repo_root(Path::new("."))?;
+    let cache = provision::cache_root(&repo)?;
+
+    for entry in &config.provisions {
+        // A checksum mismatch propagates as a `Denial` (exit 2) from here, so
+        // the loop stops at the first bad artifact rather than going on to
+        // install the rest under a verdict that already failed.
+        let applied = provision::apply(entry, &cache, dry_run)?;
+        let verb = match applied {
+            provision::Applied::Installed => "installed",
+            provision::Applied::AlreadyFresh => continue,
+            provision::Applied::Previewed => "would install",
+        };
+        // Pointer-only: the entry and its pinned version, never a URL response
+        // and never a byte of the artifact.
+        writeln!(err, "provision: {verb} {} {}", entry.name, entry.version)?;
+    }
+    Ok(ExitCode::Success)
 }
 
 /// Report work that is uncommitted, unpushed, or not landed (CLOUD-51).

@@ -79,6 +79,13 @@
         "type": "string"
       }
     },
+    "provision": {
+      "description": "Pinned tools this repository provisions (CLOUD-90): version, URL,\nchecksum, unpack behaviour, binary name. Consumer-specific by nature —\nwhich tools a repository needs is that repository's business, never\nBatten's (non-negotiable rule 1) — so the core carries the mechanism and\nthis table carries the answer. The type and both halves of the\ncheck/fix pair are [`crate::provision`].",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Provision"
+      }
+    },
     "rule": {
       "description": "The declarative rules run against the repository. Absent or empty means\n\"no rules configured\" and nothing is reported. Which of these a given\nverb admits is the §5 effect split: `check` runs only non-spawning kinds\nand refuses the rest, `enforce` runs all of them (CLOUD-170).\n\nEvery rule pins its `severity` explicitly — the key is required, with no\nimplicit fallback — and carries a separate `scope` key whose vocabulary\nnever conflates with severity's (CLOUD-61). Both disciplines are\nenforced at parse time: omission or conflation is a usage error here,\nnever a value quietly assumed.",
       "type": "array",
@@ -348,6 +355,45 @@
         }
       ]
     },
+    "Provision": {
+      "description": "One provisioned tool.",
+      "type": "object",
+      "properties": {
+        "binary": {
+          "description": "The binary's name inside the artifact, and the name it is cached under.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The entry's name, unique within the manifest. Also the first cache path\nsegment, so two tools never share a directory.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "The SHA-256 of the artifact, lowercase hex. The whole equality test.",
+          "type": "string"
+        },
+        "unpack": {
+          "description": "What the artifact is, and therefore how to get the binary out of it.",
+          "$ref": "#/$defs/Unpack",
+          "default": "none"
+        },
+        "url": {
+          "description": "Where the artifact comes from. `https://` or `file://` — see the module\ndocs for why those two and no others.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The pinned version. Encoded in the cache path, so two pinned versions\ncoexist and a version change is a cache miss rather than an overwrite.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "url",
+        "sha256",
+        "binary"
+      ]
+    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
       "type": "object",
@@ -505,6 +551,21 @@
           "description": "Everything `Standard` fails on, plus anything advisory.",
           "type": "string",
           "const": "strict"
+        }
+      ]
+    },
+    "Unpack": {
+      "description": "How to get the binary out of the fetched artifact.",
+      "oneOf": [
+        {
+          "description": "The artifact *is* the binary.",
+          "type": "string",
+          "const": "none"
+        },
+        {
+          "description": "A gzipped tarball; the entry whose file name is [`Provision::binary`] is\nextracted and everything else ignored.",
+          "type": "string",
+          "const": "tar_gz"
         }
       ]
     },

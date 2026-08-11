@@ -363,6 +363,25 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   dual-HMAC). Behavioural churn fixtures live in
   `crates/batten/tests/identity_churn.rs` (CLOUD-169); they compose the matcher
   with this module because a `Finding` carries no fingerprint yet (CLOUD-164).
+- `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
+  and cached out of tree. §9's check/fix pair — `provision status` (read) is
+  freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary
+  is never executed by either half**: the whole equality test is a checksum, which
+  is what keeps a `read` verb from running an artifact fetched from the internet.
+  `apply` fetches into memory, verifies, THEN writes — a mismatched artifact never
+  reaches the cache, so there is no partial install. Mismatch is exit 2 (a verdict
+  about the pin); unreachable is exit 3 (could not complete — a different claim).
+  The cache stores the artifact bytes as well as the binary, so freshness
+  re-verifies the pin against what was installed rather than a receipt it wrote
+  about itself; `version` is a path segment so two pins coexist. A malformed
+  `sha256` is refused at load, or every apply would blame the artifact for a typo.
+  **The https fetch shells out to `curl`** — measured, not preferred: no
+  TLS-capable Rust client links here, because `macos-link-check` fails any crate
+  declaring `links` or linking an Apple framework (native-tls and
+  rustls-native-certs pull `security-framework`; rustls with bundled roots still
+  fails on `ring`'s `links` key). curl IS the host's default TLS stack, which is
+  the acceptance's proxy-CA property in its strongest reading, and §9's own
+  posture. Debt tracked in CLOUD-320, not absorbed.
 - `receipt.rs` — verification receipts (CLOUD-203): SHA-keyed in-toto
   statements that a named check passed, stored out-of-tree (first caller of
   `state.rs` and `identity.rs`) plus the grandfathered

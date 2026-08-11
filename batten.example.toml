@@ -263,3 +263,56 @@ path = "vendor/**"
 # changed, which looks exactly like a valid answer.
 [epoch]
 tracked = ["batten.toml"]
+
+# ---------------------------------------------------------------------------
+# Pinned tools this repository provisions (CLOUD-90).
+#
+# One entry per tool: a pinned version, where to get it, what it must hash to,
+# how to unpack it, and the binary it yields. House style §9's rule is that
+# consumer-specific behaviour is reconstructed through config rather than baked
+# into the core, and this is that surface for binaries.
+#
+# TWO VERBS, one pair. `batten provision status` is the freshness gate and is
+# read-effect; `batten provision apply` is the write that fixes it. The gate is
+# `read` for a structural reason rather than a behavioural one: the whole
+# equality test is a checksum over cached bytes, so THE PROVISIONED BINARY IS
+# NEVER EXECUTED. A freshness check that ran `--version` would be a read verb
+# executing an artifact fetched from the internet.
+#
+# `apply` fetches into memory, verifies against `sha256`, and only then writes.
+# A mismatched artifact never reaches the cache, so there is no partial install
+# and no window where a bad binary sits under a good name. The mismatch is exit
+# 2 — a verdict about the pin — while an unreachable URL is exit 3, which is a
+# different claim: the apply could not complete, rather than one it did make.
+#
+# `version` is a cache PATH SEGMENT, so two pins coexist and a version bump is a
+# cache miss rather than an overwrite. The cache lives outside the repository
+# (the OS data directory), so nothing provisioned is ever committed — a property
+# of where the path resolves, not a promise to be careful.
+#
+# `url` takes `https://` or `file://`. Plain `http://` is absent deliberately: a
+# pinned checksum makes tampering detectable, not impossible to attempt, and
+# there is no reason to fetch a pinned artifact over a rewritable channel.
+# `file://` is what makes a hermetic fixture possible.
+#
+# The https fetch runs the host's `curl`, so host CA configuration keeps working
+# behind a TLS re-terminating proxy — it IS the host's default TLS stack rather
+# than a re-implementation of one. That is also §9's posture: name a command
+# already on the operator's PATH, never a downloaded, executed binary.
+#
+# `unpack` is "none" (the artifact is the binary) or "tar_gz". A tarball entry is
+# matched on its FILE NAME, so a release that nests its binary under a versioned
+# directory needs no second statement of the version here.
+# A real, verifiable entry rather than an illustrative one: this URL and this
+# digest are the actual jq 1.7.1 linux-amd64 release binary, measured. A worked
+# example carrying a made-up checksum teaches the shape and mis-teaches the
+# discipline — the pin is the whole security property, so a fake one is the one
+# field that must not be faked.
+[[provision]]
+name = "jq"
+version = "1.7.1"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+sha256 = "5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5"
+# The artifact IS the binary — no archive to open.
+unpack = "none"
+binary = "jq"

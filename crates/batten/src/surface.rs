@@ -444,6 +444,27 @@ const JSON: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `-n --dry-run`: preview the change and write nothing.
+///
+/// Per-command rather than global (§3), because a preview is only meaningful for
+/// a verb that writes. It changes *behaviour*, never the declared effect — §5's
+/// raise-only rule is explicit that a bug in a dry-run path must not be able to
+/// claim safety the verb does not have, so `provision apply` stays `write` with
+/// or without it.
+const DRY_RUN: FlagDecl = FlagDecl {
+    id: "dry_run",
+    long: Some("dry-run"),
+    short: Some('n'),
+    help: "Preview what would be applied, writing nothing",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 fn verbosity_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<Verbosity>::new())
 }
@@ -760,6 +781,39 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
+    },
+    // The `provision` noun only dispatches, and its subtree carries a write
+    // verb, so it takes `receipt`'s conservative reading rather than `policy`'s:
+    // a write-bearing subtree under a `read` noun would leak onto the derived
+    // allowlist for any consumer that treats an entry as a prefix (CLOUD-90).
+    CommandDecl {
+        path: "provision",
+        about: "Pinned tools this repository provisions, cached out of tree",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // The freshness half of §9's check/fix pair, and `read` for a structural
+    // reason rather than a behavioural one: the whole equality test is a
+    // checksum over cached bytes, so **the provisioned binary is never
+    // executed**. A freshness check that ran `--version` would be a `read` verb
+    // executing an artifact fetched from the internet.
+    CommandDecl {
+        path: "provision status",
+        about: "Report which provisioned tools do not match the manifest",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
+    // The fix half. `write` rather than `destructive`: everything it creates is
+    // recreatable by running it again, and it replaces nothing the caller
+    // authored — the cache is out of tree and Batten's own.
+    CommandDecl {
+        path: "provision apply",
+        about: "Fetch, verify against the pinned checksum, and install into the out-of-tree cache",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[DRY_RUN],
     },
     // `hook` adjudicates another tool's call: its own execution only reads
     // stdin and config, but its *decision* mediates writes, so it is listed

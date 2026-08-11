@@ -224,6 +224,10 @@ mod tests {
                 // no write for the noun row to smuggle on (CLOUD-50).
                 "policy".to_owned(),
                 "policy budget".to_owned(),
+                // The freshness verb, never the `provision` noun or `apply`:
+                // that subtree writes, so the noun takes the conservative
+                // reading (CLOUD-90).
+                "provision status".to_owned(),
                 "receipt status".to_owned(),
                 "spec".to_owned(),
                 "state list".to_owned(),
