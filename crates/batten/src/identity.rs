@@ -61,18 +61,23 @@
 //! unkeyed digest of a matched secret is an offline-guessing oracle — secrets are
 //! often low-entropy, so a plain hash journaled into an append-only store is
 //! recoverable by anyone who reads the store, and cannot be expunged from it.
+//! HMAC carries no work factor, so this buys separation and not difficulty: it
+//! holds only while the key is unreachable from the journal it protects.
 //! The key is supplied by the caller: this module mints and stores nothing, and
 //! custody (minting at store init, rotation, the loud orphan event on key loss)
 //! belongs to the store and to the scanner adapter that classifies a span as
-//! secret-bearing.
+//! secret-bearing. The protection is exactly as good as that classification:
+//! an unclassified secret span still reaches [`code_fingerprint`] and gets an
+//! unkeyed digest, so recall is the control keying does not supply.
 //!
 //! # Per-rule overrides are split-only, by construction
 //!
-//! [`override_fingerprint`] hashes the default identity *as a field*, so two
-//! spans with different default identities cannot collide under any
-//! discriminator. An override can fragment a group and is mathematically unable
-//! to merge two — the property a rule author must be held to, made a property of
-//! the function rather than of a config check.
+//! [`override_fingerprint`] hashes the default identity *as a field*, so for two
+//! spans with different default identities no colliding preimage exists under any
+//! discriminator. An override can fragment a group, and merging two would take a
+//! SHA-256 collision rather than a chosen discriminator — the property a rule
+//! author must be held to, made a property of the function rather than of a
+//! config check that could be bypassed.
 //!
 //! # Migration
 //!
@@ -450,18 +455,43 @@ impl fmt::Debug for IdentityKey {
 /// stability: the same secret at the same place fingerprints identically under
 /// the same key.
 ///
-/// **The key id is inside the preimage, and that does not contradict the
-/// version-beside-the-hash rule above.** The two exist for opposite reasons. An
-/// extractor version stays *out* so two versions can produce comparable hashes
-/// for the migration equality-join. A key rotation is *meant* to re-mint, and its
-/// join is dual-HMAC — computing the identity under both keys while both are
-/// held — so the key id belongs in the tuple. A store records the id beside the
-/// fingerprint as well, because a hash is one-way and rotation has to know what
-/// it is rotating from.
+/// **Keying is worth nothing if the key lives where the digests live.** HMAC
+/// carries no work factor, so the protection is all-or-nothing: whoever can read
+/// both the journal and the key can run the same full-speed offline guess the
+/// unkeyed digest would have allowed. The invariant the custody contract owes this
+/// function is that the key is *not* reachable from the store it protects.
 ///
-/// Because an [`IdentityKey`] is required by the signature, a secret-class
-/// identity cannot be minted without one. The refusal is structural, not a
-/// runtime check that could be forgotten at a call site.
+/// **The key id is inside the preimage.** Not because it does work the HMAC does
+/// not — a rotation re-mints through the HMAC alone — but because it makes the
+/// identity self-describing about which key generation minted it, and that is the
+/// decided custody contract (CLOUD-59): a store holding identities from two
+/// generations can separate them in the tuple rather than only in metadata, and
+/// dual-HMAC rotation has something to name the pair by. The id is a
+/// caller-chosen label, so two keys sharing one id would be conflated in the
+/// preimage; keeping ids unique per key generation is the custody contract's job,
+/// not this function's.
+///
+/// This does not contradict the version-beside-the-hash rule above, which is about
+/// an *extractor* version: that stays out of the preimage so two versions can
+/// produce comparable hashes for the migration equality-join, whereas a key
+/// rotation is meant to re-mint.
+///
+/// **The version coordinate a store records beside this is
+/// [`FindingKind::Code`]'s.** A secret-class finding is the code kind with its
+/// span keyed and the key id appended — not a fifth kind — so it versions with the
+/// code tuple and the two evolve together. [`override_fingerprint`] inherits the
+/// version of whichever kind produced the default it wraps, for the same reason.
+/// Neither mints a version of its own, and a store must not invent one.
+///
+/// A **secret-tagged** identity cannot be minted without a key: that much is
+/// structural, and it is all this signature buys. The **routing** is not. A span
+/// is keyed only if a classifier sends it here, and [`code_fingerprint`] takes
+/// this parameter list minus the key — so a caller who drops one argument hashes
+/// the same secret bytes unkeyed, into the same journal that cannot be expunged.
+/// Classifier recall is therefore the load-bearing control, and the residual risk
+/// is a missed classification rather than a forgotten key. Making the routing
+/// structural takes a span type only a classifier can mint, which belongs with
+/// the classifier rather than here (CLOUD-59).
 ///
 /// # Errors
 ///
@@ -472,10 +502,15 @@ pub fn secret_code_fingerprint(
     rule_id: &str,
     repo_path: &str,
     span: &str,
-    mode: SpanNormalization,
 ) -> anyhow::Result<Fingerprint> {
     let path = canonical_repo_path(repo_path)?;
-    let content = normalize_span(span, mode);
+    // Verbatim, and not the caller's choice: a secret *is* literal content, so
+    // this is exactly the narrowed-literal case the canonicalization law already
+    // assigns to [`SpanNormalization::Verbatim`]. Collapsing would fold two
+    // secrets differing only in whitespace into one identity, and for this kind a
+    // false merge hides the second secret behind the first — strictly worse than
+    // the false split a collapse is meant to avoid.
+    let content = normalize_span(span, SpanNormalization::Verbatim);
     let keyed = keyed_span(key, &content)?;
     Ok(tagged_fingerprint(
         SECRET_TAG,
@@ -492,12 +527,15 @@ pub fn secret_code_fingerprint(
 ///
 /// # Errors
 ///
-/// HMAC accepts a key of any length, so the length error cannot occur for a
-/// fixed 32-byte key. It is mapped rather than unwrapped because library code
-/// carries no panic path, not because the branch is reachable.
+/// HMAC accepts a key of any length, so the length error cannot occur for a fixed
+/// 32-byte key. It is mapped rather than unwrapped because library code carries no
+/// panic path — and mapped to a plain internal error (exit `3`) rather than a
+/// [`UsageError`] (exit `1`), because an unreachable invariant breaking is Batten's
+/// fault, never the caller's malformed input.
 fn keyed_span(key: &IdentityKey, content: &str) -> anyhow::Result<[u8; 32]> {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key.bytes)
-        .map_err(|_| UsageError::raise("identity key is not a usable HMAC key"))?;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key.bytes).map_err(|_| {
+        anyhow::anyhow!("identity: a 32-byte HMAC key was rejected as a key length")
+    })?;
     mac.update(content.as_bytes());
     Ok(mac.finalize().into_bytes().into())
 }
@@ -505,10 +543,12 @@ fn keyed_span(key: &IdentityKey, content: &str) -> anyhow::Result<[u8; 32]> {
 /// Apply a per-rule identity override to a default identity.
 ///
 /// **Split-only by construction, not by validation.** The default fingerprint is
-/// itself a field of the preimage, so two spans with different default identities
-/// cannot produce the same override identity under any discriminator: an override
-/// can fragment a group and is unable to merge two. Making that a property of the
-/// function means no config check has to enforce it, and none can be bypassed.
+/// itself a field of the preimage, so for two spans with different default
+/// identities **no colliding preimage exists** under any discriminator — an
+/// override can fragment a group, and merging two would take a SHA-256 collision
+/// rather than a chosen discriminator. That is a stronger guarantee than a config
+/// check, which could be bypassed, and a weaker one than "impossible": it inherits
+/// the hash's collision resistance and claims nothing beyond it.
 ///
 /// A constant discriminator is therefore a relabel rather than a merge — it
 /// preserves the default partition exactly. Splitting needs a discriminator that
@@ -887,25 +927,13 @@ mod tests {
 
     #[test]
     fn the_same_span_under_two_keys_is_two_identities() {
-        // The point of keying: someone holding a stored digest must not be able
-        // to confirm a guess at the secret it came from, and a second holder of
-        // the same secret must not produce the same digest.
-        let one = secret_code_fingerprint(
-            &key("k1", 1),
-            "r",
-            "src/a.rs",
-            SECRET_SPAN,
-            SpanNormalization::Verbatim,
-        )
-        .unwrap();
-        let two = secret_code_fingerprint(
-            &key("k2", 2),
-            "r",
-            "src/a.rs",
-            SECRET_SPAN,
-            SpanNormalization::Verbatim,
-        )
-        .unwrap();
+        // Two holders of the same secret mint different identities, so a digest
+        // taken from one store confirms nothing about a guess made against
+        // another. That holds for spans routed here; an unclassified span still
+        // reaches the unkeyed path, which is why the fn's doc names recall as the
+        // control rather than this signature.
+        let one = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
+        let two = secret_code_fingerprint(&key("k2", 2), "r", "src/a.rs", SECRET_SPAN).unwrap();
         assert_ne!(one, two);
     }
 
@@ -913,14 +941,7 @@ mod tests {
     fn a_keyed_identity_never_collides_with_an_unkeyed_one() {
         // Distinct domain tags, so total agreement on every other field still
         // cannot make a secret-class identity equal a plain code one.
-        let keyed = secret_code_fingerprint(
-            &key("k1", 1),
-            "r",
-            "src/a.rs",
-            SECRET_SPAN,
-            SpanNormalization::Verbatim,
-        )
-        .unwrap();
+        let keyed = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
         let plain =
             code_fingerprint("r", "src/a.rs", SECRET_SPAN, SpanNormalization::Verbatim).unwrap();
         assert_ne!(keyed, plain);
@@ -930,16 +951,7 @@ mod tests {
     fn the_same_key_and_span_is_one_stable_identity() {
         // Keying must not cost stability: a re-observation of the same secret in
         // the same place is the same finding, or every scan would re-raise it.
-        let mint = || {
-            secret_code_fingerprint(
-                &key("k1", 1),
-                "r",
-                "src/a.rs",
-                SECRET_SPAN,
-                SpanNormalization::Verbatim,
-            )
-            .unwrap()
-        };
+        let mint = || secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
         assert_eq!(mint(), mint());
     }
 
@@ -964,14 +976,7 @@ mod tests {
         }
         let expected: [u8; 32] = hasher.finalize().into();
 
-        let got = secret_code_fingerprint(
-            &key("k1", 1),
-            "r",
-            "src/a.rs",
-            SECRET_SPAN,
-            SpanNormalization::Verbatim,
-        )
-        .unwrap();
+        let got = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
         assert_eq!(got.to_hex(), Fingerprint(expected).to_hex());
     }
 
