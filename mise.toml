@@ -22,6 +22,11 @@ hk = "1.54.0"                                                # git-hook runner (
 # sidesteps that rule but source-builds a large tree (it pulls the AWS SDK):
 # measured 318s here, uncached, on every run. The gate reads the declared floor
 # from `cargo metadata` and drives rustup directly instead.
+# Coverage as a REPORT, never a gate (CLOUD-111): `mise run coverage`, surfaced
+# by a scheduled workflow, deliberately absent from `verify` and from `final`.
+# Unlike cargo-msrv above, this one ships aarch64-unknown-linux-gnu, so a
+# release-asset backend locks every platform `lock-complete` requires.
+"aqua:taiki-e/cargo-llvm-cov" = "0.8.7"
 # mise-tasks/ holds real bash programs, so they get the same lint+format
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
@@ -195,6 +200,46 @@ description = "actionlint: workflow mistakes (bad `on:` keys, undefined matrix r
 # Bare invocation: actionlint defaults to .github/workflows, and unlike taplo it
 # does not walk the tree, so there is nothing to scope away.
 run = "actionlint"
+
+[tasks.coverage]
+description = "Report: line/region coverage of the Rust suite. A REPORT, never a gate — deliberately not in `verify` and not a required check"
+shell = "bash -c"
+# WHY THIS IS NOT A GATE, and must not become one. A coverage-percentage
+# threshold rewards line-touching over behaviour assertion: the cheapest way to
+# move the number is a test that executes code and asserts nothing, which is
+# strictly worse than no test because it also has to be maintained. The real
+# quality bar here is the contract suite — byte-stable snapshots, negative exit
+# codes, the derived-artifact diffs — and those already fail loudly. So this
+# emits a number for a human to read and draws no conclusion from it.
+#
+# Consequences of that, all deliberate: absent from `[tasks.verify]`, absent
+# from `final`'s `needs` in ci.yml, and its workflow runs on a schedule rather
+# than on `pull_request` — which is also what keeps `ci-local-parity` honest,
+# since that gate requires every task a PR workflow runs to be one `verify`
+# runs. Wiring coverage into `verify` to satisfy it would be the gate this
+# refuses to be.
+#
+# `llvm-tools-preview` is NOT added to the `rust` pin's `components` above: that
+# would make every CI job download it for a tool only this task uses. Installed
+# here, on demand, and only when missing — the same "don't mutate the toolchain
+# on the common path" reasoning as `[tasks.msrv]`.
+#
+# Task bodies do not run under `set -e`, and a report built from a half-run
+# suite is a misleading number rather than a missing one, so the body opts in.
+run = '''
+set -euo pipefail
+if ! rustup component list --installed | grep -qx 'llvm-tools-preview'; then
+	if ! rustup component add llvm-tools-preview; then
+		echo "::error:: coverage: could not install llvm-tools-preview, so no report was produced." >&2
+		exit 1
+	fi
+fi
+mkdir -p "${COVERAGE_OUT_DIR:-target/coverage}"
+# Two artifacts from one instrumented run: lcov for tooling that consumes it,
+# and a summary a human reads. `--workspace` matches what `test:cargo` runs.
+cargo llvm-cov --workspace --lcov --output-path "${COVERAGE_OUT_DIR:-target/coverage}/lcov.info"
+cargo llvm-cov report --summary-only
+'''
 
 [tasks.test]
 description = "Run every test suite — Rust and shell"

@@ -1,0 +1,89 @@
+name: coverage
+
+# A coverage REPORT, not a gate (CLOUD-111).
+#
+# The distinction is the whole design. A coverage-percentage threshold rewards
+# line-touching over behaviour assertion — the cheapest way to move the number
+# is a test that executes code and asserts nothing — while the real quality bar
+# here is the contract suite: byte-stable snapshots, negative exit codes, the
+# derived-artifact diffs. Those already fail loudly. This produces a number for
+# a human to read and draws no conclusion from it.
+#
+# So, deliberately:
+#   * NOT triggered by `pull_request`. Coverage says nothing about whether a
+#     given branch may land, and putting it on the landing path would spend a
+#     runner per push for a report nobody blocks on. It also keeps
+#     `ci-local-parity` honest: that gate requires every task a PR workflow runs
+#     to be one `mise run verify` runs, and satisfying it by adding coverage to
+#     `verify` would make this the gate it refuses to be.
+#   * NOT a required status, and NOT in ci.yml's `final` fan-in.
+#   * NO threshold, no `--fail-under-lines`, nothing that can exit non-zero on
+#     the number itself. Only a broken run fails this job.
+#
+# Not a push-to-main trigger either: `main` only ever advances by fast-forward
+# to a commit a PR already tested, so triggering on push would re-run work that
+# is by construction already done. The schedule is what samples `main`.
+
+on:
+  schedule:
+    # Mondays, 07:00 UTC — an hour after lock-currency, so the two scheduled
+    # jobs do not contend, and before the week's work starts.
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). Every
+  # workflow using mise-action must set this; `mise run lock-complete` fails if
+  # one does not.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # budget: grandfathered measured=2026-08-11
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # cargo-llvm-cov drives cargo; rust supplies the compiler and the
+          # rustup that fetches llvm-tools-preview. Nothing else is invoked.
+          # `mise run ci-tools-check` fails if a name here drifts from mise.toml.
+          install_args: rust aqua:taiki-e/cargo-llvm-cov
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Instrumented builds are a different profile from every other job's,
+          # so a shared cache entry would thrash.
+          key: coverage
+      # Redirected, never piped. A pipeline hands the exit status to its LAST
+      # stage, so `mise run coverage | tee ...` would report success whenever
+      # `tee` succeeded — the false-green shape `mise run run-shape-guard`
+      # exists to refuse locally, and it is no less wrong in a workflow.
+      - run: mise run coverage >"$RUNNER_TEMP/coverage-summary.txt" 2>&1
+      # The report as a job summary, so it is readable without downloading
+      # anything, and as an artifact for whatever wants to consume the lcov.
+      - name: Publish the summary
+        if: always()
+        run: |
+          {
+            echo '## Coverage'
+            echo
+            echo 'A report, not a gate — no threshold, not a required check.'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/coverage-summary.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: coverage-lcov
+          path: target/coverage/lcov.info
+          if-no-files-found: warn

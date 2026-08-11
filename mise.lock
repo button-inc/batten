@@ -314,6 +314,52 @@ checksum = "sha256:7f12f1801bca3d480d67aaf7774f4c2a6359a3ca8eebe382c95c10c9704aa
 url = "https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_windows_amd64.zip"
 url_api = "https://api.github.com/repos/rhysd/actionlint/releases/assets/221573260"
 
+[[tools."aqua:taiki-e/cargo-llvm-cov"]]
+version = "0.8.7"
+backend = "aqua:taiki-e/cargo-llvm-cov"
+
+[tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-arm64"]
+checksum = "sha256:b7bb2ad514166f3b19fc06874c577eefde0010e5ac571f9ae33ff45cd19a4785"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861713"
+provenance = "github-attestations"
+
+[tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-arm64-musl"]
+checksum = "sha256:b7bb2ad514166f3b19fc06874c577eefde0010e5ac571f9ae33ff45cd19a4785"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861713"
+provenance = "github-attestations"
+
+[tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-x64"]
+checksum = "sha256:967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861752"
+provenance = "github-attestations"
+
+[tools."aqua:taiki-e/cargo-llvm-cov"."platforms.linux-x64-musl"]
+checksum = "sha256:967b5cc996c29d8baa52bbb4595ef1f53af35255af8e2036ddbc6468d7b523c7"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861752"
+provenance = "github-attestations"
+
+[tools."aqua:taiki-e/cargo-llvm-cov"."platforms.macos-arm64"]
+checksum = "sha256:3efee732ed7e9a653e20d96c930e0ec799901289cce90f46bb20f627e2c0d2e9"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861557"
+provenance = "github-attestations"
+
+[tools."aqua:taiki-e/cargo-llvm-cov"."platforms.macos-x64"]
+checksum = "sha256:288ce0cb976207a9a1ad5af4d7ec9a06c9af116727066fb2287df8d9d1026be9"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418861642"
+provenance = "github-attestations"
+
+[tools."aqua:taiki-e/cargo-llvm-cov"."platforms.windows-x64"]
+checksum = "sha256:56bce7aef6bf906af0fe025d2459f8be483d65ed4c105760671f9c92449c966d"
+url = "https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.8.7/cargo-llvm-cov-x86_64-pc-windows-msvc.tar.gz"
+url_api = "https://api.github.com/repos/taiki-e/cargo-llvm-cov/releases/assets/418863335"
+provenance = "github-attestations"
+
 [[tools."aqua:tamasfe/taplo"]]
 version = "0.10.0"
 backend = "aqua:tamasfe/taplo"
