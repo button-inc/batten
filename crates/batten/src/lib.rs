@@ -1372,7 +1372,7 @@ fn run_doctor(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
 }
 
 fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {
-    let described = spec::describe(&surface::command());
+    let described = spec::document(&surface::command());
     match format {
         SpecFormat::Json => {
             let json = spec::to_json(&described)?;

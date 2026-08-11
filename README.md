@@ -34,7 +34,9 @@ first-class rules.
   harness.
 - **The CLI is data.** A single usage spec is the source of truth for
   completions, man pages, and markdown, and effects are annotated once and
-  reused (the agent read-only allowlist is _derived_ from those annotations).
+  reused (the agent read-only allowlist is _derived_ from those annotations and
+  emitted by `batten spec` as `read_only_allowlist`, so a consumer reads it
+  rather than re-deriving it).
 - **Narrow configuration.** A two-layer TOML model — a repo file plus env and
   flag overrides — with no upward walk and no `conf.d` merge surface.
 - **Zero-config by default** _(planned — CLOUD-70, CLOUD-66)_: `check` on

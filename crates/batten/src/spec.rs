@@ -122,20 +122,52 @@ pub fn describe(root: &Command) -> CommandSpec {
     }
 }
 
-/// Serialize a spec to byte-stable pretty JSON (`batten spec --format json`).
+/// The whole emitted document: the command tree, plus every derivation that is
+/// a pure function of it.
+///
+/// The tree is flattened rather than nested under a key, so the root keys a
+/// consumer already reads (`path`, `subcommands`, …) stay exactly where they
+/// were and a derivation can be added beside them without moving anything.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct SpecDocument {
+    /// The command tree itself, at the document root.
+    #[serde(flatten)]
+    pub command: CommandSpec,
+    /// The derived agent read-only allowlist — see [`read_only_allowlist`].
+    /// Emitted rather than left to each consumer to re-derive: a second
+    /// implementation of the `effect == read` filter is a second place for it
+    /// to be wrong, and this one is wrong in the unsafe direction.
+    pub read_only_allowlist: Vec<String>,
+}
+
+/// Describe the whole surface as the emitted document: [`describe`] plus the
+/// derivations taken from that same walk.
+#[must_use]
+pub fn document(root: &Command) -> SpecDocument {
+    let command = describe(root);
+    SpecDocument {
+        read_only_allowlist: read_only_allowlist(&command),
+        command,
+    }
+}
+
+/// Serialize a spec document to byte-stable pretty JSON
+/// (`batten spec --format json`).
 ///
 /// # Errors
 ///
 /// Returns an error only if serialization itself fails, which for this
 /// data-only tree does not occur in practice.
-pub fn to_json(spec: &CommandSpec) -> anyhow::Result<String> {
+pub fn to_json(spec: &SpecDocument) -> anyhow::Result<String> {
     Ok(serde_json::to_string_pretty(spec)?)
 }
 
 /// The derived agent read-only allowlist (CLOUD-28): every command path whose
 /// effect is [`Effect::Read`], sorted. Derived from the same walk as the spec —
 /// there is no second, hand-maintained list — so an unclassified command can
-/// never leak in.
+/// never leak in. Emitted as [`SpecDocument::read_only_allowlist`], which is
+/// what makes the derivation reachable by the agent that has to honour it
+/// rather than only by this crate's own tests.
 #[must_use]
 pub fn read_only_allowlist(spec: &CommandSpec) -> Vec<String> {
     let mut paths = Vec::new();
@@ -164,6 +196,10 @@ mod tests {
         describe(&surface::command())
     }
 
+    fn doc() -> SpecDocument {
+        document(&surface::command())
+    }
+
     /// Collect every command path in the tree whose effect resolves to `ask`
     /// (i.e. is missing from the §5 table). Used by the completeness gate.
     fn unclassified_paths(node: &CommandSpec, root_name: &str, out: &mut Vec<String>) {
@@ -189,16 +225,45 @@ mod tests {
     #[test]
     fn json_is_byte_stable() {
         // Same input, identical bytes (§6): the ordering is fixed, no timestamps.
-        let a = to_json(&spec()).unwrap();
-        let b = to_json(&spec()).unwrap();
+        let a = to_json(&doc()).unwrap();
+        let b = to_json(&doc()).unwrap();
         assert_eq!(a, b);
     }
 
     #[test]
     fn json_parses_and_names_the_root() {
-        let json = to_json(&spec()).unwrap();
+        let json = to_json(&doc()).unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        // Flattened, so the tree's own keys stay at the document root: adding a
+        // derivation beside them must not re-nest what a consumer already reads.
         assert_eq!(value["path"], "batten");
+        assert!(value["subcommands"].is_array());
+    }
+
+    #[test]
+    fn the_emitted_allowlist_is_exactly_the_read_effect_filter() {
+        // The point of emitting the derivation is that a consumer stops
+        // re-deriving it, so what has to be pinned is that the emitted key *is*
+        // the `effect == read` filter over the emitted tree — not a list of
+        // paths, which `allowlist_is_exactly_the_read_commands` already holds
+        // and which a second copy here would only duplicate. Recomputed from
+        // the tree the same document carries, so a walk that ever stopped
+        // agreeing with the filter fails here.
+        let document = doc();
+        let mut expected: Vec<String> = Vec::new();
+        emitted_paths(
+            &document.command,
+            document.command.path.as_str(),
+            &mut expected,
+        );
+        expected.retain(|path| effect_for(path).is_read_only());
+        expected.sort();
+
+        assert_eq!(document.read_only_allowlist, expected);
+        assert_eq!(
+            document.read_only_allowlist,
+            read_only_allowlist(&document.command)
+        );
     }
 
     #[test]

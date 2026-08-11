@@ -620,6 +620,38 @@ fn spec_emits_parseable_json_on_stdout() {
 }
 
 #[test]
+fn spec_emits_the_derived_read_only_allowlist() {
+    // CLOUD-217 (39). The §5 allowlist is derived from the effect annotations,
+    // and until now the derivation was reachable only from this crate's own
+    // tests — so the agent expected to honour it had to re-derive it, which is
+    // a second implementation of a filter whose failure mode is advertising a
+    // write-bearing verb as agent-safe. Asserted over the binary's stdout
+    // because that is the artifact the agent actually reads.
+    let output = batten().arg("spec").output().expect("run batten spec");
+    assert!(output.status.success());
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("spec stdout is valid JSON");
+
+    let allowlist: Vec<&str> = value["read_only_allowlist"]
+        .as_array()
+        .expect("the emitted document carries the derived allowlist")
+        .iter()
+        .map(|path| path.as_str().expect("an allowlist entry is a string"))
+        .collect();
+
+    assert!(allowlist.contains(&"check"), "{allowlist:?}");
+    assert!(allowlist.contains(&"spec"), "{allowlist:?}");
+    // The two verbs whose exclusion is the whole point: `enforce` may run
+    // user-supplied commands, and `hook` adjudicates someone else's write.
+    assert!(!allowlist.contains(&"enforce"), "{allowlist:?}");
+    assert!(!allowlist.contains(&"hook"), "{allowlist:?}");
+
+    let mut sorted = allowlist.clone();
+    sorted.sort_unstable();
+    assert_eq!(allowlist, sorted, "the emitted allowlist is sorted (§6)");
+}
+
+#[test]
 fn spec_json_is_byte_stable_across_runs() {
     // §6: identical input yields identical bytes — no timestamps or ordering drift.
     let first = batten().arg("spec").output().expect("run batten spec");

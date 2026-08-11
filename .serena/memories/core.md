@@ -133,7 +133,10 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   same paths.
 - `spec.rs` — house-style §11: introspects the live `clap::Command` tree plus
   the `surface.rs` effect rows at runtime into byte-stable JSON (`batten spec`),
-  and derives the read-only allowlist from the same walk. Completions derive
+  and derives the read-only allowlist from the same walk, emitting it beside the
+  tree as `read_only_allowlist` (CLOUD-217 (39)) — flattened, so the tree's own
+  root keys do not move, and the filter has one implementation rather than one
+  per consumer. Completions derive
   from this too — `batten generate completions` emits them on stdout and
   `completions-check` diffs the committed copy byte-for-byte (DoR §4).
 - `exit.rs` — the `ExitCode` contract (stable numeric values); branch on named
