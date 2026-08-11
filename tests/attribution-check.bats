@@ -51,13 +51,32 @@ setup() {
 }
 
 @test "an appeal introduced into a tracked file fails the gate" {
-	# End-to-end: write the violation, run the real gate, then restore.
-	local victim="tests/.attribution-fixture.md"
-	printf '%s\n' 'We do it this way because jdx does.' >"$victim"
-	git add -N "$victim"
+	# End-to-end: write the violation, run the real gate, read the verdict.
+	#
+	# In a throwaway repo, never in this one (CLOUD-386). The gate reads `git
+	# ls-files` from the working directory, so it judges whatever tree it is
+	# pointed at — and the earlier form of this case pointed it at the real
+	# checkout, planting a tracked violation and mutating the real index for the
+	# duration. Serially that was invisible. Under `bats --jobs` it is a race:
+	# the sibling case above ("the repo as it stands passes") reads the same
+	# tracked set and would flip red, and every concurrent case shelling out to
+	# git contends on .git/index.lock. The suite's own convention already had
+	# the answer — issue-guard.bats builds a fresh repo per case for exactly
+	# this reason.
+	local repo="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$repo"
+	git -C "$repo" init -q
+	printf '%s\n' 'We do it this way because jdx does.' >"$repo/note.md"
+	# A second, clean file so the tree has more than one tracked path. The gate
+	# pipes `git ls-files -z` into `xargs -0 grep -n`, and grep prefixes the
+	# filename only when it is given more than one — a single-file fixture would
+	# assert a pointer shape the real invocation never emits.
+	printf '%s\n' 'Nothing to see here.' >"$repo/clean.md"
+	git -C "$repo" add -N note.md clean.md
+	cd "$repo" || return 1
 	run "$CHECK"
-	local status_seen="$status"
-	git rm -q --cached "$victim" >/dev/null 2>&1 || true
-	rm -f "$victim"
-	[ "$status_seen" -eq 1 ]
+	[ "$status" -eq 1 ]
+	# Pointer, never payload: the gate names the coordinate, and the line it
+	# quotes is the offending line itself rather than the file's contents.
+	[[ "$output" == *"note.md:1:"* ]]
 }

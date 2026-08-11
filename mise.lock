@@ -348,6 +348,45 @@ checksum = "sha256:2508c549b049b1d4342d08edc1cb42bfac169082b6e3069431b5bab9822db
 url = "https://github.com/sharkdp/hyperfine/releases/download/v1.20.0/hyperfine-v1.20.0-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/sharkdp/hyperfine/releases/assets/317832313"
 
+[[tools."aqua:shenwei356/rush"]]
+version = "0.9.0"
+backend = "aqua:shenwei356/rush"
+
+[tools."aqua:shenwei356/rush"."platforms.linux-arm64"]
+checksum = "sha256:e8cf6a45eab9e67b952650ea90eb87f457ac1a95a2d7e338eea88a4da488da7b"
+url = "https://github.com/shenwei356/rush/releases/download/v0.9.0/rush_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/391416978"
+
+[tools."aqua:shenwei356/rush"."platforms.linux-arm64-musl"]
+checksum = "sha256:e8cf6a45eab9e67b952650ea90eb87f457ac1a95a2d7e338eea88a4da488da7b"
+url = "https://github.com/shenwei356/rush/releases/download/v0.9.0/rush_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/391416978"
+
+[tools."aqua:shenwei356/rush"."platforms.linux-x64"]
+checksum = "sha256:436d935bcd0dc263d20674201cd3e9c85059d331d8641f970e1e8958ad0af4fc"
+url = "https://github.com/shenwei356/rush/releases/download/v0.9.0/rush_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/391416899"
+
+[tools."aqua:shenwei356/rush"."platforms.linux-x64-musl"]
+checksum = "sha256:436d935bcd0dc263d20674201cd3e9c85059d331d8641f970e1e8958ad0af4fc"
+url = "https://github.com/shenwei356/rush/releases/download/v0.9.0/rush_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/391416899"
+
+[tools."aqua:shenwei356/rush"."platforms.macos-arm64"]
+checksum = "sha256:f5cd118ee7a04c70849c891e172ed1d3fb85fc5c14a7dacddb1d5c210b0f0613"
+url = "https://github.com/shenwei356/rush/releases/download/v0.9.0/rush_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/391416669"
+
+[tools."aqua:shenwei356/rush"."platforms.macos-x64"]
+checksum = "sha256:85c43308b935bef7f09922c98dc9f1d304843457c8c0daa06a1a22ae16393f9e"
+url = "https://github.com/shenwei356/rush/releases/download/v0.9.0/rush_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/391416568"
+
+[tools."aqua:shenwei356/rush"."platforms.windows-x64"]
+checksum = "sha256:4ed40a085fa19ccdb02af418d639f9ef3dba11289454695aef7609a6431ef07e"
+url = "https://github.com/shenwei356/rush/releases/download/v0.9.0/rush_windows_amd64.exe.tar.gz"
+url_api = "https://api.github.com/repos/shenwei356/rush/releases/assets/391417091"
+
 [[tools."aqua:taiki-e/cargo-llvm-cov"]]
 version = "0.8.7"
 backend = "aqua:taiki-e/cargo-llvm-cov"
