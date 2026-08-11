@@ -87,10 +87,31 @@ EOF
 	[[ "$output" != *"retrying download"* ]]
 }
 
-@test "a queued caller waits for the lock holder, then proceeds" {
+# The lock is a directory, so a test holder takes it the way target-ensure does:
+# mkdir, then name a LIVE process in the pid file. A pid file naming a corpse is
+# an abandoned lock by construction and would be reclaimed on sight, which would
+# quietly turn the two waiting tests below into tests of nothing.
+hold_lock() { # <seconds>
 	mkdir -p "$SYSROOT/lib/rustlib"
-	flock "$SYSROOT/lib/rustlib/.batten-target-lock" sleep 0.4 &
+	local lock="$SYSROOT/lib/rustlib/.batten-target-lock"
+	# $BASHPID is the subshell's own pid, which is what $! names.
+	{
+		mkdir "$lock" && echo "$BASHPID" >"$lock/pid" && sleep "$1"
+		rm -rf "$lock"
+	} &
 	holder=$!
+	# The holder takes the lock asynchronously; wait for its pid file so the
+	# caller under test cannot win the lock before the holder has taken it.
+	local i
+	for i in $(seq 1 100); do
+		[ -e "$lock/pid" ] && return 0
+		sleep 0.02
+	done
+	return 1
+}
+
+@test "a queued caller waits for the lock holder, then proceeds" {
+	hold_lock 0.4
 	run "$ENSURE" "$T"
 	wait "$holder"
 	[ "$status" -eq 0 ]
@@ -98,14 +119,75 @@ EOF
 }
 
 @test "a held lock past the timeout is a loud failure, not a hang" {
-	mkdir -p "$SYSROOT/lib/rustlib"
-	flock "$SYSROOT/lib/rustlib/.batten-target-lock" sleep 5 &
-	holder=$!
+	hold_lock 5
 	run env TARGET_LOCK_TIMEOUT=1 "$ENSURE" "$T"
 	kill "$holder" 2>/dev/null || true
 	wait "$holder" 2>/dev/null || true
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"timed out waiting for the toolchain lock"* ]]
+}
+
+@test "the lock is released on a normal exit" {
+	run "$ENSURE" "$T"
+	[ "$status" -eq 0 ]
+	[ ! -e "$SYSROOT/lib/rustlib/.batten-target-lock" ]
+}
+
+@test "a lock whose holder is dead is reclaimed, not waited out" {
+	# flock's release came from the kernel; a directory's comes from the trap,
+	# which a SIGKILLed holder never runs. Reclaim is what keeps that a delay of
+	# one poll instead of the full timeout — a timeout here means it regressed.
+	(exit 0) &
+	corpse=$!
+	wait "$corpse" 2>/dev/null || true
+	lock="$SYSROOT/lib/rustlib/.batten-target-lock"
+	mkdir -p "$lock"
+	echo "$corpse" >"$lock/pid"
+	run env TARGET_LOCK_TIMEOUT=5 "$ENSURE" "$T"
+	[ "$status" -eq 0 ]
+	grep -qxF "$T" "$STATE/installed"
+}
+
+@test "the pre-CLOUD-286 lock FILE does not wedge the directory lock" {
+	# Every machine that ran doctor before CLOUD-286 has a regular file at this
+	# path. mkdir can never succeed against it, so an unhandled one is a 600s
+	# timeout on the first run after upgrading, on every existing checkout.
+	mkdir -p "$SYSROOT/lib/rustlib"
+	: >"$SYSROOT/lib/rustlib/.batten-target-lock"
+	run env TARGET_LOCK_TIMEOUT=5 "$ENSURE" "$T"
+	[ "$status" -eq 0 ]
+	grep -qxF "$T" "$STATE/installed"
+}
+
+@test "with no flock on PATH: acquires, serializes and releases" {
+	# The case that would have caught CLOUD-286. flock(1) is util-linux and is
+	# absent on macOS, so the proof is a PATH holding only what target-ensure
+	# actually needs — not a stub named flock, which `command -v` would find.
+	CLEAN="$BATS_TEST_TMPDIR/clean"
+	mkdir -p "$CLEAN"
+	for t in bash env cat dirname grep mkdir mv rm sleep; do
+		ln -sf "$(command -v "$t")" "$CLEAN/$t"
+	done
+	ln -sf "$STUB/rustc" "$STUB/rustup" "$CLEAN/"
+	run env -i PATH="$CLEAN" bash -c 'command -v flock'
+	[ "$status" -ne 0 ]
+
+	hold_lock 0.4
+	run env -i PATH="$CLEAN" TARGET_LOCK_TIMEOUT=30 "$ENSURE" "$T"
+	wait "$holder"
+	[ "$status" -eq 0 ]
+	grep -qxF "$T" "$STATE/installed"
+	[ ! -e "$SYSROOT/lib/rustlib/.batten-target-lock" ]
+}
+
+@test "the task layer names no util-linux flock" {
+	# The standing half of CLOUD-286: the dependency cannot come back by way of
+	# a new call site. Comments are excluded on the same reasoning as the sweep
+	# below — prose naming the binary is how the rule is explained.
+	run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise-tasks/'* | grep -c 'flock'"
+	[ "$output" = "0" ]
+	run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise.toml' | grep -c 'flock'"
+	[ "$output" = "0" ]
 }
 
 @test "target-ensure is the only live rustup-target-add in the task layer" {
