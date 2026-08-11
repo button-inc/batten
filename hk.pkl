@@ -50,6 +50,12 @@ local gate = new Mapping<String, Step> {
   // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
   // tracked. Research deliverables and evidence notes attach to the Linear
   // issue; the repo carries code and its close-in config, not research prose.
+  //
+  // Deliberately keeps NO glob where its two glob-less neighbours got one
+  // (CLOUD-224). Its input genuinely is the whole index: it fails on any TRACKED
+  // docs/ path, including one an earlier commit left behind, so a glob would let
+  // a violation persist unreported for every commit that did not touch it. It
+  // costs ~95ms, which is what makes that affordable.
   ["no-docs-tree"] {
     check = "mise run no-docs-tree"
   }
@@ -224,11 +230,27 @@ local gate = new Mapping<String, Step> {
     glob = List("AGENTS.md", ".serena/memories/always/*.md", "batten.toml")
     check = "mise run policy-budget"
   }
+  // The other half of `batten-check`'s glob (CLOUD-224). That list is derived
+  // from batten.toml — every `[[rule]]` glob, every declared budget file — so
+  // writing it here makes hk.pkl a second authority over a set the config
+  // already defines, and a second authority narrows SILENTLY: add a rule whose
+  // glob names a path outside the list and the step stops running for commits
+  // that touch only that path, with nothing going red. A glob without this is
+  // half a change (non-negotiable 2).
+  ["batten-glob-check"] {
+    glob = List("batten.toml", "hk.pkl")
+    check = "mise run batten-glob-check"
+  }
   // The macOS release artifacts are linked on Linux by zig with no Apple SDK.
   // A dependency that links a system framework breaks that, and `cross-check`
   // cannot see it because `cargo check` never links — so without this gate the
   // first symptom is the release workflow failing after the tag is cut.
+  //
+  // Globbed on the manifests alone (CLOUD-224): the predicate is `cargo metadata
+  // --filter-platform` over the resolved graph, so the inputs are exactly the
+  // files that can move that graph. Nothing else can add a dependency.
   ["macos-link-check"] {
+    glob = List("Cargo.toml", "Cargo.lock", "crates/**/Cargo.toml")
     check = "mise run macos-link-check"
   }
 
@@ -335,12 +357,52 @@ local gate = new Mapping<String, Step> {
     check = "mise run test:cargo"
   }
   // Consumer #1 in practice: the committed batten.toml, evaluated by the engine
-  // it configures, over this repository. No glob — any file can carry a
-  // violation, so the rule table applies to every commit. Chained after `test`
-  // for the same reason the cargo steps chain: exactly one cargo build holds
-  // the target-dir lock at a time.
+  // it configures, over this repository. Chained after `test` for the same
+  // reason the cargo steps chain: exactly one cargo build holds the target-dir
+  // lock at a time.
+  //
+  // This carried NO glob for its whole life, on the reasoning that any file can
+  // carry a violation — so `cargo run` rebuilt the engine on every commit
+  // whatever it touched: 9.47s cold from a fresh clone (CLOUD-212 run 1, D8)
+  // against 0.16s for the cheapest gate in the same run, and 133-141ms warm,
+  // forever (CLOUD-224).
+  //
+  // The glob is the union of what `batten check` ACTUALLY reads, which is three
+  // things and not the two the obvious reading gives (crates/batten/src/lib.rs,
+  // `run_check_with`):
+  //
+  //   1. every [[rule]], over that rule's own `glob` — and those reach well
+  //      outside crates/: mise.toml, .github/workflows/*.yml, tests/*.bats
+  //   2. `budget::measure_all`, because a declared budget is a gate under
+  //      `check` and not only under `policy budget` (CLOUD-50) — so AGENTS.md
+  //      and .serena/project.yml are genuine inputs, and "a Markdown-only change
+  //      cannot change this verdict" is FALSE for the most-edited Markdown file
+  //      in the repo
+  //   3. `defects::gate`, inert while batten.toml declares no [defects]
+  //
+  // plus the engine and its dependencies, because the task deliberately uses
+  // `cargo run` so the gate judges the working tree's engine and config as the
+  // PAIR that ships (mise.toml, task comment). A glob tight enough to skip when
+  // a dependency moves would be the false green this whole gate model exists to
+  // prevent.
+  //
+  // Deriving that union from batten.toml by hand makes hk.pkl a second authority
+  // over it, which narrows silently the next time a rule adds a glob — half a
+  // change by non-negotiable 2. `batten-glob-check` below is the other half.
   ["batten-check"] {
     depends = List("test")
+    glob =
+      List(
+        "batten.toml",
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "mise.toml",
+        ".github/workflows/*.yml",
+        "tests/*.bats",
+        "AGENTS.md",
+        ".serena/project.yml",
+      )
     check = "mise run batten-check"
   }
 }
