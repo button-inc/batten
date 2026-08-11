@@ -137,6 +137,42 @@ problem the drift gate then solves. The exception is an artifact a consumer must
 resolve independently — a published JSON schema — which is committed _and_ gated,
 because the copy they fetch has to match the code.
 
+## Worked example: measure the tool against this tree before deciding
+
+A structural-matcher survey (CLOUD-310) is the reference instance of step 3,
+"re-derive against our constraints". The tool was excellent and the verdict was
+still mostly reject, because the deciding facts were properties of _this_ tree
+and none of them appear in anyone's documentation:
+
+- **All 46 `mise-tasks/*` are extensionless.** Language dispatch by file
+  extension therefore sees none of them, the directory walk reports
+  `scannedFileCount=0`, and the process exits `0`. A gate over this repo's own
+  gates would have been a permanent silent green — the exact false green the
+  engine exists to kill, arriving as an adoption.
+- **A grammar that _almost_ fits fails silently.** `.bats` is not bash. The
+  parse dropped ~11% of `run` invocations across the suite while emitting zero
+  error nodes, and it erred in both directions at once.
+
+The transferable rule: **run the candidate over the real tree and count, in both
+directions, before writing the verdict.** A tool evaluated on its own examples
+evaluates its examples. Two numbers settle an adoption argument that prose
+cannot — how many of the incumbent's findings it eliminates, and how many real
+ones it loses.
+
+Second finding, and the one that survives the tool being rejected: of a literal
+rule's findings on this tree, the false positives were overwhelmingly
+**whole-line comments** — 27 of 40 for one gate, 8 of 40 for another, closing
+the second gate exactly. The expensive capability, knowing a string from a
+`case` pattern, bought only the remaining 13. When a matcher upgrade is
+proposed, price the cheap discriminator first; it usually carries most of the
+measured gap.
+
+Where the residue goes: an approximation reported as coverage is worse than the
+literal it replaced, so the change that lands the cheap half must _name_ the
+lines it still cannot reach and file them with a re-open predicate. CLOUD-310's
+is stated as one — the upstream crate declares a stable API **and** its MSRV is
+at or below our pin. "Revisit later" is not a predicate and reopens nothing.
+
 ## Portability constrains where instructions live
 
 Instructions live in vendor-neutral files: `AGENTS.md` (with `CLAUDE.md` a
