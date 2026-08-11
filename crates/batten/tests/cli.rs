@@ -5038,6 +5038,268 @@ fn a_store_newer_than_the_binary_is_read_only_and_still_allows() {
     );
 }
 
+// --- warm-fork restart (CLOUD-83) ---------------------------------------------
+//
+// A warm fork abandons the trajectory and keeps the working state. Almost
+// everything survives because it was never in the forked process; what does not
+// is the reader's position and the session key an open sequence-kind finding was
+// minted under. Every `batten` invocation below is a separate process, so each
+// pair of runs IS a restart — there is no in-process state for one to leak to
+// the next.
+
+/// `store_cmd`, plus the session environment a fork inherits.
+///
+/// A warm fork inherits its parent's environment, which is exactly why the parent
+/// is declared there rather than inferred from the store — so these tests set it
+/// the same way a forking host would.
+fn session_cmd(
+    dir: &std::path::Path,
+    home: &std::path::Path,
+    session: &str,
+    parent: Option<&str>,
+    args: &[&str],
+) -> Output {
+    let mut command = batten();
+    command
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("BATTEN_SESSION", session);
+    match parent {
+        Some(parent) => command.env("BATTEN_SESSION_PARENT", parent),
+        // Explicitly cleared rather than merely unset, so a test cannot inherit a
+        // parent from whatever environment the suite happens to run in.
+        None => command.env_remove("BATTEN_SESSION_PARENT"),
+    };
+    command.output().expect("run batten with a session")
+}
+
+/// The session records the store holds, as `(parent, holder -> seqno)` per file.
+///
+/// Read off disk rather than through a verb: no verb reports them, deliberately —
+/// CLOUD-83 adds no command — so the store is the only place to assert the
+/// durable half.
+fn session_records(store_dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let dir = store_dir.join("sessions");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| {
+            serde_json::from_str(&fs::read_to_string(path).expect("read a session record"))
+                .expect("a session record is JSON")
+        })
+        .collect()
+}
+
+/// The one record whose `session` is `key`.
+fn session_record(store_dir: &std::path::Path, key: &str) -> serde_json::Value {
+    session_records(store_dir)
+        .into_iter()
+        .find(|record| record["session"] == key)
+        .unwrap_or_else(|| panic!("the store holds a record for session {key}"))
+}
+
+#[test]
+fn a_fork_resumes_at_its_parents_cursor_with_every_finding_intact() {
+    // Acceptance (a) and (c) together, because one mechanism serves both: the
+    // cursor is stored on the LINEAGE ROOT, so the fork finds its parent's
+    // position without knowing it was forked, and a position it can honour is a
+    // delta rather than the full resync that would re-emit an unchanged set.
+    let (repo, home) = ledger_fixture("fork-resume");
+
+    let first = session_cmd(&repo, &home, "alpha", None, &["state", "record", "-v"]);
+    assert_eq!(first.status.code(), Some(0));
+    let before = stored_findings(&repo, &home);
+    assert_eq!(before.len(), 1, "the scan found the planted defect");
+
+    let store_dir = bound_store_dir(&repo, &home);
+    let parent = session_record(&store_dir, "alpha");
+    assert!(
+        parent["parent"].is_null(),
+        "the first session is nobody's fork: {parent}"
+    );
+    let held = parent["cursors"]["record"].clone();
+    assert!(
+        held["generation"].is_string() && held["seqno"].is_number(),
+        "the parent left a resume point: {parent}"
+    );
+
+    // A separate process, declaring itself a fork of the first.
+    let forked = session_cmd(
+        &repo,
+        &home,
+        "beta",
+        Some("alpha"),
+        &["state", "record", "-v"],
+    );
+    assert_eq!(forked.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&forked.stderr);
+    assert!(
+        stderr.contains("resumed"),
+        "the fork resumed from a cursor: {stderr}"
+    );
+    assert!(
+        !stderr.contains("full resync"),
+        "a fork with its parent's position must never re-hand itself the whole set: {stderr}"
+    );
+
+    // The edge is recorded on the fork, and the cursor stays on the root: two
+    // records, one position.
+    assert_eq!(session_record(&store_dir, "beta")["parent"], "alpha");
+    assert!(
+        session_record(&store_dir, "beta")["cursors"]
+            .as_object()
+            .is_none_or(serde_json::Map::is_empty),
+        "the position belongs to the lineage root, not to each descendant"
+    );
+    assert_eq!(
+        session_record(&store_dir, "alpha")["cursors"]["record"],
+        held,
+        "an unchanged journal leaves the root's position where it was"
+    );
+
+    // And the findings themselves are untouched by any of it.
+    assert_eq!(
+        stored_findings(&repo, &home),
+        before,
+        "a restart preserves the store, findings and instances alike"
+    );
+}
+
+#[test]
+fn a_rotated_generation_still_forces_the_resync_it_exists_to_force() {
+    // The resume point must not become a way to honour a cursor that is no longer
+    // honourable. GC rotates the generation, which invalidates every outstanding
+    // position by construction — the stored one included, since it is read back
+    // through the same `since` every other reader uses.
+    let (repo, home) = ledger_fixture("fork-rotate");
+    assert_eq!(
+        session_cmd(&repo, &home, "alpha", None, &["state", "record"])
+            .status
+            .code(),
+        Some(0)
+    );
+
+    // A second ref, then its death, is what makes GC drop instances and rotate.
+    let tree = repo.parent().unwrap().join("wt");
+    git_in(
+        &repo,
+        &["worktree", "add", "-b", "doomed", tree.to_str().unwrap()],
+    );
+    assert_eq!(
+        session_cmd(&tree, &home, "alpha", None, &["state", "record"])
+            .status
+            .code(),
+        Some(0)
+    );
+    git_in(
+        &repo,
+        &["worktree", "remove", "--force", tree.to_str().unwrap()],
+    );
+    git_in(&repo, &["branch", "-D", "doomed"]);
+
+    let store_dir = bound_store_dir(&repo, &home);
+    let before = session_record(&store_dir, "alpha")["cursors"]["record"]["generation"].clone();
+
+    let collected = session_cmd(
+        &repo,
+        &home,
+        "beta",
+        Some("alpha"),
+        &["state", "record", "-v"],
+    );
+    assert_eq!(collected.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&collected.stderr);
+    assert!(
+        stderr.contains("full resync"),
+        "a cursor from a retired generation must resync, never delta: {stderr}"
+    );
+    assert_ne!(
+        session_record(&store_dir, "alpha")["cursors"]["record"]["generation"],
+        before,
+        "the stored position moves to the live generation"
+    );
+}
+
+#[test]
+fn an_undeclared_session_leaves_the_store_and_the_report_untouched() {
+    // Absent is not empty (`transcript.rs`'s law). A host that supplies no
+    // session is a repository not using this, so nothing is written and the
+    // byte-stable one-line report is exactly what it was before any of this.
+    let (repo, home) = ledger_fixture("fork-unconfigured");
+    let plain = store_cmd(&repo, &home, &["state", "record", "-v"]);
+    assert_eq!(plain.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&plain.stderr);
+    assert!(
+        !stderr.contains("session"),
+        "an unconfigured repository is told nothing about sessions: {stderr}"
+    );
+    assert!(
+        stderr.contains("state record refs/heads/main: 1 minted"),
+        "the existing report is unchanged: {stderr}"
+    );
+    assert!(
+        !bound_store_dir(&repo, &home).join("sessions").exists(),
+        "nothing declared, nothing written"
+    );
+
+    // An empty value is how a CI file clears one, and reads the same way.
+    let cleared = session_cmd(&repo, &home, "", None, &["state", "record", "-v"]);
+    assert_eq!(cleared.status.code(), Some(0));
+    assert!(
+        !bound_store_dir(&repo, &home).join("sessions").exists(),
+        "an empty session is no session, never a session named the empty string"
+    );
+}
+
+#[test]
+fn a_declared_parent_never_relinks_a_lineage_that_is_already_recorded() {
+    // Ancestry is a fact about a fork that happened. A second, different parent
+    // would move every already-resolved sequence identity and the cursor with
+    // them, under readers holding the old root — so the recorded edge stands and
+    // the disagreement is reported rather than resolved silently.
+    let (repo, home) = ledger_fixture("fork-relink");
+    for (session, parent) in [("alpha", None), ("beta", Some("alpha"))] {
+        assert_eq!(
+            session_cmd(&repo, &home, session, parent, &["state", "record"])
+                .status
+                .code(),
+            Some(0)
+        );
+    }
+    let store_dir = bound_store_dir(&repo, &home);
+    assert_eq!(session_record(&store_dir, "beta")["parent"], "alpha");
+
+    let conflicting = session_cmd(
+        &repo,
+        &home,
+        "beta",
+        Some("gamma"),
+        &["state", "record", "-v"],
+    );
+    assert_eq!(
+        conflicting.status.code(),
+        Some(0),
+        "a contradicted declaration is reported, never an error and never a deny"
+    );
+    assert!(
+        String::from_utf8_lossy(&conflicting.stderr).contains("differs from the recorded one"),
+        "the disagreement is visible: {}",
+        String::from_utf8_lossy(&conflicting.stderr)
+    );
+    assert_eq!(
+        session_record(&store_dir, "beta")["parent"],
+        "alpha",
+        "the recorded ancestry is what stands"
+    );
+}
+
 // --- the transcript capability (CLOUD-95) -----------------------------------
 //
 // A completed session transcript is an optional `check` input. Three states,

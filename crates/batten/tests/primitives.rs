@@ -933,3 +933,140 @@ fn the_crate_bakes_in_no_consumer_vocabulary() {
     }
     assert!(scanned > 0, "the grep must actually have read the crate");
 }
+
+// --- warm-fork identity requirements (CLOUD-83) --------------------------------
+//
+// The library half of the restart obligations. `tests/cli.rs` covers what a
+// consumer reaches over the CLI — the resume point and the lineage record — and
+// these cover the two identity properties, which mint no subcommand: the
+// sequence kind's session must follow a fork, and the other three kinds must
+// carry no session at all.
+
+/// A scratch store directory, wiped so a crashed prior run cannot mask anything.
+fn session_store(name: &str) -> PathBuf {
+    common::scratch(name)
+}
+
+/// Record a chain `keys[0]` <- `keys[1]` <- …, each declaring the one before it
+/// as its parent, the way a run of separate forked processes would.
+fn fork_chain(dir: &Path, keys: &[&str]) {
+    for pair in keys.windows(2) {
+        batten::session::observe(
+            dir,
+            &batten::session::Declared {
+                key: pair[1].to_owned(),
+                parent: Some(pair[0].to_owned()),
+            },
+        )
+        .expect("record a fork edge");
+    }
+}
+
+#[test]
+fn a_sequence_finding_open_at_fork_time_follows_the_fork() {
+    // CLOUD-83's §7 (b) and the identity half of its stated assumption: a warm
+    // fork continues the parent's session key, so the deny-then-bypass finding
+    // the parent opened keeps its identity in the trajectory that inherited the
+    // working state. Asserted over `sequence_fingerprint` itself, because the
+    // claim is about the identity and not about any rendering of it.
+    let dir = session_store("fork-identity");
+    fork_chain(&dir, &["alpha", "beta", "gamma"]);
+
+    let opened = batten::identity::sequence_fingerprint("deny-then-bypass", "p", Some("alpha"));
+    for descendant in ["beta", "gamma"] {
+        let resolved =
+            batten::session::sequence_session(&dir, descendant).expect("resolve the lineage");
+        assert_eq!(
+            batten::identity::sequence_fingerprint("deny-then-bypass", "p", Some(&resolved)),
+            opened,
+            "{descendant} inherited the working state, so it inherits the open finding"
+        );
+    }
+
+    // The other direction is what makes it a fork rule rather than
+    // session-blindness: an unrelated session mints its OWN identity, which is
+    // the entire reason the session is in the tuple.
+    let stranger =
+        batten::session::sequence_session(&dir, "stranger").expect("resolve an unforked session");
+    assert_ne!(
+        batten::identity::sequence_fingerprint("deny-then-bypass", "p", Some(&stranger)),
+        opened,
+        "a second session's incident must not dedupe into the first's open finding"
+    );
+}
+
+#[test]
+fn no_session_scoped_field_enters_a_code_log_or_scope_identity() {
+    // CLOUD-83's §7 (d). These three kinds survive a restart by CONSTRUCTION —
+    // their tuples carry nothing process-local — and that is a property worth a
+    // gate rather than a comment, because the cost of losing it is silent: every
+    // stored finding would re-mint under a new identity on the next fork and the
+    // store would look busy rather than broken.
+    //
+    // Asserted twice. First behaviourally: the three functions take no session,
+    // so a caller cannot vary one, and a store with a lineage recorded in it
+    // changes none of the three values.
+    let dir = session_store("fork-identity-audit");
+    let code = batten::identity::code_fingerprint(
+        "r",
+        "src/a.rs",
+        "TODO",
+        batten::identity::SpanNormalization::Collapsed,
+    )
+    .expect("a clean repo-relative path");
+    let log = batten::identity::log_fingerprint("r", "stdout", "template");
+    let scope = batten::identity::scope_fingerprint("r", "src/a.rs");
+
+    fork_chain(&dir, &["alpha", "beta"]);
+    assert_eq!(
+        batten::identity::code_fingerprint(
+            "r",
+            "src/a.rs",
+            "TODO",
+            batten::identity::SpanNormalization::Collapsed,
+        )
+        .expect("a clean repo-relative path"),
+        code,
+        "a code identity is a fact about content, not about who was looking"
+    );
+    assert_eq!(
+        batten::identity::log_fingerprint("r", "stdout", "template"),
+        log
+    );
+    assert_eq!(batten::identity::scope_fingerprint("r", "src/a.rs"), scope);
+
+    // The sequence kind is the control: it DOES move with the session, so a
+    // suite that only asserted the three above would also pass if every
+    // fingerprint had quietly become session-blind.
+    assert_ne!(
+        batten::identity::sequence_fingerprint("r", "p", Some("alpha")),
+        batten::identity::sequence_fingerprint("r", "p", Some("beta")),
+        "the sequence kind must still distinguish sessions"
+    );
+
+    // Second, at the source level, in the spirit of `store.rs`'s
+    // `source_keys_on_no_basename`: the behavioural half above cannot fail while
+    // the signatures stay session-free, so it would not catch the change that
+    // matters — someone adding a session parameter. Each function BODY is
+    // bounded by the first column-zero `}`, which is where an item ends under
+    // this crate's formatting.
+    let source =
+        fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/identity.rs"))
+            .expect("read identity.rs");
+    for name in [
+        "pub fn code_fingerprint",
+        "pub fn log_fingerprint",
+        "pub fn scope_fingerprint",
+    ] {
+        let body = source
+            .split(name)
+            .nth(1)
+            .and_then(|rest| rest.split("\n}\n").next())
+            .unwrap_or_else(|| panic!("{name} is in identity.rs"));
+        assert!(
+            !body.contains("session"),
+            "{name} reads a session; a process-local component in a code/log/scope \
+             tuple would re-mint every stored finding on a warm fork (CLOUD-83)"
+        );
+    }
+}
