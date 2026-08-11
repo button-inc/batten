@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.54](https://github.com/button-inc/batten/compare/v0.0.53...v0.0.54) - 2026-08-11
+
+### Added
+
+- *(identity)* key secret-class identity, and make an override split-only
+
 ## [0.0.53](https://github.com/button-inc/batten/compare/v0.0.52...v0.0.53) - 2026-08-11
 
 ### Added
