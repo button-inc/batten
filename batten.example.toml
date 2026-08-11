@@ -108,10 +108,36 @@ effect = "destructive"
 redirect = "append, or write through the surface that owns the file"
 
 # Rules are the output-producing half of the config: glob-selected, kind-typed
-# predicates over the repository, evaluated by `batten check`. A `forbid` rule
-# fires on any line containing its literal pattern, reported pointer-only as
-# `path:line rule-id`. This one ships live so a copied config detects
+# predicates over the repository. This one ships live so a copied config detects
 # something real on day one: a conflict marker that survived a botched merge.
+#
+# It is a `command` rule, and that is the lesson worth copying. Batten does not
+# re-implement a check some tool already owns; it selects the paths, delegates,
+# and decides what a non-zero exit means downstream. Write a `forbid` rule when
+# no existing tool answers your question, and a `command` rule when one does.
+#
+#   check     the inspection-only command — the gate, and the only side
+#             enforcement ever runs. `{{files}}` expands in place to the matched
+#             paths, batched under the argv limit; omit it and the command
+#             self-discovers its own inputs. Split on whitespace and executed
+#             directly, never through a shell, so what runs is what you read.
+#   fix       the optional mutating half of the same duality. Reserved: this
+#             build executes no fix, and refuses a rule declaring one rather
+#             than accepting a repair that would silently never happen.
+#
+# THE GLOB IS A GATE BEFORE IT IS AN ARGV SOURCE. No match means no process is
+# spawned at all — so keep it to the files you actually want handed to the
+# delegate, and remember that the walk currently has no gitignore: a `**` in a
+# repository with a build directory hands that directory over too.
+#
+# The predicate is the exit code ALONE. The command's stdout and stderr are
+# discarded and never parsed for meaning, so a finding reports this rule's own
+# pointer — the glob, with no line number, because a command condemns a batch
+# rather than a span. A `forbid` rule reports `path:line rule-id` instead.
+#
+# A `command` rule spawns a process, so it runs under `batten enforce` only;
+# `batten check` refuses it with a usage error rather than skipping it, which is
+# what keeps `check`'s read-only effect a promise rather than a hope.
 #
 # Two per-rule keys are deliberately separate axes (cargo-deny's model):
 #
@@ -125,9 +151,9 @@ redirect = "append, or write through the surface that owns the file"
 #             key (or the reverse) is refused with exit 1, not reinterpreted.
 [[rule]]
 id = "no-conflict-markers"
-kind = "forbid"
+kind = "command"
 glob = "**/*.rs"
-pattern = "<<<<<<< "
+check = "hk util check-merge-conflict --assume-in-merge {{files}}"
 severity = "deny"
 scope = "tree"
 
