@@ -175,6 +175,17 @@ mod tests {
         }
     }
 
+    /// Every command path the binary emits, sorted; the bare root is skipped
+    /// because it declares no verb of its own.
+    fn emitted_paths(node: &CommandSpec, root_name: &str, out: &mut Vec<String>) {
+        if node.path != root_name {
+            out.push(node.path.clone());
+        }
+        for sub in &node.subcommands {
+            emitted_paths(sub, root_name, out);
+        }
+    }
+
     #[test]
     fn json_is_byte_stable() {
         // Same input, identical bytes (§6): the ordering is fixed, no timestamps.
@@ -254,5 +265,116 @@ mod tests {
         );
         assert_eq!(effect_for("enforce"), Effect::Unclassified);
         assert!(!effect_for("enforce").is_read_only());
+    }
+
+    #[test]
+    fn the_mediation_entrypoint_is_never_read_only() {
+        // CLOUD-244. House-style §2 listed `hook` as `(read)`, and that is the
+        // one row where the document is simply wrong — wrong in the unsafe
+        // direction, because §5 makes the agent allowlist *derived* from
+        // `effect == read`, so implementing §2 as written would have advertised
+        // the deny-issuing mediator as agent-safe. §5's promise about a `read`
+        // verb ("structurally incapable, not merely well-behaved") cannot be
+        // made about a verb whose whole job is adjudicating someone else's
+        // write. Pinned here so the correction cannot be undone by a row edit.
+        let allowlist = read_only_allowlist(&spec());
+        assert!(
+            !allowlist.contains(&"hook".to_owned()),
+            "the mediation entrypoint leaked into the read-only allowlist: {allowlist:?}"
+        );
+        assert_eq!(effect_for("hook"), Effect::Unclassified);
+        assert!(!effect_for("hook").is_read_only());
+    }
+
+    #[test]
+    fn the_stdout_only_emitter_stays_read() {
+        // CLOUD-244, the one row where the decision was real rather than
+        // bookkeeping: §2 declared `generate` `(write)`, main declares it
+        // `Read`. Settled against what the verb *does* — emission is
+        // stdout-only, so the redirect that refreshes a committed artifact is
+        // the caller's (`mise run completions`), never the binary's. `read` is
+        // therefore structurally honest and not a promise about behaviour, and
+        // §2 is corrected rather than the code. If a sub-verb ever opens a file
+        // itself, this is the assertion that has to be deleted deliberately.
+        for path in ["generate", "generate completions", "generate schema"] {
+            assert_eq!(
+                effect_for(path),
+                Effect::Read,
+                "{path} no longer emits on stdout only: reclassify it and drop it from the allowlist"
+            );
+        }
+    }
+
+    #[test]
+    fn the_emitted_surface_is_exactly_the_committed_row_set() {
+        // CLOUD-244's in-tree half. §2 and the emitted spec disagreed on four
+        // rows for want of anything comparing them, and the comparison itself
+        // cannot be automated yet: §2 lives in a Linear document, out of tree,
+        // and `batten check` evaluates a file tree (that gap is CLOUD-95). What
+        // *is* checkable in-tree is that the emitted row set never moves
+        // silently — so a verb added, renamed, or re-parented (`config schema`
+        // -> `generate schema` was one of the four) fails here and has to be
+        // stated, which is the prompt to reconcile §2 in the same change.
+        let root = spec();
+        let mut paths = Vec::new();
+        emitted_paths(&root, root.path.as_str(), &mut paths);
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "check".to_owned(),
+                "config".to_owned(),
+                "config epoch".to_owned(),
+                "config lint".to_owned(),
+                "config show".to_owned(),
+                "defects".to_owned(),
+                "defects add".to_owned(),
+                "defects query".to_owned(),
+                "doctor".to_owned(),
+                "enforce".to_owned(),
+                "exec".to_owned(),
+                // The schema is emitted by `generate`, not `config`: it is a
+                // derivation of the config types, and §11 gives every
+                // derivation the one emitter (CLOUD-244).
+                "generate".to_owned(),
+                "generate completions".to_owned(),
+                "generate schema".to_owned(),
+                "hook".to_owned(),
+                "policy".to_owned(),
+                "policy budget".to_owned(),
+                "provision".to_owned(),
+                "provision apply".to_owned(),
+                "provision status".to_owned(),
+                "receipt".to_owned(),
+                "receipt record".to_owned(),
+                "receipt status".to_owned(),
+                "spec".to_owned(),
+                "state".to_owned(),
+                "state adopt".to_owned(),
+                "state list".to_owned(),
+                "state migrate".to_owned(),
+                "state record".to_owned(),
+                "worktree".to_owned(),
+                "worktree status".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_spec_emits_exactly_the_committed_formats() {
+        // CLOUD-244's fourth row. §2 and §11 advertised `spec --format
+        // kdl|json`; only `json` was ever implemented, and a format named in
+        // the spec and absent from the binary is a promise an agent's argv
+        // discovers is false. Settled as: JSON is the agent-facing contract
+        // (§6, byte-stable), KDL had no consumer, so it is removed from the
+        // document rather than implemented. Committed here so re-adding a
+        // format is a deliberate edit to this list and to §2 together.
+        let formats: Vec<String> = <crate::cli::SpecFormat as clap::ValueEnum>::value_variants()
+            .iter()
+            .filter_map(|format| {
+                clap::ValueEnum::to_possible_value(format).map(|value| value.get_name().to_owned())
+            })
+            .collect();
+        assert_eq!(formats, vec!["json".to_owned()]);
     }
 }

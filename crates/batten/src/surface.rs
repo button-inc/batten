@@ -765,7 +765,10 @@ pub const SURFACE: &[CommandDecl] = &[
     // Emission is stdout-only — `generate` writes no file, so the redirect that
     // refreshes a committed artifact is the caller's (`mise run completions`),
     // never the binary's. That is what makes `read` structurally honest here
-    // rather than a promise about behaviour.
+    // rather than a promise about behaviour. House-style §2 read `(write)`;
+    // settled against the implementation and corrected in the document, with
+    // `spec::tests::the_stdout_only_emitter_stays_read` holding the decision
+    // (CLOUD-244).
     // The designated post-install self-check (§12). Diagnoses whether Batten can
     // do its job here; it never renders a policy verdict, which is why `config
     // lint` is not one of its diagnostics (CLOUD-66).

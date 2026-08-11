@@ -256,6 +256,12 @@ pub enum GenerateCommand {
 }
 
 /// The formats `batten spec` can emit.
+///
+/// One, deliberately. House-style §2 and §11 advertised `kdl|json`; KDL was
+/// never implemented and never had a consumer, and JSON is the agent-facing
+/// contract (§6). The document is corrected rather than the binary, and
+/// `spec::tests::the_spec_emits_exactly_the_committed_formats` pins the list so
+/// a second format is added to both at once (CLOUD-244).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 #[non_exhaustive]
 pub enum SpecFormat {
