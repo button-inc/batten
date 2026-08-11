@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.61](https://github.com/button-inc/batten/compare/v0.0.60...v0.0.61) - 2026-08-11
+
+### Added
+
+- *(defects)* append-only defect ledger with a check-enforced gate
+- *(rules)* let a count move only one way, and catch the tree that emptied
+
+### Fixed
+
+- *(defects)* satisfy the output-contract census and the items-after-statements lint
+- *(ci)* supply the ratchet base the runner does not fetch, and isolate the fixtures that read it
+
+### Other
+
+- apply rustfmt to the defect-ledger module and its suite
+- *(spec)* admit `defects query` to the derived read-only allowlist
+
 ## [0.0.60](https://github.com/button-inc/batten/compare/v0.0.59...v0.0.60) - 2026-08-11
 
 ### Added
