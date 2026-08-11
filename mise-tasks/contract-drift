@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+#MISE description="Hook body: remind once when the instruction surface changed under a running session (reads the hook payload on stdin; pointer-only)"
+#
+# CLOUD-187. A session loads its hook wiring and reads its instruction files ONCE,
+# at start. When the contract then changes on `main` — a new guard lands, a
+# workflow rule is rewritten — the running session keeps executing the old
+# contract with no signal that it drifted. Measured: `issue-guard` landed
+# mid-session and a live session readied a PR whose branch and commits carried no
+# `CLOUD-<n>` key, because that hook was never in that session's wiring; the same
+# session rebased across several instruction-file changes and re-read none.
+#
+# The landing-path gates are unaffected — they run from the TREE, not the session.
+# What binds only through the session-start snapshot is CONDUCT: how to sequence
+# the lifecycle, board discipline, what a commit must carry. So this is
+# feedforward with a trigger, not a gate: it names the files that moved and the
+# agent does the reading. Diffing *semantics* is deliberately out of scope.
+#
+# WHY NOT `PreToolUse`, which the issue's Ready block specified. The two halves of
+# that spelling are incompatible in this CLI build, and its own hook registry says
+# so: `PreToolUse` documents exit-code channels only — 0 is "stdout/stderr not
+# shown", 2 is "show stderr to model AND BLOCK tool call". The only model-facing
+# channel there is the blocking one, and a deny is exactly what CLOUD-97 and
+# CLOUD-219 each independently ruled out ("detection and self-clearing, never a
+# hard deny"), because pausing mid-task is legitimate. `PostToolBatch` documents
+# the shape verbatim: "Fires once after every tool call in a batch has resolved,
+# before the next model request. Return additionalContext via hookSpecificOutput
+# to inject context once for the whole batch." That is also the better moment on
+# the merits — "before the next model request" IS "before the next lifecycle
+# step" — and it costs one sweep per batch rather than one per tool call.
+#
+# MEASURED, not inferred, on the session that wrote this file: the `PostToolBatch`
+# entry took effect within that same session — the edit adding it landed, and the
+# next batch boundary delivered this task's `additionalContext` naming the file it
+# had just changed. So the channel works, and the issue's premise ("hooks are
+# session-start snapshots") is narrower than it reads: whatever the harness
+# re-reads, it is not everything. That does not soften the defect — a `PreToolUse`
+# guard demonstrably did NOT load mid-session, which is the measurement CLOUD-187
+# was filed on — it means the reminder's settings.json sentence is a warning to
+# check, not a guarantee of absence.
+#
+# WHY IT IS ALSO WIRED AT `SessionStart`, which is load-bearing rather than
+# symmetry. The first batch of an autonomous session is routinely `git fetch` +
+# rebase. A snapshot first written at the END of that batch would record
+# post-rebase state and miss the very drift this exists to catch, so the seed has
+# to happen before any tool runs.
+#
+# Fails OPEN — exit 0, no output — on everything it cannot establish, and on
+# BATTEN_CONTRACT_DRIFT_BYPASS. `PostToolBatch` spends exit 2 on "stop the agentic
+# loop", so a non-zero exit here would halt a turn over a bookkeeping failure.
+set -uo pipefail
+
+[ -n "${BATTEN_CONTRACT_DRIFT_BYPASS:-}" ] && exit 0
+
+raw=$(cat) || exit 0
+[ -n "$raw" ] || exit 0
+
+# The snapshot key. Per SESSION, not per clone, because the question is "did the
+# surface change since THIS session read it" — a clone-wide snapshot would remind
+# a session that started *after* the change and therefore already has it.
+#
+# An absent `session_id` degrades to a shared key rather than to silence: a
+# weaker answer beats a dead mechanism, and every event this is wired to carries
+# the field today. `// empty` rather than a bare read so a payload jq cannot parse
+# lands on the fallback instead of the string "null".
+session=$(printf '%s' "$raw" | jq -r '.session_id // empty' 2>/dev/null) || session=""
+# The event names ITSELF in the payload, so the reply's `hookEventName` is read
+# from the caller rather than hardcoded — this one body is wired to two events and
+# a hardcoded name would be wrong at one of them.
+event=$(printf '%s' "$raw" | jq -r '.hook_event_name // empty' 2>/dev/null) || event=""
+[ -n "$event" ] || event="PostToolBatch"
+# Anything but the characters a session id actually uses is dropped, so the key
+# can never escape the snapshot directory or name a path of its own choosing.
+key=$(printf '%s' "${session:-shared}" | tr -c 'A-Za-z0-9._-' '-')
+[ -n "$key" ] || key="shared"
+
+# Outside a checkout there is no surface to hash and nowhere per-clone to keep a
+# snapshot, so there is nothing this can honestly judge.
+git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+[ -n "$git_dir" ] || exit 0
+
+# THE SURFACE, written once as data. Every path whose content binds an agent's
+# conduct: the always-loaded instructions, the path-triggered rules, the hook
+# wiring itself, the gate config, and the task layer those hooks resolve to.
+#
+# A pathspec list fed through `git ls-files`, never a shell glob: TRACKED files
+# are the contract, and untracked scratch under `mise-tasks/` is not. That also
+# makes an added or removed contract file drift by construction rather than
+# through a second code path.
+SURFACE=(AGENTS.md .claude/rules .claude/settings.json hk.pkl mise-tasks)
+
+paths=$(git ls-files -- "${SURFACE[@]}" 2>/dev/null) || exit 0
+[ -n "$paths" ] || exit 0
+
+# One `hash-object` process for the whole surface. Measured on this repo: 63
+# files, 8ms, two spawns total — which is what makes this affordable at every
+# batch boundary.
+#
+# `--stdin-paths` rather than an argv list so the call cannot outgrow ARG_MAX as
+# the task layer grows, and WORKING-TREE content rather than `git ls-tree HEAD`:
+# a rebase updates the tree, and a local edit to the contract is drift too.
+hashes=$(printf '%s\n' "$paths" | git hash-object --stdin-paths 2>/dev/null) || exit 0
+
+# `<blob-sha> <path>` per line, in `ls-files` order. Zipped by line number rather
+# than by a per-file call; a path containing a newline would break the pairing,
+# and `git ls-files` without `-z` could not have reported one in the first place.
+manifest=$(paste -d' ' <(printf '%s\n' "$hashes") <(printf '%s\n' "$paths")) || exit 0
+[ -n "$manifest" ] || exit 0
+
+# Out of tree, per clone, beside the receipt store — so a checkout stays clean and
+# no new path scheme is invented.
+store="$git_dir/batten-contract"
+mkdir -p "$store" 2>/dev/null || exit 0
+snapshot="$store/$key"
+
+write_snapshot() {
+	printf '%s\n' "$manifest" >"$snapshot" 2>/dev/null || return 1
+}
+
+# STATE 1: no snapshot. This is the session's start, so record it and say nothing.
+# The seed is never a reminder — there is no "before" to have drifted from.
+if [ ! -f "$snapshot" ]; then
+	write_snapshot || true
+	exit 0
+fi
+
+previous=$(cat "$snapshot" 2>/dev/null) || exit 0
+
+# STATE 2: byte-identical. Silence is the default and the common case.
+[ "$previous" = "$manifest" ] && exit 0
+
+# STATE 3: it moved. One bucket for "changed or added" — a line present now and
+# absent before is either a new hash for a known path or a path that did not exist,
+# and both mean the same thing to a reader who has to go and look — and one for
+# "no longer tracked", compared on the path field alone so a file that merely moved
+# position in the listing is not reported as gone.
+changed=$(
+	comm -13 <(printf '%s\n' "$previous" | sort) <(printf '%s\n' "$manifest" | sort) |
+		cut -d' ' -f2- | sort -u
+)
+gone=$(
+	comm -23 \
+		<(printf '%s\n' "$previous" | cut -d' ' -f2- | sort -u) \
+		<(printf '%s\n' "$manifest" | cut -d' ' -f2- | sort -u)
+)
+
+# THE RATE LIMIT IS THE OVERWRITE, with no second state file to keep consistent —
+# the same reasoning `stop-guard` applies to `stop_hook_active`. One reminder per
+# change-set: the next invocation compares against what was just reported, so a
+# surface that stops moving goes quiet by itself.
+write_snapshot || true
+
+# A hash set that differs while every path resolves to the same list is not
+# possible, but a `comm` that produced nothing must not emit an empty reminder.
+[ -n "$changed$gone" ] || exit 0
+
+count=$(printf '%s\n' "$changed" | grep -c . || true)
+removed_count=$(printf '%s\n' "$gone" | grep -c . || true)
+
+# POINTER, NEVER PAYLOAD (non-negotiable rule 4), and here that is the mechanism
+# as much as the rule: a reminder carrying the new text would be a mirror, and a
+# mirror is satisfied by reading the hook's own output instead of the file. A
+# path can only be answered by opening it. `tests/contract-drift.bats` asserts
+# the emitted bytes carry no substring of the changed file's content, so a later
+# edit cannot turn this into a diff.
+reason="contract-drift ${count} changed, ${removed_count} removed"
+if [ -n "$changed" ]; then
+	reason="$reason
+
+changed or added:
+$(printf '%s\n' "$changed" | sed 's/^/  /')"
+fi
+if [ -n "$gone" ]; then
+	reason="$reason
+
+no longer tracked:
+$(printf '%s\n' "$gone" | sed 's/^/  /')"
+fi
+
+reason="$reason
+
+These files changed under this session, which read the OLD ones at start and has
+not re-read them. Re-read the ones named above before the next lifecycle step.
+
+If \`.claude/settings.json\` is among them, check whether a hook it adds is in this
+session's wiring — a \`PreToolUse\` guard measurably was not (CLOUD-187), and an
+unloaded rule is unenforced here and has to be self-enforced for the rest of this
+session.
+
+Reported once per change-set; silence otherwise. BATTEN_CONTRACT_DRIFT_BYPASS=1 to
+switch it off."
+
+jq -n --arg r "$reason" --arg e "$event" '{
+  hookSpecificOutput: {
+    hookEventName: $e,
+    additionalContext: $r
+  }
+}'

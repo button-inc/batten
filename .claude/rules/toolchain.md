@@ -121,9 +121,18 @@ them in a `;`/`||` list: each discards the verdict AND the exit status
 (`mem:toolchain-and-hooks`, "A Bash call is a supervised process"). Run the
 command alone in the call and read the log in a separate one.
 
-That's a rule, so it ships with mechanisms — the `PreToolUse` hooks wired in
+**A rebase or fetch that touches the instruction surface is a re-read trigger.**
+Hooks and instruction files are session-start snapshots: the harness loads the
+wiring once and the agent reads `AGENTS.md`, `.claude/rules/*` and the task layer
+once, so a contract that lands mid-session binds nothing until it is re-read —
+re-read the files named before the next lifecycle step, and self-enforce the rule
+of any hook `.claude/settings.json` added, since that wiring cannot reload
+(CLOUD-187). `contract-drift` is the feedforward half.
+
+That's a rule, so it ships with mechanisms — the hooks wired in
 `.claude/settings.json` (the settings file is the authoritative list; don't
-restate its count here), each failing open on anything it can't parse:
+restate its count here), each failing open on anything it can't parse. Most are
+`PreToolUse`; the two exceptions name their event:
 
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision
@@ -201,6 +210,23 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   the principle — read the status from the harness — rather than naming one
   command, since complying with the narrower wording is how the second instance
   happened. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.
+- `contract-drift` is the only hook here that is not `PreToolUse`, and it cannot
+  be: that event's model-facing channel is exit 2, which _blocks_ the call, and
+  CLOUD-97 and CLOUD-219 each ruled a deny out independently. So it runs on
+  `SessionStart` (seeding the snapshot before any tool does, since an autonomous
+  session's first batch is routinely fetch+rebase and a snapshot written after it
+  would record the drift as the baseline) and on `PostToolBatch`, whose documented
+  `additionalContext` fires "once after every tool call in a batch has resolved,
+  before the next model request" — which is the same instant as "before the next
+  lifecycle step". It hashes the tracked surface (`AGENTS.md`, `.claude/rules`,
+  `.claude/settings.json`, `hk.pkl`, `mise-tasks`) in one `git hash-object` pass,
+  8ms over 63 files, keyed per **session** so a session that started after a change
+  is not nudged about one it already has. Silence is the default; a change-set is
+  reported once, because reporting overwrites the snapshot. Pointer-only — paths
+  and a count, never a byte of the file, asserted in `tests/contract-drift.bats`,
+  because a reminder carrying the new text is a mirror and a mirror is cleared by
+  reading the hook instead of the file. Bypass:
+  `BATTEN_CONTRACT_DRIFT_BYPASS=1`.
 - `ready-guard` denies `gh pr ready` unless `verify` and `linear-check` have both
   passed against this exact HEAD. Each writes a receipt under
   `.git/batten-receipts/` keyed to the commit it validated, and linear-check's
