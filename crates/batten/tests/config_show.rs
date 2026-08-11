@@ -65,7 +65,7 @@ id = "allow-once"
 token = "batten: allow-once"
 
 [budget.instructions]
-paths = ["AGENTS.md"]
+files = ["AGENTS.md"]
 max_tokens = 3500
 max_lines = 200
 
