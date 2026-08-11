@@ -223,16 +223,14 @@
       "description": "The `[judge]` table: what the judge may put in a model call.\n\nEvery field defaults to the refusing reading, so a `[judge]` table that\nmerely exists sends nothing but pointers and hashes.",
       "type": "object",
       "properties": {
-        "over_protected": {
-          "description": "What happens to a span the `protected` set covers.\n\n**Absent is not a default here, it is an unanswered question**, and\n`config lint` reports it as one whenever `protected` is non-empty\n(`judge-over-protected-unstated`). Payload construction still treats\nabsent as [`OverProtected::Pointer`] — fail-closed — so the unanswered\ncase is safe *and* visible rather than either alone.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OverProtected"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "max_payload_bytes": {
+          "description": "The ceiling on assembled payload bytes. Absent means\n[`DEFAULT_MAX_PAYLOAD_BYTES`].\n\nThere is deliberately **no** key for what happens over the `protected`\nset: one protected member refuses the invocation, full stop. See the\nmodule docs for why that key was removed rather than defaulted.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
         },
         "raw": {
           "description": "The content classes admitted **raw** into a model call. Empty — the\ndefault — means pointer-only: no span bytes cross at all.\n\nA class named here is admitted and nothing else is. There is deliberately\nno \"all\" spelling: a config that wants both classes names both, so the\ndiff that widens the boundary shows what it widened.",
@@ -323,21 +321,6 @@
         "id",
         "pattern",
         "reason"
-      ]
-    },
-    "OverProtected": {
-      "description": "What a protected span may become in a payload.",
-      "oneOf": [
-        {
-          "description": "A pointer and a hash only. The bytes never leave.",
-          "type": "string",
-          "const": "pointer"
-        },
-        {
-          "description": "Protected spans may also use the classes [`Judge::raw`] admits.\n\nThe loud spelling of \"yes, send my protected content to a model\", which\nis exactly how loud that decision should have to be.",
-          "type": "string",
-          "const": "raw"
-        }
       ]
     },
     "PayloadClass": {

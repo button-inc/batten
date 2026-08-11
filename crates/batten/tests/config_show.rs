@@ -71,7 +71,7 @@ max_lines = 200
 
 [judge]
 raw = ["span_text"]
-over_protected = "pointer"
+
 "#;
 
 fn show(dir: &Path, extra: &[&str]) -> Output {

@@ -18,7 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stdout};
+use common::{Fixture, batten, scratch, stderr, stdout};
 
 /// Create a temp repo containing a `batten.toml` with `contents`.
 fn repo_with_config(name: &str, contents: &str) -> PathBuf {
@@ -376,7 +376,7 @@ fn the_two_verbs_agree_on_where_a_weakening_is() {
     assert_eq!(pointer(&lint_out), "batten.toml:rule[no-todo].severity");
 }
 
-// --- the judge payload boundary's unanswered question (CLOUD-135) -------------
+// --- the judge payload boundary (CLOUD-135) ----------------------------------
 
 /// A config with a protected set and a `[judge]` table, with `extra` appended
 /// inside that table.
@@ -385,45 +385,41 @@ fn judge_config(extra: &str) -> String {
 }
 
 #[test]
-fn a_judge_over_a_protected_set_that_never_says_what_happens_to_it_is_a_smell() {
-    // The acceptance's "cannot be silently enabled over protected content". The
-    // absent key is *safe* — payload construction withholds — which is exactly
-    // why it needs to be *visible*: a silent safe default is indistinguishable
-    // from a decision nobody made, and the next diff that widens `raw` inherits
-    // the omission without ever seeing it.
+fn a_judge_over_a_protected_set_needs_no_answer_because_the_engine_gives_one() {
+    // `judge-over-protected-unstated` used to fire here. It is gone with the key
+    // it asked about: protected content now refuses the whole invocation, so
+    // there is no question for a config to leave unanswered, and a smell over a
+    // decision the engine makes structurally could never fire.
     let dir = repo_with_config("judge-unstated", &judge_config(""));
     let output = lint(&dir, &[]);
-    assert_eq!(output.status.code(), Some(2), "a smell is a policy verdict");
-
-    let text = stdout(&output);
-    assert!(
-        text.contains("judge-over-protected-unstated"),
-        "the smell names itself: {text:?}"
-    );
-    // Located at the `[judge]` table, which is the thing that owes the answer —
-    // a `protected` set on its own owes nothing.
-    assert!(
-        text.contains("batten.toml:4 "),
-        "the pointer locates the table: {text:?}"
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an unanswerable question is not a smell: {}",
+        stdout(&output)
     );
 }
 
 #[test]
-fn stating_the_answer_clears_the_smell_either_way() {
-    // Both answers clear it. The smell is about the question being unanswered,
-    // not about which answer was given — a lint that only accepted the cautious
-    // one would be a gate wearing a diagnostic's clothes.
+fn the_removed_protected_egress_key_is_refused_rather_than_ignored() {
+    // The key was the issue's own rejected alternative — "a committed opt-in key
+    // for protected egress … not a latent key". A config still carrying it must
+    // hear that it no longer does anything, rather than parsing green and
+    // leaving its author believing protected content still crosses.
     for answer in ["pointer", "raw"] {
         let dir = repo_with_config(
-            &format!("judge-stated-{answer}"),
+            &format!("judge-removed-{answer}"),
             &judge_config(&format!("over_protected = \"{answer}\"\n")),
         );
         let output = lint(&dir, &[]);
         assert_eq!(
             output.status.code(),
-            Some(0),
-            "`over_protected = {answer:?}` answers the question: {}",
-            stdout(&output)
+            Some(1),
+            "an unknown key is a usage error, never a silent ignore"
+        );
+        assert!(
+            stderr(&output).contains("over_protected"),
+            "the refusal names the key that is gone"
         );
     }
 }

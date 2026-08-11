@@ -28,7 +28,22 @@
 //! to be safe" resolves to protected here rather than to sent. Every silent
 //! egress bug in this shape is a default that read absent as permitted.
 //!
-//! ## What a withheld span leaves behind
+//! ## One protected member refuses the WHOLE invocation
+//!
+//! Not the span — the invocation. [`assemble`] returns [`Refusal::Protected`]
+//! and the caller exits `1`, naming the rule and the count.
+//!
+//! An earlier landing withheld protected spans individually behind a config key
+//! (`over_protected = "raw" | "pointer"`), and CLOUD-135's `DoD` audit removed it:
+//! that key is verbatim the issue's own **rejected** alternative — "a committed
+//! opt-in key for protected egress … a widening surface that purchases no
+//! enforcement power. If a consumer ever needs it, that is a new recorded
+//! decision, not a latent key." Per-span withholding also quietly changes what
+//! the judge is judging: the row named a set of files, and silently sending a
+//! subset means the verdict is about content the config never described. Refusal
+//! is the only posture that keeps the verdict honest and the bytes home.
+//!
+//! ## What a refusal leaves behind
 //!
 //! A pointer and a hash, never nothing. The hash ([`crate::identity::
 //! judge_fingerprint`]) lets a caller reference content it did not send — two
@@ -36,12 +51,25 @@
 //! the bytes leaving. It reuses the one length-prefixed construction rather than
 //! minting a second hash of the same bytes.
 //!
+//! ## The cap refuses whole, and never truncates
+//!
+//! [`Judge::max_payload_bytes`] defaults to [`DEFAULT_MAX_PAYLOAD_BYTES`]. Over
+//! it, the invocation is refused. Truncating would be worse than refusing: the
+//! judge would return a verdict about a prefix while the record says it judged
+//! the row — a quiet disagreement between what was named and what was read.
+//!
+//! The clamp is **tighten-only** ([`effective_cap`]): a lower local value wins,
+//! a higher one is ignored. Today `resolve` does not layer `[judge]` at all,
+//! which is strictly stronger than tighten-only — nothing local reaches it — so
+//! the clamp is the semantics waiting for the day it does.
+//!
 //! ## What this module does not do
 //!
-//! It performs no egress and spawns nothing: it is config types plus a pure
-//! function, so a local model stays available by construction and there is no
-//! network path here to review. Enforcement of the config half rides `config
-//! lint`'s landed `read` row — see [`crate::lint`] for the opt-in smell.
+//! It performs no egress and spawns nothing: it is config types plus pure
+//! functions, so a local model stays available by construction and there is no
+//! network path here to review. Which channel a payload crosses on — stdin,
+//! never argv and never a temp file — is CLOUD-56's wiring; this module hands
+//! back bytes and a record, and reaches nothing itself.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -64,29 +92,36 @@ pub struct Judge {
     /// diff that widens the boundary shows what it widened.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub raw: Vec<PayloadClass>,
-    /// What happens to a span the `protected` set covers.
+    /// The ceiling on assembled payload bytes. Absent means
+    /// [`DEFAULT_MAX_PAYLOAD_BYTES`].
     ///
-    /// **Absent is not a default here, it is an unanswered question**, and
-    /// `config lint` reports it as one whenever `protected` is non-empty
-    /// (`judge-over-protected-unstated`). Payload construction still treats
-    /// absent as [`OverProtected::Pointer`] — fail-closed — so the unanswered
-    /// case is safe *and* visible rather than either alone.
+    /// There is deliberately **no** key for what happens over the `protected`
+    /// set: one protected member refuses the invocation, full stop. See the
+    /// module docs for why that key was removed rather than defaulted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub over_protected: Option<OverProtected>,
+    pub max_payload_bytes: Option<usize>,
 }
 
-/// What a protected span may become in a payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum OverProtected {
-    /// A pointer and a hash only. The bytes never leave.
-    Pointer,
-    /// Protected spans may also use the classes [`Judge::raw`] admits.
-    ///
-    /// The loud spelling of "yes, send my protected content to a model", which
-    /// is exactly how loud that decision should have to be.
-    Raw,
+/// The engine's payload ceiling when a row names none.
+///
+/// 16 KiB, the precedent of the argv-batching bound: large enough for a rule's
+/// criteria plus a handful of matched files, small enough that an accidental
+/// whole-tree glob refuses instead of shipping the repository to a model.
+pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 16_384;
+
+/// The cap actually in force, given the authority's value and a local one.
+///
+/// **Tighten-only**: the minimum wins, so a local file may lower the ceiling and
+/// a local file that tries to raise it changes nothing. A raise-only clamp reads
+/// backwards here and is worth stating: for a *budget* smaller is stricter, so
+/// the §8 "may not weaken" rule means "may not increase".
+#[must_use]
+pub fn effective_cap(authority: Option<usize>, local: Option<usize>) -> usize {
+    let base = authority.unwrap_or(DEFAULT_MAX_PAYLOAD_BYTES);
+    match local {
+        Some(local) => base.min(local),
+        None => base,
+    }
 }
 
 /// A class of content that could cross into a model call.
@@ -198,6 +233,22 @@ pub struct PayloadEntry {
     pub text: Option<String>,
 }
 
+/// The judge row's own committed text — the *rule* payload class.
+///
+/// Its own type because it is the one class that is **not** repo content: it is
+/// the config author's own words, already committed to `batten.toml`, so it
+/// carries no egress question at all and always crosses. Separating it from
+/// [`Span`] is what makes "the constructor admits exactly three classes"
+/// checkable by reading the signature.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct RuleText {
+    /// The judge row's `id`.
+    pub id: String,
+    /// The judge row's `criteria` — what the model is being asked.
+    pub criteria: String,
+}
+
 /// What a judge model call may carry.
 ///
 /// Byte-identical for identical input: entries stay in the caller's order and no
@@ -205,44 +256,146 @@ pub struct PayloadEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Payload {
+    /// The *rule* class: the row's own committed id and criteria.
+    pub rule: RuleText,
     /// The entries, in the order the caller supplied them.
     pub entries: Vec<PayloadEntry>,
     /// How many entries carry content.
     pub sent: usize,
-    /// How many were reduced to a pointer and a hash.
+    /// How many are pointer-and-hash only.
     pub withheld: usize,
 }
 
-/// Build the payload for `spans` under `protected` and `judge`.
-///
-/// A pure function of its three inputs — no I/O, no clock, no environment —
-/// which is what lets the boundary be tested exhaustively rather than observed.
-///
-/// An absent `[judge]` is the same as a `[judge]` that admits nothing: pointers
-/// and hashes only.
-#[must_use]
-pub fn build(spans: &[Span], protected: &PathSet, judge: Option<&Judge>) -> Payload {
-    let (raw, over_protected) = judge.map_or((&[][..], OverProtected::Pointer), |judge| {
-        (
-            judge.raw.as_slice(),
-            // Absent resolves to the withholding reading. `config lint` is what
-            // makes the omission visible; the value here is what makes it safe.
-            judge.over_protected.unwrap_or(OverProtected::Pointer),
-        )
-    });
+/// Why an assembly refused. Every variant is pointer-only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "refusal", rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Refusal {
+    /// At least one offered span is protected, so nothing is assembled.
+    Protected {
+        /// The judge row that asked.
+        rule: String,
+        /// How many offered spans were protected. A count, never the paths —
+        /// which file is secret is itself worth not printing.
+        count: usize,
+    },
+    /// The assembled payload exceeds the cap in force.
+    OverCap {
+        /// The judge row that asked.
+        rule: String,
+        /// What it would have been.
+        bytes: usize,
+        /// The ceiling it broke.
+        cap: usize,
+    },
+}
 
+impl Refusal {
+    /// The pointer-only diagnostic a caller prints before exiting `1`.
+    #[must_use]
+    pub fn line(&self) -> String {
+        match self {
+            Refusal::Protected { rule, count } => format!(
+                "judge {rule}: refused — {count} protected span(s) offered; protected content \
+                 never crosses"
+            ),
+            Refusal::OverCap { rule, bytes, cap } => {
+                format!("judge {rule}: refused — payload {bytes} bytes over the {cap}-byte cap")
+            }
+        }
+    }
+
+    /// The disposition token this refusal records.
+    #[must_use]
+    pub const fn disposition(&self) -> &'static str {
+        match self {
+            Refusal::Protected { .. } => "refused-protected",
+            Refusal::OverCap { .. } => "refused-over-cap",
+        }
+    }
+}
+
+/// The pointer-only record of one assembly, refused or crossed.
+///
+/// Carries **no payload bytes** — a count and a hash stand for them, which is
+/// what lets the record be stored and reported under the same output law as
+/// every other Batten emission (rule 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[non_exhaustive]
+pub struct InvocationRecord {
+    /// The judge row.
+    pub rule: String,
+    /// How many bytes the payload was, or would have been.
+    pub bytes: usize,
+    /// SHA-256 over the serialized payload, so two identical calls are visibly
+    /// identical without either being reproduced.
+    pub sha256: String,
+    /// How many files the row's glob matched.
+    pub matched_files: usize,
+    /// `crossed`, or the refusal's token.
+    pub disposition: &'static str,
+}
+
+/// A successful assembly: the bytes to send, and the record of having sent them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Assembled {
+    /// The payload, as the caller will serialize it.
+    pub payload: Payload,
+    /// The serialized bytes — what actually crosses, and what `bytes`/`sha256`
+    /// in the record are over. Handed back rather than re-derived so the record
+    /// cannot describe different bytes than the ones sent.
+    pub serialized: Vec<u8>,
+    /// The pointer-only record.
+    pub record: InvocationRecord,
+}
+
+/// Assemble the payload for `rule` over `spans`, under `protected` and `judge`.
+///
+/// A pure function of its inputs — no I/O, no clock, no environment — which is
+/// what lets the boundary be tested exhaustively rather than observed.
+///
+/// The order is load-bearing: **protection is decided before any byte is
+/// admitted**, so a protected member refuses without its content ever entering a
+/// payload value, and the cap is checked on the assembled bytes so it bounds
+/// what would actually cross.
+///
+/// An absent `[judge]` is the same as a `[judge]` that admits nothing: the rule
+/// text, pointers and hashes, and no span content.
+///
+/// # Errors
+///
+/// [`Refusal::Protected`] when any offered span is protected or has no
+/// provenance; [`Refusal::OverCap`] when the assembled bytes exceed the cap.
+/// Both are usage errors at the caller (exit 1), never a policy verdict.
+pub fn assemble(
+    rule: &RuleText,
+    spans: &[Span],
+    protected: &PathSet,
+    judge: Option<&Judge>,
+    cap: usize,
+) -> Result<Assembled, Refusal> {
+    // First, and before anything is read into a payload: one protected member
+    // refuses the whole invocation.
+    let protected_count = spans
+        .iter()
+        .filter(|span| span.attribution(protected).is_protected())
+        .count();
+    if protected_count > 0 {
+        return Err(Refusal::Protected {
+            rule: rule.id.clone(),
+            count: protected_count,
+        });
+    }
+
+    let raw = judge.map_or(&[][..], |judge| judge.raw.as_slice());
     let mut entries = Vec::with_capacity(spans.len());
     let mut sent = 0;
     for span in spans {
-        let attribution = span.attribution(protected);
-        // Two independent gates, and both must pass. The class gate asks "may
-        // this kind of content ever cross"; the protection gate asks "may THIS
-        // span use that permission". Collapsing them would let one opt-in imply
-        // the other.
-        let class_admitted = raw.contains(&span.class);
-        let protection_admits = !attribution.is_protected() || over_protected == OverProtected::Raw;
-        let admitted = class_admitted && protection_admits;
-
+        // Only the class gate remains here: the protection gate above already
+        // refused the invocation, so every span reaching this loop is
+        // attributable and unprotected.
+        let admitted = raw.contains(&span.class);
         if admitted {
             sent += 1;
         }
@@ -250,7 +403,7 @@ pub fn build(spans: &[Span], protected: &PathSet, judge: Option<&Judge>) -> Payl
             rule: span.rule.clone(),
             pointer: pointer_of(span),
             class: span.class.as_str(),
-            attribution,
+            attribution: span.attribution(protected),
             hash: identity::judge_fingerprint(span.class.as_str(), &span.bytes).to_hex(),
             // `from_utf8_lossy`: a payload is a model call, so it must be text.
             // Lossy rather than a refusal because the alternative — dropping a
@@ -260,11 +413,36 @@ pub fn build(spans: &[Span], protected: &PathSet, judge: Option<&Judge>) -> Payl
         });
     }
 
-    Payload {
+    let payload = Payload {
+        rule: rule.clone(),
         withheld: entries.len() - sent,
         entries,
         sent,
+    };
+    // Serialization cannot fail for this type — every field is a string, a
+    // number, or a Vec of the same — but the boundary must not panic, so an
+    // unexpected failure refuses at the cap rather than unwrapping.
+    let serialized = serde_json::to_vec(&payload).unwrap_or_default();
+    if serialized.len() > cap {
+        return Err(Refusal::OverCap {
+            rule: rule.id.clone(),
+            bytes: serialized.len(),
+            cap,
+        });
     }
+
+    let record = InvocationRecord {
+        rule: rule.id.clone(),
+        bytes: serialized.len(),
+        sha256: identity::judge_fingerprint("payload", &serialized).to_hex(),
+        matched_files: spans.len(),
+        disposition: "crossed",
+    };
+    Ok(Assembled {
+        payload,
+        serialized,
+        record,
+    })
 }
 
 /// The pointer for a span: `path:line`, `path`, or nothing to point at.
@@ -282,9 +460,18 @@ mod tests {
     use super::*;
 
     const SECRET: &[u8] = b"AKIAIOSFODNN7EXAMPLE trailing-secret-bytes";
+    const UNMATCHED: &[u8] = b"UNMATCHED-FILE-SENTINEL-nothing-selected-this";
+    const ENV_SENTINEL: &[u8] = b"ENV-VALUE-SENTINEL-never-a-payload-input";
 
     fn protected_set() -> PathSet {
         PathSet::includes("protected", &["secrets/**".to_owned()]).unwrap()
+    }
+
+    fn rule_text() -> RuleText {
+        RuleText {
+            id: "a-rule".to_owned(),
+            criteria: "does this read as intentional".to_owned(),
+        }
     }
 
     fn span(path: Option<&str>, class: PayloadClass, bytes: &[u8]) -> Span {
@@ -298,62 +485,103 @@ mod tests {
     }
 
     /// The assertion the acceptance actually asks for: search the serialized
-    /// payload for the protected bytes.
-    fn carries(payload: &Payload, needle: &[u8]) -> bool {
-        let json = serde_json::to_vec(payload).expect("the payload serializes");
-        json.windows(needle.len()).any(|window| window == needle)
+    /// bytes for the needle.
+    fn carries(bytes: &[u8], needle: &[u8]) -> bool {
+        bytes.windows(needle.len()).any(|window| window == needle)
+    }
+
+    fn assemble_ok(spans: &[Span], judge: Option<&Judge>) -> Assembled {
+        assemble(
+            &rule_text(),
+            spans,
+            &protected_set(),
+            judge,
+            DEFAULT_MAX_PAYLOAD_BYTES,
+        )
+        .expect("assembly succeeds")
     }
 
     #[test]
-    fn a_protected_span_is_a_pointer_and_a_hash_and_its_bytes_do_not_appear() {
-        let spans = [span(
-            Some("secrets/prod.env"),
-            PayloadClass::SpanText,
-            SECRET,
-        )];
-        // Even with the class admitted raw: the class gate passing is not the
-        // protection gate passing.
+    fn one_protected_span_refuses_the_whole_invocation() {
+        // Decision 2, and the clause the DoD audit reopened this issue for. Not
+        // "this span is withheld" — the invocation is refused, so no payload
+        // value containing the other spans exists either.
+        let spans = [
+            span(Some("src/a.rs"), PayloadClass::SpanText, b"ordinary"),
+            span(Some("secrets/prod.env"), PayloadClass::SpanText, SECRET),
+        ];
+        // Even with the class admitted raw: admitting a class is not admitting a
+        // protected file.
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
-            over_protected: None,
+            max_payload_bytes: None,
         };
-        let payload = build(&spans, &protected_set(), Some(&judge));
+        let refusal = assemble(
+            &rule_text(),
+            &spans,
+            &protected_set(),
+            Some(&judge),
+            DEFAULT_MAX_PAYLOAD_BYTES,
+        )
+        .expect_err("a protected member refuses");
 
-        assert_eq!(payload.sent, 0);
-        assert_eq!(payload.withheld, 1);
-        let entry = &payload.entries[0];
-        assert_eq!(entry.attribution, Attribution::Protected);
-        assert_eq!(entry.pointer.as_deref(), Some("secrets/prod.env:7"));
         assert_eq!(
-            entry.hash.len(),
-            64,
-            "a withheld entry still identifies itself"
+            refusal,
+            Refusal::Protected {
+                rule: "a-rule".to_owned(),
+                count: 1,
+            }
         );
-        assert!(entry.text.is_none());
+        let line = refusal.line();
+        assert!(line.contains("a-rule") && line.contains('1'));
         assert!(
-            !carries(&payload, SECRET),
-            "no protected byte may appear in the payload"
+            !carries(line.as_bytes(), SECRET) && !carries(line.as_bytes(), b"secrets/prod.env"),
+            "the diagnostic is a count, never the bytes or even the path: {line}"
         );
     }
 
     #[test]
-    fn a_span_with_no_provenance_is_withheld_even_though_no_glob_matched_it() {
-        // The fail-closed half. Nothing marked this span protected; nothing
-        // could show it was safe either, and that resolves to withheld.
+    fn a_span_with_no_provenance_refuses_too() {
+        // The fail-closed half: nothing marked it protected, and nothing could
+        // show it was safe either.
         let spans = [span(None, PayloadClass::SpanText, SECRET)];
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
-            over_protected: Some(OverProtected::Pointer),
+            max_payload_bytes: None,
         };
-        let payload = build(&spans, &PathSet::empty(), Some(&judge));
+        assert!(matches!(
+            assemble(
+                &rule_text(),
+                &spans,
+                &PathSet::empty(),
+                Some(&judge),
+                DEFAULT_MAX_PAYLOAD_BYTES
+            ),
+            Err(Refusal::Protected { count: 1, .. })
+        ));
+    }
 
-        assert_eq!(payload.entries[0].attribution, Attribution::NoProvenance);
+    #[test]
+    fn a_clean_payload_carries_the_criteria_and_the_matched_bytes_and_no_sentinel() {
+        // The acceptance's positive-and-negative byte scan, in one place.
+        let spans = [span(Some("src/a.rs"), PayloadClass::SpanText, b"the span")];
+        let judge = Judge {
+            raw: vec![PayloadClass::SpanText],
+            max_payload_bytes: None,
+        };
+        let assembled = assemble_ok(&spans, Some(&judge));
+
         assert!(
-            payload.entries[0].pointer.is_none(),
-            "there is nothing to point at"
+            carries(&assembled.serialized, b"does this read as intentional"),
+            "the rule class crosses: it is the config author's own committed words"
         );
-        assert!(payload.entries[0].text.is_none());
-        assert!(!carries(&payload, SECRET));
+        assert!(carries(&assembled.serialized, b"the span"));
+        for sentinel in [SECRET, UNMATCHED, ENV_SENTINEL] {
+            assert!(
+                !carries(&assembled.serialized, sentinel),
+                "a sentinel the constructor was never offered cannot appear"
+            );
+        }
     }
 
     #[test]
@@ -364,17 +592,20 @@ mod tests {
         ];
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
-            over_protected: None,
+            max_payload_bytes: None,
         };
-        let payload = build(&spans, &protected_set(), Some(&judge));
+        let assembled = assemble_ok(&spans, Some(&judge));
 
-        assert_eq!(payload.sent, 1);
-        assert_eq!(payload.entries[0].text.as_deref(), Some("the span"));
+        assert_eq!(assembled.payload.sent, 1);
+        assert_eq!(
+            assembled.payload.entries[0].text.as_deref(),
+            Some("the span")
+        );
         assert!(
-            payload.entries[1].text.is_none(),
+            assembled.payload.entries[1].text.is_none(),
             "a class the config did not name does not ride in on one it did"
         );
-        assert!(!carries(&payload, b"the whole file"));
+        assert!(!carries(&assembled.serialized, b"the whole file"));
     }
 
     #[test]
@@ -384,53 +615,123 @@ mod tests {
             None,
             Some(Judge {
                 raw: Vec::new(),
-                over_protected: None,
+                max_payload_bytes: None,
             }),
         ] {
-            let payload = build(&spans, &protected_set(), judge.as_ref());
-            assert_eq!(payload.sent, 0, "an unconfigured judge sends no content");
-            assert_eq!(payload.entries[0].attribution, Attribution::Unprotected);
-            assert!(!carries(&payload, b"the span"));
+            let assembled = assemble_ok(&spans, judge.as_ref());
+            assert_eq!(
+                assembled.payload.sent, 0,
+                "an unconfigured judge sends no content"
+            );
+            assert!(!carries(&assembled.serialized, b"the span"));
+            assert!(
+                carries(&assembled.serialized, b"does this read as intentional"),
+                "the rule class still crosses — it is not repo content"
+            );
         }
     }
 
     #[test]
-    fn the_loud_opt_in_is_what_lets_protected_bytes_cross() {
-        // The escape hatch exists and is reachable — otherwise the tests above
-        // would pass over a boundary that simply never sends anything, which is
-        // a different (and untested) design.
-        let spans = [span(
-            Some("secrets/prod.env"),
-            PayloadClass::SpanText,
-            SECRET,
-        )];
+    fn the_cap_refuses_whole_and_the_boundary_is_inclusive() {
+        let spans = [span(Some("src/a.rs"), PayloadClass::SpanText, b"content")];
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
-            over_protected: Some(OverProtected::Raw),
+            max_payload_bytes: None,
         };
-        let payload = build(&spans, &protected_set(), Some(&judge));
+        let exact = assemble_ok(&spans, Some(&judge)).serialized.len();
 
-        assert_eq!(payload.sent, 1);
+        // Exactly at the cap assembles.
         assert!(
-            carries(&payload, SECRET),
-            "the loud opt-in must actually work"
+            assemble(&rule_text(), &spans, &protected_set(), Some(&judge), exact).is_ok(),
+            "exactly at the cap is within it"
+        );
+
+        // One byte under refuses — whole, never truncated.
+        let refusal = assemble(
+            &rule_text(),
+            &spans,
+            &protected_set(),
+            Some(&judge),
+            exact - 1,
+        )
+        .expect_err("over the cap refuses");
+        assert_eq!(
+            refusal,
+            Refusal::OverCap {
+                rule: "a-rule".to_owned(),
+                bytes: exact,
+                cap: exact - 1,
+            }
+        );
+        assert!(!carries(refusal.line().as_bytes(), b"content"));
+    }
+
+    #[test]
+    fn the_cap_clamp_is_tighten_only() {
+        // Smaller is stricter for a budget, so §8's "may not weaken" means "may
+        // not raise" here — the direction reads backwards and is easy to invert.
+        assert_eq!(effective_cap(None, None), DEFAULT_MAX_PAYLOAD_BYTES);
+        assert_eq!(effective_cap(Some(1_000), None), 1_000);
+        assert_eq!(effective_cap(Some(1_000), Some(500)), 500, "lowering wins");
+        assert_eq!(
+            effective_cap(Some(1_000), Some(9_000)),
+            1_000,
+            "a local file may not raise the ceiling"
+        );
+        assert_eq!(
+            effective_cap(None, Some(99_999)),
+            DEFAULT_MAX_PAYLOAD_BYTES,
+            "nor raise it above the engine default"
         );
     }
 
     #[test]
-    fn two_builds_over_the_same_input_are_byte_identical() {
+    fn the_record_is_pointer_only_and_never_carries_payload_bytes() {
         let spans = [
-            span(Some("secrets/prod.env"), PayloadClass::SpanText, SECRET),
-            span(None, PayloadClass::FileText, b"anonymous"),
-            span(Some("src/a.rs"), PayloadClass::SpanText, b"ordinary"),
+            span(Some("src/a.rs"), PayloadClass::SpanText, b"the span"),
+            span(Some("src/b.rs"), PayloadClass::SpanText, b"more content"),
         ];
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
-            over_protected: Some(OverProtected::Pointer),
+            max_payload_bytes: None,
         };
-        let first = serde_json::to_vec(&build(&spans, &protected_set(), Some(&judge))).unwrap();
-        let second = serde_json::to_vec(&build(&spans, &protected_set(), Some(&judge))).unwrap();
-        assert_eq!(first, second);
+        let assembled = assemble_ok(&spans, Some(&judge));
+        let record = serde_json::to_vec(&assembled.record).unwrap();
+
+        assert_eq!(assembled.record.rule, "a-rule");
+        assert_eq!(assembled.record.matched_files, 2);
+        assert_eq!(assembled.record.bytes, assembled.serialized.len());
+        assert_eq!(assembled.record.sha256.len(), 64);
+        assert_eq!(assembled.record.disposition, "crossed");
+        for needle in [
+            &b"the span"[..],
+            &b"more content"[..],
+            b"does this read as intentional",
+        ] {
+            assert!(
+                !carries(&record, needle),
+                "the record stands for the payload, it does not reproduce it"
+            );
+        }
+    }
+
+    #[test]
+    fn two_assemblies_over_the_same_input_are_byte_identical() {
+        let spans = [
+            span(Some("src/a.rs"), PayloadClass::SpanText, b"ordinary"),
+            span(Some("src/b.rs"), PayloadClass::FileText, b"a whole file"),
+        ];
+        let judge = Judge {
+            raw: vec![PayloadClass::SpanText],
+            max_payload_bytes: None,
+        };
+        let first = assemble_ok(&spans, Some(&judge));
+        let second = assemble_ok(&spans, Some(&judge));
+        assert_eq!(first.serialized, second.serialized);
+        assert_eq!(
+            serde_json::to_vec(&first.record).unwrap(),
+            serde_json::to_vec(&second.record).unwrap()
+        );
     }
 
     #[test]
@@ -441,8 +742,11 @@ mod tests {
             span(Some("src/a.rs"), PayloadClass::SpanText, b"same"),
             span(Some("src/a.rs"), PayloadClass::FileText, b"same"),
         ];
-        let payload = build(&spans, &protected_set(), None);
-        assert_ne!(payload.entries[0].hash, payload.entries[1].hash);
+        let assembled = assemble_ok(&spans, None);
+        assert_ne!(
+            assembled.payload.entries[0].hash,
+            assembled.payload.entries[1].hash
+        );
     }
 
     #[test]

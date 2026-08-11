@@ -394,9 +394,23 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   row, no egress** — enforcement of the config half rides `config lint`'s landed
   `read` row. Landed BEFORE the judge that reads it (CLOUD-56), because a
   boundary written after the code it bounds is one that code has already crossed.
-  Two independent gates, and both must pass: `[judge] raw` names which classes
-  may ever cross (default none), `over_protected` says whether a protected span
-  may use that permission. Collapsing them would let one opt-in imply the other.
+  `[judge] raw` names which content classes may ever cross (default none).
+  **One protected member refuses the WHOLE invocation** (`Refusal::Protected`,
+  exit 1 at the caller) — not the span. The `over_protected` key that used to
+  withhold spans individually is GONE: it was verbatim the issue's own rejected
+  alternative ("a committed opt-in key for protected egress … not a latent key"),
+  and per-span withholding also made the verdict be about content the config
+  never described. `assemble` decides protection BEFORE any byte enters a payload
+  value. The cap (`max_payload_bytes`, default 16 KiB) refuses whole and never
+  truncates — a truncated payload judges a prefix while the record claims the
+  row; `effective_cap` is tighten-only, and for a budget that means "may not
+  RAISE" (the §8 direction reads backwards here). Three payload classes: `rule`
+  (the row's own committed id+criteria — config author's words, always crosses,
+  not repo content), `content`, `pointer`. `InvocationRecord` is pointer-only
+  (rule, byte count, sha256, matched-file count, disposition) and is asserted to
+  carry no payload bytes. `lint.rs`'s `judge-over-protected-unstated` went with
+  the key — a smell over a decision the engine now makes structurally could never
+  fire.
   A span is protected when its path matches the committed `protected` globs — a
   structural match, never an inference — **or when it carries no path provenance
   at all**, the fail-closed half: cannot-show-it-is-safe resolves to withheld.
