@@ -54,6 +54,12 @@ set -euo pipefail
 
 # The one shape, and the key that exempts it.
 DEFERRALS="judgement call|judgment call"
+# A literal backtick, named rather than written inline. Inside single quotes the
+# linter reads one as a missed expansion (SC2016), and a suppression would be
+# noise where a name is clearer. Note the wording: a comment LINE that begins
+# with the linter's own name parses as a directive (SC1073), which is its own
+# small trap.
+BACKTICK='`'
 KEY="CLOUD-[0-9]+"
 
 body=$(cat) || exit 0
@@ -78,9 +84,15 @@ while IFS= read -r -d '' para; do
 	# `-o` on a here-string, never `producer | grep -q`: under pipefail an
 	# early-exiting grep in a pipeline promotes a MATCH to a failure status
 	# (pipefail-grep-check).
-	hit=$(grep -oiE "$DEFERRALS" <<<"$para" || true)
+	# Backticked spans are neutralised before judging — the same treatment
+	# `gh-guard` and `issue-guard` give quoted spans, and for the same reason: a
+	# paragraph NAMING the phrase is not a paragraph USING it. Measured on this
+	# gate's own PR, whose table row `| judgement call | ... |` fired as a
+	# deferral. Being consumer #1 is what caught it.
+	prose=$(sed -E "s/${BACKTICK}[^${BACKTICK}]*${BACKTICK}/CODESPAN/g" <<<"$para")
+	hit=$(grep -oiE "$DEFERRALS" <<<"$prose" || true)
 	[ -n "$hit" ] || continue
-	owner=$(grep -oE "$KEY" <<<"$para" || true)
+	owner=$(grep -oE "$KEY" <<<"$para" || true) # keys count wherever they appear
 	[ -n "$owner" ] && continue
 	# The paragraph's first line, trimmed to a coordinate length. Enough to find
 	# it; not enough to be a mirror of it.

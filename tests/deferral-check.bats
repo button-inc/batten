@@ -6,12 +6,12 @@
 # showed a clean Done with no follow-up. They are CLOUD-321 and CLOUD-322 now
 # because a human asked, not because anything checked.
 #
-# `.claude/rules/toolchain.md` records that `issue-guard` deliberately does not
-# gate this — "not computable over any artifact the repo can see". That holds for
-# the TREE and is why this gate does not live there: the artifact here is the PR
-# BODY, which `gh` can see and which a caller pipes in. Same
-# agents-fetch-gates-decide contract every board gate uses, so the verdict is a
-# pure function of stdin and this suite needs no network.
+# `issue-guard` gates the start; this gates the finish. It does not live in the
+# tree gate because nothing in the TREE carries the answer — the artifact here is
+# the PR BODY, which a caller pipes in. Same agents-fetch-gates-decide contract
+# every board gate uses, so the verdict is a pure function of stdin and this
+# suite needs no network. `.claude/rules/toolchain.md` is the authority on where
+# it sits, and is corrected in the same change.
 #
 # The two anchor cases are the real paragraphs the shape was measured on, so a
 # change that breaks the discrimination fails against the evidence that chose it.
@@ -72,6 +72,15 @@ tracked() {
 	# made every line its own scope, so the gate fired on PR #233 — disagreeing
 	# with the measurement it was built from. Reproducing the corpus caught it.
 	run bash -c "printf 'That is a judgement call.\nCLOUD-164 owns it.\n' | '$CHECK'"
+	[ "$status" -eq 0 ]
+}
+
+@test "naming the phrase in a code span is not using it" {
+	# Measured on this gate's own PR: the table row documenting the shape fired
+	# as a deferral. A paragraph NAMING the phrase is not one USING it, and
+	# backticked spans are neutralised the same way `gh-guard` and `issue-guard`
+	# neutralise quoted spans. Being consumer #1 caught this.
+	run bash -c "printf '| shape | verdict |\n| \`judgement call\` | keep |\n' | '$CHECK'"
 	[ "$status" -eq 0 ]
 }
 
