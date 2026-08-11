@@ -112,3 +112,63 @@ payload() {
 	run bash -c "echo '{\"id\":\"CLOUD-1\"}' | $CHECK"
 	[ "$status" -eq 2 ]
 }
+
+# --- the claim receipt (CLOUD-272) ------------------------------------------
+#
+# `claim-check` was a pure read: it answered "is this pullable" and left no
+# trace, so nothing downstream could tell a claimed branch from an unclaimed
+# one. The receipt is that answer made durable, and `claim-guard` is its only
+# reader.
+
+setup_repo() {
+	REPO="$BATS_TEST_TMPDIR/claimed"
+	mkdir -p "$REPO"
+	git -C "$REPO" init -q -b work
+	git -C "$REPO" config user.email t@example.com
+	git -C "$REPO" config user.name t
+	git -C "$REPO" commit -q --allow-empty -m seed
+	RECEIPT="$REPO/$(git -C "$REPO" rev-parse --git-dir)/batten-receipts/claim.work"
+}
+
+@test "the pullable path mints a receipt for the current branch" {
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-272 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[ -f "$RECEIPT" ]
+	# It records WHICH issue was cleared, so the trace is auditable rather than
+	# a bare flag.
+	[[ "$(cat "$RECEIPT")" == *"CLOUD-272"* ]]
+}
+
+@test "a NOT-pullable issue mints nothing — the receipt is the claim, not the attempt" {
+	for state in "In Progress" "In Review" Done; do
+		setup_repo
+		run bash -c "$(declare -f payload); payload CLOUD-49 '$state' | (cd '$REPO' && $CHECK)"
+		[ "$status" -eq 1 ]
+		[ ! -f "$RECEIPT" ]
+	done
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-49 Todo a@b | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 1 ]
+	[ ! -f "$RECEIPT" ]
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-49 Todo '' https://github.com/o/r/pull/7 | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 1 ]
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "unreadable stdin mints nothing either" {
+	setup_repo
+	run bash -c "printf 'not json' | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 2 ]
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "outside a checkout the verdict still stands — the receipt is a side effect" {
+	# The gate's answer must not depend on being in a repo: `graph-check` and
+	# this compose in one pipeline, and a caller inspecting the board from
+	# anywhere still deserves the verdict.
+	run bash -c "$(declare -f payload); payload CLOUD-272 Todo | (cd '$BATS_TEST_TMPDIR' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"pullable"* ]]
+}

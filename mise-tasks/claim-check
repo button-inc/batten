@@ -89,4 +89,36 @@ if [ "$blocked" -ne 0 ]; then
 	exit 1
 fi
 
+# --- the claim receipt (CLOUD-272) -------------------------------------------
+#
+# This gate used to be a pure read: it answered "is this pullable" and left no
+# trace, so nothing downstream could tell a claimed branch from an unclaimed one
+# — and `claim-guard` needs exactly that distinction to sit between discovering
+# work and editing files for it.
+#
+# Written ONLY here, on the pullable path, which is what makes it a claim rather
+# than a record of an attempt: a `not-todo` / `assigned` / `has-pr` answer mints
+# nothing.
+#
+# Keyed by BRANCH, not by the commit SHA `ready-guard`'s receipts use. That
+# receipt should expire on an amend or a rebase, because it attests to a property
+# of those exact bytes; a claim attests to a decision about an *issue*, which
+# every commit on the branch continues to serve. A SHA-keyed claim would demand a
+# re-claim per commit, which is the false-positive rate that gets a guard
+# bypassed.
+#
+# The verdict above does not depend on any of this. Outside a checkout, or with
+# an unwritable git dir, the answer still stands and only the side effect is
+# skipped — `graph-check` and this compose in one pipeline, and a caller
+# inspecting the board from anywhere still deserves the verdict.
+if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
+	branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
+	[ -n "$branch" ] &&
+	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
+	# Slashes are the one character a filename cannot carry; the substitution
+	# must match `claim-guard`'s spelling exactly.
+	printf '%s\n' "$(jq -r '[.[].id] | join(" ")' <<<"$issues")" \
+		>"$git_dir/batten-receipts/claim.${branch//\//-}" 2>/dev/null || true
+fi
+
 echo "claim-check: pullable ($(jq 'length' <<<"$issues") issue(s)) — claim it before you write code: move Todo -> In Progress and assign yourself. The tracker automation will not do this for you; it fires on the PR event, which is the end of the work, not the start."

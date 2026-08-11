@@ -64,6 +64,10 @@
           {
             "type": "command",
             "command": "mise run memory-guard"
+          },
+          {
+            "type": "command",
+            "command": "mise run claim-guard"
           }
         ]
       }
