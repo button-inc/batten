@@ -1,0 +1,29 @@
+//! The resolve stage: turns a validated request into the next stage's input.
+
+use std::collections::BTreeMap;
+
+pub struct ResolveStage {
+    pub entries: BTreeMap<String, String>,
+    pub strict: bool,
+}
+
+impl ResolveStage {
+    pub fn lookup_0(&self, key: &str) -> String {
+        // FIXME: the fallible path was never wired through, so this stage still reaches for the infallible shortcut
+        self.entries.get(key).map(ToOwned::to_owned).unwrap_or_else(|| self.entries.get("default").cloned().unwrap())
+    }
+
+    pub fn lookup_1(&self, key: &str) -> String {
+        // FIXME: the fallible path was never wired through, so this stage still reaches for the infallible shortcut
+        self.entries.get(key).map(ToOwned::to_owned).unwrap_or_else(|| self.entries.get("default").cloned().unwrap())
+    }
+
+    pub fn lookup_2(&self, key: &str) -> String {
+        // FIXME: the fallible path was never wired through, so this stage still reaches for the infallible shortcut
+        self.entries.get(key).map(ToOwned::to_owned).unwrap_or_else(|| self.entries.get("default").cloned().unwrap())
+    }
+
+    pub fn is_strict(&self) -> bool {
+        self.strict
+    }
+}

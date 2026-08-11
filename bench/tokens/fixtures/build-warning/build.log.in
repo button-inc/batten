@@ -1,0 +1,420 @@
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded libc v1.0.0
+  Downloaded cfg-if v1.0.0
+  Downloaded memchr v1.0.0
+  Downloaded proc-macro2 v1.0.0
+  Downloaded quote v1.0.0
+  Downloaded syn v1.0.0
+  Downloaded serde v1.0.0
+  Downloaded serde_derive v1.0.0
+  Downloaded once_cell v1.0.0
+  Downloaded regex-syntax v1.0.0
+  Downloaded regex-automata v1.0.0
+  Downloaded regex v1.0.0
+  Downloaded aho-corasick v1.0.0
+  Downloaded anyhow v1.0.0
+  Downloaded thiserror v1.0.0
+  Downloaded itoa v1.0.0
+  Downloaded ryu v1.0.0
+  Downloaded serde_json v1.0.0
+  Downloaded log v1.0.0
+  Downloaded bitflags v1.0.0
+  Downloaded hashbrown v1.0.0
+  Downloaded equivalent v1.0.0
+  Downloaded indexmap v1.0.0
+  Downloaded toml_datetime v1.0.0
+  Downloaded winnow v1.0.0
+  Downloaded toml_edit v1.0.0
+  Downloaded toml v1.0.0
+  Downloaded schemars v1.0.0
+  Downloaded dyn-clone v1.0.0
+  Downloaded unicode-ident v1.0.0
+  Downloaded heck v1.0.0
+  Downloaded strsim v1.0.0
+  Downloaded clap_lex v1.0.0
+  Downloaded anstyle v1.0.0
+  Downloaded colorchoice v1.0.0
+  Downloaded utf8parse v1.0.0
+  Downloaded anstyle-parse v1.0.0
+  Downloaded anstyle-query v1.0.0
+  Downloaded is_terminal_polyfill v1.0.0
+  Downloaded anstream v1.0.0
+  Downloaded clap_builder v1.0.0
+  Downloaded clap_derive v1.0.0
+  Downloaded clap v1.0.0
+  Downloaded etcetera v1.0.0
+  Downloaded home v1.0.0
+  Downloaded sha2 v1.0.0
+  Downloaded cpufeatures v1.0.0
+  Downloaded generic-array v1.0.0
+  Downloaded typenum v1.0.0
+  Downloaded block-buffer v1.0.0
+  Downloaded crypto-common v1.0.0
+  Downloaded digest v1.0.0
+  Downloaded either v1.0.0
+  Downloaded rayon-core v1.0.0
+  Downloaded rayon v1.0.0
+   Compiling libc v1.0.0
+     Running `rustc --crate-name libc --edition=2021 /home/build/.cargo/registry/src/index.crates.io/libc-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling cfg-if v1.0.0
+   Compiling memchr v1.0.0
+   Compiling proc-macro2 v1.0.0
+   Compiling quote v1.0.0
+     Running `rustc --crate-name quote --edition=2021 /home/build/.cargo/registry/src/index.crates.io/quote-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling syn v1.0.0
+   Compiling serde v1.0.0
+   Compiling serde_derive v1.0.0
+   Compiling once_cell v1.0.0
+     Running `rustc --crate-name once_cell --edition=2021 /home/build/.cargo/registry/src/index.crates.io/once_cell-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling regex-syntax v1.0.0
+   Compiling regex-automata v1.0.0
+   Compiling regex v1.0.0
+   Compiling aho-corasick v1.0.0
+     Running `rustc --crate-name aho-corasick --edition=2021 /home/build/.cargo/registry/src/index.crates.io/aho-corasick-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling anyhow v1.0.0
+   Compiling thiserror v1.0.0
+   Compiling itoa v1.0.0
+   Compiling ryu v1.0.0
+     Running `rustc --crate-name ryu --edition=2021 /home/build/.cargo/registry/src/index.crates.io/ryu-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling serde_json v1.0.0
+   Compiling log v1.0.0
+   Compiling bitflags v1.0.0
+   Compiling hashbrown v1.0.0
+     Running `rustc --crate-name hashbrown --edition=2021 /home/build/.cargo/registry/src/index.crates.io/hashbrown-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling equivalent v1.0.0
+   Compiling indexmap v1.0.0
+   Compiling toml_datetime v1.0.0
+   Compiling winnow v1.0.0
+     Running `rustc --crate-name winnow --edition=2021 /home/build/.cargo/registry/src/index.crates.io/winnow-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling toml_edit v1.0.0
+   Compiling toml v1.0.0
+   Compiling schemars v1.0.0
+   Compiling dyn-clone v1.0.0
+     Running `rustc --crate-name dyn-clone --edition=2021 /home/build/.cargo/registry/src/index.crates.io/dyn-clone-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling unicode-ident v1.0.0
+   Compiling heck v1.0.0
+   Compiling strsim v1.0.0
+   Compiling clap_lex v1.0.0
+     Running `rustc --crate-name clap_lex --edition=2021 /home/build/.cargo/registry/src/index.crates.io/clap_lex-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling anstyle v1.0.0
+   Compiling colorchoice v1.0.0
+   Compiling utf8parse v1.0.0
+   Compiling anstyle-parse v1.0.0
+     Running `rustc --crate-name anstyle-parse --edition=2021 /home/build/.cargo/registry/src/index.crates.io/anstyle-parse-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling anstyle-query v1.0.0
+   Compiling is_terminal_polyfill v1.0.0
+   Compiling anstream v1.0.0
+   Compiling clap_builder v1.0.0
+     Running `rustc --crate-name clap_builder --edition=2021 /home/build/.cargo/registry/src/index.crates.io/clap_builder-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling clap_derive v1.0.0
+   Compiling clap v1.0.0
+   Compiling etcetera v1.0.0
+   Compiling home v1.0.0
+     Running `rustc --crate-name home --edition=2021 /home/build/.cargo/registry/src/index.crates.io/home-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling sha2 v1.0.0
+   Compiling cpufeatures v1.0.0
+   Compiling generic-array v1.0.0
+   Compiling typenum v1.0.0
+     Running `rustc --crate-name typenum --edition=2021 /home/build/.cargo/registry/src/index.crates.io/typenum-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling block-buffer v1.0.0
+   Compiling crypto-common v1.0.0
+   Compiling digest v1.0.0
+   Compiling either v1.0.0
+     Running `rustc --crate-name either --edition=2021 /home/build/.cargo/registry/src/index.crates.io/either-1.0.0/src/lib.rs --error-format=json --crate-type lib`
+   Compiling rayon-core v1.0.0
+   Compiling rayon v1.0.0
+warning[duplicate]: two versions of `serde_derive` were selected and the older one was linked
+  = note: this build produced an artifact, but not the one the manifest asked for
+  = note: `#[warn(duplicate_dependency)]` on by default
+
+   Compiling libc-macros v1.0.0
+    Checking libc v1.0.0
+   Compiling cfg-if-macros v1.0.0
+    Checking cfg-if v1.0.0
+   Compiling memchr-macros v1.0.0
+    Checking memchr v1.0.0
+   Compiling proc-macro2-macros v1.0.0
+    Checking proc-macro2 v1.0.0
+   Compiling quote-macros v1.0.0
+    Checking quote v1.0.0
+   Compiling syn-macros v1.0.0
+    Checking syn v1.0.0
+   Compiling serde-macros v1.0.0
+    Checking serde v1.0.0
+   Compiling serde_derive-macros v1.0.0
+    Checking serde_derive v1.0.0
+   Compiling once_cell-macros v1.0.0
+    Checking once_cell v1.0.0
+   Compiling regex-syntax-macros v1.0.0
+    Checking regex-syntax v1.0.0
+   Compiling regex-automata-macros v1.0.0
+    Checking regex-automata v1.0.0
+   Compiling regex-macros v1.0.0
+    Checking regex v1.0.0
+   Compiling aho-corasick-macros v1.0.0
+    Checking aho-corasick v1.0.0
+   Compiling anyhow-macros v1.0.0
+    Checking anyhow v1.0.0
+   Compiling thiserror-macros v1.0.0
+    Checking thiserror v1.0.0
+   Compiling itoa-macros v1.0.0
+    Checking itoa v1.0.0
+   Compiling ryu-macros v1.0.0
+    Checking ryu v1.0.0
+   Compiling serde_json-macros v1.0.0
+    Checking serde_json v1.0.0
+   Compiling log-macros v1.0.0
+    Checking log v1.0.0
+   Compiling bitflags-macros v1.0.0
+    Checking bitflags v1.0.0
+   Compiling hashbrown-macros v1.0.0
+    Checking hashbrown v1.0.0
+   Compiling equivalent-macros v1.0.0
+    Checking equivalent v1.0.0
+   Compiling indexmap-macros v1.0.0
+    Checking indexmap v1.0.0
+   Compiling toml_datetime-macros v1.0.0
+    Checking toml_datetime v1.0.0
+   Compiling winnow-macros v1.0.0
+    Checking winnow v1.0.0
+   Compiling toml_edit-macros v1.0.0
+    Checking toml_edit v1.0.0
+   Compiling toml-macros v1.0.0
+    Checking toml v1.0.0
+   Compiling schemars-macros v1.0.0
+    Checking schemars v1.0.0
+   Compiling dyn-clone-macros v1.0.0
+    Checking dyn-clone v1.0.0
+   Compiling unicode-ident-macros v1.0.0
+    Checking unicode-ident v1.0.0
+   Compiling heck-macros v1.0.0
+    Checking heck v1.0.0
+   Compiling strsim-macros v1.0.0
+    Checking strsim v1.0.0
+   Compiling clap_lex-macros v1.0.0
+    Checking clap_lex v1.0.0
+   Compiling anstyle-macros v1.0.0
+    Checking anstyle v1.0.0
+   Compiling colorchoice-macros v1.0.0
+    Checking colorchoice v1.0.0
+   Compiling utf8parse-macros v1.0.0
+    Checking utf8parse v1.0.0
+   Compiling anstyle-parse-macros v1.0.0
+    Checking anstyle-parse v1.0.0
+   Compiling anstyle-query-macros v1.0.0
+    Checking anstyle-query v1.0.0
+   Compiling is_terminal_polyfill-macros v1.0.0
+    Checking is_terminal_polyfill v1.0.0
+   Compiling anstream-macros v1.0.0
+    Checking anstream v1.0.0
+   Compiling clap_builder-macros v1.0.0
+    Checking clap_builder v1.0.0
+   Compiling clap_derive-macros v1.0.0
+    Checking clap_derive v1.0.0
+   Compiling clap-macros v1.0.0
+    Checking clap v1.0.0
+   Compiling etcetera-macros v1.0.0
+    Checking etcetera v1.0.0
+   Compiling home-macros v1.0.0
+    Checking home v1.0.0
+   Compiling sha2-macros v1.0.0
+    Checking sha2 v1.0.0
+   Compiling cpufeatures-macros v1.0.0
+    Checking cpufeatures v1.0.0
+   Compiling generic-array-macros v1.0.0
+    Checking generic-array v1.0.0
+   Compiling typenum-macros v1.0.0
+    Checking typenum v1.0.0
+   Compiling block-buffer-macros v1.0.0
+    Checking block-buffer v1.0.0
+   Compiling crypto-common-macros v1.0.0
+    Checking crypto-common v1.0.0
+   Compiling digest-macros v1.0.0
+    Checking digest v1.0.0
+   Compiling either-macros v1.0.0
+    Checking either v1.0.0
+   Compiling rayon-core-macros v1.0.0
+    Checking rayon-core v1.0.0
+   Compiling rayon-macros v1.0.0
+    Checking rayon v1.0.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for libc
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for cfg-if
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for memchr
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for proc-macro2
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for quote
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for syn
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for serde
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for serde_derive
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for once_cell
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for regex-syntax
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for regex-automata
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for regex
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for aho-corasick
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for anyhow
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for thiserror
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for itoa
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for ryu
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for serde_json
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for log
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for bitflags
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for hashbrown
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for equivalent
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for indexmap
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for toml_datetime
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for winnow
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for toml_edit
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for toml
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for schemars
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for dyn-clone
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for unicode-ident
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for heck
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for strsim
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for clap_lex
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for anstyle
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for colorchoice
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for utf8parse
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for anstyle-parse
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for anstyle-query
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for is_terminal_polyfill
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for anstream
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for clap_builder
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for clap_derive
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for clap
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for etcetera
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for home
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for sha2
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for cpufeatures
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for generic-array
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for typenum
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for block-buffer
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for crypto-common
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for digest
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for either
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for rayon-core
+    Finished `dev` profile [unoptimized + debuginfo] target(s) for rayon
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.02s
+     Running unittests src/lib.rs (target/debug/deps/app-6f2a1c9e4b7d0a35)
+test suite::case_000 ... ok
+test suite::case_001 ... ok
+test suite::case_002 ... ok
+test suite::case_003 ... ok
+test suite::case_004 ... ok
+test suite::case_005 ... ok
+test suite::case_006 ... ok
+test suite::case_007 ... ok
+test suite::case_008 ... ok
+test suite::case_009 ... ok
+test suite::case_010 ... ok
+test suite::case_011 ... ok
+test suite::case_012 ... ok
+test suite::case_013 ... ok
+test suite::case_014 ... ok
+test suite::case_015 ... ok
+test suite::case_016 ... ok
+test suite::case_017 ... ok
+test suite::case_018 ... ok
+test suite::case_019 ... ok
+test suite::case_020 ... ok
+test suite::case_021 ... ok
+test suite::case_022 ... ok
+test suite::case_023 ... ok
+test suite::case_024 ... ok
+test suite::case_025 ... ok
+test suite::case_026 ... ok
+test suite::case_027 ... ok
+test suite::case_028 ... ok
+test suite::case_029 ... ok
+test suite::case_030 ... ok
+test suite::case_031 ... ok
+test suite::case_032 ... ok
+test suite::case_033 ... ok
+test suite::case_034 ... ok
+test suite::case_035 ... ok
+test suite::case_036 ... ok
+test suite::case_037 ... ok
+test suite::case_038 ... ok
+test suite::case_039 ... ok
+test suite::case_040 ... ok
+test suite::case_041 ... ok
+test suite::case_042 ... ok
+test suite::case_043 ... ok
+test suite::case_044 ... ok
+test suite::case_045 ... ok
+test suite::case_046 ... ok
+test suite::case_047 ... ok
+test suite::case_048 ... ok
+test suite::case_049 ... ok
+test suite::case_050 ... ok
+test suite::case_051 ... ok
+test suite::case_052 ... ok
+test suite::case_053 ... ok
+test suite::case_054 ... ok
+test suite::case_055 ... ok
+test suite::case_056 ... ok
+test suite::case_057 ... ok
+test suite::case_058 ... ok
+test suite::case_059 ... ok
+test suite::case_060 ... ok
+test suite::case_061 ... ok
+test suite::case_062 ... ok
+test suite::case_063 ... ok
+test suite::case_064 ... ok
+test suite::case_065 ... ok
+test suite::case_066 ... ok
+test suite::case_067 ... ok
+test suite::case_068 ... ok
+test suite::case_069 ... ok
+test suite::case_070 ... ok
+test suite::case_071 ... ok
+test suite::case_072 ... ok
+test suite::case_073 ... ok
+test suite::case_074 ... ok
+test suite::case_075 ... ok
+test suite::case_076 ... ok
+test suite::case_077 ... ok
+test suite::case_078 ... ok
+test suite::case_079 ... ok
+test suite::case_080 ... ok
+test suite::case_081 ... ok
+test suite::case_082 ... ok
+test suite::case_083 ... ok
+test suite::case_084 ... ok
+test suite::case_085 ... ok
+test suite::case_086 ... ok
+test suite::case_087 ... ok
+test suite::case_088 ... ok
+test suite::case_089 ... ok
+test suite::case_090 ... ok
+test suite::case_091 ... ok
+test suite::case_092 ... ok
+test suite::case_093 ... ok
+test suite::case_094 ... ok
+test suite::case_095 ... ok
+test suite::case_096 ... ok
+test suite::case_097 ... ok
+test suite::case_098 ... ok
+test suite::case_099 ... ok
+test suite::case_100 ... ok
+test suite::case_101 ... ok
+test suite::case_102 ... ok
+test suite::case_103 ... ok
+test suite::case_104 ... ok
+test suite::case_105 ... ok
+test suite::case_106 ... ok
+test suite::case_107 ... ok
+test suite::case_108 ... ok
+test suite::case_109 ... ok
+test suite::case_110 ... ok
+test suite::case_111 ... ok
+test suite::case_112 ... ok
+test suite::case_113 ... ok
+test suite::case_114 ... ok
+test suite::case_115 ... ok
+test suite::case_116 ... ok
+test suite::case_117 ... ok
+test suite::case_118 ... ok
+test suite::case_119 ... ok
+
+test result: ok. 120 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+

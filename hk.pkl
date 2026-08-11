@@ -110,6 +110,33 @@ local gate = new Mapping<String, Step> {
     glob = List("crates/batten/src/surface.rs", "crates/batten/src/cli.rs", "completions/*")
     check = "mise run completions-check"
   }
+  // The adoption claim is token economics, and a benchmark nobody else can
+  // reproduce is a marketing artifact rather than a proof (CLOUD-119). This is
+  // the same derived-artifact shape as the two entries either side of it — the
+  // published table is regenerated from the committed fixtures and diffed
+  // byte-for-byte — plus the honesty predicate read back off those bytes: a
+  // figure with no workload, baseline, run count and method is refused, and so
+  // is a capability reporting "not measured" with no reason. Globbed on the
+  // declarations and fixtures, and on the modules whose output shape IS the
+  // measurement, since a change to any of them moves the numbers.
+  //
+  // `token-bench`, not `bench`: CLOUD-207's `mise run bench` measures batten's
+  // INVOCATION COST and landed under that name first. Two benchmarks with two
+  // subjects need two names, and the more specific one moves.
+  ["token-bench-check"] {
+    glob =
+      List(
+        "bench/tokens/*",
+        "bench/tokens/fixtures/**",
+        "mise-tasks/token-bench",
+        "mise-tasks/token-bench-check",
+        "crates/batten/src/output.rs",
+        "crates/batten/src/findings.rs",
+        "crates/batten/src/outputs.rs",
+        "crates/batten/src/exec.rs",
+      )
+    check = "mise run token-bench-check"
+  }
   // The JSON Schema is derived from the config types (DoR §1), and it is
   // *published* — a released asset and the `.taplo.toml` binding an editor
   // resolves. So a stale one does not merely go unused: it tells a consumer

@@ -1,0 +1,86 @@
+# The benchmark's workloads, as data (CLOUD-119).
+#
+# One table per capability. A workload names the QUESTION an agent is trying to
+# answer, the step sequence a typical agent runs to answer it without Batten, and
+# the step sequence it runs with Batten. `mise-tasks/token-bench` executes both arms
+# against the committed fixture and counts the bytes each puts into a context
+# window; it invents no step and no assumption of its own.
+#
+# WHY THE BASELINE IS A SEQUENCE. "Cost per completed task" is the headline unit
+# (Cost-of-Pass, arXiv:2504.13359), and a task an agent answers in two commands
+# costs two commands' worth of context. Writing the baseline as steps makes the
+# re-run visible and countable instead of a coefficient somebody chose: the run
+# count in the results table IS the length of this list.
+#
+# EVERY ARM IS RUN `runs` TIMES AND ITS OUTPUT COMPARED BYTE-FOR-BYTE. An arm
+# that is not byte-stable is reported as such and never averaged — averaging is
+# how a non-deterministic tool acquires a number it cannot support, and
+# byte-stability is precisely the property the cache claim rests on.
+#
+# `$BATTEN` is substituted with the binary under test, so the harness always
+# judges the working tree's engine rather than whatever is on PATH.
+
+version = 1
+
+# --- scan → pointer -----------------------------------------------------------
+
+[[workload]]
+id = "scan-pointer"
+capability = "pointer-only check output"
+fixture = "scan-pointer"
+question = "Which files and lines carry the banned pattern?"
+runs = 3
+
+baseline = ["grep -rnF '.unwrap()' src"]
+baseline_model = """
+The full matched output: one whole source line per hit, every hit. This is what a \
+tree scan puts into an agent's context today, and it carries the matched bytes \
+themselves — the payload rather than a pointer to it, which is what makes the \
+same shape unusable over content nobody wants echoed."""
+
+batten = ["$BATTEN check"]
+batten_model = """
+`path:line rule-id` per finding and nothing else (non-negotiable rule 4). Same \
+question, same file set, same number of findings — only the answer's shape \
+differs."""
+
+# --- long build output → the warning line --------------------------------------
+
+[[workload]]
+id = "build-warning"
+capability = "exec output predicate"
+fixture = "build-warning"
+question = "Does this build's own output say it is not actually done, and where?"
+runs = 3
+
+baseline = ["tail -n 200 build.log", "cat build.log"]
+baseline_model = """
+The named pain, modelled as the two commands it actually costs: the agent pipes \
+to `tail`, the warning is above the window, so it re-runs and takes the whole \
+dump. Two steps, both billed. The fixture places the warning outside a 200-line \
+tail on purpose — that is the case worth measuring, and a fixture that put it \
+inside would be measuring the lucky guess."""
+
+batten = ["$BATTEN exec -- cat build.log"]
+batten_model = """
+One step, and the reduction is exactly the discarded `tail` window — nothing \
+more. `exec` TEES (CLOUD-162): the child's bytes reach the caller unchanged by \
+design, so the agent still ingests the whole log, plus Batten's pointer to the \
+line. What it stops paying for is the guess that missed. Whether the log itself \
+becomes cheaper is CLOUD-121's question, not this one's, and the number here is \
+reported at whatever it actually is rather than at what the story would like."""
+
+# --- a large log → a handle ----------------------------------------------------
+
+[[workload]]
+id = "log-handle"
+capability = "capture-once handles"
+fixture = "build-warning"
+question = "What is in this log around the line that matters, without re-running the command?"
+runs = 3
+
+# No arms, and therefore no figure. The honesty gate refuses a number here rather
+# than borrowing `build-warning`'s or projecting one from the capture store's byte
+# counts: a projection is an assertion wearing a measurement's clothes, and this
+# issue exists because borrowed magnitudes drift from their sources.
+not_measured = "the capability is not shipped — `show <handle>` and its select verbs are CLOUD-121, the next issue in this bundle"

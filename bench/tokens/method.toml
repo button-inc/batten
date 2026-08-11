@@ -1,0 +1,67 @@
+# The benchmark's method, as data (CLOUD-119).
+#
+# Every constant a published figure depends on lives here, with its source and
+# the date it was read, so a reader can check the arithmetic against the primary
+# rather than trusting the harness. `mise-tasks/token-bench` bakes none of it in: a
+# price or a divisor written into a program is a number nobody re-derives.
+#
+# WHY THIS FILE IS NOT IN `crates/batten`. Provider prices and benchmark
+# scaffolding are consumer facts (non-negotiable rule 1), and the crate already
+# owns exactly one token estimator — `budget.rs` — which this file agrees with
+# rather than forks.
+
+version = 1
+
+# --- how bytes become tokens -------------------------------------------------
+#
+# An ESTIMATE, and named as one everywhere it is reported. An exact count needs a
+# model-specific tokenizer, which would make this benchmark's numbers a function
+# of a download; the divisor below is stable, offline and monotone, which is what
+# a reproducible comparison of two byte counts actually needs.
+#
+# It is the same divisor `crates/batten/src/budget.rs` uses (`BYTES_PER_TOKEN =
+# 4`), deliberately: two estimators in one repository disagreeing about what a
+# token costs is the drift a policy engine must not model.
+[tokens]
+bytes_per_token = 4
+basis = "1 token is approximately 4 characters of English text"
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+retrieved = "2026-08-11"
+# The direction the estimate can be wrong in, stated rather than discovered: both
+# arms of every comparison are divided by the same constant, so a ratio between
+# two arms is INDEPENDENT of it. Only the absolute token and dollar columns move
+# if the true divisor differs, and they move together.
+affects = "absolute token and dollar columns only; every ratio is divisor-independent"
+
+# --- how tokens become dollars -----------------------------------------------
+#
+# One model's published rates, quoted exactly. Not an average across providers and
+# not a blended rate: a blend is a number with no primary behind it, which is the
+# shape this issue's honesty gate exists to refuse.
+[price]
+model = "Claude Sonnet 5"
+currency = "USD"
+per = 1000000
+source = "https://platform.claude.com/docs/en/about-claude/pricing"
+retrieved = "2026-08-11"
+# "Base Input Tokens" — what an agent pays for tool output entering its context
+# the first time.
+input_fresh = 2.00
+# "Cache Hits & Refreshes" — what the same bytes cost on a later turn when the
+# prefix they sit in stayed byte-identical. The tenth-of-fresh ratio is the whole
+# reason byte-stable output is an economic property and not a tidiness one.
+input_cached_read = 0.20
+# "Output Tokens". Reported for completeness; no workload here bills output, and
+# a column with no measurement behind it is left empty rather than filled.
+output = 10.00
+
+# --- what is deliberately NOT measured here ----------------------------------
+#
+# The honesty gate reads this table: a capability named here reports "not
+# measured" with this reason attached, and `bench-check` refuses a reason-less
+# omission. A gap that is stated is a finding; a gap that is silent is a claim of
+# coverage nobody made on purpose.
+[[not_measured]]
+subject = "cross-session prefix-cache hit rate"
+reason = "requires a live provider credential; hit rate and time-to-first-token are properties of the world, not of this commit, so they cannot be a gate (see .claude/rules/toolchain.md on gate-vs-schedule)"
+what_is_measured_instead = "byte-stability of each arm across runs — the precondition a warm prefix cache depends on, and the half that IS a property of this commit"

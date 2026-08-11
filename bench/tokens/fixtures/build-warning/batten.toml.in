@@ -1,0 +1,10 @@
+version = 1
+
+# The predicate this workload measures: a command that exits 0 while its own
+# output says it is not actually done. No severity knob — a finding that exits 0
+# is invisible to the only surface an agent reads (see crates/batten/src/outputs.rs).
+[[exec_pattern]]
+id = "lying-zero"
+pattern = "warning[duplicate]"
+stream = "both"
+reason = "configure the build to fail on a duplicate dependency instead of warning"

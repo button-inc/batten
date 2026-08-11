@@ -1,0 +1,12 @@
+version = 1
+
+# The scan this workload measures: one banned shape over a source tree. Same
+# question the baseline `grep -rnF` asks, over the same file set — only the
+# answer's shape differs, which is the whole comparison.
+[[rule]]
+id = "no-infallible-shortcut"
+kind = "forbid"
+glob = "src/**/*.rs"
+pattern = ".unwrap()"
+severity = "deny"
+scope = "tree"
