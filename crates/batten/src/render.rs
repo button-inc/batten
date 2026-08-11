@@ -215,7 +215,11 @@ mod tests {
         let root = surface::command();
         for decl in SURFACE {
             let page = man(&root, Some(decl.path)).expect("a declared path renders");
-            assert!(!page.trim().is_empty(), "{} rendered an empty page", decl.path);
+            assert!(
+                !page.trim().is_empty(),
+                "{} rendered an empty page",
+                decl.path
+            );
         }
     }
 
@@ -243,7 +247,10 @@ mod tests {
         // §6, and the precondition for the drift gate: the same surface must
         // render identical bytes, or every regeneration would report drift.
         let root = surface::command();
-        assert_eq!(man(&root, Some("check")).unwrap(), man(&root, Some("check")).unwrap());
+        assert_eq!(
+            man(&root, Some("check")).unwrap(),
+            man(&root, Some("check")).unwrap()
+        );
         let described = spec::describe(&surface::command());
         assert_eq!(markdown(&described), markdown(&described));
     }

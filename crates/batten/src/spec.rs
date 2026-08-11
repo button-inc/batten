@@ -301,6 +301,11 @@ mod tests {
                 "doctor".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
+                // The two human renderings (CLOUD-69) are on the list for the
+                // same structural reason the shell one is: they return bytes
+                // and write nothing.
+                "generate man".to_owned(),
+                "generate markdown".to_owned(),
                 "generate schema".to_owned(),
                 // The `lint` noun is on the list with its kind, for the same
                 // reason as `policy` below: `lint <kind>` reads text the caller
@@ -373,7 +378,13 @@ mod tests {
         // therefore structurally honest and not a promise about behaviour, and
         // §2 is corrected rather than the code. If a sub-verb ever opens a file
         // itself, this is the assertion that has to be deleted deliberately.
-        for path in ["generate", "generate completions", "generate schema"] {
+        for path in [
+            "generate",
+            "generate completions",
+            "generate man",
+            "generate markdown",
+            "generate schema",
+        ] {
             assert_eq!(
                 effect_for(path),
                 Effect::Read,
@@ -417,6 +428,13 @@ mod tests {
                 // derivation the one emitter (CLOUD-244).
                 "generate".to_owned(),
                 "generate completions".to_owned(),
+                // §11's other two derivations, landed together (CLOUD-69): the
+                // document has named man pages and markdown as derivations of
+                // this spec since the spine, and until now only the shell one
+                // existed. §2 needs no reconciliation for them — it never
+                // listed a row either way.
+                "generate man".to_owned(),
+                "generate markdown".to_owned(),
                 "generate schema".to_owned(),
                 "hook".to_owned(),
                 // A top-level verb-with-kind, not a `brief` noun: what varies

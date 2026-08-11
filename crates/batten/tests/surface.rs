@@ -210,7 +210,11 @@ fn a_page_is_emitted_for_every_command_and_none_is_empty() {
             "{} did not render",
             path.display()
         );
-        assert!(!output.stdout.is_empty(), "{} rendered empty", path.display());
+        assert!(
+            !output.stdout.is_empty(),
+            "{} rendered empty",
+            path.display()
+        );
     }
 }
 
@@ -235,7 +239,10 @@ fn a_page_is_titled_by_the_filename_it_is_committed_as() {
     // filename disagree is unfindable — and both sides would still be
     // byte-stable and pass every diff above.
     for (path, command) in committed_pages() {
-        let stem = path.file_stem().and_then(|stem| stem.to_str()).expect("UTF-8");
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .expect("UTF-8");
         let page = String::from_utf8(generate_man(&command).stdout).expect("roff is UTF-8");
         assert!(
             page.contains(&format!(".TH {stem} 1")),
@@ -283,11 +290,17 @@ fn the_markdown_reference_is_emitted_whole_and_byte_stably() {
         .args(["generate", "markdown"])
         .output()
         .expect("run batten generate markdown");
-    assert_eq!(output.stdout, again.stdout, "the reference was not byte-stable");
+    assert_eq!(
+        output.stdout, again.stdout,
+        "the reference was not byte-stable"
+    );
 
     let rendered = String::from_utf8(output.stdout).expect("markdown is UTF-8");
     for verb in ["batten check", "batten config show", "batten generate man"] {
-        assert!(rendered.contains(verb), "the reference must document `{verb}`");
+        assert!(
+            rendered.contains(verb),
+            "the reference must document `{verb}`"
+        );
     }
 }
 

@@ -2094,7 +2094,11 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // whole tree would document the root and none of the verbs, which is
         // the shape `man batten-config-show` cannot resolve.
         GenerateCommand::Man { command } => {
-            write!(out, "{}", render::man(&surface::command(), command.as_deref())?)?;
+            write!(
+                out,
+                "{}",
+                render::man(&surface::command(), command.as_deref())?
+            )?;
         }
         // The whole surface in one document — the CLI reference CLOUD-171
         // renders at publish time. Deliberately not a committed artifact: a
@@ -2102,7 +2106,11 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         // construction, and a committed copy would be the second authority
         // this whole module exists to remove.
         GenerateCommand::Markdown => {
-            write!(out, "{}", render::markdown(&spec::describe(&surface::command())))?;
+            write!(
+                out,
+                "{}",
+                render::markdown(&spec::describe(&surface::command()))
+            )?;
         }
         // Two surfaces, two derivations (CLOUD-239): one schema describing both
         // is what let a validator vouch for override keys the loader drops.
