@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.58](https://github.com/button-inc/batten/compare/v0.0.57...v0.0.58) - 2026-08-11
+
+### Added
+
+- *(judge)* govern what may be sent to a model, before the judge exists
+
 ## [0.0.57](https://github.com/button-inc/batten/compare/v0.0.56...v0.0.57) - 2026-08-11
 
 ### Added
