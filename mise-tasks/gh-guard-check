@@ -23,7 +23,19 @@ cmd="${1:-}"
 
 # Neutralise quoted spans, then split on shell separators.
 scrubbed=$(printf '%s' "$cmd" | sed -E "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
-mapfile -t segments < <(printf '%s' "$scrubbed" | sed -E 's/(\&\&|\|\||[;|&])/\n/g')
+
+# A `read` loop and not `mapfile` (CLOUD-282): `mapfile` is bash 4 and macOS
+# ships 3.2 as /bin/bash, so the guard would die on its own first statement.
+# Same idiom as `issue-guard` and `ready-guard`, which never used mapfile.
+#
+# `printf '%s\n'`, WITH the trailing newline, is the load-bearing half. `read`
+# returns false on a final segment that carries no terminator, so without it the
+# last — and for a single-segment command like `gh pr merge` the ONLY — segment
+# is dropped and the guard silently allows everything it exists to deny.
+segments=()
+while IFS= read -r seg; do
+	segments+=("$seg")
+done < <(printf '%s\n' "$scrubbed" | sed -E 's/(\&\&|\|\||[;|&])/\n/g')
 
 for seg in "${segments[@]}"; do
 	read -r -a toks <<<"$seg"

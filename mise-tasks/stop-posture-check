@@ -57,17 +57,27 @@ msg=$(cat) || exit 2
 # that documented it, twice, before its scrubber covered quoted spans. Code spans,
 # fenced blocks, block quotes and double-quoted spans all come out first.
 #
-# `-z` throughout, because sed is line-based by default and every one of these
-# spans is routinely line-wrapped in real prose — a line-based scrub leaves the
-# interior of a wrapped quotation exposed, which is the same defect
-# `run-shape-guard` fixed at its own scrubber.
+# WHOLE-INPUT throughout, because the default line-at-a-time model leaves the
+# interior of a wrapped quotation exposed and every one of these spans is
+# routinely line-wrapped in real prose — the same defect `run-shape-guard` fixed
+# at its own scrubber. The last substitution needs it twice over: it matches `\n`
+# inside the pattern space, which a line-based reader never has.
+#
+# `perl -0777` and not sed's NUL-separated mode (CLOUD-282): `-z` is a GNU
+# extension, BSD sed exits `illegal option -- z`, and these are GATES — a macOS
+# checkout could not run them at all. Byte-identical for all four substitutions,
+# differentially verified against the real bats fixtures and both edges (a
+# leading `\n`, a blank line before `>`); only `\1` becomes `$1`. Not awk:
+# `awk-regex-check` forbids `-v`-passed regexes, and this repo's dev boxes are
+# mawk against a gawk runner. The banned literal is deliberately not spelled
+# here — `no-gnu-sed-z` in batten.toml is a substring rule over this directory.
 scrubbed=$(
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 	printf '%s' "$msg" |
-		sed -zE 's/```[^`]*```/FENCED/g' |
-		sed -zE 's/`[^`]*`/CODE/g' |
-		sed -zE 's/"[^"]*"/QUOTED/g' |
-		sed -zE 's/(^|\n)[[:space:]]*>[^\n]*/\1QUOTED/g'
+		perl -0777 -pe 's/```[^`]*```/FENCED/g' |
+		perl -0777 -pe 's/`[^`]*`/CODE/g' |
+		perl -0777 -pe 's/"[^"]*"/QUOTED/g' |
+		perl -0777 -pe 's/(^|\n)[[:space:]]*>[^\n]*/$1QUOTED/g'
 )
 
 # The literal set is AGENTS.md's own two examples plus their direct inflections.

@@ -90,9 +90,16 @@ body=$(awk '
 	inheredoc { if ($0 ~ "^[[:space:]]*" term "[[:space:]]*$") inheredoc = 0; next }
 	{ print }
 ' <<<"$value")
-# -z, so a quoted span is neutralised across NEWLINES — a multi-line commit
-# message is the single most likely place for someone to write these shapes down.
-scrubbed=$(printf '%s' "$body" | sed -zE "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
+# Slurped whole, so a quoted span is neutralised across NEWLINES — a multi-line
+# commit message is the single most likely place for someone to write these
+# shapes down.
+#
+# `perl -0777` and not sed's NUL-separated mode (CLOUD-282): `-z` is a GNU
+# extension, BSD sed exits `illegal option -- z`, and this is a GATE — a macOS
+# checkout could not run it at all. The literal is deliberately not spelled here:
+# `no-gnu-sed-z` in batten.toml is a substring rule over this very directory, so
+# a comment quoting the banned form would make the row fire on its own rationale.
+scrubbed=$(printf '%s' "$body" | perl -0777 -pe "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
 
 # Judged per SEGMENT, not per command string. A read in one segment must not be
 # condemned by a write in another, and — the direction that actually matters —

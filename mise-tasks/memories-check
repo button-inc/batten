@@ -60,9 +60,17 @@ while IFS=: read -r file line ref; do
 	[ -f "$memories/$name.md" ] || report "$file:$line" "mem-ref-stale ($name)"
 	# CHANGELOG.md is excluded with the template: release-plz owns it, so a stale
 	# reference there could only be fixed by hand-editing a generated file.
+	#
+	# Bare `xargs` below, with no `--no-run-if-empty` (CLOUD-282): the short form
+	# of that flag is a GNU extension BSD xargs did not carry until recently. It
+	# bought nothing here — the `/dev/null` sentinel argument means a zero-file
+	# invocation still runs `grep` against one unmatchable file, which prints
+	# nothing and exits 1, which is exactly what the flag was suppressing.
+	# `no-gnu-xargs-r` in batten.toml keeps it out; the literal is not spelled
+	# here because that row is a substring rule over this directory.
 done < <(git ls-files '*.md' ':!:tests/bats' ':!:CHANGELOG.md' |
 	grep -vxF "$memories/memory_maintenance.md" |
-	xargs -r grep -noE 'mem:[A-Za-z0-9_/-]+' /dev/null 2>/dev/null | sort -u)
+	xargs grep -noE 'mem:[A-Za-z0-9_/-]+' /dev/null 2>/dev/null | sort -u)
 
 if [ "$violations" -ne 0 ]; then
 	echo "::error:: memories-check: $violations violation(s) — the memory graph has dangling edges" >&2

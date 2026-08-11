@@ -120,11 +120,18 @@ body=$(awk '
 	inheredoc { if ($0 ~ "^[[:space:]]*" term "[[:space:]]*$") inheredoc = 0; next }
 	{ print }
 ' <<<"$cmd")
-# -z, so a quoted span is neutralised across NEWLINES. sed is line-based by
-# default, which left the interior of every multi-line `git commit -m "…"`
-# exposed — and a commit message documenting these shapes is the single most
-# likely place to write them down. The guard denied exactly that.
-scrubbed=$(printf '%s' "$body" | sed -zE "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
+# Slurped whole, so a quoted span is neutralised across NEWLINES. A line-at-a-
+# time reader left the interior of every multi-line `git commit -m "…"` exposed
+# — and a commit message documenting these shapes is the single most likely
+# place to write them down. The guard denied exactly that.
+#
+# `perl -0777` and not sed's NUL-separated mode (CLOUD-282): `-z` is a GNU
+# extension, BSD sed exits `illegal option -- z`, so a macOS checkout could not
+# run this guard at all. Byte-identical for both substitutions, differentially
+# verified against the real fixtures. The banned literal is deliberately not
+# spelled here — `no-gnu-sed-z` in batten.toml is a substring rule over this
+# directory, so quoting it would make the row fire on its own rationale.
+scrubbed=$(printf '%s' "$body" | perl -0777 -pe "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
 
 # --- resolve a pipeline stage to its EFFECTIVE program ------------------------
 #
@@ -378,7 +385,15 @@ for element in "${elements[@]}"; do
 		index=$((index + 1))
 		continue
 	}
-	mapfile -t stages < <(printf '%s' "$element" | tr '|' '\n')
+	# A `read` loop and not `mapfile` (CLOUD-282): `mapfile` is bash 4 and macOS
+	# ships 3.2, so this guard would die on a Mac. `printf '%s\n'` with the
+	# trailing newline is load-bearing — `read` returns false on an unterminated
+	# final segment, and an unpiped command is exactly one stage, so dropping it
+	# would leave `stages` empty and wave every verdict-bearing command through.
+	stages=()
+	while IFS= read -r stage_line; do
+		stages+=("$stage_line")
+	done < <(printf '%s\n' "$element" | tr '|' '\n')
 	if verdict_bearing "${stages[0]}"; then
 		last_verdict=$index
 		for stage in "${stages[@]:1}"; do
