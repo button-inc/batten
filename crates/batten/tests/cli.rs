@@ -4133,8 +4133,7 @@ fn bound_store_dir(repo: &std::path::Path, home: &std::path::Path) -> PathBuf {
     let mut found = None;
     for entry in walk_dirs(&home.join("data")) {
         if entry.join("store.json").is_file()
-            && fs::read_to_string(entry.join("store.json"))
-                .is_ok_and(|text| text.contains(&id))
+            && fs::read_to_string(entry.join("store.json")).is_ok_and(|text| text.contains(&id))
         {
             found = Some(entry);
             break;

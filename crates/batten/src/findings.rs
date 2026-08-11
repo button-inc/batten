@@ -976,7 +976,11 @@ mod tests {
         );
 
         // Every other disposition collects normally.
-        for disposition in [None, Some(Disposition::Acted), Some(Disposition::RejectedWrong)] {
+        for disposition in [
+            None,
+            Some(Disposition::Acted),
+            Some(Disposition::RejectedWrong),
+        ] {
             let mut other = FindingRecord {
                 disposition,
                 ..record_of(vec![instance("refs/heads/a", Observation::Observed(1))])

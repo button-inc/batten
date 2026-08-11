@@ -234,7 +234,7 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   cardinality cap, capability-absent) never had the chance to be acted on, so
   `effective_fp_rates` excludes it from BOTH sides of the ratio — otherwise the
   suppression machinery inflates the number it exists to measure. Not-acted is a
-  false positive *including* `rejected-by-design`; exempting the agent's own
+  false positive _including_ `rejected-by-design`; exempting the agent's own
   by-design call is what would make the measurement worthless. A zero denominator
   is no rate rather than a perfect one. `tier` is the ONE stored severity axis,
   derived through the rank table at mint and never recomputed: an Nth occurrence

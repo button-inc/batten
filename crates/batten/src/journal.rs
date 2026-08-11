@@ -135,7 +135,11 @@ fn mint_generation(store_dir: &Path, bump: u64) -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_nanos());
-    let seed = format!("{}:{now}:{}:{bump}", store_dir.display(), std::process::id());
+    let seed = format!(
+        "{}:{now}:{}:{bump}",
+        store_dir.display(),
+        std::process::id()
+    );
     crate::identity::store_fingerprint(&[&seed]).to_hex()
 }
 
@@ -322,9 +326,10 @@ fn read_shards(store_dir: &Path) -> Result<Vec<Entry>> {
         // A torn trailing line is dropped rather than failing the merge: the
         // writer will re-append it, and refusing to merge every other shard over
         // one partial write would make a crash contagious.
-        all.extend(text.lines().filter_map(|line| {
-            serde_json::from_str::<Entry>(line).ok()
-        }));
+        all.extend(
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<Entry>(line).ok()),
+        );
     }
     Ok(all)
 }
@@ -474,15 +479,17 @@ impl Drain {
 }
 
 /// Read the merged log's current contents.
-fn read_merged(store_dir: &Path) -> Result<Vec<Entry>> {
-    let path = merged_path(store_dir);
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(Vec::new());
+///
+/// Infallible by construction: an absent log is an empty one (the ordinary
+/// first-drain case), and an unparseable line is skipped the same way a torn
+/// shard line is. There is no failure a caller could act on differently.
+fn read_merged(store_dir: &Path) -> Vec<Entry> {
+    let Ok(text) = std::fs::read_to_string(merged_path(store_dir)) else {
+        return Vec::new();
     };
-    Ok(text
-        .lines()
+    text.lines()
         .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
-        .collect())
+        .collect()
 }
 
 /// Everything after `cursor`, or a full resync when it cannot be honoured.
@@ -495,7 +502,7 @@ fn read_merged(store_dir: &Path) -> Result<Vec<Entry>> {
 /// Returns an error when the format or the merged log cannot be read.
 pub fn since(store_dir: &Path, cursor: Option<&Cursor>) -> Result<Drain> {
     let format = open(store_dir)?.format().clone();
-    let entries = read_merged(store_dir)?;
+    let entries = read_merged(store_dir);
     let current = Cursor {
         generation: format.generation.clone(),
         seqno: entries.len() as u64,
@@ -748,7 +755,12 @@ mod tests {
         // lost is safe to repeat.
         let dir = store("idempotent");
         crate::findings::save_one(&dir, &record_for("TODO")).unwrap();
-        append(&dir, "shard-a", &entry_for("TODO", Disposition::RejectedByDesign)).unwrap();
+        append(
+            &dir,
+            "shard-a",
+            &entry_for("TODO", Disposition::RejectedByDesign),
+        )
+        .unwrap();
         merge(&dir).unwrap();
         let first = crate::findings::load_all(&dir).unwrap();
         merge(&dir).unwrap();
@@ -786,7 +798,10 @@ mod tests {
         merge(&dir).unwrap();
 
         let first = since(&dir, None).unwrap();
-        assert!(matches!(first, Drain::FullResync { .. }), "no cursor resyncs");
+        assert!(
+            matches!(first, Drain::FullResync { .. }),
+            "no cursor resyncs"
+        );
         let cursor = first.cursor().clone();
 
         // Caught up: nothing new.
@@ -876,7 +891,10 @@ mod tests {
         assert_eq!(migrated.from, FINDINGS_SCHEMA_MIN);
         assert_eq!(migrated.to, FINDINGS_SCHEMA);
         assert_eq!(migrated.records, 1);
-        assert_eq!(open(&dir).unwrap().format().findings_schema, FINDINGS_SCHEMA);
+        assert_eq!(
+            open(&dir).unwrap().format().findings_schema,
+            FINDINGS_SCHEMA
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
