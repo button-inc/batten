@@ -100,10 +100,32 @@ sessions outlive the turn.
 
 ## What bounds the fleet
 
-Planning fans out freely: a planner writes no code and takes no lock. **Landing
-contends** — every land forces siblings to rebase and re-run `verify`, so the
-ceiling is roughly time-between-lands ÷ verify-duration, and the honest signal
-that you are past it is a rising re-verify rate, not a stall. Bundles raise that
-ceiling by amortising several commits per session over one rebase cost; adding
-sessions does not. `mem:workflow/agent-fanout` carries the measurement and the
-current cap.
+**Not the re-verify rate.** `land` laps unattended — a fast-forward refusal
+rebases and re-verifies with no model turn — so a moved base spends CPU and
+wall-clock, both free here, and zero tokens. Re-verifying is the loop working,
+and throttling the fleet to avoid it optimises against a cost that does not
+exist.
+
+Three costs are real, and each has its own control:
+
+| Cost                                  | Control                                             |
+| ------------------------------------- | --------------------------------------------------- |
+| a rebase **conflict** (needs a human) | file-domain partitioning — step 3                   |
+| **CI minutes** on a run `main` voids  | the `land-lock` lease — `mem:workflow/landing-loop` |
+| **tokens**                            | bundles, and `land` lapping without a model turn    |
+
+So the objective is pace of landed work per token, not collision avoidance.
+There is exactly one coordination primitive — `land-lock`, a CAS lease on
+`refs/heads/batten-land-lock` that `land` acquires before the ready/push pair,
+so the draft→ready transition that spends the CI bill happens inside the hold.
+It decides **who goes first and nothing more**: bounded to the holder plus one
+admitted successor, regardless of how many sessions are dispatched. Everything
+else stays CSMA/CD — detect, back off, retry, keep the medium saturated.
+
+Do not build a second admission authority on top of it, and do not "repair" it
+back to an unlocked loop: `mem:workflow/landing-loop` is the one place its
+semantics live, and it records which of its shapes read as breakage from an old
+clone. What the lease does not yet do — keep the queue warm across a merge,
+stop a loser starving — is CLOUD-369's residue, not a gap to fill here.
+
+`mem:workflow/agent-fanout` carries the fan-out measurement.
