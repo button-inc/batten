@@ -39,6 +39,13 @@ clap_complete = "4"
 # Per-OS base directories: XDG on Linux/macOS (honours XDG_DATA_HOME), the
 # roaming known folder on Windows — the CLOUD-23 state-path rule, one crate.
 etcetera = "0.10"
+# Secret-class identity inputs are HMAC-keyed (CLOUD-123): an unkeyed digest of a
+# matched secret is an offline-guessing oracle, because secrets are often
+# low-entropy and a journalled hash cannot be expunged. Pinned to the 0.12 line,
+# not 0.13, deliberately: 0.12 requires `digest ^0.10.3`, which is the `digest`
+# the vendored `sha2 = "0.10"` already resolves to, while 0.13 wants `digest 0.11`
+# and would put two majors of the same hashing substrate in the tree.
+hmac = "0.12"
 # The JSON Schema for `batten.toml`, derived from the config types themselves
 # (CLOUD-33) — never hand-authored, so the schema cannot describe a config the
 # binary does not accept.

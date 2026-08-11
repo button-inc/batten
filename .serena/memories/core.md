@@ -255,7 +255,21 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   out of scope — it would put `rules::run_all`'s spawning path behind a `read` verb.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
-  insertion doesn't re-mint a finding; content changes correctly do.
+  insertion doesn't re-mint a finding; content changes correctly do. The module
+  doc is the landed spec (tuples, canonicalization, exclusions, count semantics,
+  migration, interaction laws), so read it rather than re-deriving from the
+  issue. Three things beyond the plain fingerprints: `secret_code_fingerprint`
+  HMAC-keys the span for secret-class findings, because an unkeyed digest of a
+  low-entropy secret is an offline-guessing oracle a journal cannot expunge —
+  the key comes from the caller, custody is the store's; `override_fingerprint`
+  hashes the default identity as a field, which makes a per-rule override
+  split-only _by construction_ rather than by validation; and the key-id sits
+  inside the preimage while an `identity_version` stays outside it, which looks
+  contradictory and is not — a version must not re-mint (the migration
+  equality-join needs comparable hashes), a rotation must (its join is
+  dual-HMAC). Behavioural churn fixtures live in
+  `crates/batten/tests/identity_churn.rs` (CLOUD-169); they compose the matcher
+  with this module because a `Finding` carries no fingerprint yet (CLOUD-164).
 - `receipt.rs` — verification receipts (CLOUD-203): SHA-keyed in-toto
   statements that a named check passed, stored out-of-tree (first caller of
   `state.rs` and `identity.rs`) plus the grandfathered
