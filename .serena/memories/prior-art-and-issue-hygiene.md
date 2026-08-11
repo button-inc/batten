@@ -273,6 +273,20 @@ still fail at "which observed problem here does it fix". The revisit trigger is
 recorded in the doc rather than left implicit, because "no" without a trigger
 becomes "no" forever by default.
 
+**A survey that classifies a corpus needs canaries, and a canary is a regression
+test — not a plausibility check.** Seed the run with cases whose answer is already
+known _because getting them wrong is a mistake you actually made_, and fail the run
+when one misclassifies. Two rounds of this survey proved it. Round one screened
+20k repositories by name, then matched policy files by filename, and produced
+errors in both directions: two `deny.toml` files that are cargo-deny's, a
+`conftest.py` that is pytest's, and real policy missed because only the root was
+listed. Round two was built to make those unrepresentable — and the canaries caught
+it reproducing the same blind spot in a new costume, fetching only paths guessed in
+advance, so two root-level policy files were "absent" again. **Absence of evidence
+is a claim about your instrument before it is a claim about the world**, and the
+canary is what tells the two apart. The corollary for the classifier itself: a name
+may decide what gets _read_; only the text decides what a thing _is_.
+
 The one adoption was a _defect_ their design exposed in ours: a fingerprint whose
 preimage includes matched values is an offline-guessable commitment to a matched
 credential, so for a secret-class finding the primary key carries the payload the
