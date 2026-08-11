@@ -35,6 +35,7 @@ pub mod receipt;
 pub mod resolve;
 pub mod rules;
 pub mod selfwrite;
+pub mod session;
 pub mod severity;
 pub mod spec;
 pub mod state;
