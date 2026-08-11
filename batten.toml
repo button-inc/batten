@@ -320,9 +320,11 @@ redirect = "write through the surface that owns the file"
 # nothing (non-negotiable rule 1). Batten is consumer #1 in practice: this is
 # the worked example of the feature, in the config the feature reads.
 #
-# Every path must be readable. An unreadable one is exit 3, never a silent skip
-# — skipping would compute a stable epoch over a surface that changed, which is
-# precisely the failure the value exists to prevent.
+# Every path must be readable. An unreadable one is exit 1 — this list is config,
+# so a tracked path that cannot be read is unreadable config, which §7 routes to
+# 1 and not to 3. It is never a silent skip: skipping would compute a stable
+# epoch over a surface that changed, which is precisely the failure the value
+# exists to prevent.
 # What the always-loaded instruction set may cost (CLOUD-50).
 #
 # Every agent pays AGENTS.md on every turn whether or not a word of it applies,

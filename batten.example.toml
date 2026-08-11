@@ -258,9 +258,11 @@ path = "vendor/**"
 # before hashing) and a duplicate is ignored. Absent, or empty, means the
 # default: this file alone, which governs every consumer by definition.
 #
-# Every listed path must be readable. An unreadable one exits 3 rather than
-# being skipped: a skip would compute a stable epoch over a surface that
-# changed, which looks exactly like a valid answer.
+# Every listed path must be readable. An unreadable one exits 1 — the config-error
+# code, because this list is config, so a tracked path that cannot be read is
+# unreadable config rather than a fault of Batten's own (which would be 3). It is
+# refused rather than skipped: a skip would compute a stable epoch over a surface
+# that changed, which looks exactly like a valid answer.
 [epoch]
 tracked = ["batten.toml"]
 
