@@ -198,12 +198,7 @@ pub const MALFORMED_LINE: &str = "defect-malformed-line";
 /// The census the repo's totality idiom walks: a new [`Problem`] variant that
 /// does not appear here fails `every_ledger_problem_is_reachable`, which is what
 /// keeps the taxonomy of gate findings from growing a member nothing exercises.
-pub const PROBLEMS: &[&str] = &[
-    MALFORMED_LINE,
-    UNKNOWN_CLASS,
-    DUPLICATE_ID,
-    NOT_APPEND_ONLY,
-];
+pub const PROBLEMS: &[&str] = &[MALFORMED_LINE, UNKNOWN_CLASS, DUPLICATE_ID, NOT_APPEND_ONLY];
 
 impl Problem {
     /// This problem as an ordinary [`Finding`] against `path`.
@@ -507,7 +502,10 @@ mod tests {
         let base = "{\"a\":1}\n{\"b\":2}\n";
 
         // Appending is the permitted move.
-        assert_eq!(first_divergence(base, "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"), None);
+        assert_eq!(
+            first_divergence(base, "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n"),
+            None
+        );
         assert_eq!(first_divergence(base, base), None);
 
         // Rewriting a row is caught at that row, not at the end.
@@ -585,12 +583,24 @@ mod tests {
         // Byte-identical: a no-op, which is what makes a half-finished import
         // safe to re-run.
         let (summary, fresh) = plan(&existing, &existing).unwrap();
-        assert_eq!(summary, Added { appended: 0, already: 1 });
+        assert_eq!(
+            summary,
+            Added {
+                appended: 0,
+                already: 1
+            }
+        );
         assert!(fresh.is_empty());
 
         // New id: an append.
         let (summary, fresh) = plan(&existing, &[record("d-2", "silent-skip")]).unwrap();
-        assert_eq!(summary, Added { appended: 1, already: 0 });
+        assert_eq!(
+            summary,
+            Added {
+                appended: 1,
+                already: 0
+            }
+        );
         assert_eq!(fresh.len(), 1);
 
         // Same id, different content: neither an append nor a no-op.
@@ -608,7 +618,13 @@ mod tests {
     fn a_stream_carrying_one_row_twice_appends_it_once() {
         let twice = vec![record("d-1", "false-green"), record("d-1", "false-green")];
         let (summary, fresh) = plan(&[], &twice).unwrap();
-        assert_eq!(summary, Added { appended: 1, already: 1 });
+        assert_eq!(
+            summary,
+            Added {
+                appended: 1,
+                already: 1
+            }
+        );
         assert_eq!(fresh.len(), 1);
     }
 
@@ -616,7 +632,11 @@ mod tests {
     fn a_query_is_pointer_only_and_sorted_by_id() {
         let mut gated = record("d-2", "false-green");
         gated.enforcement = Some("no-todo".to_owned());
-        let records = vec![record("d-3", "silent-skip"), gated, record("d-1", "false-green")];
+        let records = vec![
+            record("d-3", "silent-skip"),
+            gated,
+            record("d-1", "false-green"),
+        ];
 
         let all = query_lines(&records, "defects.jsonl", Filter::All);
         assert_eq!(
@@ -649,7 +669,11 @@ mod tests {
     #[test]
     fn a_blank_line_is_not_a_record_and_a_bad_one_names_its_line() {
         let text = "{\"id\":\"d-1\",\"class\":\"false-green\",\"observed\":\"2026-08-11\",\"evidence\":\"a:1\"}\n\n";
-        assert_eq!(parse(text).unwrap().len(), 1, "a trailing newline is not a row");
+        assert_eq!(
+            parse(text).unwrap().len(),
+            1,
+            "a trailing newline is not a row"
+        );
 
         let bad = format!("{text}not json\n");
         let err = parse(&bad).unwrap_err();
@@ -661,7 +685,8 @@ mod tests {
         // `deny_unknown_fields`: a row carrying a key the schema does not know
         // would otherwise be stored with that key silently discarded, which in a
         // permanent ledger is data loss nobody sees.
-        let text = "{\"id\":\"d-1\",\"class\":\"c\",\"observed\":\"d\",\"evidence\":\"e\",\"bogus\":1}\n";
+        let text =
+            "{\"id\":\"d-1\",\"class\":\"c\",\"observed\":\"d\",\"evidence\":\"e\",\"bogus\":1}\n";
         assert!(parse(text).is_err());
     }
 

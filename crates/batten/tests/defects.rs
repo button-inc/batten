@@ -76,16 +76,28 @@ fn ledger_text(dir: &Path) -> String {
 fn rewriting_a_committed_row_is_a_violation_at_that_line() {
     // The headline case, and the one an id-set check would miss: every id
     // survives and history still changed.
-    let base = format!("{}\n{}\n", row("d-1", "false-green", "a.rs:1"), row("d-2", "silent-skip", "b.rs:2"));
+    let base = format!(
+        "{}\n{}\n",
+        row("d-1", "false-green", "a.rs:1"),
+        row("d-2", "silent-skip", "b.rs:2")
+    );
     let dir = ledger_repo("defects-rewritten", Some(&base));
     common::write(
         &dir,
         "defects.jsonl",
-        &format!("{}\n{}\n", row("d-1", "false-green", "a.rs:1"), row("d-2", "silent-skip", "SOMEWHERE-ELSE:9")),
+        &format!(
+            "{}\n{}\n",
+            row("d-1", "false-green", "a.rs:1"),
+            row("d-2", "silent-skip", "SOMEWHERE-ELSE:9")
+        ),
     );
 
     let output = check(&dir);
-    assert_eq!(output.status.code(), Some(2), "a rewrite is a policy verdict");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a rewrite is a policy verdict"
+    );
     let text = stdout(&output);
     assert!(
         text.contains("defect-not-append-only"),
@@ -113,14 +125,25 @@ fn appending_is_the_permitted_move_and_says_nothing() {
 
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty(), "a ledger that only grew is silent");
+    assert!(
+        output.stdout.is_empty(),
+        "a ledger that only grew is silent"
+    );
 }
 
 #[test]
 fn deleting_a_committed_row_is_caught_at_the_row_that_went_missing() {
-    let base = format!("{}\n{}\n", row("d-1", "false-green", "a.rs:1"), row("d-2", "silent-skip", "b.rs:2"));
+    let base = format!(
+        "{}\n{}\n",
+        row("d-1", "false-green", "a.rs:1"),
+        row("d-2", "silent-skip", "b.rs:2")
+    );
     let dir = ledger_repo("defects-shrunk", Some(&base));
-    common::write(&dir, "defects.jsonl", &format!("{}\n", row("d-1", "false-green", "a.rs:1")));
+    common::write(
+        &dir,
+        "defects.jsonl",
+        &format!("{}\n", row("d-1", "false-green", "a.rs:1")),
+    );
 
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(2));
@@ -170,7 +193,11 @@ fn a_malformed_row_is_a_finding_rather_than_an_aborted_run() {
     common::write(&dir, "defects.jsonl", "not json at all\n");
 
     let output = check(&dir);
-    assert_eq!(output.status.code(), Some(2), "a verdict, not a usage error");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a verdict, not a usage error"
+    );
     let text = stdout(&output);
     assert!(text.contains("defect-malformed-line"), "got: {text:?}");
     assert!(
@@ -241,7 +268,11 @@ fn with_no_remote_the_comparison_degrades_to_head_only_never_to_a_pass() {
         git_in(&dir, &["remote"]).is_empty(),
         "the fixture must genuinely have no remote for this to prove anything"
     );
-    common::write(&dir, "defects.jsonl", &format!("{}\n", row("d-1", "false-green", "z.rs:9")));
+    common::write(
+        &dir,
+        "defects.jsonl",
+        &format!("{}\n", row("d-1", "false-green", "z.rs:9")),
+    );
 
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(2));
@@ -259,12 +290,22 @@ fn a_resolvable_remote_default_is_a_second_base_and_one_rewrite_is_one_finding()
     // A real remote with a recorded HEAD: `remote_default_branch` reads
     // `refs/remotes/<remote>/HEAD`, which is what a clone maintains.
     let upstream = common::scratch("defects-remote-upstream");
-    git_in(&upstream, &["init", "-q", "--bare", "--initial-branch=main"]);
-    git_in(&dir, &["remote", "add", "origin", &upstream.to_string_lossy()]);
+    git_in(
+        &upstream,
+        &["init", "-q", "--bare", "--initial-branch=main"],
+    );
+    git_in(
+        &dir,
+        &["remote", "add", "origin", &upstream.to_string_lossy()],
+    );
     git_in(&dir, &["push", "-q", "origin", "main"]);
     git_in(&dir, &["remote", "set-head", "origin", "main"]);
 
-    common::write(&dir, "defects.jsonl", &format!("{}\n", row("d-1", "false-green", "z.rs:9")));
+    common::write(
+        &dir,
+        "defects.jsonl",
+        &format!("{}\n", row("d-1", "false-green", "z.rs:9")),
+    );
     let output = check(&dir);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
@@ -296,7 +337,11 @@ fn the_gate_is_silent_when_no_table_is_declared() {
 fn the_report_is_byte_stable_across_runs_in_both_channels() {
     let base = format!("{}\n", row("d-1", "false-green", "a.rs:1"));
     let dir = ledger_repo("defects-stable", Some(&base));
-    common::write(&dir, "defects.jsonl", &format!("{}\n", row("d-1", "false-green", "z.rs:9")));
+    common::write(
+        &dir,
+        "defects.jsonl",
+        &format!("{}\n", row("d-1", "false-green", "z.rs:9")),
+    );
 
     for args in [&["check"][..], &["check", "-J"][..]] {
         let first = run(&dir, args);
@@ -322,7 +367,11 @@ fn a_waiver_suppresses_a_ledger_finding_like_any_other() {
             "{CONFIG}\n[[waiver]]\nrule = \"defect-not-append-only\"\nreason = \"tracked in CLOUD-1; the ledger is being migrated\"\nexpires = \"2999-01-01\"\n"
         ),
     );
-    common::write(&dir, "defects.jsonl", &format!("{}\n", row("d-1", "false-green", "z.rs:9")));
+    common::write(
+        &dir,
+        "defects.jsonl",
+        &format!("{}\n", row("d-1", "false-green", "z.rs:9")),
+    );
     assert_eq!(check(&dir).status.code(), Some(0));
 }
 
@@ -346,7 +395,11 @@ fn add_appends_and_is_idempotent_on_a_byte_identical_row() {
     // Asked for on the ladder, the counts are there.
     let again = run_with_stdin(&dir, &["-v", "defects", "add"], &line);
     assert_eq!(again.status.code(), Some(0));
-    assert!(stderr(&again).contains("already present 1"), "{}", stderr(&again));
+    assert!(
+        stderr(&again).contains("already present 1"),
+        "{}",
+        stderr(&again)
+    );
     assert_eq!(
         ledger_text(&dir).lines().count(),
         1,
@@ -356,13 +409,20 @@ fn add_appends_and_is_idempotent_on_a_byte_identical_row() {
 
 #[test]
 fn add_refuses_a_revision_and_names_the_sanctioned_correction() {
-    let dir = ledger_repo("defects-revise", Some(&format!("{}\n", row("d-1", "false-green", "a.rs:1"))));
+    let dir = ledger_repo(
+        "defects-revise",
+        Some(&format!("{}\n", row("d-1", "false-green", "a.rs:1"))),
+    );
     let output = run_with_stdin(
         &dir,
         &["defects", "add"],
         &format!("{}\n", row("d-1", "false-green", "elsewhere.rs:9")),
     );
-    assert_eq!(output.status.code(), Some(1), "a usage error, not a verdict");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a usage error, not a verdict"
+    );
     assert!(
         stderr(&output).contains("supersedes"),
         "got: {}",
@@ -397,7 +457,11 @@ fn add_dry_run_reports_the_counts_and_writes_nothing() {
         &format!("{}\n", row("d-1", "false-green", "a.rs:1")),
     );
     assert_eq!(output.status.code(), Some(0));
-    assert!(stderr(&output).contains("would append 1"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("would append 1"),
+        "{}",
+        stderr(&output)
+    );
     assert!(ledger_text(&dir).is_empty(), "a dry run writes nothing");
 }
 
@@ -413,7 +477,10 @@ fn add_refuses_an_empty_stream() {
 #[test]
 fn query_is_pointer_only_sorted_by_id_and_filterable() {
     let mut gated = row("d-2", "false-green", "b.rs:2");
-    gated = format!("{},\"enforcement\":\"no-todo\"}}", gated.trim_end_matches('}'));
+    gated = format!(
+        "{},\"enforcement\":\"no-todo\"}}",
+        gated.trim_end_matches('}')
+    );
     let dir = ledger_repo(
         "defects-query",
         Some(&format!(
@@ -437,17 +504,23 @@ fn query_is_pointer_only_sorted_by_id_and_filterable() {
 
     // The filter rule 2 wants somebody looking at: which lessons are still prose.
     assert_eq!(
-        stdout(&run(&dir, &["defects", "query", "--ungated"])).lines().count(),
+        stdout(&run(&dir, &["defects", "query", "--ungated"]))
+            .lines()
+            .count(),
         3,
         "the pointers plus the trailing count"
     );
     assert_eq!(
-        stdout(&run(&dir, &["defects", "query", "--class", "silent-skip"])).lines().count(),
+        stdout(&run(&dir, &["defects", "query", "--class", "silent-skip"]))
+            .lines()
+            .count(),
         2,
         "the pointers plus the trailing count"
     );
     assert_eq!(
-        stdout(&run(&dir, &["defects", "query", "--id", "d-2"])).lines().count(),
+        stdout(&run(&dir, &["defects", "query", "--id", "d-2"]))
+            .lines()
+            .count(),
         2,
         "the pointers plus the trailing count"
     );
@@ -455,8 +528,14 @@ fn query_is_pointer_only_sorted_by_id_and_filterable() {
 
 #[test]
 fn query_refuses_two_filters_rather_than_picking_a_winner() {
-    let dir = ledger_repo("defects-two-filters", Some(&format!("{}\n", row("d-1", "false-green", "a.rs:1"))));
-    let output = run(&dir, &["defects", "query", "--ungated", "--class", "false-green"]);
+    let dir = ledger_repo(
+        "defects-two-filters",
+        Some(&format!("{}\n", row("d-1", "false-green", "a.rs:1"))),
+    );
+    let output = run(
+        &dir,
+        &["defects", "query", "--ungated", "--class", "false-green"],
+    );
     assert_eq!(output.status.code(), Some(1));
     assert!(stderr(&output).contains("name one"), "{}", stderr(&output));
 }
@@ -476,7 +555,10 @@ fn query_json_is_emitted_even_when_it_is_empty() {
 fn a_verb_over_an_undeclared_ledger_is_a_usage_error_not_an_empty_answer() {
     // Answering "no records" for a ledger nobody declared would be the false
     // green the engine exists to catch — `policy budget`'s reading, applied here.
-    let dir = Fixture::new("defects-no-table").config("version = 1\n").git().build();
+    let dir = Fixture::new("defects-no-table")
+        .config("version = 1\n")
+        .git()
+        .build();
     git_in(&dir, &["add", "-A"]);
     git_in(&dir, &["commit", "-q", "-m", "base"]);
 

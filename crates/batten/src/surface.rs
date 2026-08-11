@@ -970,12 +970,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "List recorded defects, as pointers",
         data_channel: true,
         effect: Effect::Read,
-        flags: &[
-            JSON,
-            CLASS,
-            RECORD_ID,
-            UNGATED,
-        ],
+        flags: &[JSON, CLASS, RECORD_ID, UNGATED],
     },
     // Appends to a committed file. `write`, not `destructive`: it adds rows and
     // removes none — the append-only gate makes removal impossible by

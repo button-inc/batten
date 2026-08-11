@@ -145,7 +145,14 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
                 class,
                 id,
                 ungated,
-            } => run_defects_query(json, class.as_deref(), id.as_deref(), ungated, &overrides, out),
+            } => run_defects_query(
+                json,
+                class.as_deref(),
+                id.as_deref(),
+                ungated,
+                &overrides,
+                out,
+            ),
             DefectsCommand::Add { dry_run } => run_defects_add(dry_run, mode, &overrides, err),
         },
         Some(Command::Provision { command }) => match command {
