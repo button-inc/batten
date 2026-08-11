@@ -12,11 +12,34 @@ repeatable command as a `[tasks]` task via `mise run` (never bare `cargo …` or
 duplicated snippet in CI/hook). Define it in `mise.toml` first, then call through
 mise — CI, hk, and your shell then run byte-identical commands.
 
-Common tasks: `mise run test | lint | fmt | ci | cross-check`; `mise tasks` lists
-all. `mise run fmt` is `hk fix --all` and `mise run ci` = `hooks` (`hk check
---all`) + `deny`, so the gate's step list lives in `hk.pkl` alone — there is no
-second list in `mise.toml` to keep in sync. `mise run test` aggregates
+Common tasks: `mise run test | lint | fmt | fix | ci | cross-check`; `mise tasks`
+lists all. `mise run fmt` is `hk fix --all` and `mise run ci` = `hooks` (`hk
+check --all`) + `deny`, so the gate's step list lives in `hk.pkl` alone — there
+is no second list in `mise.toml` to keep in sync. `mise run test` aggregates
 `test:cargo` + `test:bats`.
+
+`lint` and `fix` are a symmetric pair, and both aggregate (CLOUD-104):
+
+- `lint` → `lint:clippy`, `lint:fmt`, `lint:toml`, `lint:actions`, via
+  `depends`. It was clippy alone, which made the name a claim the repo could not
+  keep — the tree is TOML-heavy and carries twelve workflows, and hk gated both
+  while the task layer offered no way to run either.
+- `fix` → `clippy --fix`, then `completions` + `schema`, then `hk fix --all`.
+  **Sequential body, not `depends`**: mise runs a `depends` list in parallel and
+  those stages contend on the cargo target-dir lock _and_ rewrite each other's
+  bytes. `fmt` stays the formatters-only subset.
+
+Two hk steps override the builtin COMMAND with a task — `cargo-fmt` →
+`mise run lint:fmt`, `cargo-clippy` → `mise run lint:clippy` — so the hook and
+the task cannot disagree about what passes. Their SELECTORS still come from
+upstream: `actionlint` globs `.github/workflows/*.y{,a}ml`, `taplo` and
+`taplo_format` glob `**/*.toml`, all three `check_first`. Re-declaring those
+locally would be a second authority for a selector upstream already tests.
+
+`lint:toml` feeds taplo `git ls-files '*.toml'` instead of letting it walk the
+tree: `target/` carries deliberately corrupt TOML the suite writes on purpose
+(`target/tmp/trust-corrupt-config/batten.toml` is `this is not = = toml`), so a
+bare `taplo lint` fails on its own test data.
 
 ## Keep the hooks fast — hk.pkl is living config
 

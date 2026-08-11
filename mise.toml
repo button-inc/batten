@@ -105,12 +105,96 @@ NO_PROXY = "{% set cur = get_env(name='NO_PROXY', default='') %}{% if 'api.githu
 no_proxy = "{% set cur = get_env(name='no_proxy', default=get_env(name='NO_PROXY', default='')) %}{% if 'api.github.com' in cur %}{{ cur }}{% else %}api.github.com,objects.githubusercontent.com,codeload.github.com,uploads.github.com{% if cur %},{{ cur }}{% endif %}{% endif %}"
 
 [tasks.fmt]
-description = "Run every fixer over the tree (rustfmt, shfmt) — hk owns the step list"
+description = "Run every fixer over the tree (rustfmt, shfmt, taplo, prettier) — hk owns the step list"
 run = "hk fix --all"
 
+[tasks.fix]
+description = "Everything `fmt` does, plus clippy's autofixes and the derived artifacts — the one command that empties a messy tree"
+shell = "bash -c"
+# The symmetric partner to `lint`: where `lint` reports every fixable thing,
+# this fixes every one it can. `fmt` stays the formatters-only subset, because
+# it is what CONTRIBUTING.md, .claude/rules/toolchain.md and .editorconfig point
+# at, and because "reformat my tree" and "rewrite my code and regenerate
+# artifacts" deserve different blast radii.
+#
+# A SEQUENTIAL BODY, deliberately not `depends`. mise runs a `depends` list in
+# parallel, and these three stages contend twice over: on the cargo target-dir
+# lock, and on the same file bytes — `clippy --fix` rewrites the sources that
+# rustfmt then formats. Ordering is the whole point, so it is spelled out:
+#
+#   1. clippy --fix   rewrites sources
+#   2. completions + schema   regenerate from the (now rewritten) surface
+#   3. hk fix --all   formats everything the first two produced, last
+#
+# Step 2 is this repo's "snapshot accept": `completions-check` and
+# `schema-check` diff those artifacts byte-for-byte against their generator, so
+# regenerating them is exactly what an `insta accept` is elsewhere.
+#
+# --allow-dirty/--allow-staged because a tree with uncommitted work is the only
+# state this task is ever run from; refusing there would make it useless.
+#
+# Task bodies do not run under `set -e` (.claude/rules/toolchain.md), and a
+# half-applied fix that reported success would send the user to commit a tree
+# the gates still reject, so the body opts in.
+run = '''
+set -eu
+cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features
+mise run completions
+mise run schema
+hk fix --all
+echo "fix: clippy autofixes applied, derived artifacts regenerated, every fixer run"
+'''
+
 [tasks.lint]
+description = "Every linter over the whole tree — Rust, TOML and workflows, fanned out"
+# Was clippy alone, which made `mise run lint` a claim the repo could not keep:
+# the tree is TOML-heavy and carries twelve workflows, and hk gated both while
+# the task layer offered no way to run them. The subtasks below are the entry
+# points; hk still drives its own file-scoped steps at commit time.
+depends = ["lint:clippy", "lint:fmt", "lint:toml", "lint:actions"]
+
+[tasks."lint:clippy"]
 description = "Clippy with warnings denied"
+# hk's `cargo-clippy` step overrides the builtin command with THIS task, so the
+# flags live in one place. The workspace lints only mean anything if every
+# target is checked and a warning fails.
 run = "cargo clippy --all-targets --all-features -- -D warnings"
+
+[tasks."lint:fmt"]
+description = "rustfmt in check mode"
+# Safe as the single definition: hk's `cargo-fmt` builtin already checks the
+# whole workspace (`--manifest-path {{workspace_indicator}}`), not file by file,
+# so routing it here costs no scoping.
+run = "cargo fmt --all --check"
+
+[tasks."lint:toml"]
+description = "taplo: TOML syntax, duplicate keys, schema bindings, and formatting"
+shell = "bash -c"
+# TRACKED FILES ONLY, and this is not tidiness. A bare `taplo lint` walks the
+# whole tree including `target/`, where the test suite writes deliberately
+# corrupt fixtures — `target/tmp/trust-corrupt-config/batten.toml` is literally
+# `this is not = = toml`, written on purpose to prove the loader rejects it. A
+# gate that fails on its own test data is a gate someone switches off. hk feeds
+# its steps `{{files}}` from git for exactly this reason; this is that same set.
+#
+# `-z` + `xargs -0`, and NOT a bash array: mise renders task bodies through
+# Tera, which reads the `{#` in `${#files[@]}` as a comment-open and fails the
+# task with "Closing comment tag `#}` not found" before a shell ever sees it.
+# NUL-delimited is the more robust idiom anyway. `-r` so an empty set is a
+# no-op rather than a bare `taplo lint` that would walk the tree after all.
+run = '''
+set -euo pipefail
+git ls-files -z '*.toml' | xargs -0 -r taplo lint
+git ls-files -z '*.toml' | xargs -0 -r taplo format --check --diff
+echo "lint:toml: every tracked TOML file parses, lints and is formatted"
+'''
+
+[tasks."lint:actions"]
+description = "actionlint: workflow mistakes (bad `on:` keys, undefined matrix refs, shellcheck over `run:` blocks)"
+# Complements rather than duplicates `zizmor`, which audits workflow SECURITY.
+# Bare invocation: actionlint defaults to .github/workflows, and unlike taplo it
+# does not walk the tree, so there is nothing to scope away.
+run = "actionlint"
 
 [tasks.test]
 description = "Run every test suite — Rust and shell"

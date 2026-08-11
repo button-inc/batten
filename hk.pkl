@@ -310,13 +310,19 @@ local gate = new Mapping<String, Step> {
     // check_first: skip the fixer (a write pass) on the common case where the
     // tree is already formatted; only rewrite when it isn't. (fix mode only.)
     check_first = true
+    // Routed through the task so `mise run lint:fmt` and this step cannot
+    // disagree about what "formatted" means. Costs no file-scoping: upstream's
+    // check is already whole-workspace (`--manifest-path
+    // {{workspace_indicator}}`), never file by file. The FIXER stays upstream's,
+    // so the fix/check split still comes from the builtin.
+    check = "mise run lint:fmt"
   }
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
     depends = List("cargo-fmt")
     // Upstream lints the default target set at default severity. The
     // workspace lints are only meaningful if every target is checked and a
     // warning fails, so the command — and only the command — is ours.
-    check = "mise run lint"
+    check = "mise run lint:clippy"
   }
   // Tests the whole workspace because a change in one crate can break another.
   ["test"] {

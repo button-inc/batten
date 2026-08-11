@@ -217,6 +217,26 @@ at check time rather than when a hook tries to run), `prettier` (Markdown, with
 `CHANGELOG.md` in `.prettierignore` because release-plz owns it), `actionlint`
 (workflows). Don't hand-format any of them; run `mise run fmt`.
 
+The task layer mirrors that reach rather than stopping at Rust: `mise run lint`
+fans out to `lint:clippy`, `lint:fmt`, `lint:toml` and `lint:actions` via
+`depends`, so each tool is runnable alone and `lint` means the whole tree.
+`mise run fix` is its symmetric partner — `clippy --fix`, then the derived
+artifacts (`completions`, `schema`), then every formatter — in that order and
+sequentially, because those stages contend on the cargo target-dir lock and
+rewrite each other's bytes. `fmt` remains the formatters-only subset.
+
+Two commands are single-definition on purpose: hk's `cargo-fmt` and
+`cargo-clippy` steps override the builtin command with `mise run lint:fmt` and
+`mise run lint:clippy`, so the hook and the task can never disagree about what
+passes. The step SELECTORS still come from upstream — `actionlint` already globs
+`.github/workflows/*.y{,a}ml`, `taplo` and `taplo_format` already glob
+`**/*.toml`, all three `check_first` — so re-declaring those here would be a
+second authority for a selector upstream already tests.
+
+`lint:toml` feeds taplo `git ls-files '*.toml'` rather than letting it walk the
+tree: `target/` holds deliberately corrupt TOML fixtures the suite writes, and a
+gate that fails on its own test data gets switched off.
+
 The pre-commit hook runs the gate and commit-msg validates the subject. Run
 `mise run ci` locally rather than discovering a failure at commit time.
 

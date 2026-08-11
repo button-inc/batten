@@ -33,11 +33,17 @@ hk install        # install the git hooks into .git/hooks
 
 ```bash
 mise run test    # workspace tests
-mise run lint    # clippy, warnings denied
-mise run fmt     # format
+mise run lint    # every linter: clippy, rustfmt, taplo, actionlint
+mise run fmt     # run every formatter over the tree
+mise run fix     # fmt + clippy's autofixes + regenerate derived artifacts
 mise run ci      # everything CI runs (the hk gate + deny)
 mise tasks       # list them all
 ```
+
+`lint` fans out to `lint:clippy`, `lint:fmt`, `lint:toml` and `lint:actions`;
+run any one on its own to narrow a failure. `fix` is `lint`'s symmetric
+partner — where `lint` reports, `fix` repairs — and is the one command to reach
+for when the tree has drifted.
 
 The `hk` pre-commit hook runs the same tasks, and the commit-msg hook enforces
 Conventional Commits. CI runs on Linux only; cross-platform coverage splits in
