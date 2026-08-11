@@ -22,6 +22,27 @@
 # meaning "this change is broken", and cancelling another ref's runs would
 # reverse CLOUD-240's "supersede your own runs, never someone else's".
 #
+# HUMANS DO NOT TOUCH THIS, and that is the design rather than an omission.
+# Commenting `/fast-forward` is unchanged and remains the whole landing action
+# for a person: `fast-forward.yml` is not modified, this task is never on their
+# path, and there is no second way to land — `land` ends in the same comment on
+# the same workflow. What the lease governs is who SPENDS CI, and a person
+# landing an already-green PR spends none, so there is nothing here for them to
+# hold.
+#
+# The cost of exempting them is one number, and it is why the exemption is
+# affordable: a human lands about once a day, so at worst one agent lap a day is
+# voided by a merge it did not expect — against the 243 refusals per half hour
+# this replaces. `land` already handles that case, since a moved `main` is the
+# ordinary lap. It gets cheaper still in practice: agents colliding with each
+# other far less means `main` is quieter when the person lands, so their
+# `/fast-forward` succeeds more often than it does today.
+#
+# Making `fast-forward.yml` lease-aware was considered and refused. It would
+# make a person wait out an agent's whole CI window, and a workflow waiting is a
+# runner billing — worse for the human and more CI minutes, to serialise the one
+# participant whose volume never needed serialising.
+#
 # THE PRIMITIVE: one operation, compare-and-swap, and nothing else.
 # `git push --force-with-lease=<ref>:<expected>` is a server-side CAS. Measured
 # against a real remote: the correct expected value wins, a stale one is rejected

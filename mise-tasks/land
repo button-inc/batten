@@ -307,7 +307,7 @@ while :; do
 		# fleet is landing faster than this branch can get a turn.
 		lease_waits=$((lease_waits + 1))
 		[ "$lease_waits" -le "$max_waits" ] ||
-			die "never won the landing lease in $max_waits attempts; the fleet is saturated. Look before lapping again."
+			die "never won the landing lease in $max_waits attempts. Run \`mise run land-lock-check\`: it tells a saturated fleet (wait, or land later) apart from a wedged lease (a ref nothing legitimate wrote), which look identical from here."
 		continue
 	fi
 	mise run land-lock hold >/dev/null 2>&1 &

@@ -46,3 +46,15 @@ jobs:
           # this one has no use for.
           install_args: aqua:cli/cli aqua:jqlang/jq
       - run: mise run branch-age-check
+      # The landing lease is a ref, so its hygiene belongs in the ref sweep
+      # rather than in a cron of its own — that is the whole reason it lands
+      # here: an added step on a job that already spins costs no runner.
+      #
+      # Weekly is deliberate and is a backstop, not the primary signal. Both
+      # unhealthy states self-heal or announce themselves sooner: a garbage ref
+      # reads as held for one TTL and then frees itself, and a genuinely stuck
+      # lease already surfaces to whoever is landing, because `land` exhausts
+      # LAND_LOCK_MAX_WAITS and stops with the saturation message inside ~16
+      # minutes. What this adds is the DIAGNOSIS — busy versus wedged — for the
+      # one state nothing else can distinguish.
+      - run: mise run land-lock-check
