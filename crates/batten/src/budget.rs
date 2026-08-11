@@ -675,6 +675,7 @@ mod tests {
                     files: vec!["AGENTS.md".to_owned()],
                     max_tokens: 1,
                     max_lines: None,
+                    embedded: Vec::new(),
                 },
             )]
             .into_iter()
