@@ -718,8 +718,15 @@ fn no_verb_emits_content_it_merely_read() {
     // emitters, and `output.rs` gives the ladder no reach over the first.
     for verb in CENSUS {
         let spawning = verb.path == "enforce";
+        // `sweep-` namespaces these away from the hand-written fixtures below.
+        // Cargo runs the tests in this file CONCURRENTLY and `scratch` wipes
+        // before writing, so a name a second test also derives is not a
+        // collision waiting to happen — it is one test deleting another's `.git`
+        // mid-run. Measured: the sweep's `exec` corpus and the passthrough
+        // case's shared a name, and the loser reported `. is not inside a git
+        // repository`. Local timing hid it; CI did not.
         let corpus = Corpus::build(
-            &format!("pointer-only-{}", verb.path.replace(' ', "-")),
+            &format!("pointer-only-sweep-{}", verb.path.replace(' ', "-")),
             spawning,
         );
 
@@ -796,7 +803,7 @@ fn a_passthrough_report_points_at_the_child_without_repeating_it() {
     // line it will not restate. The child writes to stderr so its bytes and
     // Batten's report share one stream, which is the strongest form of the
     // question.
-    let root = scratch("pointer-only-exec");
+    let root = scratch("pointer-only-exec-report");
     let repo = Fixture::at(root.join("repo"))
         .config(
             "version = 1\n\n[[exec_pattern]]\nid = \"lying-exit\"\n\
