@@ -44,21 +44,110 @@ if [ "${1:-}" = "--no-targets" ]; then
 fi
 read -r -a targets <<<"${DOCTOR_TARGETS-x86_64-pc-windows-gnu ${DARWIN_TARGET:-aarch64-apple-darwin}}"
 
+# --- concurrency: doctor races itself, by design of the task graph -------------
+#
+# `verify` reaches this task twice in one invocation — through `cross-check`, and
+# again through `ci` -> `hooks` -> `hk check --all`, whose `test:bats` step shells
+# out to `mise run test:bats`. That is a SEPARATE mise process, so the dependency
+# dedup that would collapse the two nodes never sees the second one (CLOUD-201).
+#
+# The rustup half is already safe: every target goes through `target-ensure`,
+# which holds a per-toolchain lock. The two REPAIRS are the writers that were
+# left. Concurrent `git submodule update` calls race git's index lock, and two
+# torn-install repairs let one doctor `rm -rf` the version directory the other's
+# `mise install` is populating — manufacturing the exact CLOUD-182 tear this task
+# exists to fix.
+#
+# One lock covers both, deliberately: two locks is two acquisition orders, and
+# both repairs are provisioning writes. It lives beside the `installs/` tree it
+# guards rather than in the working tree — an untracked lock directory there
+# would make `tree-clean` refuse every `verify` (CLOUD-277).
+#
+# Each repair CHECKS OUTSIDE the lock and RE-CHECKS INSIDE it, `target-ensure`'s
+# idiom: the healthy path never takes the lock at all, and a doctor that queued
+# behind the winner re-reads fresh state and no-ops instead of repeating the
+# repair or reporting one it did not do.
+lock="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/.batten-doctor-lock"
+with_lock="$(dirname "$0")/with-lock"
+installs="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
+
+broken_bins() { # bin symlinks whose target does not exist (portable: no -xtype)
+	find "$installs" -mindepth 4 -maxdepth 4 -path '*/bin/*' -type l 2>/dev/null |
+		while IFS= read -r link; do [ -e "$link" ] || printf '%s\n' "$link"; done
+}
+
+repair_submodule() {
+	if [ -x tests/bats/bin/bats ]; then
+		echo "doctor: bats submodule checked out"
+		return 0
+	fi
+	echo "doctor: tests/bats not checked out — running git submodule update --init"
+	git submodule update --init --recursive tests/bats
+	if [ -x tests/bats/bin/bats ]; then
+		echo "doctor: bats submodule checked out"
+		return 0
+	fi
+	echo "::error:: tests/bats is still missing after submodule update; test:bats cannot run." >&2
+	return 1
+}
+
+# Torn mise installs (CLOUD-182). `mise install` trusts its own record: a version
+# directory whose payload is gone still counts as installed, `mise install`
+# no-ops on it, and the first symptom is an exec failure wearing someone else's
+# name — measured here as bin/serena a broken symlink into an absent venv while
+# `mise ls` reported 1.6.1, so the Serena MCP server silently never connected.
+# Check the ARTIFACTS, not the record: a bin entry that is a broken symlink marks
+# that tool version as torn. Repair by removing the version directory and
+# re-running `mise install`, which reprovisions whatever mise.toml says is
+# missing — no fragile mapping from a directory name back to tool syntax.
+repair_installs() {
+	local torn vdir
+	torn=$(broken_bins | sed -E 's|/bin/[^/]+$||' | sort -u)
+	if [ -z "$torn" ]; then
+		echo "doctor: mise installs intact (no broken bin symlinks)"
+		return 0
+	fi
+	while IFS= read -r vdir; do
+		echo "doctor: torn install (broken bin symlink) — removing $vdir"
+		rm -rf -- "$vdir"
+	done <<<"$torn"
+	echo "doctor: re-running mise install to reprovision"
+	if ! mise install; then
+		echo "::error:: mise install failed after removing torn installs" >&2
+		return 1
+	fi
+	if [ -n "$(broken_bins | head -n1)" ]; then
+		echo "::error:: torn install remains after repair: $(broken_bins | head -n1)" >&2
+		return 1
+	fi
+	echo "doctor: torn installs reprovisioned"
+}
+
+# The repair modes, dispatched FIRST and before any other work: this script
+# re-enters itself under the lock so each repair's re-check happens inside the
+# critical section, and a repair child must do its repair and nothing else. A
+# dispatch placed lower would have the child re-run the outer flow and queue for
+# a lock its own parent holds.
+case "${1:-}" in
+--repair-submodule)
+	repair_submodule
+	exit
+	;;
+--repair-installs)
+	repair_installs
+	exit
+	;;
+esac
+
+export WITH_LOCK_LABEL="the doctor provisioning lock"
 status=0
 
 # --- the bats submodule -------------------------------------------------------
 
 if [ -x tests/bats/bin/bats ]; then
 	echo "doctor: bats submodule checked out"
-else
-	echo "doctor: tests/bats not checked out — running git submodule update --init"
-	git submodule update --init --recursive tests/bats
-	if [ -x tests/bats/bin/bats ]; then
-		echo "doctor: bats submodule checked out"
-	else
-		echo "::error:: tests/bats is still missing after submodule update; test:bats cannot run." >&2
-		status=1
-	fi
+elif ! "$with_lock" "$lock" -- "$0" --repair-submodule; then
+	status=1
 fi
 
 # --- the git hooks (CLOUD-476) ------------------------------------------------
@@ -141,30 +230,15 @@ done
 # tool version as torn. Repair by removing the version directory and re-running
 # `mise install`, which reprovisions whatever mise.toml says is missing — no
 # fragile mapping from a directory name back to tool syntax.
-installs="${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}/installs"
-broken_bins() { # bin symlinks whose target does not exist (portable: no -xtype)
-	find "$installs" -mindepth 4 -maxdepth 4 -path '*/bin/*' -type l 2>/dev/null |
-		while IFS= read -r link; do [ -e "$link" ] || printf '%s\n' "$link"; done
-}
+# The scan runs here, unlocked, so an intact tree — the overwhelmingly common
+# case — costs no lock at all. Only a tree that looks torn queues, and the
+# re-scan inside the critical section is what stops the second doctor removing
+# and reprovisioning what the first one has already repaired.
 if [ -d "$installs" ]; then
-	torn=$(broken_bins | sed -E 's|/bin/[^/]+$||' | sort -u)
-	if [ -n "$torn" ]; then
-		while IFS= read -r vdir; do
-			echo "doctor: torn install (broken bin symlink) — removing $vdir"
-			rm -rf -- "$vdir"
-		done <<<"$torn"
-		echo "doctor: re-running mise install to reprovision"
-		if ! mise install; then
-			echo "::error:: mise install failed after removing torn installs" >&2
-			status=1
-		elif [ -n "$(broken_bins | head -n1)" ]; then
-			echo "::error:: torn install remains after repair: $(broken_bins | head -n1)" >&2
-			status=1
-		else
-			echo "doctor: torn installs reprovisioned"
-		fi
-	else
+	if [ -z "$(broken_bins | head -n1)" ]; then
 		echo "doctor: mise installs intact (no broken bin symlinks)"
+	elif ! "$with_lock" "$lock" -- "$0" --repair-installs; then
+		status=1
 	fi
 fi
 
