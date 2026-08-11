@@ -190,3 +190,19 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 	[[ "$output" != *"expires:"* ]]
 	[[ "$output" == *"s left"* ]]
 }
+
+@test "THE EXPECTED VALUE IS EXPLICIT — a bare --force-with-lease is two holders" {
+	# Not a style rule. Bare `--force-with-lease` compares against this clone's
+	# remote-tracking ref, i.e. whatever the last fetch saw, which for a ref other
+	# sessions rewrite constantly is the stale value the whole task must not
+	# trust: a holder whose lease had already been taken would stamp its own back
+	# on top. The two forms are one character apart in a diff and opposite in
+	# meaning, so the explicit form is asserted rather than commented.
+	# Comments are stripped first: this file's own prose explains the bare form,
+	# and a gate that its own rationale trips is a gate someone deletes.
+	run bash -c "sed 's/#.*//' '$LOCK' | grep -c -- '--force-with-lease=\"\$ref:\$1\"'"
+	[ "$status" -eq 0 ]
+	[ "$output" -ge 1 ]
+	run bash -c "sed 's/#.*//' '$LOCK' | grep -n -- '--force-with-lease[^=]'"
+	[ "$status" -ne 0 ]
+}

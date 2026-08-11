@@ -187,6 +187,16 @@ observe() {
 # makes this safe to call from a heartbeat: a lease that changed hands under us
 # is rejected rather than clobbered. An empty $1 means "must not exist", which is
 # how the very first claim is made without a separate create path.
+# The expected value is passed EXPLICITLY (`<ref>:<sha>`) and must stay that way.
+# Bare `--force-with-lease` compares against this clone's remote-tracking ref —
+# what the last fetch happened to see — which for a ref other sessions are
+# actively rewriting is precisely the stale value this must not trust. The two
+# forms look interchangeable and are not: the bare one would let a holder whose
+# lease had already been taken stamp its own back on top, which is the
+# two-holders bug the whole task exists to prevent.
+#
+# The flag is also named backwards for what it does here. It is the OPPOSITE of a
+# force push: it refuses in exactly the case a plain `--force` would clobber.
 swap() { git push --quiet --force-with-lease="$ref:$1" "$remote" "$(mint "${2:-}"):$ref" 2>/dev/null; }
 
 # `-ge`, not `-gt`: a lease with zero seconds left has none, and the release
