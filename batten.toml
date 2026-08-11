@@ -428,19 +428,21 @@ base = "origin/main"
 severity = "deny"
 scope = "tree"
 
-# `tests/*.bats`, single-segment, NOT `tests/**/*.bats`. `tests/bats` is a
-# vendored submodule carrying 228 of its own `.bats` files, and the two sides of
-# a ratchet disagree about submodules: `git ls-tree -r` at the base sees one
-# gitlink, while the working-tree walk sees every file inside it. Measured with
-# the recursive glob: base 637, working 1404 — a permanent +767 skew that no
-# realistic deletion could ever pull back under, i.e. a gate that cannot fail.
-# Every one of this repository's own bats suites sits directly in `tests/`, so a
-# single-segment glob is both correct and sufficient here. The engine-level
-# asymmetry is CLOUD-328.
+# `tests/**/*.bats`, recursive — and the recursion is safe now rather than by
+# this glob's care. `tests/bats` is a vendored submodule carrying 227 of its own
+# `.bats` files, and the two sides of a ratchet used to disagree about
+# submodules: `git ls-tree -r` at the base saw one gitlink while the
+# working-tree walk saw every file inside it. Measured with this glob before the
+# fix: base 637, working 1404 — a permanent +767 skew that no realistic deletion
+# could pull back under, i.e. a gate that could not fail. The row was narrowed to
+# `tests/*.bats` as a workaround; CLOUD-328 fixed the engine instead, so both
+# halves now stop at a nested repository and select the same files. Widened back
+# because the narrow glob was only correct while every bats suite sat directly in
+# `tests/` — this one covers a nested one the day it is written.
 [[rule]]
 id = "bats-tests-not-deleted"
 kind = "ratchet"
-glob = "tests/*.bats"
+glob = "tests/**/*.bats"
 pattern = "@test \""
 direction = "non_decreasing"
 base = "origin/main"

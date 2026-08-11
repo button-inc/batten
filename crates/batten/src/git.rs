@@ -811,6 +811,10 @@ pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
     query_optional(dir, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
 }
 
+/// The `ls-tree` mode of a **gitlink**: a submodule, recorded as one entry
+/// naming a commit in another repository rather than as the files inside it.
+const GITLINK_MODE: &str = "160000";
+
 /// Count occurrences of `pattern` across files matching `glob` at `rev`
 /// (CLOUD-55).
 ///
@@ -818,6 +822,19 @@ pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
 /// both through this module's one invoker, so a ratchet adds no second way to
 /// read git. The working-tree half is the caller's, using the crate's one tree
 /// walker; neither side re-implements the other's glob matching.
+///
+/// **A gitlink is skipped, which is this side's reading of the one selection
+/// rule [`crate::rules::tree_files`] states** (CLOUD-328): the walker stops at a
+/// nested repository, so this half must not count one either, and the two
+/// select the same set for any glob. Skipped *explicitly* rather than by
+/// accident — `git show <rev>:<gitlink>` fails with `bad object`, so the
+/// read-failure path below already swallowed it, and a silent skip that happens
+/// to land on the right answer is the same shape as the defect this fixes.
+///
+/// `ls-tree`'s long form is read rather than `--name-only`, because the mode is
+/// what distinguishes a gitlink from a file and `--name-only` discards it. The
+/// long form over `--format`, because it needs no git version floor; path
+/// quoting is exactly as `--name-only` had it.
 ///
 /// Byte-level and case-sensitive, matching `forbid`'s discipline: the pattern is
 /// a literal a consumer wrote, and a count that silently normalized it would be
@@ -837,12 +854,21 @@ pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
 pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<usize> {
     let listing = query(
         dir,
-        &["ls-tree", "-r", "--name-only", "--end-of-options", rev],
+        &["ls-tree", "-r", "--end-of-options", rev],
         &format!("ratchet base {rev:?} does not resolve to a tree in this repository"),
     )?;
 
     let mut total = 0;
-    for path in listing.lines().filter(|path| !path.is_empty()) {
+    for entry in listing.lines().filter(|line| !line.is_empty()) {
+        // `<mode> SP <type> SP <object> TAB <path>`. The tab is the one
+        // separator a path cannot contain unquoted, so splitting on it is what
+        // keeps a path with a space in it whole.
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        if meta.split_whitespace().next() == Some(GITLINK_MODE) {
+            continue;
+        }
         if !crate::rules::glob_match(glob, path) {
             continue;
         }

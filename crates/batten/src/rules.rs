@@ -1237,9 +1237,13 @@ fn forbid_in_file(
     Ok(())
 }
 
-/// Recursively collect repo-relative file paths under `dir`, `/`-separated and
-/// skipping the `.git` directory. `root` is the walk origin the paths are made
-/// relative to.
+/// The entry whose presence makes a directory a repository of its own — git's
+/// own boundary marker, and therefore the one this crate reads.
+///
+/// It is a *directory* in a plain clone and a *file* in a submodule or a linked
+/// worktree, which is why presence is what is tested and never the kind.
+pub const NESTED_REPOSITORY_MARKER: &str = ".git";
+
 /// Every file under `root`, as sorted repo-relative `/`-separated paths — the
 /// one tree walk the crate has.
 ///
@@ -1247,6 +1251,32 @@ fn forbid_in_file(
 /// the object store is never policy input. A second walker would be a second
 /// answer to "what does Batten look at", which is the divergence
 /// [`crate::markers`] reuses this to avoid.
+///
+/// # The selection stops at a nested repository (CLOUD-328)
+///
+/// A directory carrying [`NESTED_REPOSITORY_MARKER`] is a repository of its
+/// own, and this walk does not enter it. **This is the single statement of
+/// which files a glob selects, and the base-rev half of a ratchet
+/// ([`crate::git::count_at_rev`]) reads the same rule** — it skips gitlink
+/// entries — so the two halves select the same set by construction rather than
+/// by a consumer's care with globs.
+///
+/// Without it the two disagree, and the direction is the dangerous one: a
+/// `non_decreasing` row whose glob spans a submodule sits permanently above a
+/// base that counted one gitlink, so no deletion could ever pull it back under
+/// and **the gate cannot fail**. Measured on this repository at the commit that
+/// raised CLOUD-328: base 637 against working 1404, a fixed `+767` in a tree
+/// where nothing had been added.
+///
+/// It is not a ratchet-only property, because this is not a ratchet-only
+/// walker: it is also what stops a `forbid` rule reporting findings against
+/// vendored third-party code, and a `budget` or a marker scan from measuring a
+/// checkout that is not this one. The rule is stated in git's terms rather than
+/// as a submodule list precisely so a linked worktree — `.claude/worktrees/`,
+/// where agents work — is bounded by the same reading.
+///
+/// `root` itself is never a boundary: it carries the marker by definition, and
+/// only *descended* directories are tested.
 ///
 /// # Errors
 ///
@@ -1265,7 +1295,14 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> anyhow::Resu
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
             // The object store is never policy input; skip it wholesale.
-            if entry.file_name() == ".git" {
+            if entry.file_name() == NESTED_REPOSITORY_MARKER {
+                continue;
+            }
+            // A directory that is its own repository is somebody else's tree.
+            // Tested on the child rather than on `dir`, which is what exempts
+            // `root` — it carries the marker by definition, and testing it
+            // would make every walk empty.
+            if path.join(NESTED_REPOSITORY_MARKER).exists() {
                 continue;
             }
             collect_files(root, &path, out)?;
