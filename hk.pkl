@@ -453,7 +453,11 @@ local gate = new Mapping<String, Step> {
         "Cargo.lock",
         "mise.toml",
         ".github/workflows/*.yml",
-        "tests/*.bats",
+        // Recursive since CLOUD-328: the ratchet row over bats suites was
+        // narrowed to one segment only to dodge a submodule the walker used to
+        // count and the base rev did not. Both halves stop at a nested
+        // repository now, so the row spans depth again and this must follow it.
+        "tests/**/*.bats",
         "AGENTS.md",
         ".serena/project.yml",
       )
