@@ -732,11 +732,11 @@ fn a_passthrough_report_points_at_the_child_without_repeating_it() {
     // question.
     let root = scratch("pointer-only-exec");
     let repo = Fixture::at(root.join("repo"))
-        .config(&format!(
+        .config(
             "version = 1\n\n[[exec_pattern]]\nid = \"lying-exit\"\n\
              pattern = \"warning[duplicate]\"\nstream = \"both\"\n\
              reason = \"set the tool's own severity to deny\"\n",
-        ))
+        )
         .git()
         .base_commit()
         .build();
