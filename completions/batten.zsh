@@ -916,6 +916,131 @@ esac
     ;;
 esac
 ;;
+(defects)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__defects_commands" \
+"*::: :->defects" \
+&& ret=0
+
+    case $state in
+    (defects)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-defects-command-$line[1]:"
+        case $line[1] in
+            (query)
+_arguments "${_arguments_options[@]}" : \
+'--class=[Only records in this taxonomy class]: :_default' \
+'--id=[Only the record with this id]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--ungated[Only records no rule or gate discharges yet]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(add)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-n[Preview what would be applied, writing nothing]' \
+'--dry-run[Preview what would be applied, writing nothing]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__defects__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-defects-help-command-$line[1]:"
+        case $line[1] in
+            (query)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(add)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (state)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -1273,6 +1398,30 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(defects)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__defects_commands" \
+"*::: :->defects" \
+&& ret=0
+
+    case $state in
+    (defects)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-defects-command-$line[1]:"
+        case $line[1] in
+            (query)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(add)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (state)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__state_commands" \
@@ -1333,6 +1482,7 @@ _batten_commands() {
 'provision:Pinned tools this repository provisions, cached out of tree' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
+'defects:The append-only defect ledger\: the lessons this repository has already paid for' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1397,6 +1547,49 @@ _batten__subcmd__config__subcmd__lint_commands() {
 _batten__subcmd__config__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'batten config show commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__defects_commands] )) ||
+_batten__subcmd__defects_commands() {
+    local commands; commands=(
+'query:List recorded defects, as pointers' \
+'add:Append defect records read as JSONL on stdin' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten defects commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__defects__subcmd__add_commands] )) ||
+_batten__subcmd__defects__subcmd__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten defects add commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__defects__subcmd__help_commands] )) ||
+_batten__subcmd__defects__subcmd__help_commands() {
+    local commands; commands=(
+'query:List recorded defects, as pointers' \
+'add:Append defect records read as JSONL on stdin' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten defects help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__defects__subcmd__help__subcmd__add_commands] )) ||
+_batten__subcmd__defects__subcmd__help__subcmd__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten defects help add commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__defects__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__defects__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten defects help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__defects__subcmd__help__subcmd__query_commands] )) ||
+_batten__subcmd__defects__subcmd__help__subcmd__query_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten defects help query commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__defects__subcmd__query_commands] )) ||
+_batten__subcmd__defects__subcmd__query_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten defects query commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__doctor_commands] )) ||
 _batten__subcmd__doctor_commands() {
@@ -1471,6 +1664,7 @@ _batten__subcmd__help_commands() {
 'provision:Pinned tools this repository provisions, cached out of tree' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
 'receipt:Verification receipts\: SHA-keyed claims a named check passed, invalidated by git facts' \
+'defects:The append-only defect ledger\: the lessons this repository has already paid for' \
 'state:The out-of-tree findings store\: which store belongs to this checkout' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1504,6 +1698,24 @@ _batten__subcmd__help__subcmd__config__subcmd__lint_commands() {
 _batten__subcmd__help__subcmd__config__subcmd__show_commands() {
     local commands; commands=()
     _describe -t commands 'batten help config show commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__defects_commands] )) ||
+_batten__subcmd__help__subcmd__defects_commands() {
+    local commands; commands=(
+'query:List recorded defects, as pointers' \
+'add:Append defect records read as JSONL on stdin' \
+    )
+    _describe -t commands 'batten help defects commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__defects__subcmd__add_commands] )) ||
+_batten__subcmd__help__subcmd__defects__subcmd__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help defects add commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__defects__subcmd__query_commands] )) ||
+_batten__subcmd__help__subcmd__defects__subcmd__query_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help defects query commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__doctor_commands] )) ||
 _batten__subcmd__help__subcmd__doctor_commands() {

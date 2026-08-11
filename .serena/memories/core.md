@@ -178,6 +178,27 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   that text to the model as the deny reason, where `batten: ` reads as a crash.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys,
   required `version`). Layering across sources is `resolve.rs`, not here.
+- `defects.rs` — the in-tree append-only defect ledger (CLOUD-52): `[defects]`
+  (`path` + `classes`, both consumer facts), one `deny_unknown_fields` `Record`,
+  `defects add [-n]` / `defects query`, and the built-in gate `check` runs
+  whenever the table is declared. The **lesson** layer, deliberately not
+  `findings.rs`'s signal layer: curated, permanent, taxonomy-classified,
+  committed and PR-reviewed, where a finding is machine-emitted, identity-hashed
+  and self-clearing. Neither absorbs the other — fold lessons into findings and
+  they self-clear, which is the one thing a lesson must never do. Append-only is
+  a **byte prefix**, not a growing id set: a prefix also freezes past rows'
+  bytes, so a correction appends with `supersedes` and the quiet revision (same
+  id, rewritten evidence) an id-set check waves through is caught. Two bases —
+  `HEAD` and the remote default when it resolves — because either alone has a
+  hole; an unresolvable base is DROPPED, never a pass, so a repo with no remote
+  is still guarded by `HEAD`. A malformed row is a `Finding`, not a usage error:
+  one bad line must not stop `check` reporting everything else, and the byte
+  comparison deliberately runs even when the parse failed so a rewrite cannot
+  hide behind a breakage. Gate findings are ordinary `Finding`s (`Scope`, keyed
+  on the problem id, never the line — a ledger only grows, so a position-keyed
+  identity would re-mint on every unrelated append), which is what gets them
+  waivers, `-J`, the exit contract and the store for free. Consumer #1 adoption
+  is deliberately NOT here (the issue's own stated assumption 2).
 - `lint.rs` — `batten config lint` (CLOUD-87): the policy smells a _valid_
   config can still carry. Complements `trust.rs` rather than replacing it —
   `--config-from` makes a weakening ineffective, this makes it visible. Two

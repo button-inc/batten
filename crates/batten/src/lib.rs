@@ -13,6 +13,7 @@ pub mod capture;
 pub mod ci;
 pub mod cli;
 pub mod config;
+pub mod defects;
 pub mod doctor;
 pub mod effect;
 pub mod epoch;
@@ -45,13 +46,13 @@ pub mod waiver;
 pub mod worktree;
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 pub use cli::{
-    Cli, Command, ConfigCommand, GenerateCommand, PolicyCommand, ProvisionCommand, ReceiptCommand,
-    SpecFormat, StateCommand, WorktreeCommand,
+    Cli, Command, ConfigCommand, DefectsCommand, GenerateCommand, PolicyCommand, ProvisionCommand,
+    ReceiptCommand, SpecFormat, StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -135,6 +136,17 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
+        },
+        // The ledger is a committed file the consumer declares; the §8 config
+        // chain supplies its path and taxonomy and nothing else layers.
+        Some(Command::Defects { command }) => match command {
+            DefectsCommand::Query {
+                json,
+                class,
+                id,
+                ungated,
+            } => run_defects_query(json, class.as_deref(), id.as_deref(), ungated, &overrides, out),
+            DefectsCommand::Add { dry_run } => run_defects_add(dry_run, mode, &overrides, err),
         },
         Some(Command::Provision { command }) => match command {
             ProvisionCommand::Status { json } => run_provision_status(json, &overrides, out),
@@ -247,6 +259,166 @@ fn run_worktree_status(json: bool, overrides: &Overrides, out: &mut dyn Write) -
         }
     }
     Ok(ExitCode::verdict(at_risk.any()))
+}
+
+/// The declared ledger, or a usage error naming what is missing (CLOUD-52).
+///
+/// A verb over a ledger nobody declared measured nothing, and answering "no
+/// records" there would be the false green the engine exists to catch — the same
+/// reading `policy budget` gives an absent budget.
+fn declared_ledger(overrides: &Overrides) -> Result<(defects::Defects, PathBuf)> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let declared = config.defects.ok_or_else(|| {
+        UsageError::raise(format!(
+            "no [defects] in {}; there is no ledger to read",
+            config::CONFIG_FILE
+        ))
+    })?;
+    let repo = git::repo_root(Path::new("."))?;
+    let path = repo.join(&declared.path);
+    Ok((declared, path))
+}
+
+/// Read and parse the declared ledger. An absent file is an empty ledger — the
+/// ordinary state before the first record.
+fn read_ledger(path: &Path) -> Result<Vec<defects::Record>> {
+    defects::parse(&std::fs::read_to_string(path).unwrap_or_default())
+}
+
+/// List recorded defects, as pointers (CLOUD-52).
+fn run_defects_query(
+    json: bool,
+    class: Option<&str>,
+    id: Option<&str>,
+    ungated: bool,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (declared, path) = declared_ledger(overrides)?;
+    let records = read_ledger(&path)?;
+
+    // One filter, not a conjunction: the flags are alternative ways to name a
+    // subset, and combining them would need a precedence nobody asked for.
+    // Refusing the combination is clearer than picking a winner silently.
+    let named = [class.is_some(), id.is_some(), ungated]
+        .iter()
+        .filter(|set| **set)
+        .count();
+    if named > 1 {
+        return Err(UsageError::raise(
+            "defects query: --class, --id and --ungated are alternative filters; name one",
+        ));
+    }
+    let filter = match (class, id, ungated) {
+        (Some(class), _, _) => defects::Filter::Class(class),
+        (_, Some(id), _) => defects::Filter::Id(id),
+        (_, _, true) => defects::Filter::Ungated,
+        _ => defects::Filter::All,
+    };
+
+    if json {
+        // Sorted by id, and emitted unconditionally including the empty answer:
+        // JSON that is sometimes absent is unparseable.
+        let mut matched: Vec<&defects::Record> = records
+            .iter()
+            .filter(|record| filter.admits(record))
+            .collect();
+        matched.sort_by(|a, b| a.id.cmp(&b.id));
+        writeln!(out, "{}", serde_json::to_string_pretty(&matched)?)?;
+    } else {
+        // Pointers, then the count the DoD asks for on its own trailing line.
+        // Unconditional, including `0`: the count is the answer to "how many",
+        // and an empty listing that says nothing cannot be told from a filter
+        // the caller misspelled.
+        let lines = defects::query_lines(&records, &declared.path, filter);
+        for line in &lines {
+            writeln!(out, "{line}")?;
+        }
+        writeln!(out, "{} record(s)", lines.len())?;
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Append records read as JSONL on stdin (CLOUD-52).
+///
+/// Idempotent on a byte-identical row, which is what makes a half-finished
+/// import safe to re-run; the same id with different content is refused, because
+/// that is a revision and revisions append with `supersedes`.
+fn run_defects_add(
+    dry_run: bool,
+    mode: Mode,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let (declared, path) = declared_ledger(overrides)?;
+
+    let mut raw = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut raw)?;
+    let incoming = defects::parse(&raw)?;
+    if incoming.is_empty() {
+        return Err(UsageError::raise(
+            "defects add: stdin carried no record; an add that adds nothing is a mistake, not a no-op",
+        ));
+    }
+    // The taxonomy is config's, so an unknown class is refused here rather than
+    // written and caught later by the gate — a ledger is append-only, so a bad
+    // row admitted once cannot be taken back.
+    let problems = defects::validate_records(&incoming, &declared.classes);
+    if let Some(problem) = problems.first() {
+        return Err(UsageError::raise(format!(
+            "defects add: stdin line {} is {}; `classes` in {} declares the taxonomy",
+            problem.line,
+            problem.id,
+            config::CONFIG_FILE
+        )));
+    }
+
+    let existing = read_ledger(&path)?;
+    let (summary, fresh) = defects::plan(&existing, &incoming)?;
+
+    if dry_run {
+        // The one line this verb prints unconditionally: `-n` exists to be read,
+        // and the would-append count IS the migration acceptance (§5). It is a
+        // *preview*, not a report of what happened, so the ladder does not gate
+        // it — a silenced preview is a `-n` that did nothing.
+        writeln!(
+            err,
+            "defects add: would append {} record(s), {} already present",
+            summary.appended, summary.already
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    if !fresh.is_empty() {
+        let mut body = String::new();
+        for record in &fresh {
+            body.push_str(&record.line()?);
+            body.push('\n');
+        }
+        // Append, never rewrite: the file is opened in append mode, so this verb
+        // is structurally incapable of the edit the gate refuses.
+        use std::io::Write as _;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        file.write_all(body.as_bytes())?;
+    }
+    // Silence on the ordinary path (§5: `add` prints nothing on success). The
+    // counts ride the ladder at `Verbose`, where a caller who asked for them
+    // gets them and a script that did not is not made to parse them.
+    output::message(
+        mode,
+        Verbosity::Verbose,
+        err,
+        &format!(
+            "defects add: appended {}, already present {}",
+            summary.appended, summary.already
+        ),
+    )?;
+    Ok(ExitCode::Success)
 }
 
 /// Bind the store, scan this ref, and fold the findings in as its instances.
@@ -748,6 +920,18 @@ fn run_rules(
             .iter()
             .filter_map(budget::Report::finding),
     );
+
+    // The defect ledger's gate (CLOUD-52), joining on the same terms and for the
+    // same reasons. It is engine-side rather than a `[[rule]]` row because the
+    // ledger records the lessons that produced the other gates — one a branch
+    // could lower by editing a rule table is worth less than none.
+    //
+    // Rooted at the repo, not the process directory: the ledger path is
+    // repo-relative and the git bases are the repository's, so answering from a
+    // subdirectory would read a ledger that is not there.
+    if let Some(declared) = config.defects.as_ref() {
+        findings.extend(defects::gate(&git::repo_root(Path::new("."))?, declared)?);
+    }
 
     // The transcript capability (CLOUD-95), resolved BESIDE the runner rather than
     // through it: `runner` is a plain fn pointer over `(&[Rule], &Path)` with

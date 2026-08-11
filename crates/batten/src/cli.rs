@@ -106,10 +106,37 @@ pub enum Command {
         /// The chosen sub-verb.
         command: StateCommand,
     },
+    /// The append-only defect ledger.
+    Defects {
+        /// The chosen sub-verb.
+        command: DefectsCommand,
+    },
     /// Pinned tools this repository provisions.
     Provision {
         /// The chosen sub-verb.
         command: ProvisionCommand,
+    },
+}
+
+/// Subcommands of `defects`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DefectsCommand {
+    /// List recorded defects as pointers.
+    Query {
+        /// Emit the records as byte-stable JSON instead of pointer lines.
+        json: bool,
+        /// Only records in this taxonomy class.
+        class: Option<String>,
+        /// Only the record with this id.
+        id: Option<String>,
+        /// Only records nothing gates yet.
+        ungated: bool,
+    },
+    /// Append records read as JSONL on stdin.
+    Add {
+        /// Validate and report the would-append count without writing.
+        dry_run: bool,
     },
 }
 
@@ -317,6 +344,21 @@ fn provision_of(matches: &ArgMatches) -> Option<ProvisionCommand> {
     }
 }
 
+fn defects_of(matches: &ArgMatches) -> Option<DefectsCommand> {
+    match matches.subcommand()? {
+        ("query", matches) => Some(DefectsCommand::Query {
+            json: flag(matches, "json"),
+            class: matches.get_one::<String>("class").cloned(),
+            id: matches.get_one::<String>("id").cloned(),
+            ungated: flag(matches, "ungated"),
+        }),
+        ("add", matches) => Some(DefectsCommand::Add {
+            dry_run: flag(matches, "dry_run"),
+        }),
+        _ => None,
+    }
+}
+
 fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(WorktreeCommand::Status {
@@ -382,6 +424,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         }),
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),
+        "defects" => defects_of(matches).map(|command| Command::Defects { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),
         // `get_many`, not `get_one`: the tail is an `Append` action, so every

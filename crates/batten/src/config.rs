@@ -205,6 +205,11 @@ pub struct Config {
     /// place the fact is decided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ci: Option<crate::ci::Ci>,
+    /// The append-only defect ledger (CLOUD-52): where it lives and what may be
+    /// in it. Absent means this repository keeps no in-tree ledger and the gate
+    /// is simply not active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defects: Option<crate::defects::Defects>,
     /// Pinned tools this repository provisions (CLOUD-90): version, URL,
     /// checksum, unpack behaviour, binary name. Consumer-specific by nature —
     /// which tools a repository needs is that repository's business, never
@@ -324,6 +329,9 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     if let Some(ci) = &config.ci {
         ci.validate()?;
     }
+    if let Some(defects) = &config.defects {
+        defects.validate()?;
+    }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
@@ -433,6 +441,7 @@ impl Config {
             must_land_on: None,
             judge: None,
             ci: None,
+            defects: None,
             provisions: Vec::new(),
             // Declaring no transcript is the ordinary case, and it is not the
             // same as pointing at one that is missing: the first says the

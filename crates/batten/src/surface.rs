@@ -463,6 +463,54 @@ const JSON: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--class <token>`: narrow a defect query to one taxonomy class.
+const CLASS: FlagDecl = FlagDecl {
+    id: "class",
+    long: Some("class"),
+    short: None,
+    help: "Only records in this taxonomy class",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--id <token>`: narrow a defect query to one record.
+const RECORD_ID: FlagDecl = FlagDecl {
+    id: "id",
+    long: Some("id"),
+    short: None,
+    help: "Only the record with this id",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--ungated`: the lessons still carried by prose alone.
+///
+/// The filter worth having: rule 2 says a rule without a runnable gate is half a
+/// change, and this enumerates exactly the rows that are still that half.
+const UNGATED: FlagDecl = FlagDecl {
+    id: "ungated",
+    long: Some("ungated"),
+    short: None,
+    help: "Only records no rule or gate discharges yet",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `-n --dry-run`: preview the change and write nothing.
 ///
 /// Per-command rather than global (§3), because a preview is only meaningful for
@@ -903,6 +951,42 @@ pub const SURFACE: &[CommandDecl] = &[
             FlagDecl::positional("check", "The check whose receipt is judged"),
             JSON,
         ],
+    },
+    // The noun only dispatches; its subtree carries a write verb, so the parent
+    // stays unclassified rather than advertising a write-bearing `read` prefix
+    // on the derived allowlist (CLOUD-170) — the posture `receipt` and `state`
+    // already take.
+    CommandDecl {
+        path: "defects",
+        about: "The append-only defect ledger: the lessons this repository has already paid for",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // Inspection only: reads the committed ledger and reports pointers. Joins
+    // the derived read-only allowlist.
+    CommandDecl {
+        path: "defects query",
+        about: "List recorded defects, as pointers",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[
+            JSON,
+            CLASS,
+            RECORD_ID,
+            UNGATED,
+        ],
+    },
+    // Appends to a committed file. `write`, not `destructive`: it adds rows and
+    // removes none — the append-only gate makes removal impossible by
+    // construction — and `-n` previews without touching the tree.
+    CommandDecl {
+        path: "defects add",
+        about: "Append defect records read as JSONL on stdin",
+        // Reports counts on stderr under -n; there is no document to emit.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[DRY_RUN],
     },
     // The noun only dispatches, and it takes the same posture `receipt` does:
     // its subtree carries a write verb, so classifying the parent `read` would

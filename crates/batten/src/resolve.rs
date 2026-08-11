@@ -228,6 +228,12 @@ pub struct Resolved {
     /// question that already has one authority.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ci: Option<crate::ci::Ci>,
+    /// The defect ledger's declaration (CLOUD-52), as the authority states it.
+    /// Not layered: where the ledger lives and what may be in it is a property
+    /// of the repository, and a local file that could redirect it would be able
+    /// to point the append-only gate at a different file than the one committed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defects: Option<crate::defects::Defects>,
     /// The provisioning manifest (CLOUD-90), as the authority states it.
     #[serde(rename = "provision", skip_serializing_if = "Vec::is_empty")]
     pub provisions: Vec<crate::provision::Provision>,
@@ -692,6 +698,7 @@ fn assemble(
         transcript: repo.transcript.clone(),
         judge: repo.judge.clone(),
         ci: repo.ci.clone(),
+        defects: repo.defects.clone(),
         provisions: repo.provisions.clone(),
         sources: attribution(
             repo,
@@ -747,6 +754,7 @@ fn attribution(
         ("transcript", authority_set(repo.transcript.is_some())),
         ("judge", authority_set(repo.judge.is_some())),
         ("ci", authority_set(repo.ci.is_some())),
+        ("defects", authority_set(repo.defects.is_some())),
         ("provision", authority_set(!repo.provisions.is_empty())),
     ])
 }

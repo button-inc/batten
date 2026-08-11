@@ -26,6 +26,17 @@
         }
       ]
     },
+    "defects": {
+      "description": "The append-only defect ledger (CLOUD-52): where it lives and what may be\nin it. Absent means this repository keeps no in-tree ledger and the gate\nis simply not active.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Defects"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "epoch": {
       "description": "Which files make up the governing config surface the `config_epoch`\nhashes (CLOUD-32). Absent means the default: this file alone.",
       "anyOf": [
@@ -231,6 +242,28 @@
       "additionalProperties": false,
       "required": [
         "required_checks"
+      ]
+    },
+    "Defects": {
+      "description": "The `[defects]` table: where the ledger lives and what may be in it.\n\nBoth keys are consumer facts. The crate carries neither a path nor a class\ntoken (non-negotiable rule 1) — a taxonomy is a description of one team's\nfailure modes, not an engine fact.",
+      "type": "object",
+      "properties": {
+        "classes": {
+          "description": "The allowed `class` tokens. A record outside this set is refused.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "path": {
+          "description": "The repo-relative path of the one JSONL ledger.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "classes"
       ]
     },
     "Direction": {
