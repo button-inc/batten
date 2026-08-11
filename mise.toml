@@ -565,7 +565,7 @@ description = "Regenerate the committed shell completions from the command surfa
 # The binary emits on stdout only, so `generate` stays a read-effect verb (§5)
 # and the redirect that refreshes the committed artifact is here, in the caller.
 # `cargo run` rather than an installed binary, so the artifact always tracks the
-# working tree's surface — the pair `completions-check` then diffs.
+# working tree's surface — the pair `derived-check` then diffs.
 shell = "bash -c"
 run = '''
 for shell in bash zsh fish; do

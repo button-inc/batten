@@ -70,7 +70,11 @@ if [ ! -x "$MAN_PAGES" ]; then
 	echo "::error:: derived-check: cannot run $MAN_PAGES, so the man page set is unknown. A gate that checks nothing must not report green." >&2
 	exit 2
 fi
-if ! pages=$("$MAN_PAGES"); then
+# Told explicitly which tree to read rather than left to re-derive it: this gate
+# runs against a scratch fixture as well as against the checkout, and a helper
+# that asked git for the top level would be answering about a different tree —
+# or, outside a repository, about none.
+if ! pages=$(MAN_PAGES_ROOT="$PWD" "$MAN_PAGES"); then
 	echo "::error:: derived-check: could not derive the man page list from the surface" >&2
 	exit 2
 fi

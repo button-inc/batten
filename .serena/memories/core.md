@@ -164,7 +164,19 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   root keys do not move, and the filter has one implementation rather than one
   per consumer. Completions derive
   from this too — `batten generate completions` emits them on stdout and
-  `completions-check` diffs the committed copy byte-for-byte (DoR §4).
+  `derived-check` diffs the committed copy byte-for-byte (DoR §4).
+- `render.rs` — the two _human_ renderings of the same tree (CLOUD-69), the
+  other half of what §11 has always claimed: `man` builds one roff page per
+  command via `clap_mangen`, `markdown` walks `spec.rs`'s `CommandSpec` into the
+  whole-surface reference. Both return a `String` and write nothing, which is
+  what keeps `generate` an `Effect::Read` verb — the redirect is the caller's
+  (`mise run man`), never the binary's. Three name fields carry the qualified
+  path because `clap_mangen` reads a different one for each (page title,
+  SYNOPSIS, `.TH` source), and the `.TH` date is left empty: a dated page would
+  differ on every regeneration and no byte-for-byte gate could hold it. The man
+  pages are committed and gated by `derived-check`; the markdown is **not**
+  committed — it is the CLI reference, rendered at publish time (CLOUD-171), so
+  there is no second copy to drift from.
 - `exit.rs` — the `ExitCode` contract (stable numeric values); branch on named
   variants, never integer literals. One table, no per-verb exception (CLOUD-226):
   `0` clean/allow, `1` usage, `2` the policy verdict — a `check` violation and a
