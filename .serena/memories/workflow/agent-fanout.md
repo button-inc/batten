@@ -211,10 +211,55 @@ The partition is by **file domain**, not by topic, and it is only real if it
 reads open PRs' file lists rather than their titles. Two issues that read as
 unrelated but both edit `mise-tasks/land` are one issue for dispatch purposes.
 
+## A fan-out that drafts rather than lands
+
+The section above is right that a non-landing session is off the contended path
+and "costs only tokens". **This is what those tokens cost**, because the reading
+that kills a fleet is "only tokens" → "free".
+
+Every bound in the caps section is a bound on **landing**. An agent that
+researches, reviews, or drafts never lands, so land contention derives nothing
+about it — and the silence that leaves is an absence of a _derivation_, not an
+absence of a _constraint_. Eight drafting agents were launched into that silence.
+
+The binding constraint for this shape is **per-agent fixed cost**, which is paid
+once per agent and therefore multiplies with N. Measured 2026-08-11: the one
+agent in that fleet which completed anything spent **63,848 tokens** to fetch a
+single issue and run one lint. That is the **floor for near-zero work**, not an
+average — budget from it, not from what the work "should" cost. Each prompt
+named eight artifacts as required reading, so the fixed cost was paid eight
+times over before any agent did anything.
+
+Three rules follow, and none of them is derived from land contention:
+
+- **Digest, don't cite.** Context shared across the fan-out is computed **once**
+  and passed as one artifact. A prompt that names N documents as required
+  reading multiplies the read cost by the fleet size to deliver identical bytes
+  to every member. The reading list is the anti-pattern; the digest is the fix.
+- **Checkpoint at the unit's own gate.** Each unit is written to its **durable
+  home** — the tracker, a memory, a PR — the moment it passes, never batched
+  behind siblings. Scratch dies with the container and no consumer reads it, so
+  work that ends the session in a scratch file was never done. This is the same
+  property `mem:workflow/board-states` makes of the board: the durable write IS
+  the delivery.
+- **Pilot one, then widen.** Carry a single unit end to end, _through its
+  durable write_, before spending the shape on the rest. A recipe unproven on
+  one unit must not be spent on fifty-one — and "unproven" means the write has
+  not been observed, not that the prompt looks right.
+
+**What is gated here, stated plainly so nothing is assumed:** none of the three.
+They are reference material with no exit code behind them, because the predicate
+they need is a measurement of a session's actual spend, which is out of tree —
+the capability gap CLOUD-95 registers. The cap of 2 above IS enforced, at claim
+time; these are not. Read that as a reason to hold them deliberately, not as a
+reason to discount them: the cost they bound was paid in full before it was
+written down.
+
 ## What each implementer does
 
-The existing contract, unchanged: claim → build → draft PR → `mise run verify`
-→ `mise run linear-check` → `gh pr ready` → `mise run land` (backgrounded) →
-In Review + attach the PR (the attachment is what makes `graph-check`'s
-In-Review predicate true). Blocked mid-build? Same question protocol: write it
+The existing contract: claim → build → draft PR → `mise run verify` → `mise run
+linear-check` → `mise run land` (backgrounded) → In Review + attach the PR (the attachment is what makes `graph-check`'s
+In-Review predicate true). **`land` is the only readier** — a hand `gh pr ready`
+spent before its push buys only draft-era skips (CLOUD-247), and the ready must
+be the event that fires CI on the SHA that lands. Blocked mid-build? Same question protocol: write it
 on the issue, move the issue back to Backlog, release, take the next one.
