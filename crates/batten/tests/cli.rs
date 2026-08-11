@@ -4119,6 +4119,149 @@ fn listing_an_unbound_repository_succeeds_and_says_nothing_by_default() {
     assert!(String::from_utf8_lossy(&loud.stderr).contains("no store is bound"));
 }
 
+// --- store format versioning (CLOUD-78) ---------------------------------------
+//
+// No implicit upgrades. A binary writes the store's version and reads a window
+// around it; the only thing that moves a store forward is `state migrate`. The
+// alternative — upgrading on a read path — turns a routine `check` in one
+// worktree into an outage for an older binary reading the same store from
+// another.
+
+/// The store directory bound to `repo`, located through the marker.
+fn bound_store_dir(repo: &std::path::Path, home: &std::path::Path) -> PathBuf {
+    let id = bound_store_id(repo);
+    let mut found = None;
+    for entry in walk_dirs(&home.join("data")) {
+        if entry.join("store.json").is_file()
+            && fs::read_to_string(entry.join("store.json"))
+                .is_ok_and(|text| text.contains(&id))
+        {
+            found = Some(entry);
+            break;
+        }
+    }
+    found.expect("the bound store directory exists under the state dir")
+}
+
+/// Every directory under `root`, breadth-first. Test-local; the crate has no
+/// recursive-walk helper exposed for tests.
+fn walk_dirs(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut queue = vec![root.to_path_buf()];
+    while let Some(dir) = queue.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if path.is_dir() {
+                queue.push(path.clone());
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn migrate_upgrades_an_older_store_and_nothing_else_does() {
+    // The keystone of the versioning rule, end to end over the binary: a store
+    // pinned to the oldest record version stays there across ordinary verbs, and
+    // moves only when `state migrate` is run.
+    let (repo, home) = ledger_fixture("ledger-migrate");
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+    let store_dir = bound_store_dir(&repo, &home);
+    let format_path = store_dir.join("journal").join("format.json");
+
+    // Pin it back to the oldest version, as an older binary would have left it.
+    let format = fs::read_to_string(&format_path).expect("a format record");
+    let mut parsed: serde_json::Value = serde_json::from_str(&format).expect("format is JSON");
+    let current = parsed["findingsSchema"].as_u64().expect("a version");
+    parsed["findingsSchema"] = serde_json::json!(1);
+    fs::write(&format_path, parsed.to_string()).expect("pin the format");
+
+    // An ordinary read verb must NOT upgrade it.
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "list"]).status.code(),
+        Some(0)
+    );
+    let after_read: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&format_path).unwrap()).unwrap();
+    assert_eq!(
+        after_read["findingsSchema"].as_u64(),
+        Some(1),
+        "a read path must never upgrade the store"
+    );
+
+    // `state migrate` is the one thing that does.
+    let migrated = store_cmd(&repo, &home, &["state", "migrate"]);
+    assert_eq!(migrated.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&migrated.stderr).contains("state migrate"),
+        "the migration reports what it did"
+    );
+    let after_migrate: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&format_path).unwrap()).unwrap();
+    assert_eq!(after_migrate["findingsSchema"].as_u64(), Some(current));
+
+    // Idempotent: running it again is a no-op that still exits 0.
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "migrate"]).status.code(),
+        Some(0)
+    );
+}
+
+#[test]
+fn a_store_newer_than_the_binary_is_read_only_and_still_allows() {
+    // Degraded read-only: an out-of-date binary is an operator problem, and
+    // refusing the agent's work is not how it gets fixed. So this path exits 0,
+    // says `persisted:false`, and never reaches the deny channel.
+    let (repo, home) = ledger_fixture("ledger-degraded");
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+    let store_dir = bound_store_dir(&repo, &home);
+    let format_path = store_dir.join("journal").join("format.json");
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&format_path).unwrap()).unwrap();
+    let current = parsed["findingsSchema"].as_u64().expect("a version");
+    parsed["findingsSchema"] = serde_json::json!(current + 1);
+    fs::write(&format_path, parsed.to_string()).expect("advance the format");
+
+    let output = store_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a store it cannot write is never a deny and never an internal error"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("degraded read-only"),
+        "the degradation is announced, not silent: {stderr}"
+    );
+    assert!(
+        stderr.contains("persisted:false"),
+        "the emission says it was not persisted: {stderr}"
+    );
+
+    // Reads still work — dedupe keeps functioning in degraded mode.
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "list"]).status.code(),
+        Some(0)
+    );
+
+    // And migrating DOWN is refused rather than silently truncating fields.
+    let refused = store_cmd(&repo, &home, &["state", "migrate"]);
+    assert_eq!(
+        refused.status.code(),
+        Some(1),
+        "a binary older than the store cannot migrate it"
+    );
+}
+
 // --- the transcript capability (CLOUD-95) -----------------------------------
 //
 // A completed session transcript is an optional `check` input. Three states,

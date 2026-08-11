@@ -998,6 +998,32 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(migrate)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (list)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -1043,6 +1069,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (record)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(migrate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1255,6 +1285,10 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (record)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(migrate)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1567,6 +1601,7 @@ _batten__subcmd__help__subcmd__state_commands() {
     local commands; commands=(
 'adopt:Bind this checkout to its findings store, minting one only if none exists' \
 'record:Record this ref'\''s findings into the store, and GC instances whose ref is gone' \
+'migrate:Upgrade the findings store to this binary'\''s record version' \
 'list:List stored findings and the refs they were observed in' \
     )
     _describe -t commands 'batten help state commands' commands "$@"
@@ -1580,6 +1615,11 @@ _batten__subcmd__help__subcmd__state__subcmd__adopt_commands() {
 _batten__subcmd__help__subcmd__state__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'batten help state list commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__state__subcmd__migrate_commands] )) ||
+_batten__subcmd__help__subcmd__state__subcmd__migrate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help state migrate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__state__subcmd__record_commands] )) ||
 _batten__subcmd__help__subcmd__state__subcmd__record_commands() {
@@ -1730,6 +1770,7 @@ _batten__subcmd__state_commands() {
     local commands; commands=(
 'adopt:Bind this checkout to its findings store, minting one only if none exists' \
 'record:Record this ref'\''s findings into the store, and GC instances whose ref is gone' \
+'migrate:Upgrade the findings store to this binary'\''s record version' \
 'list:List stored findings and the refs they were observed in' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1745,6 +1786,7 @@ _batten__subcmd__state__subcmd__help_commands() {
     local commands; commands=(
 'adopt:Bind this checkout to its findings store, minting one only if none exists' \
 'record:Record this ref'\''s findings into the store, and GC instances whose ref is gone' \
+'migrate:Upgrade the findings store to this binary'\''s record version' \
 'list:List stored findings and the refs they were observed in' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1765,6 +1807,11 @@ _batten__subcmd__state__subcmd__help__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'batten state help list commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__state__subcmd__help__subcmd__migrate_commands] )) ||
+_batten__subcmd__state__subcmd__help__subcmd__migrate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten state help migrate commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__state__subcmd__help__subcmd__record_commands] )) ||
 _batten__subcmd__state__subcmd__help__subcmd__record_commands() {
     local commands; commands=()
@@ -1774,6 +1821,11 @@ _batten__subcmd__state__subcmd__help__subcmd__record_commands() {
 _batten__subcmd__state__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'batten state list commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__state__subcmd__migrate_commands] )) ||
+_batten__subcmd__state__subcmd__migrate_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten state migrate commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__state__subcmd__record_commands] )) ||
 _batten__subcmd__state__subcmd__record_commands() {
