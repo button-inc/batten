@@ -1,9 +1,19 @@
 # Batten
 
-Batten is a repo-agnostic **policy engine** that keeps _"done"_ aligned with
-landed-and-verified work. It gates what gets written, proves what was verified,
-and refuses to let unlanded work appear finished — enforcing one repository's
-policy consistently at the pre-commit layer, in CI, and at an agent's tool call.
+Batten is an **agent-era completion gate**: repo-state conformance checks — is
+this ref on `main`? did the required checks conclude green for this exact SHA? —
+enforced at the agent's tool call, and re-checked in CI and at pre-commit so the
+verdict cannot be bypassed.
+
+Your agent says "done." The repository knows otherwise: the branch never landed,
+the checks never ran on that SHA, the tests were edited until they passed. Batten
+is the deterministic check at the moment of the claim — the throughput stays, the
+false _"done"_ dies.
+
+_"Done"_ here is the **minimum falsifiable completion predicate**: landed on
+`main` by fast-forward, with the required checks green for that exact SHA. It
+kills false success. It does not certify correctness, and review still gates
+release.
 
 > **Status:** early scaffold. The command surface is being filled in against the
 > project plan; see [Roadmap](#roadmap). The crate is not yet published and the
@@ -12,17 +22,51 @@ policy consistently at the pre-commit layer, in CI, and at an agent's tool call.
 
 ## Why
 
-Repo-config-driven permission hooks that can gate an agent's tool call _before_
-execution are new, and earlier tooling was built for humans at commit time
-rather than agents operating mid-trajectory. The hook layer itself is
+Repo-config-driven **conformance gates** that can judge an agent's tool call
+_before_ execution are new, and earlier tooling was built for humans at commit
+time rather than agents operating mid-trajectory. The hook layer itself is
 deliberately boring: the major harnesses have converged on one wire shape — a
 JSON payload on stdin, a block returned as exit code `2`, a JSON verdict on
 stdout — so Batten's normalized envelope and thin per-host shims are cheap
-insurance against divergence, not the product. What no existing tool occupies
-is the layer behind the hook: one policy engine rendering the same verdict from
-the same committed config at the pre-commit layer, in CI, and at an agent's
-tool call, with completion predicates — landed, verified, CI-green — as
-first-class rules.
+insurance against divergence, not the product. What no existing tool occupies is
+the layer behind the hook: one engine rendering the same verdict from the same
+committed config at the agent's tool call — and again in CI and at pre-commit, so
+the verdict cannot be bypassed — with completion predicates (landed, verified,
+CI-green) as first-class rules.
+
+The hook is the binding surface because it fires on events the agent cannot
+decline, and because it reads committed, out-of-band config that the model's
+context cannot influence. Any surface the model must _choose_ to consult loses to
+the primitive it already trusts.
+
+### Cheap to consult, so it gets consulted
+
+A gate an agent routes around is a gate that does not run, and what agents route
+around is expense. Three pains compound in an agent's context, and a tool that
+answers with a dump makes every one of them worse:
+
+- **Tail-calling.** The output did not fit, so the agent runs the command again to
+  see a different slice — paying twice for one answer, often for the wrong slice.
+- **Lost-in-the-middle.** A two-thousand-line dump buries the one line that
+  mattered exactly where retrieval is weakest.
+- **Context rot.** Every avoidable byte crowds out the working state the agent
+  needs to finish the task it was actually doing.
+
+Batten's output contract answers all three at once. A finding is a **pointer, not
+a payload** — a count and a `path:line`, never the matched content — so a wrapped
+tool's two thousand lines become one. Output is **byte-stable**, so an unchanged
+repository renders identical bytes and the agent's prefix cache stays warm instead
+of being invalidated by a reordered map or a timestamp. And a refusal **points at
+the fix**: a deny names the rule, the reason, and the command to run instead,
+which is one hop to right rather than a round of guessing.
+
+Magnitude belongs to the benchmark, not to this page. The
+[token-economics benchmark][token-economics] is the proof, and it is measured
+per capability against a named workload with a stated baseline and run count. No
+figure is published here until it has been measured that way; a capability with no
+defensible number reports "not measured" rather than borrowing one.
+
+[token-economics]: https://linear.app/buttoninc/document/batten-adoption-proof-token-economics-benchmark-headline-story-685716ec5b7a
 
 ## Design principles
 
@@ -50,7 +94,7 @@ first-class rules.
 
 ## Scope and limits
 
-Batten is a policy engine: it **evaluates** narrow content predicates and
+Batten **evaluates** narrow content predicates and
 **wraps** linters, scanners, and hook runners as evidence sources — a rule kind
 exists to gate on a tool's verdict, never to replace the tool, so the boundary
 holds even as rule kinds grow. Its threat model is honest agent or human error:
