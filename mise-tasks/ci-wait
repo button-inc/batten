@@ -16,6 +16,27 @@
 # request every 20s to usually learn nothing, so the interval had to stay long
 # and the news arrived late.
 #
+# Terminality is decided over a NAMED REQUIRED SET, never over "any graded run"
+# (CLOUD-327). The old predicate asked whether anything graded, when the question
+# is whether the checks that judge this repository graded: `SonarCloud Code
+# Analysis` and `release-plz` are not draft-gated, so the two of them satisfied it
+# on their own and a set in which `ci`, `cross`, `commit-lint`, `darwin-link` and
+# `final` were all `skipped` reported green. #261 landed on that.
+#
+# `skipped` is still not a bad conclusion, and deliberately: it is the intended
+# economy for a draft and for a matrix leg that does not run, and refusing it
+# everywhere is the CLOUD-247 stall this repo already paid for. What changed is
+# WHERE it is read — a required check that skipped is not an answer and the poll
+# continues (`land`'s lap re-fires the ready, which is what replaces the skips);
+# an unrelated check that skipped is none of our business. The same scoping is
+# why a third party cannot veto a landing: only a required check's failure is
+# red here, matching what branch protection actually enforces.
+#
+# ABSENT is not the same as skipped, and must not be: `zizmor` is path-filtered,
+# so on a PR touching no workflow it produces no check-run at all. Requiring every
+# name to be PRESENT would hang forever on the ordinary PR. The predicate is
+# therefore "at least one required check graded, none skipped, none pending".
+#
 # Measured against this endpoint: ~260ms network round trip warm, ~130ms of `gh`
 # process startup, ~470ms for the whole conditional call. The sleep is therefore
 # not what sets the pace — the round trip is — and a 1s interval gives a ~1.5s
@@ -29,6 +50,11 @@ sha="${SHA:-$(git rev-parse HEAD)}"
 interval="${CI_WAIT_INTERVAL:-1}"
 etag=""
 runs=""
+announced=""
+# Declared once in mise.toml [env] and read by `land` too. Unset is fatal rather
+# than an empty set: an empty set makes every check unrequired, which is the
+# false green this task exists to stop.
+required="${CI_REQUIRED_CHECKS:?ci-wait: CI_REQUIRED_CHECKS is unset — run this through \`mise run ci-wait\`, which is where the required set is declared.}"
 
 echo "ci-wait: polling check-runs for $sha (conditional, ${interval}s)"
 
@@ -54,21 +80,37 @@ while :; do
 			jq -r '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)"' 2>/dev/null) || runs=""
 	fi
 
-	# A check set that is entirely `skipped` is not an answer: those are the
-	# draft-era runs, or the real ones not yet registered. Require at least one
-	# graded conclusion before treating the set as terminal.
-	graded=$(printf '%s\n' "$runs" |
-		awk -F'\t' '$2=="success"||$2=="failure"||$2=="timed_out"||$2=="cancelled"||$2=="action_required"' | wc -l)
-	pending=$(printf '%s\n' "$runs" | awk -F'\t' 'NF && $1!="completed"' | wc -l)
+	# One pass over the required subset. `|`-separated because a tab is IFS
+	# whitespace and `read` collapses runs of it, which would shift an empty
+	# name list into the wrong variable; no check-run name contains a pipe.
+	# Names are accumulated as pointers — a `<check> skipped` coordinate, never a
+	# run's log (house-style §6).
+	verdict=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
+		BEGIN { n = split(req, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+		!NF || !($3 in want) { next }
+		$1 != "completed" { pending++; next }
+		$2 == "skipped" { skipped = skipped sep3 $3; sep3 = ", "; next }
+		$2 == "success" || $2 == "neutral" { graded++; next }
+		{ graded++; bad = bad sep4 $3 " " $2; sep4 = ", " }
+		END { printf "%d|%d|%s|%s", graded + 0, pending + 0, skipped, bad }
+	')
+	IFS='|' read -r graded pending ungraded failed <<<"$verdict"
 
-	if [ -n "$runs" ] && [ "$graded" -gt 0 ] && [ "$pending" -eq 0 ]; then
-		printf '%s\n' "$runs" | awk -F'\t' '{print $2"\t"$3}' | sort -u
-		if printf '%s\n' "$runs" | awk -F'\t' '$2!="success"&&$2!="neutral"&&$2!="skipped"{bad=1} END{exit !bad}'; then
-			echo "::error:: CI is not green on $sha — reproduce and fix locally." >&2
+	if [ "$graded" -gt 0 ] && [ "$pending" -eq 0 ] && [ -z "$ungraded" ]; then
+		printf '%s\n' "$runs" | awk -F'\t' 'NF {print $2"\t"$3}' | sort -u
+		if [ -n "$failed" ]; then
+			echo "::error:: CI is not green on $sha — $failed. Reproduce and fix locally." >&2
 			exit 1
 		fi
-		echo "ci-wait: all checks terminal and green on $sha"
+		echo "ci-wait: every required check terminal and green on $sha"
 		exit 0
+	fi
+
+	# Say what is being waited on, once per change of answer. Silence here is how
+	# a poll that will never resolve looks exactly like one about to.
+	if [ -n "$ungraded" ] && [ "$ungraded" != "$announced" ]; then
+		echo "ci-wait: not an answer yet on $sha — required check(s) skipped: $ungraded"
+		announced="$ungraded"
 	fi
 
 	sleep "$wait_for"

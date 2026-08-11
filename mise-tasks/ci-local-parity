@@ -25,6 +25,14 @@
 #      is DISCOVERED rather than confirmed, and the discovery costs a runner and
 #      a round trip that a free local run would have caught.
 #
+#   4. THE REQUIRED SET NAMES EXACTLY THESE JOBS. `ci-wait` and `land` decide
+#      "did this SHA get an answer" over `$CI_REQUIRED_CHECKS` (CLOUD-327), a
+#      hand-maintained list until CLOUD-54's derived `[ci].required_checks`
+#      lands. A hand-maintained list is only safe with a sensor on it: a job
+#      added and not listed is silently unrequired — the exact false green
+#      CLOUD-327 is — and a listed name matching no job waits forever for a run
+#      nothing will ever create. Both directions, over the committed text.
+#
 # Scoped to `pull_request`-triggered workflows: a scheduled or release workflow
 # is not on the landing path and none of the three properties apply to it.
 set -uo pipefail
@@ -46,6 +54,22 @@ if [ -z "$verify_block" ]; then
 	exit 1
 fi
 
+# The required set, read from the same manifest `[tasks.verify]` came from —
+# not from the environment, so a fixture manifest exercises the property and the
+# real one is what the last bats case judges.
+required=$(awk -F'"' '/^CI_REQUIRED_CHECKS = /{print $2; exit}' "$manifest")
+[ -n "$required" ] ||
+	problem "no CI_REQUIRED_CHECKS in $manifest, so \`ci-wait\` has no required set and every check is unrequired."
+
+# A check-run's name is the job's `name:`; a matrix leg gets the leg appended in
+# parentheses, which no committed text can expand. Comparison is therefore over
+# the base name — enough to catch a job added, removed or renamed, which is what
+# rots a list. Job `name:` sits at exactly four spaces; a step's `- name:` is
+# deeper and stays out.
+base_names() { sed -E 's/[[:space:]]*\(.*$//' | sed -E 's/[[:space:]]+$//' | sort -u; }
+want_names=$(printf '%s\n' "$required" | tr ',' '\n' | base_names)
+job_names=""
+
 checked=0
 for wf in "$workflows"/*.yml; do
 	[ -e "$wf" ] || continue
@@ -56,6 +80,13 @@ for wf in "$workflows"/*.yml; do
 	triggers=$(awk '/^on:/{p=1;next} /^[a-z]/{p=0} p' "$wf")
 	grep -q '^  pull_request:' <<<"$triggers" || continue
 	checked=$((checked + 1))
+
+	job_names="$job_names
+$(awk '
+		/^jobs:/ { injobs = 1; next }
+		injobs && /^[a-z]/ { injobs = 0 }
+		injobs && /^    name:[[:space:]]/ { sub(/^    name:[[:space:]]*/, ""); print }
+	' "$wf")"
 
 	grep -q 'cancel-in-progress: true' "$wf" ||
 		problem "$wf triggers on pull_request but never supersedes its own runs — add a concurrency group with cancel-in-progress: true, or a lap pays out the run it just made obsolete."
@@ -105,5 +136,17 @@ if [ "$checked" -eq 0 ]; then
 	problem "no pull_request-triggered workflow found under $workflows — either the path is wrong or the landing path is untested."
 fi
 
+have_names=$(printf '%s\n' "$job_names" | sed '/^$/d' | base_names)
+while IFS= read -r name; do
+	[ -n "$name" ] || continue
+	grep -qxF "$name" <<<"$have_names" ||
+		problem "CI_REQUIRED_CHECKS names '$name', which is no job in a pull_request workflow — \`ci-wait\` would wait for a run nothing creates."
+done <<<"$want_names"
+while IFS= read -r name; do
+	[ -n "$name" ] || continue
+	grep -qxF "$name" <<<"$want_names" ||
+		problem "job '$name' runs on pull_request but is missing from CI_REQUIRED_CHECKS — \`ci-wait\` would report green without it (CLOUD-327)."
+done <<<"$have_names"
+
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, and running nothing verify does not"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, running nothing verify does not, and named in full by CI_REQUIRED_CHECKS"

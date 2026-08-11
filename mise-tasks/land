@@ -113,17 +113,29 @@ redraft() {
 		echo "land: re-drafted #$pr — CI does not run on drafts, so nothing more is spent until this is fixed locally"
 }
 
-# "Does this SHA carry an answer yet?" — the conclusions `ci-wait` grades, so
-# the two agree by construction on what counts as one. Absent from the remote,
-# or unreachable, reads as 0: a SHA with no runs is exactly the one that needs
-# the event, and the caller's other guards decide whether to spend it.
+# "Does this SHA carry an answer yet?" — the conclusions `ci-wait` grades, over
+# the checks `ci-wait` requires, so the two agree by construction on what counts
+# as one. Both read $CI_REQUIRED_CHECKS from mise.toml [env]; a second copy that
+# drifted would put this task back to waiting on runs that will never be graded.
+# Absent from the remote, or unreachable, reads as 0: a SHA with no runs is
+# exactly the one that needs the event, and the caller's other guards decide
+# whether to spend it.
+#
+# Scoped to the required set for the reason CLOUD-327 records: `SonarCloud Code
+# Analysis` and `release-plz` are not draft-gated, so they grade on the draft
+# push. Counting them made this read "answered" on a head whose own checks were
+# all draft-era skips, so the ready was never re-fired and the skips were never
+# replaced — the #182/#177 shape, reached from the other direction.
 graded_runs() {
 	local n
 	n=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" \
-		--jq '[.check_runs[]?
-                       | select(.conclusion == "success" or .conclusion == "failure"
-                             or .conclusion == "timed_out" or .conclusion == "cancelled"
-                             or .conclusion == "action_required")] | length' 2>/dev/null) || n=0
+		--jq '.check_runs[]? | "\(.conclusion // "-")\t\(.name)"' 2>/dev/null |
+		awk -F'\t' -v req="${CI_REQUIRED_CHECKS:?}" '
+			BEGIN { n = split(req, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+			($2 in want) && ($1 == "success" || $1 == "failure" || $1 == "timed_out" ||
+				$1 == "cancelled" || $1 == "action_required") { hit++ }
+			END { print hit + 0 }
+		') || n=0
 	echo "${n:-0}"
 }
 

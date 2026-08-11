@@ -13,6 +13,8 @@ setup() {
 	mkdir -p "$WF"
 	export PARITY_WORKFLOWS="$WF" PARITY_MANIFEST="$MANIFEST"
 	cat >"$MANIFEST" <<-'EOF'
+		CI_REQUIRED_CHECKS = "ci"
+
 		[tasks.ci]
 		run = "hk check --all"
 
@@ -131,6 +133,47 @@ workflow() {
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"1 pull_request workflow(s)"* ]]
+}
+
+@test "a pull_request job missing from CI_REQUIRED_CHECKS is refused" {
+	# The rot this sensor exists for. A job added and not listed is silently
+	# unrequired, which is CLOUD-327 itself: `ci-wait` reports green on a SHA
+	# where that job never graded.
+	workflow ci
+	workflow cross
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"job 'cross' runs on pull_request but is missing from CI_REQUIRED_CHECKS"* ]]
+}
+
+@test "a required name matching no job is refused" {
+	# The other direction, and it fails differently: `ci-wait` waits forever for
+	# a run nothing will ever create.
+	workflow ci
+	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,gone"/' "$MANIFEST"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"names 'gone', which is no job"* ]]
+}
+
+@test "a matrix leg matches on its base name" {
+	# A check-run's name carries the leg in parentheses and no committed text
+	# can expand the template, so the comparison is over the base name.
+	workflow ci
+	sed -i 's/^    name: ci$/    name: ci (${{ matrix.target }})/' "$WF/ci.yml"
+	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci (aarch64-apple-darwin)"/' "$MANIFEST"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a manifest with no required set at all is a failure, not a pass" {
+	# An empty required set makes every check unrequired — the false green
+	# stated as a default rather than a bug.
+	workflow ci
+	sed -i '/^CI_REQUIRED_CHECKS = /d' "$MANIFEST"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no CI_REQUIRED_CHECKS"* ]]
 }
 
 @test "finding no pull_request workflow at all is a failure, not a pass" {

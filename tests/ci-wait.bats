@@ -2,6 +2,12 @@
 # ci-wait's reading of a check-run set, exercised through a stub `gh` so the
 # cases that matter — an all-skipped set, a red set, a conditional 304 — are
 # reproducible without waiting on real CI.
+#
+# $CI_REQUIRED_CHECKS is deliberately NOT set here. It arrives from mise.toml
+# [env] via `mise run test:bats`, so these cases run against the real roster
+# rather than a copy of it that could disagree with the one landing uses. The
+# check names below are that roster's; `ci-local-parity` is what keeps it
+# matching the workflows.
 
 setup() {
 	WAIT="$BATS_TEST_DIRNAME/../mise-tasks/ci-wait"
@@ -57,6 +63,77 @@ response() {
 	run timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
+}
+
+@test "a draft-era skip set with third-party successes is not green" {
+	# The set that landed #261 (CLOUD-327), byte-for-byte in shape: every check
+	# that judges this repository is a draft-era `skipped`, and the two
+	# workflows that are not draft-gated graded on their own. The old predicate
+	# counted those two and reported "all checks terminal and green".
+	stub_gh
+	response resp.1 'W/"a"' '{"check_runs":[
+          {"status":"completed","conclusion":"success","name":"SonarCloud Code Analysis"},
+          {"status":"completed","conclusion":"success","name":"release-plz"},
+          {"status":"completed","conclusion":"skipped","name":"commit-lint"},
+          {"status":"completed","conclusion":"skipped","name":"cross"},
+          {"status":"completed","conclusion":"skipped","name":"ci"},
+          {"status":"completed","conclusion":"skipped","name":"final"},
+          {"status":"completed","conclusion":"skipped","name":"darwin-link (aarch64-apple-darwin)"}]}'
+	response resp.last 'W/"b"' '{"check_runs":[
+          {"status":"completed","conclusion":"success","name":"ci"}]}'
+	run timeout 20 "$WAIT"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
+	# And it says what it is waiting on, as a pointer rather than a log.
+	[[ "$output" == *"required check(s) skipped"* ]]
+	[[ "$output" == *"ci"* ]]
+}
+
+@test "a third-party check gets no veto over landing" {
+	# Branch protection enforces the required set, so a failure outside it must
+	# not hold `main`. The mirror of the case above: same scoping, other sign.
+	stub_gh
+	response resp.last 'W/"a"' '{"check_runs":[
+          {"status":"completed","conclusion":"failure","name":"SonarCloud Code Analysis"},
+          {"status":"completed","conclusion":"skipped","name":"release-plz"},
+          {"status":"completed","conclusion":"success","name":"ci"}]}'
+	run "$WAIT"
+	[ "$status" -eq 0 ]
+}
+
+@test "a required check still pending holds the poll open" {
+	# A third-party check that has already graded must not make the set look
+	# terminal while ours is still running.
+	stub_gh
+	response resp.1 'W/"a"' '{"check_runs":[
+          {"status":"completed","conclusion":"success","name":"SonarCloud Code Analysis"},
+          {"status":"in_progress","conclusion":null,"name":"ci"}]}'
+	response resp.last 'W/"b"' '{"check_runs":[
+          {"status":"completed","conclusion":"success","name":"ci"}]}'
+	run timeout 20 "$WAIT"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
+}
+
+@test "a required check that failed is red, and named" {
+	stub_gh
+	response resp.last 'W/"a"' '{"check_runs":[
+          {"status":"completed","conclusion":"success","name":"ci"},
+          {"status":"completed","conclusion":"failure","name":"cross"}]}'
+	run "$WAIT"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"not green"* ]]
+	[[ "$output" == *"cross failure"* ]]
+}
+
+@test "an unset required set is fatal rather than an empty one" {
+	# An empty set makes every check unrequired, which is the false green this
+	# task exists to stop — so it must not be reachable by forgetting a variable.
+	stub_gh
+	response resp.last 'W/"a"' '{"check_runs":[{"status":"completed","conclusion":"skipped","name":"ci"}]}'
+	run env -u CI_REQUIRED_CHECKS "$WAIT"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"CI_REQUIRED_CHECKS is unset"* ]]
 }
 
 @test "a 304 keeps the previous reading instead of clearing it" {

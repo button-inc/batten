@@ -54,6 +54,22 @@ _.path = ["tests/bats/bin"]
 # Conventional Commits subject pattern, shared by the commit-msg hook and the CI
 # commit linter so there is exactly one definition of "valid commit".
 CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
+# The checks that carry a verdict about THIS repository, named exactly as GitHub
+# names their check-runs (the matrix leg's suffix included). Shared by `ci-wait`
+# ("is this SHA green?") and `land`'s `graded_runs` ("does this SHA carry an
+# answer yet?") for the same reason CONVENTIONAL_RE is shared: a second copy that
+# drifted would put `land` back to waiting on runs that will never be graded.
+#
+# It exists because "any graded run" is not the question. `SonarCloud Code
+# Analysis` and `release-plz` are not draft-gated, so they grade on the draft
+# push and satisfied the old predicate by themselves — waving through a set in
+# which every check that builds this repository was `skipped`. That landed #261
+# on a SHA no CI run of ours ever judged (CLOUD-327).
+#
+# Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
+# on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
+# matches no job, or if a `pull_request` job is missing from here.
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),final"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.

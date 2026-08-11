@@ -92,6 +92,20 @@ emits the ready frontier + WIP count on stdout — the same command gates and
 schedules, so every session computes the same frontier. Fan-out protocol:
 `mem:workflow/agent-fanout`.
 
+**`ci-wait` decides terminality over a named required set, never over "any graded
+run"** (CLOUD-327). `$CI_REQUIRED_CHECKS` in `mise.toml [env]` names the checks
+that carry a verdict about this repository, and `land`'s `graded_runs` reads the
+same value, so the two cannot drift. Green means at least one required check
+graded, none skipped, none pending; a required check that skipped is not an
+answer and the poll continues, while an unrelated check gets neither a vote nor a
+veto. `skipped` is still not a bad conclusion — it is the draft's economy, and
+refusing it everywhere is the CLOUD-247 stall — what changed is where it is read.
+Absent is not skipped: `zizmor` is path-filtered and produces no run at all on a
+PR touching no workflow, so requiring every name to be present would hang.
+The list is hand-maintained until CLOUD-54's derived `[ci].required_checks`
+lands, and `ci-local-parity` is the sensor on it: a `pull_request` job missing
+from the set, or a name matching no job, fails the gate.
+
 `ci-wait` polls conditionally: each request carries the previous ETag as
 `If-None-Match`, and a 304 costs nothing against the rate limit (measured: three
 consecutive 304s left `X-RateLimit-Used` unchanged). That is what pays for the
