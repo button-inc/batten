@@ -183,7 +183,25 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   (`Rule::columns` × `requires`/`permits`), not a per-kind match — the match
   named fields, so a new column landed in no arm and every kind accepted it.
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
-  wrapper-lookthrough command parser, and the matcher. **The policy is config,
+  wrapper-lookthrough command parser, and the matcher. The envelope is seven
+  fields since CLOUD-43 — a typed `Event` (`const ALL` + `as_str`, the vocabulary
+  idiom `Harness`/`Stream`/`RuleKind` use) plus the host's own `raw_event`, which
+  is not a second authority: one is what policy dispatches on, the other is the
+  token echoed back, and normalizing inward and echoing outward are different
+  directions. `input` carries the whole tool-input object for the tools that are
+  not shell-shaped and is never emitted (rule 4); `command` stays as its shell
+  projection so the parser reads one decoded string. `session` is
+  `Option<String>` with empty normalized to `None`, because
+  `identity::sequence_fingerprint` already hashes `None` and `Some("")`
+  distinctly — that signature IS the degradation contract, not a second rule.
+  **`adjudicate` dispatches on the event and only pre-tool is adjudicated**: the
+  field was decoded and never read, so a `PostToolUse` payload carrying a banned
+  command was denied after the fact, at an event no host offers a deny channel
+  for. `cwd` is decoded but not consumed, so an absolute path operand is still
+  compared as written. An absent `hook_event_name` is assumed pre-tool
+  (`ASSUMED_EVENT`) rather than unrecognized: guessing the adjudicated event can
+  only over-adjudicate, where guessing the other turns a missing key into a
+  silent bypass. **The policy is config,
   not code** (CLOUD-48): `Policy` is the `mediated_call`-scoped rows of the
   _resolved_ config, so a `batten.local.toml` that adds a row is applied and
   `--config-from` is inherited. The parser is quote-aware (CLOUD-269) — a quoted

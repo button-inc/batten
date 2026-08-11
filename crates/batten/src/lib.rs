@@ -111,7 +111,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             // corrupt a document the caller may be parsing.
             exec::run_with(&command, &patterns, err)
         }
-        Some(Command::Hook { harness }) => run_hook(harness, &overrides, out),
+        Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
         Some(Command::Receipt { command }) => match command {
@@ -120,6 +120,20 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
     }
 }
+
+/// What a fail-open boundary says on its way out.
+///
+/// Loud, not silent (CLOUD-43). A guard that cannot read its input is a gate
+/// that did not run, and the silent version of that is byte-identical to a clean
+/// allow — the false green this engine exists to catch, in the one place nobody
+/// would think to look. They go through [`output::message`], so they are
+/// `batten: `-prefixed and ladder-gated: this is a statement about Batten, not a
+/// verdict, which is exactly the distinction [`output::verdict`]'s unprefixed,
+/// ungated shape draws in the other direction.
+const UNREADABLE_STDIN: &str =
+    "hook: stdin could not be read, so nothing was adjudicated — allowing";
+const UNDECODABLE_PAYLOAD: &str =
+    "hook: the payload on stdin did not decode, so nothing was adjudicated — allowing";
 
 /// Adjudicate one mediated call read from stdin (CLOUD-202).
 ///
@@ -135,15 +149,19 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
 /// through [`Denial`] so the write stays at the binary boundary.
 fn run_hook(
     harness: hook::Harness,
+    mode: Mode,
     overrides: &Overrides,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     let mut raw = String::new();
     if std::io::stdin().read_to_string(&mut raw).is_err() {
+        output::message(mode, Verbosity::Normal, err, UNREADABLE_STDIN)?;
         return Ok(ExitCode::Success);
     }
     let bypass = std::env::var_os(hook::BYPASS_ENV).is_some_and(|value| !value.is_empty());
     let Some(envelope) = hook::decode(harness, &raw) else {
+        output::message(mode, Verbosity::Normal, err, UNDECODABLE_PAYLOAD)?;
         return Ok(ExitCode::Success);
     };
     // Only now is config touched. Ordering the cheap refusals first is §4's
@@ -215,10 +233,14 @@ fn decide(
         hook::Decision::Allow => Ok(ExitCode::Success),
         hook::Decision::Deny(reason) => match harness {
             hook::Harness::ClaudeCode => {
+                // The host's OWN spelling goes back, not our normalized token:
+                // a decision document is read by the host, which knows only its
+                // own vocabulary. Normalizing inward and echoing outward are
+                // different directions, which is why the envelope carries both.
                 writeln!(
                     out,
                     "{}",
-                    hook::encode_claude_deny(&envelope.event, &reason)?
+                    hook::encode_claude_deny(&envelope.raw_event, &reason)?
                 )?;
                 Ok(ExitCode::Success)
             }

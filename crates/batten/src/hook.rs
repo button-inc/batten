@@ -5,10 +5,17 @@
 //! Three layers, deliberately separated:
 //!
 //! * [`Envelope`] — the one normalized shape every harness adapter decodes
-//!   into: `event`, `tool`, and `command`. Harness-specific field names live in
-//!   the adapter for that harness, never here. (`cwd` and `session` are *not*
-//!   fields yet; the absence is why an absolute path argument cannot be resolved
-//!   against the repo root.)
+//!   into: a typed [`Event`], the host's own `raw_event` spelling, `tool`,
+//!   the whole `input` object, its shell `command` projection, `cwd` and an
+//!   optional `session` (CLOUD-43). Harness-specific field names live in the
+//!   adapter for that harness, never here. `cwd` is carried but not yet
+//!   consumed, which is why an absolute path argument is still compared as
+//!   written rather than resolved against the repo root.
+//! * the dispatch — **only the pre-tool event is adjudicated.** Before
+//!   CLOUD-43 the event was decoded and never read, so a `PostToolUse` payload
+//!   carrying a banned command was refused after the call had already run, at
+//!   an event no host offers a deny channel for. Every other event allows by
+//!   decision rather than by omission.
 //! * the parser — quoted spans become words rather than a sentinel, segments
 //!   split on unquoted shell separators, env prefixes and wrapper programs
 //!   (`env`, `timeout`, `mise exec -- …`) looked through, so policy judges the
@@ -27,6 +34,8 @@
 //! is honoured exactly as the shell guard honours it. Fail-open needs no care
 //! here beyond the returns below: §7 spends `2` on the policy verdict alone, so
 //! neither code a Batten failure can produce is one a host reads as a deny.
+
+use std::path::PathBuf;
 
 use serde::Serialize;
 use serde_json::Value;
@@ -71,22 +80,129 @@ impl Harness {
     }
 }
 
+/// The lifecycle events the core normalizes, whatever a host spells them.
+///
+/// A vocabulary enum with a `const ALL`, the shape [`Harness`],
+/// [`crate::capture::Stream`] and [`crate::rules::RuleKind`] already use, so
+/// anything ranging over events is derived rather than re-typed — the golden
+/// census in `tests/cli.rs` reads this, which is what stops a new variant from
+/// landing with no fixture.
+///
+/// The set is what the dependent surfaces consume, not everything a host emits:
+/// which events a given host offers is the capability table's business
+/// (CLOUD-45), and per-host spellings beyond the converged ones below are the
+/// shims' (CLOUD-44).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Event {
+    /// Before a tool runs — the only point at which a deny still prevents
+    /// anything, and so the only event policy adjudicates.
+    PreTool,
+    /// After a tool ran. A deny here would refuse something that already
+    /// happened, which no host honours and none of them offer.
+    PostTool,
+    /// End of turn: the reconciliation point the stop gate uses (CLOUD-85).
+    Stop,
+    /// Start of a session.
+    SessionStart,
+    /// The host named an event this build does not normalize. Distinct from an
+    /// absent one: absent means nobody said, this means somebody said something
+    /// we do not know, and the two must not collapse.
+    Unrecognized,
+}
+
+impl Event {
+    /// Every event, so a census is derived rather than hand-maintained.
+    pub const ALL: &'static [Event] = &[
+        Event::PreTool,
+        Event::PostTool,
+        Event::Stop,
+        Event::SessionStart,
+        Event::Unrecognized,
+    ];
+
+    /// The normalized token. Deliberately not a host spelling — a host's own
+    /// word for an event travels in [`Envelope::raw_event`] and is echoed back
+    /// verbatim, so this one is free to name the concept.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Event::PreTool => "pre-tool",
+            Event::PostTool => "post-tool",
+            Event::Stop => "stop",
+            Event::SessionStart => "session-start",
+            Event::Unrecognized => "unrecognized",
+        }
+    }
+
+    /// Normalize a host's spelling.
+    ///
+    /// The spellings matched here are the converged ones — Claude Code's, which
+    /// Codex CLI and Gemini CLI also ship (CLOUD-210). The residual renames
+    /// (Cursor's split camelCase events, Gemini's `BeforeTool`) belong to the
+    /// per-host shims in CLOUD-44, not here: normalizing them in the core would
+    /// put host-specific vocabulary in the harness-blind layer.
+    #[must_use]
+    pub fn normalize(raw: &str) -> Event {
+        match raw {
+            "PreToolUse" => Event::PreTool,
+            "PostToolUse" => Event::PostTool,
+            "Stop" => Event::Stop,
+            "SessionStart" => Event::SessionStart,
+            _ => Event::Unrecognized,
+        }
+    }
+}
+
+/// The event assumed when a payload names none.
+///
+/// Conservative on purpose, and the landed behaviour this preserves: a mediation
+/// gate that guessed "unrecognized" would stop adjudicating a payload whose host
+/// simply omitted the field, turning a missing key into a silent bypass. Guessing
+/// pre-tool can only ever over-adjudicate, which is the safe direction.
+const ASSUMED_EVENT: &str = "PreToolUse";
+
 /// The normalized hook envelope — the shape the core adjudicates, whatever the
 /// host called its fields.
 ///
-/// Deliberately three fields and no more for now. A `session` id was described
-/// here before it existed; anything keyed on one would have to degrade to
-/// per-invocation anyway, since some harnesses expose two and some events none.
-/// A `cwd` is the gap that bites: without it a path operand cannot be resolved
-/// against the repo root, so an absolute path is compared as written.
+/// `raw_event` beside `event` is not two sources of truth: `event` is what
+/// policy dispatches on, and `raw_event` is the host's own token, kept so a
+/// decision document can echo it back in the host's vocabulary rather than in
+/// ours. Normalizing inward and echoing outward are different directions.
+///
+/// `command` is the shell-shaped projection of `input`, kept as a field so the
+/// parser and matcher read one decoded string rather than re-walking the JSON
+/// per rule. `input` carries the whole object for the tools that are not
+/// shell-shaped, and is **never emitted**: a tool input is among the likeliest
+/// places in the engine for a secret to appear (rule 4).
+///
+/// Stated limit: `cwd` is decoded but not yet consumed, so an absolute or `..`
+/// path operand is still compared as written. Resolving one against the repo
+/// root is a behaviour change with its own issue, not a side effect of carrying
+/// the field the host shims need.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Envelope {
-    /// The lifecycle event, e.g. `PreToolUse`.
-    pub event: String,
+    /// The normalized lifecycle event, which policy dispatches on.
+    pub event: Event,
+    /// The host's own spelling, echoed back in a decision document.
+    pub raw_event: String,
     /// The tool being mediated, e.g. `Bash`.
     pub tool: String,
+    /// The tool's whole input object; `Value::Null` when the payload had none.
+    pub input: Value,
     /// The command text for shell-shaped tools; empty when the tool has none.
     pub command: String,
+    /// The host's working directory, when it reported one.
+    pub cwd: Option<PathBuf>,
+    /// The host's session id, when it reported one.
+    ///
+    /// `None` rather than an empty string when absent, because the two are
+    /// different claims and [`crate::identity::sequence_fingerprint`] already
+    /// hashes them distinctly — that signature *is* the degradation contract,
+    /// so a session-less host folds to per-invocation handling by construction
+    /// instead of through a second rule invented here.
+    pub session: Option<String>,
 }
 
 /// The adjudication verdict. `Deny` carries the reason, which by the refusal
@@ -115,18 +231,29 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
+            let raw_event = value
+                .get("hook_event_name")
+                .and_then(Value::as_str)
+                .unwrap_or(ASSUMED_EVENT)
+                .to_owned();
             Some(Envelope {
-                event: value
-                    .get("hook_event_name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("PreToolUse")
-                    .to_owned(),
+                event: Event::normalize(&raw_event),
+                raw_event,
                 tool: value
                     .get("tool_name")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_owned(),
+                input: value.get("tool_input").cloned().unwrap_or(Value::Null),
                 command,
+                cwd: value.get("cwd").and_then(Value::as_str).map(PathBuf::from),
+                // Empty is treated as absent, so `Some("")` never reaches a
+                // consumer that would hash it as a real session.
+                session: value
+                    .get("session_id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                    .map(ToOwned::to_owned),
             })
         }
     }
@@ -217,6 +344,18 @@ impl Policy {
 /// value, so every verdict is a function of config plus argv and nothing else.
 #[must_use]
 pub fn adjudicate(policy: &Policy, envelope: &Envelope, bypass: bool) -> Decision {
+    // Dispatch on the event FIRST, and allow every non-pre-tool one explicitly
+    // (CLOUD-43). Before this the field was decoded and never read, so a
+    // `PostToolUse` payload carrying a banned command in `tool_input.command`
+    // was adjudicated as though the call had not happened yet — and denied.
+    // That refusal is meaningless after the fact and is not a decision any host
+    // offers at that event, so it could only ever be noise the model was handed
+    // as a reason. Allowing here is a decision, not an omission: the events
+    // below have their own surfaces (the stop gate is CLOUD-85, the post-tool
+    // drain CLOUD-79), and neither is a deny channel.
+    if envelope.event != Event::PreTool {
+        return Decision::Allow;
+    }
     if bypass || envelope.command.is_empty() || policy.is_empty() {
         return Decision::Allow;
     }
@@ -738,10 +877,18 @@ mod tests {
     }
 
     fn envelope(command: &str) -> Envelope {
+        envelope_at(Event::PreTool, command)
+    }
+
+    fn envelope_at(event: Event, command: &str) -> Envelope {
         Envelope {
-            event: "PreToolUse".to_owned(),
+            event,
+            raw_event: ASSUMED_EVENT.to_owned(),
             tool: "Bash".to_owned(),
+            input: Value::Null,
             command: command.to_owned(),
+            cwd: None,
+            session: None,
         }
     }
 
@@ -876,6 +1023,88 @@ mod tests {
         let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
         assert_eq!(envelope.command, "gh pr merge");
         assert_eq!(envelope.tool, "Bash");
+    }
+
+    #[test]
+    fn decode_carries_cwd_session_and_the_whole_input() {
+        let raw = r#"{"hook_event_name":"PreToolUse","session_id":"s1","cwd":"/w/r",
+                      "tool_name":"Edit","tool_input":{"file_path":"/w/r/a.rs","command":"x"}}"#;
+        let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
+        assert_eq!(envelope.session.as_deref(), Some("s1"));
+        assert_eq!(envelope.cwd, Some(PathBuf::from("/w/r")));
+        // The whole object, not only the shell projection: a tool that is not
+        // shell-shaped has its arguments here and nowhere else, which is what
+        // CLOUD-44/45/79/91 read.
+        assert_eq!(
+            envelope.input.get("file_path").and_then(Value::as_str),
+            Some("/w/r/a.rs")
+        );
+        assert_eq!(envelope.command, "x");
+    }
+
+    #[test]
+    fn an_absent_or_empty_session_is_none_never_some_empty() {
+        // `identity::sequence_fingerprint` hashes `None` and `Some("")`
+        // distinctly, so letting an empty string through would mint a second
+        // identity for "no session" and split a finding in two.
+        for raw in [
+            r#"{"hook_event_name":"PreToolUse"}"#,
+            r#"{"hook_event_name":"PreToolUse","session_id":""}"#,
+        ] {
+            let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
+            assert_eq!(envelope.session, None, "raw: {raw}");
+        }
+    }
+
+    #[test]
+    fn every_event_normalizes_and_round_trips_its_token() {
+        // Totality over the vocabulary: a variant added with no `as_str` arm
+        // would not compile, but one added with a duplicate token would, and
+        // that silently merges two events in any census keyed on the string.
+        let mut tokens: Vec<&str> = Event::ALL.iter().map(|event| event.as_str()).collect();
+        tokens.sort_unstable();
+        let unique = {
+            let mut copy = tokens.clone();
+            copy.dedup();
+            copy
+        };
+        assert_eq!(tokens, unique, "two events share a token");
+        assert_eq!(Event::normalize("PreToolUse"), Event::PreTool);
+        assert_eq!(Event::normalize("PostToolUse"), Event::PostTool);
+        assert_eq!(Event::normalize("Stop"), Event::Stop);
+        assert_eq!(Event::normalize("SessionStart"), Event::SessionStart);
+        // Unknown is a decision, not a fallback into the adjudicated event.
+        assert_eq!(Event::normalize("BeforeTool"), Event::Unrecognized);
+        assert_eq!(Event::normalize(""), Event::Unrecognized);
+    }
+
+    #[test]
+    fn a_payload_naming_no_event_is_still_adjudicated() {
+        // The assumed event, and why it is not `Unrecognized`: a host that omits
+        // the field would otherwise turn a missing key into a silent bypass of
+        // every rule. Over-adjudicating is the safe direction.
+        let raw = r#"{"tool_name":"Bash","tool_input":{"command":"gh pr merge"}}"#;
+        let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
+        assert_eq!(envelope.event, Event::PreTool);
+        assert!(matches!(
+            adjudicate(&gh_policy(), &envelope, false),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn no_event_but_pre_tool_reaches_the_matcher() {
+        // The correctness fix, in-module: the same banned command is a deny
+        // before the call and an allow at every other event. Ranged over
+        // `Event::ALL` so a new variant defaults to the safe answer or fails.
+        for &event in Event::ALL {
+            let decision = adjudicate(&gh_policy(), &envelope_at(event, "gh pr merge 42"), false);
+            if event == Event::PreTool {
+                assert!(matches!(decision, Decision::Deny(_)), "{event:?}");
+            } else {
+                assert_eq!(decision, Decision::Allow, "{event:?}");
+            }
+        }
     }
 
     #[test]

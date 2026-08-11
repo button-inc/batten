@@ -904,6 +904,213 @@ fn the_matrix_covers_every_supported_harness() {
     );
 }
 
+// --- the normalized event census (CLOUD-43) ---------------------------------
+//
+// The envelope carried an `event` field from CLOUD-202 and never dispatched on
+// it: its one consumer echoed it into the deny document. So a `PostToolUse`
+// payload carrying a banned command was adjudicated as though the call had not
+// happened yet, and denied — a refusal of something already done, on an event no
+// host offers a deny channel for.
+//
+// Golden rows per normalized event, and a census over `Event::ALL` so a new
+// variant cannot land with its decision unexercised. That is the same defect
+// class `the_matrix_covers_every_supported_harness` guards one level up.
+
+/// One golden row: an event's host spelling, and what a banned command does at it.
+struct EventRow {
+    /// The normalized event this row pins.
+    event: batten::hook::Event,
+    /// The host's own spelling, as it appears in `hook_event_name`.
+    spelling: &'static str,
+    /// Whether policy adjudicates at this event at all.
+    adjudicated: bool,
+}
+
+const EVENTS: &[EventRow] = &[
+    EventRow {
+        event: batten::hook::Event::PreTool,
+        spelling: "PreToolUse",
+        adjudicated: true,
+    },
+    EventRow {
+        event: batten::hook::Event::PostTool,
+        spelling: "PostToolUse",
+        adjudicated: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Stop,
+        spelling: "Stop",
+        adjudicated: false,
+    },
+    EventRow {
+        event: batten::hook::Event::SessionStart,
+        spelling: "SessionStart",
+        adjudicated: false,
+    },
+    EventRow {
+        event: batten::hook::Event::Unrecognized,
+        spelling: "SomethingThisBuildDoesNotKnow",
+        adjudicated: false,
+    },
+];
+
+/// A payload at a named event, carrying a command the committed policy bans.
+fn payload_at(spelling: &str, command: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": spelling,
+        "tool_name": "Bash",
+        "tool_input": { "command": command }
+    })
+    .to_string()
+}
+
+#[test]
+fn every_normalized_event_resolves_to_its_golden_decision() {
+    let dir = repo_with_gh_policy("event-census");
+    for row in EVENTS {
+        assert_eq!(
+            batten::hook::Event::normalize(row.spelling),
+            row.event,
+            "{}: spelling does not normalize to the event it claims",
+            row.spelling
+        );
+        for harness in harnesses() {
+            let output = run_hook_in(
+                &dir,
+                harness,
+                &payload_at(row.spelling, "gh pr merge 42"),
+                false,
+            );
+            let at = format!("{harness}/{}", row.spelling);
+            if row.adjudicated {
+                // Pre-tool is the one event a deny can still prevent anything at.
+                let denied = output.status.code() == Some(2)
+                    || String::from_utf8_lossy(&output.stdout).contains("\"deny\"");
+                assert!(
+                    denied,
+                    "{at}: a banned command must be denied before it runs"
+                );
+            } else {
+                assert_eq!(
+                    output.status.code(),
+                    Some(0),
+                    "{at}: a non-pre-tool event must not deny"
+                );
+                assert!(
+                    String::from_utf8_lossy(&output.stdout).is_empty(),
+                    "{at}: a non-pre-tool event emits no decision document"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_census_covers_every_normalized_event() {
+    // Total, or the golden set is coverage rather than a contract: a variant
+    // added to `Event::ALL` with no row would ship with its decision unpinned.
+    let mut covered: Vec<&str> = EVENTS.iter().map(|row| row.event.as_str()).collect();
+    covered.sort_unstable();
+    covered.dedup();
+    let mut required: Vec<&str> = batten::hook::Event::ALL
+        .iter()
+        .map(|event| event.as_str())
+        .collect();
+    required.sort_unstable();
+    assert_eq!(
+        covered, required,
+        "every normalized event needs a golden row, or its decision is unexercised"
+    );
+    assert!(
+        EVENTS.iter().any(|row| row.adjudicated),
+        "a census where nothing is adjudicated would pass while policy did nothing"
+    );
+}
+
+#[test]
+fn the_deny_document_echoes_the_hosts_own_spelling_not_ours() {
+    // The host reads its own vocabulary. Normalizing inward must not leak our
+    // token back out, or the document names an event the host never emitted.
+    let dir = repo_with_gh_policy("event-echo");
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &payload_at("PreToolUse", "gh pr merge 42"),
+        false,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("PreToolUse"), "got: {stdout}");
+    assert!(
+        !stdout.contains("pre-tool"),
+        "the normalized token must not reach the host: {stdout}"
+    );
+}
+
+#[test]
+fn an_absent_session_degrades_to_per_invocation_without_panicking() {
+    // The acceptance's second clause. A host that reports no session must be
+    // adjudicated exactly as one that does — the deny is a function of the
+    // command, and nothing here is keyed on a session yet.
+    let dir = repo_with_gh_policy("session-absent");
+    let with = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "abc123",
+        "tool_name": "Bash",
+        "tool_input": { "command": "gh pr merge 42" }
+    })
+    .to_string();
+    let without = payload_at("PreToolUse", "gh pr merge 42");
+    for harness in harnesses() {
+        let a = run_hook_in(&dir, harness, &with, false);
+        let b = run_hook_in(&dir, harness, &without, false);
+        assert_eq!(
+            a.status.code(),
+            b.status.code(),
+            "{harness}: an absent session must not change the verdict"
+        );
+        assert_eq!(a.stdout, b.stdout, "{harness}: nor the decision document");
+    }
+    // An empty string is absent, not a session: the two must not collapse, since
+    // a consumer keyed on one hashes `Some("")` and `None` differently.
+    let empty = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "",
+        "tool_name": "Bash",
+        "tool_input": { "command": "gh pr view 42" }
+    })
+    .to_string();
+    assert_eq!(
+        run_hook_in(&dir, "exit-code", &empty, false).status.code(),
+        Some(0)
+    );
+}
+
+#[test]
+fn an_undecodable_payload_fails_open_loudly_and_never_denies() {
+    // The acceptance's third clause. Failing open is right; failing open in
+    // SILENCE is the false green — byte-identical to a clean allow, in the one
+    // place nobody looks. Prefixed, because this is a statement about Batten
+    // rather than a verdict.
+    let dir = repo_with_gh_policy("undecodable");
+    for harness in harnesses() {
+        let output = run_hook_in(&dir, harness, "{not json at all", false);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{harness}: an undecodable payload must never deny"
+        );
+        assert!(
+            stderr.contains("batten:") && stderr.contains("did not decode"),
+            "{harness}: the fail-open must say so, got: {stderr}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).is_empty(),
+            "{harness}: no decision document for a payload we could not read"
+        );
+    }
+}
+
 #[test]
 fn a_quoted_invocation_denies_on_both_harness_channels() {
     // CLOUD-269's one intended tightening, asserted over the compiled binary
