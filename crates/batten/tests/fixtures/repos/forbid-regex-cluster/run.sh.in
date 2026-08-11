@@ -1,0 +1,3 @@
+grep -q needle file
+grep -qxF needle file
+grep -n needle file

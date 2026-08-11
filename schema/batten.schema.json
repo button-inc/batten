@@ -517,6 +517,13 @@
             }
           ]
         },
+        "exclude": {
+          "description": "A regex that **un**-matches: a matched line carrying it is not a finding.\n\n[`RuleKind::Forbid`] only, and regex-only with no literal twin — an\nexclusion is inherently shape-based, and the measured one (a whole-line\ncomment, `^[[:space:]]*#`) cannot be written as a literal at all.\n\nComment-awareness lives here, in the consumer's config, rather than as a\n`skip_comments` flag in the engine: per-language comment syntax inside\n`crates/batten` would break non-negotiable rule 1, and it would also be\nwrong — `no-conflict-markers` must still fire inside a comment. What a\ncomment looks like is a property of a repository, not of Batten.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "glob": {
           "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.\n\nOptional at the type level and required per-kind: a file kind cannot load\nwithout it, and [`RuleKind::Shape`] — which inspects no files — rejects it.",
           "type": [
@@ -560,6 +567,13 @@
             "null"
           ]
         },
+        "regex": {
+          "description": "The banned shape as a regular expression — [`RuleKind::Forbid`]'s\n**alternative** to `pattern`, never an addition to it (CLOUD-283).\n\nA row carries exactly one of the two, and one carrying both is a load\nerror rather than a precedence rule nobody can read. `pattern` stays the\ncommon case because a literal is the readable one (§9); this is the\nescape for a predicate that genuinely is a *shape* — a flag cluster\njudged by its letters, where `-qxF` must count as `-q` and an enumeration\nof spellings rots.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "run": {
           "description": "The command template a [`RuleKind::Command`] rule runs. Required by that\nkind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.",
           "type": [
@@ -595,7 +609,7 @@
       "description": "The kind of predicate a [`Rule`] applies to its matched files.\n\nSerialized as a lowercase `kind = \"...\"` token in `batten.toml`. Marked\n`#[non_exhaustive]` because the engine is designed to grow kinds (the dynamic\n`command` kind is CLOUD-89) without that being a breaking change.",
       "oneOf": [
         {
-          "description": "A static banned shape: every line of a matched file that contains the\nliteral `pattern` is a finding. The check is inspection-only.",
+          "description": "A static banned shape, one line at a time. Every line of a matched file\nthat carries the banned shape is a finding, unless `exclude` takes it\nback out. The check is inspection-only.\n\nThe shape is either the literal `pattern` or the expression `regex` —\nexactly one, never both (CLOUD-283). The literal is the common case and\nthe readable one; the expression is for a predicate that genuinely is a\nshape, such as a flag cluster judged by its letters.",
           "type": "string",
           "const": "forbid"
         },

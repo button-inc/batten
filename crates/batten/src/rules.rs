@@ -40,6 +40,7 @@
 use std::fs;
 use std::path::Path;
 
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -56,8 +57,14 @@ use crate::severity::{self, ReportLevel, RuleSeverity};
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RuleKind {
-    /// A static banned shape: every line of a matched file that contains the
-    /// literal `pattern` is a finding. The check is inspection-only.
+    /// A static banned shape, one line at a time. Every line of a matched file
+    /// that carries the banned shape is a finding, unless `exclude` takes it
+    /// back out. The check is inspection-only.
+    ///
+    /// The shape is either the literal `pattern` or the expression `regex` —
+    /// exactly one, never both (CLOUD-283). The literal is the common case and
+    /// the readable one; the expression is for a predicate that genuinely is a
+    /// shape, such as a flag cluster judged by its letters.
     Forbid,
     /// A dynamic check: run the `run` template and treat its exit code as the
     /// predicate — `0` passes, non-zero is a violation. The sanctioned escape
@@ -148,7 +155,11 @@ impl RuleKind {
     #[must_use]
     pub const fn requires(self) -> &'static [&'static str] {
         match self {
-            RuleKind::Forbid => &["glob", "pattern"],
+            // `pattern` is deliberately absent: `forbid` requires exactly one of
+            // `pattern` or `regex`, and this list cannot express "one of"
+            // (CLOUD-283). `validate` carries that check, which is also where
+            // the both-columns case is refused.
+            RuleKind::Forbid => &["glob"],
             RuleKind::Command => &["glob", "run"],
             // A shape row's `reason` is required, not optional: the deny it
             // produces reaches a model as the whole explanation, and a refusal
@@ -170,7 +181,14 @@ impl RuleKind {
             // `verbatim` narrows a hashed span, so only the kind that hashes one
             // accepts it: a `verbatim` on a command rule would name a
             // normalization that applies to nothing, and reading as configured.
-            RuleKind::Forbid => &["glob", "pattern", "verbatim", "identity_key"],
+            RuleKind::Forbid => &[
+                "glob",
+                "pattern",
+                "regex",
+                "exclude",
+                "verbatim",
+                "identity_key",
+            ],
             RuleKind::Command => &["glob", "run", "identity_key"],
             // A shape rule is adjudicated per mediated call and never reaches
             // the store, so an identity column on one is decorative by
@@ -297,6 +315,30 @@ pub struct Rule {
     /// Required by both kinds, rejected by [`RuleKind::Command`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>,
+    /// The banned shape as a regular expression — [`RuleKind::Forbid`]'s
+    /// **alternative** to `pattern`, never an addition to it (CLOUD-283).
+    ///
+    /// A row carries exactly one of the two, and one carrying both is a load
+    /// error rather than a precedence rule nobody can read. `pattern` stays the
+    /// common case because a literal is the readable one (§9); this is the
+    /// escape for a predicate that genuinely is a *shape* — a flag cluster
+    /// judged by its letters, where `-qxF` must count as `-q` and an enumeration
+    /// of spellings rots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regex: Option<String>,
+    /// A regex that **un**-matches: a matched line carrying it is not a finding.
+    ///
+    /// [`RuleKind::Forbid`] only, and regex-only with no literal twin — an
+    /// exclusion is inherently shape-based, and the measured one (a whole-line
+    /// comment, `^[[:space:]]*#`) cannot be written as a literal at all.
+    ///
+    /// Comment-awareness lives here, in the consumer's config, rather than as a
+    /// `skip_comments` flag in the engine: per-language comment syntax inside
+    /// `crates/batten` would break non-negotiable rule 1, and it would also be
+    /// wrong — `no-conflict-markers` must still fire inside a comment. What a
+    /// comment looks like is a property of a repository, not of Batten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exclude: Option<String>,
     /// An extra literal that must appear in the mediated command **as written**
     /// for a [`RuleKind::Shape`] rule to fire. Optional, that kind only.
     ///
@@ -434,10 +476,12 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 10] {
+    fn columns(&self) -> [(&'static str, bool); 12] {
         [
             ("glob", self.glob.is_some()),
             ("pattern", self.pattern.is_some()),
+            ("regex", self.regex.is_some()),
+            ("exclude", self.exclude.is_some()),
             ("run", self.run.is_some()),
             ("contains", self.contains.is_some()),
             ("reason", self.reason.is_some()),
@@ -486,6 +530,45 @@ impl Rule {
                 "rule {}: `glob` must not be empty",
                 self.id
             )));
+        }
+        self.validate_forbid_predicate()
+    }
+
+    /// The `pattern`-xor-`regex` rule, and the regexes' own well-formedness.
+    ///
+    /// Not expressible in [`RuleKind::requires`], which is a flat list of
+    /// columns that must all be present — "exactly one of these two" needs a
+    /// check of its own (CLOUD-283). Refusing a row that carries both is what
+    /// keeps this a *choice* rather than a precedence rule a reader has to know.
+    ///
+    /// Each expression is compiled here, at load, so a bad one is a config error
+    /// naming the row rather than a failure part-way through a scan.
+    fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Forbid {
+            return Ok(());
+        }
+        match (self.pattern.is_some(), self.regex.is_some()) {
+            (true, true) => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `pattern` and `regex` are alternatives; a row carries exactly one, \
+                     never both",
+                    self.id
+                )));
+            }
+            (false, false) => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"forbid\" requires `pattern` (a literal) or `regex` (a shape)",
+                    self.id
+                )));
+            }
+            _ => {}
+        }
+        for (column, expression) in [("regex", &self.regex), ("exclude", &self.exclude)] {
+            if let Some(expression) = expression {
+                Regex::new(expression).map_err(|err| {
+                    UsageError::raise(format!("rule {}: `{column}` is not valid: {err}", self.id))
+                })?;
+            }
         }
         Ok(())
     }
@@ -960,6 +1043,67 @@ fn span_mode(rule: &Rule) -> identity::SpanNormalization {
 
 /// Emit a finding for every line of `rel_path` that contains the rule's literal
 /// `pattern`. A non-UTF-8 file cannot contain the literal, so it never matches.
+/// A `forbid` rule's line predicate: what makes a line a finding, and what
+/// takes it back out again.
+///
+/// One compiled value per file rather than a pair of `Option`s consulted per
+/// line, so the "exactly one of literal-or-shape" choice is made once, where it
+/// can be read, instead of re-derived inside the scan.
+enum Matcher {
+    /// `pattern`: a case-sensitive literal substring — the readable common case.
+    Literal(String),
+    /// `regex`: the escape for a predicate that genuinely is a shape.
+    Shape(Regex),
+}
+
+impl Matcher {
+    /// Compile `rule`'s predicate, plus its optional `exclude`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a row carrying both columns or
+    /// neither, or an expression that does not compile.
+    fn for_rule(rule: &Rule) -> anyhow::Result<(Self, Option<Regex>)> {
+        let matcher = match (rule.pattern.as_deref(), rule.regex.as_deref()) {
+            (Some(_), Some(_)) => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `pattern` and `regex` are alternatives; a row carries exactly one, \
+                     never both",
+                    rule.id
+                )));
+            }
+            (Some(literal), None) => Matcher::Literal(literal.to_owned()),
+            (None, Some(shape)) => Matcher::Shape(Regex::new(shape).map_err(|err| {
+                UsageError::raise(format!("rule {}: `regex` is not valid: {err}", rule.id))
+            })?),
+            (None, None) => {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"forbid\" requires `pattern` (a literal) or `regex` (a shape)",
+                    rule.id
+                )));
+            }
+        };
+        let exclude = rule
+            .exclude
+            .as_deref()
+            .map(|expression| {
+                Regex::new(expression).map_err(|err| {
+                    UsageError::raise(format!("rule {}: `exclude` is not valid: {err}", rule.id))
+                })
+            })
+            .transpose()?;
+        Ok((matcher, exclude))
+    }
+
+    /// Whether `line` matches this rule's banned shape.
+    fn matches(&self, line: &str) -> bool {
+        match self {
+            Matcher::Literal(pattern) => line.contains(pattern.as_str()),
+            Matcher::Shape(regex) => regex.is_match(line),
+        }
+    }
+}
+
 fn forbid_in_file(
     rule: &Rule,
     root: &Path,
@@ -974,15 +1118,21 @@ fn forbid_in_file(
     let Ok(text) = String::from_utf8(contents) else {
         return Ok(());
     };
-    let Some(pattern) = rule.pattern.as_deref() else {
-        return Err(UsageError::raise(format!(
-            "rule {}: kind \"forbid\" requires `pattern`",
-            rule.id
-        )));
-    };
+    // Compiled once per file, never per line: an expression recompiled inside
+    // the loop would make the scan's cost a function of the tree's size times
+    // the pattern's, and `Regex::new` is the expensive half.
+    //
+    // `Rule::validate` has already refused a malformed expression and the
+    // both-columns row, so these are defence in depth on the same reading
+    // `run_rule` applies — the runner re-validates rather than trusting that
+    // every path reached it through the loader.
+    let (matcher, exclude) = Matcher::for_rule(rule)?;
     let mode = span_mode(rule);
     for (index, line) in text.lines().enumerate() {
-        if line.contains(pattern) {
+        // Excluded lines are dropped AFTER matching, never instead of it: the
+        // exclusion is about what a matched line turns out to be — a comment,
+        // a case pattern — not about narrowing what counts as a match.
+        if matcher.matches(line) && !exclude.as_ref().is_some_and(|re| re.is_match(line)) {
             // The whole matched line is the span, which is exactly what the
             // churn pack hashed test-side before this existed — so its fixtures
             // keep their assertions, and that unchanged-ness is the evidence the
@@ -1417,6 +1567,8 @@ mod tests {
             severity: RuleSeverity::Deny,
             scope: kind.scopes()[0],
             pattern: None,
+            regex: None,
+            exclude: None,
             contains: None,
             reason: None,
             policy_url: None,
@@ -1630,6 +1782,15 @@ mod tests {
                         "base" => rule.base = Some("HEAD".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
                     }
+                }
+                // `requires()` alone does not make a loadable `forbid` row: its
+                // requirement is "exactly one of `pattern` or `regex`", which a
+                // flat column list cannot express, so neither appears there
+                // (CLOUD-283). This test is about scope pairings, so it supplies
+                // the literal and lets `validate_forbid_predicate` be tested by
+                // the cases that are about it.
+                if *kind == RuleKind::Forbid {
+                    rule.pattern = Some("x".to_owned());
                 }
                 let result = rule.validate();
                 if kind.scopes().contains(scope) {

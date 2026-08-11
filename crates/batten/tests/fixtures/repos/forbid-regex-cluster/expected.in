@@ -1,0 +1,5 @@
+argv: check
+exit: 2
+stdout:
+run.sh:1 no-grep-q
+run.sh:2 no-grep-q

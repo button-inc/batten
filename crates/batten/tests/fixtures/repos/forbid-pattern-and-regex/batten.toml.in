@@ -1,0 +1,13 @@
+version = 1
+
+# `pattern` and `regex` are ALTERNATIVES. A row carrying both is a load error
+# rather than a precedence rule nobody can read — the choice has to be visible
+# in the row, not inferred from which column the engine happens to consult first.
+[[rule]]
+id = "both-columns"
+kind = "forbid"
+glob = "**/*.sh"
+pattern = "timeout "
+regex = "timeout[[:space:]]"
+severity = "deny"
+scope = "tree"

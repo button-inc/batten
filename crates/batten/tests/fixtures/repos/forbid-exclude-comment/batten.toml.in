@@ -1,0 +1,15 @@
+version = 1
+
+# CLOUD-283 case 2: the measured gap. A `timeout` row over this repo's task layer
+# reported 40 lines and none were invocations — 27 were whole-line comments.
+# `exclude` is a regex because a whole-line comment cannot be written as a
+# literal at all, and it lives in config because what a comment looks like is a
+# property of a repository, not of Batten.
+[[rule]]
+id = "no-timeout"
+kind = "forbid"
+glob = "**/*.sh"
+pattern = "timeout "
+exclude = "^[[:space:]]*#"
+severity = "deny"
+scope = "tree"

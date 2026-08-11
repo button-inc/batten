@@ -66,6 +66,15 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # foreground kill would otherwise strand a lockfile and brick the store
 # repo-wide.
 fs4 = "1.1"
+# `RuleKind::Forbid`'s `regex`/`exclude` columns (CLOUD-283), and deliberately
+# nowhere else. `outputs.rs` recorded the standing deferral — "adding a regex
+# engine is a decision about the whole rule vocabulary, not a detail of this
+# predicate" — and this is that decision, taken narrowly: `[[exec_pattern]]` and
+# `[[marker]]` stay literal, because a count that becomes a function of an
+# expression is a ratchet a rename defeats (`markers.rs`). A regex engine
+# arriving by accident in one more predicate is what the deferral guarded
+# against, so the split is stated rather than left to whoever edits next.
+regex = "1"
 semver = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }

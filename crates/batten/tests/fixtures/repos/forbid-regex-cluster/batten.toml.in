@@ -1,0 +1,12 @@
+version = 1
+
+# CLOUD-283 case 1: a flag cluster judged by its LETTERS, not by its spelling.
+# `-qxF` has to count as `-q`, and a literal cannot cover the orderings — a row
+# per ordering is the enumeration this column exists to avoid.
+[[rule]]
+id = "no-grep-q"
+kind = "forbid"
+glob = "**/*.sh"
+regex = "grep [^|]*-[a-zA-Z]*q"
+severity = "deny"
+scope = "tree"

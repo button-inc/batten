@@ -22,11 +22,24 @@
 //!
 //! ## Literal, not regex
 //!
-//! The match is a case-sensitive literal substring, the same predicate
-//! `RuleKind::Forbid` uses. The crate carries no regex dependency, and the
-//! issue's own guidance asks for "a fixed, reviewable literal" — a pattern a
-//! reviewer can read without evaluating it. Adding a regex engine is a decision
-//! about the whole rule vocabulary, not a detail of this predicate.
+//! The match is a case-sensitive literal substring. The issue's own guidance
+//! asks for "a fixed, reviewable literal" — a pattern a reviewer can read
+//! without evaluating it.
+//!
+//! This module once justified that by "the crate carries no regex dependency",
+//! and added that adding one "is a decision about the whole rule vocabulary, not
+//! a detail of this predicate". That decision has since been taken, narrowly:
+//! CLOUD-283 gave `RuleKind::Forbid` a `regex` alternative and an `exclude`
+//! column, because a flag cluster judged by its letters is genuinely a shape and
+//! no enumeration of spellings survives contact with one.
+//!
+//! **It was taken for `forbid` and nowhere else, and this predicate is one of
+//! the places it was deliberately not taken.** The dependency now exists, so the
+//! reason has to stand on its own: an `exec_pattern` decides whether a wrapped
+//! command's *output* betrays a failure it did not report, and a reviewer
+//! reading the config should be able to see what would trip it without
+//! evaluating an expression in their head. `markers.rs` states the sibling case
+//! in its own words — a count must not become a function of an expression.
 //!
 //! ## Batten only ever ADDS failure
 //!

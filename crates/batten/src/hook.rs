@@ -1210,6 +1210,8 @@ mod tests {
             severity: RuleSeverity::Deny,
             scope: RuleScope::MediatedCall,
             pattern: Some(pattern.to_owned()),
+            regex: None,
+            exclude: None,
             contains: contains.map(ToOwned::to_owned),
             reason: Some(format!("use the sanctioned path for {id}")),
             policy_url: None,

@@ -1,0 +1,3 @@
+# timeout is not portable, so this line explains rather than invokes
+	# an indented comment mentioning timeout counts as a comment too
+echo done
