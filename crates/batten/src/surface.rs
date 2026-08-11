@@ -683,6 +683,25 @@ const ROOT_FLAGS: &[FlagDecl] = &[
         "Never prompt; treat the run as unattended",
         crate::output::NO_INPUT_ENV,
     ),
+    // §3 lists `-y --yes` among the globals, and §5 binds it to `destructive`:
+    // it pre-answers the confirmation only that effect triggers. Global for
+    // ROOT_FLAGS' stated reason — whether this invocation is authorized to
+    // destroy something is a property of the invocation, not of one verb — and
+    // it carries the short form the spec names, which is why it is spelled out
+    // here rather than built by `FlagDecl::presentation`.
+    FlagDecl {
+        id: "yes",
+        long: Some("yes"),
+        short: Some('y'),
+        help: "Confirm a destructive operation that would otherwise refuse",
+        env: EnvDecl::Presentation(crate::output::YES_ENV),
+        global: true,
+        positional: false,
+        required: false,
+        hidden: false,
+        rung: Rung::None,
+        value: ValueDecl::Bool,
+    },
 ];
 
 /// The command tree: every subcommand, with its summary, effect, and flags.
@@ -917,6 +936,23 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
+    },
+    // The first `destructive` row in the tree (CLOUD-46), and it earns the
+    // classification the hard way: it removes a worktree whose recovery means
+    // redoing work. What makes that acceptable is ordering, not optimism —
+    // `worktree::reclaim` snapshots and verifies the snapshot ref resolves
+    // before anything is removed — but §5 classifies by what a failure would
+    // cost, never by how careful the implementation is.
+    //
+    // Both flags §3 owes a destructive verb are here, and
+    // `every_destructive_row_owes_dry_run_and_yes` is what keeps that true for
+    // the next one: `-n` from this row, `-y` from the globals.
+    CommandDecl {
+        path: "worktree reclaim",
+        about: "Snapshot and abandon worktrees that are dirty and unreapable",
+        data_channel: false,
+        effect: Effect::Destructive,
+        flags: &[DRY_RUN],
     },
     // The `provision` noun only dispatches, and its subtree carries a write
     // verb, so it takes `receipt`'s conservative reading rather than `policy`'s:
@@ -1525,6 +1561,7 @@ mod tests {
             crate::output::LOG_LEVEL_ENV,
             crate::output::NO_COLOR_ENV,
             crate::output::NO_INPUT_ENV,
+            crate::output::YES_ENV,
         ];
         for decl in std::iter::once(&ROOT).chain(SURFACE) {
             for flag in decl.flags {
@@ -1590,16 +1627,31 @@ mod tests {
     }
 
     #[test]
-    fn no_row_declares_destructive_so_yes_and_dry_run_are_not_owed() {
-        // §3 owes `-y`/`-n` and `--dry-run` to a *destructive* verb. None exists
-        // yet, so shipping them now would be a confirmation prompt for nothing —
-        // filed as G11 and pinned here, so the first destructive row fails this
-        // test rather than landing unguarded.
+    fn every_destructive_row_owes_dry_run_and_yes() {
+        // §3 owes `-y` and `-n --dry-run` to a *destructive* verb. This used to
+        // assert that no such row existed — CLOUD-42's G11, pinned so the first
+        // destructive row would fail rather than land unguarded. CLOUD-46 is
+        // that row, so the pin becomes the obligation it was standing in for:
+        // the preview flag on the row itself, the confirmation flag among the
+        // globals, and both reachable from the same invocation.
+        let confirmation = ROOT_FLAGS
+            .iter()
+            .find(|flag| flag.id == "yes")
+            .expect("§3 declares -y --yes among the globals");
+        assert_eq!(confirmation.short, Some('y'));
+        assert!(
+            confirmation.global,
+            "-y is global: whether an invocation may destroy something is a property of the \
+             invocation, not of one verb"
+        );
+
         for decl in std::iter::once(&ROOT).chain(SURFACE) {
-            assert_ne!(
-                decl.effect,
-                Effect::Destructive,
-                "{:?} is destructive: it owes -y/-n and --dry-run (CLOUD-42, G11)",
+            if decl.effect != Effect::Destructive {
+                continue;
+            }
+            assert!(
+                decl.flags.iter().any(|flag| flag.id == "dry_run"),
+                "{:?} is destructive and declares no --dry-run (CLOUD-42, G11)",
                 decl.path
             );
         }

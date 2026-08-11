@@ -162,6 +162,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
+            WorktreeCommand::Reclaim { dry_run } => {
+                run_worktree_reclaim(dry_run, mode, &overrides, err)
+            }
         },
         // The ledger is a committed file the consumer declares; the §8 config
         // chain supplies its path and taxonomy and nothing else layers.
@@ -327,11 +330,19 @@ fn run_provision_apply(
 fn run_worktree_status(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
     let target = config.must_land_on.as_deref();
+    // Absent `[worktree]`, and absent `pileup_threshold` inside it, are the same
+    // answer: no threshold is declared, so the pileup predicate does not run.
+    // Neither is an error — see `run_worktree_status`'s note on what refusing
+    // the whole invocation over an absent key cost this verb once already.
+    let threshold = config
+        .worktree
+        .as_ref()
+        .and_then(|worktree| worktree.pileup_threshold);
     // The repo root, not the process directory: the three categories are
     // properties of the repository, and answering from a subdirectory would
     // report a clean tree for a dirty one one level up.
     let repo = git::repo_root(Path::new("."))?;
-    let at_risk = worktree::status(&repo, target)?;
+    let at_risk = worktree::status(&repo, target, threshold)?;
 
     if json {
         // Unconditional, including the clean run: JSON that is sometimes absent
@@ -345,6 +356,59 @@ fn run_worktree_status(json: bool, overrides: &Overrides, out: &mut dyn Write) -
         }
     }
     Ok(ExitCode::verdict(at_risk.any()))
+}
+
+/// Snapshot and abandon worktrees that are dirty and unreapable (CLOUD-46).
+///
+/// Reports through `err`, never `out`: like `provision apply` this verb acts on
+/// the machine and has no document to emit, and the one thing it prints — which
+/// worktrees it removed — belongs on the messaging channel.
+///
+/// **Confirmation is required and never prompted for.** §4 is explicit that a
+/// destructive verb without `-y` refuses with instructions rather than prompting
+/// into the void, and this engine's primary caller is a program in a loop: a
+/// gate that blocks on a Y/N is a dead gate. So the refusal is unconditional
+/// rather than conditioned on attendedness, and it is exit `1` — a usage error,
+/// because §7 keeps `2` for verdicts and "you did not pass the flag" is not one.
+/// `--dry-run` needs no confirmation: it is structurally incapable of the
+/// mutation it previews.
+fn run_worktree_reclaim(
+    dry_run: bool,
+    mode: Mode,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    // A verb that removes worktrees over a threshold nobody declared would be
+    // choosing the threshold itself. Absent is a usage error *here* — unlike
+    // `worktree status`, which has three other questions to answer and must stay
+    // silent about this one — because there is no reclaim to perform at all.
+    let threshold = config
+        .worktree
+        .as_ref()
+        .and_then(|worktree| worktree.pileup_threshold)
+        .ok_or_else(|| {
+            UsageError::raise(format!(
+                "no [worktree] pileup_threshold in {}; there is no pileup to reclaim against",
+                config::CONFIG_FILE
+            ))
+        })?;
+
+    if !dry_run && !mode.confirmed {
+        return Err(UsageError::raise(
+            "worktree reclaim removes worktrees and the work in them; pass --yes to confirm, \
+             or --dry-run to preview",
+        ));
+    }
+
+    let repo = git::repo_root(Path::new("."))?;
+    let report = worktree::reclaim(&repo, threshold, dry_run)?;
+    for entry in &report {
+        writeln!(err, "{}", entry.render())?;
+    }
+    // A refusal is a verdict about this machine — there is work here nothing
+    // could make recoverable — so it takes the policy code, not a failure one.
+    Ok(ExitCode::verdict(worktree::any_refused(&report)))
 }
 
 /// The declared ledger, or a usage error naming what is missing (CLOUD-52).

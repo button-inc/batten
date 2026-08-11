@@ -304,6 +304,28 @@ path = "vendor/**"
 tracked = ["batten.toml"]
 
 # ---------------------------------------------------------------------------
+# The worktree pileup threshold (CLOUD-46).
+#
+# How many LINKED worktrees may sit dirty-and-unreapable before
+# `batten worktree status` calls it a pileup and returns the policy verdict
+# (exit 2). "Unreapable" is git's own answer, not Batten's: a worktree git
+# reports as `prunable` will be cleared by `git worktree prune`, and one you
+# `git worktree lock` is a deliberate keep — neither is counted.
+#
+# The core ships NO default. How many parallel worktrees is normal is a fact
+# about how your repository is worked, so an absent `[worktree]` means the
+# predicate does not run at all — `worktree status` still reports the three
+# at-risk categories, and does not become an error for want of this key.
+#
+# The escape is `batten worktree reclaim --yes`, which snapshots each offending
+# worktree to `refs/batten/snapshot/<commit>` and removes it only after that ref
+# is shown to resolve. Pass `--dry-run` to preview. A worktree whose dirt is all
+# untracked files cannot be snapshotted by git, so it is left in place and
+# reported rather than abandoned.
+[worktree]
+pileup_threshold = 3
+
+# ---------------------------------------------------------------------------
 # Pinned tools this repository provisions (CLOUD-90).
 #
 # One entry per tool: a pinned version, where to get it, what it must hash to,

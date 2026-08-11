@@ -528,6 +528,34 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   `unpushed` (different fixes: push vs. set a tracking branch), and fires only
   when the target cannot account for the work — a landed branch loses nothing by
   tracking nothing, and flagging it would mark every finished local branch forever.
+  **CLOUD-46 adds the pileup half**, about the MACHINE rather than this checkout:
+  `count(dirty ∧ unreapable) >= [worktree] pileup_threshold` over the other
+  worktrees, joined into `AtRisk` so it inherits the one verdict and the one `-J`
+  document. Every conjunct but `dirty` is git's OWN vocabulary from `worktree list
+  --porcelain` — `locked` (a deliberate keep, excluded from the count so a verdict
+  always has an escape) and `prunable` (git will clear it itself, which is what
+  stops `reclaim` and `git worktree prune` fighting over one set) — so
+  "unreapable" decides nothing git has not already answered. The main checkout is
+  skipped by POSITION (always the first record), avoiding a second question about
+  symlinks the listing already settled. An absent threshold does not participate
+  and is NOT exit 1 — this module's own demotion lesson, reacquired the moment a
+  second absence reads as a refusal. The escape is `worktree reclaim [-n]`, **the
+  tree's first `destructive` row**, which is why CLOUD-42's G11 pin
+  (`no_row_declares_destructive…`) became `every_destructive_row_owes_dry_run_and_yes`
+  and why `-y --yes` exists at all (`output.rs`'s `Mode::confirmed`, `BATTEN_YES`).
+  Confirmation is required and never PROMPTED for — a gate that blocks a loop on a
+  Y/N is a dead gate — so no `-y` is exit 1 (usage), not 2. The safety argument is
+  ORDER, enforced per worktree: `stash_create` → `update_ref` → **verify the ref
+  resolves** → `worktree_remove`, so recoverability is a property of the code path
+  rather than of the test. Load-bearing measurement: `git stash create` captures
+  NOTHING for a tree dirty only with untracked files, exactly the shape an
+  abandoned agent worktree takes — hence the `Option`, and hence a worktree that
+  yields no snapshot is left in place and reported (exit 2, a verdict about the
+  machine). Snapshot refs are content-addressed (`refs/batten/snapshot/<commit>`,
+  `capture.rs`'s "the digest IS the key"), so two reclaims of one directory cannot
+  overwrite each other. `[worktree]` is authority-only, following `[budget]` rather
+  than the raise-only clamp: two thresholds with opposite layering postures is the
+  drift this engine refuses, and `trust.rs` compares the committed bytes.
 - `journal.rs` — the store's durable plumbing (CLOUD-78): append shards, a merged
   log with `(generation, seqno)` cursors, and the store-format version. Writers
   append to their **own** shard, so the concurrent path shares no mutable file and

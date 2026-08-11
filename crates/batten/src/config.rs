@@ -189,6 +189,18 @@ pub struct Config {
     /// them together would give one key two meanings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
+    /// What this repository will tolerate on its machine (CLOUD-46): today one
+    /// key, `pileup_threshold`, the count of dirty unreapable worktrees at which
+    /// `worktree status` returns a violation. Absent means the predicate does
+    /// not participate — a threshold nobody wrote down is not a threshold of
+    /// zero, the same reading [`Config::budget`] gives. The type and the
+    /// predicate are [`crate::worktree`].
+    ///
+    /// [`Config::must_land_on`] stays a top-level key rather than moving in
+    /// here: it landed there (CLOUD-51) and relocating it would break every
+    /// committed config for a tidier table of contents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<crate::worktree::WorktreeConfig>,
     /// The optional LLM judge's payload-privacy boundary (CLOUD-135): what may
     /// cross into a model call. Absent means no judge is configured; present and
     /// empty means pointers and hashes only, which is also what every field
@@ -283,7 +295,9 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// `judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard
 /// parse error here rather than a silently discarded tightening. A hand-maintained
 /// refusal list would be a second authority, and would drift the moment a field
-/// is added to [`Config`].
+/// is added to [`Config`]. `worktree` is authority-only for `budget`'s reason
+/// (CLOUD-46): a threshold is a bar a repository sets for itself, and two
+/// thresholds in one config with opposite layering rules is drift.
 ///
 /// Every key here is **raise-only**; [`crate::resolve`] holds that invariant,
 /// and the per-field docs say which direction "raise" means.
@@ -545,6 +559,10 @@ impl Config {
             // either — there is simply no threshold, which is what `None` says.
             budget: None,
             must_land_on: None,
+            // Same reading as `budget`, for the same reason: a threshold nobody
+            // declared is not a threshold of zero, and an unreadable authority
+            // declares none.
+            worktree: None,
             judge: None,
             // Declaring no ceiling is not declaring a ceiling of zero: the audit
             // falls back to the engine default, so an unreadable authority

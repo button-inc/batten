@@ -4734,6 +4734,282 @@ fn the_at_risk_report_is_byte_stable_across_runs() {
     assert_eq!(first.status.code(), Some(2));
 }
 
+// --- the worktree pileup gate (CLOUD-46) --------------------------------------
+//
+// The counted predicate over the *machine* rather than this checkout, plus the
+// snapshot-then-abandon path out of it. The load-bearing property is ordering:
+// a worktree is only ever removed after its snapshot ref has been shown to
+// resolve, so "the abandoned work is recoverable" is a property of the code
+// path and not of the test that checks it.
+
+/// A repository declaring `pileup_threshold`, with `count` linked worktrees.
+///
+/// Each linked worktree is left **clean**; the tests dirty exactly the ones they
+/// mean to, so the predicate's conjunction is exercised rather than assumed.
+fn pileup_repo(name: &str, threshold: usize, count: usize) -> (PathBuf, Vec<PathBuf>) {
+    let dir = Fixture::new(name)
+        .config(&format!(
+            "version = 1\nmust_land_on = \"main\"\n\n[worktree]\npileup_threshold = {threshold}\n"
+        ))
+        .file("README.md", "base\n")
+        // The linked worktrees live under `wt/`, inside the fixture so the
+        // builder cleans them between runs — and ignored, so the main
+        // checkout's own porcelain status stays empty. Without the ignore every
+        // linked worktree would read as an untracked path in the main tree and
+        // the `uncommitted` category would fire in tests that are about the
+        // pileup category alone. This mirrors the real layout, where agent
+        // worktrees sit in an ignored directory of the repository they came from.
+        .file(".gitignore", "wt/\n")
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+    let linked = (0..count)
+        .map(|index| {
+            let path = dir.join("wt").join(format!("wt{index}"));
+            git_in(
+                &dir,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    &format!("wt{index}"),
+                    path.to_str().expect("fixture path is UTF-8"),
+                ],
+            );
+            path
+        })
+        .collect();
+    (dir, linked)
+}
+
+/// Dirty `worktree` with a tracked edit, which is what `git stash create` can
+/// capture. Untracked-only dirt is its own case and has its own test.
+fn dirty(worktree: &std::path::Path) {
+    common::write(worktree, "README.md", "edited in the worktree\n");
+}
+
+#[test]
+fn a_pileup_at_the_threshold_is_a_verdict_naming_the_count_and_each_path() {
+    let (dir, linked) = pileup_repo("pileup-over", 2, 2);
+    for worktree in &linked {
+        dirty(worktree);
+    }
+
+    let output = worktree_status(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a pileup at the threshold is a policy verdict"
+    );
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("pileup: 2 worktree(s) dirty and unreapable (threshold 2)"),
+        "the report states the count and the bar it crossed: {text:?}"
+    );
+    // Each offending worktree, by path — the Ready block asks for the count and
+    // the paths, and a path is a pointer, never the work in it.
+    for worktree in &linked {
+        let name = worktree
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("fixture worktree name is UTF-8");
+        assert!(
+            text.contains(name),
+            "the report names {name}, the worktree to go look at: {text:?}"
+        );
+    }
+    assert!(
+        !text.contains("edited in the worktree"),
+        "the report is a pointer, never the content (rule 4): {text:?}"
+    );
+}
+
+#[test]
+fn a_clean_set_of_worktrees_exits_zero_and_says_nothing() {
+    // Acceptance (b). The worktrees exist and are counted — they are simply not
+    // dirty, so the conjunction is false and there is nothing to report.
+    let (dir, _linked) = pileup_repo("pileup-clean", 1, 3);
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        common::stdout(&output),
+        "",
+        "a clean run prints nothing (§6)"
+    );
+}
+
+#[test]
+fn a_count_below_the_threshold_is_not_a_pileup() {
+    // The predicate is `>=`, so one dirty worktree under a threshold of two is
+    // silent — and silent rather than reported-but-passing, because a report
+    // nobody has to act on is noise a caller pays for every run.
+    let (dir, linked) = pileup_repo("pileup-under", 2, 2);
+    dirty(&linked[0]);
+
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!common::stdout(&output).contains("pileup"));
+}
+
+#[test]
+fn a_locked_worktree_is_kept_deliberately_and_never_counted() {
+    // A lock is an explicit "I am keeping this", which is the opposite of an
+    // unreaped pileup — and `reclaim` must never remove one, so counting it
+    // would be a verdict with no escape.
+    let (dir, linked) = pileup_repo("pileup-locked", 1, 1);
+    dirty(&linked[0]);
+    git_in(
+        &dir,
+        &[
+            "worktree",
+            "lock",
+            linked[0].to_str().expect("fixture path is UTF-8"),
+        ],
+    );
+
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!common::stdout(&output).contains("pileup"));
+}
+
+#[test]
+fn an_absent_threshold_still_reports_the_other_three_categories() {
+    // The bug this module was demoted for once already (CLOUD-51's DoD audit),
+    // in its second possible location: an absent key must not silence the
+    // report, and must not become exit 1 either.
+    let dir = worktree_repo("pileup-unconfigured", "main");
+    common::write(&dir, "scratch.txt", "work in progress\n");
+
+    let output = worktree_status(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the dirty tree is still a verdict; the absent threshold is not an error"
+    );
+    let text = common::stdout(&output);
+    assert!(text.contains("uncommitted: 1 paths"), "{text:?}");
+    assert!(
+        !text.contains("pileup"),
+        "a threshold nobody declared reports nothing: {text:?}"
+    );
+}
+
+#[test]
+fn reclaim_previews_under_dry_run_and_mutates_nothing() {
+    // Acceptance (c). The preview is structurally incapable of the mutation it
+    // previews: `reclaim` returns before reaching a single git write.
+    let (dir, linked) = pileup_repo("pileup-preview", 1, 1);
+    dirty(&linked[0]);
+
+    let output = common::run(&dir, &["worktree", "reclaim", "--dry-run"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        common::stderr(&output).contains("would reclaim:"),
+        "the preview says what it would do: {:?}",
+        common::stderr(&output)
+    );
+    assert!(linked[0].exists(), "the worktree is still there");
+    assert_eq!(
+        git_in(
+            &dir,
+            &["for-each-ref", "--format=%(refname)", "refs/batten"]
+        ),
+        "",
+        "a preview writes no snapshot ref"
+    );
+}
+
+#[test]
+fn reclaim_snapshots_then_abandons_and_the_work_is_recoverable() {
+    // Acceptance (d), and the whole safety argument: the worktree is gone, and
+    // the ref the report named still holds the work that was in it.
+    let (dir, linked) = pileup_repo("pileup-reclaim", 1, 1);
+    dirty(&linked[0]);
+
+    let output = common::run(&dir, &["worktree", "reclaim", "--yes"]);
+    assert_eq!(output.status.code(), Some(0));
+    let text = common::stderr(&output);
+    assert!(text.contains("reclaimed:"), "{text:?}");
+    assert!(!linked[0].exists(), "the worktree was abandoned");
+
+    // The snapshot ref exists, and it carries the abandoned edit — recoverable
+    // is the claim, so the test reads the content back rather than trusting the
+    // ref's existence to imply it.
+    let refs = git_in(
+        &dir,
+        &["for-each-ref", "--format=%(refname)", "refs/batten"],
+    );
+    let snapshot = refs.lines().next().expect("a snapshot ref was written");
+    assert!(snapshot.starts_with("refs/batten/snapshot/"), "{refs:?}");
+    let recovered = git_in(&dir, &["show", &format!("{snapshot}:README.md")]);
+    assert_eq!(
+        recovered, "edited in the worktree",
+        "the abandoned work is readable from the snapshot"
+    );
+
+    // And the count it existed to bring down has come down.
+    assert_eq!(worktree_status(&dir).status.code(), Some(0));
+}
+
+#[test]
+fn reclaim_without_confirmation_refuses_with_instructions_and_removes_nothing() {
+    // §4: destructive plus no `-y` refuses with the exact flag needed. Exit 1,
+    // not 2 — "you did not pass the flag" is a usage error, and §7 keeps the
+    // verdict code for verdicts.
+    let (dir, linked) = pileup_repo("pileup-unconfirmed", 1, 1);
+    dirty(&linked[0]);
+
+    let output = common::run(&dir, &["worktree", "reclaim"]);
+    assert_eq!(output.status.code(), Some(1));
+    let text = common::stderr(&output);
+    assert!(
+        text.contains("--yes"),
+        "the refusal names the flag that answers it: {text:?}"
+    );
+    assert!(linked[0].exists(), "nothing was removed");
+}
+
+#[test]
+fn a_worktree_nothing_can_snapshot_is_left_in_place() {
+    // The fail-closed edge, and the reason `stash_create` returns an Option:
+    // git captures no commit for a tree dirty only with untracked files, and
+    // removing on that answer would destroy exactly the work this verb exists
+    // to preserve.
+    let (dir, linked) = pileup_repo("pileup-untracked", 1, 1);
+    common::write(&linked[0], "only-untracked.txt", "never committed\n");
+
+    let output = common::run(&dir, &["worktree", "reclaim", "--yes"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "work that cannot be made recoverable is a verdict about this machine"
+    );
+    let text = common::stderr(&output);
+    assert!(text.contains("refused:"), "{text:?}");
+    assert!(
+        linked[0].exists(),
+        "the worktree holding unrecoverable work was not touched"
+    );
+}
+
+#[test]
+fn reclaim_without_a_declared_threshold_is_a_usage_error() {
+    // Unlike `status`, this verb has nothing else to answer: reclaiming against
+    // a threshold nobody declared would mean choosing the threshold itself.
+    let dir = worktree_repo("pileup-no-threshold", "main");
+    let output = common::run(&dir, &["worktree", "reclaim", "--yes"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        common::stderr(&output).contains("pileup_threshold"),
+        "the refusal names the missing key: {:?}",
+        common::stderr(&output)
+    );
+}
+
 // --- the findings store's identity (CLOUD-164) --------------------------------
 
 /// A repo fixture for the store tests, plus the `home` that isolates the

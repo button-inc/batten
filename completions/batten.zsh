@@ -35,6 +35,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '-V[Print version]' \
@@ -72,6 +74,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -100,6 +104,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -126,6 +132,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '*::command -- The command to run, after `--`, with its own arguments intact:_default' \
@@ -153,6 +161,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__config_commands" \
@@ -189,6 +199,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -218,6 +230,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -247,6 +261,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -309,6 +325,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__lint_commands" \
@@ -345,6 +363,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::brief -- The brief to read; omitted or `-` reads stdin:_default' \
@@ -401,6 +421,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -429,6 +451,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -455,6 +479,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__generate_commands" \
@@ -490,6 +516,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -518,6 +546,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -576,6 +606,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__policy_commands" \
@@ -612,6 +644,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -666,6 +700,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__worktree_commands" \
@@ -702,6 +738,38 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(reclaim)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-n[Preview what would be applied, writing nothing]' \
+'--dry-run[Preview what would be applied, writing nothing]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -719,6 +787,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-worktree-help-command-$line[1]:"
         case $line[1] in
             (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(reclaim)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -756,6 +828,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__provision_commands" \
@@ -792,6 +866,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -820,6 +896,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -884,6 +962,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -910,6 +990,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__receipt_commands" \
@@ -944,6 +1026,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':check -- The check whose conclusion is being recorded:_default' \
@@ -973,6 +1057,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ':check -- The check whose receipt is judged:_default' \
@@ -1032,6 +1118,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__defects_commands" \
@@ -1071,6 +1159,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -1099,6 +1189,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -1157,6 +1249,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__design_commands" \
@@ -1193,6 +1287,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -1247,6 +1343,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 ":: :_batten__subcmd__state_commands" \
@@ -1281,6 +1379,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::store -- The store id to bind, when resolution cannot decide for itself:_default' \
@@ -1308,6 +1408,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -1334,6 +1436,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -1362,6 +1466,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
@@ -1543,6 +1649,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-help-worktree-command-$line[1]:"
         case $line[1] in
             (status)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(reclaim)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -2130,8 +2240,14 @@ _batten__subcmd__help__subcmd__state__subcmd__record_commands() {
 _batten__subcmd__help__subcmd__worktree_commands() {
     local commands; commands=(
 'status:Report work that is uncommitted, unpushed, or not landed on the configured target' \
+'reclaim:Snapshot and abandon worktrees that are dirty and unreapable' \
     )
     _describe -t commands 'batten help worktree commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__worktree__subcmd__reclaim_commands] )) ||
+_batten__subcmd__help__subcmd__worktree__subcmd__reclaim_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help worktree reclaim commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__worktree__subcmd__status_commands] )) ||
 _batten__subcmd__help__subcmd__worktree__subcmd__status_commands() {
@@ -2367,6 +2483,7 @@ _batten__subcmd__state__subcmd__record_commands() {
 _batten__subcmd__worktree_commands() {
     local commands; commands=(
 'status:Report work that is uncommitted, unpushed, or not landed on the configured target' \
+'reclaim:Snapshot and abandon worktrees that are dirty and unreapable' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten worktree commands' commands "$@"
@@ -2375,6 +2492,7 @@ _batten__subcmd__worktree_commands() {
 _batten__subcmd__worktree__subcmd__help_commands() {
     local commands; commands=(
 'status:Report work that is uncommitted, unpushed, or not landed on the configured target' \
+'reclaim:Snapshot and abandon worktrees that are dirty and unreapable' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten worktree help commands' commands "$@"
@@ -2384,10 +2502,20 @@ _batten__subcmd__worktree__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten worktree help help commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__worktree__subcmd__help__subcmd__reclaim_commands] )) ||
+_batten__subcmd__worktree__subcmd__help__subcmd__reclaim_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten worktree help reclaim commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__worktree__subcmd__help__subcmd__status_commands] )) ||
 _batten__subcmd__worktree__subcmd__help__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'batten worktree help status commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__worktree__subcmd__reclaim_commands] )) ||
+_batten__subcmd__worktree__subcmd__reclaim_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten worktree reclaim commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__worktree__subcmd__status_commands] )) ||
 _batten__subcmd__worktree__subcmd__status_commands() {

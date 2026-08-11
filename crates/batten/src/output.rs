@@ -177,6 +177,9 @@ pub struct Presentation {
     pub no_color: bool,
     /// `--no-input`: never prompt, whatever stderr is attached to.
     pub no_input: bool,
+    /// `-y --yes`: the caller has pre-answered the confirmation a `destructive`
+    /// verb would otherwise refuse for (§5).
+    pub yes: bool,
 }
 
 /// The resolved output mode: what to say, and how.
@@ -189,6 +192,12 @@ pub struct Mode {
     pub color: bool,
     /// Whether the run is unattended: no prompting, no decoration.
     pub machine: bool,
+    /// Whether a `destructive` operation has been confirmed (§5's `-y --yes`).
+    ///
+    /// Resolved here rather than read per verb so the answer to "may this
+    /// invocation destroy something" has one derivation, beside the other §4
+    /// signals it belongs with.
+    pub confirmed: bool,
 }
 
 impl Default for Mode {
@@ -200,6 +209,9 @@ impl Default for Mode {
             verbosity: Verbosity::DEFAULT,
             color: false,
             machine: true,
+            // Never confirmed by default: the mode used when resolution itself
+            // failed must not be the one that authorizes a removal.
+            confirmed: false,
         }
     }
 }
@@ -272,6 +284,10 @@ pub fn resolve_with(
 
     let no_color = flags.no_color || present(env, NO_COLOR_ENV).is_some();
     let no_input = flags.no_input || present(env, NO_INPUT_ENV).is_some();
+    // Flag or env, the same disjunction every presentation boolean uses. It
+    // never interacts with `machine`: attendedness says whether a prompt could
+    // be answered, and this says whether the answer was already given.
+    let confirmed = flags.yes || present(env, YES_ENV).is_some();
 
     // §4: absence of a terminal is the primary signal, and every other one only
     // ever forces machine mode — never back out of it. `TERM=dumb` is a terminal
@@ -296,6 +312,7 @@ pub fn resolve_with(
         verbosity,
         color,
         machine,
+        confirmed,
     })
 }
 
@@ -310,6 +327,8 @@ pub const LOG_LEVEL_ENV: &str = "BATTEN_LOG_LEVEL";
 pub const NO_COLOR_ENV: &str = "BATTEN_NO_COLOR";
 /// `BATTEN_NO_INPUT`, the env equivalent of `--no-input`.
 pub const NO_INPUT_ENV: &str = "BATTEN_NO_INPUT";
+/// `BATTEN_YES`, the env equivalent of `-y --yes`.
+pub const YES_ENV: &str = "BATTEN_YES";
 
 /// The ladder flags, as the raw-argv scan recognises them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -406,6 +425,13 @@ impl Presentation {
                 }
                 "--no-input" => {
                     flags.no_input = true;
+                    continue;
+                }
+                // Both spellings, because `expand_clusters` splits `-vy` into
+                // `-v -y` and a caller writing the short form gets the same
+                // answer as one writing the long.
+                "--yes" | "-y" => {
+                    flags.yes = true;
                     continue;
                 }
                 _ => {}

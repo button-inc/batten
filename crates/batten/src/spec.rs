@@ -440,6 +440,14 @@ mod tests {
                 "state migrate".to_owned(),
                 "state record".to_owned(),
                 "worktree".to_owned(),
+                // CLOUD-46. §2 already names this row — `worktree status |
+                // new|adopt|prune|reclaim` — so the reconciliation this test
+                // prompts for found the section and the tree in agreement, and
+                // §2 needed no edit. `reclaim` is the shipped spelling of the
+                // `prune|reclaim` slot; `prune` would be a wrapper over `git
+                // worktree prune`, and Batten adopts prior art rather than
+                // wrapping it.
+                "worktree reclaim".to_owned(),
                 "worktree status".to_owned(),
             ]
         );

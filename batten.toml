@@ -81,6 +81,27 @@ protected = [
   ".github/workflows/**",
 ]
 
+# ---------------------------------------------------------------------------
+# The worktree pileup threshold (CLOUD-46).
+#
+# How many LINKED worktrees may sit dirty-and-unreapable before `worktree status`
+# calls it a pileup. Unreaped dirty worktrees are the highest realized harm this
+# project has recorded: an agent spawns one, leaves uncommitted work in it, and
+# the work is neither landed nor abandoned until the disk is the constraint.
+#
+# Deliberately NOT a `[[rule]]`: rules match file content, and this is a property
+# of the machine rather than of the tree or of any commit. It is for the same
+# reason not a commit-gate step — a pileup does not become true or false because
+# someone committed.
+#
+# `3` for this repository, not a number the engine ships: the core carries no
+# default, because how many parallel worktrees is normal is a fact about how a
+# repository is worked (non-negotiable rule 1). The escape is
+# `batten worktree reclaim --yes`, which snapshots to `refs/batten/snapshot/<sha>`
+# and only then abandons, so nothing it removes is unrecoverable.
+[worktree]
+pileup_threshold = 3
+
 # Batten gates this repository with its own engine — consumer #1 in practice,
 # not just in principle. Rules below whose `scope` is "tree" run under `batten
 # check`; rules whose `scope` is "mediated_call" are adjudicated by `batten hook`
