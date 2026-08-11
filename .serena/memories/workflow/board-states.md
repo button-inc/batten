@@ -15,7 +15,35 @@ there is no separate "tell people." Button Cloud (CLOUD) team states:
 | **Todo**        | the **ready queue**                                   | the Definition-of-Ready predicate is validated (the issue's **Ready block** is satisfied). Issues here are available to pull. |
 | **In Progress** | checked out, being worked                             | you start work — assign yourself in the same move.                                                                            |
 | **In Review**   | landed to trunk, under post-merge review, pre-release | the change is on `main`.                                                                                                      |
-| Done            | released                                              | the change ships.                                                                                                             |
+| Done            | released                                              | the change ships **and** `graph-check` accepts the issue — see the sweep ordering below.                                      |
+
+## The In Review → Done sweep is a CONJUNCTION, and the order is fixed
+
+Two gates, and neither alone is the transition (CLOUD-309):
+
+- `graph-check` — "is this issue honestly labelled": In Review ⇒ a linked GitHub
+  PR attachment. It runs **first**.
+- `released <tag>` — "did this tag ship it": a ref in the tag's commit range, or a
+  supplied commit the range contains (CLOUD-260).
+
+`mise run released` now composes them: pipe the In Review closure and it runs
+`graph-check` by path, reports any issue that gate names as `REFUSED (<rule>)`,
+and exits 1. **Pipe `attachments`** — the key is what decides `in-review-no-pr`,
+and a payload assembled without it cannot answer the question at all, so an In
+Review issue missing the key is exit 2 ("could not look"), not a verdict.
+
+Why the order exists: `released` resolves refs from commit _messages_, so an issue
+a commit merely CITES reads as shipped. CLOUD-228 and CLOUD-231 were In Review
+with `attachments: []`, bulk-flipped out of Todo eight seconds apart with nothing
+ever landed, and `released` named both movable at `v0.0.29`. CLOUD-257's hold
+marker cannot catch that shape — an author who never worked the issue has no
+reason to add one. So there are two refusals now, covering opposite halves:
+`HELD` is the issue that _says_ it is not done, `REFUSED` is the issue that never
+started.
+
+`dangling-blocker` is deliberately not a refusal: a sweep pipes the In Review
+closure by design, so an edge leaving it is the expected input shape, not a board
+lying.
 
 ## Two things that trip agents up
 

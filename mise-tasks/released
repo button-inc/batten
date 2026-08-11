@@ -44,6 +44,21 @@
 # run exits 1, so a sweep cannot close it. A literal marker, matched exactly —
 # never a judgement about whether prose means "not done", which would make a gate
 # out of a classification (non-negotiable 3).
+#
+# AND THE OTHER FACE OF IT (CLOUD-309). The hold marker catches an issue that SAYS
+# it is not done. It cannot catch an issue that never started: an author who never
+# worked the issue has no reason to add a marker. CLOUD-228 and CLOUD-231 sat In
+# Review with `attachments: []`, flipped straight out of Todo eight seconds apart,
+# and this task named both movable at v0.0.29 — because one commit in that range
+# merely CITED them. A sweep on this task alone would have closed two issues on
+# which nothing had ever landed.
+#
+# So the In Review -> Done transition is a CONJUNCTION and this is only one half
+# of it: `graph-check` owns "is this issue honestly labelled", this owns "did the
+# tag ship it". That ordering used to live nowhere, so every sweeping agent
+# rediscovered it or did not. It now runs here, by path — the way `graph-check`
+# itself calls `ready-lint` — so neither gate grows a copy of the other's
+# predicate and there is nothing to drift.
 set -euo pipefail
 
 # The marker an issue puts in its own body to hold itself open. One string, and
@@ -105,6 +120,42 @@ if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else
 	exit 2
 fi
 
+# THE CONJUNCTION (CLOUD-309), and it runs before anything is reported movable.
+#
+# `attachments` decides `in-review-no-pr`, and a payload assembled without the key
+# reports EVERY In Review issue as PR-less. Both readings of that are wrong: treat
+# it as absent-and-refuse and a correct sweep is blocked by how the caller fetched;
+# treat it as absent-and-allow and the gate is vacuous exactly when it matters. So
+# a missing key is neither — it is exit 2, "could not look", the same code an
+# absent tag gets. An explicit `[]` is data and is judged.
+missing=$(jq -r '[.[] | select(.status == "In Review") | select(has("attachments") | not) | .id] | join(" ")' <<<"$issues")
+if [ -n "$missing" ]; then
+	echo "::error:: no \`attachments\` on In Review issue(s): $missing. The board gate reads that key to decide \`in-review-no-pr\`, so a payload without it cannot answer whether anything landed — re-fetch with attachments included." >&2
+	exit 2
+fi
+
+# Called by path, the way graph-check calls ready-lint: this stays a pure function
+# of stdin plus git, and the one definition of "honestly labelled" is composed
+# rather than copied.
+gate="$(dirname "$0")/graph-check"
+if [ ! -x "$gate" ]; then
+	echo "::error:: cannot run $gate. A gate that cannot run is not a pass — the sweep needs it, so this is 'could not look'." >&2
+	exit 2
+fi
+# Violations land on stderr as `<id> <rule>`; stdout carries the frontier, which is
+# not this task's business. A non-zero exit is the ordinary case here, so it is not
+# fatal — the per-issue lines are the payload, not the status.
+gate_report=$("$gate" <<<"$issues" 2>&1 >/dev/null) || true
+
+# `dangling-blocker` is deliberately NOT a refusal. It is a property of the piped
+# SET, not of the issue: a sweep pipes the In Review closure by design, so an edge
+# leaving that closure is the expected input shape rather than a board lying about
+# an issue. Refusing on it would make the gate cost more than it saves on every
+# ordinary sweep, and a refusal that expensive gets bypassed.
+refusal_for() {
+	grep -oE "^$1 [a-z-]+" <<<"$gate_report" | awk '{print $2}' | grep -vx 'dangling-blocker' | head -n1 || true
+}
+
 # THE SECOND WAY IN (CLOUD-260). The grep above rests on a premise that does not
 # hold retroactively: issue-guard makes the ref mandatory *now*, so work that
 # landed before that discipline carries none, and no tag can ever name it. Four
@@ -153,15 +204,22 @@ fi
 movable=0
 skipped=0
 held=0
+refused=0
 for ref in $refs; do
 	status=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .status' <<<"$issues" | head -n1)
 	# An issue this tag shipped but which was not piped in is not a finding: the
 	# caller chose the closure to judge, exactly as graph-check does.
 	[ -n "$status" ] || continue
 	body=$(jq -r --arg id "$ref" '.[] | select(.id == $id) | .description // ""' <<<"$issues" | head -c 100000)
+	rule=""
+	[ "$status" != "In Review" ] || rule=$(refusal_for "$ref")
 	if [ "$status" = "In Review" ] && [ "${body#*"$HOLD_MARKER"}" != "$body" ]; then
 		echo "  $ref  HELD — the issue holds itself open"
 		held=$((held + 1))
+	elif [ -n "$rule" ]; then
+		# Pointer-only: the issue id and the rule id that refused, never the body.
+		echo "  $ref  REFUSED ($rule) — the board gate rejects it"
+		refused=$((refused + 1))
 	elif [ "$status" = "In Review" ]; then
 		echo "  $ref  In Review -> Done"
 		movable=$((movable + 1))
@@ -173,10 +231,20 @@ for ref in $refs; do
 	fi
 done
 
+tally="released: $tag ($range) — $movable to move, $skipped left alone"
+[ "$held" = 0 ] || tally="$tally, $held HELD"
+[ "$refused" = 0 ] || tally="$tally, $refused REFUSED"
+echo "$tally"
+
+# Both refusals are reported before either exits, so one never hides the other and
+# a caller sees the whole board in one run. The movable list stays complete beside
+# them for the same reason: a caller acts on what it can and resolves the rest.
 if [ "$held" != 0 ]; then
-	echo "released: $tag ($range) — $movable to move, $skipped left alone, $held HELD"
 	echo "::error:: $held issue(s) shipped in $tag but carry \`$HOLD_MARKER\`. Shipping a ref is necessary for Done, not sufficient — resolve the hold or strike the marker before moving them." >&2
+fi
+if [ "$refused" != 0 ]; then
+	echo "::error:: $refused issue(s) shipped in $tag are rejected by graph-check. In Review -> Done is a conjunction: the tag must have shipped it AND the board must be labelling it honestly. Fix the board state named above — do not move them." >&2
+fi
+if [ "$held" != 0 ] || [ "$refused" != 0 ]; then
 	exit 1
 fi
-
-echo "released: $tag ($range) — $movable to move, $skipped left alone"

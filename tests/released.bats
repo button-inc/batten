@@ -39,7 +39,10 @@ payload() {
 		[ "$body" != "$spec" ] || body=""
 		[ "$first" = 1 ] || out="$out,"
 		first=0
-		out="$out{\"id\":\"$id\",\"status\":\"$status\",\"description\":\"$body\"}"
+		# CLOUD-309: `attachments` is now part of the question, so every fixture
+		# carries one. An issue with a linked PR is the ordinary case; the
+		# fixtures that model a bare board write it explicitly as `[]`.
+		out="$out{\"id\":\"$id\",\"status\":\"$status\",\"description\":\"$body\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}]}"
 	done
 	printf '%s]' "$out]" | sed 's/]]$/]/'
 }
@@ -103,7 +106,7 @@ payload() {
 @test "an issue with no marker and no description still moves" {
 	# The marker is opt-in: a body that does not carry it keeps the old answer,
 	# so this cannot quietly freeze the whole board.
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\"}]' | '$TASK' v0.0.2"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}]}]' | '$TASK' v0.0.2"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"In Review -> Done"* ]]
 }
@@ -116,7 +119,7 @@ payload() {
 	# evidence, and containment in this tag's range is the predicate.
 	local sha
 	sha=$(git rev-parse HEAD) # the v0.0.2 tip, which names no issue at all
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}],\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"CLOUD-9  In Review -> Done"* ]]
 }
@@ -127,7 +130,7 @@ payload() {
 	# make the sweep noisier the longer the history gets.
 	local sha
 	sha=$(git rev-parse v0.0.1)
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}],\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"CLOUD-9"* ]]
 }
@@ -136,7 +139,7 @@ payload() {
 	local sha
 	sha=$(git rev-parse HEAD)
 	# v0.0.1 predates HEAD, so HEAD is not contained in it.
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.1"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}],\"commit\":\"$sha\"}]' | '$TASK' v0.0.1"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"CLOUD-9"* ]]
 }
@@ -145,7 +148,7 @@ payload() {
 	# A second way to be FOUND must not become a way around being HELD.
 	local sha
 	sha=$(git rev-parse HEAD)
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\",\"description\":\"DO-NOT-CLOSE\"}]' | '$TASK' v0.0.2"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}],\"commit\":\"$sha\",\"description\":\"DO-NOT-CLOSE\"}]' | '$TASK' v0.0.2"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-9  HELD"* ]]
 }
@@ -153,7 +156,7 @@ payload() {
 @test "an unknown or malformed commit is ignored, not fatal" {
 	# Supplementary evidence: a sha this clone cannot resolve must not take the
 	# whole report down, or one stale payload field breaks every sweep.
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"not-a-sha\"},{\"id\":\"CLOUD-2\",\"status\":\"In Review\"}]' | '$TASK' v0.0.2"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}],\"commit\":\"not-a-sha\"},{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}]}]' | '$TASK' v0.0.2"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"CLOUD-2  In Review -> Done"* ]]
 	[[ "$output" != *"CLOUD-9"* ]]
@@ -163,7 +166,7 @@ payload() {
 	# The ordinary case for work that carries its ref and supplies a commit.
 	local sha
 	sha=$(git rev-parse HEAD)
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}],\"commit\":\"$sha\"}]' | '$TASK' v0.0.2"
 	[ "$status" -eq 0 ]
 	[ "$(grep -c 'CLOUD-2  In Review -> Done' <<<"$output")" -eq 1 ]
 	[[ "$output" == *"1 to move"* ]]
@@ -184,7 +187,7 @@ payload() {
 	# a tag of pure chore commits. Its clean-outcome contract is unchanged.
 	commit "chore: release v0.0.3"
 	git tag v0.0.3
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\"}]' | '$TASK' v0.0.3"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}]}]' | '$TASK' v0.0.3"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"references no CLOUD-* issue"* ]]
 }
@@ -196,7 +199,7 @@ payload() {
 	git tag v0.0.3
 	local sha
 	sha=$(git rev-parse HEAD)
-	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"commit\":\"$sha\"}]' | '$TASK' v0.0.3"
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-9\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/1\"}],\"commit\":\"$sha\"}]' | '$TASK' v0.0.3"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"CLOUD-9  In Review -> Done"* ]]
 }
@@ -209,6 +212,109 @@ payload() {
 @test "stdin that is not a payload set is exit 2, distinct from a stale board" {
 	run bash -c "printf 'not json' | '$TASK' v0.0.2"
 	[ "$status" -eq 2 ]
+}
+
+# --- the conjunction: graph-check first (CLOUD-309) ---------------------------
+#
+# The hold marker catches an issue that SAYS it is not done. Nothing caught an
+# issue that never started — CLOUD-228 and CLOUD-231 sat In Review with no PR ever
+# attached and this task named both movable, because one commit merely cited them.
+
+@test "THE SECOND REFUSAL: an In Review issue with no PR is REFUSED, not movable" {
+	# The exact shape of CLOUD-228/231. Fails against the pre-fix ordering, where
+	# the same payload reported `In Review -> Done` and exited 0.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[]}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2  REFUSED"* ]]
+	[[ "$output" != *"CLOUD-2  In Review -> Done"* ]]
+	[[ "$output" == *"0 to move"* ]]
+}
+
+@test "the refusal names the rule that rejected it, not a generic failure" {
+	# Pointer-only, and actionable: a caller must be able to tell an unlanded
+	# issue from a held one without reading either body.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[]}]' | '$TASK' v0.0.2"
+	[[ "$output" == *"in-review-no-pr"* ]]
+}
+
+@test "the same issue WITH a PR attachment still sweeps" {
+	# The other direction, so the conjunction cannot collapse into refusing
+	# everything — which would be the vacuous pass in refusal's clothing.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/9\"}]}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2  In Review -> Done"* ]]
+	[[ "$output" != *"REFUSED"* ]]
+}
+
+@test "a non-PR attachment is not a linked PR" {
+	# graph-check's predicate is a github pull URL; a design doc link must not
+	# clear it, or the gate is bypassed by attaching anything at all.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://example.com/notes\"}]}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"REFUSED (in-review-no-pr)"* ]]
+}
+
+@test "a refused issue does not suppress the movable ones beside it" {
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[]},{\"id\":\"CLOUD-3\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/9\"}]}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2  REFUSED"* ]]
+	[[ "$output" == *"CLOUD-3  In Review -> Done"* ]]
+	[[ "$output" == *"1 to move"* ]]
+	[[ "$output" == *"1 REFUSED"* ]]
+}
+
+@test "HELD and REFUSED are both reported, so one refusal never hides the other" {
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[],\"description\":\"x\"},{\"id\":\"CLOUD-3\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/9\"}],\"description\":\"DO-NOT-CLOSE\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2  REFUSED"* ]]
+	[[ "$output" == *"CLOUD-3  HELD"* ]]
+	[[ "$output" == *"1 HELD"* ]]
+	[[ "$output" == *"1 REFUSED"* ]]
+}
+
+@test "the gate only judges In Review — a Done issue with no PR is left alone" {
+	# Done is past this transition. Refusing there would report on a move the
+	# sweep is not making.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"Done\",\"attachments\":[]}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"left alone"* ]]
+	[[ "$output" != *"REFUSED"* ]]
+}
+
+@test "COULD NOT LOOK: an In Review payload with no attachments KEY is exit 2" {
+	# The hazard CLOUD-309 names. `attachments` absent and `attachments: []` look
+	# identical to the board gate, and both readings of that are wrong: refuse and
+	# a correct sweep is blocked by how the caller fetched; allow and the gate is
+	# vacuous exactly when it matters. So it is neither verdict — it is 2.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"CLOUD-2"* ]]
+	[[ "$output" == *"attachments"* ]]
+}
+
+@test "a missing key on an issue this transition does not touch is not exit 2" {
+	# The 2 is scoped to the question being asked. A Done issue's attachments are
+	# never read, so demanding them would fail sweeps for no gain.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"Done\"}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+}
+
+@test "a blocker outside the piped set is NOT a refusal" {
+	# `dangling-blocker` is a property of the piped SET, not of the issue: a sweep
+	# pipes the In Review closure by design, so an edge leaving it is the expected
+	# input shape. Refusing on it would cost more than it saves on every ordinary
+	# sweep, and a refusal that expensive gets bypassed.
+	run bash -c "printf '%s' '[{\"id\":\"CLOUD-2\",\"status\":\"In Review\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/9\"}],\"relations\":{\"blockedBy\":[{\"id\":\"CLOUD-999\"}]}}]' | '$TASK' v0.0.2"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-2  In Review -> Done"* ]]
+}
+
+@test "the ordering is composed, not copied — no second in-review-no-pr predicate" {
+	# §1: graph-check owns \"honestly labelled\". This task must name the rule in a
+	# report and nowhere else; a `test(\"github.com/.*/pull/\")` here would be the
+	# copy that drifts.
+	run grep -c 'pull/' "$TASK"
+	[ "$output" -eq 0 ]
 }
 
 @test "the marker is stated once, in the task, not spread across issue prose" {
