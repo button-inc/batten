@@ -110,7 +110,10 @@ fn tree_files_stops_at_a_nested_repository_boundary() {
     // decides about submodules is pinned HERE, on the walker, so no later
     // reading has to be inferred from a ratchet's arithmetic.
     let dir = repo_with_submodule("submodule-walk", SPANNING_CONFIG);
-    let files: BTreeSet<String> = tree_files(&dir).expect("walk the tree").into_iter().collect();
+    let files: BTreeSet<String> = tree_files(&dir)
+        .expect("walk the tree")
+        .into_iter()
+        .collect();
 
     let inside: Vec<&String> = files
         .iter()
@@ -130,7 +133,10 @@ fn tree_files_stops_at_a_nested_repository_boundary() {
     // And the superproject is still fully walked — a boundary that swallowed
     // its own tree would agree with the base half by making both empty.
     for own in ["batten.toml", "tests/own.bats", "tests/suite/deep.bats"] {
-        assert!(files.contains(own), "{own} must still be selected: {files:?}");
+        assert!(
+            files.contains(own),
+            "{own} must still be selected: {files:?}"
+        );
     }
     assert!(
         files.contains(".gitmodules"),
@@ -144,7 +150,10 @@ fn both_halves_select_the_same_set_over_a_submodule() {
     // count comparison: two different sets can share a size, and it is the
     // *sets* that must agree for the gate to be honest for every glob.
     let dir = repo_with_submodule("submodule-parity", SPANNING_CONFIG);
-    let walked: BTreeSet<String> = tree_files(&dir).expect("walk the tree").into_iter().collect();
+    let walked: BTreeSet<String> = tree_files(&dir)
+        .expect("walk the tree")
+        .into_iter()
+        .collect();
 
     assert_eq!(
         walked,
@@ -201,7 +210,11 @@ fn changing_a_file_inside_the_submodule_moves_neither_count() {
     common::write(&dir, &format!("{SUBMODULE}/one.bats"), "");
     common::write(&dir, &format!("{SUBMODULE}/two.bats"), "");
     common::write(&dir, &format!("{SUBMODULE}/nested/three.bats"), "");
-    common::write(&dir, &format!("{SUBMODULE}/added.bats"), &bats("vendored new"));
+    common::write(
+        &dir,
+        &format!("{SUBMODULE}/added.bats"),
+        &bats("vendored new"),
+    );
 
     let output = run(&dir, &["check"]);
     assert_eq!(
