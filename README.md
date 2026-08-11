@@ -81,10 +81,10 @@ tool call rather than once per commit. These are measured numbers, not targets �
 `mise run bench` reproduces them, and `mise run bench-assert` fails when a
 measured p95 leaves its budget.
 
-| path    | what it does                                   | p50    | p95    | budget   |
-| ------- | ---------------------------------------------- | ------ | ------ | -------- |
+| path    | what it does                                    | p50    | p95    | budget   |
+| ------- | ----------------------------------------------- | ------ | ------ | -------- |
 | `noop`  | process start, command tree, render             | 2.4 ms | 2.9 ms | ≤ 100 ms |
-| `check` | + config load, trust resolution, one-rule tree   | 2.5 ms | 2.7 ms | —        |
+| `check` | + config load, trust resolution, one-rule tree  | 2.5 ms | 2.7 ms | —        |
 | `hook`  | + envelope decode, adjudication, decision write | 2.6 ms | 3.1 ms | ≤ 100 ms |
 
 100 ms is the [Command Line Interface Guidelines'][clig] floor for a response

@@ -99,7 +99,11 @@ jobs:
           {
             echo '## Invocation cost'
             echo
-            echo 'Budgets are enforced by `mise run bench-assert`; see README, Performance.'
+            # Double-quoted with escaped backticks, not single-quoted: a
+            # backtick pair inside single quotes reads as legacy command
+            # substitution to shellcheck (SC2016), which actionlint runs over
+            # every `run:` block.
+            echo "Budgets are enforced by \`mise run bench-assert\` — see README, Performance."
             echo
             echo '```'
             cat "$RUNNER_TEMP/bench.txt"
