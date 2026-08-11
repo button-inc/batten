@@ -875,8 +875,13 @@ mod tests {
 
         let fresh = record(FindingKind::Code, "r", "src/a.rs", "TODO");
         assert_eq!(
-            record_suppressions(&dir, "shard", &[fresh.clone()], NotShown::DrainSuppressed)
-                .unwrap(),
+            record_suppressions(
+                &dir,
+                "shard",
+                std::slice::from_ref(&fresh),
+                NotShown::DrainSuppressed,
+            )
+            .unwrap(),
             1,
             "the first suppression is news"
         );
@@ -974,7 +979,7 @@ mod tests {
         // fingerprint, a rule id, a `path:line` and a count — and nothing that
         // could be the matched content, which the store does not hold anyway.
         let one = record(FindingKind::Code, "r", "src/a.rs", "TODO");
-        let drained = cycle(&[one.clone()], &changed(&["src/a.rs"]), None);
+        let drained = cycle(std::slice::from_ref(&one), &changed(&["src/a.rs"]), None);
         assert_eq!(
             drained.lines,
             vec![format!(
@@ -1027,7 +1032,9 @@ mod tests {
             assert!(
                 path.file_name()
                     .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.len() == 69 && name.ends_with(".json")),
+                    .and_then(|name| name.strip_suffix(".json"))
+                    .is_some_and(|stem| stem.len() == 64
+                        && stem.bytes().all(|byte| byte.is_ascii_hexdigit())),
                 "a 64-hex key plus `.json`, whatever the host sent"
             );
         }

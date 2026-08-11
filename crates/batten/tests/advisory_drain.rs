@@ -270,9 +270,9 @@ fn a_session_less_payload_degrades_without_draining_or_failing() {
     // handling. Per-invocation is exactly the once-per-verifier behaviour the
     // window exists to prevent, so the honest degradation is to hold the wake —
     // loudly on the verbose rung, never as an error and never as a deny.
-    let (repo, home) = drained_fixture("drain-no-session", "");
     const SESSIONLESS: &str = r#"{"hook_event_name":"PostToolUse","cwd":"/w","tool_name":"Bash","tool_input":{"command":"echo hi"}}"#;
 
+    let (repo, home) = drained_fixture("drain-no-session", "");
     let output = hook(&repo, &home, SESSIONLESS);
     assert_eq!(output.status.code(), Some(0));
     assert!(payload(&output).is_empty());
