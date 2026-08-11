@@ -57,8 +57,21 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   output is the likeliest place in the engine for a secret to appear. Batten only
   ever **adds** failure: a non-zero child passes its code through untouched.
   Raise-only from a local file (add yes, redefine no).
-- `budget.rs` — the instruction-set token budget (CLOUD-50), surfaced as `policy
-budget`. The successor to `mise-tasks/context-budget`, deleted in the same
+- `budget.rs` — declared file-set token budgets (CLOUD-50), surfaced as `policy
+budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct with
+  a field per set: the set name is the consumer's, and an engine field called
+  `instructions` would be a consumer-specific identifier in the crate (rule 1) —
+  a second consumer now declares `[budget.<their-name>]` with no engine change.
+  Enforcement is an ordinary `Finding` (`FindingKind::Scope`, id `budget.<name>`,
+  identity over the SET so a bigger overrun is the same finding), appended in
+  `run_rules` before the waiver filter — which is what makes a budget waivable
+  and puts it in `-J`, the exit contract and the store for free, none of which a
+  private verdict path would have inherited. `policy budget` is introspection
+  only; it was the sole surface until the DoD audit, and a budget that reported
+  only when asked is a gate nobody runs. The absent `[budget]` table reads two
+  ways ON PURPOSE: `check` measures nothing (a repo declaring no budget has none
+  to fail), `policy budget` is exit 1 (a report that measured nothing must not
+  print `0`) — two callers, two honest readings. The successor to `mise-tasks/context-budget`, deleted in the same
   change: two gates counting one surface by different rules is the drift this
   engine exists to refuse. The estimate is bytes/4 over what actually **loads** —
   YAML frontmatter and block-level HTML comments stripped first, by a byte scan

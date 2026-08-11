@@ -39,9 +39,22 @@
 //! Two gates counting the same surface by different rules is the drift a policy
 //! engine must not model, so the shell task's `hk` wiring moved onto this verb
 //! rather than running beside it. Its optional line predicate came along as
-//! [`InstructionBudget::max_lines`] so the deletion orphaned nothing.
+//! [`BudgetSet::max_lines`] so the deletion orphaned nothing.
+//!
+//! # Sets are named by the consumer, and `check` is where they bite
+//!
+//! `[budget.<name>]` is a **map**: the set name belongs to the repository
+//! declaring it, and an engine field called `instructions` would be a
+//! consumer-specific identifier in `crates/batten` (non-negotiable rule 1).
+//!
+//! Every declared set is evaluated by `batten check` as a non-spawning read
+//! gate, producing an ordinary [`Finding`] rather than a private verdict path.
+//! That is what makes a budget subject to the same waivers, `-J` shape, exit
+//! contract and findings store as every other gate — `policy budget` is the
+//! introspection surface, never the enforcement one. A gate that only reported
+//! when asked is a gate nobody runs.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -50,33 +63,47 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
-use crate::rules::{glob_match, tree_files};
+use crate::identity::{self, FindingKind, StoredIdentity};
+use crate::rules::{Finding, glob_match, tree_files};
+use crate::severity::RuleSeverity;
 
 /// Bytes per estimated token. A convention-level constant, not a
 /// literature-backed claim — see the module docs for why an approximation is the
 /// right shape here.
 const BYTES_PER_TOKEN: usize = 4;
 
-/// The `[budget]` table: thresholds this repository holds itself to.
+/// The `[budget]` table: **named** file sets and what each may cost.
 ///
-/// One field today. A future budget over a different surface — the advisory
-/// drain's, say (CLOUD-82) — is a sibling key here, not a second meaning loaded
-/// onto this one; the two share the estimator's discipline and nothing else.
+/// A map, not a struct with a field per set. The set name is the *consumer's*
+/// — `[budget.instructions]` is this repository's name for its always-loaded
+/// context, and an engine type carrying that name would be a consumer-specific
+/// identifier in `crates/batten` (non-negotiable rule 1). A second consumer
+/// budgeting a different surface declares `[budget.<their-name>]` and needs no
+/// engine change; before this it needed a new field.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Budget {
-    /// The always-loaded instruction set and what it may cost.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<InstructionBudget>,
+#[serde(transparent)]
+pub struct Budget(pub BTreeMap<String, BudgetSet>);
+
+impl Budget {
+    /// The declared sets, in name order — the fixed evaluation and report order.
+    pub fn sets(&self) -> impl Iterator<Item = (&String, &BudgetSet)> {
+        self.0.iter()
+    }
+
+    /// Whether the table declares nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
-/// The `[budget.instructions]` table.
+/// One `[budget.<name>]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct InstructionBudget {
-    /// The instruction-file set, as globs over repo-relative `/`-separated
-    /// paths. Every entry must match at least one file — see the module docs.
-    pub paths: Vec<String>,
+pub struct BudgetSet {
+    /// The counted file set, as globs over repo-relative `/`-separated paths.
+    /// Every entry must match at least one file — see the module docs.
+    pub files: Vec<String>,
     /// The ceiling on estimated tokens over the whole set. The boundary is
     /// `<=`: exactly at budget passes.
     pub max_tokens: usize,
@@ -109,6 +136,10 @@ pub struct FileCount {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[non_exhaustive]
 pub struct Report {
+    /// Which declared set this measures. The consumer's name, carried so a
+    /// finding and a report row can say *which* budget was exceeded — with
+    /// several sets declared, a count with no name is unactionable.
+    pub name: String,
     /// The measured files, sorted by path.
     pub files: Vec<FileCount>,
     /// Estimated tokens over the whole set.
@@ -139,14 +170,57 @@ impl Report {
     pub fn summary(&self) -> String {
         match self.max_lines {
             Some(max_lines) => format!(
-                "policy-budget: ~{} tokens of {}, {} lines of {max_lines}",
-                self.tokens, self.max_tokens, self.lines
+                "policy-budget {}: ~{} tokens of {}, {} lines of {max_lines}",
+                self.name, self.tokens, self.max_tokens, self.lines
             ),
             None => format!(
-                "policy-budget: ~{} tokens of {}, {} lines",
-                self.tokens, self.max_tokens, self.lines
+                "policy-budget {}: ~{} tokens of {}, {} lines",
+                self.name, self.tokens, self.max_tokens, self.lines
             ),
         }
+    }
+
+    /// The rule id a violation of this budget is reported under.
+    ///
+    /// Namespaced by the table it came from, so a budget finding is never
+    /// mistaken for a `[[rule]]` row's and two consumers' set names cannot
+    /// collide with a rule id.
+    #[must_use]
+    pub fn rule_id(&self) -> String {
+        format!("budget.{}", self.name)
+    }
+
+    /// This report as a finding, when it is over either bound.
+    ///
+    /// A real [`Finding`], not a bespoke channel: budgets then flow through the
+    /// one funnel `check` and `enforce` share — waivers, `-J`, the exit contract
+    /// and the findings store — instead of growing a second verdict path that
+    /// would have to re-implement each of them.
+    ///
+    /// [`FindingKind::Scope`] is the honest kind: a budget is a whole-repo
+    /// condition, not a span in a file, and its identity is `(scope, rule_id,
+    /// set name)` — stable across the content edits that move the count, which
+    /// is what lets a store recognise the same over-budget finding twice.
+    ///
+    /// Pointer-only: the path is the set name and the counts are counts. No
+    /// measured file's content reaches it (rule 4).
+    #[must_use]
+    pub fn finding(&self) -> Option<Finding> {
+        if !self.over_budget() {
+            return None;
+        }
+        let rule = self.rule_id();
+        let identity = StoredIdentity::new(
+            FindingKind::Scope,
+            identity::scope_fingerprint(&rule, &self.name),
+        );
+        Some(Finding {
+            rule,
+            severity: RuleSeverity::Deny,
+            path: self.name.clone(),
+            line: None,
+            identity,
+        })
     }
 }
 
@@ -257,28 +331,26 @@ pub fn count_lines(loaded: &str) -> usize {
 /// when any single entry matches no file — per entry, never per set, so a dead
 /// glob cannot hide behind the entries that still count. An I/O failure while
 /// walking or reading propagates as an internal error (→ exit `3`).
-pub fn measure(root: &Path, budget: &InstructionBudget) -> Result<Report> {
-    if budget.paths.is_empty() {
-        return Err(UsageError::raise(
-            "budget.instructions: `paths` declares no entries; a budget over nothing is not a \
-             budget"
-                .to_owned(),
-        ));
+pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
+    if budget.files.is_empty() {
+        return Err(UsageError::raise(format!(
+            "budget.{name}: `files` declares no entries; a budget over nothing is not a budget"
+        )));
     }
 
     let tree = tree_files(root)?;
     // A set, so two entries selecting the same file count it once — a budget is
     // over the content an agent loads, and it loads that file once.
     let mut selected = BTreeSet::new();
-    for entry in &budget.paths {
+    for entry in &budget.files {
         let mut matched = tree
             .iter()
             .filter(|path| glob_match(entry, path))
             .peekable();
         if matched.peek().is_none() {
             return Err(UsageError::raise(format!(
-                "budget.instructions: `{entry}` matches no file; a dead entry contributes nothing \
-                 and must not pass as measured"
+                "budget.{name}: `{entry}` matches no file; a dead entry contributes nothing and \
+                 must not pass as measured"
             )));
         }
         selected.extend(matched.cloned());
@@ -302,12 +374,36 @@ pub fn measure(root: &Path, budget: &InstructionBudget) -> Result<Report> {
     }
 
     Ok(Report {
+        name: name.to_owned(),
         files,
         tokens,
         lines,
         max_tokens: budget.max_tokens,
         max_lines: budget.max_lines,
     })
+}
+
+/// Measure every declared set, in name order.
+///
+/// An absent `[budget]` table measures nothing and is **not** an error here:
+/// this is the form `check` calls, and a repository that declares no budget has
+/// no budget to fail. That is the opposite reading from `policy budget`, whose
+/// whole job is to report a measurement — a budget verb with no budget measured
+/// nothing, and saying `0` there would be the false green the engine exists to
+/// catch. Same absence, two honest readings, because the two callers are asking
+/// different questions.
+///
+/// # Errors
+///
+/// Propagates [`measure`]'s errors for any declared set.
+pub fn measure_all(root: &Path, budget: Option<&Budget>) -> Result<Vec<Report>> {
+    let Some(budget) = budget else {
+        return Ok(Vec::new());
+    };
+    budget
+        .sets()
+        .map(|(name, set)| measure(root, name, set))
+        .collect()
 }
 
 /// Validate the `[budget]` table at load.
@@ -321,11 +417,9 @@ pub fn validate(budget: Option<&Budget>) -> Result<()> {
     let Some(budget) = budget else {
         return Ok(());
     };
-    if budget.instructions.is_none() {
+    if budget.is_empty() {
         return Err(UsageError::raise(
-            "budget: the table declares no budget; remove it or declare \
-             [budget.instructions]"
-                .to_owned(),
+            "budget: the table declares no set; remove it or declare [budget.<name>]".to_owned(),
         ));
     }
     Ok(())
@@ -393,6 +487,7 @@ mod tests {
     #[test]
     fn the_boundary_is_less_than_or_equal() {
         let at = Report {
+            name: "instructions".to_owned(),
             files: Vec::new(),
             tokens: 100,
             lines: 10,
@@ -422,20 +517,98 @@ mod tests {
         assert!(!unenforced.over_budget());
     }
 
-    #[test]
-    fn a_budget_table_declaring_no_budget_is_refused() {
-        let err = validate(Some(&Budget { instructions: None })).unwrap_err();
-        assert!(err.downcast_ref::<UsageError>().is_some());
-        assert!(validate(None).is_ok());
-        assert!(
-            validate(Some(&Budget {
-                instructions: Some(InstructionBudget {
-                    paths: vec!["AGENTS.md".to_owned()],
+    fn budget_of(name: &str) -> Budget {
+        Budget(
+            [(
+                name.to_owned(),
+                BudgetSet {
+                    files: vec!["AGENTS.md".to_owned()],
                     max_tokens: 1,
                     max_lines: None,
-                }),
-            }))
-            .is_ok()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        )
+    }
+
+    #[test]
+    fn a_budget_table_declaring_no_budget_is_refused() {
+        let err = validate(Some(&Budget(BTreeMap::new()))).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        assert!(validate(None).is_ok());
+        assert!(validate(Some(&budget_of("instructions"))).is_ok());
+    }
+
+    #[test]
+    fn a_set_name_is_the_consumers_and_the_engine_carries_none() {
+        // Rule 1: the engine must hold no consumer-specific identifier. Any name
+        // works, because the table is a map rather than a field per set — before
+        // this, a second consumer's budget needed an engine change.
+        for name in ["instructions", "prompts", "whatever-they-call-it"] {
+            let budget = budget_of(name);
+            assert!(validate(Some(&budget)).is_ok());
+            let (declared, _) = budget.sets().next().unwrap();
+            assert_eq!(declared, name);
+        }
+    }
+
+    #[test]
+    fn an_over_budget_report_is_an_ordinary_finding_naming_its_set() {
+        // Budgets bite through `check` as a normal finding, which is what makes
+        // them waivable and puts them in `-J` and the store for free.
+        let within = Report {
+            name: "instructions".to_owned(),
+            files: Vec::new(),
+            tokens: 10,
+            lines: 1,
+            max_tokens: 100,
+            max_lines: None,
+        };
+        assert!(
+            within.finding().is_none(),
+            "a set within budget produces no finding"
         );
+
+        let over = Report {
+            tokens: 101,
+            ..within.clone()
+        };
+        let finding = over.finding().expect("over budget produces a finding");
+        assert_eq!(finding.rule, "budget.instructions");
+        assert_eq!(finding.severity, RuleSeverity::Deny);
+        assert_eq!(
+            finding.path, "instructions",
+            "the pointer is the set name, never a measured file's content"
+        );
+        assert_eq!(finding.line, None);
+
+        // Identity is over the set, not the counts: the same over-budget set is
+        // one finding across the edits that move the number.
+        let worse = Report {
+            tokens: 5_000,
+            ..over.clone()
+        };
+        assert_eq!(
+            worse.finding().unwrap().identity,
+            finding.identity,
+            "a bigger overrun is the same finding, not a new one"
+        );
+
+        // A different set is a different finding.
+        let other = Report {
+            name: "prompts".to_owned(),
+            ..over
+        };
+        assert_ne!(other.finding().unwrap().identity, finding.identity);
+    }
+
+    #[test]
+    fn measuring_no_declared_budget_is_empty_for_check_and_never_an_error() {
+        // `check`'s reading of the absent table: a repository that declares no
+        // budget has no budget to fail. `policy budget` reads the same absence
+        // as a usage error, because a report that measured nothing must not
+        // print `0` — two callers, two honest readings.
+        assert!(measure_all(Path::new("."), None).unwrap().is_empty());
     }
 }

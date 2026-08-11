@@ -414,42 +414,45 @@ fn run_state_list(
     Ok(ExitCode::Success)
 }
 
-/// Judge the always-loaded instruction set against its declared budget
-/// (CLOUD-50).
+/// Report every declared file-set budget (CLOUD-50).
 ///
-/// Three outcomes, and the middle one is the whole point of the verb: no
-/// `[budget.instructions]` at all is a **usage error**, not a silent pass. A
-/// budget verb run against a config that declares no budget measured nothing,
+/// The **introspection** surface, not the enforcement one — enforcement is a
+/// finding on `check`, so a budget bites without anybody choosing to look.
+///
+/// A config declaring no budget at all is a **usage error**, not a silent pass.
+/// A budget verb run against a config that declares no budget measured nothing,
 /// and reporting that as `0` would be the false green this engine exists to
 /// catch — the same reading `rules::run_static` gives a rule it cannot honestly
-/// run.
+/// run. (`check` reads the same absence the other way, and both are right: see
+/// [`budget::measure_all`].)
 fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let declared = config
-        .budget
-        .as_ref()
-        .and_then(|budget| budget.instructions.as_ref())
-        .ok_or_else(|| {
-            UsageError::raise(format!(
-                "no [budget.instructions] in {}; there is no budget to judge",
-                config::CONFIG_FILE
-            ))
-        })?;
-    let report = budget::measure(Path::new("."), declared)?;
+    let declared = config.budget.as_ref().ok_or_else(|| {
+        UsageError::raise(format!(
+            "no [budget.<name>] in {}; there is no budget to judge",
+            config::CONFIG_FILE
+        ))
+    })?;
+    let reports = budget::measure_all(Path::new("."), Some(declared))?;
+    let over = reports.iter().any(budget::Report::over_budget);
 
     if json {
         // Emitted unconditionally, including for a run within budget: JSON that
-        // is sometimes absent is unparseable.
-        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
-    } else if report.over_budget() {
-        // Silence is the success signal on the human channel (§6), so the
+        // is sometimes absent is unparseable. An array because there are N sets;
+        // one set is an array of one, not a bare object, so the shape does not
+        // change under the consumer as they add a second budget.
+        writeln!(out, "{}", serde_json::to_string_pretty(&reports)?)?;
+    } else {
+        // Silence is the success signal on the human channel (§6), so a set's
         // per-file breakdown is written only when it explains a verdict.
-        for file in &report.files {
-            writeln!(out, "{}", file.line())?;
+        for report in reports.iter().filter(|report| report.over_budget()) {
+            for file in &report.files {
+                writeln!(out, "{}", file.line())?;
+            }
+            writeln!(out, "{}", report.summary())?;
         }
-        writeln!(out, "{}", report.summary())?;
     }
-    Ok(ExitCode::verdict(report.over_budget()))
+    Ok(ExitCode::verdict(over))
 }
 
 /// What a fail-open boundary says on its way out.
@@ -698,7 +701,23 @@ fn run_rules(
     // setting comes off the same resolution, so one §8 chain decides both.
     let base_ref = overrides.config_from.as_deref();
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let findings = runner(&config.rules, Path::new("."))?;
+    let mut findings = runner(&config.rules, Path::new("."))?;
+
+    // Declared budgets are gates, evaluated here rather than only under `policy
+    // budget` (CLOUD-50). Reading files and summing them spawns nothing, so this
+    // preserves `check`'s declared `read` effect.
+    //
+    // They join `findings` BEFORE the waiver filter below, deliberately: a
+    // budget is a policy verdict like any other, so it must be waivable, must
+    // appear in `-J`, and must reach the store — all of which come free from
+    // being an ordinary `Finding`, and all of which a private verdict path would
+    // have had to re-implement. An over-budget set was previously visible only
+    // to whoever thought to run `policy budget`, which is a report, not a gate.
+    findings.extend(
+        budget::measure_all(Path::new("."), config.budget.as_ref())?
+            .iter()
+            .filter_map(budget::Report::finding),
+    );
 
     // The transcript capability (CLOUD-95), resolved BESIDE the runner rather than
     // through it: `runner` is a plain fn pointer over `(&[Rule], &Path)` with

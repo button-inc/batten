@@ -324,7 +324,7 @@ redirect = "write through the surface that owns the file"
 # successor to `mise-tasks/context-budget`, deleted in the same change — never
 # two gates counting the same surface by different rules.
 #
-# `paths` is consumer-specific by nature: which files are always loaded is a
+# `files` is consumer-specific by nature: which files are always loaded is a
 # property of this repository, not of Batten (non-negotiable rule 1). It lists
 # `AGENTS.md` alone. The shell task also globbed `.serena/memories/always/*.md`,
 # a directory that has never existed — a dead entry contributing nothing while
@@ -339,7 +339,7 @@ redirect = "write through the surface that owns the file"
 # either number is a visible diff in this file, pinned by a test in
 # `crates/batten/tests/cli.rs`.
 [budget.instructions]
-paths = ["AGENTS.md"]
+files = ["AGENTS.md"]
 max_tokens = 3500
 max_lines = 199
 

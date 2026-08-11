@@ -156,22 +156,44 @@
   ],
   "$defs": {
     "Budget": {
-      "description": "The `[budget]` table: thresholds this repository holds itself to.\n\nOne field today. A future budget over a different surface — the advisory\ndrain's, say (CLOUD-82) — is a sibling key here, not a second meaning loaded\nonto this one; the two share the estimator's discipline and nothing else.",
+      "description": "The `[budget]` table: **named** file sets and what each may cost.\n\nA map, not a struct with a field per set. The set name is the *consumer's*\n— `[budget.instructions]` is this repository's name for its always-loaded\ncontext, and an engine type carrying that name would be a consumer-specific\nidentifier in `crates/batten` (non-negotiable rule 1). A second consumer\nbudgeting a different surface declares `[budget.<their-name>]` and needs no\nengine change; before this it needed a new field.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/BudgetSet"
+      }
+    },
+    "BudgetSet": {
+      "description": "One `[budget.<name>]` table.",
       "type": "object",
       "properties": {
-        "instructions": {
-          "description": "The always-loaded instruction set and what it may cost.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/InstructionBudget"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "files": {
+          "description": "The counted file set, as globs over repo-relative `/`-separated paths.\nEvery entry must match at least one file — see the module docs.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_lines": {
+          "description": "The optional ceiling on loaded lines, the second predicate the shell gate\nthis replaces carried. Absent means unenforced — a threshold nobody\ndeclared is not a threshold of zero.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0
+        },
+        "max_tokens": {
+          "description": "The ceiling on estimated tokens over the whole set. The boundary is\n`<=`: exactly at budget passes.",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "required": [
+        "files",
+        "max_tokens"
+      ]
     },
     "Effect": {
       "type": "string",
@@ -196,39 +218,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "InstructionBudget": {
-      "description": "The `[budget.instructions]` table.",
-      "type": "object",
-      "properties": {
-        "max_lines": {
-          "description": "The optional ceiling on loaded lines, the second predicate the shell gate\nthis replaces carried. Absent means unenforced — a threshold nobody\ndeclared is not a threshold of zero.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint",
-          "minimum": 0
-        },
-        "max_tokens": {
-          "description": "The ceiling on estimated tokens over the whole set. The boundary is\n`<=`: exactly at budget passes.",
-          "type": "integer",
-          "format": "uint",
-          "minimum": 0
-        },
-        "paths": {
-          "description": "The instruction-file set, as globs over repo-relative `/`-separated\npaths. Every entry must match at least one file — see the module docs.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "paths",
-        "max_tokens"
-      ]
     },
     "Judge": {
       "description": "The `[judge]` table: what the judge may put in a model call.\n\nEvery field defaults to the refusing reading, so a `[judge]` table that\nmerely exists sends nothing but pointers and hashes.",

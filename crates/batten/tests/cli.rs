@@ -2466,7 +2466,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
             "version = 1\n",
             "must_land_on = \"main\"\n",
             "[budget.instructions]\n",
-            "paths = [\"AGENTS.md\"]\n",
+            "files = [\"AGENTS.md\"]\n",
             "max_tokens = 1000\n",
         ))
         .file("AGENTS.md", "instructions\n")
@@ -2917,6 +2917,11 @@ fn the_committed_repo_config_gates_a_repository() {
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
 
     let dir = repo_with_config("config-committed", &contents);
+    // The committed config declares `[budget.instructions]` over `AGENTS.md`,
+    // and since CLOUD-50 wired budgets into `check` a dead glob there is exit 1
+    // per entry (CLOUD-298's refusal, now reaching the main gate). A fixture
+    // standing in for a repository using this config owes it that file.
+    fs::write(dir.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
     // A file the committed no-conflict-markers rule must flag. The marker is
     // assembled at runtime so this source file never carries the banned shape
     // itself — the gate this test backs scans the whole tree, including here.
@@ -2977,6 +2982,9 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // the rules' `crates/**` glob from the `crates/**/*.rs` the marker rule uses:
     // rule 1 says *anywhere* under the crate, and a `*.rs` glob would wave the
     // second file straight through.
+    // Same reason as the sibling test above: the committed budget names
+    // `AGENTS.md`, and `check` now refuses a budget entry that matches nothing.
+    fs::write(dirty.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
     let src = dirty.join("crates/demo/src");
     fs::create_dir_all(&src).expect("create fixture source tree");
     fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
@@ -3010,6 +3018,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("config-agnostic-clean"),
     );
     let clean = repo_with_config("config-agnostic-clean", &contents);
+    fs::write(clean.join("AGENTS.md"), "instructions\n").expect("write fixture instructions");
     let ordinary = clean.join("crates/demo/src");
     fs::create_dir_all(&ordinary).expect("create clean source tree");
     fs::write(ordinary.join("lib.rs"), "pub fn ok() {}\n").expect("write clean source");
@@ -3293,8 +3302,8 @@ fn instructions_of(tokens: usize) -> String {
     body
 }
 
-fn budget_config(paths: &str, max_tokens: usize) -> String {
-    format!("version = 1\n[budget.instructions]\npaths = {paths}\nmax_tokens = {max_tokens}\n")
+fn budget_config(files: &str, max_tokens: usize) -> String {
+    format!("version = 1\n[budget.instructions]\nfiles = {files}\nmax_tokens = {max_tokens}\n")
 }
 
 #[test]
@@ -3324,6 +3333,96 @@ fn a_set_over_budget_exits_2_and_reports_the_files_the_total_and_the_budget() {
         !text.contains("xxxx"),
         "the report must never carry the measured content: {text:?}"
     );
+}
+
+#[test]
+fn an_over_budget_set_denies_through_check_not_only_policy_budget() {
+    // The clause this issue was demoted from Done for. `policy budget` is the
+    // introspection surface; a budget that only reported when somebody thought
+    // to ask is a gate nobody runs. Enforcement is a finding on `check`.
+    let dir = repo_with_config("budget-check-deny", &budget_config("[\"AGENTS.md\"]", 100));
+    common::write(&dir, "AGENTS.md", &instructions_of(150));
+
+    let output = common::run(&dir, &["check"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "over budget is a policy verdict on the main gate"
+    );
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("budget.instructions"),
+        "the finding names which budget was exceeded: {text:?}"
+    );
+    assert!(
+        !text.contains("xxxx"),
+        "pointer-only: never a byte of what was counted: {text:?}"
+    );
+
+    // And it is an ordinary finding, so it appears in the machine channel with
+    // the same shape every other finding has.
+    let json = common::run(&dir, &["check", "-J"]);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&common::stdout(&json)).expect("check -J is JSON");
+    let findings = parsed["findings"].as_array().expect("findings array");
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding["rule"] == "budget.instructions"),
+        "the budget finding rides the normal findings channel: {findings:?}"
+    );
+}
+
+#[test]
+fn a_set_within_budget_leaves_check_silent() {
+    // The other half: the gate must not fire on a repository that is inside its
+    // declared budget, or every consumer would carry a permanent violation.
+    let dir = repo_with_config("budget-check-clean", &budget_config("[\"AGENTS.md\"]", 100));
+    common::write(&dir, "AGENTS.md", &instructions_of(50));
+
+    let output = common::run(&dir, &["check"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty(), "a set within budget says nothing");
+}
+
+#[test]
+fn several_named_sets_are_each_measured_and_each_named() {
+    // Rule 1, end to end: the set name is the consumer's, so a repository may
+    // declare any number of budgets under names the engine has never heard of.
+    let dir = repo_with_config(
+        "budget-many",
+        "version = 1\n\
+         [budget.instructions]\n\
+         files = [\"AGENTS.md\"]\n\
+         max_tokens = 100\n\
+         [budget.prompts]\n\
+         files = [\"PROMPTS.md\"]\n\
+         max_tokens = 100\n",
+    );
+    common::write(&dir, "AGENTS.md", &instructions_of(50));
+    common::write(&dir, "PROMPTS.md", &instructions_of(150));
+
+    let output = common::run(&dir, &["check"]);
+    assert_eq!(output.status.code(), Some(2));
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("budget.prompts"),
+        "the over-budget set is named: {text:?}"
+    );
+    assert!(
+        !text.contains("budget.instructions"),
+        "the set within budget raises nothing: {text:?}"
+    );
+
+    // `policy budget` reports every declared set as an array, so the shape does
+    // not change as a consumer adds a second budget.
+    let json = common::run(&dir, &["policy", "budget", "-J"]);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&common::stdout(&json)).expect("policy budget -J is JSON");
+    let sets = parsed.as_array().expect("an array of reports");
+    assert_eq!(sets.len(), 2);
+    assert_eq!(sets[0]["name"], "instructions", "reported in name order");
+    assert_eq!(sets[1]["name"], "prompts");
 }
 
 #[test]
@@ -3418,7 +3517,13 @@ fn a_config_declaring_no_budget_is_a_usage_error_not_a_silent_pass() {
     let dir = repo_with_config("budget-undeclared", "version = 1\n");
     let output = common::run(&dir, &["policy", "budget"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(common::stderr(&output).contains("budget.instructions"));
+    assert!(common::stderr(&output).contains("budget"));
+
+    // `check` reads the same absence the other way, and both are right: a
+    // repository that declares no budget has no budget to fail, so the gate is
+    // silent rather than refusing. Two callers asking different questions.
+    let checked = common::run(&dir, &["check"]);
+    assert_eq!(checked.status.code(), Some(0));
 }
 
 #[test]
@@ -3440,7 +3545,7 @@ fn this_repos_own_budget_is_pinned_so_raising_it_is_a_visible_diff() {
     assert_eq!(instructions["max_tokens"].as_integer(), Some(3500));
     assert_eq!(instructions["max_lines"].as_integer(), Some(199));
     assert_eq!(
-        instructions["paths"].as_array().map(Vec::len),
+        instructions["files"].as_array().map(Vec::len),
         Some(1),
         "the counted set is AGENTS.md alone; adding an always-load surface is a \
          decision that shows up here"
