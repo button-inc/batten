@@ -81,6 +81,35 @@ step mise-install env MISE_LOCKFILE=false mise install
 # bats lives in tests/bats; `mise run test:bats` cannot run without it.
 step submodules git submodule update --init --recursive
 
+# `doctor` joins the same synchronous window (CLOUD-218). `mise install` returning
+# is not "the toolchain is settled": doctor provisions what mise does NOT own —
+# the rustup cross targets above all — and left outside this window it runs for
+# the first time inside the first `mise run verify`, concurrently with whatever
+# else the sandbox is still laying down. Measured on a cold container
+# 2026-08-07: that first verify died in doctor with
+#
+#   error: failed to install component: 'rust-std-aarch64-apple-darwin',
+#   detected conflict: '.../libaddr2line-….rlib'
+#   ::error:: could not install rust target aarch64-apple-darwin; …
+#
+# and a second doctor, nothing changed but time, exited 0. The message names
+# cross-compilation, so it costs the reader a debugging session on a machine
+# where nothing is broken — CLOUD-196's failure mode in different clothes.
+#
+# This is not a retry: it does not make the race survivable, it empties the
+# window the race needs. CLOUD-220's per-toolchain mutex in `target-ensure`
+# serializes concurrent WRITERS; this leaves the later ones nothing to write,
+# because by the time any task runs the targets are already installed. Both
+# stand — the mutex covers the warm case (the verify graph racing itself,
+# CLOUD-201), this covers the cold one.
+#
+# `doctor` itself is unchanged, and runs AFTER the two steps above: its rustup
+# half needs the mise-provisioned toolchain, and its submodule half is a repair
+# for the case the step above did not reach. It goes through `step`, so the
+# loud-failure contract is the same as every other one — a `::error::` line, the
+# log pointer, and a non-zero exit at the end.
+step doctor mise run doctor
+
 # `hk install` is deliberately NOT run here, though AGENTS.md lists it as a
 # per-clone step. The hook it generates is `exec hk run pre-commit`, calling
 # `hk` bare — which resolves only where mise's shims are on PATH. In this
@@ -115,4 +144,4 @@ fi
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi
-echo "session-start: toolchain provisioned (mise install, submodules); container preflight clean"
+echo "session-start: toolchain provisioned (mise install, submodules, doctor); container preflight clean"

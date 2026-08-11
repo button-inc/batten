@@ -18,12 +18,27 @@ setup() {
 	#
 	# The preflight's own behaviour is asserted in tests/container-preflight.bats,
 	# where the GitHub half is stubbed and every verdict is reachable.
+	#
+	# `doctor` is neutralised for the same reason and one more (CLOUD-218). Its
+	# rustup half reaches the network to install cross targets, so an offline
+	# container would decide these tests; and `[tasks."test:bats"]` already
+	# `depends = ["doctor --no-targets"]`, so letting each hook-running test
+	# invoke a FULL doctor would hang a cross-target install off every one of
+	# them. Its own behaviour is asserted in tests/doctor-check.bats and
+	# tests/target-race.bats.
+	#
+	# The stub RECORDS every invocation, which is what makes the wiring assertion
+	# below a real observation of the hook's behaviour rather than a grep of its
+	# source. `mise install` still execs the real binary — that is what keeps the
+	# two lockfile assertions non-vacuous.
 	STUB="$BATS_TEST_TMPDIR/bin"
+	CALLS="$BATS_TEST_TMPDIR/mise-calls"
 	mkdir -p "$STUB"
 	REAL_MISE="$(command -v mise)"
 	cat >"$STUB/mise" <<EOF
 #!/usr/bin/env bash
-if [ "\$1" = run ] && [ "\$2" = container-preflight ]; then exit 0; fi
+printf '%s\n' "\$*" >>"$CALLS"
+if [ "\$1" = run ] && { [ "\$2" = container-preflight ] || [ "\$2" = doctor ]; }; then exit 0; fi
 exec "$REAL_MISE" "\$@"
 EOF
 	chmod +x "$STUB/mise"
@@ -55,6 +70,29 @@ EOF
 	# pure exec instead of a 24-second install inside the MCP startup window.
 	run grep -q "mise install" "$HOOK"
 	[ "$status" -eq 0 ]
+}
+
+@test "doctor runs inside the synchronous window — after install, before the preflight" {
+	# CLOUD-218. `mise install` returning is not "the toolchain is settled": the
+	# rustup cross targets are doctor's to provision, and outside this window
+	# they land inside the first `mise run verify`, where a concurrent writer
+	# turns the install into a `detected conflict` rollback that names
+	# cross-compilation. Ordering is the whole property — after `mise install`
+	# because doctor's rustup half needs the provisioned toolchain, before the
+	# preflight because the preflight is a halt and provisioning must be done
+	# by then.
+	run env CLAUDE_PROJECT_DIR="$BATS_TEST_DIRNAME/.." "$HOOK"
+	[ "$status" -eq 0 ]
+
+	local install doctor preflight
+	install=$(grep -nx 'install' "$CALLS" | head -1 | cut -d: -f1)
+	doctor=$(grep -nx 'run doctor' "$CALLS" | head -1 | cut -d: -f1)
+	preflight=$(grep -n '^run container-preflight' "$CALLS" | head -1 | cut -d: -f1)
+	[ -n "$install" ]
+	[ -n "$doctor" ]
+	[ -n "$preflight" ]
+	[ "$install" -lt "$doctor" ]
+	[ "$doctor" -lt "$preflight" ]
 }
 
 @test "a failed step exits non-zero — absence must never be silent" {
