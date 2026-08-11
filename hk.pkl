@@ -346,7 +346,6 @@ local gate = new Mapping<String, Step> {
   // findings would be inconvenient (CLOUD-27).
   local generated = List("completions/*")
   ["shfmt"] = (Builtins.shfmt) {
-    check_first = true
     exclude = generated
   }
   ["shellcheck"] = (Builtins.shellcheck) {
@@ -374,7 +373,6 @@ local gate = new Mapping<String, Step> {
   ["taplo"] = Builtins.taplo
   ["taplo-format"] = (Builtins.taplo_format) {
     depends = List("taplo")
-    check_first = true
   }
   // `pkl eval` is the only thing that proves this file is valid. Without it a
   // malformed hk.pkl surfaces when a hook tries to run — the worst possible
@@ -387,7 +385,6 @@ local gate = new Mapping<String, Step> {
   }
   ["pkl-format"] = (Builtins.pkl_format) {
     depends = List("pkl")
-    check_first = true
   }
   // Markdown, plus the one hand-written YAML no other tool owns. prettier also
   // handles JS/CSS/JSON, none of which this repo has by hand — and pointing it
@@ -404,7 +401,6 @@ local gate = new Mapping<String, Step> {
   // by-product rather than the point.
   ["prettier"] = (Builtins.prettier) {
     glob = List("**/*.md", "action.yml")
-    check_first = true
   }
 
   // --- workflows ------------------------------------------------------------
@@ -417,9 +413,6 @@ local gate = new Mapping<String, Step> {
   // --- rust ------------------------------------------------------------------
 
   ["cargo-fmt"] = (Builtins.cargo_fmt) {
-    // check_first: skip the fixer (a write pass) on the common case where the
-    // tree is already formatted; only rewrite when it isn't. (fix mode only.)
-    check_first = true
     // Routed through the task so `mise run lint:fmt` and this step cannot
     // disagree about what "formatted" means. Costs no file-scoping: upstream's
     // check is already whole-workspace (`--manifest-path
