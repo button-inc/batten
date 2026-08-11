@@ -216,7 +216,7 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   deletion of a populated set is caught by the base-ref class instead. Any smell
   is exit 2; an unparseable config is exit 1.
 - `brief.rs` — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint
-  brief`. `lint.rs`'s sibling and deliberately not part of it: that verb lints the
+brief`. `lint.rs`'s sibling and deliberately not part of it: that verb lints the
   one committed authority, this one lints an artifact the CALLER names, so they
   share the house-style `lint <kind>` shape and no code. `SCHEMA` is the
   required-section set as DATA — identifiers, period, instructions, read, check —
@@ -237,7 +237,7 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   brief quotes its evidence the more sections it appears to satisfy. Two problem
   classes because they are two different repairs (`missing` = write the section,
   `unrunnable` = put a command in one that exists), rendered `missing: check,
-  period (2)` in SCHEMA order — so the report never depends on the order the author
+period (2)` in SCHEMA order — so the report never depends on the order the author
   wrote. A clean brief is SILENT (the issue's §7(a) overriding the house "state the
   count even at zero"), while `-J` answers unconditionally. Exit `0`/`2`/`1`, and
   the `2`-for-a-missing-section is CLOUD-307's correction landing: the issue's own

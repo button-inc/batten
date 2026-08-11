@@ -427,7 +427,10 @@ mod tests {
     #[test]
     fn an_empty_brief_is_missing_every_section() {
         let report = problems("");
-        assert_eq!(report.missing, SCHEMA.iter().map(|s| s.id).collect::<Vec<_>>());
+        assert_eq!(
+            report.missing,
+            SCHEMA.iter().map(|s| s.id).collect::<Vec<_>>()
+        );
         // `check` is absent, so it is missing rather than unrunnable.
         assert!(report.unrunnable.is_empty());
     }
@@ -470,7 +473,11 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), count, "section ids must be unique");
         for section in SCHEMA {
-            assert!(!section.labels.is_empty(), "{} declares no label", section.id);
+            assert!(
+                !section.labels.is_empty(),
+                "{} declares no label",
+                section.id
+            );
             for label in section.labels {
                 assert_eq!(
                     label_of(label).as_deref(),

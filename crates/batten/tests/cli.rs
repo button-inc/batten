@@ -2887,17 +2887,17 @@ fn census_argv(decl: &batten::surface::CommandDecl) -> Vec<String> {
     );
     let mut argv: Vec<String> = decl.path.split(' ').map(ToOwned::to_owned).collect();
     for _ in &positionals {
-        let value = CENSUS_POSITIONALS
+        let found = CENSUS_POSITIONALS
             .iter()
             .find(|(path, _)| *path == decl.path)
-            .map(|(_, value)| *value)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{}: takes a positional but CENSUS_POSITIONALS names no value for it — \
-                     add a row (and whatever file it needs to census_fixture)",
-                    decl.path
-                )
-            });
+            .map(|(_, value)| *value);
+        let Some(value) = found else {
+            panic!(
+                "{}: takes a positional but CENSUS_POSITIONALS names no value for it — \
+                 add a row (and whatever file it needs to census_fixture)",
+                decl.path
+            )
+        };
         argv.push(value.to_owned());
     }
     argv.push("-J".to_owned());
@@ -5899,7 +5899,10 @@ fn no_byte_of_the_brief_reaches_any_output_stream() {
             .output()
             .expect("run batten lint brief");
         let both = format!("{}{}", stdout(&output), stderr(&output));
-        assert!(!both.contains(sentinel), "{extra:?} leaked the brief: {both}");
+        assert!(
+            !both.contains(sentinel),
+            "{extra:?} leaked the brief: {both}"
+        );
     }
 }
 

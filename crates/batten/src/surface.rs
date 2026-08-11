@@ -795,10 +795,7 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[
             JSON,
-            FlagDecl::positional_optional(
-                "brief",
-                "The brief to read; omitted or `-` reads stdin",
-            ),
+            FlagDecl::positional_optional("brief", "The brief to read; omitted or `-` reads stdin"),
         ],
     },
     CommandDecl {

@@ -296,6 +296,12 @@ mod tests {
                 "generate".to_owned(),
                 "generate completions".to_owned(),
                 "generate schema".to_owned(),
+                // The `lint` noun is on the list with its kind, for the same
+                // reason as `policy` below: `lint <kind>` reads text the caller
+                // names and answers about its shape, so the whole subtree is
+                // read and the noun row smuggles no write (CLOUD-84).
+                "lint".to_owned(),
+                "lint brief".to_owned(),
                 // The `policy` noun is on the list with its verbs, unlike
                 // `receipt`: every verb in its §2 subtree is read, so there is
                 // no write for the noun row to smuggle on (CLOUD-50).
@@ -405,6 +411,12 @@ mod tests {
                 "generate completions".to_owned(),
                 "generate schema".to_owned(),
                 "hook".to_owned(),
+                // A top-level verb-with-kind, not a `brief` noun: what varies
+                // across `lint <kind>` is the artifact, and `config lint` stays
+                // where it is because it lints the one committed authority
+                // rather than something the caller names (CLOUD-84).
+                "lint".to_owned(),
+                "lint brief".to_owned(),
                 "policy".to_owned(),
                 "policy budget".to_owned(),
                 "provision".to_owned(),

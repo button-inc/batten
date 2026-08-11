@@ -1340,8 +1340,9 @@ fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result
                 UsageError::raise("the brief on stdin is not valid UTF-8".to_owned())
             })?
         }
-        Some(source) => std::fs::read_to_string(source)
-            .map_err(|err| UsageError::raise(format!("cannot read the brief at {source}: {err}")))?,
+        Some(source) => std::fs::read_to_string(source).map_err(|err| {
+            UsageError::raise(format!("cannot read the brief at {source}: {err}"))
+        })?,
     };
 
     let report = brief::problems(&text);
