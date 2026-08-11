@@ -96,6 +96,22 @@ pub enum Command {
         /// The chosen sub-verb.
         command: PolicyCommand,
     },
+    /// Worktrees and the work in them.
+    Worktree {
+        /// The chosen sub-verb.
+        command: WorktreeCommand,
+    },
+}
+
+/// Subcommands of `worktree`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum WorktreeCommand {
+    /// Report work that is uncommitted, unpushed, or not landed.
+    Status {
+        /// Emit the report as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
 }
 
 /// Subcommands of `policy`.
@@ -242,6 +258,15 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 _ => None,
             })
             .map(|command| Command::Policy { command }),
+        "worktree" => matches
+            .subcommand()
+            .and_then(|(name, matches)| match name {
+                "status" => Some(WorktreeCommand::Status {
+                    json: flag(matches, "json"),
+                }),
+                _ => None,
+            })
+            .map(|command| Command::Worktree { command }),
         "generate" => matches
             .subcommand()
             .and_then(|(name, matches)| match name {

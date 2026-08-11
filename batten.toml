@@ -22,7 +22,33 @@ version = 1
 # is what actually forces that — an older build fails on the unknown key — and
 # this floor states the intent so the refusal names the version rather than the
 # key.
-min_batten_version = "0.0.53"
+min_batten_version = "0.0.54"
+
+# The ref work must land on (CLOUD-51) — the target `batten worktree status`
+# judges uncommitted, unpushed, and unlanded work against.
+#
+# Consumer-specific by nature, which is why it lives here and never in the crate
+# (non-negotiable rule 1): which ref is the trunk is a property of the repository
+# being gated. The core ships no default, so an absent key means the gate has no
+# target — exit 1, never a guessed one and never a vacuous pass.
+#
+# `origin/main` rather than `main`: this repo is trunk-based and lands by
+# fast-forward, so the question is whether work reached the remote trunk. A local
+# `main` can be behind, and judging against it would call work landed that only
+# this checkout has seen. Read as it is on disk — the gate fetches nothing
+# (agents fetch, gates decide).
+#
+# Merged-ness here is decided by patch identity, never ancestry, which is what
+# makes the key usable at all: landing by rebase gives every landed commit a new
+# SHA, so a landed branch is never an ancestor of the trunk and `git branch
+# --merged` would report this repository's own finished work as outstanding
+# forever.
+#
+# NOT to be confused with `unlanded` below it in the schema: that is a
+# path-membership set the rule engine evaluates over tree content. VCS state and
+# path membership are orthogonal, and one key meaning both is the conflation
+# CLOUD-37 kept `scope`/`protected`/`unlanded` apart to avoid.
+must_land_on = "origin/main"
 
 # ---------------------------------------------------------------------------
 # The protected-path gate (CLOUD-96): {mutating verb} × {protected path}.

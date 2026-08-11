@@ -176,6 +176,18 @@ pub struct Config {
     /// predicate are [`crate::budget`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget: Option<crate::budget::Budget>,
+    /// The ref work must land on (CLOUD-51) — the target `worktree status`
+    /// judges at-risk work against. Consumer-specific by nature: which ref is
+    /// the trunk is a property of the repository being gated, never of Batten
+    /// (non-negotiable rule 1), so the core ships no default and an absent key
+    /// means the gate has no target rather than a guessed one.
+    ///
+    /// Deliberately not [`Config::unlanded`], which is a path-membership set the
+    /// rule engine evaluates over tree content. The two are orthogonal — one is
+    /// VCS state, the other is which paths policy calls unlanded — and folding
+    /// them together would give one key two meanings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub must_land_on: Option<String>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -372,6 +384,7 @@ impl Config {
             // An authority that declares no budget grants no exemption from one
             // either — there is simply no threshold, which is what `None` says.
             budget: None,
+            must_land_on: None,
         }
     }
 }

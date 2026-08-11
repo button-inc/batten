@@ -35,6 +35,7 @@ pub mod surface;
 pub mod trust;
 pub mod verbs;
 pub mod waiver;
+pub mod worktree;
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -43,6 +44,7 @@ use anyhow::Result;
 
 pub use cli::{
     Cli, Command, ConfigCommand, GenerateCommand, PolicyCommand, ReceiptCommand, SpecFormat,
+    WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -124,7 +126,45 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Policy { command }) => match command {
             PolicyCommand::Budget { json } => run_budget(json, &overrides, out),
         },
+        Some(Command::Worktree { command }) => match command {
+            WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
+        },
     }
+}
+
+/// Report work that is uncommitted, unpushed, or not landed (CLOUD-51).
+///
+/// An absent `must_land_on` is a **usage error**, the same reading `policy
+/// budget` gives an absent budget: there is no target to judge against, and a
+/// gate that answered `0` there would report "nothing is at risk" having checked
+/// nothing — the false green this engine exists to catch. A configured target
+/// that resolves to no commit is exit 1 too, raised by `git::landing`.
+fn run_worktree_status(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let target = config.must_land_on.as_deref().ok_or_else(|| {
+        UsageError::raise(format!(
+            "no `must_land_on` in {}; there is no target to judge work against",
+            config::CONFIG_FILE
+        ))
+    })?;
+    // The repo root, not the process directory: the three categories are
+    // properties of the repository, and answering from a subdirectory would
+    // report a clean tree for a dirty one one level up.
+    let repo = git::repo_root(Path::new("."))?;
+    let at_risk = worktree::status(&repo, target)?;
+
+    if json {
+        // Unconditional, including the clean run: JSON that is sometimes absent
+        // is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&at_risk)?)?;
+    } else {
+        // Clean prints nothing — `lines()` is empty exactly then, so silence is
+        // structural here rather than a branch that could disagree with `any()`.
+        for line in at_risk.lines() {
+            writeln!(out, "{line}")?;
+        }
+    }
+    Ok(ExitCode::verdict(at_risk.any()))
 }
 
 /// Judge the always-loaded instruction set against its declared budget

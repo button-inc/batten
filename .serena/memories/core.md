@@ -183,7 +183,19 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   carrying the scan it did, never a bare no. All git plumbing flows through
   `query`/`query_bytes` here; three source-level gates in its tests hold the
   line (one repo-root resolver, no reachability verdict in `src/`, no second
-  literal `git` invoker).
+  literal `git` invoker). `query_optional` is the fourth entry point (CLOUD-51):
+  non-zero exit is `None`, for the one question whose answer may legitimately be
+  "there is none" — `@{upstream}` on a branch that tracks nothing. A caller that
+  would read absent as _safe_ must not use it.
+  **The `--end-of-options` trap, measured on CLOUD-51:** every query here carries
+  that flag, and in `rev-parse`'s ref-PRINTING modes (`--abbrev-ref`,
+  `--symbolic-full-name`) it must not — `rev-parse` does not consume the flag
+  there, it **echoes it as an output line**, so the answer comes back as
+  `"--end-of-options\nrefs/remotes/origin/main"` and every downstream ref lookup
+  fails on a target nobody configured. Copying the house pattern is what produces
+  the bug. `upstream_of_head` therefore asks about a bare `@{upstream}` with no
+  branch name interpolated, so there is no caller-influenced token in the argv
+  and omitting the flag costs nothing.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<repo-name>/`, CLOUD-23),
   via `etcetera`; repo-name derived at runtime, never baked in (rule 1).
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
@@ -269,6 +281,22 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   tree. Dead-waiver diagnostics are `lint.rs`'s `waiver-names-no-rule` and
   `waiver-expired`; the runtime one (a waiver matching nothing) is deliberately
   out of scope — it would put `rules::run_all`'s spawning path behind a `read` verb.
+- `worktree.rs` — at-risk work detection (CLOUD-51), surfaced as `worktree
+status`. Three categories as one read gate: **uncommitted** (the tree is not
+  porcelain-clean), **unpushed** (commits with no patch-equivalent on the
+  upstream — and a branch with **no upstream** is judged against the target
+  instead, because absence of an upstream is not safety), **unlanded** (no
+  patch-equivalent on `must_land_on`). It re-derives no merged-ness: every
+  verdict is `git::landing`, so the rebase and squash shapes come for free and
+  ancestry is never consulted — which is the whole point, since these consumers
+  land by rebase and a landed branch is therefore never an ancestor of the trunk.
+  A negative carries `TRUNCATED` when the scan filled its window, so an unproven
+  absence never renders as a proven one. `is_landed()` is the test rather than
+  `Verdict::Landed`, or a branch with nothing to land would read at-risk forever.
+  Config is one key, `must_land_on` — deliberately NOT the landed `unlanded`
+  key, which is path membership over tree content; VCS state and path membership
+  are orthogonal and one key meaning both is the conflation CLOUD-37 avoided.
+  An absent key is exit 1, never a pass over nothing.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do. The module

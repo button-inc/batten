@@ -725,6 +725,29 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // The `worktree` noun only dispatches, and unlike `policy` it cannot be
+    // `read`: its house-style §2 subtree (new, adopt, prune, reclaim) is
+    // write-bearing, and a `read` noun over a mutating subtree would leak onto
+    // the derived allowlist for any consumer that treats an entry as a prefix.
+    // Same fail-safe posture as `receipt`: listed with its reason, never guessed
+    // (CLOUD-51). The mutating verbs themselves are other work and absent here.
+    CommandDecl {
+        path: "worktree",
+        about: "Worktrees and the work in them: what is at risk, and the hygiene verbs over them",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // Fixed, read-only VCS queries plus arithmetic over their output. A `read`
+    // verb may run a fixed git query — `receipt status` already does — and what
+    // it must never reach is user-supplied code, which no path here does.
+    CommandDecl {
+        path: "worktree status",
+        about: "Report work that is uncommitted, unpushed, or not landed on the configured target",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // `hook` adjudicates another tool's call: its own execution only reads
     // stdin and config, but its *decision* mediates writes, so it is listed
     // unclassified rather than allowed to leak into the derived read-only

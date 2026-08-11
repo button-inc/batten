@@ -570,6 +570,95 @@ pub fn query_bytes(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<u8>> 
     Ok(output.stdout)
 }
 
+/// [`query`] for a question whose answer may legitimately be "there is none".
+///
+/// Returns `None` when git exits non-zero, rather than raising. Only for a query
+/// where a non-zero exit *is* an answer — `@{upstream}` on a branch that has no
+/// upstream is the case this exists for, and there is no ref-existence test that
+/// does not itself have to be spelled as a failing lookup. A caller that would
+/// treat an absent answer as a *pass* must not use this: absence of an upstream
+/// is not safety (CLOUD-51), so the caller owes the absent case its own reading.
+///
+/// # Errors
+///
+/// Failing to run `git` at all, or output that is not UTF-8, is still an
+/// internal error — only the *verdict* is optional, never the mechanism.
+pub fn query_optional(dir: &Path, args: &[&str]) -> Result<Option<String>> {
+    let output = command(dir)
+        .args(args)
+        .stderr(Stdio::null())
+        .output()
+        .with_context(|| format!("run `git {}`", args.join(" ")))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let stdout = String::from_utf8(output.stdout)
+        .with_context(|| format!("decode `git {}` output as UTF-8", args.join(" ")))?;
+    Ok(Some(stdout.trim_end_matches(['\r', '\n']).to_owned()))
+}
+
+/// How many entries the working tree reports as not committed.
+///
+/// A **count, not a list**, and deliberately so: the report this feeds says
+/// `uncommitted: N paths`, and a primitive that cannot return a path cannot leak
+/// one (non-negotiable rule 4). It also sidesteps `--porcelain`'s path quoting
+/// entirely, which is the only part of that format that is not trivially
+/// parseable.
+///
+/// Counts staged, unstaged, and untracked entries alike — every one of them is
+/// work that a reclaimed container would take with it.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
+pub fn uncommitted(dir: &Path) -> Result<usize> {
+    let status = query(
+        dir,
+        &["status", "--porcelain"],
+        "cannot read the working tree status; this is not a git repository",
+    )?;
+    Ok(status.lines().filter(|line| !line.is_empty()).count())
+}
+
+/// The branch `HEAD` is on, or `None` on a detached `HEAD`.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
+pub fn current_branch(dir: &Path) -> Result<Option<String>> {
+    let name = query(
+        dir,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+        "cannot resolve HEAD; this is not a git repository, or it has no commits",
+    )?;
+    // git spells a detached HEAD as the literal `HEAD`, which is not a branch
+    // name; reporting it as one would name a branch that does not exist.
+    Ok((name != "HEAD").then_some(name))
+}
+
+/// The upstream `HEAD` tracks, as a full ref name, or `None` when it tracks
+/// nothing (including on a detached `HEAD`).
+///
+/// Two deliberate spellings, both learned the hard way:
+///
+/// * **`@{upstream}`, not `<branch>@{upstream}`.** The question is only ever
+///   asked about the current branch, so interpolating a branch name would put a
+///   caller-influenced token in the argv for no gain. There is nothing here to
+///   quote wrongly.
+/// * **No `--end-of-options`.** Every other query in this module carries it, and
+///   this one must not: in ref-printing mode `rev-parse` does not consume the
+///   flag, it **echoes it as an output line**, so the answer comes back as
+///   `"--end-of-options\nrefs/remotes/origin/main"` and every downstream ref
+///   lookup fails on a target nobody configured. It is safe to omit precisely
+///   because the argument is a fixed literal.
+///
+/// # Errors
+///
+/// Internal only — no upstream is `None`, not a failure.
+pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
+    query_optional(dir, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
+}
+
 /// Resolve `rev` to the full SHA of a commit.
 ///
 /// `--verify` yields exactly one line or a failure; the `^{commit}` peel

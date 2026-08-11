@@ -226,6 +226,10 @@ mod tests {
                 "policy budget".to_owned(),
                 "receipt status".to_owned(),
                 "spec".to_owned(),
+                // The verb, never the `worktree` noun: that subtree is
+                // write-bearing, so the noun is `Unclassified` and stays off
+                // this list (CLOUD-51).
+                "worktree status".to_owned(),
             ]
         );
     }

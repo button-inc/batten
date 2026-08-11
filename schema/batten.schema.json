@@ -54,6 +54,13 @@
         "null"
       ]
     },
+    "must_land_on": {
+      "description": "The ref work must land on (CLOUD-51) — the target `worktree status`\njudges at-risk work against. Consumer-specific by nature: which ref is\nthe trunk is a property of the repository being gated, never of Batten\n(non-negotiable rule 1), so the core ships no default and an absent key\nmeans the gate has no target rather than a guessed one.\n\nDeliberately not [`Config::unlanded`], which is a path-membership set the\nrule engine evaluates over tree content. The two are orthogonal — one is\nVCS state, the other is which paths policy calls unlanded — and folding\nthem together would give one key two meanings.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "protected": {
       "description": "Paths whose modification is guarded. A plain include set — no `!`\nentries — evaluated independently of [`Config::scope`] and\n[`Config::unlanded`]. CLOUD-31's config-trust diff defends this set.",
       "type": "array",

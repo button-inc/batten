@@ -27,6 +27,19 @@ Keep guidance durable and generalizable, not task-local.
 Add or update memories only with stable, non-obvious project conventions that avoid complex rediscovery in the future.
 Do not add: quick-read facts; generic language/framework knowledge; one-off task notes; volatile line-level details; behavior likely to change soon.
 
+## Memories are formatted, and the Serena tools do not format them
+
+`.serena/memories/*.md` are in prettier's glob, and the `hk` gate checks them.
+The Serena write/edit tools do **not** run prettier, so a memory edit leaves the
+tree unformatted and the next `verify` fails on it.
+
+**Order matters: edit memories BEFORE `mise run fmt`, never after.** Measured
+twice in one session (CLOUD-50, CLOUD-51): both times the memory edit landed
+after the format run, both times `verify` failed on `prettier --check` several
+minutes in, and on the second one it cost a whole `land` lap. If a memory is
+edited after formatting, `mise exec -- prettier --write .serena/memories/<f>.md`
+is the cheap fix — seconds, against a ~3.5-minute `verify`.
+
 ## Maintenance Actions
 
 - Renaming memories: References are updated automatically if handled via Serena's memory rename tool.

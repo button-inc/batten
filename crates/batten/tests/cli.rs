@@ -2462,7 +2462,13 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
     // same way `census_argv` supplies `receipt status` its positional.
     let root = scratch(name);
     let repo = Fixture::at(root.join("repo"))
-        .config("version = 1\n[budget.instructions]\npaths = [\"AGENTS.md\"]\nmax_tokens = 1000\n")
+        .config(concat!(
+            "version = 1\n",
+            "must_land_on = \"main\"\n",
+            "[budget.instructions]\n",
+            "paths = [\"AGENTS.md\"]\n",
+            "max_tokens = 1000\n",
+        ))
         .file("AGENTS.md", "instructions\n")
         .git()
         .base_commit()
@@ -3439,4 +3445,231 @@ fn this_repos_own_budget_is_pinned_so_raising_it_is_a_visible_diff() {
         "the counted set is AGENTS.md alone; adding an always-load surface is a \
          decision that shows up here"
     );
+}
+
+// --- `worktree status` (CLOUD-51) ---------------------------------------------
+//
+// The three at-risk categories as one read gate. The load-bearing property is
+// that merged-ness is content, never ancestry: these consumers land by rebase
+// and fast-forward, so a branch that landed perfectly is never an ancestor of
+// the trunk, and every ancestry test reports finished work as outstanding.
+
+/// A repository with one base commit, `origin/main` pinned to it, and a
+/// `must_land_on` naming `target`.
+fn worktree_repo(name: &str, target: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(&format!("version = 1\nmust_land_on = \"{target}\"\n"))
+        .file("README.md", "base\n")
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    dir
+}
+
+/// Commit `body` at `path`, returning the new HEAD sha.
+fn commit_file(dir: &std::path::Path, path: &str, body: &str, message: &str) -> String {
+    common::write(dir, path, body);
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-q", "-m", message]);
+    git_in(dir, &["rev-parse", "HEAD"])
+}
+
+/// Point `branch` at the pinned `origin/main` as its upstream, without a real
+/// remote: the tracking ref already exists, so the branch config plus a fetch
+/// refspec is the whole of what `@{upstream}` resolves through.
+fn track_origin_main(dir: &std::path::Path, branch: &str) {
+    git_in(dir, &["config", "remote.origin.url", "."]);
+    git_in(
+        dir,
+        &[
+            "config",
+            "remote.origin.fetch",
+            "+refs/heads/*:refs/remotes/origin/*",
+        ],
+    );
+    git_in(
+        dir,
+        &["config", &format!("branch.{branch}.remote"), "origin"],
+    );
+    git_in(
+        dir,
+        &[
+            "config",
+            &format!("branch.{branch}.merge"),
+            "refs/heads/main",
+        ],
+    );
+}
+
+fn worktree_status(dir: &std::path::Path) -> Output {
+    common::run(dir, &["worktree", "status"])
+}
+
+#[test]
+fn a_dirty_tree_is_at_risk_and_names_the_count_not_the_paths() {
+    let dir = worktree_repo("worktree-dirty", "main");
+    common::write(&dir, "scratch.txt", "work in progress\n");
+
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(2), "at-risk work is a verdict");
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("uncommitted: 1 paths"),
+        "the report states the count: {text:?}"
+    );
+    // A count, never a path and never a diff (non-negotiable rule 4). The
+    // primitive cannot return a path at all, so this is structural.
+    assert!(!text.contains("scratch.txt"), "pointer-only: {text:?}");
+    assert!(
+        !text.contains("work in progress"),
+        "never content: {text:?}"
+    );
+}
+
+#[test]
+fn a_committed_but_unpushed_branch_is_at_risk() {
+    let dir = worktree_repo("worktree-unpushed", "origin/main");
+    track_origin_main(&dir, "main");
+    commit_file(&dir, "feature.txt", "shipped locally\n", "feat: local only");
+
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        common::stdout(&output).contains("unpushed:"),
+        "work the upstream does not carry is at risk: {:?}",
+        common::stdout(&output)
+    );
+}
+
+#[test]
+fn a_rebased_and_landed_branch_reads_landed_though_ancestry_says_otherwise() {
+    // The keystone, at the verb layer. The branch's commit was replayed onto the
+    // target under a new SHA, so `main` is not an ancestor of the branch and no
+    // reachability test can see the landing. Content can.
+    let dir = worktree_repo("worktree-rebased", "main");
+    git_in(&dir, &["checkout", "-q", "-b", "feature"]);
+    let original = commit_file(&dir, "work.txt", "the work\n", "feat: the work");
+
+    // The target moves first. That is why a rebase happens at all, and it is
+    // also what makes the replay a genuinely different commit: cherry-picking
+    // onto the *same* parent reproduces the original object exactly, so a test
+    // that skipped this would assert nothing about new SHAs.
+    git_in(&dir, &["checkout", "-q", "main"]);
+    commit_file(
+        &dir,
+        "other.txt",
+        "landed meanwhile\n",
+        "feat: someone else",
+    );
+    git_in(&dir, &["cherry-pick", &original]);
+    let landed_as = git_in(&dir, &["rev-parse", "HEAD"]);
+    assert_ne!(original, landed_as, "the replay must mint a new SHA");
+    git_in(&dir, &["checkout", "-q", "feature"]);
+
+    let output = worktree_status(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a rebased landing is landed: {:?}",
+        common::stdout(&output)
+    );
+    assert_eq!(common::stdout(&output), "", "clean prints nothing");
+}
+
+#[test]
+fn a_squash_merged_multi_commit_branch_reads_landed() {
+    // The case per-commit patch identity alone under-detects: no individual
+    // commit survived the merge, so only the branch's cumulative content matches.
+    let dir = worktree_repo("worktree-squashed", "main");
+    git_in(&dir, &["checkout", "-q", "-b", "feature"]);
+    commit_file(&dir, "one.txt", "first\n", "feat: one");
+    commit_file(&dir, "two.txt", "second\n", "feat: two");
+
+    git_in(&dir, &["checkout", "-q", "main"]);
+    git_in(&dir, &["merge", "--squash", "feature"]);
+    git_in(
+        &dir,
+        &["commit", "-q", "-m", "feat: the whole branch, squashed"],
+    );
+    git_in(&dir, &["checkout", "-q", "feature"]);
+
+    let output = worktree_status(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a squash merge is landed: {:?}",
+        common::stdout(&output)
+    );
+}
+
+#[test]
+fn a_clean_landed_checkout_prints_nothing_and_exits_0() {
+    let dir = worktree_repo("worktree-clean", "main");
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(common::stdout(&output), "", "success is silent");
+}
+
+#[test]
+fn a_target_that_resolves_to_no_commit_is_exit_1_never_a_vacuous_pass() {
+    let dir = worktree_repo("worktree-bad-target", "refs/heads/no-such-branch");
+    let output = worktree_status(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unresolvable target is a config error, not `nothing is at risk`"
+    );
+    assert!(common::stderr(&output).contains("does not resolve to a commit"));
+}
+
+#[test]
+fn a_local_only_branch_with_no_upstream_never_reads_as_safe() {
+    // Absence of an upstream is not safety. This is the branch that disappears
+    // with the container it lived in, and the one an upstream-only check misses
+    // entirely.
+    let dir = worktree_repo("worktree-local-only", "main");
+    git_in(&dir, &["checkout", "-q", "-b", "orphan"]);
+    commit_file(&dir, "orphan.txt", "never pushed\n", "feat: orphan work");
+
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(2));
+    let text = common::stdout(&output);
+    assert!(
+        text.contains("unpushed:") && text.contains("unlanded:"),
+        "a branch with no upstream is both unpushed and unlanded: {text:?}"
+    );
+    assert!(
+        text.contains("orphan@"),
+        "the pointer names the branch: {text:?}"
+    );
+}
+
+#[test]
+fn a_missing_target_key_is_a_usage_error_not_a_silent_pass() {
+    let dir = Fixture::new("worktree-no-target")
+        .config("version = 1\n")
+        .file("README.md", "base\n")
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+
+    let output = worktree_status(&dir);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(common::stderr(&output).contains("must_land_on"));
+}
+
+#[test]
+fn the_at_risk_report_is_byte_stable_across_runs() {
+    let dir = worktree_repo("worktree-stable", "main");
+    git_in(&dir, &["checkout", "-q", "-b", "feature"]);
+    commit_file(&dir, "work.txt", "the work\n", "feat: the work");
+    common::write(&dir, "scratch.txt", "dirty\n");
+
+    let first = common::run(&dir, &["worktree", "status", "--json"]);
+    let second = common::run(&dir, &["worktree", "status", "--json"]);
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(first.status.code(), Some(2));
 }
