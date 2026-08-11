@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Output, Stdio};
 
-use common::{Fixture, batten, git_in, scratch};
+use common::{Fixture, batten, git_in, scratch, scratch_outside_tree};
 
 /// Run `batten hook --harness <harness>` with `payload` piped to stdin.
 ///
@@ -3672,4 +3672,205 @@ fn the_at_risk_report_is_byte_stable_across_runs() {
     let second = common::run(&dir, &["worktree", "status", "--json"]);
     assert_eq!(first.stdout, second.stdout);
     assert_eq!(first.status.code(), Some(2));
+}
+
+// --- the findings store's identity (CLOUD-164) --------------------------------
+
+/// A repo fixture for the store tests, plus the `home` that isolates the
+/// out-of-tree store. Separate from [`receipt_fixture`] in one respect that
+/// matters: it takes the directory name, because *basename collision* is one of
+/// the behaviours under test and cannot be exercised through a fixed layout.
+/// `distinct` seeds a file so the repository gets its own root commit. The
+/// harness pins author and committer dates for determinism, so two fixtures with
+/// byte-identical history would share a commit SHA — and a shared root commit
+/// means "the same repository" to this module, quite correctly. Real unrelated
+/// repositories never collide there; fixtures have to be told not to.
+fn store_fixture(group: &str, parent: &str, name: &str, distinct: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(group);
+    let repo = Fixture::at(root.join(parent).join(name))
+        .config("version = 1\n")
+        .file("seed.txt", distinct)
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    (repo, home)
+}
+
+/// Run `batten` in `dir` with the store isolated under `home`, and repository
+/// discovery fenced to the test tmpdir — so a fixture that forgot `git init`
+/// fails loudly rather than resolving the real batten checkout and writing a
+/// store marker into its `.git/`.
+fn store_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Output {
+    batten()
+        .args(args)
+        .current_dir(dir)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .output()
+        .expect("run batten state")
+}
+
+/// The store id bound to `dir`, read from the marker the repository carries.
+///
+/// Read through the marker rather than by scanning the state dir, because the
+/// marker is the repository→store direction the design depends on: a test that
+/// scanned instead would pass even if the marker were never written.
+fn bound_store_id(dir: &std::path::Path) -> String {
+    fs::read_to_string(dir.join(".git").join("batten-store"))
+        .expect("the repository carries a store marker")
+        .trim()
+        .to_owned()
+}
+
+#[test]
+fn adopting_mints_one_store_and_is_idempotent() {
+    let (repo, home) = store_fixture("store-mint", "parent", "proj", "mint");
+
+    let first = store_cmd(&repo, &home, &["state", "adopt"]);
+    assert_eq!(first.status.code(), Some(0));
+    let minted = bound_store_id(&repo);
+    assert_eq!(minted.len(), 64, "a store id is 64 hex characters");
+    assert!(minted.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(
+        String::from_utf8_lossy(&first.stderr).contains("minted"),
+        "minting a store is announced, never silent"
+    );
+
+    // Re-running binds the same store: resolution asks every criterion before
+    // it mints, so a second run cannot mint a second one.
+    let again = store_cmd(&repo, &home, &["state", "adopt"]);
+    assert_eq!(again.status.code(), Some(0));
+    assert_eq!(
+        bound_store_id(&repo),
+        minted,
+        "a second run re-mints nothing"
+    );
+}
+
+#[test]
+fn two_repos_sharing_a_directory_name_do_not_share_a_store() {
+    // Acceptance (b). Basename keying is disqualified precisely because it
+    // merges same-named strangers; both repos here are called `proj` and share
+    // one state root, and they must still hold two distinct stores.
+    let (one, home) = store_fixture("store-strangers", "a", "proj", "repo-a");
+    let two = Fixture::at(
+        one.parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("b")
+            .join("proj"),
+    )
+    .config("version = 1\n")
+    .file("seed.txt", "repo-b")
+    .git()
+    .base_commit()
+    .build();
+
+    assert_eq!(
+        store_cmd(&one, &home, &["state", "adopt"]).status.code(),
+        Some(0)
+    );
+    assert_eq!(
+        store_cmd(&two, &home, &["state", "adopt"]).status.code(),
+        Some(0)
+    );
+
+    assert_ne!(
+        bound_store_id(&one),
+        bound_store_id(&two),
+        "same-named strangers must not merge onto one store"
+    );
+}
+
+#[test]
+fn a_moved_no_remote_repo_keeps_its_store() {
+    // Acceptance (c). A move changes the common dir AND the basename at once,
+    // which is why neither can be the key: with no remote to fall back on, the
+    // marker and the minted id are all that carry continuity across it.
+    let (repo, home) = store_fixture("store-moved", "before", "proj", "moved");
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "adopt"]).status.code(),
+        Some(0)
+    );
+    let minted = bound_store_id(&repo);
+
+    // Move it, and rename it while we are at it: the basename hint is now wrong
+    // as well as the path.
+    let moved = repo.parent().unwrap().join("renamed");
+    fs::rename(&repo, &moved).expect("move the repository");
+
+    let after = store_cmd(&moved, &home, &["state", "adopt"]);
+    assert_eq!(after.status.code(), Some(0));
+    assert_eq!(
+        bound_store_id(&moved),
+        minted,
+        "a moved repository is adopted by its store, never orphaned onto a fresh one"
+    );
+    assert!(
+        String::from_utf8_lossy(&after.stderr).contains("migrated"),
+        "a key-material change is reported, never silent"
+    );
+}
+
+#[test]
+fn a_linked_worktree_resolves_to_the_main_repositorys_store() {
+    // The store half of acceptance (a): worktree siblings must not split. The
+    // root resolver answers with the *common* dir's parent, so a call from
+    // inside a linked worktree names the main repository — which is what makes
+    // one defect seen from two worktrees one finding rather than two.
+    let (repo, home) = store_fixture("store-worktree", "parent", "proj", "worktree");
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "adopt"]).status.code(),
+        Some(0)
+    );
+    let minted = bound_store_id(&repo);
+
+    let tree = repo.parent().unwrap().join("wt");
+    git_in(
+        &repo,
+        &["worktree", "add", "-b", "topic", tree.to_str().unwrap()],
+    );
+
+    let from_worktree = store_cmd(&tree, &home, &["state", "adopt"]);
+    assert_eq!(from_worktree.status.code(), Some(0));
+    assert_eq!(
+        bound_store_id(&repo),
+        minted,
+        "a linked worktree binds the main repository's store, never a second one"
+    );
+}
+
+#[test]
+fn adopting_outside_a_repository_is_a_usage_error() {
+    // Not a repository: exit 1, never a mint. A store minted against whatever
+    // repository happened to be up the tree would bind the wrong one.
+    //
+    // **Outside the tree, not under `target/`, and `GIT_CEILING_DIRECTORIES` is
+    // not what saves this.** `git::repo_root` scrubs the discovery *fences* on
+    // purpose — its answer must be a function of the path and the filesystem
+    // alone — so a fixture under `target/` walks straight up into this
+    // repository's own `.git`. Measured: the first version of this test adopted
+    // a store for the real batten checkout and wrote a marker into it.
+    let loose = scratch_outside_tree("store-no-repo", "loose");
+    let home = scratch_outside_tree("store-no-repo", "home");
+
+    let output = store_cmd(&loose, &home, &["state", "adopt"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!loose.join(".git").exists());
+}
+
+#[test]
+fn adopting_a_store_id_that_does_not_exist_is_refused() {
+    // A typo must not silently bind the wrong store, and must not mint one
+    // either — the named form is an override of resolution, not a create.
+    let (repo, home) = store_fixture("store-bad-id", "parent", "proj", "bad-id");
+    let output = store_cmd(&repo, &home, &["state", "adopt", &"f".repeat(64)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no store with id"),
+        "the refusal names what was not found"
+    );
 }

@@ -228,6 +228,12 @@ pub enum Opened {
         record: StoreRecord,
         /// Where it lives.
         dir: PathBuf,
+        /// What the repository looks like **now**. Carried from [`resolve`]
+        /// rather than re-derived at write time: the record's own `commonDir`
+        /// is precisely the field a move invalidates, so re-observing through it
+        /// would fail exactly when the repository had moved — the one case this
+        /// module exists to survive.
+        observed: KeyMaterial,
         /// Key-material changes observed since it was last written. Empty is the
         /// ordinary case; non-empty is a migration awaiting a write.
         migrations: Vec<Migration>,
@@ -239,6 +245,8 @@ pub enum Opened {
         record: StoreRecord,
         /// Where it lives.
         dir: PathBuf,
+        /// What the repository looks like now — see [`Opened::Existing`].
+        observed: KeyMaterial,
         /// What proved it.
         criterion: MatchCriterion,
     },
@@ -466,6 +474,7 @@ pub fn resolve(repo_root: &Path) -> Result<Opened> {
             return Ok(Opened::Existing {
                 record,
                 dir: expected,
+                observed,
                 migrations,
             });
         }
@@ -476,6 +485,7 @@ pub fn resolve(repo_root: &Path) -> Result<Opened> {
             return Ok(Opened::Adopted {
                 record,
                 dir,
+                observed,
                 criterion: MatchCriterion::Marker,
             });
         }
@@ -492,6 +502,7 @@ pub fn resolve(repo_root: &Path) -> Result<Opened> {
                 Opened::Existing {
                     record,
                     dir: expected,
+                    observed,
                     migrations,
                 }
             }
@@ -523,6 +534,7 @@ pub fn resolve(repo_root: &Path) -> Result<Opened> {
             Opened::Adopted {
                 record,
                 dir,
+                observed,
                 criterion,
             }
         } else {
@@ -613,8 +625,15 @@ pub fn commit(opened: Opened) -> Result<Bound> {
         Opened::Existing {
             mut record,
             dir,
+            observed,
             migrations,
         } => {
+            // The marker is refreshed on **every** path, including this one,
+            // where nothing moved. A repository meeting an existing store for
+            // the first time takes this arm with no migration to record, and
+            // without an unconditional write it would never get the pointer that
+            // makes the *next* move survivable.
+            write_marker(&observed.common_dir, &record.id)?;
             if migrations.is_empty() {
                 return Ok(Bound {
                     record,
@@ -622,7 +641,6 @@ pub fn commit(opened: Opened) -> Result<Bound> {
                     note: None,
                 });
             }
-            let observed = observe_for(&dir, &record)?;
             let note = Some(format!(
                 "store {} migrated ({})",
                 record.id,
@@ -631,20 +649,24 @@ pub fn commit(opened: Opened) -> Result<Bound> {
             record.migrations.extend(migrations);
             record.key_material = observed;
             write_record(&dir, &record)?;
-            write_marker(&record.key_material.common_dir, &record.id)?;
             Ok(Bound { record, dir, note })
         }
         Opened::Adopted {
             mut record,
             dir,
+            observed,
             criterion,
         } => {
-            let observed = observe_for(&dir, &record)?;
             let changed = changed_fields(&record.key_material, &observed);
             let note = Some(format!(
-                "store {} adopted on {}",
+                "store {} adopted on {}{}",
                 record.id,
-                criterion.as_str()
+                criterion.as_str(),
+                if changed.is_empty() {
+                    String::new()
+                } else {
+                    format!("; migrated ({})", changed.join(", "))
+                }
             ));
             if !changed.is_empty() {
                 record.migrations.push(Migration {
@@ -709,21 +731,6 @@ pub fn commit(opened: Opened) -> Result<Bound> {
     }
 }
 
-/// Re-observe the repository a bound record belongs to.
-///
-/// The record's own `commonDir` names the git directory, and its parent is the
-/// checkout — so a record can be refreshed without the caller threading the repo
-/// root back in. Falls back to the record's existing material when the path is
-/// no longer readable, so a store on a detached volume is refreshed to nothing
-/// rather than erased.
-fn observe_for(_dir: &Path, record: &StoreRecord) -> Result<KeyMaterial> {
-    let common = Path::new(&record.key_material.common_dir);
-    let Some(root) = common.parent() else {
-        return Ok(record.key_material.clone());
-    };
-    observe(root).or_else(|_| Ok(record.key_material.clone()))
-}
-
 /// One line naming what a migration moved. Pointer-only: field names, never
 /// values — a recorded remote URL can carry a credential.
 fn describe(migrations: &[Migration]) -> String {
@@ -760,6 +767,7 @@ pub fn run_adopt(store: Option<&str>, err: &mut dyn std::io::Write) -> Result<Ex
                     Some(record) => Opened::Adopted {
                         record,
                         dir,
+                        observed: observe(&root)?,
                         criterion,
                     },
                     None => {
@@ -788,6 +796,7 @@ pub fn run_adopt(store: Option<&str>, err: &mut dyn std::io::Write) -> Result<Ex
             Opened::Adopted {
                 record,
                 dir,
+                observed,
                 criterion,
             }
         }
