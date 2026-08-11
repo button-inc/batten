@@ -244,6 +244,27 @@ fn json_records_the_promoted_disposition_and_is_byte_stable() {
     assert_eq!(unset_json["findings"][0]["path"], "lib.rs");
     assert_eq!(unset_json["findings"][0]["line"], 2);
 
+    // The identity rides the data channel (CLOUD-322), under the same key path
+    // `state list -J` uses — `identity.fingerprint` — so the two documents join
+    // rather than merely agree. Shape asserted here; the join itself is pinned
+    // in `cli.rs`, which is where both surfaces can be run against one store.
+    let fingerprint = unset_json["findings"][0]["identity"]["fingerprint"]
+        .as_str()
+        .expect("a finding carries its minted identity");
+    assert_eq!(fingerprint.len(), 64, "64 hex characters: {fingerprint}");
+    assert!(
+        fingerprint
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "lowercase hex only, so it sorts byte-stably: {fingerprint}"
+    );
+    assert!(
+        unset_json["findings"][0]["identity"]["version"]
+            .as_str()
+            .is_some_and(|v| !v.is_empty()),
+        "the minting function's version rides beside the hash, never inside it"
+    );
+
     let promoted = run(&dir, &["check", "--fail-on-warning", "-J"], None);
     assert_eq!(promoted.status.code(), Some(2));
     let promoted_json: serde_json::Value =

@@ -4466,6 +4466,45 @@ fn ledger_fixture(name: &str) -> (PathBuf, PathBuf) {
 }
 
 #[test]
+fn check_and_state_list_name_the_same_finding_by_the_same_key() {
+    // CLOUD-322's whole point: a key that does not join the two documents is not
+    // a key. `check -J` reports what it just found, `state list -J` reports what
+    // the store holds, and until now they described the same defect with nothing
+    // in common. Run both against ONE store and assert the fingerprints are
+    // equal — not merely well-formed, which a second derivation would also be.
+    let (repo, home) = ledger_fixture("identity-join");
+
+    let recorded = store_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0));
+
+    let checked = store_cmd(&repo, &home, &["check", "-J"]);
+    assert_eq!(
+        checked.status.code(),
+        Some(2),
+        "a deny-severity match is a policy verdict"
+    );
+    let report: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(checked.stdout).expect("stdout is UTF-8"))
+            .expect("check -J is JSON");
+
+    let stored = stored_findings(&repo, &home);
+    assert_eq!(stored.len(), 1, "one defect, one finding");
+    assert_eq!(
+        report["findings"][0]["identity"]["fingerprint"]
+            .as_str()
+            .expect("check -J carries the identity"),
+        stored[0].fingerprint,
+        "the same span mints the same fingerprint on both surfaces"
+    );
+    assert_eq!(report["findings"][0]["rule"], "no-todo");
+
+    // Pointer, never payload (rule 4): the identity is a digest, so the matched
+    // line must not appear anywhere in the document that now carries it.
+    let text = serde_json::to_string(&report).expect("re-serialize");
+    assert!(!text.contains("TODO fix me"), "pointer-only: {text}");
+}
+
+#[test]
 fn a_defect_seen_from_two_worktrees_is_one_finding_with_two_instances() {
     // Acceptance (a), end to end. The same defect observed from two worktrees
     // must be ONE finding — and fixing it in one must not disturb the other's

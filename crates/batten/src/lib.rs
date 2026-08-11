@@ -801,6 +801,12 @@ fn decide(
 /// applied. A promoted warning is therefore visible as `"severity": "warn"` with
 /// `"report": "fail"` — the promoted disposition, derived here at the output
 /// boundary and never stored (see [`severity`]'s one-stored-field rule).
+///
+/// `identity` is the whole [`identity::StoredIdentity`], not a bare fingerprint,
+/// so this document joins `state list -J` **key for key** rather than merely
+/// agreeing in value — the same `identity.fingerprint` path reads on both. The
+/// version rides along because a consumer freezing a fingerprint forever (SARIF's
+/// `partialFingerprints`, CLOUD-167) has to know which function minted it.
 #[derive(Debug, serde::Serialize)]
 struct FindingView<'a> {
     rule: &'a str,
@@ -809,6 +815,21 @@ struct FindingView<'a> {
     line: Option<usize>,
     severity: RuleSeverity,
     report: severity::ReportLevel,
+    /// The finding's minted identity (CLOUD-322).
+    ///
+    /// Emitted unconditionally. The oracle argument that kept it off this
+    /// channel was inherited from the secret class and does not transfer: a
+    /// code-anchored fingerprint digests a line of **tracked source**, already
+    /// readable by anyone reading the `path:line` beside it, so confirming a
+    /// guess about it buys nothing. The secret class cannot leak here however
+    /// this path is written, because [`identity::secret_code_fingerprint`] takes
+    /// an `IdentityKey` in its signature — a secret-bearing identity cannot be
+    /// minted unkeyed at all.
+    ///
+    /// Withholding it would not remove the need for a stable key on the wire
+    /// (drain dedup, worktree hygiene, SARIF); it would move the derivation
+    /// elsewhere, which is the second identity a single module exists to prevent.
+    identity: &'a identity::StoredIdentity,
 }
 
 /// The `-J` payload for one `check`/`enforce` run.
@@ -1156,6 +1177,7 @@ fn run_rules(
                         severity::row_for_rule(finding.severity).report,
                         config.fail_on_warning,
                     ),
+                    identity: &finding.identity,
                 })
                 .collect(),
         };
