@@ -33,8 +33,48 @@ runs() { printf '%s\n' "$@"; }
 	# by default, this is the state on every refresh, not a corner case.
 	CHECKS_GREEN_RUNS="$(runs "completed	skipped	ci")" run "$GREEN"
 	[ "$status" -eq 3 ]
-	[[ "$output" == *"required check(s) skipped"* ]]
-	[[ "$output" == *"ci"* ]]
+	[[ "$output" == *"required check(s) with no verdict"* ]]
+	[[ "$output" == *"ci skipped"* ]]
+}
+
+@test "a cancelled required check is not an answer either, and says which word" {
+	# CLOUD-363. A cancelled run judged nothing — it is the absence of an answer,
+	# exactly like the draft-era skip. Reading it as red is what wedged #293: the
+	# lap stopped, and nothing it could do afterwards created another check-run.
+	# The conclusion is named beside the check because "no verdict" now has two
+	# spellings, and a stall you cannot spell is a stall you cannot diagnose.
+	CHECKS_GREEN_RUNS="$(runs "completed	cancelled	ci")" run "$GREEN"
+	[ "$status" -eq 3 ]
+	[[ "$output" == *"required check(s) with no verdict"* ]]
+	[[ "$output" == *"ci cancelled"* ]]
+}
+
+@test "one cancelled required check is not redeemed by another that succeeded" {
+	# The partial set, which is the ordinary shape of a supersession: whichever
+	# legs had already finished carry their verdict, and the rest were killed
+	# mid-run. Green would land a SHA most of whose checks never judged it.
+	CHECKS_GREEN_RUNS="$(runs \
+		"completed	success	ci" \
+		"completed	cancelled	cross")" run "$GREEN"
+	[ "$status" -eq 3 ]
+	[[ "$output" == *"cross cancelled"* ]]
+}
+
+@test "a fan-in failing over cancelled upstreams is no verdict, not a red one" {
+	# THE MEASURED SET, from #293 (CLOUD-363). `final` is a fan-in over the
+	# others, so its failure is a CONSEQUENCE of the cancellations rather than an
+	# independent judgement on the tree. This is why "no answer" is tested before
+	# "red": promoting the failure here would report the whole set as a real
+	# failure and put the branch straight back into the wedge.
+	CHECKS_GREEN_RUNS="$(runs \
+		"completed	failure	final" \
+		"completed	cancelled	msrv" \
+		"completed	cancelled	ci" \
+		"completed	cancelled	cross" \
+		"completed	cancelled	darwin-link (aarch64-apple-darwin)" \
+		"completed	cancelled	commit-lint")" run "$GREEN"
+	[ "$status" -eq 3 ]
+	[[ "$output" != *"not green"* ]]
 }
 
 @test "third-party successes do not make a draft-era skip set an answer" {
@@ -68,6 +108,9 @@ runs() { printf '%s\n' "$@"; }
 }
 
 @test "a required check that failed is red, and named" {
+	# CLOUD-363's second acceptance clause: making a cancellation recoverable
+	# must not make a real failure recoverable. A failure with nothing ungraded
+	# beside it leaves that bucket empty and falls through to exit 1.
 	CHECKS_GREEN_RUNS="$(runs \
 		"completed	success	ci" \
 		"completed	failure	cross")" run "$GREEN"
@@ -139,7 +182,7 @@ runs() { printf '%s\n' "$@"; }
 		"completed	success	ci	2026-08-12T01:00:00Z	1" \
 		"completed	skipped	ci	2026-08-12T02:00:00Z	2")" run "$GREEN"
 	[ "$status" -eq 3 ]
-	[[ "$output" == *"required check(s) skipped"* ]]
+	[[ "$output" == *"required check(s) with no verdict"* ]]
 }
 
 @test "the id breaks a tie between two runs started in the same second" {

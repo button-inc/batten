@@ -24,6 +24,15 @@
 # business. The same scoping is why a third party cannot veto a landing — only a
 # required check's failure is red here, matching what branch protection enforces.
 #
+# `cancelled` sits in that same bucket, and CLOUD-363 is what put it there. A
+# cancelled run judged nothing — it is the ABSENCE of an answer, not a bad one —
+# and reading it as red wedged a branch with no exit: `land` re-drafted and
+# stopped, and every later lap re-read the same stale set without ever being able
+# to create a check-run. It holds for whatever cancels a run: a concurrent push
+# under `cancel-in-progress`, a manual cancel, a runner reclaim. The bucket
+# carries the conclusion alongside the name, because "no verdict" now has two
+# spellings and a stall you cannot spell is a stall you cannot diagnose.
+#
 # ABSENT IS NOT SKIPPED. `zizmor` is path-filtered, so a PR touching no workflow
 # produces no check-run for it at all. Requiring every name to be PRESENT would
 # hang forever on the ordinary PR; requiring none to be skipped does not.
@@ -110,7 +119,11 @@ reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
 		# The precedence that makes an UNORDERABLE pair fail closed: a reading
 		# carrying no started_at/id leaves every key equal, and then the least
 		# conclusive row wins, which is the union answer this replaces.
-		rank = ($1 != "completed") ? 4 : ($2 == "skipped" ? 3 : (($2 == "success" || $2 == "neutral") ? 1 : 2))
+		# `cancelled` ranks with `skipped`, not with a failure (CLOUD-363): a
+		# cancelled run judged nothing, so an unorderable pair holding one must
+		# fall to "no answer" rather than to red.
+		rank = ($1 != "completed") ? 4 : \
+			(($2 == "skipped" || $2 == "cancelled") ? 3 : (($2 == "success" || $2 == "neutral") ? 1 : 2))
 		if (!(name in bestkey) || key > bestkey[name] ||
 			(key == bestkey[name] && rank > bestrank[name])) {
 			bestkey[name] = key
@@ -127,7 +140,17 @@ reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
 			if (!(name in bestkey)) continue
 			print "SUMMARY|" bestconcl[name] "\t" name
 			if (beststatus[name] != "completed") { pending++; continue }
-			if (bestconcl[name] == "skipped") { skipped = skipped sep3 name; sep3 = ", "; continue }
+			# THE NOT-AN-ANSWER BUCKET, and `cancelled` belongs in it (CLOUD-363).
+			# A cancelled run is the ABSENCE of a verdict, exactly like a
+			# draft-era skip; reading it as red wedged #293 with no exit. The
+			# conclusion is carried beside the name because "no verdict" has two
+			# spellings, and a stall you cannot spell is a stall you cannot
+			# diagnose.
+			if (bestconcl[name] == "skipped" || bestconcl[name] == "cancelled") {
+				skipped = skipped sep3 name " " bestconcl[name]
+				sep3 = ", "
+				continue
+			}
 			graded++
 			if (bestconcl[name] != "success" && bestconcl[name] != "neutral") {
 				bad = bad sep4 name " " bestconcl[name]
@@ -143,9 +166,16 @@ summary=$(printf '%s\n' "$reading" | sed -n 's/^SUMMARY|//p')
 verdict=$(printf '%s\n' "$reading" | sed -n 's/^VERDICT|//p')
 IFS='|' read -r graded pending ungraded failed <<<"$verdict"
 
+# "No answer" is tested BEFORE "red", and the order is load-bearing rather than
+# incidental (CLOUD-363). The measured set on #293 was `final failure` plus five
+# `cancelled`: `final` is a fan-in over the others, so its failure was a
+# CONSEQUENCE of the cancellations and not an independent verdict on the tree.
+# Promoting red over "no answer" would report that set as a real failure and put
+# the branch straight back in the wedge. A genuine failure leaves this bucket
+# empty and still falls through to exit 1 below.
 if [ "$graded" -eq 0 ] || [ "$pending" -gt 0 ] || [ -n "$ungraded" ]; then
 	if [ -n "$ungraded" ]; then
-		echo "checks-green: not an answer yet on $sha — required check(s) skipped: $ungraded"
+		echo "checks-green: not an answer yet on $sha — required check(s) with no verdict: $ungraded"
 	else
 		echo "checks-green: not an answer yet on $sha — $pending required check(s) still running, $graded graded"
 	fi

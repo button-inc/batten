@@ -85,8 +85,27 @@ response() {
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
 	# And it says what it is waiting on, as a pointer rather than a log.
-	[[ "$output" == *"required check(s) skipped"* ]]
-	[[ "$output" == *"ci"* ]]
+	[[ "$output" == *"required check(s) with no verdict"* ]]
+	[[ "$output" == *"ci skipped"* ]]
+}
+
+@test "a cancelled set holds the poll open instead of reporting red" {
+	# CLOUD-363, through the poll rather than the predicate: the supersession
+	# that cancelled #293's landing run made `ci-wait` exit 1, `land` re-draft,
+	# and the branch wedge. The poll must outlive the cancellation, because
+	# `land`'s next lap re-fires the ready and the fresh run supersedes these
+	# check-runs by name.
+	stub_gh
+	response resp.1 'W/"a"' '{"check_runs":[
+          {"status":"completed","conclusion":"failure","name":"final"},
+          {"status":"completed","conclusion":"cancelled","name":"ci"},
+          {"status":"completed","conclusion":"cancelled","name":"cross"}]}'
+	response resp.last 'W/"b"' '{"check_runs":[
+          {"status":"completed","conclusion":"success","name":"ci"}]}'
+	run timeout 20 "$WAIT"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
+	[[ "$output" == *"ci cancelled"* ]]
 }
 
 @test "a third-party check gets no veto over landing" {

@@ -227,10 +227,20 @@ singleton_held=yes
 # is running.
 mise run task-registry register land "$$" starting >/dev/null 2>&1 || true
 
-# "Does this SHA carry an answer yet?" — the conclusions `ci-wait` grades, over
-# the checks `ci-wait` requires, so the two agree by construction on what counts
-# as one. Both read $CI_REQUIRED_CHECKS from mise.toml [env]; a second copy that
+# "Does this SHA carry an answer yet?" — the conclusions `checks-green` grades,
+# over the checks it requires, so the two agree by construction on what counts as
+# one. Both read $CI_REQUIRED_CHECKS from mise.toml [env]; a second copy that
 # drifted would put this task back to waiting on runs that will never be graded.
+#
+# The CONCLUSION list has to mirror it just as exactly, and CLOUD-363 is what a
+# drift there costs. `cancelled` counted as graded here while `checks-green` read
+# it as red, and the two composed into a trap with no exit: the red stopped the
+# lap, and "already graded" then suppressed the ready that would have replaced
+# the cancelled runs, so every later lap re-read the identical stale set. A
+# cancelled run is not an answer at either end now, which is what makes the next
+# lap re-fire the ready and buy a real run. `neutral` is here for the mirror-image
+# reason: `checks-green` grades it, so omitting it would leave a green SHA reading
+# as unanswered and buy a second run for a head that already has its verdict.
 # Absent from the remote, or unreachable, reads as 0: a SHA with no runs is
 # exactly the one that needs the event, and the caller's other guards decide
 # whether to spend it.
@@ -254,7 +264,9 @@ graded_runs() {
 				# an answer this head does not have — leaving the ready that
 				# starts CI unfired.
 				key = $3 "|" sprintf("%020d", $4 + 0)
-				rank = ($1 == "skipped" || $1 == "-") ? 2 : 1
+				# `cancelled` is not an answer here either, or the two ends
+				# disagree and the CLOUD-363 trap survives the other fix.
+				rank = ($1 == "skipped" || $1 == "cancelled" || $1 == "-") ? 2 : 1
 				if (!($2 in bestkey) || key > bestkey[$2] ||
 					(key == bestkey[$2] && rank > bestrank[$2])) {
 					bestkey[$2] = key
@@ -265,8 +277,8 @@ graded_runs() {
 			END {
 				for (i = 1; i <= n; i++) {
 					c = bestconcl[roster[i]]
-					if (c == "success" || c == "failure" || c == "timed_out" ||
-						c == "cancelled" || c == "action_required") hit++
+					if (c == "success" || c == "neutral" || c == "failure" ||
+						c == "timed_out" || c == "action_required") hit++
 				}
 				print hit + 0
 			}

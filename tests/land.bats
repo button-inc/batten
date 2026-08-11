@@ -277,6 +277,9 @@ head_checks() { printf '%s' "$1" >"$BATS_TEST_TMPDIR/checkruns"; }
 head_checks_empty() { head_checks '{"check_runs":[]}'; }
 head_is_graded() { head_checks '{"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}'; }
 head_is_all_skipped() { head_checks '{"check_runs":[{"name":"ci","status":"completed","conclusion":"skipped"}]}'; }
+# The supersession set (CLOUD-363): the landing SHA's runs were killed by a
+# concurrent event, so nothing on this head judged anything.
+head_is_all_cancelled() { head_checks '{"check_runs":[{"name":"ci","status":"completed","conclusion":"cancelled"}]}'; }
 ci_is_slow() { : >"$BATS_TEST_TMPDIR/ci-wait.slow"; }
 # A lap makes TWO `main-watch` calls: one racing `ci-wait`, one racing the
 # fast-forward answer (CLOUD-246). Each is counted under its own role, so a
@@ -670,6 +673,41 @@ workflow_runs() {
 	[ "$status" -eq 0 ]
 	[[ "$(ready_calls)" == *"--undo"* ]]
 	[[ "$output" == *"re-fired the ready"* ]]
+}
+
+@test "a ready PR whose head carries only cancelled runs has its ready re-fired" {
+	# THE WEDGE (CLOUD-363), measured on #293. `land` readied and then
+	# force-pushed; both events reached the same `concurrency: ci-<ref>` group two
+	# seconds apart and the run on the SHA that would land was the one cancelled.
+	# `graded_runs` counted `cancelled` as an answer, so this block did not fire —
+	# and with HEAD unchanged, the push moving nothing and the verify receipt
+	# still valid, re-running `land` re-read the identical stale set forever. Two
+	# consecutive invocations died on it; the only escape was a hand-minted SHA,
+	# which is a manual step outside the loop this task exists to drive.
+	head_is_all_cancelled
+	push_moves_nothing
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$(ready_calls)" == *"--undo"* ]]
+	[[ "$output" == *"re-fired the ready"* ]]
+}
+
+@test "the re-drafted PR a cancelled set left behind is readied, not stuck" {
+	# The state `land` actually leaves after reporting red: `redraft` closed the
+	# tap, so the next invocation meets a DRAFT whose head carries the cancelled
+	# set. That is the entry point recovery has to work from, and it takes the
+	# other ready block — the pre-push one — so `--undo` is neither needed nor
+	# spent (CLOUD-255 still holds on this path).
+	is_draft
+	head_is_all_cancelled
+	push_moves_nothing
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ "$(grep -c . "$BATS_TEST_TMPDIR/ready")" -eq 1 ]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+	[[ "$output" == *"readied #150 before pushing"* ]]
 }
 
 @test "a DRAFT whose push moves nothing readies once, not once and then again" {
