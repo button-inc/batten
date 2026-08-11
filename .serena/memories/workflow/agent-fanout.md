@@ -97,6 +97,31 @@ each landed change was producing about two commits on `main`; CLOUD-319's
 debounce targets exactly that amplifier. The lever remains the one stated above:
 shorten `verify`, do not add sessions.
 
+**Re-measured three hours later, and the model no longer held — a lap now LOSES
+by arithmetic, not by coin flip.** Over `main`'s ten commits to 21:09Z the mean
+gap was **436s**, down from 487s, while a full lap is `verify` (~200s) + CI
+(~5–6 min) + the fast-forward wait — call it 8–10 minutes against a 7.3-minute
+gap. CLOUD-122 lost **16 consecutive laps** across two `mise run land`
+invocations, every one of them green on CI. Nothing was broken and no change was
+at fault; the loop simply cannot converge while the gap is under a lap.
+
+Two distinct lap-loss shapes showed up, and only one is the documented one:
+
+- **main moved before CI finished** (3 of 16) — the void-the-verdict case
+  `ci-wait`/`main-watch` race for on purpose. Cheap, cancels early.
+- **CI green, `/fast-forward` posted, the bot then SILENT while main moved**
+  (5 of 16, and the majority of the laps that got that far). `land` infers a
+  refusal from main moving rather than from the bot answering, so this reads in
+  the log as a refusal that never happened. The bot is not rejecting the
+  fast-forward; it is slower than `main`.
+
+That second shape is what makes the ceiling bite sooner than the N ≈ 2.9 model
+predicts: the model prices a lap at verify + CI, and the bot's silence is a third
+term nobody measured. Raising `LAND_MAX_LAPS` (the task's own documented bound)
+buys more attempts within one invocation but does not change the per-lap odds —
+it spends CI minutes against a losing bet. The lever is unchanged and now more
+urgent: **shorten the lap, or quiet `main`; never add sessions.**
+
 ## Planners fan out freely; implementers do not
 
 The cap above is a **build** cap, and reading it as a cap on sessions is the
