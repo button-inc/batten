@@ -25,7 +25,16 @@
 #      is DISCOVERED rather than confirmed, and the discovery costs a runner and
 #      a round trip that a free local run would have caught.
 #
-#   4. THE REQUIRED SET NAMES EXACTLY THESE JOBS. `ci-wait` and `land` decide
+#   4. THE RELEASE PR IS A DRAFT UNTIL THE DEBOUNCE READIES IT. release-plz
+#      rewrites the `release-plz-*` branch on every push to `main`, and a
+#      non-draft PR turns each of those refreshes into a full matrix on a diff
+#      that is a version bump and a changelog entry — 5 of 30 `ci.yml` runs in
+#      one measured 37-minute window, four of them thrown away by the next
+#      refresh (CLOUD-346). `pr_draft` is the whole mechanism, so it is the
+#      thing to sense: property 1 gates every job on the draft flag, and this
+#      gates the flag itself being set.
+#
+#   5. THE REQUIRED SET NAMES EXACTLY THESE JOBS. `ci-wait` and `land` decide
 #      "did this SHA get an answer" over `$CI_REQUIRED_CHECKS` (CLOUD-327), a
 #      hand-maintained list until CLOUD-54's derived `[ci].required_checks`
 #      lands. A hand-maintained list is only safe with a sensor on it: a job
@@ -39,6 +48,7 @@ set -uo pipefail
 
 workflows="${PARITY_WORKFLOWS:-.github/workflows}"
 manifest="${PARITY_MANIFEST:-mise.toml}"
+release_plz="${PARITY_RELEASE_PLZ:-release-plz.toml}"
 fail=0
 
 problem() {
@@ -136,6 +146,14 @@ if [ "$checked" -eq 0 ]; then
 	problem "no pull_request-triggered workflow found under $workflows — either the path is wrong or the landing path is untested."
 fi
 
+# Property 4. Read as committed text, like everything else here: the key set to
+# anything but `true` is the same defect as the key absent, so match the value.
+if [ ! -f "$release_plz" ]; then
+	problem "no $release_plz, so nothing declares whether the release PR is a draft — every refresh of it would buy a full matrix (CLOUD-346)."
+elif ! grep -Eq '^[[:space:]]*pr_draft[[:space:]]*=[[:space:]]*true[[:space:]]*$' "$release_plz"; then
+	problem "$release_plz does not set \`pr_draft = true\` — release-plz would open the release PR ready, and every push to main would spend a matrix on it before the debounce is ever consulted (CLOUD-346)."
+fi
+
 have_names=$(printf '%s\n' "$job_names" | sed '/^$/d' | base_names)
 while IFS= read -r name; do
 	[ -n "$name" ] || continue
@@ -149,4 +167,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, running nothing verify does not, and named in full by CI_REQUIRED_CHECKS"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, running nothing verify does not, and named in full by CI_REQUIRED_CHECKS; the release PR opens as a draft"

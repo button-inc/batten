@@ -10,8 +10,10 @@ setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ci-local-parity"
 	WF="$BATS_TEST_TMPDIR/workflows"
 	MANIFEST="$BATS_TEST_TMPDIR/mise.toml"
+	RELEASE_PLZ="$BATS_TEST_TMPDIR/release-plz.toml"
 	mkdir -p "$WF"
-	export PARITY_WORKFLOWS="$WF" PARITY_MANIFEST="$MANIFEST"
+	export PARITY_WORKFLOWS="$WF" PARITY_MANIFEST="$MANIFEST" PARITY_RELEASE_PLZ="$RELEASE_PLZ"
+	printf '[workspace]\npr_draft = true\n' >"$RELEASE_PLZ"
 	cat >"$MANIFEST" <<-'EOF'
 		CI_REQUIRED_CHECKS = "ci"
 
@@ -184,9 +186,38 @@ workflow() {
 	[[ "$output" == *"no pull_request-triggered workflow"* ]]
 }
 
+@test "a release config that does not open the release PR as a draft is refused" {
+	# CLOUD-346. A ready release PR is refreshed on every push to `main`, and
+	# each refresh buys a full matrix over a version bump. Property 1 gates every
+	# job on the draft flag; this gates the flag being set at all.
+	workflow ci
+	printf '[workspace]\npublish = false\n' >"$RELEASE_PLZ"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"pr_draft = true"* ]]
+}
+
+@test "a release config set to something other than true is refused" {
+	# The key present and false is the same defect as the key absent, so the
+	# gate matches the value rather than the name.
+	workflow ci
+	printf '[workspace]\npr_draft = false\n' >"$RELEASE_PLZ"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"pr_draft = true"* ]]
+}
+
+@test "a missing release config is a failure, not a pass" {
+	workflow ci
+	rm -f "$RELEASE_PLZ"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"nothing declares whether the release PR is a draft"* ]]
+}
+
 @test "this repository's real workflows pass" {
 	# The assertion that catches the gate drifting from what it guards.
-	unset PARITY_WORKFLOWS PARITY_MANIFEST
+	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ
 	cd "$BATS_TEST_DIRNAME/.."
 	run "$GATE"
 	[ "$status" -eq 0 ]

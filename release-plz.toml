@@ -6,3 +6,12 @@
 publish = false           # do not publish to any cargo registry
 git_release_enable = true # create a GitHub release when the version changes
 git_tag_enable = true
+# CLOUD-346. The release PR is refreshed on every push to `main`, and a non-draft
+# one turns each refresh into a full CI matrix over a version bump and a
+# changelog entry — measured at 5 of 30 `ci.yml` runs in one 37-minute window,
+# four of them discarded by the next refresh. Draft is what the existing
+# `if: github.event.pull_request.draft == false` job guards already skip, so the
+# debounce in `auto-release-land.yml` decides BEFORE the minutes are spent: it
+# readies this PR only once a release is actually due. Gated by
+# `mise run ci-local-parity`.
+pr_draft = true

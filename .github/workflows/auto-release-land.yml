@@ -24,6 +24,16 @@ name: auto-release-land
 # and release-plz keeps accumulating into it, so a hold costs nothing and the
 # eventual tag covers the whole batch. Its header carries the reasoning.
 #
+# AND THE DEBOUNCE NOW DECIDES BEFORE THE MINUTES ARE SPENT (CLOUD-346). It was
+# the last gate here, behind the green check — so by the time it said "hold", the
+# CI for that refresh was already paid for. It was throttling the TAG and nothing
+# about CI: release-plz rewrites the release branch on every push to `main`, and
+# a non-draft PR turns each rewrite into a full matrix (measured: 5 of 30 `ci.yml`
+# runs in one 37-minute window, four discarded by the next refresh). The PR is now
+# opened as a draft (`pr_draft` in release-plz.toml), CI skips drafts by the guard
+# it already had, and this job readies the PR only once `release-due` says a
+# release is due — so exactly one matrix is spent, on the SHA that lands.
+#
 # QUIET IS THE ABSENCE OF EVENTS, so something has to ask: the `schedule` trigger
 # below is that asker, and the only reason this workflow has a clock at all. It is
 # deliberately coarse — one tick per half hour, a job that shallow-checks-out,
@@ -106,57 +116,42 @@ jobs:
           if [ "$EVENT" = "schedule" ]; then
             pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" \
               --jq '[.[] | select(.head.ref | startswith("release-plz-"))] | .[0] // {}')
-            num=$(jq -r '.number // empty' <<<"$pr")
-            sha=$(jq -r '.head.sha // empty' <<<"$pr")
-            [ -n "$num" ] || echo "no open release-plz PR; nothing to land"
+            [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open release-plz PR; nothing to land"
           else
-            sha="$RUN_SHA"
-            num=$(gh api "repos/$REPO/commits/$sha/pulls" \
-              --jq 'map(select(.state == "open")) | .[0].number // empty')
-            [ -n "$num" ] || echo "no open PR for $sha; skipping"
+            pr=$(gh api "repos/$REPO/commits/$RUN_SHA/pulls" \
+              --jq 'map(select(.state == "open")) | .[0] // {}')
+            [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open PR for $RUN_SHA; skipping"
           fi
+          num=$(jq -r '.number // empty' <<<"$pr")
+          sha=$(jq -r '.head.sha // empty' <<<"$pr")
+          # The draft flag is read from the PR itself rather than inferred from
+          # the event: it is what the whole debounce now turns on, and the two
+          # triggers reach the same PR from opposite ends.
+          draft=$(jq -r 'if .draft == true then "true" else "false" end' <<<"$pr")
           echo "num=$num" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-      # This fires per gating workflow; require that *every* non-skipped check-run
-      # on the SHA is completed and successful before landing, so the first
-      # workflow to finish can't land while another is still running or has failed.
-      # The cron path needs the same answer for a different reason: it can arrive
-      # mid-refresh, while release-plz's latest push is still being checked.
-      # Read with GITHUB_TOKEN — it carries checks:read; the release PAT does not.
-      - name: Confirm every check on the head SHA is green
-        if: steps.target.outputs.num != ''
-        id: checks
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ steps.target.outputs.sha }}
-        run: |
-          set -euo pipefail
-          outstanding=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-            --jq '[.check_runs[]
-                   | select(.conclusion != "skipped")
-                   | select(.status != "completed" or .conclusion != "success")]
-                  | length')
-          if [ "$outstanding" != "0" ]; then
-            echo "not all checks green yet ($outstanding outstanding); skipping"
-            echo "green=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "green=true" >> "$GITHUB_OUTPUT"
-          fi
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
       # `main`, not the PR head — the default ref for both of this workflow's
       # triggers. The debounce must be the one committed to trunk, never a copy a
       # release branch could carry, and no credential outlives the step.
+      #
+      # This used to sit behind the green check, which is what made the debounce
+      # decide too late to save anything (CLOUD-346). It now runs on any tick that
+      # found a release PR — a checkout and a mise install, a few tens of seconds,
+      # against the full matrix that ordering was costing on every push to `main`.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: steps.checks.outputs.green == 'true'
+        if: steps.target.outputs.num != ''
         with:
           persist-credentials: false
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
-        if: steps.checks.outputs.green == 'true'
-      # THE DEBOUNCE. Exit 1 is a hold, which is the ordinary outcome and must not
-      # fail the run — only exit 2, "could not look", is allowed to. Dispatched
-      # through mise so CI runs the exact task an agent runs locally, per the
-      # workflow contract; the reasoning lives in the task's header, not here.
+        if: steps.target.outputs.num != ''
+      # THE DEBOUNCE, AND NOW THE FIRST GATE RATHER THAN THE LAST. Exit 1 is a
+      # hold, which is the ordinary outcome and must not fail the run — only exit
+      # 2, "could not look", is allowed to. Dispatched through mise so CI runs the
+      # exact task an agent runs locally, per the workflow contract; the reasoning
+      # lives in the task's header, not here.
       - name: Is the release due, or is it still being debounced?
-        if: steps.checks.outputs.green == 'true'
+        if: steps.target.outputs.num != ''
         id: debounce
         env:
           GH_TOKEN: ${{ github.token }}
@@ -172,11 +167,60 @@ jobs:
             1) echo "due=false" >> "$GITHUB_OUTPUT" ;;
             *) exit "$verdict" ;;
           esac
+      # The four states this job can be in, and there is nothing else to decide:
+      #
+      #   draft + hold  nothing. The cheap tick, and the ordinary one — the PR
+      #                 keeps accumulating and no CI is spent on it at all.
+      #   draft + due   ready it. That is the one event that starts CI, and it
+      #                 starts it on the SHA that is about to land.
+      #   ready + hold  re-draft it. `main` moved after the ready, so the window
+      #                 reopened; leaving it ready would buy a matrix on every
+      #                 further refresh, which is the whole defect (CLOUD-346).
+      #   ready + due   judge the checks, and land if they are green.
+      #
+      # Readying with the PAT, not GITHUB_TOKEN: a `ready_for_review` from the
+      # Actions token fires no workflow, so CI would never run and the landing
+      # would wait forever on checks nothing creates.
+      - name: Ready the release PR so CI runs on the SHA that will land
+        if: steps.debounce.outputs.due == 'true' && steps.target.outputs.draft == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.target.outputs.num }}
+        run: gh pr ready "$PR_NUM" --repo "$REPO"
+      - name: Re-draft the release PR while the debounce is holding
+        if: steps.debounce.outputs.due == 'false' && steps.target.outputs.draft == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.target.outputs.num }}
+        run: gh pr ready "$PR_NUM" --repo "$REPO" --undo
+      # The same predicate `ci-wait` blocks on, asked once: at least one required
+      # check graded, none skipped, none pending. The inline jq this replaces
+      # filtered `skipped` out before counting, so a wholly skipped set — every
+      # draft-era refresh, now the normal state — read as zero outstanding, i.e.
+      # green (CLOUD-327's false green, second author). Exit 3 "no answer yet" and
+      # exit 1 "red" are both ordinary here and must not fail the run; only exit 2
+      # is. Read with GITHUB_TOKEN — it carries checks:read; the release PAT does
+      # not.
+      - name: Is every required check green on the head SHA?
+        if: steps.debounce.outputs.due == 'true' && steps.target.outputs.draft == 'false'
+        id: checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set +e
+          mise run checks-green
+          verdict=$?
+          case "$verdict" in
+            0) echo "green=true" >> "$GITHUB_OUTPUT" ;;
+            1 | 3) echo "green=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$verdict" ;;
+          esac
       # Post with the release PAT (repo owner): fast-forward.yml only acts on a
       # comment from OWNER/MEMBER/COLLABORATOR, and a GITHUB_TOKEN comment would
       # not trigger that workflow at all.
       - name: Comment /fast-forward to land the release PR
-        if: steps.debounce.outputs.due == 'true'
+        if: steps.checks.outputs.green == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}
