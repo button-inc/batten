@@ -152,6 +152,21 @@ minutes becoming ~7.5 against the same 7.3-minute gap. So the odds a re-invoked
 is not the same bet as raising `LAND_MAX_LAPS`. Neither is a substitute for the
 lever; both beat engineering around the loop.
 
+**What the backstop is asking when it stops you.** `still not linear after 8
+laps; main is moving faster than a lap takes. Look before lapping again` — the
+thing to look at is whether the laps lost for a REASON (rebase conflict, red CI,
+failed `verify`) or purely because `main` moved. Only the second is contention,
+and only the second is safe to re-run unchanged; the first is a defect the loop
+is correctly refusing to paper over. Measured again on CLOUD-282, which spent a
+full 8 laps to the backstop with every `verify` green and CI green three separate
+times, then lost the next invocation to a genuine rebase conflict — two different
+answers to that question, one invocation apart.
+
+A land that stops on the backstop is **re-run, not re-engineered**: wrapping it
+in bespoke retry or pre-check logic is forbidden (AGENTS.md), and re-invoking
+`mise run land` after confirming the laps lost only to movement is the sanctioned
+move.
+
 ## Planners fan out freely; implementers do not
 
 The cap above is a **build** cap, and reading it as a cap on sessions is the
