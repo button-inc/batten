@@ -199,6 +199,13 @@ pub struct Config {
     /// already crossed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<crate::judge::Judge>,
+    /// The design-evidence audit's one bound (CLOUD-53): how large a single
+    /// capture may be. Absent means the engine default — the corpus arrives on
+    /// stdin and the predicates are the engine's, so a repository that declares
+    /// nothing still gets the full gate. The type and the gates are
+    /// [`crate::design`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<crate::design::Design>,
     /// The merge contract this repository commits to (CLOUD-54), **derived**
     /// from the host ruleset. Absent means the contract is not projected here;
     /// present, it is what `config lint --host-rules` compares against. The host
@@ -273,8 +280,8 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 ///
 /// `deny_unknown_fields` is what makes the refusal total and free: every
 /// authority-only key (`epoch`, `marker`, `verb`, `budget`, `must_land_on`,
-/// `judge`, `ci`, `defects`, `provision`, `transcript`) becomes a hard parse
-/// error here rather than a silently discarded tightening. A hand-maintained
+/// `judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard
+/// parse error here rather than a silently discarded tightening. A hand-maintained
 /// refusal list would be a second authority, and would drift the moment a field
 /// is added to [`Config`].
 ///
@@ -539,6 +546,10 @@ impl Config {
             budget: None,
             must_land_on: None,
             judge: None,
+            // Declaring no ceiling is not declaring a ceiling of zero: the audit
+            // falls back to the engine default, so an unreadable authority
+            // withholds no gate here — it only fails to tighten one.
+            design: None,
             ci: None,
             defects: None,
             provisions: Vec::new(),

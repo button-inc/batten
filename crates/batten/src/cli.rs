@@ -121,6 +121,11 @@ pub enum Command {
         /// The chosen kind.
         command: LintCommand,
     },
+    /// Design-evidence claims and the integrity of the record behind them.
+    Design {
+        /// The chosen sub-verb.
+        command: DesignCommand,
+    },
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -134,6 +139,17 @@ pub enum LintCommand {
         /// straight from whatever composed it without a temporary file.
         path: Option<String>,
         /// Emit the report as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
+}
+
+/// Subcommands of `design`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DesignCommand {
+    /// Audit a JSONL claim stream read on stdin.
+    Audit {
+        /// Emit the problems as byte-stable JSON instead of pointer lines.
         json: bool,
     },
 }
@@ -423,6 +439,15 @@ fn defects_of(matches: &ArgMatches) -> Option<DefectsCommand> {
     }
 }
 
+fn design_of(matches: &ArgMatches) -> Option<DesignCommand> {
+    match matches.subcommand()? {
+        ("audit", matches) => Some(DesignCommand::Audit {
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
 fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(WorktreeCommand::Status {
@@ -495,6 +520,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),
         "defects" => defects_of(matches).map(|command| Command::Defects { command }),
+        "design" => design_of(matches).map(|command| Command::Design { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),
         // `get_many`, not `get_one`: the tail is an `Append` action, so every

@@ -15,6 +15,7 @@ pub mod ci;
 pub mod cli;
 pub mod config;
 pub mod defects;
+pub mod design;
 pub mod doctor;
 pub mod effect;
 pub mod epoch;
@@ -55,8 +56,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    Cli, Command, ConfigCommand, DefectsCommand, GenerateCommand, LintCommand, PolicyCommand,
-    ProvisionCommand, ReceiptCommand, SpecFormat, StateCommand, WorktreeCommand,
+    Cli, Command, ConfigCommand, DefectsCommand, DesignCommand, GenerateCommand, LintCommand,
+    PolicyCommand, ProvisionCommand, ReceiptCommand, SpecFormat, StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -167,6 +168,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             ),
             DefectsCommand::Add { dry_run } => run_defects_add(dry_run, mode, &overrides, err),
         },
+        // The corpus is stdin's and nothing else (CLOUD-324); the §8 chain
+        // supplies one ceiling and no second source of records.
+        Some(Command::Design { command }) => match command {
+            DesignCommand::Audit { json } => run_design_audit(json, &overrides, out),
+        },
         Some(Command::Provision { command }) => match command {
             ProvisionCommand::Status { json } => run_provision_status(json, &overrides, out),
             ProvisionCommand::Apply { dry_run } => run_provision_apply(dry_run, &overrides, err),
@@ -181,6 +187,51 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             StateCommand::List { json } => run_state_list(json, mode, out, err),
         },
     }
+}
+
+/// Audit a design-evidence claim stream read on stdin (CLOUD-53).
+///
+/// The whole input is stdin: no config path, no filesystem walk, no second
+/// source and therefore no precedence question (CLOUD-324). Config supplies
+/// exactly one value — the per-capture ceiling — so this verb resolves the §8
+/// chain for a number and reads its records from nowhere else.
+///
+/// The two channels answer differently on a clean corpus, and both are the
+/// contract: plain prints **nothing** (§6, and the acceptance's own wording),
+/// while `-J` emits its document unconditionally, because JSON that is sometimes
+/// absent is unparseable.
+fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<ExitCode> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    // `[design]` is authority-only, so there is no local layer to clamp against
+    // today; the tighten-only call is the semantics, stated where it applies.
+    let cap = design::effective_cap(config.design.and_then(|design| design.max_capture_bytes), None);
+
+    let mut raw = String::new();
+    std::io::stdin().read_to_string(&mut raw)?;
+    // A malformed corpus is exit 1, never 2: the policy verdict is reserved for
+    // a claim about the evidence, and "this is not the format" is a claim about
+    // the invocation.
+    let claims = design::parse(&raw)?;
+    let problems = design::audit(&claims, cap);
+
+    if json {
+        writeln!(
+            out,
+            "{}",
+            serde_json::to_string_pretty(&design::Report::new(&problems))?
+        )?;
+    } else {
+        for problem in &problems {
+            writeln!(out, "{}", problem.line_text())?;
+        }
+    }
+
+    let findings: Vec<rules::Finding> = problems.iter().map(design::Problem::finding).collect();
+    Ok(ExitCode::verdict(design::blocks(
+        &findings,
+        config.strictness,
+        config.fail_on_warning,
+    )))
 }
 
 /// Report which provisioned tools do not match the manifest (CLOUD-90).

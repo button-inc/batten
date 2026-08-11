@@ -1049,6 +1049,28 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[DRY_RUN],
     },
+    // The noun only dispatches, and takes `receipt`'s conservative posture for
+    // the reason that posture exists: `design attest` (write) is the declared
+    // next verb under this path, and a `read` parent would advertise a
+    // write-bearing prefix to any consumer treating allowlist entries as
+    // prefixes (CLOUD-170).
+    CommandDecl {
+        path: "design",
+        about: "Design-evidence claims: the integrity of the record behind a decision",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // Reads a claim stream on stdin and reports pointers. No file is opened, no
+    // process is spawned, and nothing configured is executed — the narrowest
+    // possible `read`, so it joins the derived read-only allowlist.
+    CommandDecl {
+        path: "design audit",
+        about: "Audit a JSONL design-evidence claim stream on stdin for record integrity",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // The noun only dispatches, and it takes the same posture `receipt` does:
     // its subtree carries a write verb, so classifying the parent `read` would
     // advertise a write-bearing prefix on the derived allowlist (CLOUD-170).

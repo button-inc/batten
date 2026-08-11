@@ -305,7 +305,17 @@ fn load_statement(path: &Path) -> Option<Statement> {
         .then_some(statement)
 }
 
-fn hex_sha256(bytes: &[u8]) -> String {
+/// Lowercase hex SHA-256 over `bytes` — the value an in-toto digest set's
+/// `sha256` key carries.
+///
+/// Public because the envelope's digest vocabulary is shared: [`crate::design`]
+/// binds a capture with the same digest-set spelling, and a second hash of the
+/// same bytes written in a second module is how two "sha256" fields come to
+/// disagree. A *plain* digest, deliberately not [`crate::identity`]'s
+/// domain-tagged construction: this value is produced by whatever attestation
+/// tool wrote the record, so it must be the ordinary one anybody can reproduce.
+#[must_use]
+pub fn hex_sha256(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
