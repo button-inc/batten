@@ -346,6 +346,27 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   `lint.rs`'s `judge-over-protected-unstated`: a silent safe default is
   indistinguishable from a decision nobody made, and the next diff widening `raw`
   inherits the omission unseen.
+- `transcript.rs` — completed-session transcripts as an optional `check` input
+  (CLOUD-95): a serde parse from a host-provided path to a typed event stream
+  (turn boundary, tool call + args, tool result, hook decision). Every event comes
+  from a **typed field**, never from prose — a denial is the host's recorded
+  `exitCode` compared against `ExitCode::Violation`, read from the other side of
+  the same §7 table, not a substring match on an error message. Free text is never
+  interpreted and never emitted: `Counts` carries numbers, `Record` a line.
+  Forward-compatible on purpose — the format is a **host's** and it moves, so an
+  unrecognized line yields no events rather than an error (one captured session
+  carried six top-level `type` values and eleven `attachment.type` values); a line
+  that is not JSON is the one refusal. Three states, and the first two are the
+  design: **unconfigured** (the repository does not use it — absent is not empty,
+  `lint.rs`'s principle) is silent; **absent** (configured, nothing there) is
+  reported and exits `0`; **present-but-undecodable** is `UsageError` (exit `1`,
+  never `2` — a parse failure must not reach a harness as a deny). The absent
+  report rides **both** channels because the stderr half is ladder-gated: `-J` has
+  no `Mode` to consult, so `--silent -J` still carries it, which is what stops a
+  skipped gate from exiting 0 in silence. Emits no findings — `FindingKind::Sequence`
+  and `findings::Observation::NotObserved` stay the reserved seam CLOUD-97/98/219/267
+  occupy. `session` is `Option<String>` with empty normalized to `None`, the same
+  degradation `identity::sequence_fingerprint`'s signature already encodes.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do. The module

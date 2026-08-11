@@ -4118,3 +4118,205 @@ fn listing_an_unbound_repository_succeeds_and_says_nothing_by_default() {
     let loud = store_cmd(&repo, &home, &["state", "list", "-v"]);
     assert!(String::from_utf8_lossy(&loud.stderr).contains("no store is bound"));
 }
+
+// --- the transcript capability (CLOUD-95) -----------------------------------
+//
+// A completed session transcript is an optional `check` input. Three states,
+// and the distinction between the first two is the whole design: a repository
+// that never configured one is not missing anything, while one that pointed at
+// a file that is not there has rules that did not run — and that must be said
+// out loud, or a skipped gate exits 0 and reads as clean.
+//
+// The fixture carries deliberate sentinels in every free-text position the host
+// records — thinking, a hook's stderr, a tool result's body. Nothing may render
+// them, which is what `no_transcript_text_reaches_any_output_stream` proves.
+
+/// The captured sample, materialized from its inert `.in` copy.
+///
+/// `.in` for the house reason: a fixture must be able to hold shapes this
+/// repository's own gates would refuse, and a tracked `.jsonl` full of sentinel
+/// strings is exactly that.
+fn repo_with_transcript(name: &str, transcript: Option<&str>) -> PathBuf {
+    let dir = repo_with_config(
+        name,
+        "version = 1\n\n[transcript]\npath = \"session.jsonl\"\n",
+    );
+    if let Some(body) = transcript {
+        fs::write(dir.join("session.jsonl"), body).expect("write transcript");
+    }
+    dir
+}
+
+fn captured_sample() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/transcripts/session.jsonl.in");
+    fs::read_to_string(path).expect("read the captured fixture")
+}
+
+#[test]
+fn a_configured_transcript_parses_to_pointer_only_counts() {
+    let dir = repo_with_transcript("transcript-present", Some(&captured_sample()));
+    let output = batten()
+        .args(["check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(0));
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one pure JSON document");
+    let transcript = &document["transcript"];
+    assert_eq!(transcript["capability"], "present");
+    // Two user turns and two assistant turns; the `attachment` and
+    // `queue-operation` lines are neither, which is the point of counting the
+    // role rather than the line.
+    assert_eq!(transcript["counts"]["turns"], 4);
+    assert_eq!(transcript["counts"]["tool_calls"], 2);
+    assert_eq!(transcript["counts"]["tool_errors"], 1);
+    assert_eq!(transcript["counts"]["hook_decisions"], 2);
+    // Read from the host's recorded `exitCode`, not from its stderr prose: one
+    // hook returned the §7 verdict code and the other returned 0.
+    assert_eq!(transcript["counts"]["hook_denials"], 1);
+}
+
+#[test]
+fn the_transcript_report_is_byte_identical_across_two_runs() {
+    let dir = repo_with_transcript("transcript-stable", Some(&captured_sample()));
+    let once = batten()
+        .args(["check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run once");
+    let twice = batten()
+        .args(["check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run twice");
+    assert_eq!(
+        once.stdout, twice.stdout,
+        "a transcript read must be a pure function of its bytes"
+    );
+}
+
+#[test]
+fn an_absent_transcript_is_reported_and_exits_zero() {
+    // Configured, nothing there. The run continues — a missing optional input is
+    // not a violation — but it must not continue in silence.
+    let dir = repo_with_transcript("transcript-absent", None);
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(batten::transcript::ABSENT_NOTICE),
+        "the skip must be stated, got: {stderr}"
+    );
+}
+
+#[test]
+fn the_absent_report_survives_silent_because_it_rides_the_data_channel() {
+    // THE PROPERTY THAT MAKES THE SKIP HONEST. `output::message` is ladder-gated,
+    // so `--silent` erases the stderr half; if that were the only channel, a
+    // skipped gate would exit 0 with nothing said — the false green this engine
+    // exists to catch. `-J` has no `Mode` to consult, so it cannot be silenced.
+    let dir = repo_with_transcript("transcript-silent", None);
+    let output = batten()
+        .args(["--silent", "check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).is_empty(),
+        "--silent empties the human channel"
+    );
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one pure JSON document");
+    assert_eq!(document["transcript"]["capability"], "absent");
+}
+
+#[test]
+fn an_unconfigured_transcript_reports_nothing_at_all() {
+    // Absent is not empty (`lint.rs`'s principle): a repository that never named
+    // a transcript is not missing one, and reporting on it would fire on every
+    // minimal config — which is how a report teaches people to ignore it.
+    let dir = repo_with_config("transcript-unconfigured", "version = 1\n");
+    let output = batten()
+        .args(["check", "-J"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&output.stderr).is_empty());
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one pure JSON document");
+    assert!(
+        document
+            .get("transcript")
+            .is_none_or(serde_json::Value::is_null),
+        "an unconfigured capability emits no key"
+    );
+}
+
+#[test]
+fn an_undecodable_transcript_is_a_usage_error_never_a_verdict() {
+    // Exit 1, not 2. The operator pointed at something Batten cannot read, so the
+    // rules keyed on it did not run — loud, and structurally not a deny: §7
+    // spends 2 on the policy verdict alone, and a parse failure reaching a
+    // mediating harness as a deny would be the inversion this contract forbids.
+    let dir = repo_with_transcript(
+        "transcript-undecodable",
+        Some("{\"type\":\"user\"}\nnot json\n"),
+    );
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("session.jsonl:2"),
+        "a pointer, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("not json"),
+        "never the line itself: {stderr}"
+    );
+}
+
+#[test]
+fn no_transcript_text_reaches_any_output_stream() {
+    // The reason this module exists in the shape it does. A transcript holds
+    // every command, every file body and every prompt of a session, so it is the
+    // richest source of secrets the engine can be pointed at. The fixture plants
+    // a sentinel in each free-text position the host records; none may appear.
+    let dir = repo_with_transcript("transcript-opaque", Some(&captured_sample()));
+    for args in [vec!["check"], vec!["check", "-J"]] {
+        let output = batten()
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .expect("run batten check");
+        let both = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for sentinel in [
+            "PRIVATE-THINKING-SENTINEL",
+            "DENY-REASON-SENTINEL",
+            "TOOL-ERROR-BODY-SENTINEL",
+            "IGNORED-SENTINEL",
+            "gh pr merge 42",
+            "dangerouslyDisableSandbox",
+        ] {
+            assert!(
+                !both.contains(sentinel),
+                "{args:?} leaked {sentinel}: {both}"
+            );
+        }
+    }
+}

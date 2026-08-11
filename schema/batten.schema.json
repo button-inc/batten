@@ -111,6 +111,17 @@
         }
       ]
     },
+    "transcript": {
+      "description": "The completed-session transcript this repository points `check` at\n(CLOUD-95). Host-specific, never consumer-specific: which file a host\nwrites its transcript to is a property of the harness, not of any one\nrepository, so rule 1 holds. Absent means the repository does not use\nthe capability — a different claim from a path that resolves to\nnothing, which is why `resolve` answers with three states and not two.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TranscriptConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "unlanded": {
       "description": "Paths whose work is not yet landed. A plain include set, evaluated\nindependently of the other two: a path may be `unlanded` without being\n`protected`, and the sets must never be collapsed (CLOUD-37).",
       "type": "array",
@@ -553,6 +564,20 @@
           "const": "strict"
         }
       ]
+    },
+    "TranscriptConfig": {
+      "description": "The configured transcript path, as `batten.toml` declares it.\n\nA path, not a format selector: which host wrote it is pinned by the fixtures,\nand a repository that points at one is saying \"read this\", not \"read this\ndialect\". Host-specific, never consumer-specific, so rule 1 holds — no\nconsumer's directory layout appears in the engine.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Repo-relative path to the completed session transcript.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "Unpack": {
       "description": "How to get the binary out of the fetched artifact.",

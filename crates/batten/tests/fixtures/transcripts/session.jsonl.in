@@ -1,0 +1,7 @@
+{"type":"user","sessionId":"s-fixture","cwd":"/w","message":{"role":"user","content":"a plain string turn"}}
+{"type":"assistant","sessionId":"s-fixture","message":{"role":"assistant","content":[{"type":"thinking","thinking":"PRIVATE-THINKING-SENTINEL"},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"gh pr merge 42","dangerouslyDisableSandbox":true}}]}}
+{"type":"attachment","sessionId":"s-fixture","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":2,"stderr":"DENY-REASON-SENTINEL"}}
+{"type":"user","sessionId":"s-fixture","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"TOOL-ERROR-BODY-SENTINEL"}]}}
+{"type":"queue-operation","sessionId":"s-fixture","content":"IGNORED-SENTINEL"}
+{"type":"assistant","sessionId":"s-fixture","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"/w/a.rs"}}]}}
+{"type":"attachment","sessionId":"s-fixture","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Read","toolUseID":"t2","exitCode":0}}

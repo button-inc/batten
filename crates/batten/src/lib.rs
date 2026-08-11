@@ -36,6 +36,7 @@ pub mod spec;
 pub mod state;
 pub mod store;
 pub mod surface;
+pub mod transcript;
 pub mod trust;
 pub mod verbs;
 pub mod waiver;
@@ -546,7 +547,29 @@ struct CheckReport<'a> {
     /// "a base ref was compared" rather than "nothing was weakened".
     #[serde(skip_serializing_if = "Option::is_none")]
     config_delta: Option<Vec<DeltaView<'a>>>,
+    /// The transcript capability's state, when the authority configured one
+    /// (CLOUD-95). Absent when no transcript is declared, so the field's presence
+    /// says "this repository uses the capability" rather than "it is available" —
+    /// the same reading `config_delta` above gives its own absence.
+    ///
+    /// It rides the DATA channel deliberately. The stderr half is ladder-gated,
+    /// so `--silent` would erase the one signal that dependent rules did not run,
+    /// and a skipped gate nobody was told about is the false green this engine
+    /// exists to catch. `-J` has no `Mode` to consult, so this cannot be silenced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transcript: Option<TranscriptView>,
     findings: Vec<FindingView<'a>>,
+}
+
+/// The transcript capability as the `-J` document renders it: a state token and,
+/// when present, counts. Never a pointer into the file's content, and never the
+/// configured path — a path is the operator's filesystem, which the data channel
+/// has no business carrying.
+#[derive(Debug, serde::Serialize)]
+struct TranscriptView {
+    capability: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    counts: Option<transcript::Counts>,
 }
 
 /// One weakened key in the `-J` payload, the same pointer the human channel
@@ -612,6 +635,29 @@ fn run_rules(
     let config = resolve::resolve(Path::new("."), overrides)?;
     let findings = runner(&config.rules, Path::new("."))?;
 
+    // The transcript capability (CLOUD-95), resolved BESIDE the runner rather than
+    // through it: `runner` is a plain fn pointer over `(&[Rule], &Path)` with
+    // nowhere to carry a transcript, and widening that signature to thread an
+    // input no rule reads yet would be scaffolding for CLOUD-97/98 built before
+    // either exists. This issue lands the substrate and reports its availability;
+    // the rules that consume it widen the seam when they have findings to emit.
+    //
+    // A present-but-undecodable transcript propagates as a `UsageError` from
+    // `resolve`, which is exit 1 — loud, and structurally not a deny (§7).
+    let capability = transcript::resolve(
+        Path::new("."),
+        config
+            .transcript
+            .as_ref()
+            .and_then(|declared| declared.path.as_deref()),
+    )?;
+    if matches!(capability, transcript::Capability::Absent) {
+        // The human half of the report. Ladder-gated, because it is a statement
+        // about Batten rather than a verdict — the `-J` field above is the half
+        // that cannot be silenced.
+        output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
+    }
+
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function
     // is the single funnel `check` and `enforce` share — they differ only in the
     // `runner` above — so one insertion point covers both verbs, both channels and
@@ -665,6 +711,17 @@ fn run_rules(
         // human channel's contract; JSON that is sometimes absent is unparseable.
         let report = CheckReport {
             fail_on_warning: config.fail_on_warning,
+            transcript: match &capability {
+                transcript::Capability::Unconfigured => None,
+                transcript::Capability::Absent => Some(TranscriptView {
+                    capability: capability.as_str(),
+                    counts: None,
+                }),
+                transcript::Capability::Present(stream) => Some(TranscriptView {
+                    capability: capability.as_str(),
+                    counts: Some(stream.counts()),
+                }),
+            },
             config_delta: delta.as_ref().map(|weakenings| {
                 weakenings
                     .iter()

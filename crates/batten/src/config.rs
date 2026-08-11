@@ -206,6 +206,14 @@ pub struct Config {
     /// check/fix pair are [`crate::provision`].
     #[serde(default, rename = "provision", skip_serializing_if = "Vec::is_empty")]
     pub provisions: Vec<crate::provision::Provision>,
+    /// The completed-session transcript this repository points `check` at
+    /// (CLOUD-95). Host-specific, never consumer-specific: which file a host
+    /// writes its transcript to is a property of the harness, not of any one
+    /// repository, so rule 1 holds. Absent means the repository does not use
+    /// the capability — a different claim from a path that resolves to
+    /// nothing, which is why `resolve` answers with three states and not two.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<crate::transcript::TranscriptConfig>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -304,6 +312,10 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // the same one: a table that parses and gates nothing. A `[budget]` header
     // with no `[budget.instructions]` under it is refused here (CLOUD-50).
     crate::budget::validate(config.budget.as_ref())?;
+    // `[transcript]` is a table too, so the census does not reach it either; the
+    // guarded failure is a `path` key present and blank, which would resolve to
+    // the repository root and read as an unparseable transcript (CLOUD-95).
+    crate::transcript::validate(config.transcript.as_ref())?;
     // A pin that can never match, a name that owns a cache path twice, an empty
     // required field: each is refused here rather than at fetch time, where the
     // failure would blame the artifact for a typo in this file.
@@ -409,6 +421,11 @@ impl Config {
             must_land_on: None,
             judge: None,
             provisions: Vec::new(),
+            // Declaring no transcript is the ordinary case, and it is not the
+            // same as pointing at one that is missing: the first says the
+            // capability was never claimed, the second that it was claimed and
+            // is unavailable. Only the second is worth reporting.
+            transcript: None,
         }
     }
 }
