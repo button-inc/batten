@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess-codex-1",
+  "turn_id": "turn-1",
+  "cwd": "/repo",
+  "permission_mode": "default",
+  "tool_name": "shell",
+  "tool_use_id": "call-1",
+  "tool_input": {
+    "command": "gh pr merge 1"
+  }
+}

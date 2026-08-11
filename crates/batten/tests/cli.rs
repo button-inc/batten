@@ -769,6 +769,9 @@ enum Channel {
     Silent,
     /// The host reads an in-band decision document; the document *is* the deny.
     StdoutDenyJson,
+    /// Cursor's in-band body, a different shape for a different reason: it
+    /// documents no meaning for stderr, so JSON is the only channel a reason has.
+    StdoutCursorDenyJson,
     /// The host's only channel is process status, so the reason rides stderr.
     StderrReason,
 }
@@ -786,6 +789,18 @@ fn harnesses() -> Vec<&'static str> {
         .iter()
         .map(|harness| harness.as_str())
         .collect()
+}
+
+/// Whether this host reads its deny reason from a JSON body rather than stderr.
+///
+/// Read off the enum rather than listing tokens here: a host added with the
+/// in-band posture and forgotten in a test list would silently stop being
+/// checked on the channel it actually uses.
+fn reads_a_deny_body(harness: &str) -> bool {
+    batten::hook::Harness::ALL
+        .iter()
+        .find(|candidate| candidate.as_str() == harness)
+        .is_some_and(|candidate| candidate.reason_travels_in_band())
 }
 
 /// One row of the per-harness decision matrix.
@@ -816,6 +831,68 @@ const MATRIX: &[Row] = &[
         command: "gh pr merge 42",
         expected: 0,
         channel: Channel::StdoutDenyJson,
+    },
+    // Cursor is the second in-band host, and for a different reason than Claude:
+    // it documents no meaning for stderr at all, so a deny that explained itself
+    // there would explain itself to nobody. Its body shape is its own.
+    Row {
+        harness: "cursor",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "cursor",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 0,
+        channel: Channel::StdoutCursorDenyJson,
+    },
+    // The three hosts that read exit 2 and take their reason from stderr. They
+    // differ on the way IN (event names, arg encodings) and not on the way out,
+    // which is why they share the neutral channel here.
+    Row {
+        harness: "copilot-cli",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "copilot-cli",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 2,
+        channel: Channel::StderrReason,
+    },
+    Row {
+        harness: "gemini-cli",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "gemini-cli",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 2,
+        channel: Channel::StderrReason,
+    },
+    Row {
+        harness: "codex-cli",
+        case: "allow",
+        command: "gh pr view 42",
+        expected: 0,
+        channel: Channel::Silent,
+    },
+    Row {
+        harness: "codex-cli",
+        case: "deny",
+        command: "gh pr merge 42",
+        expected: 2,
+        channel: Channel::StderrReason,
     },
     Row {
         harness: "exit-code",
@@ -850,6 +927,10 @@ fn the_decision_channel_matrix_holds_for_every_harness() {
             Channel::StdoutDenyJson => assert!(
                 stdout.contains("\"permissionDecision\":\"deny\""),
                 "{at}: the decision document is the deny, got: {stdout}"
+            ),
+            Channel::StdoutCursorDenyJson => assert!(
+                stdout.contains("\"permission\":\"deny\"") && stdout.contains("user_message"),
+                "{at}: Cursor's own body shape is the deny, got: {stdout}"
             ),
             Channel::StderrReason => {
                 assert!(
@@ -1123,12 +1204,9 @@ fn a_quoted_invocation_denies_on_both_harness_channels() {
         let output = run_hook_in(&dir, harness, &claude_payload("gh \"pr\" \"merge\""), false);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if harness == "claude-code" {
+        if reads_a_deny_body(harness) {
             assert_eq!(output.status.code(), Some(0), "{harness}");
-            assert!(
-                stdout.contains("\"permissionDecision\":\"deny\""),
-                "{harness}: got {stdout}"
-            );
+            assert!(stdout.contains("\"deny\""), "{harness}: got {stdout}");
         } else {
             assert_eq!(output.status.code(), Some(2), "{harness}");
             assert!(stderr.contains("Refused by"), "{harness}: got {stderr}");
@@ -1337,12 +1415,9 @@ fn hook_denies_a_mutating_verb_against_a_protected_path_on_both_channels() {
         let output = run_hook_in(&dir, harness, &claude_payload("rm guarded/thing"), false);
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if harness == "claude-code" {
+        if reads_a_deny_body(harness) {
             assert_eq!(output.status.code(), Some(0), "{harness}");
-            assert!(
-                stdout.contains("\"permissionDecision\":\"deny\""),
-                "{harness}: got {stdout}"
-            );
+            assert!(stdout.contains("\"deny\""), "{harness}: got {stdout}");
             assert!(stdout.contains("restore it with git"), "names the redirect");
         } else {
             assert_eq!(output.status.code(), Some(2), "{harness}");
@@ -1522,6 +1597,105 @@ fn hook_denies_a_blocked_shape_in_the_harness_channel() {
         stdout.contains("mise run land"),
         "the deny must name the redirect the fixture policy declares"
     );
+}
+
+/// A checked-in host fixture, by file stem.
+fn host_fixture(stem: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/hooks")
+        .join(format!("{stem}.json"));
+    fs::read_to_string(&path).unwrap_or_else(|_| panic!("read {}", path.display()))
+}
+
+#[test]
+fn every_host_denies_the_same_call_through_its_own_channel() {
+    // CLOUD-44's acceptance over the compiled binary: five hosts, five wire
+    // formats, one policy, one verdict — and each answer shaped the way that
+    // host reads it. The fixtures all carry `gh pr merge 1`, which the fixture
+    // policy denies.
+    let dir = repo_with_gh_policy("host-matrix");
+
+    // Hosts whose reason travels in a JSON body, with the key that proves the
+    // body is that host's own shape rather than a shared one.
+    for (harness, stem, marker) in [
+        (
+            "claude-code",
+            "claude-code",
+            "\"permissionDecision\":\"deny\"",
+        ),
+        ("cursor", "cursor", "\"permission\":\"deny\""),
+    ] {
+        let output = run_hook_in(&dir, harness, &host_fixture(stem), false);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{harness}: an in-band deny exits 0 — the body is the verdict"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(marker),
+            "{harness}: wrong deny shape, got: {stdout}"
+        );
+        assert!(
+            stdout.contains("mise run land"),
+            "{harness}: the deny must name the redirect"
+        );
+    }
+
+    // Hosts whose channel is the exit code, with the reason on stderr.
+    for (harness, stem) in [
+        ("copilot-cli", "copilot-cli"),
+        ("gemini-cli", "gemini-cli"),
+        ("codex-cli", "codex-cli"),
+    ] {
+        let output = run_hook_in(&dir, harness, &host_fixture(stem), false);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{harness}: exit 2 is the deny on every surveyed host"
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{harness}: stray stdout on these hosts risks being read as an allow"
+        );
+        assert!(
+            common::stderr(&output).contains("mise run land"),
+            "{harness}: the reason travels on stderr here"
+        );
+    }
+}
+
+#[test]
+fn a_cursor_payload_with_a_windows_bom_still_denies() {
+    // The measured failure this guards: a UTF-8 BOM on Cursor's stdin breaks a
+    // strict JSON parser, and fail-open turns that into allow-all. Through the
+    // binary, because that is where the bytes actually arrive.
+    let dir = repo_with_gh_policy("host-bom");
+    let output = run_hook_in(&dir, "cursor", &host_fixture("cursor-bom"), false);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("\"permission\":\"deny\""),
+        "a BOM must not degrade the guard to an allow"
+    );
+}
+
+#[test]
+fn a_payload_that_fits_no_host_fails_open_on_every_host() {
+    // §7(c): a payload no adapter can read is an allow, never an error and never
+    // a deny — a guard must not be the reason a session cannot proceed.
+    let dir = repo_with_gh_policy("host-junk");
+    for harness in [
+        "claude-code",
+        "cursor",
+        "copilot-cli",
+        "gemini-cli",
+        "codex-cli",
+        "exit-code",
+    ] {
+        let output = run_hook_in(&dir, harness, "not json at all", false);
+        assert_eq!(output.status.code(), Some(0), "{harness} must fail open");
+        assert!(output.stdout.is_empty(), "{harness} emits no verdict");
+    }
 }
 
 #[test]

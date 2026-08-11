@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "BeforeTool",
+  "session_id": "sess-gemini-1",
+  "transcript_path": "/tmp/transcript.jsonl",
+  "cwd": "/repo",
+  "tool_name": "run_shell_command",
+  "tool_input": {
+    "command": "gh pr merge 1"
+  }
+}

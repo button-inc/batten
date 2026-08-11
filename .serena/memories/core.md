@@ -268,7 +268,25 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   (`Rule::columns` × `requires`/`permits`), not a per-kind match — the match
   named fields, so a new column landed in no arm and every kind accepted it.
 - `hook.rs` — the `hook` adjudicator (CLOUD-202): the normalized envelope, the
-  wrapper-lookthrough command parser, and the matcher. The envelope is seven
+  wrapper-lookthrough command parser, the matcher, and the **per-host shims**
+  (CLOUD-44). Five hosts plus the neutral `exit-code`: claude-code, cursor,
+  copilot-cli, gemini-cli, codex-cli. The survey (CLOUD-209) is why the shim is
+  small — the industry converged on Claude's wire format, so the adapter is a
+  rename table plus three special cases, NOT a moat. What differs: Gemini's event
+  names (`BeforeTool`→pre-tool); Cursor's four pre-tool spellings, its specialized
+  events that carry the operand at top level with NO `tool_name` (the tool is
+  DERIVED from the event, or every specialized call reads as the same anonymous
+  one), and `conversation_id` for session; Copilot's `toolArgs` typed `unknown`
+  and shown stringified in its own docs, so the parser takes object OR string —
+  assuming object would read a real payload as command-less, i.e. a silent allow.
+  A leading UTF-8 BOM is stripped on EVERY host: Cursor's Windows stdin emits one,
+  it broke strict parsers, and (staff-confirmed) degraded guards to allow-all.
+  Emitter: `encode_deny` returns `None` where the exit code is the whole channel.
+  Two hosts read a body, for DIFFERENT reasons — Claude discards stdout on exit 2
+  so the channels are exclusive; Cursor assigns stderr no meaning at all, so
+  CLOUD-122's "every deny points to the fix" is unsatisfiable there without JSON.
+  Fixtures live in `tests/fixtures/hooks/`, checked in rather than reconstructed
+  because the survey measured that model memory of this space is badly stale. The envelope is seven
   fields since CLOUD-43 — a typed `Event` (`const ALL` + `as_str`, the vocabulary
   idiom `Harness`/`Stream`/`RuleKind` use) plus the host's own `raw_event`, which
   is not a second authority: one is what policy dispatches on, the other is the

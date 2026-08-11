@@ -565,21 +565,24 @@ fn decide(
 ) -> Result<ExitCode> {
     match hook::adjudicate(policy, envelope, bypass) {
         hook::Decision::Allow => Ok(ExitCode::Success),
-        hook::Decision::Deny(reason) => match harness {
-            hook::Harness::ClaudeCode => {
-                // The host's OWN spelling goes back, not our normalized token:
-                // a decision document is read by the host, which knows only its
-                // own vocabulary. Normalizing inward and echoing outward are
-                // different directions, which is why the envelope carries both.
-                writeln!(
-                    out,
-                    "{}",
-                    hook::encode_claude_deny(&envelope.raw_event, &reason)?
-                )?;
-                Ok(ExitCode::Success)
+        // One dispatch for every host, because the *shape* of the answer is the
+        // adapter's business and the decision is not. A host that reads a body
+        // gets one; a host whose channel is the exit code alone gets the §7 `2`
+        // with the reason on stderr. Adding a host does not touch this function.
+        //
+        // The host's OWN event spelling goes back, not our normalized token: a
+        // decision document is read by the host, which knows only its own
+        // vocabulary. Normalizing inward and echoing outward are different
+        // directions, which is why the envelope carries both.
+        hook::Decision::Deny(reason) => {
+            match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
+                Some(body) => {
+                    writeln!(out, "{body}")?;
+                    Ok(ExitCode::Success)
+                }
+                None => Err(Denial::raise(reason)),
             }
-            hook::Harness::ExitCode => Err(Denial::raise(reason)),
-        },
+        }
     }
 }
 

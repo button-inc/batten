@@ -1153,7 +1153,7 @@ _batten() {
             fi
             case "${prev}" in
                 --harness)
-                    COMPREPLY=($(compgen -W "claude-code exit-code" -- "${cur}"))
+                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)

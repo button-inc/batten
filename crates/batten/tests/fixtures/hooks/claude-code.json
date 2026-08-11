@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "sess-claude-1",
+  "transcript_path": "/tmp/transcript.jsonl",
+  "cwd": "/repo",
+  "permission_mode": "default",
+  "tool_name": "Bash",
+  "tool_use_id": "call-1",
+  "tool_input": {
+    "command": "gh pr merge 1",
+    "description": "merge the pull request"
+  }
+}

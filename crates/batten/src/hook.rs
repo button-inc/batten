@@ -54,6 +54,22 @@ pub enum Harness {
     /// `hookSpecificOutput.permissionDecision` JSON object on stdout with exit
     /// `0` — the channel the production shell guards already use.
     ClaudeCode,
+    /// Cursor. Two payload families under one host: a generic `preToolUse` that
+    /// looks like Claude's, and specialized events (`beforeShellExecution`,
+    /// `beforeReadFile`, `beforeMCPExecution`) that carry the operand at top
+    /// level and **no** `tool_name` at all. Session is `conversation_id`.
+    Cursor,
+    /// GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which
+    /// yields `hook_event_name` natively. The camelCase dialect omits the event
+    /// name entirely, so Batten does not speak it.
+    CopilotCli,
+    /// Gemini CLI. Claude-identical payload fields, different event names
+    /// (`BeforeTool` rather than `PreToolUse`).
+    GeminiCli,
+    /// Codex CLI, whose wire format is a near-verbatim clone of Claude Code's —
+    /// its own repo says so. No payload shim is needed; the adapter exists so
+    /// the host is nameable and its fixture is pinned against drift.
+    CodexCli,
     /// The neutral core contract: envelope in, decision as exit code out —
     /// `0` allow, `2` deny (reason on stderr), for any host whose only decision
     /// channel is an exit status. Both codes are the §7 table's, unmodified.
@@ -63,8 +79,15 @@ pub enum Harness {
 impl Harness {
     /// Every harness, so anything ranging over them is derived rather than
     /// re-typed — the CLOUD-40 decision-channel matrix reads this, which is what
-    /// stops a third adapter from landing with no fixture row.
-    pub const ALL: &'static [Harness] = &[Harness::ClaudeCode, Harness::ExitCode];
+    /// stops a further adapter from landing with no fixture row.
+    pub const ALL: &'static [Harness] = &[
+        Harness::ClaudeCode,
+        Harness::Cursor,
+        Harness::CopilotCli,
+        Harness::GeminiCli,
+        Harness::CodexCli,
+        Harness::ExitCode,
+    ];
 
     /// The CLI token, identical to the `ValueEnum` spelling `--harness` accepts.
     ///
@@ -75,8 +98,25 @@ impl Harness {
     pub const fn as_str(self) -> &'static str {
         match self {
             Harness::ClaudeCode => "claude-code",
+            Harness::Cursor => "cursor",
+            Harness::CopilotCli => "copilot-cli",
+            Harness::GeminiCli => "gemini-cli",
+            Harness::CodexCli => "codex-cli",
             Harness::ExitCode => "exit-code",
         }
+    }
+
+    /// Whether a deny on this host must carry its reason **in the JSON body**
+    /// rather than on stderr.
+    ///
+    /// Cursor is the one surveyed host that assigns no meaning to stderr, so
+    /// CLOUD-122's refusal contract ("every deny points to the fix") is
+    /// unsatisfiable there through the exit-code channel alone. Claude Code
+    /// answers in-band for a different reason — exit 2 discards its stdout JSON,
+    /// so the two channels are exclusive and it picks the richer one.
+    #[must_use]
+    pub const fn reason_travels_in_band(self) -> bool {
+        matches!(self, Harness::ClaudeCode | Harness::Cursor)
     }
 }
 
@@ -223,40 +263,155 @@ pub enum Decision {
 /// `{hook_event_name, tool_name, tool_input: {command, …}, …}`.
 #[must_use]
 pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
-    match harness {
-        Harness::ClaudeCode | Harness::ExitCode => {
-            let value: Value = serde_json::from_str(raw).ok()?;
-            let command = value
-                .pointer("/tool_input/command")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let raw_event = value
-                .get("hook_event_name")
-                .and_then(Value::as_str)
-                .unwrap_or(ASSUMED_EVENT)
-                .to_owned();
-            Some(Envelope {
-                event: Event::normalize(&raw_event),
-                raw_event,
-                tool: value
-                    .get("tool_name")
+    // Strip a leading UTF-8 BOM before anything else, on every host. Cursor is
+    // the measured case — its Windows stdin prefixes one, which breaks strict
+    // JSON parsers and (staff-confirmed) degraded users' guards to allow-all —
+    // but a BOM is never meaningful in any of these payloads, so removing it
+    // once here beats remembering which host emits one.
+    let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
+    let value: Value = serde_json::from_str(raw).ok()?;
+
+    let raw_event = value
+        .get("hook_event_name")
+        .and_then(Value::as_str)
+        .unwrap_or(ASSUMED_EVENT)
+        .to_owned();
+    let event = normalize_event(harness, &raw_event);
+
+    // Cursor's specialized events carry the operand at top level and no
+    // `tool_name`; every other shape nests it under `tool_input`.
+    let specialized = harness == Harness::Cursor && cursor_specialized_tool(&raw_event).is_some();
+    let input = if specialized {
+        cursor_specialized_input(&value)
+    } else {
+        // Copilot's `toolArgs` is typed `unknown` and its own docs show it
+        // stringified, so the parser accepts both an object and a JSON string.
+        let named = value
+            .get("tool_input")
+            .or_else(|| value.get("toolArgs"))
+            .cloned()
+            .unwrap_or(Value::Null);
+        match named {
+            Value::String(text) => serde_json::from_str(&text).unwrap_or(Value::String(text)),
+            other => other,
+        }
+    };
+
+    let tool = if specialized {
+        cursor_specialized_tool(&raw_event)
+            .unwrap_or_default()
+            .to_owned()
+    } else {
+        value
+            .get("tool_name")
+            .or_else(|| value.get("toolName"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+
+    Some(Envelope {
+        event,
+        raw_event,
+        tool,
+        command: input
+            .pointer("/command")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        input,
+        cwd: value
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(PathBuf::from)
+            // Cursor omits `cwd` on some non-tool events; its documented
+            // fallback is the first workspace root.
+            .or_else(|| {
+                value
+                    .pointer("/workspace_roots/0")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                input: value.get("tool_input").cloned().unwrap_or(Value::Null),
-                command,
-                cwd: value.get("cwd").and_then(Value::as_str).map(PathBuf::from),
-                // Empty is treated as absent, so `Some("")` never reaches a
-                // consumer that would hash it as a real session.
-                session: value
-                    .get("session_id")
-                    .and_then(Value::as_str)
-                    .filter(|id| !id.is_empty())
-                    .map(ToOwned::to_owned),
-            })
+                    .map(PathBuf::from)
+            }),
+        // One session field, three spellings. Empty is treated as absent, so
+        // `Some("")` never reaches a consumer that would hash it as a real
+        // session.
+        session: ["session_id", "sessionId", "conversation_id"]
+            .iter()
+            .find_map(|key| value.get(*key).and_then(Value::as_str))
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned),
+    })
+}
+
+/// Normalize a host's event spelling, applying that host's rename table.
+///
+/// The converged spellings live in [`Event::normalize`] — Claude Code's, which
+/// Codex CLI and Copilot's `PascalCase` dialect ship verbatim. Only the two hosts
+/// that genuinely diverge get a table here, which is what keeps host vocabulary
+/// out of the harness-blind core.
+fn normalize_event(harness: Harness, raw: &str) -> Event {
+    let renamed = match harness {
+        // Gemini's names are the only structural gap in an otherwise
+        // Claude-identical payload.
+        Harness::GeminiCli => match raw {
+            "BeforeTool" => Some(Event::PreTool),
+            "AfterTool" => Some(Event::PostTool),
+            // `AfterAgent` is Gemini's end-of-turn; it is the Stop family's
+            // member here even though the word differs.
+            "AfterAgent" => Some(Event::Stop),
+            _ => None,
+        },
+        // Cursor splits pre-tool across a generic event and three specialized
+        // ones. All four adjudicate at the same moment, so all four normalize to
+        // the same concept.
+        Harness::Cursor => match raw {
+            "preToolUse" | "beforeShellExecution" | "beforeMCPExecution" | "beforeReadFile" => {
+                Some(Event::PreTool)
+            }
+            "afterFileEdit" => Some(Event::PostTool),
+            "stop" | "subagentStop" => Some(Event::Stop),
+            "sessionStart" => Some(Event::SessionStart),
+            _ => None,
+        },
+        Harness::ClaudeCode | Harness::CopilotCli | Harness::CodexCli | Harness::ExitCode => None,
+    };
+    renamed.unwrap_or_else(|| Event::normalize(raw))
+}
+
+/// The tool name a Cursor specialized event stands for, if it is one.
+///
+/// These events carry no `tool_name`, so the adapter derives a constant from the
+/// event. Deriving rather than defaulting to empty matters: a shape rule matches
+/// on the effective program, and an empty tool would make every specialized
+/// event look like the same anonymous call.
+const fn cursor_specialized_tool(raw_event: &str) -> Option<&'static str> {
+    match raw_event.as_bytes() {
+        b"beforeShellExecution" => Some("Shell"),
+        b"beforeReadFile" => Some("Read"),
+        b"beforeMCPExecution" => Some("MCP"),
+        _ => None,
+    }
+}
+
+/// Assemble an `input` object from a Cursor specialized event's top-level fields.
+///
+/// Only the keys those events document are lifted, so the envelope's `input`
+/// carries the operand and nothing incidental from the host frame.
+fn cursor_specialized_input(value: &Value) -> Value {
+    let mut input = serde_json::Map::new();
+    for key in [
+        "command",
+        "file_path",
+        "url",
+        "sandbox",
+        "tool_name",
+        "args",
+    ] {
+        if let Some(found) = value.get(key) {
+            input.insert(key.to_owned(), found.clone());
         }
     }
+    Value::Object(input)
 }
 
 /// The escape hatch, named once so the boundary and the reason text agree.
@@ -797,6 +952,59 @@ pub fn encode_claude_deny(event: &str, reason: &str) -> serde_json::Result<Strin
             permission_decision_reason: reason,
         },
     })
+}
+
+/// Cursor's deny body.
+///
+/// A different shape for a different reason than Claude's: Cursor documents no
+/// meaning for stderr at all, so this is the **only** channel a reason can travel
+/// on. `user_message` and `agent_message` are its documented fields, and both
+/// carry the same text — the human and the model are being told the same thing,
+/// and a refusal that told them different things would be two contracts.
+#[derive(Serialize)]
+struct CursorDeny<'a> {
+    permission: &'a str,
+    #[serde(rename = "user_message")]
+    user_message: &'a str,
+    #[serde(rename = "agent_message")]
+    agent_message: &'a str,
+}
+
+/// Encode a deny for the Cursor adapter.
+///
+/// # Errors
+///
+/// Serialization of this fixed shape cannot practically fail; the `Result` is
+/// the honest signature for a serde boundary.
+pub fn encode_cursor_deny(reason: &str) -> serde_json::Result<String> {
+    serde_json::to_string(&CursorDeny {
+        permission: "deny",
+        user_message: reason,
+        agent_message: reason,
+    })
+}
+
+/// Encode a deny body for `harness`, when that host reads one.
+///
+/// `None` means the host's channel is the exit code alone and the reason belongs
+/// on stderr — the neutral contract, and what Copilot, Gemini and Codex all read.
+///
+/// # Errors
+///
+/// Serialization of these fixed shapes cannot practically fail; the `Result` is
+/// the honest signature for a serde boundary.
+pub fn encode_deny(
+    harness: Harness,
+    event: &str,
+    reason: &str,
+) -> serde_json::Result<Option<String>> {
+    match harness {
+        Harness::ClaudeCode => encode_claude_deny(event, reason).map(Some),
+        Harness::Cursor => encode_cursor_deny(reason).map(Some),
+        Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
+            Ok(None)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1473,6 +1681,181 @@ mod tests {
             Decision::Allow,
             "a different declared set must allow the same command"
         );
+    }
+
+    /// Every host's checked-in fixture, paired with its `--harness` token.
+    ///
+    /// `include_str!` rather than a runtime read: the fixtures are part of the
+    /// contract, and a test that could not find them should fail to compile
+    /// rather than skip.
+    const HOST_FIXTURES: &[(Harness, &str)] = &[
+        (
+            Harness::ClaudeCode,
+            include_str!("../tests/fixtures/hooks/claude-code.json"),
+        ),
+        (
+            Harness::CodexCli,
+            include_str!("../tests/fixtures/hooks/codex-cli.json"),
+        ),
+        (
+            Harness::CopilotCli,
+            include_str!("../tests/fixtures/hooks/copilot-cli.json"),
+        ),
+        (
+            Harness::GeminiCli,
+            include_str!("../tests/fixtures/hooks/gemini-cli.json"),
+        ),
+        (
+            Harness::Cursor,
+            include_str!("../tests/fixtures/hooks/cursor.json"),
+        ),
+    ];
+
+    #[test]
+    fn every_hosts_fixture_normalizes_to_the_same_envelope() {
+        // CLOUD-44's acceptance, stated directly rather than through behaviour:
+        // five hosts, five wire formats, one envelope. The fields compared are
+        // the ones policy dispatches on — the host's own `raw_event` and its
+        // tool vocabulary deliberately differ, which is the whole point of
+        // normalizing.
+        for (harness, raw) in HOST_FIXTURES {
+            let envelope = decode(*harness, raw)
+                .unwrap_or_else(|| panic!("{} fixture decodes", harness.as_str()));
+            assert_eq!(
+                envelope.event,
+                Event::PreTool,
+                "{} must normalize its pre-tool event",
+                harness.as_str()
+            );
+            assert_eq!(
+                envelope.command,
+                "gh pr merge 1",
+                "{} must yield the same command",
+                harness.as_str()
+            );
+            assert_eq!(
+                envelope.cwd.as_deref(),
+                Some(std::path::Path::new("/repo")),
+                "{} must yield the same cwd",
+                harness.as_str()
+            );
+            assert!(
+                envelope.session.is_some(),
+                "{} must yield a session id whatever it calls the key",
+                harness.as_str()
+            );
+            assert!(
+                !envelope.tool.is_empty(),
+                "{} must yield a tool name, derived where the host sends none",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn a_cursor_payload_with_a_bom_decodes_identically() {
+        // The measured Windows failure: a UTF-8 BOM on stdin breaks a strict
+        // parser, and on Cursor that silently degraded guards to allow-all. A
+        // BOM is never meaningful here, so it is stripped before parsing.
+        let plain = decode(
+            Harness::Cursor,
+            include_str!("../tests/fixtures/hooks/cursor.json"),
+        )
+        .expect("the plain fixture decodes");
+        let with_bom = decode(
+            Harness::Cursor,
+            include_str!("../tests/fixtures/hooks/cursor-bom.json"),
+        )
+        .expect("a BOM must not make a payload undecodable");
+        assert_eq!(plain, with_bom);
+    }
+
+    #[test]
+    fn a_cursor_specialized_event_derives_its_tool_and_lifts_its_operand() {
+        // `beforeShellExecution` carries the command at top level and no
+        // `tool_name` at all. An adapter that left the tool empty would make
+        // every specialized event look like the same anonymous call.
+        let envelope = decode(
+            Harness::Cursor,
+            include_str!("../tests/fixtures/hooks/cursor.json"),
+        )
+        .expect("decodes");
+        assert_eq!(envelope.tool, "Shell");
+        assert_eq!(envelope.raw_event, "beforeShellExecution");
+        assert_eq!(
+            envelope.input.pointer("/command").and_then(Value::as_str),
+            Some("gh pr merge 1"),
+            "the operand is lifted into `input` from the top level"
+        );
+        // The generic event still works the ordinary way.
+        let generic = decode(
+            Harness::Cursor,
+            r#"{"hook_event_name":"preToolUse","tool_name":"Shell","tool_input":{"command":"x"}}"#,
+        )
+        .expect("decodes");
+        assert_eq!(generic.event, Event::PreTool);
+        assert_eq!(generic.tool, "Shell");
+    }
+
+    #[test]
+    fn copilots_tool_args_are_accepted_as_an_object_or_a_string() {
+        // Copilot types `toolArgs` as `unknown` and its own docs show it
+        // stringified, so a parser that assumed an object would read a real
+        // payload as having no command — an allow, silently.
+        let stringified = decode(
+            Harness::CopilotCli,
+            include_str!("../tests/fixtures/hooks/copilot-cli-stringified-args.json"),
+        )
+        .expect("decodes");
+        assert_eq!(stringified.command, "gh pr merge 1");
+    }
+
+    #[test]
+    fn geminis_event_names_are_renamed_and_claudes_are_not_disturbed() {
+        // Gemini's names are the only structural gap in an otherwise
+        // Claude-identical payload.
+        for (raw, expected) in [
+            ("BeforeTool", Event::PreTool),
+            ("AfterTool", Event::PostTool),
+            ("AfterAgent", Event::Stop),
+        ] {
+            assert_eq!(normalize_event(Harness::GeminiCli, raw), expected);
+        }
+        // A host with no rename table falls through to the converged spellings,
+        // and a host's table never leaks into another's.
+        assert_eq!(
+            normalize_event(Harness::ClaudeCode, "BeforeTool"),
+            Event::Unrecognized,
+            "Gemini's vocabulary is not Claude's"
+        );
+        assert_eq!(
+            normalize_event(Harness::CodexCli, "PreToolUse"),
+            Event::PreTool
+        );
+    }
+
+    #[test]
+    fn only_the_hosts_with_no_stderr_reason_get_a_deny_body() {
+        // Cursor documents no meaning for stderr, so its reason can only travel
+        // in JSON; Claude discards stdout on exit 2, so it picks the richer
+        // channel. Everything else answers with the exit code and stderr.
+        for harness in Harness::ALL {
+            let body = encode_deny(*harness, "PreToolUse", "use `mise run land`")
+                .expect("the fixed shapes serialize");
+            assert_eq!(
+                body.is_some(),
+                harness.reason_travels_in_band(),
+                "{} channel disagrees with its declared posture",
+                harness.as_str()
+            );
+            if let Some(body) = body {
+                assert!(
+                    body.contains("use `mise run land`"),
+                    "{}: a deny body must carry the reason",
+                    harness.as_str()
+                );
+            }
+        }
     }
 
     #[test]
