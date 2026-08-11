@@ -166,7 +166,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // not a policy question and no `batten.toml` may answer it.
         Some(Command::State { command }) => match command {
             StateCommand::Adopt { store } => store::run_adopt(store.as_deref(), err),
-            StateCommand::Record => run_state_record(&overrides, err),
+            StateCommand::Record => run_state_record(&overrides, mode, err),
             StateCommand::Migrate => run_state_migrate(err),
             StateCommand::List { json } => run_state_list(json, mode, out, err),
         },
@@ -440,7 +440,12 @@ fn run_defects_add(
 /// and a detached head has none; inventing a synthetic one would mint an
 /// instance that ref-death GC could never collect, because the ref it names
 /// never existed to die.
-fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
+///
+/// When a session is declared ([`session::SESSION_ENV`]) this also records the
+/// lineage edge and advances **its own** fold position
+/// ([`session::HOLDER_RECORD`]) — never a drain's, since this verb folds shards
+/// whether or not anything reached an agent (CLOUD-83).
+fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> Result<ExitCode> {
     let repo = git::repo_root(Path::new("."))?;
     // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
     // MAIN worktree's root — which is exactly what makes every linked worktree
@@ -513,6 +518,12 @@ fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCo
         journal::new_generation(&bound.dir)?;
     }
 
+    // The session's durable resume point (CLOUD-83), recorded LAST so the stored
+    // cursor names the generation this run finished in — a GC above may have
+    // rotated it, and a cursor saved before that would name a dead one and force
+    // a resync this process already knows the answer to.
+    record_session_position(&bound.dir, mode, err)?;
+
     // Pointer-only counts on stderr; `record` emits no data document, so the
     // stdout channel stays empty for it.
     writeln!(
@@ -521,6 +532,62 @@ fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCo
         recorded.minted, recorded.updated, recorded.resolved
     )?;
     Ok(ExitCode::Success)
+}
+
+/// Record this session's lineage edge and fold position, when one is declared.
+///
+/// Split out because it is a different question from "what did this scan find",
+/// and because the whole of it is skipped when no session is declared: a host
+/// that supplies none is a repository not using this, and an absent session must
+/// leave the store and this verb's output byte-identical to before
+/// ([`transcript`]'s absent-is-not-empty law).
+///
+/// The note rides the `Verbose` rung rather than the default line. `state
+/// record`'s one-line report is a byte-stable contract, and a resume position is
+/// detail for a caller who asked — not a second sentence every consumer must now
+/// parse.
+///
+/// **Not reachable on the degraded read-only path**: [`run_state_record`] returns
+/// before the merge there, so a binary that may not write the store does not
+/// write a session record either.
+fn record_session_position(store_dir: &Path, mode: Mode, err: &mut dyn Write) -> Result<()> {
+    let Some(declared) = session::declared() else {
+        return Ok(());
+    };
+    let observed = session::observe(store_dir, &declared)?;
+    let root = session::root(store_dir, &declared.key)?;
+    let held = session::load_cursor(store_dir, &root, session::HOLDER_RECORD)?;
+    // The same `since` every reader uses, so a rotated generation forces the
+    // resync here exactly as it would anywhere else — this verb gets no private
+    // reading of a cursor's validity.
+    let drained = journal::since(store_dir, held.as_ref())?;
+    let resumed = match &drained {
+        journal::Drain::Delta { entries, .. } => format!("resumed, {} new", entries.len()),
+        journal::Drain::FullResync { reason, .. } => format!("full resync ({reason})"),
+    };
+    session::save_cursor(store_dir, &root, session::HOLDER_RECORD, drained.cursor())?;
+
+    // Pointer-only (rule 4): the lineage root as a fingerprint prefix and the
+    // walk's depth, never the host's session id and never an entry.
+    let lineage = if root.truncated {
+        format!("lineage {} (truncated at {})", root.short(), root.depth)
+    } else if root.depth > 0 {
+        format!("lineage {} (+{})", root.short(), root.depth)
+    } else {
+        format!("lineage {}", root.short())
+    };
+    let conflict = if observed == session::Observed::ParentConflict {
+        "; declared parent differs from the recorded one, which stands"
+    } else {
+        ""
+    };
+    output::message(
+        mode,
+        Verbosity::Verbose,
+        err,
+        &format!("state record: session {lineage}: {resumed}{conflict}"),
+    )?;
+    Ok(())
 }
 
 /// Upgrade the store's record version. The one explicit upgrade path.

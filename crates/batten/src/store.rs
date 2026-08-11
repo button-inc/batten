@@ -52,6 +52,28 @@
 //! repository. A matching common dir alone *can* be — a checkout deleted and
 //! another cloned to the same path — so it yields [`Opened::Candidate`], which is
 //! reported and bound only by an explicit `batten state adopt`.
+//!
+//! # Warm-fork restart: this module's half (CLOUD-83)
+//!
+//! [`crate::state`] states the procedure; the part that belongs here is **why a
+//! restart finds the same store rather than a fresh one**. A fork changes no key
+//! material at all — same checkout, same common dir, same root commits — so
+//! [`resolve`] takes the marker arm and returns [`Opened::Existing`] with no
+//! migration to record. Nothing about restart is special-cased, and that is the
+//! property worth stating: the machinery that survives a repository being *moved*
+//! is strictly stronger than what surviving a *process* needs.
+//!
+//! The failure this rules out is the one named at the top of this module —
+//! minting a fresh store, which silently resurrects every finding a reviewer
+//! already rejected by design. A restart is exactly when that would be least
+//! visible, because there is no other symptom: the new store is valid, empty and
+//! quiet. [`Opened::Fresh`] being reachable only after every criterion has been
+//! asked is what makes it unreachable here.
+//!
+//! Per-session state — the drain's resume position and the sequence kind's
+//! session lineage — is [`crate::session`]'s, kept beside the findings rather
+//! than in this record: it changes every session, and store identity is stable
+//! for the life of a repository.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

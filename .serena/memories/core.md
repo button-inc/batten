@@ -573,6 +573,33 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   target are payload, not pointers. The intent question is permanently out of
   scope (CLOUD-93), not deferred. Store/tier/drain integration waits on
   CLOUD-81/82.
+- `session.rs` — session lineage and the durable resume point (CLOUD-83): the
+  fourth question `store`/`findings`/`journal` leave open — **who is reading, and
+  how far have they got**. A warm fork keeps everything that is out of process
+  for free (that inheritance is the restart "procedure", written as rustdoc on
+  `state.rs`/`store.rs` per the issue's §1); the two things it loses are a
+  reader's `(generation, seqno)` position and the session key an open
+  sequence-kind finding was minted under. Both live in one record per session
+  under `sessions/`. The cursor is keyed on the **lineage root**, so a fork reads
+  its parent's position, and sub-keyed by `holder` — load-bearing, not defensive:
+  a shared cursor would let `state record` (holder `record`) mark entries seen
+  that never reached an agent, and CLOUD-79's drain would then skip exactly what
+  it exists to emit. `root` walks the chain bounded at 64 and reports
+  `truncated` rather than spinning; a cycle is unreachable through `observe`
+  anyway, whose parent edge is **write-once** (relinking would move already-
+  resolved identities and cursors under readers holding the old root). The parent
+  is DECLARED through `BATTEN_SESSION_PARENT`, never inferred: two sessions run
+  back-to-back in one worktree are indistinguishable from a fork by anything the
+  store can observe, and chaining them would carry an open incident into an
+  unrelated trajectory — the direction that hides an alert. A warm fork inherits
+  its parent's environment, which is what makes env the honest channel and costs
+  no new command, flag, or envelope field (§3). Bare consts rather than a
+  `resolve.rs` `SETTINGS` row (`hook::BYPASS_ENV`'s shape): ambient context has no
+  config spelling, so no precedence ladder to declare. Absent is unconfigured and
+  silent, and the record file is named by a FINGERPRINT of the key — a host
+  session id is somebody else's arbitrary string and must not name this crate's
+  files — with the raw key inside, where `sequence_fingerprint` needs it. Reads
+  never write, so resolving a session on a `read` verb does not make it a writer.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do. The module

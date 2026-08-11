@@ -9,6 +9,34 @@
 //! The `<repo-name>` segment is derived from the repository at runtime (rule 1):
 //! the core bakes in no repository name. `<app>` is the crate name, taken from
 //! the manifest rather than a hand-copied string constant.
+//!
+//! # Warm-fork restart: what survives, and why (CLOUD-83)
+//!
+//! A warm fork abandons the current trajectory and keeps the working state. The
+//! restart procedure is this: **there is nothing to do.** That is the design
+//! rather than an omission, and this is where it is written down, because this
+//! module is the one that decides where the state lives.
+//!
+//! Survival is **inherited from the location**, never implemented by a
+//! restart-time copier — a copier is a step someone can forget, and a step that
+//! runs after a crash has already lost the thing it was going to copy. So:
+//!
+//! | What                | Where it lives                      | Survives because                     |
+//! | ------------------- | ----------------------------------- | ------------------------------------ |
+//! | the findings store  | here, out of tree ([`repo_state_dir`]) | it was never in the forked process   |
+//! | dispositions        | journal shards under that directory | [`crate::journal::append`] fsyncs before returning |
+//! | the defect ledger   | a tracked file in the repository    | it is committed                      |
+//! | working papers      | the checkout                        | a warm fork keeps the checkout       |
+//!
+//! Two things are genuinely lost with the process, and [`crate::session`] is
+//! where they are recorded instead: the reader's `(generation, seqno)` position,
+//! and the session key an open sequence-kind finding was minted under. See that
+//! module for the lineage rule — a fork continues its parent's session key — and
+//! for why the parent is declared rather than inferred.
+//!
+//! What a warm fork does **not** preserve is the trajectory: the abandoned
+//! session's plan, its context, its in-flight edits. That is the point of forking.
+//! Nothing here tries to keep it.
 
 use std::path::{Path, PathBuf};
 
