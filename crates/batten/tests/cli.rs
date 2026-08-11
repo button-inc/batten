@@ -5117,6 +5117,11 @@ fn a_fork_resumes_at_its_parents_cursor_with_every_finding_intact() {
     assert_eq!(first.status.code(), Some(0));
     let before = stored_findings(&repo, &home);
     assert_eq!(before.len(), 1, "the scan found the planted defect");
+    // The whole document, not the parsed subset: §2's predicate is that a
+    // kill-and-restart preserves the store BYTE-FOR-BYTE, which covers the
+    // fields `stored_findings` drops — the tier, the presentation and the
+    // disposition among them.
+    let before_bytes = store_cmd(&repo, &home, &["state", "list", "-J"]).stdout;
 
     let store_dir = bound_store_dir(&repo, &home);
     let parent = session_record(&store_dir, "alpha");
@@ -5169,6 +5174,13 @@ fn a_fork_resumes_at_its_parents_cursor_with_every_finding_intact() {
         stored_findings(&repo, &home),
         before,
         "a restart preserves the store, findings and instances alike"
+    );
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "list", "-J"]).stdout,
+        before_bytes,
+        "byte-for-byte: every field survives, including the ones no verb can \
+         vary yet — a disposition set by a future caller must survive too, and \
+         a comparison over a parsed subset would not notice if it stopped"
     );
 }
 
