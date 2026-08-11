@@ -38,6 +38,47 @@ check() {
 	[[ "$output" == *"hedged-flag-framing 2"* ]]
 }
 
+# --- one verb set across the worth/bears openers (CLOUD-387) ------------------
+
+@test "THE WITNESSED MISS: the CLOUD-347 sentence fires" {
+	# The trunk-based-development audit closed its report with this, a real finding
+	# that reached chat and nothing else and became CLOUD-380 only because a human
+	# asked. It was silent before this verb set was unified — and nothing else
+	# covered it either: `stop-guard` consults `finding-sink-check` precisely when
+	# this rule is silent, and that gate needs a `path:line` citation this sentence
+	# does not carry. The turn's one advisory slot was never claimed, not spent.
+	run check "One open thread worth naming: the census never interrogated host settings, and if you want them enumerated and gated the way CLOUD-350 did for the ruleset, that is a new issue."
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"worth naming"* ]]
+}
+
+@test "the asymmetry is gone: mentioning is a flagging verb under BOTH openers" {
+	# `bears mentioning` always fired and `worth mentioning` never did. Nothing
+	# distinguished the two openers; the split was an accident of the alternation.
+	run check 'All seven pass. Worth mentioning that the frontier is still empty.'
+	[ "$status" -eq 1 ]
+	run check 'All seven pass. That bears mentioning.'
+	[ "$status" -eq 1 ]
+}
+
+@test "every opener carries the witnessed verb" {
+	run check 'Worth naming one thing about the receipt.'
+	[ "$status" -eq 1 ]
+	run check 'That bears naming before the next lap.'
+	[ "$status" -eq 1 ]
+	run check "It's worth naming that the epoch is stale."
+	[ "$status" -eq 1 ]
+}
+
+@test "an UNWITNESSED near-miss stays out — that is the line against inventing a list" {
+	# `calling out` is the same grammatical shape and is deliberately absent: not
+	# witnessed on any real turn, and not already in the file. Asserted rather than
+	# assumed, so a later author cannot widen the set by accident and call it an
+	# inflection.
+	run check 'All seven pass. Worth calling out that the frontier is still empty.'
+	[ "$status" -eq 0 ]
+}
+
 # --- pointer-only ------------------------------------------------------------
 
 @test "the report never echoes the sentence it judged" {

@@ -79,7 +79,46 @@ scrubbed=$(
 # only `I'?d` and its own test caught the miss: "one thing I would flag" is the
 # commoner spelling of the phrase AGENTS.md writes contracted. Both apostrophes
 # too — a straight one and a typographic one are the same word to a reader.
-HEDGES="worth (noting|flagging)|one thing (I would|I['’]?d) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth (noting|flagging)|bears (noting|mentioning)"
+#
+# ONE VERB SET ACROSS THE `worth`/`bears` OPENERS (CLOUD-387), because they used to
+# carry two and the difference was an accident of how the alternation was written:
+# `worth (noting|flagging)` beside `bears (noting|mentioning)`, so `mentioning` was
+# a flagging verb to this file under one opener and unknown under the other.
+# Measured before and after, one sentence per row:
+#
+#                        before   after
+#   worth noting           fires   fires
+#   worth flagging         fires   fires
+#   bears noting           fires   fires
+#   bears mentioning       fires   fires
+#   worth naming          SILENT   fires   <- the witnessed miss
+#   worth mentioning      SILENT   fires   <- the asymmetry
+#   bears naming          SILENT   fires
+#   it's worth naming     SILENT   fires
+#   worth calling out     SILENT  SILENT   <- deliberately still out
+#
+# `naming` is the witnessed one. The CLOUD-347..356 audit closed its report with
+# "One open thread worth naming: the census … never interrogated host settings",
+# a real finding that reached chat and nothing else and became CLOUD-380 only
+# because a human asked. That sentence is silent here; the same sentence with
+# `noting` fires. And nothing else covered it: `stop-guard` consults
+# `finding-sink-check` precisely WHEN this rule is silent, and that gate needs a
+# `path:line` citation the sentence does not carry — so the turn's one advisory
+# slot was not spent, it was never claimed.
+#
+# `calling out` is the line between completing an inflection and inventing a
+# phrase list, and it stays out: unwitnessed, and not already in this file. That
+# distinction is the whole reason this is not the unmeasured-literal mistake
+# CLOUD-323 and CLOUD-326 forbid — those govern a NEW SHAPE, while every verb
+# here is either witnessed or already present, inside a construction measured at
+# 3/3. Precision holds by construction: "worth naming" is the same
+# opener-plus-communication-verb form as "worth noting".
+#
+# The `I would flag` / `I should note` family keeps `(flag|note)`, measured and
+# deliberately unchanged — "I would name that" is not natural flagging, and
+# widening there would be the invention this paragraph exists to refuse.
+FLAG_VERB="noting|flagging|mentioning|naming"
+HEDGES="worth ($FLAG_VERB)|one thing (I would|I['’]?d) (flag|note)|I['’]?d (flag|note) (that|one)|I would (flag|note) that|I should (note|flag)|(it|that)['’]?s worth ($FLAG_VERB)|bears ($FLAG_VERB)"
 
 # `-o` on a here-string, never `producer | grep -q`: under pipefail an
 # early-exiting grep in a pipeline promotes a MATCH to a failure status
