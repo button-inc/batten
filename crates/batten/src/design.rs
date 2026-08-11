@@ -762,10 +762,7 @@ mod tests {
             audit(std::slice::from_ref(&claim), body.len()).is_empty(),
             "exactly at the ceiling is within it"
         );
-        assert_eq!(
-            ids(&audit(&[claim], body.len() - 1)),
-            [CAPTURE_OVER_BUDGET]
-        );
+        assert_eq!(ids(&audit(&[claim], body.len() - 1)), [CAPTURE_OVER_BUDGET]);
     }
 
     #[test]
@@ -911,14 +908,14 @@ mod tests {
     fn an_unknown_enum_token_is_a_parse_error_not_a_weakest_variant() {
         // The whole point of closed enums: a corpus written against a newer
         // schema is refused, never audited as `claimed`.
-        let text = "{\"id\":\"a\",\"status\":\"attested\",\"polarity\":\"existence\",\"source\":\"s\"}\n";
+        let text =
+            "{\"id\":\"a\",\"status\":\"attested\",\"polarity\":\"existence\",\"source\":\"s\"}\n";
         assert!(parse(text).is_err());
     }
 
     #[test]
     fn an_unknown_field_is_a_parse_error() {
-        let text =
-            "{\"id\":\"a\",\"status\":\"claimed\",\"polarity\":\"existence\",\"source\":\"s\",\"extra\":1}\n";
+        let text = "{\"id\":\"a\",\"status\":\"claimed\",\"polarity\":\"existence\",\"source\":\"s\",\"extra\":1}\n";
         assert!(parse(text).is_err());
     }
 

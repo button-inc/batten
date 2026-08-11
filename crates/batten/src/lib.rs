@@ -204,7 +204,10 @@ fn run_design_audit(json: bool, overrides: &Overrides, out: &mut dyn Write) -> R
     let config = resolve::resolve(Path::new("."), overrides)?;
     // `[design]` is authority-only, so there is no local layer to clamp against
     // today; the tighten-only call is the semantics, stated where it applies.
-    let cap = design::effective_cap(config.design.and_then(|design| design.max_capture_bytes), None);
+    let cap = design::effective_cap(
+        config.design.and_then(|design| design.max_capture_bytes),
+        None,
+    );
 
     let mut raw = String::new();
     std::io::stdin().read_to_string(&mut raw)?;

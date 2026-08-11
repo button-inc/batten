@@ -149,7 +149,11 @@ fn the_json_channel_answers_even_when_clean() {
     // The opposite discipline on the other channel: JSON that is sometimes
     // absent is unparseable, so the document is emitted for a clean corpus too.
     let dir = repo("design-clean-json", "version = 1\n");
-    let output = run_with_stdin(&dir, &["design", "audit", "-J"], &corpus(&[Row::clean("a")]));
+    let output = run_with_stdin(
+        &dir,
+        &["design", "audit", "-J"],
+        &corpus(&[Row::clean("a")]),
+    );
 
     assert_eq!(code(&output), 0);
     let document: serde_json::Value = serde_json::from_str(&stdout(&output)).expect("valid JSON");
@@ -257,7 +261,11 @@ fn an_absent_claimant_is_an_advisory_and_a_violation_under_strict() {
     let text = corpus(&[row]);
 
     let standard = audit(&dir, &text);
-    assert_eq!(code(&standard), 0, "an advisory alone does not fail the run");
+    assert_eq!(
+        code(&standard),
+        0,
+        "an advisory alone does not fail the run"
+    );
     assert!(stdout(&standard).contains("design-claimant-absent"));
 
     // The existing ladder, with no bespoke flag.
@@ -374,7 +382,10 @@ fn a_row_that_does_not_parse_is_a_usage_error_naming_only_its_line() {
     // stream is not the format" is a claim about the invocation. A harness must
     // never read a corpus typo as a deny.
     let dir = repo("design-malformed", "version = 1\n");
-    let text = format!("{}\n{{\"id\":\"{SENTINEL}\", oops\n", Row::clean("a").line());
+    let text = format!(
+        "{}\n{{\"id\":\"{SENTINEL}\", oops\n",
+        Row::clean("a").line()
+    );
     let output = audit(&dir, &text);
 
     assert_eq!(code(&output), 1);
