@@ -81,6 +81,10 @@ stderr_noise() {
 	[ "$status" -eq 0 ]
 }
 
+# Ordering is by the log's ISO-8601 NAME, whose lexicographic order is its
+# chronological order. The mtimes here are set deliberately AGAINST the name
+# order, so a regression to mtime ordering fails this test rather than passing
+# by coincidence.
 @test "only the NEWEST log is judged — a stale failure does not condemn a good session" {
 	old=$(log_for serena 2026-08-07T05-04-29-250Z)
 	{
@@ -92,8 +96,9 @@ stderr_noise() {
 		started
 		connected
 	} >"$new"
-	touch -d '2026-08-07 05:04:29' "$old"
-	touch -d '2026-08-11 06:19:12' "$new"
+	# Inverted on purpose: the STALE log is the most recently written file.
+	touch -d '2026-08-11 07:00:00' "$old"
+	touch -d '2026-08-07 05:04:29' "$new"
 	run "$GATE" --settings "$SETTINGS" --logs "$LOGS"
 	[ "$status" -eq 0 ]
 }

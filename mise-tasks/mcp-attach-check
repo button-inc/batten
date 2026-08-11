@@ -112,9 +112,15 @@ while IFS= read -r server; do
 		continue
 	fi
 
-	# Newest by mtime. Each connection attempt opens its own file, so the newest
-	# is this session's; older ones answer a question nobody asked.
-	newest=$(ls -t "$dir"/*.jsonl 2>/dev/null | head -n 1)
+	# Newest by NAME, not by mtime. Each connection attempt opens its own file
+	# named for its UTC start instant — `2026-08-11T06-19-12-114Z.jsonl` — a
+	# fixed-width ISO-8601 form whose lexicographic order IS its chronological
+	# order, so a plain reverse sort picks this session's log. Parsing `ls -t`
+	# would be the obvious alternative and is the wrong one (SC2012): its output
+	# is ambiguous for unusual filenames, and mtime is the weaker key anyway —
+	# a log is appended to as the session runs, so mtime tracks last write while
+	# the name records which connection attempt it belongs to.
+	newest=$(find "$dir" -maxdepth 1 -type f -name '*.jsonl' 2>/dev/null | sort -r | head -n 1)
 	if [ -z "$newest" ] || [ ! -r "$newest" ]; then
 		report "$server no-log — $dir holds no readable connection log"
 		continue
