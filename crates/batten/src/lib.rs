@@ -1017,7 +1017,9 @@ fn drain_advisories(
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+        .map_or(0, |since| {
+            u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+        });
 
     match drain::decide_wake(&state, &config, now_ms, seqno) {
         drain::Wake::Coalesced => {

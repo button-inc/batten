@@ -12,10 +12,14 @@
 //! same reason the module doc of `tests/common/mod.rs` gives for existing at all
 //! — they are about *what is written*, not *how*.
 
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Output, Stdio};
 
 use common::{Fixture, batten, scratch};
 
@@ -29,10 +33,15 @@ fn post_tool(session: &str) -> String {
 /// Run `batten hook --harness claude-code` in `dir` with `payload` on stdin, in a
 /// scrubbed environment pointing at the fixture's own state home.
 fn hook(dir: &Path, home: &Path, payload: &str) -> Output {
-    use std::io::Write as _;
-    use std::process::Stdio;
+    hook_at(dir, home, payload, &[])
+}
 
-    let mut child = batten()
+/// [`hook`] with extra arguments ahead of the verb — the §3 ladder flags, which
+/// are read from raw argument order and so cannot be appended.
+fn hook_at(dir: &Path, home: &Path, payload: &str, leading: &[&str]) -> Output {
+    let mut command = batten();
+    command
+        .args(leading)
         .args(["hook", "--harness", "claude-code"])
         .current_dir(dir)
         .env("HOME", home)
@@ -40,9 +49,8 @@ fn hook(dir: &Path, home: &Path, payload: &str) -> Output {
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn batten hook");
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
     child
         .stdin
         .as_mut()
@@ -102,7 +110,11 @@ fn drained_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
 
     // Put the finding's file into the changed scope without re-recording, so the
     // stored instance still points at the path the filter is asked about.
-    common::write(&repo, "src/a.rs", "fn main() {}\n// TODO fix me\n// edited\n");
+    common::write(
+        &repo,
+        "src/a.rs",
+        "fn main() {}\n// TODO fix me\n// edited\n",
+    );
     (repo, home)
 }
 
@@ -186,11 +198,7 @@ fn a_batch_of_wakes_drains_once_and_the_interval_is_config() {
     // coalescing window would have prevented: the first wake speaks, and a
     // change to the store is picked up on the very next one.
     assert_eq!(payload(&hook(&open, &home_o, &post_tool("batch"))).len(), 1);
-    common::write(
-        &open,
-        "src/b.rs",
-        "fn other() {}\n// TODO also fix me\n",
-    );
+    common::write(&open, "src/b.rs", "fn other() {}\n// TODO also fix me\n");
     let recorded = state_cmd(&open, &home_o, &["state", "record"]);
     assert_eq!(recorded.status.code(), Some(0));
     assert_eq!(
@@ -239,7 +247,10 @@ fn filters_a_code_finding_whose_file_is_not_in_the_changed_scope() {
     common::git_in(&repo, &["checkout", "--", "src/a.rs"]);
     let output = hook(&repo, &home, &post_tool("s1"));
     assert_eq!(output.status.code(), Some(0));
-    assert!(payload(&output).is_empty(), "nothing to emit prints nothing");
+    assert!(
+        payload(&output).is_empty(),
+        "nothing to emit prints nothing"
+    );
 
     // And it is recorded as withheld BY THE ENGINE — visible in the store
     // immediately, with no later verb needed to fold it, because the rate this
@@ -260,39 +271,22 @@ fn a_session_less_payload_degrades_without_draining_or_failing() {
     // window exists to prevent, so the honest degradation is to hold the wake —
     // loudly on the verbose rung, never as an error and never as a deny.
     let (repo, home) = drained_fixture("drain-no-session", "");
-    let output = hook(
-        &repo,
-        &home,
-        r#"{"hook_event_name":"PostToolUse","cwd":"/w","tool_name":"Bash","tool_input":{"command":"echo hi"}}"#,
-    );
+    const SESSIONLESS: &str = r#"{"hook_event_name":"PostToolUse","cwd":"/w","tool_name":"Bash","tool_input":{"command":"echo hi"}}"#;
+
+    let output = hook(&repo, &home, SESSIONLESS);
     assert_eq!(output.status.code(), Some(0));
     assert!(payload(&output).is_empty());
+    assert!(
+        !common::stderr(&output).contains("no session"),
+        "and a default run is not told about it: on a host that never sends a \
+         session this is the ordinary state, not news"
+    );
 
-    let loud = batten()
-        .args(["-v", "hook", "--harness", "claude-code"])
-        .current_dir(&repo)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            use std::io::Write as _;
-            child
-                .stdin
-                .as_mut()
-                .expect("stdin is piped")
-                .write_all(
-                    br#"{"hook_event_name":"PostToolUse","cwd":"/w","tool_name":"Bash","tool_input":{"command":"echo hi"}}"#,
-                )?;
-            child.wait_with_output()
-        })
-        .expect("run batten hook");
+    let loud = hook_at(&repo, &home, SESSIONLESS, &["-v"]);
+    assert_eq!(loud.status.code(), Some(0));
     assert!(
         common::stderr(&loud).contains("no session"),
-        "the degradation is stated on the ladder: {}",
+        "asking for detail produces it: {}",
         common::stderr(&loud)
     );
 }

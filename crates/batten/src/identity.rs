@@ -468,7 +468,7 @@ pub fn store_fingerprint(seed: &[&str]) -> Fingerprint {
 /// precisely so that never happens by accident.
 #[must_use]
 pub fn drain_result_fingerprint(lines: &[String]) -> Fingerprint {
-    let fields: Vec<&[u8]> = lines.iter().map(|line| line.as_bytes()).collect();
+    let fields: Vec<&[u8]> = lines.iter().map(std::string::String::as_bytes).collect();
     tagged_fingerprint(DRAIN_TAG, &fields)
 }
 

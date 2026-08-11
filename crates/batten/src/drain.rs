@@ -644,15 +644,39 @@ mod tests {
         };
         let now = 1_000_500;
         assert_eq!(
-            decide_wake(&state, &DrainConfig { interval_ms: 1_000, empty_poll_giveup: 3 }, now, 0),
+            decide_wake(
+                &state,
+                &DrainConfig {
+                    interval_ms: 1_000,
+                    empty_poll_giveup: 3
+                },
+                now,
+                0
+            ),
             Wake::Coalesced
         );
         assert_eq!(
-            decide_wake(&state, &DrainConfig { interval_ms: 100, empty_poll_giveup: 3 }, now, 0),
+            decide_wake(
+                &state,
+                &DrainConfig {
+                    interval_ms: 100,
+                    empty_poll_giveup: 3
+                },
+                now,
+                0
+            ),
             Wake::Drain
         );
         assert_eq!(
-            decide_wake(&state, &DrainConfig { interval_ms: 0, empty_poll_giveup: 3 }, now, 0),
+            decide_wake(
+                &state,
+                &DrainConfig {
+                    interval_ms: 0,
+                    empty_poll_giveup: 3
+                },
+                now,
+                0
+            ),
             Wake::Drain,
             "a zero window is every wake drains, not a disabled drain"
         );
@@ -669,11 +693,27 @@ mod tests {
             ..WakeState::default()
         };
         assert_eq!(
-            decide_wake(&state, &DrainConfig { interval_ms: 10, empty_poll_giveup: 2 }, 9_000, 4),
+            decide_wake(
+                &state,
+                &DrainConfig {
+                    interval_ms: 10,
+                    empty_poll_giveup: 2
+                },
+                9_000,
+                4
+            ),
             Wake::GaveUp
         );
         assert_eq!(
-            decide_wake(&state, &DrainConfig { interval_ms: 10, empty_poll_giveup: 3 }, 9_000, 4),
+            decide_wake(
+                &state,
+                &DrainConfig {
+                    interval_ms: 10,
+                    empty_poll_giveup: 3
+                },
+                9_000,
+                4
+            ),
             Wake::Drain
         );
     }
@@ -770,7 +810,10 @@ mod tests {
         let first = cycle(&records, &scope, None);
         let again = cycle(&records, &scope, None);
         assert_eq!(first.result_id, again.result_id);
-        assert_eq!(first.lines, again.lines, "and the bytes agree, not just the digest");
+        assert_eq!(
+            first.lines, again.lines,
+            "and the bytes agree, not just the digest"
+        );
         assert_eq!(first.lines.len(), 2);
 
         // A count that moved is a re-raise, and must NOT short-circuit.
@@ -803,7 +846,11 @@ mod tests {
         // counted" — one line per IDENTITY, never one per record, and the
         // duplicate is a number rather than a silently dropped row.
         let one = record(FindingKind::Code, "r", "src/a.rs", "TODO");
-        let drained = cycle(&[one.clone(), one.clone(), one], &changed(&["src/a.rs"]), None);
+        let drained = cycle(
+            &[one.clone(), one.clone(), one],
+            &changed(&["src/a.rs"]),
+            None,
+        );
         assert_eq!(drained.lines.len(), 1);
         assert_eq!(drained.duplicates, 2);
     }
@@ -877,7 +924,11 @@ mod tests {
             line: Some(1),
         });
         let scope = changed(&["src/a.rs"]);
-        let here = cycle(&multi_records(&multi), &scope, Some(&Context::new("refs/heads/z")));
+        let here = cycle(
+            &multi_records(&multi),
+            &scope,
+            Some(&Context::new("refs/heads/z")),
+        );
         assert!(here.lines[0].ends_with(" 42"));
         let fallback = cycle(&multi_records(&multi), &scope, None);
         assert!(
