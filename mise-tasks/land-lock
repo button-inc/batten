@@ -22,28 +22,30 @@
 # meaning "this change is broken", and cancelling another ref's runs would
 # reverse CLOUD-240's "supersede your own runs, never someone else's".
 #
-# THE PRIMITIVE, and why the lease is a BRANCH. Two properties are needed, and
-# both were measured here rather than assumed:
+# THE PRIMITIVE: one operation, compare-and-swap, and nothing else.
+# `git push --force-with-lease=<ref>:<expected>` is a server-side CAS. Measured
+# against a real remote: the correct expected value wins, a stale one is rejected
+# with `stale info`, and the empty expected value means "must not exist", so even
+# the first claim is a CAS rather than a create-and-hope.
 #
-#   1. Create must be an atomic test-and-set. Pushing a parentless commit to an
-#      absent ref creates it; pushing one to a ref that exists is rejected as a
-#      non-fast-forward. Measured: exit 0 then exit 1 against the real remote.
-#   2. Renewal must be compare-and-swap, or a heartbeat can clobber a lease that
-#      changed hands. `git push --force-with-lease=<ref>:<observed>` is exactly
-#      that. Measured: the correct expected value wins, a stale one is rejected
-#      with `stale info`.
+# Everything is that one operation. Acquiring CASes from the free state,
+# renewing CASes the expiry forward, and releasing CASes the expiry to zero —
+# there is deliberately no delete. A tombstoned lease is instantly claimable by
+# anyone, which is all a release has to mean, and avoiding the delete removes
+# every permission and namespace question from the design at once. It also
+# removes the REST API from this task entirely, which matters more than it looks:
+# the API budget is shared with `land`'s own polling and was measurably exhausted
+# by the fleet during development.
 #
-# Both hold ONLY under `refs/heads/`. A custom namespace fails on both counts
-# here: the agent proxy answers 403 to a push at any ref outside `refs/heads`,
-# and GitHub's ref API does not enforce the fast-forward rule off `refs/heads`
-# at all — a PATCH of a parentless orphan with `force: false` was accepted (422
-# "Update is not a fast forward" came back only for a branch). So the lease is a
-# branch, and `branch-age-check` is taught to skip it rather than the lease being
-# bent to fit the gate.
-#
-# The one thing that does NOT go through git is the delete: the proxy answers 403
-# to a delete-push too, so `release` goes through the REST API. That asymmetry is
-# environmental, not a design choice.
+# WHERE THE LEASE LIVES. `refs/heads/` today, a custom namespace later, and the
+# code does not care — that is the point of CAS-only. A custom namespace is the
+# better home (measured on a local remote: invisible to `git branch -r`,
+# untouched by `git push --all`, absent from PR base pickers, and CAS behaves
+# identically there), and it is deferred rather than chosen because THIS sandbox
+# proxies git and its write policy 403s any push outside `refs/heads`. That is an
+# environment limitation, not a property of GitHub, and a design must not be bent
+# around it — humans and CI push straight to GitHub and never see it. Moving is a
+# one-line default change once the proxy allows it.
 #
 # The holder id in the lease body is load-bearing rather than decorative: git
 # addresses objects by content, so two sessions building an identical lease would
@@ -117,11 +119,13 @@ holder_id() {
 # success. That turns a rejected claim into an apparent win. Measured: without
 # it, a second `acquire` from the holder reported "acquired" rather than
 # recognising its own lease, and a renew left the ref unmoved.
+# $1 is the lifetime in seconds; 0 mints a TOMBSTONE — a lease already expired,
+# which is what a release leaves behind instead of deleting the ref.
 mint() {
 	local tree
 	tree=$(git hash-object -t tree /dev/null)
 	printf 'land-lock\nholder: %s\nexpires: %s\nnonce: %s\n' \
-		"$(holder_id)" "$(($(now) + ttl))" \
+		"$(holder_id)" "$(($(now) + ${1:-$ttl}))" \
 		"$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')" |
 		git commit-tree "$tree"
 }
@@ -160,14 +164,15 @@ observe() {
 
 # Compare-and-swap the lease from $1 to a fresh one. The expected value is what
 # makes this safe to call from a heartbeat: a lease that changed hands under us
-# is rejected rather than clobbered.
-swap() { git push --quiet --force-with-lease="$ref:$1" "$remote" "$(mint):$ref" 2>/dev/null; }
-claim() { git push --quiet "$remote" "$(mint):$ref" 2>/dev/null; }
-# Deleting goes through the API because the proxy 403s a delete-push. There is no
-# lease guard available on this path, so every caller checks `mine` first.
-drop() { gh api -X DELETE "repos/{owner}/{repo}/git/$ref" >/dev/null 2>&1; }
+# is rejected rather than clobbered. An empty $1 means "must not exist", which is
+# how the very first claim is made without a separate create path.
+swap() { git push --quiet --force-with-lease="$ref:$1" "$remote" "$(mint "${2:-}"):$ref" 2>/dev/null; }
 
-expired() { [ "$(now)" -gt "${observed_expires:-0}" ]; }
+# `-ge`, not `-gt`: a lease with zero seconds left has none, and the release
+# tombstone sets the expiry to exactly now. Under `-gt` that read as still-held
+# for one more second, so a release did not free the lease until the clock
+# ticked — measured, as a release the releaser itself still saw as held.
+expired() { [ "$(now)" -ge "${observed_expires:-0}" ]; }
 mine() { [ -n "$observed_holder" ] && [ "$observed_holder" = "$(holder_id)" ]; }
 age() { echo $((ttl - (observed_expires - $(now)))); }
 
@@ -180,29 +185,35 @@ acquire)
 	# which is the herd this task exists to disperse.
 	delay=2
 	while :; do
-		if claim; then
-			echo "land-lock: acquired by $(holder_id), ${ttl}s lease"
-			exit 0
-		fi
 		observe || exit 2
-		if [ -z "$observed_sha" ]; then
-			continue # released between our claim and our look; try again at once
-		fi
-		if mine; then
+		if mine && ! expired; then
 			echo "land-lock: already held by this clone"
 			exit 0
 		fi
-		# Stealing is the same compare-and-swap as a heartbeat, so two sessions
-		# stealing one dead lease cannot both win: the second sees stale info.
-		# Seconds past the VICTIM's expiry, computed directly rather than through
-		# `age`: that helper measures a lease against OUR ttl, which is not the
-		# one the dead holder was running under.
-		if expired && swap "$observed_sha"; then
-			echo "land-lock: stole a lease $(($(now) - observed_expires))s past expiry from $observed_holder"
-			exit 0
+		# One compare-and-swap covers all three ways in: the ref does not exist
+		# yet (expected value empty), it was tombstoned by a release, or its
+		# holder stopped beating. Two sessions racing the same free state CAS
+		# from the same expected value, so exactly one wins and the other is told
+		# `stale info` — which is why there is no separate create path to race.
+		if [ -z "$observed_sha" ] || expired; then
+			if swap "$observed_sha"; then
+				if [ -n "$observed_holder" ] && [ "$observed_holder" != "$(holder_id)" ]; then
+					# Seconds since the previous holder's expiry, computed here
+					# rather than through `age`: that helper measures a lease
+					# against OUR ttl, not the one its last holder ran under.
+					echo "land-lock: took the lease $(($(now) - observed_expires))s after $observed_holder stopped holding it"
+				else
+					echo "land-lock: acquired by $(holder_id), ${ttl}s lease"
+				fi
+				exit 0
+			fi
+			# Lost the CAS: somebody claimed the same free state first. Fall
+			# through to the deadline and the backoff rather than retrying at
+			# once — an immediate retry is the tight spin that turns a contended
+			# lease into a busy loop, measured when this `continue`d instead.
 		fi
 		if [ "$(now)" -ge "$deadline" ]; then
-			echo "land-lock: still held by $observed_holder after ${wait_for}s"
+			echo "land-lock: still held by ${observed_holder:-another session} after ${wait_for}s"
 			exit 1
 		fi
 		sleep $((delay + RANDOM % delay))
@@ -252,7 +263,10 @@ release)
 	# fires on every exit path, including ones that never acquired. Exiting
 	# non-zero there would turn an orderly cleanup into a reported failure.
 	{ [ -n "$observed_sha" ] && mine; } || exit 0
-	drop || {
+	# A tombstone, not a delete: CAS the expiry to now, which leaves the lease
+	# instantly claimable by anyone. That is all a release has to mean, and it
+	# keeps every write in this task the same single operation.
+	swap "$observed_sha" 0 || {
 		echo "land-lock: could not release; it expires in $((observed_expires - $(now)))s"
 		exit 0
 	}
@@ -262,15 +276,19 @@ release)
 
 status)
 	observe || exit 2
+	# Expired and absent are one state to a caller: both mean the next `acquire`
+	# will win. The distinction still matters for diagnosis, so an expired lease
+	# names who left it and how long ago rather than vanishing from the report —
+	# a lease nobody released is the tell for a session that died holding one.
 	if [ -z "$observed_sha" ]; then
 		echo "land-lock: unheld"
 		exit 0
 	fi
 	if expired; then
-		echo "land-lock: held by $observed_holder, EXPIRED $(($(now) - observed_expires))s ago"
-	else
-		echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left"
+		echo "land-lock: unheld — last held by $observed_holder, free for $(($(now) - observed_expires))s"
+		exit 0
 	fi
+	echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left"
 	mine && exit 0
 	exit 1
 	;;

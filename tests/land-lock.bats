@@ -6,9 +6,11 @@
 # these tests exercise the same create-is-test-and-set and
 # --force-with-lease-is-CAS behaviour that was measured against GitHub.
 #
-# The one stub is `gh`, because releasing goes through the REST API rather than a
-# delete-push (the agent proxy 403s the latter). The stub performs the equivalent
-# `update-ref -d` on the bare repo, so the delete is real too.
+# There is no `gh` stub, and that is an assertion rather than an omission: the
+# task uses one operation, `git push --force-with-lease`, and nothing else. The
+# stub below makes `gh` fail loudly, so any API call would break the suite. That
+# matters beyond tidiness — the API budget is shared with `land`'s own polling
+# and the fleet measurably exhausted it during development.
 #
 # A rival session is modelled as a second working clone: the holder id lives in
 # each clone's own git dir, so two clones are two identities, which is exactly
@@ -23,12 +25,10 @@ setup() {
 
 	git init -q --bare "$BARE"
 	mkdir -p "$STUB"
-	cat >"$STUB/gh" <<EOF
+	cat >"$STUB/gh" <<'EOF'
 #!/usr/bin/env bash
-# Only the one call land-lock makes: DELETE .../git/refs/heads/<branch>
-for a in "\$@"; do case "\$a" in */git/refs/heads/*) ref="refs/heads/\${a##*/git/refs/heads/}" ;; esac; done
-[ -n "\${ref:-}" ] || exit 1
-git --git-dir="$BARE" update-ref -d "\$ref"
+echo "land-lock called gh, which it must never do: $*" >&2
+exit 99
 EOF
 	chmod +x "$STUB/gh"
 	PATH="$STUB:$PATH"
@@ -80,12 +80,24 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 	[ "$status" -eq 1 ]
 }
 
-@test "release by the holder frees the lease" {
+@test "release by the holder frees the lease for the next claimant" {
 	lock "$MINE" acquire
 	run lock "$MINE" release
 	[ "$status" -eq 0 ]
-	run lease_sha
-	[ "$status" -ne 0 ]
+	# Released is a TOMBSTONE, not a deletion: the ref survives, carrying an
+	# expiry in the past. What a caller must see is that the lease is free.
+	lease_sha
+	run lock "$MINE" status
+	[[ "$output" == *"unheld"* ]]
+	run lock "$RIVAL" acquire
+	[ "$status" -eq 0 ]
+}
+
+@test "a released lease is not still held by its releaser" {
+	lock "$MINE" acquire
+	lock "$MINE" release
+	run lock "$MINE" held
+	[ "$status" -eq 1 ]
 }
 
 @test "release by a non-holder is a silent no-op, never a theft" {
@@ -117,7 +129,7 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 	sleep 2
 	run lock "$RIVAL" acquire
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"stole a lease"* ]]
+	[[ "$output" == *"took the lease"* ]]
 	run lock "$RIVAL" held
 	[ "$status" -eq 0 ]
 }
@@ -141,11 +153,15 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 	[ "$status" -eq 1 ]
 }
 
-@test "an expired lease still reads as held by its owner, with the expiry named" {
+@test "an expired lease reads as free, and still names who left it" {
+	# Free is what a caller acts on; the name is what a human diagnoses a dead
+	# session with, so the report carries both rather than choosing.
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
 	run lock "$MINE" status
-	[[ "$output" == *"EXPIRED"* ]]
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"unheld"* ]]
+	[[ "$output" == *"last held by"* ]]
 }
 
 @test "FAIL CLOSED: an unreachable remote is exit 2, never 'unheld'" {
