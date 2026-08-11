@@ -18,7 +18,14 @@ chore, ci, docs, feat, fix, perf, refactor, revert, style, test`. Enforced
 - **Land by commenting `/fast-forward`** (`mise run land`). The merge button is
   blocked on purpose: "Rebase and merge" rewrites every commit under a new SHA
   and discards the objects CI tested. `main` only advances to a commit whose
-  exact SHA already passed `ci`, `cross`, `commit-lint`.
+  exact SHA already passed `final` — the single fan-in job every other leg
+  reports through, which is what branch protection requires so that adding a job
+  never needs a ruleset change. Which legs feed it is `ci.yml`'s business, and
+  which check-runs carry a verdict for `ci-wait` is `CI_REQUIRED_CHECKS`'s; the
+  host ruleset is the one authority for what blocks a merge, and `mise run
+  ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live
+  rules. There is deliberately no third copy in the tree — one was there, naming
+  a set that predated `final`, read by nothing and gated by nothing (CLOUD-350).
 - **Semver + changelog are automated.** `release-plz` reads commits since the
   last release and bumps version + `CHANGELOG.md` (`feat`→minor, `fix`→patch,
   `!`/`BREAKING CHANGE`→major). Do **not** hand-edit version or changelog.
