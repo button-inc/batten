@@ -79,7 +79,15 @@ rm -f "$scratch/$MANIFEST"
 # LC_ALL=C so the order is byte order on every machine: two runs over one release
 # produce identical bytes, which is what makes the published artifact a function
 # of the release rather than of who cut it.
-mapfile -t assets < <(cd "$scratch" && shopt -s nullglob && for f in *; do printf '%s\n' "$f"; done | LC_ALL=C sort)
+#
+# A `read` loop rather than `mapfile` (CLOUD-282): `mapfile` is bash 4 and macOS
+# ships 3.2, so it would die here on the one platform whose release artifacts
+# this manifest covers. `no-bash4-mapfile` in batten.toml is the standing gate —
+# it caught this line the day the file landed.
+assets=()
+while IFS= read -r asset; do
+	assets+=("$asset")
+done < <(cd "$scratch" && shopt -s nullglob && for f in *; do printf '%s\n' "$f"; done | LC_ALL=C sort)
 
 if [ "${#assets[@]}" -eq 0 ]; then
 	echo "::error:: checksums: release $tag carries no assets to hash. A manifest that covers nothing is indistinguishable from no manifest, so none is written." >&2
