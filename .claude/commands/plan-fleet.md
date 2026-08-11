@@ -1,96 +1,109 @@
 ---
-description: Dispatch one planning-only sibling session per ready issue, partitioned by file domain
+description: Dispatch sibling sessions over the ready queue in bundles, each planning then landing its own chain
 ---
 
-Dispatch a fleet of planning-only sibling sessions over the ready queue.
+Dispatch a fleet of sibling sessions over the ready queue. Each gets a **bundle**
+— an ordered chain of tickets in one file domain — which it plans and lands one
+ticket at a time.
 
-`$ARGUMENTS` may name the issues (`CLOUD-333 CLOUD-224 …`). If it is empty,
-compute the frontier yourself as described in step 1.
+`$ARGUMENTS` may name tickets or bundles. If empty, compute the frontier
+yourself as described in step 1.
 
-The model this implements — the caps, the measurement behind them, and why
-planners and implementers scale differently — is `mem:workflow/agent-fanout`.
-Read it before deviating; this file is the procedure, not the reasoning.
+The model this implements is `mem:workflow/agent-fanout`. Read it before
+deviating; this file is the procedure, not the reasoning.
 
 ## 1. Compute the frontier, do not guess it
 
 - Pull the `Todo` column, and `In Progress` for what is already claimed.
-- An issue is dispatchable only if `blockedBy` is empty **or** every blocker has
-  landed. Fetch `get_issue(includeRelations: true)` — do not infer readiness from
-  the column alone, since a blocker added after promotion still holds.
+- A ticket is dispatchable only if `blockedBy` is empty **or** every blocker has
+  landed. Do not infer readiness from the column alone — a blocker added after
+  promotion still holds.
 - Pipe the active columns' payloads to `mise run graph-check` rather than
-  eyeballing the graph. Every session computing it independently gets the same
-  answer, and that shared determinism is what replaces a dispatcher.
+  eyeballing the graph.
+- You do **not** need perfect global knowledge before dispatching. Each child
+  runs `mise run claim-check` per ticket and skips what is not pullable, so a
+  mis-sequenced bundle degrades to a skip rather than a collision. Push the
+  dependency check down to the gate; that is what it is for.
 
 ## 2. Subtract what is already spoken for
 
-Three independent sources, all of them necessary:
+Three independent sources, all necessary:
 
 - `list_sessions` with `mine: true` — a **non-archived** session whose title or
-  branch names an issue intends it. Archived sessions do not.
+  branch names a ticket intends it. Archived sessions do not.
 - Open PRs, and their **file lists**
-  (`git diff --name-only origin/main...origin/<head>`), not just their titles.
-  This is what makes the partition in step 3 real rather than nominal.
+  (`git diff --name-only origin/main...origin/<head>`), not their titles.
 - `In Progress` assignees on the board.
 
-## 3. Partition by file domain, not by topic
+## 3. Bundle by file domain, and order within the bundle
 
-Two issues that read as unrelated but both edit `mise-tasks/land` are one issue
-for dispatch purposes. Group by the files each plan will touch, and give each
-session a domain no sibling holds. Where a domain collides with an **open PR**,
-either hold the issue back or state the collision in that child's prompt, so its
-implementer expects a rebase instead of engineering around one.
+Group tickets into chains where **one session owns one file domain end to end**.
+Two tickets that read as unrelated but both edit `mise-tasks/land` belong in the
+same bundle, sequenced — never in two, racing.
 
-Report what you held back and why. A silently dropped issue reads as "the queue
+Order within a bundle by real dependency, cheapest-enabling-first: the ticket
+that makes the next one's gate exist goes first; the ticket that replaces what
+an earlier one fixed goes last. Say in the prompt _why_ the order is what it is,
+so the child does not silently reorder it.
+
+Name the domain explicitly in each prompt as files the session **owns**, plus
+the neighbouring files it must **not** touch because a sibling holds them. Where
+a domain collides with an open PR, say so and tell the child to expect a rebase
+rather than engineer around one.
+
+Report what you held back and why. A silently dropped ticket reads as "the queue
 was empty" when it was not.
 
-## 4. One `create_session` per issue
+## 4. One `create_session` per bundle
 
 Call the Claude Code Remote `create_session` tool with
-`source_url: https://github.com/button-inc/batten`, tags
-`["batten-planner", "ready-queue-<YYYY-MM-DD>"]`, and a title of the form
-`PLAN CLOUD-<n> — <short handle>`.
+`source_url: https://github.com/button-inc/batten`, `model: claude-opus-5`,
+`permission_mode: "plan"`, tags `["batten-bundle", "ready-queue-<YYYY-MM-DD>"]`,
+and a title of the form `BUNDLE <domain> — CLOUD-<a> → CLOUD-<b>`.
 
-Do **not** pass `permission_mode: "plan"`. It blocks on an approval prompt in the
-web UI that nobody is watching, and the child stalls indefinitely.
+**Plan mode is correct here and is also this environment's default.** The child
+plans, a human approves in the web UI, and it then works on. Its one failure
+mode is a child nobody intends to approve — that stalls indefinitely, so only
+omit it when dispatching genuinely fire-and-forget work.
 
-Each prompt is standalone — the child starts from nothing — and carries, in order:
+Reasoning effort is **not** a `create_session` parameter; children inherit the
+dispatching session's. Dispatch from a session at the effort you want.
 
-1. **The refusal, first and explicit.** Planning only: do not implement, commit,
-   push, run `land`, or claim the issue. Leave it in `Todo`, unassigned.
-2. **What to read**: `AGENTS.md`, then `mem:workflow/agent-fanout`,
-   `mem:workflow/board-states`, plus the `.claude/rules/` file matching the
-   surface and any memory its toolchain touches.
-3. **What the plan must name**: exact files; the mechanism as a command and an
-   exit code over an object it decides; the test obligation and where it lives;
-   commit type and bump; and anything in the Ready block the current tree
-   contradicts.
-4. **The question protocol**: a genuine ambiguity goes onto the issue under
-   `**Open questions blocking Ready:**` via an **anchored patch op**, never a
-   whole-description overwrite. Ration them — state an assumption and flag it
-   where you can, and ask only when the answer changes acceptance. The issue
-   blocks; the loop does not.
-5. **Where the output goes**: a comment on the Linear issue. Say plainly that the
-   child's final chat message is not read, because it is not — the parent never
-   sees it, so a plan left only there dies with the session.
-6. **The issue's own substance**, carried over rather than referenced: the
-   measurement, the Ready block's specializations, the rejected alternatives, and
-   any decision the issue deliberately leaves to the implementer. A prompt that
-   says "read CLOUD-n and plan it" spends the child's first ten minutes
-   rediscovering what the dispatcher already had loaded.
+Each prompt is standalone — the child starts from nothing — and carries:
+
+1. **The bundle, in order**, with one line per ticket on what it is and why it
+   sits where it does.
+2. **The file domain**: what this session owns, and what it must not touch.
+3. **What to read**: `AGENTS.md` first — naming it as the standing authorization
+   to carry work to landed without asking, because a child that has not read it
+   will stop after the edits and wait. Then `mem:workflow/agent-fanout`,
+   `mem:workflow/board-states`, the `.claude/rules/` file matching the surface,
+   and any house-style section that governs the surface it touches.
+4. **The per-ticket loop**, verbatim in shape: `claim-check` → claim → plan
+   **this ticket only** and wait for approval → build, `verify`, `linear-check`,
+   draft PR, `land` backgrounded → next ticket.
+5. **The instruction not to plan ahead.** A later ticket's shape depends on what
+   the earlier one lands; planning the whole bundle up front is planning against
+   a tree that does not exist.
+6. **The instruction to keep going.** Do not stop after one ticket and do not
+   stop to report progress — the board and the PRs are the report. A blocked
+   ticket is written on the issue, moved to Backlog, and skipped, not a reason to
+   halt the chain.
 
 ## 5. Verify, then report
 
-Call `get_session` on at least one child until it reaches `RUNNING` with a
-`task_summary`. `PENDING` only means the container is still provisioning, and is
-not evidence the fleet works.
+`get_session` on at least one child until it reaches `RUNNING` with a
+`task_summary`. `PENDING` only means the container is provisioning.
 
-Then report the fleet: issue, domain, session title. Do not idle waiting on
-plans — the sessions outlive the turn, and their plans land on the issues whether
-or not anyone is watching.
+Then report the fleet: bundle, domain, tickets. Do not idle waiting — the
+sessions outlive the turn.
 
-## What this command is not
+## What bounds the fleet
 
-It does not dispatch implementers. Build WIP is capped at **2**, and past ~2–3
-the binding constraint is land contention rather than compute — the caps section
-of `mem:workflow/agent-fanout` carries the measurement. Planning fans out freely
-because planners write no code and take no locks; landing does not.
+Planning fans out freely: a planner writes no code and takes no lock. **Landing
+contends** — every land forces siblings to rebase and re-run `verify`, so the
+ceiling is roughly time-between-lands ÷ verify-duration, and the honest signal
+that you are past it is a rising re-verify rate, not a stall. Bundles raise that
+ceiling by amortising several commits per session over one rebase cost; adding
+sessions does not. `mem:workflow/agent-fanout` carries the measurement and the
+current cap.

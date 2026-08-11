@@ -75,9 +75,26 @@ issue. Nothing it does is on the contended path, so N planners cost only tokens.
 Landing is what contends. Fan out planning; drain the plans at 2.
 
 Dispatched as `/plan-fleet` (`.claude/commands/plan-fleet.md`), which owns the
-procedure; this section owns why it is shaped that way. Measured 2026-08-11:
-seven planners over CLOUD-333, 224, 218, 249, 328, 46 and 171, one sibling
-session each via `create_session`, partitioned so no two held the same files.
+procedure; this section owns why it is shaped that way.
+
+**Dispatch bundles, not single tickets.** A session handed one ticket stops when
+it lands, and its container plus its warm context are thrown away. A session
+handed an ordered chain in one file domain keeps going, and — the part that
+matters for the cap above — amortises several commits over one rebase cost
+instead of paying that cost per ticket. Bundling is what raises the ceiling;
+adding sessions is not.
+
+Order within a bundle by real dependency: the ticket whose gate the next one
+needs goes first, and the ticket that _replaces_ what an earlier one fixed goes
+last (CLOUD-328 then CLOUD-214 is the worked example — fix the walker's contract
+and pin it with assertions, then let the replacement land against those
+assertions). Each child plans **one ticket at a time**: a later ticket's shape
+depends on what the earlier one landed, so planning the chain up front is
+planning against a tree that does not exist.
+
+The dispatcher does not need perfect dependency knowledge. Every child runs
+`claim-check` per ticket and skips what is not pullable, so a mis-sequenced
+bundle degrades to a skip rather than a collision.
 
 Three things about the harness that the procedure encodes because they are
 invisible until they bite:
@@ -86,8 +103,14 @@ invisible until they bite:
   planner concludes must be written to the issue, or it dies with the session.
   Naming the durable destination is not a nicety in the prompt; it is the
   difference between a plan and a lost turn.
-- `permission_mode: "plan"` **stalls a child indefinitely.** It blocks on an
-  approval prompt in the web UI that nobody is watching. Omit it.
+- `permission_mode: "plan"` **is the right default, and is already this
+  environment's.** Measured 2026-08-11: children dispatched without it came up
+  `PERMISSION_MODE_PLAN` anyway and parked at "Waiting on permission:
+  ExitPlanMode". That park is the feature — the child plans, a human approves,
+  and it works on from there. It is only a defect for work nobody intends to
+  approve, which then stalls forever. Pass it explicitly so the intent is legible.
+- **Reasoning effort is not a `create_session` parameter.** Children inherit the
+  dispatcher's, so dispatch from a session at the effort you want them to run at.
 - **In-process subagents are the wrong tool here, for a reason unrelated to
   caps.** They share the parent's single working tree, and there is no channel
   for one to put a question to the human — the parent must relay it after the
