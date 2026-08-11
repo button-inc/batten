@@ -79,9 +79,12 @@ credential exists), so live runs need board data but their bats suites run
 unconditionally in the gate. `mise-tasks/` is the authoritative list; don't
 restate a count here, which is how "three `PreToolUse` hooks" went stale. `mise run ready-lint` validates an issue's Ready
 block: only the clauses _present_ (restating all eight is forbidden by the DoR
-doc), anchored on label+tag pairs like `Commit / bump (§6)` because bare `(§N)`
-collides with house-style section references, holding §8 to `blockedBy` _claims_
-(one sentence, mention markup stripped) against the real relations. `mise run
+doc), and it holds §8 to `blockedBy` _claims_ against the real relations. Every
+token it anchors on — which openers name a block, which line is the `(§6)`
+clause rather than a house-style cross-reference, which code span is the commit
+type — is defined once, in `mise-tasks/ready-lint`'s comments beside the pattern
+that implements it. Read it there; a restatement here is a copy that drifts, and
+CLOUD-290 was an author rediscovering the real grammar by experiment. `mise run
 claim-check` is the pull-time half: pipe the payload for the issue you mean to
 pull and it exits non-zero on `not-todo`, `assigned`, or `has-pr` (a PR already
 attached — someone published before the column moved). The automation will not

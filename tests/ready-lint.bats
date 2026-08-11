@@ -206,6 +206,61 @@ block() {
 	[ "$status" -eq 0 ]
 }
 
+# --- §6 reads the type from a whole code span, not a prefix -------------------
+#
+# CLOUD-290. The closing backtick was optional, so any backticked token whose
+# first characters spelled a type was read as the declared type. The pair of
+# measured payloads is below, and the failure was asymmetric in the worst way:
+# loud when the author was right, silent when the spurious type and the real one
+# happened to agree. Both directions are pinned here, because a pass/pass pair
+# proves nothing on its own — a pattern that stopped matching altogether would
+# also pass both while disabling the clause.
+
+@test "an earlier code span whose prefix spells a type is not the declared type" {
+	# Measured: refused as `ci implies no bump` because of `ci-local-parity`,
+	# though `feat` → patch is the honest declaration under this regime.
+	payload "$(block '* **Commit / bump (§6).** `ci-local-parity`; `feat` → **patch** until 0.1.0.')"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "the verdict follows the declared type, not the prefix that precedes it" {
+	# The anti-vacuity conjunct: the prefix (`test` → no bump) and the declared
+	# type (`feat` → patch below 0.1.0) disagree, so the parenthetical names
+	# which one was read. Before the fix this reported `test implies no bump`.
+	payload "$(block '* **Commit / bump (§6).** `tests/fanout-guard.bats`; `feat` → **minor**.')"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type (feat implies patch below 0.1.0)"* ]]
+}
+
+@test "a coincidental prefix no longer decides an honest no-bump line" {
+	# The measured coincidence, sharpened: `feature-flags` spells feat (→ patch)
+	# while the declared `ci` implies no bump, so passing requires reading the
+	# declaration. The original pair agreed by accident and could not tell.
+	payload "$(block '* **Commit / bump (§6).** `feature-flags`; `ci` → **no bump**.')"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a scoped commit type is still recognised" {
+	# `fix(gate)` is a legitimate declaration, and it passes today only because
+	# the loose pattern matched its prefix. Tightening the anchor without the
+	# scope arm would turn this verdict into commit-type-missing.
+	payload "$(block '* **Commit / bump (§6).** `fix(gate)` → **patch** until 0.1.0.')"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a disagreeing declaration beside a code span is still refused" {
+	# The clause must not decay into one that never fires: an unrelated span on
+	# the line does not buy a pass for a bump that genuinely disagrees.
+	payload "$(block '* **Commit / bump (§6).** `mise-tasks/ready-lint`; `feat` → **major**.')"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type"* ]]
+}
+
 # Copies the lint next to a synthetic workspace root so the ≥0.1.0 regime is
 # exercised through the real code path rather than an env override — a gate's own
 # facts must not have a bypass surface.
