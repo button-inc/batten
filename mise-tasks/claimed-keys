@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#MISE description="The issue keys a branch CLAIMS, as distinct from the ones it merely mentions (extra evidence on stdin; prints one key per line)"
+#
+# CLOUD-338. Two guards need this answer and had one copy of it. `issue-guard`
+# derived the claimed set inline to refuse a duplicate claim; `deferral-check`
+# then needed the same set, to stop a deferral being exempted by the very key
+# `issue-guard` forces onto every PR. A second copy is a second authority, and
+# two guards that disagree about which issue a PR claims is a worse defect than
+# either gate misfiring — so the derivation moved here and both read it.
+#
+# WHICH issue a branch claims is a NARROWER question than which it mentions,
+# and conflating them is a false positive `issue-guard` produced against its own
+# PR twice. A body cites related issues, prior measurements and superseded work
+# as evidence; a branch may carry a bundle name naming two issues that landed
+# hours ago. Neither is a claim. Only these are, most explicit first:
+#
+#   1. a closing keyword — `Closes`/`Fixes`/`Resolves CLOUD-<n>` — in the extra
+#      evidence on stdin (the command being run, or the PR's own body) or in a
+#      commit on the branch. It OVERRIDES the branch, which is the escape hatch
+#      for a branch whose name no longer reflects the work.
+#   2. failing that, the branch name — the tracker's own `gitBranchName` shape
+#      names the issue being worked, so a branch is a claim.
+#   3. failing that, a `Refs:` trailer on a commit.
+#
+# When none resolves, the answer is EMPTY and that is not an error: every caller
+# treats "no claim" as "do not judge", because a guard that guesses is one that
+# blocks correct work. Outside a git repo the same applies — exit 0, print
+# nothing, and let the caller behave exactly as it did before it asked.
+#
+# Output is the keys alone, uppercased and sorted, one per line — a pointer set,
+# never the prose they were extracted from (rule 4).
+set -euo pipefail
+
+ISSUE_RE='CLOUD-[0-9]+'
+CLAIM_RE='(Closes|Fixes|Resolves)[[:space:]]+CLOUD-[0-9]+'
+
+# `grep -o` consumes its whole input rather than exiting on the first hit, so
+# piping it is safe under pipefail — the SIGPIPE trap that bit `issue-guard`
+# applies to `-q`/`-m`/`-l` only.
+extract() { grep -oiE "$ISSUE_RE" <<<"$1" | tr '[:lower:]' '[:upper:]' | sort -u || true; }
+
+# Extra evidence the caller has and this script cannot read for itself: the
+# command being guarded, or the PR body being judged. Optional — a caller with
+# nothing to add closes stdin and the branch/commit sources still answer.
+extra=""
+[ -t 0 ] || extra=$(cat || true)
+
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+
+log=""
+if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
+	log=$(git log --format='%B' origin/main..HEAD 2>/dev/null || true)
+fi
+
+claimed=$(extract "$(grep -oiE "$CLAIM_RE" <<<"$extra $log" || true)")
+[ -n "$claimed" ] || claimed=$(extract "$branch")
+[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
+
+[ -n "$claimed" ] && printf '%s\n' "$claimed"
+exit 0

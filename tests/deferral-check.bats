@@ -16,8 +16,26 @@
 # The two anchor cases are the real paragraphs the shape was measured on, so a
 # change that breaks the discrimination fails against the evidence that chose it.
 
+# The gate now asks git which issue the branch CLAIMS (CLOUD-338), so the suite
+# runs against a FIXTURE repo rather than the checkout it happens to live in.
+# Otherwise every verdict would depend on the branch a developer ran it from —
+# the "verdict is a property of the machine" shape CLOUD-227 names. The fixture
+# claims CLOUD-777, a key no real issue uses.
+#
+# `git init -b <name>` and never `git branch -f`: forcing a branch that is
+# already checked out fails, and it passes in CI today only because the runner's
+# git still defaults to `master` (CLOUD-282).
 setup() {
 	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/deferral-check"
+	REPO="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$REPO"
+	git init -q -b claude/cloud-777-fixture "$REPO"
+	cd "$REPO" || return 1
+	# An unborn branch has no HEAD to resolve, and the claim derivation reads
+	# `git rev-parse --abbrev-ref HEAD` — so a fixture with no commit fails open
+	# and would prove nothing. One empty commit is what makes the branch real.
+	git -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+		commit -q --allow-empty -m "fixture"
 }
 
 # PR #243's paragraph: a decision deferred with no owner named. The true
@@ -99,6 +117,64 @@ tracked() {
 @test "the American spelling is caught too" {
 	run bash -c "printf 'That is a judgment call nobody owns.\n' | '$CHECK'"
 	[ "$status" -eq 1 ]
+}
+
+@test "a deferral exempted only by the PR's own claimed issue fails" {
+	# CLOUD-338, and the case measured on PR #275: the paragraph named CLOUD-286,
+	# the issue the PR implemented, and was exempt — while the item it described
+	# was owned by CLOUD-282, which nothing asked for. The branch claims
+	# CLOUD-777 here, so naming CLOUD-777 is naming the work in hand.
+	run bash -c "printf 'Whether to verify on a Mac is a judgement call, and CLOUD-777 is this PR.\n' | '$CHECK'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"deferral-without-owner"* ]]
+}
+
+@test "a deferral naming an issue the PR does not claim passes" {
+	run bash -c "printf 'That is a judgement call; CLOUD-282 owns the follow-up.\n' | '$CHECK'"
+	[ "$status" -eq 0 ]
+}
+
+@test "naming both the claimed issue and a real owner passes" {
+	# The exemption is \"some key that is not claimed\", not \"no claimed key\" — a
+	# paragraph may legitimately cite the work in hand beside the owner it files.
+	run bash -c "printf 'CLOUD-777 leaves this open and it is a judgement call; CLOUD-282 owns it.\n' | '$CHECK'"
+	[ "$status" -eq 0 ]
+}
+
+@test "a closing keyword in the body claims that issue too" {
+	# `claimed-keys` precedence: a closing keyword OVERRIDES the branch name, so a
+	# body saying `Closes CLOUD-321` cannot then use CLOUD-321 as a deferral's home.
+	run bash -c "printf 'Closes CLOUD-321\n\nThe rest is a judgement call and CLOUD-321 covers it.\n' | '$CHECK'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"deferral-without-owner"* ]]
+}
+
+@test "outside a git checkout the narrowing fails open" {
+	# No branch, no log, so no claim resolves and every verdict is what it was
+	# before this narrowing existed. A gate that cannot look must not invent.
+	run bash -c "cd '$BATS_TEST_TMPDIR' && printf 'A judgement call, and CLOUD-777 owns it.\n' | '$CHECK'"
+	[ "$status" -eq 0 ]
+}
+
+@test "an unverified claim with no owner fails — the second measured shape" {
+	# PR #275's real heading, the shape `judgement call` could not see. Measured
+	# 1 firing / 0 false positives over the 60 most recent merged PRs.
+	run bash -c "printf '## Residual gap — not verified here\n' | '$CHECK'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"deferral-without-owner"* ]]
+}
+
+@test "an unverified claim that names its owner passes" {
+	run bash -c "printf 'The macOS half is not verified here; CLOUD-282 owns that run.\n' | '$CHECK'"
+	[ "$status" -eq 0 ]
+}
+
+@test "a dropped candidate shape does not fire" {
+	# `unproven`, `left open` and the rest measured 0 firings over the corpus and
+	# were dropped rather than shipped — a branch nothing exercises is dead code
+	# (CLOUD-235). This pins that they stayed out.
+	run bash -c "printf 'The macOS half is unproven and left open.\n' | '$CHECK'"
+	[ "$status" -eq 0 ]
 }
 
 @test "the report is a pointer, never the paragraph" {

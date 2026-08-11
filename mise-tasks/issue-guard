@@ -224,11 +224,13 @@ fi
 # When none of those resolves, the duplicate check does not run. That is
 # deliberate: it would be guessing, and a guard that guesses is one that blocks
 # correct work — the failure mode this whole file is written to avoid.
-claim_re='(Closes|Fixes|Resolves)[[:space:]]+CLOUD-[0-9]+'
-claimed=$(extract "$(grep -oiE "$claim_re" <<<"$cmd $log" || true)")
-[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "$claim_re" <<<"$mine_text" || true)")
-[ -n "$claimed" ] || claimed=$(extract "$branch")
-[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
+#
+# The derivation itself moved to `claimed-keys` when `deferral-check` needed the
+# same answer (CLOUD-338): two guards disagreeing about which issue a PR claims
+# would be a worse defect than either misfiring, and a second copy is how that
+# happens. The precedence above is that script's, documented in its header. The
+# command and this PR's own text are the evidence it cannot read for itself.
+claimed=$("$(dirname "$0")/claimed-keys" <<<"$cmd $mine_text" 2>/dev/null || true)
 [ -n "$claimed" ] || exit 0
 [ -n "$mine" ] || command -v gh >/dev/null 2>&1 || exit 0
 
