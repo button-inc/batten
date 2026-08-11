@@ -141,27 +141,37 @@ One substitution underlies both: making the call return **small** (`| tail`) or
 **fast** (`nohup &`), at the cost of the two things that are actually the
 interface.
 
-The correct form keeps the status and lets the harness supervise:
+The correct form is **the command alone in the call**:
 
 ```
-mise run <task> >/tmp/<task>.log 2>&1; echo "EXIT=$?"; tail -20 /tmp/<task>.log
+mise run <task> >/tmp/<task>.log 2>&1
 ```
 
 with `run_in_background` on the tool call itself for anything over ~2 minutes.
 `run_in_background` must wrap the long command, not a launcher that returns
 immediately — a wrapped launcher looks identical in the tool result and silently
-drops the re-invocation. A pager over a **file** is fine; over a **live task** it
-is not.
+drops the re-invocation. **Read the log in a separate call.** A pager over a
+**file** is fine; over a **live task** it is not.
 
-**The prescribed form has its own trap: read the `EXIT=` line, not the exit code
-the harness reports.** That chain ends in `tail`, so the _shell line_ exits 0
-whatever the task did, and the tool result says "exit code 0" for the call. The
-task's real status is only in the `EXIT=` line of the output. Measured: a `verify`
-whose `linear-check` refused a stale branch was reported to the session as exit 0
-with `VERIFY_EXIT=1` sitting in the same output — a false green survived one turn
-on the reported code alone. `run-shape-guard` cannot catch this: it denies a pipe
-and a `nohup &` because each crosses a tool boundary it inspects, and a trailing
-`;`-chain crosses none.
+**Nothing may follow it in the same `;` or `||` list.** This note used to
+prescribe `…; echo "EXIT=$?"; tail -20 …`, and that form is now denied
+(CLOUD-199) — the chain ends in the last element, so the _shell line_ exits 0
+whatever the task did, and the tool result says "exit code 0" for the call.
+Backgrounded it is worse than a misread: the task-completion notification carries
+the compound's status, so a failed task arrives as `completed (exit code 0)` — an
+authoritative-looking statement from the harness rather than a reading of yours.
+Measured twice in one session: `mise run fmt` notified exit 0 with `EXIT=1` in
+the file and shellcheck genuinely failing; a later `verify` did the same.
+
+`&&` is fine and stays: it short-circuits, so a failure still propagates as the
+list's status. `;` and `||` do not.
+
+The principle the guard now states, rather than a rule about one command: **a
+verdict-bearing command's exit status is read from the harness, never inferred
+from its output.** A pager, a filter, a `wc -l`, an eyeballed tail and a trailing
+list element are all the same substitution. `run-shape-guard` covers the whole
+verdict-bearing family — `mise run`, `git push`/`fetch`/`rebase`, mutating
+`gh pr`, and `cargo` — not just `mise run`.
 
 ### Do not hand-roll a waiter for work the harness already supervises
 

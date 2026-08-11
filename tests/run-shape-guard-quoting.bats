@@ -38,7 +38,12 @@ Both fail green."'
 }
 
 @test "a heredoc body naming the shapes is documentation" {
-	run guard 'mise run fmt; python3 - <<PY
+	# `&&`, not `;`: since CLOUD-199 a verdict-bearing command followed by `;`
+	# is denied for the trailing list, which would pass this test for the wrong
+	# reason. `&&` keeps a verdict-bearing command in the string — so the guard
+	# is genuinely engaged — while leaving the heredoc prose as the only thing
+	# that could trip it.
+	run guard 'mise run fmt && python3 - <<PY
 text = "detaching with nohup / & loses the wake-up"
 PY'
 	! denied "$output"

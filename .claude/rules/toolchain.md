@@ -113,8 +113,10 @@ consecutive 304s left `X-RateLimit-Used` unchanged). That is what pays for the
 news arrived late. The sleep is not what sets the pace: the round trip is ~470ms
 (~260ms network, ~130ms `gh` startup), so the real cycle is ~1.5s.
 `X-Poll-Interval` is honoured as a floor if the endpoint ever sends one; it does
-not today. Never pipe these into a pager: it discards the verdict AND the exit status
-(`mem:toolchain-and-hooks`, "A Bash call is a supervised process").
+not today. Never pipe these into a pager or a filter, and never put anything after
+them in a `;`/`||` list: each discards the verdict AND the exit status
+(`mem:toolchain-and-hooks`, "A Bash call is a supervised process"). Run the
+command alone in the call and read the log in a separate one.
 
 That's a rule, so it ships with mechanisms — the `PreToolUse` hooks wired in
 `.claude/settings.json` (the settings file is the authoritative list; don't
@@ -170,6 +172,19 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   because `issue-guard` already forces a key onto every one. `worth checking`
   (2 firings, both review prompts) and `deliberate` (16) were measured and
   dropped; one shape survived, firing once, correctly.
+- `run-shape-guard` denies three ways of throwing away a **verdict-bearing**
+  command's exit status: piping it into a pager or filter, following it with `;`
+  or `||` in the same list, and detaching it with `nohup`/`&`. The
+  verdict-bearing list is written once as data in the task — `mise run`,
+  `git push`/`fetch`/`rebase`, mutating `gh pr`, and `cargo` minus its query
+  subcommands — because the guard was scoped to the literal string `mise run`
+  and an agent complying with it exactly kept making the identical error on the
+  next command (CLOUD-199, measured on `git push`, `cargo clippy` and
+  `cargo test`). `&&` is deliberately allowed: it short-circuits, so a failure
+  still propagates and there is no false green to stop. The deny message states
+  the principle — read the status from the harness — rather than naming one
+  command, since complying with the narrower wording is how the second instance
+  happened. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.
 - `ready-guard` denies `gh pr ready` unless `verify` and `linear-check` have both
   passed against this exact HEAD. Each writes a receipt under
   `.git/batten-receipts/` keyed to the commit it validated, and linear-check's
