@@ -53,6 +53,19 @@ verify-duration. A rising re-verify rate is the stop signal, and shortening
 `verify` buys more parallelism than adding sessions. There is deliberately no
 cap on In Review: in a fast-forward trunk nothing queues there.
 
+**Measured 2026-08-11, and the model held.** Over three hours `main` took 25
+commits — mean gap **487s** — against a `verify` of **~170s**, so N ≈ **2.9**
+with the cap at 2: at the ceiling. The symptom at that point is not a stall but
+a cost: a lap is `verify` + CI + the fast-forward wait, roughly 5–7 minutes
+against an 8.1-minute mean gap, so each lap is near a coin flip and PRs landed
+in 8, 3, 4 and 2 laps. Nothing is broken when this happens — `main-watch`
+already polls conditionally (a 304 is free), and a `main` that moves mid-CI
+cancels the doomed run through `concurrency: cancel-in-progress`, which is the
+cheap direction. **5 of those 25 commits were release-plz `chore: release`**, so
+each landed change was producing about two commits on `main`; CLOUD-319's
+debounce targets exactly that amplifier. The lever remains the one stated above:
+shorten `verify`, do not add sessions.
+
 ## What each implementer does
 
 The existing contract, unchanged: claim → build → draft PR → `mise run verify`
