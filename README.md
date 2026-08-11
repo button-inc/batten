@@ -337,6 +337,33 @@ verb cannot also render a policy verdict on the same channel without some
 ambiguity against the child's own codes, whichever number it picks. Tracked as
 CLOUD-292 rather than papered over here.
 
+### Whatever you reach for: output is a pointer, never the payload
+
+This is a project-wide law, not a quirk of one adapter. Every check Batten runs
+reports a **count, a `path:line`, or a boolean** — never the bytes it read. A
+`forbid` finding names the line number and not the line; an `exec` match names
+`stream:line <id>` and not the matched text; a `command` rule's child has both its
+streams discarded, so there is nothing to leak in the first place.
+
+The reason is that a policy engine reads the places secrets live. Findings travel
+into CI logs, PR comments and model context, and a check that echoed what it
+matched would publish the thing it was gating. So the law binds **your** checks
+too: a `command` rule you write should exit non-zero and say where, not print what
+it found.
+
+```console
+$ batten check
+src/config.rs:41 no-hardcoded-token   # the pointer
+                                      # never the token
+```
+
+`crates/batten/tests/pointer_only.rs` decides this rather than asserting it. It
+seeds a corpus in which every byte a check can read is a unique canary, runs
+**every leaf verb** of the command surface over it, and fails if a canary reaches
+either channel. A verb added to the surface must declare which side of the law it
+sits on before the suite will pass, so the guarantee stays total as the surface
+grows.
+
 ### Every example above is executed, not just written
 
 `crates/batten/tests/extension_surfaces.rs` runs each command in this section

@@ -1,0 +1,764 @@
+//! Non-negotiable rule 4, made total and given an exit code (CLOUD-92).
+//!
+//! "Output is a pointer, never the payload" (house-style §6) was stated as a law
+//! and enforced nowhere. Every emitting module asserted its own compliance in its
+//! own doc comment and, at best, in one hand-written case — `outputs.rs` has
+//! `a_match_points_at_its_line_and_never_carries_the_bytes`,
+//! `extension_surfaces.rs` has one `!stderr.contains(…)`. Those are per-site
+//! claims. None of them can answer the question the law actually poses: *is there
+//! a remaining check that leaks content?* A rule without a runnable gate is half a
+//! change (rule 2), and this is the other half.
+//!
+//! ## Why this sits at the process boundary rather than at the emitters
+//!
+//! There is no shared emission path for the data channel. `output.rs` funnels
+//! *stderr* through `message`/`error`/`verdict`, but each takes a `&str` the
+//! caller already composed; stdout has no funnel at all — ~30 inline
+//! `writeln!(out, …)` sites in `lib.rs`, fed by ten independently-named renderers
+//! (`line`, `line_text`, `summary`) plus `rules::Finding`, which has none and is
+//! formatted inline. Unifying those is real work and a different change
+//! (CLOUD-330); it would also not *decide* anything, because no trait can stop a
+//! `String` carrying content.
+//!
+//! So the gate goes where every one of those sites already converges: the bytes
+//! the process actually wrote. One mechanism, no call-site edits, and it cannot
+//! be routed around by an emitter that spells its renderer a new way.
+//!
+//! ## What it decides
+//!
+//! A **corpus** in which every byte a check can read as subject matter is a
+//! distinct canary token, crossed with a **census** over every leaf verb of
+//! [`batten::surface::SURFACE`]. The census is the totality proof: a verb added
+//! tomorrow lands in no bucket and fails [`every_leaf_verb_is_classified`] until
+//! somebody says which bucket it is in. That is the property CLOUD-92 asks for —
+//! not "the checks we thought of do not leak", but "no check leaks, and a new one
+//! cannot quietly join without answering the question".
+//!
+//! ## Two classes of canary, because rule 4 is about content and not about config
+//!
+//! * **Content** — bytes a check read as its *subject*: a matched line, a counted
+//!   file's body, a transcript's free text, a wrapped child's stream. These are
+//!   what the law is about, and **no verb may emit one**.
+//! * **Declaration** — bytes the caller *wrote as policy*: a rule's `pattern`, a
+//!   waiver's `reason`, a ledger row's `evidence`. Echoing these back is what
+//!   `config show` and `generate schema` are *for*, so the law cannot mean them.
+//!
+//! Collapsing the two would make the gate either vacuous (exempt every verb that
+//! prints config) or false (fail `config show` for doing its job).
+
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod common;
+
+use std::io::Write as _;
+use std::path::PathBuf;
+use std::process::Stdio;
+
+use batten::surface::SURFACE;
+use common::{Fixture, batten, scratch};
+
+// -- The canaries ------------------------------------------------------------
+
+/// The canary a corpus seeds for `tag`.
+///
+/// Assembled from parts rather than written as one literal, so the token a
+/// fixture carries appears nowhere in the tree — not even in this file. A gate
+/// whose canary is greppable is a gate whose failure could be ordinary repo
+/// content, which is the one thing it must never be confusable with.
+fn canary(tag: &str) -> String {
+    const HEAD: &str = "Q7v";
+    const TAIL: &str = "x9nK";
+    format!("{HEAD}{tag}{TAIL}")
+}
+
+/// Bytes a check read as its **subject**. No verb may emit one of these.
+const CONTENT: &[&str] = &[
+    // The rest of the line a `forbid` rule matched, and the line a declared
+    // suppression marker sits on — the same line, because a leak of either is
+    // the same emitter printing the same bytes.
+    "matched",
+    // The body of a file counted against a declared budget.
+    "counted",
+    // Free text inside a completed-session transcript.
+    "spoken",
+    // A wrapped or configured child's own stdout and stderr.
+    "childout",
+    "childerr",
+    // The operand of a mediated tool call, read from a `hook` payload.
+    "mediated",
+];
+
+/// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
+const DECLARATION: &[&str] = &[
+    // A `[[rule]]` pattern.
+    "rulepat",
+    // A second `[[rule]]` pattern, doubling as a `[[marker]]` token.
+    "markertok",
+    // A `[[waiver]]` reason.
+    "waived",
+    // A ledger row's `evidence` pointer.
+    "logged",
+];
+
+// -- The corpus --------------------------------------------------------------
+
+/// The committed authority every corpus carries.
+///
+/// Each table exists so some emitter has subject matter to be tempted by: the
+/// two `forbid` rules give `check` a finding and the waiver an audit line, the
+/// budget is deliberately set to overflow so `policy budget` renders its
+/// per-file breakdown rather than staying silent, and the ledger and transcript
+/// give `defects query` and `check`'s transcript view something to read.
+fn authority(spawning: bool) -> String {
+    let mut config = format!(
+        "version = 1\n\
+         scope = [\"**\"]\n\
+         protected = [\"batten.toml\"]\n\
+         unlanded = [\"subject.txt\"]\n\
+         must_land_on = \"refs/heads/main\"\n\
+         \n\
+         [[rule]]\n\
+         id = \"no-canary\"\n\
+         kind = \"forbid\"\n\
+         glob = \"**/*.txt\"\n\
+         pattern = \"{rulepat}\"\n\
+         severity = \"warn\"\n\
+         scope = \"tree\"\n\
+         \n\
+         [[rule]]\n\
+         id = \"no-canary-waived\"\n\
+         kind = \"forbid\"\n\
+         glob = \"**/*.txt\"\n\
+         pattern = \"{markertok}\"\n\
+         severity = \"deny\"\n\
+         scope = \"tree\"\n\
+         \n\
+         [[rule]]\n\
+         id = \"switched-off\"\n\
+         kind = \"forbid\"\n\
+         glob = \"**/*.md\"\n\
+         pattern = \"{rulepat}\"\n\
+         severity = \"allow\"\n\
+         scope = \"tree\"\n\
+         \n\
+         [[rule]]\n\
+         id = \"no-canary-command\"\n\
+         kind = \"shape\"\n\
+         scope = \"mediated_call\"\n\
+         severity = \"deny\"\n\
+         pattern = \"rm -rf\"\n\
+         reason = \"remove it through the surface that owns it\"\n\
+         \n\
+         [[waiver]]\n\
+         rule = \"no-canary-waived\"\n\
+         reason = \"{waived}\"\n\
+         expires = \"2099-12-31\"\n\
+         \n\
+         [[marker]]\n\
+         id = \"waved-through\"\n\
+         token = \"{markertok}\"\n\
+         glob = \"**/*.txt\"\n\
+         \n\
+         [budget.loaded]\n\
+         files = [\"counted.txt\"]\n\
+         max_tokens = 1\n\
+         \n\
+         [defects]\n\
+         path = \"defects.jsonl\"\n\
+         classes = [\"process\"]\n\
+         \n\
+         [transcript]\n\
+         path = \"transcript.jsonl\"\n\
+         \n\
+         [epoch]\n\
+         tracked = [\"batten.toml\"]\n",
+        rulepat = canary("rulepat"),
+        markertok = canary("markertok"),
+        waived = canary("waived"),
+    );
+    if spawning {
+        // Only `enforce` evaluates a spawning kind — `check` refuses one outright
+        // and would then evaluate nothing at all, so seeding this everywhere
+        // would make the corpus prove nothing for the verb it matters most for.
+        // The child writes a canary to each stream and exits non-zero, so the
+        // finding path runs too; `rules.rs` nulls both streams, and this is what
+        // pins that it still does.
+        //
+        // `run` is split on whitespace, so the child is a script rather than an
+        // `sh -c` one-liner: a quoted argument would not survive the split.
+        config.push_str(
+            "\n[[rule]]\n\
+             id = \"canary-child\"\n\
+             kind = \"command\"\n\
+             glob = \"**/*.txt\"\n\
+             run = \"sh emit.sh\"\n\
+             severity = \"warn\"\n\
+             scope = \"tree\"\n",
+        );
+    }
+    config
+}
+
+/// The child a spawning corpus runs: a canary on each stream, and a non-zero
+/// exit so the finding it produces is rendered rather than skipped.
+fn emit_script() -> String {
+    format!(
+        "echo '{}'\necho '{}' >&2\nexit 1\n",
+        canary("childout"),
+        canary("childerr"),
+    )
+}
+
+/// A materialized corpus: the repository, and an isolated data home so the
+/// out-of-tree store and capture dirs never touch the developer's own.
+struct Corpus {
+    repo: PathBuf,
+    home: PathBuf,
+}
+
+impl Corpus {
+    fn build(name: &str, spawning: bool) -> Corpus {
+        let root = scratch(name);
+        let repo = Fixture::at(root.join("repo"))
+            .config(&authority(spawning))
+            .file("emit.sh", &emit_script())
+            // The subject line carries a declaration canary (the literal both
+            // rules match on) and a content canary (the rest of the line) side by
+            // side, so an emitter that printed the matched line would leak both
+            // and one that printed only its own pattern would leak neither.
+            .file(
+                "subject.txt",
+                &format!(
+                    "first line\n{} {} {}\nthird line\n",
+                    canary("rulepat"),
+                    canary("markertok"),
+                    canary("matched"),
+                ),
+            )
+            .file("counted.txt", &format!("{}\n", canary("counted")))
+            .file(
+                "defects.jsonl",
+                &format!(
+                    "{{\"id\":\"d1\",\"class\":\"process\",\"observed\":\"2026-01-01\",\
+                     \"evidence\":\"{}\"}}\n",
+                    canary("logged"),
+                ),
+            )
+            .file(
+                "transcript.jsonl",
+                &format!(
+                    "{{\"type\":\"user\",\"message\":{{\"role\":\"user\",\
+                     \"content\":\"{}\"}}}}\n",
+                    canary("spoken"),
+                ),
+            )
+            .git()
+            .base_commit()
+            .build();
+        let home = Fixture::at(root.join("home")).build();
+        Corpus { repo, home }
+    }
+}
+
+/// The mediated tool call `hook` adjudicates: a command whose operand is a
+/// content canary. `hook.rs` states that `input` is never emitted (rule 4); this
+/// is what decides it.
+fn mediated_call() -> String {
+    format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":\"rm -rf {}\"}}}}\n",
+        canary("mediated"),
+    )
+}
+
+/// A ledger row read on stdin by `defects add -n`. The caller wrote it, so its
+/// bytes are a declaration.
+fn incoming_record() -> String {
+    format!(
+        "{{\"id\":\"d2\",\"class\":\"process\",\"observed\":\"2026-01-01\",\
+         \"evidence\":\"{}\"}}\n",
+        canary("logged"),
+    )
+}
+
+// -- The census --------------------------------------------------------------
+
+/// What a verb is allowed to put on its channels.
+enum Disposition {
+    /// The law. Neither a content byte nor a declaration byte reaches either
+    /// channel. Every verb is this unless a stated reason says otherwise.
+    PointerOnly,
+    /// The answer **is** the caller's own declaration — a resolved config value,
+    /// a schema derived from the config types, a ledger row they wrote. Held to
+    /// the content half only, which is the half rule 4 is about.
+    Echoes(&'static str),
+    /// The verb relays bytes it was handed. Held to a **count**: a canary may
+    /// appear exactly as often as the caller's own command wrote it and never
+    /// more, so a report that amplified the payload still fails.
+    Passthrough(&'static str),
+}
+
+/// What the verb reads on stdin. Built at run time because it carries canaries.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stdin {
+    Nothing,
+    MediatedCall,
+    DefectRecord,
+}
+
+struct Verb {
+    /// The leaf path, exactly as [`SURFACE`] spells it.
+    path: &'static str,
+    /// Arguments after the path tokens. Required flags only — this census is
+    /// about what a verb *emits*, not about exercising its flag matrix.
+    args: &'static [&'static str],
+    stdin: Stdin,
+    disposition: Disposition,
+}
+
+/// One entry per leaf verb of [`SURFACE`], asserted total by
+/// [`every_leaf_verb_is_classified`] in both directions.
+const CENSUS: &[Verb] = &[
+    Verb {
+        path: "check",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "enforce",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "exec",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "the child's streams are inherited and its exit code returned unchanged — that \
+             transparency is the verb's whole contract, so the question here is not whether the \
+             caller's own bytes appear but whether Batten's report adds a copy of them",
+        ),
+    },
+    Verb {
+        path: "config show",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the effective configuration IS the answer; a resolver that reported its own values \
+             as counts would answer a question nobody asked",
+        ),
+    },
+    Verb {
+        path: "config epoch",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "config lint",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "spec",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the spec is derived from the command surface and reads no repository content at \
+             all; it echoes Batten's own declarations, not the caller's tree",
+        ),
+    },
+    Verb {
+        path: "doctor",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "generate completions",
+        args: &["--shell", "bash"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "a completion script is the command surface rendered for a shell; same reasoning as \
+             `spec`, and it reads no repository content either",
+        ),
+    },
+    Verb {
+        path: "generate schema",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the schema is derived from the config TYPES, so it describes the shape a \
+             declaration may take and never a value one carries",
+        ),
+    },
+    Verb {
+        path: "policy budget",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "worktree status",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "provision status",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "provision apply",
+        args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "hook",
+        args: &["--harness", "exit-code"],
+        stdin: Stdin::MediatedCall,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "receipt record",
+        args: &["final"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "receipt status",
+        args: &["final"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "defects query",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the ledger is committed, human-authored and PR-reviewed, and `evidence` is a \
+             pointer by the type's own contract; querying it back is reading the caller's file \
+             to them, not surfacing content a check went and read",
+        ),
+    },
+    Verb {
+        path: "defects add",
+        args: &["-n"],
+        stdin: Stdin::DefectRecord,
+        disposition: Disposition::Echoes(
+            "the row being previewed arrived on stdin from the caller; a dry run reporting it \
+             back is an echo of their own input",
+        ),
+    },
+    Verb {
+        path: "state adopt",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "state record",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "state migrate",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
+        path: "state list",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+];
+
+/// The leaf paths of [`SURFACE`]: a row no other row is a subcommand of.
+///
+/// Derived rather than listed, so a noun that grows a verb changes this set on
+/// its own and the census below is forced to keep up.
+fn leaf_paths() -> Vec<&'static str> {
+    let mut leaves: Vec<&'static str> = SURFACE
+        .iter()
+        .map(|decl| decl.path)
+        .filter(|path| {
+            !SURFACE
+                .iter()
+                .any(|other| other.path.starts_with(&format!("{path} ")))
+        })
+        .collect();
+    leaves.sort_unstable();
+    leaves
+}
+
+/// Whether [`SURFACE`] declares a `-J` data channel for `path`.
+fn has_data_channel(path: &str) -> bool {
+    SURFACE
+        .iter()
+        .any(|decl| decl.path == path && decl.data_channel)
+}
+
+// -- Running one verb --------------------------------------------------------
+
+/// One verb's captured channels. Bytes, not `String`: a leak in invalid UTF-8 is
+/// still a leak, and lossy decoding would rewrite exactly the bytes in question.
+struct Run {
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl Run {
+    /// Both channels concatenated, which is what the law ranges over — rule 4
+    /// says nothing about *which* stream may carry the payload.
+    fn emitted(&self) -> Vec<u8> {
+        let mut all = self.stdout.clone();
+        all.extend_from_slice(&self.stderr);
+        all
+    }
+}
+
+fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
+    let mut command = batten();
+    command
+        .args(args)
+        .current_dir(&corpus.repo)
+        .env("HOME", &corpus.home)
+        .env("XDG_DATA_HOME", corpus.home.join("data"))
+        .env("XDG_CACHE_HOME", corpus.home.join("cache"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten");
+    let payload = match stdin {
+        Stdin::Nothing => String::new(),
+        Stdin::MediatedCall => mediated_call(),
+        Stdin::DefectRecord => incoming_record(),
+    };
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes())
+        .expect("write stdin");
+    let output = child.wait_with_output().expect("await batten");
+    Run {
+        code: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    }
+}
+
+fn contains(haystack: &[u8], needle: &str) -> bool {
+    count(haystack, needle) > 0
+}
+
+fn count(haystack: &[u8], needle: &str) -> usize {
+    let needle = needle.as_bytes();
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return 0;
+    }
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+// -- The gate ----------------------------------------------------------------
+
+#[test]
+fn every_leaf_verb_is_classified() {
+    // The totality proof, and the reason this suite answers CLOUD-92's question
+    // rather than a sample of it. Both directions: a verb that joins the surface
+    // has no bucket and fails here, and an entry left behind by a deleted verb
+    // fails here too rather than passing vacuously forever.
+    let mut declared: Vec<&str> = CENSUS.iter().map(|verb| verb.path).collect();
+    declared.sort_unstable();
+    let leaves = leaf_paths();
+    assert_eq!(
+        declared, leaves,
+        "every leaf verb needs exactly one pointer-only disposition. A new verb is \
+         `PointerOnly` unless there is a reason it is not — and the reason is the field, so it \
+         has to be written down rather than assumed."
+    );
+}
+
+#[test]
+fn a_canary_is_searchable_as_written() {
+    // The search below is a plain byte scan, which is only sound because a canary
+    // survives JSON escaping unchanged. Pinned rather than assumed: a future tag
+    // carrying punctuation would silently weaken every assertion in this file to
+    // "the escaped form did not appear".
+    for tag in CONTENT.iter().chain(DECLARATION) {
+        let token = canary(tag);
+        assert!(
+            token.chars().all(char::is_alphanumeric),
+            "canary {token} must be alphanumeric, or serde would re-spell it in `-J` and the \
+             byte scan would miss the leak it is looking for"
+        );
+        assert_eq!(
+            serde_json::to_string(&token).unwrap(),
+            format!("\"{token}\""),
+            "a canary must round-trip through JSON unchanged"
+        );
+    }
+}
+
+#[test]
+fn the_corpus_is_live_subject_matter() {
+    // A canary gate over a corpus no check reads would pass forever while
+    // proving nothing. This is the vacuity guard: the seeded content must
+    // actually reach the emitters the sweep then judges.
+    let corpus = Corpus::build("pointer-only-live", false);
+
+    let checked = run_in(&corpus, &["check"], Stdin::Nothing);
+    let stdout = String::from_utf8_lossy(&checked.stdout).into_owned();
+    assert!(
+        stdout.contains("subject.txt:2 no-canary"),
+        "the forbid rule must fire on the seeded line, or `check` is judging nothing: {stdout}"
+    );
+    assert!(
+        stdout.contains("budget.loaded"),
+        "the budget must overflow, or its per-file rendering is never reached: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&checked.stderr).into_owned();
+    assert!(
+        stderr.contains("waived subject.txt:2 no-canary-waived"),
+        "the waiver must apply, or its audit line is never rendered: {stderr}"
+    );
+
+    let budget = run_in(&corpus, &["policy", "budget"], Stdin::Nothing);
+    assert_eq!(
+        budget.code,
+        Some(2),
+        "the budget verb must render a verdict over the seeded files"
+    );
+    assert!(
+        !budget.stdout.is_empty(),
+        "an over-budget set renders its per-file breakdown"
+    );
+}
+
+#[test]
+fn no_verb_emits_content_it_merely_read() {
+    // The law, swept over the whole surface. Each verb runs on its own corpus so
+    // a writer cannot leave state that changes the next verb's answer, and every
+    // `-J` verb runs twice — the document and the human rendering are two
+    // emitters, and `output.rs` gives the ladder no reach over the first.
+    for verb in CENSUS {
+        let spawning = verb.path == "enforce";
+        let corpus = Corpus::build(&format!("pointer-only-{}", verb.path.replace(' ', "-")), spawning);
+
+        let mut argvs: Vec<Vec<&str>> = Vec::new();
+        let base: Vec<&str> = verb
+            .path
+            .split_whitespace()
+            .chain(verb.args.iter().copied())
+            .collect();
+        argvs.push(base.clone());
+        if has_data_channel(verb.path) {
+            let mut with_json = base;
+            with_json.push("-J");
+            argvs.push(with_json);
+        }
+
+        for argv in argvs {
+            let run = run_in(&corpus, &argv, verb.stdin);
+            assert_ne!(
+                run.code,
+                Some(3),
+                "{argv:?} failed internally, so what it did not emit proves nothing: {}",
+                String::from_utf8_lossy(&run.stderr)
+            );
+            let emitted = run.emitted();
+
+            match verb.disposition {
+                Disposition::PointerOnly => {
+                    for tag in CONTENT.iter().chain(DECLARATION) {
+                        assert!(
+                            !contains(&emitted, &canary(tag)),
+                            "{argv:?} emitted the `{tag}` canary. Output is a pointer, never the \
+                             payload (non-negotiable rule 4, house-style §6): report a count, a \
+                             `path:line`, or a boolean."
+                        );
+                    }
+                }
+                Disposition::Echoes(reason) => {
+                    for tag in CONTENT {
+                        assert!(
+                            !contains(&emitted, &canary(tag)),
+                            "{argv:?} is classified as echoing the caller's own declarations \
+                             ({reason}) — but it emitted the `{tag}` canary, which is content a \
+                             check READ. That is the half rule 4 is about, and no disposition \
+                             exempts it."
+                        );
+                    }
+                }
+                Disposition::Passthrough(reason) => {
+                    // Held to a count rather than to absence: the caller's own
+                    // bytes are the point of the verb, so what would be a defect
+                    // is Batten adding a copy of them to its own report.
+                    for tag in CONTENT {
+                        assert!(
+                            count(&emitted, &canary(tag)) <= 1,
+                            "{argv:?} relays its child's streams ({reason}), so the `{tag}` \
+                             canary may appear exactly as often as the child wrote it — once. A \
+                             second copy is Batten's own report carrying the payload."
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_passthrough_report_points_at_the_child_without_repeating_it() {
+    // The `Passthrough` bucket's own case, spelled out rather than left to the
+    // sweep: `exec`'s output predicate must render `stream:line <id>` beside a
+    // line it will not restate. The child writes to stderr so its bytes and
+    // Batten's report share one stream, which is the strongest form of the
+    // question.
+    let root = scratch("pointer-only-exec");
+    let repo = Fixture::at(root.join("repo"))
+        .config(&format!(
+            "version = 1\n\n[[exec_pattern]]\nid = \"lying-exit\"\n\
+             pattern = \"warning[duplicate]\"\nstream = \"both\"\n\
+             reason = \"set the tool's own severity to deny\"\n",
+        ))
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    let corpus = Corpus { repo, home };
+
+    let script = format!("echo 'warning[duplicate] {}' >&2", canary("childerr"));
+    let run = run_in(
+        &corpus,
+        &["exec", "--", "sh", "-c", &script],
+        Stdin::Nothing,
+    );
+
+    let stderr = run.stderr.clone();
+    assert!(
+        contains(&stderr, "stderr:1 lying-exit"),
+        "the match must be reported as a pointer: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert_eq!(
+        count(&stderr, &canary("childerr")),
+        1,
+        "the child wrote its line once; Batten's report must not write it again"
+    );
+}

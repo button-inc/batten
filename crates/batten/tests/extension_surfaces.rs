@@ -235,6 +235,41 @@ fn the_two_promotion_paths_produce_exactly_the_codes_the_table_claims() {
 }
 
 #[test]
+fn the_doc_states_pointer_only_as_a_law_over_every_surface_not_one_adapter() {
+    // CLOUD-92's first acceptance clause. The law was stated for agents in
+    // AGENTS.md and for the CLI in house style §6, and nowhere a *consumer*
+    // reads before writing a check — so the surface most likely to leak was the
+    // one the documentation never spoke to.
+    let prose = readme_prose();
+    assert!(
+        prose.contains("output is a pointer, never the payload"),
+        "the extension doc must state the law in the words the project uses for it"
+    );
+    assert!(
+        prose.contains("count, a `path:line`, or a boolean"),
+        "and must say what a check may emit instead, or the law is a prohibition with no \
+         alternative"
+    );
+    assert!(
+        prose.contains("So the law binds **your** checks too"),
+        "stating it as Batten's own behaviour is only half: a consumer's `command` rule is a \
+         check Batten runs, and the doc has to say so"
+    );
+    // And it must point at the mechanism, because prose is feedforward only
+    // (rule 2). A stated law whose gate the reader cannot find is one they
+    // cannot tell from an aspiration.
+    assert!(
+        prose.contains("crates/batten/tests/pointer_only.rs"),
+        "the doc must name the gate that decides the law it just stated"
+    );
+    assert!(
+        at_root("crates/batten/tests/pointer_only.rs").exists(),
+        "and that gate must exist — a doc citing a deleted suite is the coverage-outlives-the- \
+         thing failure this file exists to catch"
+    );
+}
+
+#[test]
 fn the_doc_records_the_asymmetry_as_a_rough_edge_rather_than_a_design() {
     // The honest half. Two things both called policy violations use different
     // codes, and §7 says 2 is *the* policy verdict with no per-verb exception. The
