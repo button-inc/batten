@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.59](https://github.com/button-inc/batten/compare/v0.0.58...v0.0.59) - 2026-08-11
+
+### Added
+
+- *(findings)* mint a finding's identity in the engine, and hold it per ref
+
 ## [0.0.58](https://github.com/button-inc/batten/compare/v0.0.57...v0.0.58) - 2026-08-11
 
 ### Added
