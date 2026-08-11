@@ -189,6 +189,28 @@ The partition is by **file domain**, not by topic, and it is only real if it
 reads open PRs' file lists rather than their titles. Two issues that read as
 unrelated but both edit `mise-tasks/land` are one issue for dispatch purposes.
 
+## Inside one session, a bundle serializes on `land` — measured 2026-08-11
+
+The contention above is between sessions. A session handed a BUNDLE (several
+issues, each landed before the next) meets the same constraint as strict
+serialization, for a mechanical reason the protocol did not state: `land` drives
+the **working tree**, so ticket N+1 cannot be started while N's land is in
+flight — switching branches under a running lap breaks it.
+
+What that costs, measured on the CLOUD-207 -> CLOUD-172 -> CLOUD-74 bundle: the
+build for each ticket was minutes, and each land was 5+ laps at roughly 5-7
+minutes a lap, so wall clock was dominated by laps in which the session had
+nothing to do but wait. `main` moving is what makes it laps, and a bundle
+session is a guaranteed loser of that race because it is not racing — it is
+queued behind itself.
+
+The unblock is a **git worktree per ticket**: `land` on ticket N in one, the
+build for N+1 in another, and the WIP cap still bounds how many issues are
+claimed at once. `batten worktree` already models the work-in-a-worktree
+question, so the mechanism exists and only the protocol has to say to use it.
+Not yet done here, and it is the lever for bundles the way "shorten `verify`" is
+the lever for fleet width.
+
 ## What each implementer does
 
 The existing contract, unchanged: claim → build → draft PR → `mise run verify`
