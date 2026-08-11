@@ -1,0 +1,21 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-state-adopt 1  "batten 0.0.61" 
+.SH NAME
+batten\-state\-adopt \- Bind this checkout to its findings store, minting one only if none exists
+.SH SYNOPSIS
+\fBbatten state adopt\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIstore\fR] 
+.SH DESCRIPTION
+Bind this checkout to its findings store, minting one only if none exists
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.TP
+[\fIstore\fR]
+The store id to bind, when resolution cannot decide for itself
+.SH VERSION
+v0.0.61

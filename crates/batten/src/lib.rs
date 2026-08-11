@@ -38,6 +38,7 @@ pub mod outputs;
 pub mod provision;
 pub mod receipt;
 pub mod refusal;
+pub mod render;
 pub mod resolve;
 pub mod rules;
 pub mod selfwrite;
@@ -2078,11 +2079,30 @@ fn run_spec(format: SpecFormat, out: &mut dyn Write) -> Result<ExitCode> {
 /// caller's redirect (`mise run completions`) and never a side effect of the
 /// verb. The completions are generated from the same [`surface::command`] tree
 /// the parser is built from, so a committed script cannot describe a surface the
-/// binary does not have — which is the property `completions-check` gates.
+/// binary does not have — which is the property `derived-check` gates.
+///
+/// Man pages and markdown join on the same terms (CLOUD-69): every format here
+/// walks the one [`surface::SURFACE`]-built tree, and every one of them returns
+/// bytes for the caller to redirect.
 fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCode> {
     match command {
         GenerateCommand::Completions { shell } => {
             clap_complete::generate(*shell, &mut surface::command(), "batten", out);
+        }
+        // One page per command, selected by the same root-relative path the
+        // spec and the §5 effect table are keyed by. A single page for the
+        // whole tree would document the root and none of the verbs, which is
+        // the shape `man batten-config-show` cannot resolve.
+        GenerateCommand::Man { command } => {
+            write!(out, "{}", render::man(&surface::command(), command.as_deref())?)?;
+        }
+        // The whole surface in one document — the CLI reference CLOUD-171
+        // renders at publish time. Deliberately not a committed artifact: a
+        // reference derived from the binary at publish time is current by
+        // construction, and a committed copy would be the second authority
+        // this whole module exists to remove.
+        GenerateCommand::Markdown => {
+            write!(out, "{}", render::markdown(&spec::describe(&surface::command())))?;
         }
         // Two surfaces, two derivations (CLOUD-239): one schema describing both
         // is what let a validator vouch for override keys the loader drops.

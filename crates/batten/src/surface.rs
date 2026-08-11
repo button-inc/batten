@@ -871,6 +871,37 @@ pub const SURFACE: &[CommandDecl] = &[
             shell_parser,
         )],
     },
+    // The two human renderings of the same tree (CLOUD-69). House-style §11
+    // already named them derivations of the spec; until now only the shell one
+    // existed, so the claim was prose. Both stay stdout-only and `read` for the
+    // reason the `generate` header states: the redirect belongs to the caller.
+    CommandDecl {
+        path: "generate man",
+        about: "Emit the roff man page for one command, on stdout",
+        // The page IS the output, and roff is not JSON.
+        data_channel: false,
+        effect: Effect::Read,
+        // A positional rather than a flag: the page selector is the command's
+        // one argument, and `batten generate man 'config show'` reads as the
+        // question it asks. Optional because the root page is the default
+        // answer, which is the `positional_optional` case exactly — a
+        // deliberate override of something the verb works out for itself.
+        flags: &[FlagDecl::positional_optional(
+            "command",
+            "The root-relative command path to document ('config show'); omit for the root page",
+        )],
+    },
+    CommandDecl {
+        path: "generate markdown",
+        about: "Emit the whole command surface as one markdown reference, on stdout",
+        // One document, no human/machine split to toggle between.
+        data_channel: false,
+        effect: Effect::Read,
+        // No selector: the reference is the whole surface by definition, and a
+        // subtree flag would invite a partial reference to be published as a
+        // complete one (CLOUD-171).
+        flags: &[],
+    },
     // Derived from the config types themselves, never hand-authored (CLOUD-33),
     // so the schema cannot describe a `batten.toml` the binary would refuse.
     CommandDecl {

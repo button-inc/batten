@@ -1,0 +1,30 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-defects-query 1  "batten 0.0.61" 
+.SH NAME
+batten\-defects\-query \- List recorded defects, as pointers
+.SH SYNOPSIS
+\fBbatten defects query\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-\-class\fR] [\fB\-\-id\fR] [\fB\-\-ungated\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+.SH DESCRIPTION
+List recorded defects, as pointers
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-\-class\fR
+Only records in this taxonomy class
+.TP
+\fB\-\-id\fR
+Only the record with this id
+.TP
+\fB\-\-ungated\fR
+Only records no rule or gate discharges yet
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v0.0.61

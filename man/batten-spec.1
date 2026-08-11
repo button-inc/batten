@@ -1,0 +1,29 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-spec 1  "batten 0.0.61" 
+.SH NAME
+batten\-spec \- Print the tool\*(Aqs own command spec
+.SH SYNOPSIS
+\fBbatten spec\fR [\fB\-\-format\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+.SH DESCRIPTION
+Print the tool\*(Aqs own command spec
+.SH OPTIONS
+.TP
+\fB\-\-format\fR [default: json]
+The output format for the spec
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+json: Byte\-stable JSON — the agent\-facing contract (§6)
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v0.0.61

@@ -1,0 +1,109 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten 1  "batten 0.0.61" 
+.SH NAME
+batten \- Repo\-agnostic policy engine that keeps "done" aligned with landed\-and\-verified work.
+.SH SYNOPSIS
+\fBbatten\fR [\fB\-\-strictness\fR] [\fB\-\-fail\-on\-warning\fR] [\fB\-\-config\-from\fR] [\fB\-\-silent\fR]... [\fB\-q\fR|\fB\-\-quiet\fR]... [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-no\-color\fR] [\fB\-\-no\-input\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+.SH DESCRIPTION
+Repo\-agnostic policy engine that keeps "done" aligned with landed\-and\-verified work.
+.SH OPTIONS
+.TP
+\fB\-\-strictness\fR
+Raise how strictly gates apply (an override may only tighten policy)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+permissive: Advisory: findings are reported without failing the run
+.IP \(bu 2
+standard: The default: a finding is a violation
+.IP \(bu 2
+strict: Everything `Standard` fails on, plus anything advisory
+.RE
+.TP
+\fB\-\-fail\-on\-warning\fR
+Promote a warn\-severity finding to a violation (an override may only turn this on)
+.TP
+\fB\-\-config\-from\fR
+Read the committed config from a git ref (e.g. origin/main) instead of the working tree
+.RS
+May also be specified with the \fBBATTEN_CONFIG_FROM\fR environment variable. 
+.RE
+.TP
+\fB\-\-silent\fR
+Say nothing but a verdict or a usage error
+.TP
+\fB\-q\fR, \fB\-\-quiet\fR
+Suppress ordinary progress (repeatable: \-qq is silent)
+.TP
+\fB\-v\fR, \fB\-\-verbose\fR
+Explain what is being checked (repeatable: \-vv is debug)
+.TP
+\fB\-\-no\-color\fR
+Never colour stderr, whatever it is attached to
+.TP
+\fB\-\-no\-input\fR
+Never prompt; treat the run as unattended
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH SUBCOMMANDS
+.TP
+batten\-check(1)
+Run the applicable read\-only gates against the repository
+.TP
+batten\-enforce(1)
+Run every configured rule, including kinds that execute a configured command
+.TP
+batten\-exec(1)
+Run a command, passing its streams and its exit code through unchanged
+.TP
+batten\-config(1)
+Inspect configuration
+.TP
+batten\-spec(1)
+Print the tool\*(Aqs own command spec
+.TP
+batten\-doctor(1)
+Diagnose whether Batten can run in this repository
+.TP
+batten\-generate(1)
+Emit artifacts derived from the command spec, on stdout
+.TP
+batten\-policy(1)
+Inspect the thresholds and path sets this repository holds itself to
+.TP
+batten\-worktree(1)
+Worktrees and the work in them: what is at risk, and the hygiene verbs over them
+.TP
+batten\-provision(1)
+Pinned tools this repository provisions, cached out of tree
+.TP
+batten\-hook(1)
+Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
+.TP
+batten\-receipt(1)
+Verification receipts: SHA\-keyed claims a named check passed, invalidated by git facts
+.TP
+batten\-defects(1)
+The append\-only defect ledger: the lessons this repository has already paid for
+.TP
+batten\-state(1)
+The out\-of\-tree findings store: which store belongs to this checkout
+.TP
+batten\-help(1)
+Print this message or the help of the given subcommand(s)
+.SH EXTRA
+Exit codes:
+  0  clean — nothing to report; a mediated call is allowed
+  1  config or usage error — fail loud, do not block
+  2  policy verdict — a violation, or a mediated call denied
+  3  internal error — fail loud, do not block
+.SH VERSION
+v0.0.61

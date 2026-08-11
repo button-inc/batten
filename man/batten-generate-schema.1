@@ -1,0 +1,31 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-generate-schema 1  "batten 0.0.61" 
+.SH NAME
+batten\-generate\-schema \- Emit the JSON Schema for a config surface, derived from the config types
+.SH SYNOPSIS
+\fBbatten generate schema\fR [\fB\-\-surface\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+.SH DESCRIPTION
+Emit the JSON Schema for a config surface, derived from the config types
+.SH OPTIONS
+.TP
+\fB\-\-surface\fR [default: authority]
+Which config surface to describe: the committed authority, or the override layer
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+authority: The committed authority: `batten.toml`
+.IP \(bu 2
+override: The raise\-only override layer: `batten.local.toml`
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v0.0.61

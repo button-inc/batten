@@ -249,12 +249,12 @@ shell = "bash -c"
 # rustfmt then formats. Ordering is the whole point, so it is spelled out:
 #
 #   1. clippy --fix   rewrites sources
-#   2. completions + schema   regenerate from the (now rewritten) surface
+#   2. completions + man + schema   regenerate from the (now rewritten) surface
 #   3. hk fix --all   formats everything the first two produced, last
 #
-# Step 2 is this repo's "snapshot accept": `completions-check` and
-# `schema-check` diff those artifacts byte-for-byte against their generator, so
-# regenerating them is exactly what an `insta accept` is elsewhere.
+# Step 2 is this repo's "snapshot accept": `derived-check` and `schema-check`
+# diff those artifacts byte-for-byte against their generator, so regenerating
+# them is exactly what an `insta accept` is elsewhere.
 #
 # --allow-dirty/--allow-staged because a tree with uncommitted work is the only
 # state this task is ever run from; refusing there would make it useless.
@@ -266,6 +266,7 @@ run = '''
 set -eu
 cargo clippy --fix --allow-dirty --allow-staged --all-targets --all-features
 mise run completions
+mise run man
 mise run schema
 hk fix --all
 echo "fix: clippy autofixes applied, derived artifacts regenerated, every fixer run"
@@ -571,6 +572,36 @@ for shell in bash zsh fish; do
   cargo run --quiet -p batten -- generate completions --shell "$shell" >"completions/batten.$shell"
 done
 echo "completions: regenerated for bash, zsh, fish"
+'''
+
+[tasks.man]
+description = "Regenerate the committed man pages from the command surface"
+# Same shape as `completions`: the binary emits on stdout only, so `generate`
+# stays a read-effect verb (§5) and the redirect lives here, in the caller.
+#
+# The page list comes from `mise-tasks/man-pages` — the one authority for which
+# pages exist and what each is called — so this task never enumerates verbs and
+# a row added to the surface is written with no edit here.
+#
+# The directory is CLEARED first, deliberately. `completions` writes a fixed set
+# of three, but this set shrinks when a verb is removed, and an overwrite-only
+# refresh would leave the removed verb's page on disk — installable, and
+# documenting a command that no longer parses. `derived-check` reports that as
+# `derived-orphan`; clearing is what makes the documented refresh its remedy.
+shell = "bash -c"
+run = '''
+set -euo pipefail
+mkdir -p man
+rm -f man/*.1
+while IFS=$'\t' read -r file path; do
+  [ -n "$file" ] || continue
+  if [ -n "$path" ]; then
+    cargo run --quiet -p batten -- generate man "$path" >"$file"
+  else
+    cargo run --quiet -p batten -- generate man >"$file"
+  fi
+done < <(mise-tasks/man-pages)
+echo "man: regenerated $(find man -type f -name '*.1' | wc -l) page(s) from the surface"
 '''
 
 [tasks.schema]

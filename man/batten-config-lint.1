@@ -1,0 +1,24 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-config-lint 1  "batten 0.0.61" 
+.SH NAME
+batten\-config\-lint \- Report policy smells in batten.toml (any smell is a violation)
+.SH SYNOPSIS
+\fBbatten config lint\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-\-host\-rules\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+.SH DESCRIPTION
+Report policy smells in batten.toml (any smell is a violation)
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-\-host\-rules\fR
+Compare the committed [ci] table against a host ruleset payload (path, or \- for stdin)
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v0.0.61

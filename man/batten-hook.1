@@ -1,0 +1,39 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-hook 1  "batten 0.0.61" 
+.SH NAME
+batten\-hook \- Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
+.SH SYNOPSIS
+\fBbatten hook\fR <\fB\-\-harness\fR> [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+.SH DESCRIPTION
+Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
+.SH OPTIONS
+.TP
+\fB\-\-harness\fR
+The harness whose payload to decode and whose decision channel to answer in
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+claude\-code: Claude Code\*(Aqs `PreToolUse` payload; a deny is returned as the `hookSpecificOutput.permissionDecision` JSON object on stdout with exit `0` — the channel the production shell guards already use
+.IP \(bu 2
+cursor: Cursor. Two payload families under one host: a generic `preToolUse` that looks like Claude\*(Aqs, and specialized events (`beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`) that carry the operand at top level and **no** `tool_name` at all. Session is `conversation_id`
+.IP \(bu 2
+copilot\-cli: GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which yields `hook_event_name` natively. The camelCase dialect omits the event name entirely, so Batten does not speak it
+.IP \(bu 2
+gemini\-cli: Gemini CLI. Claude\-identical payload fields, different event names (`BeforeTool` rather than `PreToolUse`)
+.IP \(bu 2
+codex\-cli: Codex CLI, whose wire format is a near\-verbatim clone of Claude Code\*(Aqs — its own repo says so. No payload shim is needed; the adapter exists so the host is nameable and its fixture is pinned against drift
+.IP \(bu 2
+exit\-code: The neutral core contract: envelope in, decision as exit code out — `0` allow, `2` deny (reason on stderr), for any host whose only decision channel is an exit status. Both codes are the §7 table\*(Aqs, unmodified
+.RE
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help (see a summary with \*(Aq\-h\*(Aq)
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.SH VERSION
+v0.0.61

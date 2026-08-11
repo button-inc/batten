@@ -294,6 +294,15 @@ pub enum GenerateCommand {
         /// The shell whose completion script to emit.
         shell: clap_complete::Shell,
     },
+    /// Emit the roff man page for one command.
+    Man {
+        /// The root-relative path of the command to document (`config show`),
+        /// or `None` for the root page. Optional rather than required because
+        /// the root page is the one a caller asks for by default.
+        command: Option<String>,
+    },
+    /// Emit the whole surface as one markdown reference.
+    Markdown,
     /// Emit the JSON Schema for a config surface.
     Schema {
         /// Which surface to describe: the committed authority, or the
@@ -470,6 +479,10 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
         ("completions", matches) => matches
             .get_one::<clap_complete::Shell>("shell")
             .map(|shell| GenerateCommand::Completions { shell: *shell }),
+        ("man", matches) => Some(GenerateCommand::Man {
+            command: matches.get_one::<String>("command").cloned(),
+        }),
+        ("markdown", _) => Some(GenerateCommand::Markdown),
         ("schema", matches) => Some(GenerateCommand::Schema {
             surface: matches
                 .get_one::<ConfigSurface>("surface")

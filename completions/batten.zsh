@@ -522,6 +522,59 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::command -- The root-relative command path to document ('\''config show'\''); omit for the root page:_default' \
+&& ret=0
+;;
+(markdown)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (schema)
 _arguments "${_arguments_options[@]}" : \
 '--surface=[Which config surface to describe\: the committed authority, or the override layer]: :((authority\:"The committed authority\: \`batten.toml\`"
@@ -565,6 +618,14 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-generate-help-command-$line[1]:"
         case $line[1] in
             (completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(markdown)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1608,6 +1669,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(man)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(markdown)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (schema)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1977,6 +2046,8 @@ _batten__subcmd__exec_commands() {
 _batten__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'man:Emit the roff man page for one command, on stdout' \
+'markdown:Emit the whole command surface as one markdown reference, on stdout' \
 'schema:Emit the JSON Schema for a config surface, derived from the config types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -1991,6 +2062,8 @@ _batten__subcmd__generate__subcmd__completions_commands() {
 _batten__subcmd__generate__subcmd__help_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'man:Emit the roff man page for one command, on stdout' \
+'markdown:Emit the whole command surface as one markdown reference, on stdout' \
 'schema:Emit the JSON Schema for a config surface, derived from the config types' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
@@ -2006,10 +2079,30 @@ _batten__subcmd__generate__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten generate help help commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__generate__subcmd__help__subcmd__man_commands] )) ||
+_batten__subcmd__generate__subcmd__help__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate help man commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__generate__subcmd__help__subcmd__markdown_commands] )) ||
+_batten__subcmd__generate__subcmd__help__subcmd__markdown_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate help markdown commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__generate__subcmd__help__subcmd__schema_commands] )) ||
 _batten__subcmd__generate__subcmd__help__subcmd__schema_commands() {
     local commands; commands=()
     _describe -t commands 'batten generate help schema commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__generate__subcmd__man_commands] )) ||
+_batten__subcmd__generate__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate man commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__generate__subcmd__markdown_commands] )) ||
+_batten__subcmd__generate__subcmd__markdown_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate markdown commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__generate__subcmd__schema_commands] )) ||
 _batten__subcmd__generate__subcmd__schema_commands() {
@@ -2117,6 +2210,8 @@ _batten__subcmd__help__subcmd__exec_commands() {
 _batten__subcmd__help__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'man:Emit the roff man page for one command, on stdout' \
+'markdown:Emit the whole command surface as one markdown reference, on stdout' \
 'schema:Emit the JSON Schema for a config surface, derived from the config types' \
     )
     _describe -t commands 'batten help generate commands' commands "$@"
@@ -2125,6 +2220,16 @@ _batten__subcmd__help__subcmd__generate_commands() {
 _batten__subcmd__help__subcmd__generate__subcmd__completions_commands() {
     local commands; commands=()
     _describe -t commands 'batten help generate completions commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__generate__subcmd__man_commands] )) ||
+_batten__subcmd__help__subcmd__generate__subcmd__man_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help generate man commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__generate__subcmd__markdown_commands] )) ||
+_batten__subcmd__help__subcmd__generate__subcmd__markdown_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help generate markdown commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__generate__subcmd__schema_commands] )) ||
 _batten__subcmd__help__subcmd__generate__subcmd__schema_commands() {

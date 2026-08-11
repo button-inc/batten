@@ -36,6 +36,12 @@ clap = { version = "4", features = ["derive", "env"] }
 # built from (CLOUD-27) — so a committed script cannot describe a surface the
 # binary does not have.
 clap_complete = "4"
+# Man pages, derived from the same `clap::Command` tree (CLOUD-69). The clap
+# ecosystem's own roff renderer, adopted rather than rebuilt: roff is a format
+# with real escaping rules, and a hand-rolled emitter would be a second place
+# for the surface to be described. Same license family as clap itself
+# (MIT OR Apache-2.0), so `deny.toml`'s allow-list already covers it.
+clap_mangen = "0.2"
 # Per-OS base directories: XDG on Linux/macOS (honours XDG_DATA_HOME), the
 # roaming known folder on Windows — the CLOUD-23 state-path rule, one crate.
 etcetera = "0.10"
