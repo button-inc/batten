@@ -17,6 +17,9 @@
 #                          which is install-time residue rather than a lock
 #   required-not-installable  a required platform with no block, or a block
 #                          carrying no url to install from
+#   unlocked-tool          a `[tools]` key in mise.toml with no lockfile entry
+#                          at all — the omission every clause above is blind to,
+#                          because each of them judges an entry that is PRESENT
 #
 # The url check is deliberately scoped to REQUIRED platforms. mise emits a
 # provenance-only stub for a platform upstream ships no artifact for — zizmor's
@@ -102,9 +105,10 @@ if [ "$#" -eq 0 ]; then
 	# A repo with no staged mise.toml has no setting to enforce, and `git show`
 	# exits non-zero there — which under `pipefail` would abort this gate on the
 	# lockfile question it was actually asked. Read it in its own step so that
-	# absence is a value, not a failure.
-	settings=$(git show :mise.toml 2>/dev/null || true)
-	enabled=$(printf '%s\n' "$settings" | awk '
+	# absence is a value, not a failure. Read once: the unlocked-tool clause
+	# below reads the same bytes for its [tools] table.
+	toml=$(git show :mise.toml 2>/dev/null || true)
+	enabled=$(printf '%s\n' "$toml" | awk '
 		/^\[settings\]/ { in_settings = 1; next }
 		/^\[/           { in_settings = 0 }
 		in_settings && /^[[:space:]]*lockfile[[:space:]]*=[[:space:]]*(true|1)[[:space:]]*$/ {
@@ -147,6 +151,23 @@ if [ "$#" -eq 0 ]; then
 		fail=1
 	fi
 fi
+
+# The backends that resolve a version through their own package manager and lock
+# no URLs of their own. Written once because two clauses ask the same question of
+# it — "this tool locks nothing" is the whole truth for these and a defect for
+# everything else — and a second copy is exactly how the two would come to
+# disagree about which tools are excused.
+#
+# It is an allowlist, so an unrecognised backend is REQUIRED to lock: a backend
+# added later is checked by default, and only a deliberate edit here excuses it.
+# An empty backend matches nothing, which is what leaves the "declares no
+# backend" case below reachable.
+backend_locks_nothing() {
+	case $1 in
+	npm:* | pipx:* | cargo:* | go:* | gem:* | core:rust) return 0 ;;
+	*) return 1 ;;
+	esac
+}
 
 # `reported` tracks this clause's own header, separately from `fail` — which any
 # earlier clause may already have set, and did once: keying the header off `fail`
@@ -196,6 +217,75 @@ parsed=$(awk '
 
 tools=$(awk -F'\t' '$1=="TOOL"{print $2"\t"$3}' <<<"$parsed")
 
+# unlocked-tool: a `[tools]` key in mise.toml with NO lockfile entry at all
+# (CLOUD-333). Every clause above judges an entry that is PRESENT, so the whole
+# gate was blind to the omission — and the omission is the one failure mode a
+# local run structurally cannot see. `[settings] lockfile = false` (CLOUD-223)
+# means nothing here ever installs `--locked`, so an unlocked tool installs fine
+# on this machine forever; every mise-action workflow sets MISE_LOCKFILE and
+# mise-action passes `--locked` whenever a lockfile exists, so CI is the only
+# observer. It fails at the INSTALL step, before a single gate runs, in every
+# job whose install list names the tool — measured on PR #272, where `msrv` and
+# `commit-lint` went red for a `cargo-msrv` pin neither of them owns, past a
+# fully green `mise run verify`.
+#
+# Index mode only, like the two mise.toml clauses above: an explicit path names
+# the lockfile bytes under test and makes no claim about the repo's mise.toml.
+if [ "$#" -eq 0 ]; then
+	# The [tools] table's keys and their line numbers. Same parse as
+	# `mise-tasks/ci-tools-check` — enter on the `[tools]` header, leave on the
+	# next table, take the text left of the first `=`, trim and unquote — with NR
+	# carried through for the pointer. The two are not merged: that one reads the
+	# WORKTREE (it is answering a question about a workflow file beside it) and
+	# needs no line numbers, and a shared parser would have to serve both.
+	declared=$(printf '%s\n' "$toml" | awk '
+		/^\[tools\]/ { in_tools = 1; next }
+		/^\[/        { in_tools = 0 }
+		in_tools && !/^[[:space:]]*#/ {
+			eq = index($0, "=")
+			if (eq == 0) next
+			key = substr($0, 1, eq - 1)
+			gsub(/^[ \t]+|[ \t]+$/, "", key)
+			gsub(/^"|"$/, "", key)
+			if (key != "") print key "\t" NR
+		}
+	')
+
+	reported_unlocked=0
+	while IFS=$'\t' read -r want wantline; do
+		[ -n "$want" ] || continue
+		# There is no lockfile entry to read a `backend` from — that absence is
+		# the whole finding — so the backend comes from the KEY, which is how mise
+		# spells it: a `<backend>:` prefix is the backend itself, and a bare name
+		# is a registry name whose core form is `core:<name>`. Only `core:rust` is
+		# exempt among those, so every other bare name (node, pkl, zig, uv, hk,
+		# zizmor) is required to lock — the fail-closed direction, and the true
+		# one: all six lock today.
+		#
+		# The exemption is inherited from the url question above, and it is a
+		# LENIENCE here rather than a necessity: this repo's `npm:prettier` and
+		# `pipx:serena-agent` do carry version-only lock entries, so requiring
+		# presence of them would pass too. Kept because the acceptance criteria
+		# name these three backends, and because a false negative on a tool that
+		# locks no url is the smaller of the two errors.
+		case $want in
+		*:*) backend="$want" ;;
+		*) backend="core:$want" ;;
+		esac
+		backend_locks_nothing "$backend" && continue
+
+		if ! awk -F'\t' -v t="$want" '$1=="TOOL" && $2==t {found=1} END{exit !found}' <<<"$parsed"; then
+			if [ "$reported_unlocked" = 0 ]; then
+				echo "::error:: a [tools] entry has no mise.lock entry, so every CI job that installs it fails before any gate runs (CLOUD-333):" >&2
+				reported_unlocked=1
+			fi
+			# Pointer-only: the tool and where it was declared, never a lockfile byte.
+			echo "  mise.toml:$wantline: $want — declared in [tools] with no $label entry; run \`mise lock\` and commit the result" >&2
+			fail=1
+		fi
+	done <<<"$declared"
+fi
+
 while IFS=$'\t' read -r tool toolline; do
 	[ -n "$tool" ] || continue
 	plats=$(awk -F'\t' -v t="$tool" '$1=="PLAT" && $2==t {print $3"\t"$4}' <<<"$parsed")
@@ -203,26 +293,21 @@ while IFS=$'\t' read -r tool toolline; do
 	# on the absence itself — and keying it on the absence is how `ubi:
 	# rust-cross/cargo-zigbuild` passed this gate for its whole life while
 	# locking a bare version and no checksum, the one tool here installed from an
-	# unverified download (CLOUD-281). `npm:`/`pipx:`/`core:rust` resolve through
-	# their own package manager and CANNOT lock a url; a fetch-an-asset backend
-	# can, so for one of those "locks nothing" means unlocked, not exempt.
+	# unverified download (CLOUD-281). The exempt backends resolve through their
+	# own package manager and CANNOT lock a url; a fetch-an-asset backend can, so
+	# for one of those "locks nothing" means unlocked, not exempt.
 	#
-	# The list is of the exempt backends, so an unrecognised backend is required
-	# to lock. That is the fail-closed direction: a backend added later is
-	# checked by default, and only a deliberate edit here can excuse it.
+	# The exempt list is `backend_locks_nothing`, shared with the unlocked-tool
+	# clause above so the two cannot disagree about which backends are excused.
 	if [ -z "$plats" ]; then
 		backend=$(awk -F'\t' -v t="$tool" '$1=="BACK" && $2==t {print $3; exit}' <<<"$parsed")
-		case $backend in
-		npm:* | pipx:* | cargo:* | go:* | gem:* | core:rust) continue ;;
-		"")
+		backend_locks_nothing "$backend" && continue
+		if [ -z "$backend" ]; then
 			report "$label:$toolline: $tool — locks no platform and declares no backend, so what it installs cannot be determined"
-			continue
-			;;
-		*)
+		else
 			report "$label:$toolline: $tool — backend \`$backend\` fetches a release asset but locks no platform, so it installs an unverified download"
-			continue
-			;;
-		esac
+		fi
+		continue
 	fi
 
 	known_seen=""

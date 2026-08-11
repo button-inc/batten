@@ -241,7 +241,10 @@ stage_settings() {
 
 @test "a lockfile key outside [settings] is not the setting" {
 	scratch_repo
-	printf '[tools]\nlockfile = true\n' >"$REPO/mise.toml"
+	# Any table that is not [settings] exercises the awk's `/^\[/` reset. It used
+	# to be [tools], which the unlocked-tool clause now reads as a tool named
+	# `lockfile` — an overload, not a second assertion.
+	printf '[env]\nlockfile = true\n' >"$REPO/mise.toml"
 	git -C "$REPO" add mise.toml
 
 	run bash -c "cd '$REPO' && '$GATE'"
@@ -254,6 +257,106 @@ stage_settings() {
 
 	# An explicit path names the bytes under test; the setting belongs to the
 	# repo the gate runs in, which a fixture run makes no claim about.
+	run bash -c "cd '$REPO' && '$GATE' '$LOCK'"
+	[ "$status" -eq 0 ]
+}
+
+# --- unlocked-tool (CLOUD-333) --------------------------------------------
+#
+# Every clause above judges an entry that is PRESENT in mise.lock, so the gate
+# was blind to a [tools] key with no entry at all — and that is the one failure
+# a local run structurally cannot see: nothing here installs `--locked`, so the
+# tool installs fine forever, and CI dies at the install step in whichever jobs
+# name it. Measured on PR #272: a fully green `mise run verify`, then `msrv` and
+# `commit-lint` red for a cargo-msrv pin neither of them owns.
+
+# scratch_repo stages a lockfile holding exactly one tool, `t`. This stages a
+# mise.toml declaring whichever tools are named, so the gap between the two is
+# the fixture.
+stage_tools() {
+	{
+		printf '[settings]\nlockfile = false\n\n[tools]\n'
+		local name
+		for name in "$@"; do
+			printf '"%s" = "1.0.0"\n' "$name"
+		done
+	} >"$REPO/mise.toml"
+	git -C "$REPO" add mise.toml
+}
+
+@test "the shape that escaped: a [tools] entry with no mise.lock entry is caught" {
+	scratch_repo
+	stage_tools t "aqua:foresterre/cargo-msrv"
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"has no mise.lock entry"* ]]
+	[[ "$output" == *"aqua:foresterre/cargo-msrv"* ]]
+	# The pointer names mise.toml, where the tool was declared, and its line.
+	[[ "$output" == *"mise.toml:6:"* ]]
+}
+
+@test "a declared tool that IS locked passes — the clause fires on the gap, not on the table" {
+	scratch_repo
+	stage_tools t
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
+@test "npm, pipx and rust are exempt from the presence rule too" {
+	# The same three backends the url clause excuses: they resolve through their
+	# own package manager and lock no URLs.
+	scratch_repo
+	stage_tools t "npm:prettier" "pipx:serena-agent" rust
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
+@test "the presence exemption is an allowlist, so a bare name other than rust must lock" {
+	# Fail-closed: `core:<name>` is not on the list, and node/pkl/zig/uv/hk/zizmor
+	# all lock today, so requiring them is the true direction as well as the safe
+	# one.
+	scratch_repo
+	stage_tools t node
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"has no mise.lock entry"* ]]
+	[[ "$output" == *"node"* ]]
+}
+
+@test "unlocked-tool output is a pointer — no checksum, no url" {
+	scratch_repo
+	stage_tools t "aqua:o/n"
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"sha256:"* ]]
+	[[ "$output" != *"https://"* ]]
+}
+
+@test "a comment inside [tools] is not a tool" {
+	scratch_repo
+	{
+		printf '[settings]\nlockfile = false\n\n[tools]\n'
+		printf '# aqua:not/a-tool = "1.0.0"\n'
+		printf '  # indented = "1.0.0"\n'
+		printf '"t" = "1.0.0"\n'
+	} >"$REPO/mise.toml"
+	git -C "$REPO" add mise.toml
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
+@test "fixture mode does not consult mise.toml for the presence rule either" {
+	scratch_repo
+	stage_tools t "aqua:foresterre/cargo-msrv"
+
+	# An explicit path names the lockfile bytes under test and makes no claim
+	# about the repo's mise.toml — the same boundary the settings clause keeps.
 	run bash -c "cd '$REPO' && '$GATE' '$LOCK'"
 	[ "$status" -eq 0 ]
 }
