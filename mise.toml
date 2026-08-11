@@ -442,7 +442,18 @@ for t in x86_64-pc-windows-gnu; do
   fi
   # `check` does codegen-to-metadata without linking, so it needs no target
   # linker or SDK — cross-platform compile coverage at Linux-runner cost.
-  cargo check --workspace --target "$t"
+  #
+  # `--all-targets` because the default target set is lib and bins ONLY: no
+  # `#[cfg(test)]` module, nothing under `tests/`. So this gate carried the
+  # repository's cross-platform claim while never once type-checking the ~440
+  # integration tests against a foreign triple — and the test code is the half
+  # most likely to break, since a suite reaches for `PermissionsExt`, `#!/bin/sh`
+  # fixtures and Unix paths as a matter of course while the library's
+  # platform-specific code is deliberate and already `#[cfg(unix)]`-gated. A test
+  # using a Unix-only API without that gate compiled fine here forever
+  # (CLOUD-395). It passes today, which is the point of adding the flag now: the
+  # property held by luck, and a mechanism is what makes it hold on purpose.
+  cargo check --workspace --all-targets --target "$t"
 done
 '''
 
