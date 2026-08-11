@@ -13,6 +13,14 @@
 #   blockedby-cycle          the blockedBy relation is acyclic
 #   dangling-blocker         every blocker is present in the piped set
 #
+# Two more vocabularies sit BESIDE those, at their own exit codes (CLOUD-251),
+# because "the board is lying" is not the only thing this can find:
+#
+#   unjudgeable-blockedby        a payload carries no blockedBy key    -> exit 2
+#   excluded (unjudgeable-ready-block)  ready-lint could not read it   -> exit 2
+#   excluded (not-ready)         its Ready block genuinely fails       -> exit 0
+#   excluded (blocked-by …)      a blocker has not landed              -> exit 0
+#
 # "At least one linked PR attachment" is a deliberate approximation of "landed":
 # it is checkable from the payload alone. Commit containment and "all referenced
 # PRs merged" are release-gate questions and belong to the In Review -> Done
@@ -43,10 +51,27 @@ if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else
 fi
 
 violations=0
+unjudgeable=0
 # Pointer-only per non-negotiable rule 4: issue id and rule id, never bodies.
 report() {
 	echo "$1 $2" >&2
 	violations=$((violations + 1))
+}
+# CLOUD-251. Three channels, not one, because this script answers two different
+# questions and used to collapse them into a single absence:
+#
+#   report()   the board is signalling falsely           -> exit 1
+#   unjudged() the caller did not pipe enough to judge   -> exit 2
+#   note()     an honest frontier exclusion              -> exit code unmoved
+#
+# A Todo issue whose Ready block fails is an unrefined issue, not an incoherent
+# board, so it must never move the exit code — but it must still be attributable,
+# which is the whole defect: "not Ready" and "not judgeable" were the same one
+# missing `frontier` line and nothing else.
+note() { echo "$1 $2" >&2; }
+unjudged() {
+	note "$1" "$2"
+	unjudgeable=$((unjudgeable + 1))
 }
 
 # Byte-stable ordering everywhere: numeric by issue number.
@@ -67,6 +92,24 @@ while IFS=$'\t' read -r id status assignee prs; do
 done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? | select(.url | test("github.com/.*/pull/"))] | length)] | @tsv' <<<"$issues" | by_num)
 
 # --- graph coherence ----------------------------------------------------------
+#
+# ANTI-VACUITY FIRST (CLOUD-251). `blockedBy[]?` yields nothing for a payload
+# that never carried the key, so a caller who projected the relations away got
+# zero edges, an unconditional "board coherent", and exit 0 — the acyclicity and
+# non-dangling claims asserted over a set whose edges it could not see. An
+# explicit `blockedBy: []` is DATA and is judged; only an absent key is
+# unjudgeable, which is the same distinction `released` draws on `attachments`.
+#
+# Keyed to the `graph` pseudo-id the cycle report already uses, and deliberately
+# NOT one line per issue: `released`'s `refusal_for` greps this stderr for
+# `^<id> <rule>` and turns any hit into a REFUSED verdict on that issue. A
+# per-id line would convert every In Review issue in a relations-free sweep into
+# a refusal — the property is of the piped SET, exactly like `dangling-blocker`.
+no_edge_key=$(jq -r '[.[] | select((try (.relations | has("blockedBy")) catch false) | not) | .id] | join(" ")' <<<"$issues")
+if [ -n "$no_edge_key" ]; then
+	unjudged "graph" "unjudgeable-blockedby ($(tr ' ' '\n' <<<"$no_edge_key" | by_num | tr '\n' ' ' | sed 's/ $//'))"
+fi
+
 edges=$(jq -r '.[] | .id as $id | .relations.blockedBy[]?.id | "\($id) \(.)"' <<<"$issues" | by_num)
 
 while read -r from to; do
@@ -85,17 +128,48 @@ fi
 # it: a Todo issue is on the frontier iff its own payload passes ready-lint and
 # every blocker in the piped set is resolved. Resolved means Done or In Review —
 # landed code is on main, so a dependent can build on it.
+#
+# EVERY EXCLUSION IS ATTRIBUTED (CLOUD-251). This loop used to end an exclusion
+# with `|| continue`, which threw away the one thing that made it readable:
+# ready-lint already separates exit 1 ("this block is wrong", with pointer-only
+# rule ids) from exit 2 ("stdin is not a payload with a .description field"), and
+# both arrived here as an identical silent absence. Its rule ids are FORWARDED,
+# never re-derived — the one definition of Ready keeps its own vocabulary — while
+# its `::error::` summary is dropped, because annotating a failure at an exit
+# code that denies one is the false signal this repo exists to catch.
 frontier=()
 while read -r id; do
 	[ -n "$id" ] || continue
 	[ "$(status_of "$id")" = "Todo" ] || continue
-	jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues" | "$lint" >/dev/null 2>&1 || continue
+	lint_rc=0
+	lint_err=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues" | "$lint" 2>&1 >/dev/null) || lint_rc=$?
+	case "$lint_rc" in
+	0) ;;
+	1)
+		note "$id" "excluded (not-ready)"
+		grep -v '^::error::' <<<"$lint_err" >&2 || true
+		continue
+		;;
+	*)
+		unjudged "$id" "excluded (unjudgeable-ready-block)"
+		continue
+		;;
+	esac
 	ok=1
+	blocking=""
 	while read -r _ to; do
 		[ -n "$to" ] || continue
-		case "$(status_of "$to")" in Done | "In Review") ;; *) ok=0 ;; esac
+		case "$(status_of "$to")" in Done | "In Review") ;; *)
+			ok=0
+			blocking="$blocking $to"
+			;;
+		esac
 	done < <(grep -E "^$id " <<<"$edges" || true)
-	[ "$ok" = 1 ] && frontier+=("$id")
+	if [ "$ok" = 1 ]; then
+		frontier+=("$id")
+	else
+		note "$id" "excluded (blocked-by${blocking})"
+	fi
 done <<<"$ids"
 
 echo "wip $(jq -r '[.[] | select(.status == "In Progress")] | length' <<<"$issues")"
@@ -105,6 +179,16 @@ done
 
 if [ "$violations" -ne 0 ]; then
 	echo "::error:: graph-check: $violations violation(s) — the board is signalling falsely" >&2
-	exit 1
 fi
+# EXIT 2 OUTRANKS EXIT 1 (CLOUD-251), and both report sets print before either
+# exit so one never hides the other. A verdict over a set this could only partly
+# read is not a verdict: the caller's next action is a re-fetch, after which more
+# violations may appear, so answering "your board is wrong" first would send them
+# to fix a board over a question that was never fully asked. `1` stays reserved
+# for a board that is demonstrably signalling falsely.
+if [ "$unjudgeable" -ne 0 ]; then
+	echo "::error:: graph-check: $unjudgeable payload(s) could not be judged — re-fetch with get_issue(includeRelations: true)" >&2
+	exit 2
+fi
+[ "$violations" -eq 0 ] || exit 1
 echo "graph-check: board coherent ($(wc -l <<<"$ids" | tr -d ' ') issues)"
