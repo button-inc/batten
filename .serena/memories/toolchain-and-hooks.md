@@ -153,6 +153,16 @@ immediately — a wrapped launcher looks identical in the tool result and silent
 drops the re-invocation. A pager over a **file** is fine; over a **live task** it
 is not.
 
+**The prescribed form has its own trap: read the `EXIT=` line, not the exit code
+the harness reports.** That chain ends in `tail`, so the _shell line_ exits 0
+whatever the task did, and the tool result says "exit code 0" for the call. The
+task's real status is only in the `EXIT=` line of the output. Measured: a `verify`
+whose `linear-check` refused a stale branch was reported to the session as exit 0
+with `VERIFY_EXIT=1` sitting in the same output — a false green survived one turn
+on the reported code alone. `run-shape-guard` cannot catch this: it denies a pipe
+and a `nohup &` because each crosses a tool boundary it inspects, and a trailing
+`;`-chain crosses none.
+
 ### Do not hand-roll a waiter for work the harness already supervises
 
 A third habit, same root, no green failure — it just hangs. Backgrounding a
