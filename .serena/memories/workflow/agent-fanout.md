@@ -24,6 +24,16 @@ work, it only makes work _claimable_. Coordination is entirely board state.
   description overwrite is last-write-wins and discards Linear's concurrency
   protection.
 
+## The brief is gated, not described
+
+A fan-out is only as good as what travels in the brief, and the facts that do not
+inherit — which identifiers, which scope, what binds inside it, what has already
+been read, and the deterministic check to run — used to live here as prose. They
+now live as data in `brief::SCHEMA`, gated by **`batten lint brief <path>`** (or
+stdin), exit `2` on a missing section and on a `check` section carrying no
+runnable command (CLOUD-84). Lint the brief before dispatching it; this file does
+not restate the set, because a requirement stated twice drifts.
+
 ## The planner's ladder
 
 1. Re-check issues whose open questions were answered — a human answer is the

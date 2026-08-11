@@ -773,6 +773,34 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON, HOST_RULES],
     },
+    // `lint <kind>` (house-style §2, CLOUD-84): a family of text-shape lints over
+    // artifacts that are NOT `batten.toml`. Deliberately a top-level verb rather
+    // than a `brief` noun — the issue's own §1 refuses a standalone noun, and the
+    // kind is what varies. `config lint` stays where it is: it lints the one
+    // committed authority, which is a different subject, not a second kind.
+    CommandDecl {
+        path: "lint",
+        about: "Lint an artifact against a declared schema",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // Reads a delegation brief and answers whether it carries the facts that do
+    // not inherit across a handoff. `read` in the strongest sense: the input is
+    // text the caller names, nothing on disk changes, and no process is spawned.
+    CommandDecl {
+        path: "lint brief",
+        about: "Check a delegation brief against the handoff schema (any missing section is a violation)",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[
+            JSON,
+            FlagDecl::positional_optional(
+                "brief",
+                "The brief to read; omitted or `-` reads stdin",
+            ),
+        ],
+    },
     CommandDecl {
         path: "spec",
         about: "Print the tool's own command spec",

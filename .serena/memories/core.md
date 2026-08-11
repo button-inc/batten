@@ -215,6 +215,37 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   mentions is not a smell, or the lint would fire on every minimal config; the
   deletion of a populated set is caught by the base-ref class instead. Any smell
   is exit 2; an unparseable config is exit 1.
+- `brief.rs` — the delegation-brief handoff schema (CLOUD-84), surfaced as `lint
+  brief`. `lint.rs`'s sibling and deliberately not part of it: that verb lints the
+  one committed authority, this one lints an artifact the CALLER names, so they
+  share the house-style `lint <kind>` shape and no code. `SCHEMA` is the
+  required-section set as DATA — identifiers, period, instructions, read, check —
+  and `problems` is a pure function of the bytes: no clock, no filesystem, no
+  config, because the schema is engine structure and there is no key a
+  `batten.local.toml` could weaken. Presence only, never prose quality; a judge is
+  permanently out of scope (CLOUD-93). The ONE shape requirement is `check`'s
+  `runnable` column — its body must carry a fenced, non-blank line — and that is
+  what **retires a separate reply scanner**: a brief handing over a runnable
+  command needs no second gate reading the reply for one. It never reads what the
+  command is, so `rm -rf /` satisfies it too. Recognition is a label-line
+  normalizer, not a heading rule: briefs in use spell a label four ways (`## Check`,
+  `**Check:**`, `- Check:`, `Check:`), so the scan takes the text before the first
+  `:`, strips markers, lowercases, and compares for EQUALITY — `contains` would make
+  a brief that discusses its own structure self-satisfying. **Fence state is
+  computed over the whole document BEFORE labels are read**, so a quoted transcript
+  containing `# Check` declares nothing; without that ordering the more faithfully a
+  brief quotes its evidence the more sections it appears to satisfy. Two problem
+  classes because they are two different repairs (`missing` = write the section,
+  `unrunnable` = put a command in one that exists), rendered `missing: check,
+  period (2)` in SCHEMA order — so the report never depends on the order the author
+  wrote. A clean brief is SILENT (the issue's §7(a) overriding the house "state the
+  count even at zero"), while `-J` answers unconditionally. Exit `0`/`2`/`1`, and
+  the `2`-for-a-missing-section is CLOUD-307's correction landing: the issue's own
+  Ready block had shipped the `mise-tasks/*-check` convention, whose inverse would
+  make a policy verdict read to every mediating harness as a config error.
+  Pointer-only is load-bearing rather than formal here — a brief is the likeliest
+  document in the tree to carry a name, an entity path or a pasted credential — so
+  ids and counts only, asserted on both channels.
 - `trust.rs` — house-style §8 config trust (CLOUD-31): `load_base` reads the
   committed authority from a git ref via `git::show`, so `--config-from` loads
   policy out of band of the change under review and a branch cannot lower the

@@ -8,6 +8,7 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
+pub mod brief;
 pub mod budget;
 pub mod capture;
 pub mod ci;
@@ -53,8 +54,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    Cli, Command, ConfigCommand, DefectsCommand, GenerateCommand, PolicyCommand, ProvisionCommand,
-    ReceiptCommand, SpecFormat, StateCommand, WorktreeCommand,
+    Cli, Command, ConfigCommand, DefectsCommand, GenerateCommand, LintCommand, PolicyCommand,
+    ProvisionCommand, ReceiptCommand, SpecFormat, StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -135,6 +136,13 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         },
         Some(Command::Policy { command }) => match command {
             PolicyCommand::Budget { json } => run_budget(json, &overrides, out),
+        },
+        // `lint <kind>` reads text the caller names and answers about its shape.
+        // The §8 config chain is deliberately not threaded through it: the schema
+        // is engine structure, not repo policy, so there is no key for a config to
+        // layer and nothing a `batten.local.toml` could weaken.
+        Some(Command::Lint { command }) => match command {
+            LintCommand::Brief { path, json } => run_lint_brief(path.as_deref(), json, out),
         },
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
@@ -1298,6 +1306,61 @@ fn pointer_value(entry: &resolve::Attributed) -> String {
         serde_json::Value::Null => "-".to_owned(),
         other => other.to_string(),
     }
+}
+
+/// `batten lint brief [<path>]` (CLOUD-84).
+///
+/// Reads a delegation brief from `path`, or from stdin when it is `None` or `-` —
+/// the same `-` convention `config lint --host-rules` uses, so a brief can be
+/// piped straight from whatever composed it.
+///
+/// # Exit contract
+///
+/// The one table, no per-verb exception (non-negotiable rule 5): a missing
+/// section is a **policy verdict**, [`ExitCode::Violation`] (`2`), and input that
+/// cannot be read is [`ExitCode::Usage`] (`1`). CLOUD-84's Ready block originally
+/// stated these the other way round — the `mise-tasks/*-check` shell convention,
+/// which is the exact inverse — and CLOUD-307 named this clause by id. Shipping
+/// `1` for a missing section would make a policy verdict read to every mediating
+/// harness as a config error: fail-loud-do-not-block, on the surface whose whole
+/// purpose is to block.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the named path cannot be read, and
+/// when the input is not UTF-8. A brief is prose; bytes that are not text are a
+/// caller mistake, and answering "no missing sections" over them would be a pass
+/// nobody measured.
+fn run_lint_brief(path: Option<&str>, json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let text = match path {
+        None | Some("-") => {
+            let mut buffer = Vec::new();
+            std::io::stdin().read_to_end(&mut buffer)?;
+            String::from_utf8(buffer).map_err(|_| {
+                UsageError::raise("the brief on stdin is not valid UTF-8".to_owned())
+            })?
+        }
+        Some(source) => std::fs::read_to_string(source)
+            .map_err(|err| UsageError::raise(format!("cannot read the brief at {source}: {err}")))?,
+    };
+
+    let report = brief::problems(&text);
+    if json {
+        // Emitted unconditionally, including the clean run: JSON that is
+        // sometimes absent is unparseable, the same reasoning `config lint -J`
+        // records. Ids and counts only — never a byte of the brief (rule 4).
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        // A complete brief is SILENT (CLOUD-84 §7(a)). This is the one verb where
+        // the house habit of stating a count even at zero is overridden by the
+        // issue, and deliberately so: `lint brief` is meant to sit inline in a
+        // dispatch path, where a line per successful handoff is noise the reader
+        // learns to skip.
+        for line in report.lines() {
+            writeln!(out, "{line}")?;
+        }
+    }
+    Ok(ExitCode::verdict(!report.is_clean()))
 }
 
 fn run_config(

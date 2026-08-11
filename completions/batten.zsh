@@ -287,6 +287,97 @@ esac
     ;;
 esac
 ;;
+(lint)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__lint_commands" \
+"*::: :->lint" \
+&& ret=0
+
+    case $state in
+    (lint)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-lint-command-$line[1]:"
+        case $line[1] in
+            (brief)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::brief -- The brief to read; omitted or `-` reads stdin:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__lint__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-lint-help-command-$line[1]:"
+        case $line[1] in
+            (brief)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (spec)
 _arguments "${_arguments_options[@]}" : \
 '--format=[The output format for the spec]: :((json\:"Byte-stable JSON — the agent-facing contract (§6)"))' \
@@ -1277,6 +1368,26 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(lint)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__lint_commands" \
+"*::: :->lint" \
+&& ret=0
+
+    case $state in
+    (lint)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-lint-command-$line[1]:"
+        case $line[1] in
+            (brief)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (spec)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -1477,6 +1588,7 @@ _batten_commands() {
 'enforce:Run every configured rule, including kinds that execute a configured command' \
 'exec:Run a command, passing its streams and its exit code through unchanged' \
 'config:Inspect configuration' \
+'lint:Lint an artifact against a declared schema' \
 'spec:Print the tool'\''s own command spec' \
 'doctor:Diagnose whether Batten can run in this repository' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
@@ -1659,6 +1771,7 @@ _batten__subcmd__help_commands() {
 'enforce:Run every configured rule, including kinds that execute a configured command' \
 'exec:Run a command, passing its streams and its exit code through unchanged' \
 'config:Inspect configuration' \
+'lint:Lint an artifact against a declared schema' \
 'spec:Print the tool'\''s own command spec' \
 'doctor:Diagnose whether Batten can run in this repository' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
@@ -1763,6 +1876,18 @@ _batten__subcmd__help__subcmd__hook_commands() {
     local commands; commands=()
     _describe -t commands 'batten help hook commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__help__subcmd__lint_commands] )) ||
+_batten__subcmd__help__subcmd__lint_commands() {
+    local commands; commands=(
+'brief:Check a delegation brief against the handoff schema (any missing section is a violation)' \
+    )
+    _describe -t commands 'batten help lint commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__lint__subcmd__brief_commands] )) ||
+_batten__subcmd__help__subcmd__lint__subcmd__brief_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help lint brief commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__help__subcmd__policy_commands] )) ||
 _batten__subcmd__help__subcmd__policy_commands() {
     local commands; commands=(
@@ -1862,6 +1987,37 @@ _batten__subcmd__help__subcmd__worktree__subcmd__status_commands() {
 _batten__subcmd__hook_commands() {
     local commands; commands=()
     _describe -t commands 'batten hook commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lint_commands] )) ||
+_batten__subcmd__lint_commands() {
+    local commands; commands=(
+'brief:Check a delegation brief against the handoff schema (any missing section is a violation)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten lint commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lint__subcmd__brief_commands] )) ||
+_batten__subcmd__lint__subcmd__brief_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lint brief commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lint__subcmd__help_commands] )) ||
+_batten__subcmd__lint__subcmd__help_commands() {
+    local commands; commands=(
+'brief:Check a delegation brief against the handoff schema (any missing section is a violation)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten lint help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lint__subcmd__help__subcmd__brief_commands] )) ||
+_batten__subcmd__lint__subcmd__help__subcmd__brief_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lint help brief commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__lint__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__lint__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten lint help help commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__policy_commands] )) ||
 _batten__subcmd__policy_commands() {

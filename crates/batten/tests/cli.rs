@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use common::{Fixture, batten, git_in, scratch, scratch_outside_tree};
+use common::{Fixture, batten, git_in, scratch, scratch_outside_tree, stderr, stdout};
 
 /// Run `batten hook --harness <harness>` with `payload` piped to stdin.
 ///
@@ -312,6 +312,18 @@ fn exit_code_contract() {
             config: Some(
                 "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"forbid\"\nglob = \"**\"\npattern = \"x\"\nseverity = \"deny\"\nscope = \"deny\"\n",
             ),
+            env: &[],
+            expected: 1,
+        },
+        Case {
+            // CLOUD-84/CLOUD-307. In the SHARED table on purpose: `lint brief`'s
+            // unreadable-input case is the same `Usage` the config verbs above
+            // return, and the Ready block that shipped this issue originally
+            // numbered it `2`. One table, no per-verb exception (rule 5) — the
+            // verdict half needs a fixture path and is asserted beside it.
+            name: "lint brief, unreadable input → usage (never the deny code)",
+            args: &["lint", "brief", "no-such-brief.md"],
+            config: None,
             env: &[],
             expected: 1,
         },
@@ -2810,6 +2822,10 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
             "classes = [\"example\"]\n",
         ))
         .file("AGENTS.md", "instructions\n")
+        // `lint brief`'s minimum input, the third verb to need one. Named by
+        // `CENSUS_POSITIONALS` rather than by this call site, so the argv and the
+        // file it points at cannot drift apart.
+        .file("census-brief.md", &census_brief())
         .git()
         .base_commit()
         .work_commit()
@@ -2818,13 +2834,49 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
     (repo, home)
 }
 
+/// The positional value each data-emitting verb needs to reach its document.
+///
+/// A table rather than one shared placeholder. It used to be the literal
+/// `"verify"` for every positional, on the stated grounds that `receipt status
+/// <check>` was the only one — and when `lint brief <path>` landed (CLOUD-84) that
+/// constant became a path to a file nobody wrote, so the census ran the verb's
+/// unreadable-input arm and asserted about a usage error. The guard that was meant
+/// to catch this only counted positionals *per verb*, so a SECOND verb with a
+/// positional slipped through silently, which is the failure mode a census exists
+/// to prevent.
+///
+/// Every value is relative to the census fixture's repo directory, and
+/// [`census_fixture`] writes whatever a row names.
+const CENSUS_POSITIONALS: &[(&str, &str)] = &[
+    // A valid check name; `receipt status` answers `missing` for it, which is a
+    // document like any other.
+    ("receipt status", "verify"),
+    // A brief that satisfies the schema, so the census asserts about a CLEAN run
+    // — which is what `no_progress_reaches_stderr_when_it_is_not_a_terminal`
+    // needs, and what makes the empty `-J` document the interesting case.
+    ("lint brief", "census-brief.md"),
+];
+
+/// A brief satisfying every row of `brief::SCHEMA`, for the census fixture.
+///
+/// Built from the schema rather than hand-typed, so a new required section cannot
+/// leave this fixture quietly failing the verb it is meant to exercise cleanly.
+fn census_brief() -> String {
+    let mut text = String::new();
+    for section in batten::brief::SCHEMA {
+        text.push_str(&format!("## {}\n\ncensus fixture\n\n", section.labels[0]));
+        if section.runnable {
+            text.push_str("```\nmise run verify\n```\n\n");
+        }
+    }
+    text
+}
+
 /// The minimal argv that makes `decl` emit its document.
 ///
-/// Derived from the declaration rather than listed: the path, then a placeholder
-/// for each required positional, then `-J`. The placeholder is a valid check name
-/// because the one positional across every data-emitting verb today is `receipt
-/// status <check>`; the assertion below fails loudly if a second one ever appears,
-/// rather than silently passing a nonsense value to it.
+/// Derived from the declaration rather than listed: the path, then the positional
+/// [`CENSUS_POSITIONALS`] names for it, then `-J`. A verb with a positional and no
+/// row fails loudly here rather than being handed a value that means nothing to it.
 fn census_argv(decl: &batten::surface::CommandDecl) -> Vec<String> {
     let positionals: Vec<&batten::surface::FlagDecl> =
         decl.flags.iter().filter(|flag| flag.positional).collect();
@@ -2835,7 +2887,18 @@ fn census_argv(decl: &batten::surface::CommandDecl) -> Vec<String> {
     );
     let mut argv: Vec<String> = decl.path.split(' ').map(ToOwned::to_owned).collect();
     for _ in &positionals {
-        argv.push("verify".to_owned());
+        let value = CENSUS_POSITIONALS
+            .iter()
+            .find(|(path, _)| *path == decl.path)
+            .map(|(_, value)| *value)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: takes a positional but CENSUS_POSITIONALS names no value for it — \
+                     add a row (and whatever file it needs to census_fixture)",
+                    decl.path
+                )
+            });
+        argv.push(value.to_owned());
     }
     argv.push("-J".to_owned());
     argv
@@ -5678,4 +5741,188 @@ fn no_memory_key_path_or_content_reaches_any_output_stream() {
             );
         }
     }
+}
+
+// --- `lint brief`: the delegation-brief handoff schema (CLOUD-84) -------------
+
+/// A committed brief fixture, by name.
+///
+/// Committed rather than composed inline, for the reason `tests/fixtures/hooks/`
+/// records: a fixture written from memory pins what its author believed the shape
+/// was, and this schema's whole subject is a shape people get wrong.
+fn brief_fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/briefs")
+        .join(name)
+}
+
+/// `batten lint brief <fixture>`, run from a directory with no `batten.toml`.
+///
+/// Run outside any config on purpose: the schema is engine structure, not repo
+/// policy, so the verdict must not depend on a config being present — and a
+/// caller linting a brief has no reason to be standing in a configured repo.
+fn run_lint_brief(name: &str, extra: &[&str]) -> Output {
+    let dir = scratch(&format!("lint-brief-{name}"));
+    let mut command = batten();
+    command.arg("lint").arg("brief");
+    command.args(extra);
+    command
+        .arg(brief_fixture(name))
+        .current_dir(&dir)
+        .output()
+        .expect("run batten lint brief")
+}
+
+#[test]
+fn a_complete_brief_exits_zero_and_says_nothing() {
+    // CLOUD-84 §7(a). Silence is the contract, not an omission: `lint brief` is
+    // meant to sit inline on a dispatch path, where a line per successful handoff
+    // is noise a reader learns to skip.
+    let output = run_lint_brief("complete.md", &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty(), "stdout: {}", stdout(&output));
+}
+
+#[test]
+fn a_brief_missing_the_check_section_is_a_policy_verdict_naming_it() {
+    // CLOUD-84 §7(b), with the exit number CLOUD-307 corrected: a missing section
+    // is a VIOLATION (2), not a usage error. Shipping 1 here would make every
+    // mediating harness read the verdict as "Batten is misconfigured".
+    let output = run_lint_brief("missing-check.md", &[]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a missing section is the policy verdict, not a usage error"
+    );
+    assert_eq!(stdout(&output), "missing: check (1)\n");
+}
+
+#[test]
+fn a_check_section_with_no_runnable_command_is_reported_separately() {
+    // CLOUD-84 §7(d): the structural assertion that retires a separate reply
+    // scanner. Its own class, not `missing`, because the repair is different —
+    // put a command in the section that already exists.
+    let output = run_lint_brief("unrunnable-check.md", &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(stdout(&output), "unrunnable: check (1)\n");
+}
+
+#[test]
+fn the_brief_report_is_byte_stable_across_runs() {
+    // CLOUD-84 §7(c). The report is a pure function of the bytes: no clock, no
+    // filesystem, no config, and an order that comes from the schema rather than
+    // from how the author arranged the document.
+    for name in ["complete.md", "missing-check.md", "unrunnable-check.md"] {
+        let first = run_lint_brief(name, &[]);
+        let second = run_lint_brief(name, &[]);
+        assert_eq!(first.stdout, second.stdout, "{name} stdout drifted");
+        assert_eq!(first.status.code(), second.status.code());
+    }
+}
+
+#[test]
+fn an_unreadable_brief_is_a_usage_error_and_never_a_deny() {
+    // The other half of CLOUD-307's correction. `1`, not `2`: "I could not read
+    // the input" must never travel to a harness as a policy decision, or a
+    // mistyped path becomes a block.
+    let dir = scratch("lint-brief-unreadable");
+    let output = batten()
+        .args(["lint", "brief", "no-such-brief.md"])
+        .current_dir(&dir)
+        .output()
+        .expect("run batten lint brief");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn a_brief_arrives_on_stdin_when_no_path_is_given() {
+    // A brief is composed in memory by whatever is dispatching; requiring a
+    // temporary file would put a write on the path of a `read` verb's caller.
+    let dir = scratch("lint-brief-stdin");
+    let brief = fs::read_to_string(brief_fixture("complete.md")).expect("read fixture");
+    let mut child = batten()
+        .args(["lint", "brief"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("spawn batten lint brief");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(brief.as_bytes())
+        .expect("write the brief");
+    let output = child.wait_with_output().expect("wait for batten");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn the_json_channel_answers_even_on_a_clean_brief() {
+    // JSON that is sometimes absent is unparseable — the same reasoning
+    // `config lint -J` records. The human channel stays silent; this one does not.
+    let output = run_lint_brief("complete.md", &["-J"]);
+    assert_eq!(output.status.code(), Some(0));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).expect("report is JSON");
+    assert_eq!(report["missing"].as_array().map(Vec::len), Some(0));
+    assert_eq!(report["unrunnable"].as_array().map(Vec::len), Some(0));
+
+    let dirty = run_lint_brief("missing-check.md", &["-J"]);
+    assert_eq!(dirty.status.code(), Some(2));
+    let report: serde_json::Value = serde_json::from_slice(&dirty.stdout).expect("report is JSON");
+    assert_eq!(report["missing"][0], "check");
+}
+
+#[test]
+fn no_byte_of_the_brief_reaches_any_output_stream() {
+    // Non-negotiable rule 4, and the reason it is load-bearing here rather than
+    // formal: a delegation brief is the likeliest document in this system to
+    // carry a consumer's name, an entity path, or a credential pasted "for
+    // context". The report is section ids and counts.
+    let dir = scratch("lint-brief-no-leak");
+    let sentinel = "ACCOUNT-SENTINEL-01189998819991197253";
+    let path = dir.join("brief.md");
+    fs::write(
+        &path,
+        format!("## Identifiers\n\n{sentinel}\n\n## Check\n\nno command here\n"),
+    )
+    .expect("write brief");
+    for extra in [vec![], vec!["-J"]] {
+        let output = batten()
+            .arg("lint")
+            .arg("brief")
+            .args(&extra)
+            .arg(&path)
+            .current_dir(&dir)
+            .output()
+            .expect("run batten lint brief");
+        let both = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(!both.contains(sentinel), "{extra:?} leaked the brief: {both}");
+    }
+}
+
+#[test]
+fn lint_brief_declares_itself_read_in_the_spec() {
+    // The derived read-only allowlist is built from this classification, so a
+    // misdeclared row would put a text-reading verb in the wrong effect class —
+    // or keep an honest one out of the allowlist a mediating harness consults.
+    let output = batten().arg("spec").output().expect("run batten spec");
+    assert_eq!(output.status.code(), Some(0));
+    let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
+    let lint = spec["subcommands"]
+        .as_array()
+        .expect("subcommands is an array")
+        .iter()
+        .find(|node| node["path"] == "lint")
+        .expect("lint is in the spec");
+    assert_eq!(lint["effect"], "read");
+    let brief = lint["subcommands"]
+        .as_array()
+        .expect("subcommands is an array")
+        .iter()
+        .find(|node| node["path"] == "lint brief")
+        .expect("lint brief is in the spec");
+    assert_eq!(brief["effect"], "read");
 }

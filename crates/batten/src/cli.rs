@@ -116,6 +116,26 @@ pub enum Command {
         /// The chosen sub-verb.
         command: ProvisionCommand,
     },
+    /// Lint an artifact against a declared schema.
+    Lint {
+        /// The chosen kind.
+        command: LintCommand,
+    },
+}
+
+/// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
+/// house-style `lint <kind>` shape names (CLOUD-84).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LintCommand {
+    /// Check a delegation brief against the handoff schema.
+    Brief {
+        /// The brief to read. `None` or `-` reads stdin, so a brief can be piped
+        /// straight from whatever composed it without a temporary file.
+        path: Option<String>,
+        /// Emit the report as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
 }
 
 /// Subcommands of `defects`.
@@ -355,6 +375,18 @@ fn config_of(matches: &ArgMatches) -> Option<ConfigCommand> {
     }
 }
 
+/// The positional is optional and belongs to one kind, so it is read inside the
+/// arm — the shape [`state_of`] uses for `state adopt`.
+fn lint_of(matches: &ArgMatches) -> Option<LintCommand> {
+    match matches.subcommand()? {
+        ("brief", matches) => Some(LintCommand::Brief {
+            path: matches.get_one::<String>("brief").cloned(),
+            json: flag(matches, "json"),
+        }),
+        _ => None,
+    }
+}
+
 fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
     match matches.subcommand()? {
         ("budget", matches) => Some(PolicyCommand::Budget {
@@ -453,6 +485,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             json: flag(matches, "json"),
         }),
         "config" => config_of(matches).map(|command| Command::Config { command }),
+        "lint" => lint_of(matches).map(|command| Command::Lint { command }),
         "spec" => matches
             .get_one::<SpecFormat>("format")
             .map(|format| Command::Spec { format: *format }),
