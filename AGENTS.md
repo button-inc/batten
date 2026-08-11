@@ -8,9 +8,8 @@ turn**; everything else is indexed below and read at its trigger.
 
 ## Authoritative specs — link, never restate
 
-Two Linear docs are the source of truth. This file governs **agent behaviour** and
-must not re-type what they own. Where they disagree the spec wins and this file is
-the bug — fix the pointer, don't fork the content.
+Three Linear docs are the source of truth; this file must not re-type what they
+own. Where they disagree the spec wins — fix the pointer, don't fork the content.
 
 - **[Batten CLI — the Button house style][house-style]** — command surface/verbs
   (§2), effect model + read-only allowlist (§5), output/exit contract (§6–§7),
@@ -18,9 +17,12 @@ the bug — fix the pointer, don't fork the content.
 - **[Definition of Ready & Done][dor-dod]** — the refinement gate every issue
   passes: Ready (the mechanism as a computable predicate) and Done (landed on
   `main` by fast-forward, CI-confirmed green).
+- **[Agent-neutral attribution][attribution]** — the three commit-metadata
+  surfaces: accountability, disclosure posture, provenance records.
 
 [house-style]: https://linear.app/buttoninc/document/batten-cli-the-button-house-style-f2db95581c41
 [dor-dod]: https://linear.app/buttoninc/document/definition-of-ready-and-done-e4e8defb6774
+[attribution]: https://linear.app/buttoninc/document/agent-neutral-attribution-the-decision-record-e869f1cc5633
 
 ## Serena memories — read the right one at the right time
 
@@ -181,9 +183,8 @@ run means a real exit condition, **not** a wall-clock cap on the CI poll.
 
 ## Where the rest lives
 
-Content that need not bind every turn is indexed, not inlined — checked-in
-markdown any agent can read; `.claude/rules/` frontmatter only says _when_ to load
-one. Use mise for everything; never a bare `cargo`/`export`/one-off install.
+Content that need not bind every turn is indexed, loaded at the trigger below.
+Use mise for everything; never a bare `cargo`/`export`/one-off install.
 
 | `.claude/rules/` | Read it when                                                                                                                                 |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -193,7 +194,6 @@ one. Use mise for everything; never a bare `cargo`/`export`/one-off install.
 
 ## Scope reminder
 
-Batten is a policy engine — **not** a general-purpose hook runner, file-shape
-linter, secret scanner, AST linter, or reference monitor. Its threat model is
-honest agent or human error: acting on the wrong entity, at the wrong time, or with
-the wrong completion signal. Don't expand the core; adopt prior art, don't rebuild.
+Batten is a policy engine — **not** a hook runner, file-shape linter, secret
+scanner, AST linter, or reference monitor. Its threat model is honest error: the
+wrong entity, time, or completion signal. Adopt prior art; don't expand the core.
