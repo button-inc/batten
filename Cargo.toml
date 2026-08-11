@@ -75,6 +75,14 @@ serde_json = "1"
 sha2 = "0.10"
 toml = "1.1"
 unicode-normalization = "0.1"
+# YAML, for the `[[budget.<name>.embedded]]` entries that count a string carried
+# INSIDE a host's config file rather than a file of its own (CLOUD-298). TOML and
+# JSON are already vendored, so this is the one format the extension dispatch
+# could not otherwise read — and an always-loaded surface the engine cannot parse
+# must be a refusal, which needs a real parser rather than a line scan. yaml-rust2
+# is the maintained successor to yaml-rust (the archived `serde_yaml` carries
+# RUSTSEC-2024-0370); it is a parser only, so it adds no serde derive surface.
+yaml-rust2 = "0.11"
 
 [profile.release]
 lto = "thin"

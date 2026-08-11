@@ -102,7 +102,10 @@ impl Budget {
 #[serde(deny_unknown_fields)]
 pub struct BudgetSet {
     /// The counted file set, as globs over repo-relative `/`-separated paths.
-    /// Every entry must match at least one file — see the module docs.
+    /// Every entry must match at least one file — see the module docs. Defaulted
+    /// because a set may count only `embedded` entries; the two being empty
+    /// *together* is what `measure` refuses.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<String>,
     /// The ceiling on estimated tokens over the whole set. The boundary is
     /// `<=`: exactly at budget passes.
@@ -112,6 +115,33 @@ pub struct BudgetSet {
     /// declared is not a threshold of zero.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lines: Option<usize>,
+    /// Always-loaded strings carried *inside* a config file rather than in a
+    /// file of their own. Empty by default: a repository with no such surface
+    /// declares nothing (CLOUD-298).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embedded: Vec<EmbeddedDecl>,
+}
+
+/// One `[[budget.<name>.embedded]]` entry: a string inside a config file that a
+/// host loads on every session.
+///
+/// Both fields are the **consumer's**. A host that always injects a key from its
+/// own config — Serena's project file, an editor's workspace settings — is a
+/// property of the repository using that host, not of Batten, so naming either
+/// one in `crates/batten` would be the consumer-specific identifier
+/// non-negotiable rule 1 forbids. The engine knows only "parse this file, read
+/// this key, count the string".
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EmbeddedDecl {
+    /// The repo-relative, `/`-separated path of the config file to read. A
+    /// literal path and never a glob: a key is read from one document, and a
+    /// pattern would leave "which file's key" unanswered.
+    pub path: String,
+    /// The key whose string value is counted. Dotted for a nested key
+    /// (`a.b.c`); the engine walks maps only, so a key under a sequence is a
+    /// miss rather than a guess.
+    pub key: String,
 }
 
 /// One measured file. Pointer-only: a path and two counts, never a byte of the
@@ -308,6 +338,97 @@ fn find_line_anchored(haystack: &str, needle: &str) -> Option<usize> {
     None
 }
 
+/// The string an [`EmbeddedDecl`] points at, or `None` when the key is absent,
+/// null, or not a string.
+///
+/// The parser is chosen by extension, which makes the rule **total**: every path
+/// either names a format the engine reads or is refused. TOML and JSON cost
+/// nothing — both parsers are already vendored for the config loader and the
+/// data channel — so supporting all three is cheaper than justifying why only
+/// one consumer's format is readable.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) naming the path when the extension is
+/// unknown or the document does not parse. That refusal is the whole point: an
+/// always-loaded surface the gate cannot read must never be reported as an empty
+/// one, which is the same false green a dead glob produced (CLOUD-298).
+fn embedded_value(root: &Path, name: &str, decl: &EmbeddedDecl) -> Result<Option<String>> {
+    let full = root.join(&decl.path);
+    let text = match fs::read_to_string(&full) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(UsageError::raise(format!(
+                "budget.{name}: `{}` matches no file; a dead entry contributes nothing and must \
+                 not pass as measured",
+                decl.path
+            )));
+        }
+        Err(error) => return Err(error.into()),
+    };
+
+    // Only the extension is trusted to name the format. Sniffing the content
+    // would make an unparseable document look like a different format rather
+    // than like the refusal it is.
+    let extension = Path::new(&decl.path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .unwrap_or_default();
+    let keys: Vec<&str> = decl.key.split('.').collect();
+    let unreadable = |what: &str| {
+        UsageError::raise(format!(
+            "budget.{name}: `{}` is not readable as {what}; an uncountable surface must not read \
+             as an empty one",
+            decl.path
+        ))
+    };
+
+    match extension {
+        "yml" | "yaml" => {
+            let docs =
+                yaml_rust2::YamlLoader::load_from_str(&text).map_err(|_| unreadable("YAML"))?;
+            // An empty document declares no keys — the same answer as a key that
+            // is simply absent, and not a parse failure.
+            let Some(doc) = docs.first() else {
+                return Ok(None);
+            };
+            let mut node = doc;
+            for key in keys {
+                node = &node[key];
+            }
+            Ok(node.as_str().map(ToOwned::to_owned))
+        }
+        "toml" => {
+            let value: toml::Value = text.parse().map_err(|_| unreadable("TOML"))?;
+            let mut node = &value;
+            for key in keys {
+                match node.get(key) {
+                    Some(next) => node = next,
+                    None => return Ok(None),
+                }
+            }
+            Ok(node.as_str().map(ToOwned::to_owned))
+        }
+        "json" => {
+            let value: serde_json::Value =
+                serde_json::from_str(&text).map_err(|_| unreadable("JSON"))?;
+            let mut node = &value;
+            for key in keys {
+                match node.get(key) {
+                    Some(next) => node = next,
+                    None => return Ok(None),
+                }
+            }
+            Ok(node.as_str().map(ToOwned::to_owned))
+        }
+        _ => Err(UsageError::raise(format!(
+            "budget.{name}: `{}` has no format this gate can read (expected .yml, .yaml, .toml or \
+             .json); an uncountable surface must not read as an empty one",
+            decl.path
+        ))),
+    }
+}
+
 /// Estimated tokens over already-[`loaded`] content.
 #[must_use]
 pub fn estimate_tokens(loaded: &str) -> usize {
@@ -332,9 +453,10 @@ pub fn count_lines(loaded: &str) -> usize {
 /// glob cannot hide behind the entries that still count. An I/O failure while
 /// walking or reading propagates as an internal error (→ exit `3`).
 pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
-    if budget.files.is_empty() {
+    if budget.files.is_empty() && budget.embedded.is_empty() {
         return Err(UsageError::raise(format!(
-            "budget.{name}: `files` declares no entries; a budget over nothing is not a budget"
+            "budget.{name}: neither `files` nor `embedded` declares an entry; a budget over \
+             nothing is not a budget"
         )));
     }
 
@@ -372,6 +494,34 @@ pub fn measure(root: &Path, name: &str, budget: &BudgetSet) -> Result<Report> {
         lines += file.lines;
         files.push(file);
     }
+
+    for decl in &budget.embedded {
+        let Some(value) = embedded_value(root, name, decl)? else {
+            // Absent, null, or empty contributes nothing AND adds no row: a zero
+            // row would report a surface as measured-and-free when there is
+            // nothing there to measure.
+            continue;
+        };
+        let loaded = loaded(&value);
+        if loaded.is_empty() {
+            continue;
+        }
+        let file = FileCount {
+            // `path#key` so the counted set stays discoverable from the report:
+            // a surface that IS counted names itself, and one that is not cannot
+            // hide behind the total.
+            path: format!("{}#{}", decl.path, decl.key),
+            tokens: estimate_tokens(&loaded),
+            lines: count_lines(&loaded),
+        };
+        tokens += file.tokens;
+        lines += file.lines;
+        files.push(file);
+    }
+
+    // One sort over both kinds, so the report keeps its documented path order
+    // whatever order the two loops produced.
+    files.sort_by(|a, b| a.path.cmp(&b.path));
 
     Ok(Report {
         name: name.to_owned(),

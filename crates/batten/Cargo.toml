@@ -36,6 +36,7 @@ sha2.workspace = true
 tar.workspace = true
 toml.workspace = true
 unicode-normalization.workspace = true
+yaml-rust2.workspace = true
 
 [dev-dependencies]
 # The provision suite builds a tarball fixture in memory rather than committing
