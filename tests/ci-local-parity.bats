@@ -215,6 +215,58 @@ workflow() {
 	[[ "$output" == *"nothing declares whether the release PR is a draft"* ]]
 }
 
+# A fan-in job over two legs. `$1` is the body of its assert step, which is the
+# only thing the two cases below differ in.
+fanin() {
+	workflow ci
+	workflow cross "    if: \${{ github.event.pull_request.draft == false }}" "cancel-in-progress: true" "cross-check"
+	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,cross,final"/' "$MANIFEST"
+	cat >"$WF/final.yml" <<-EOF
+		name: final
+
+		on:
+		  pull_request:
+		    types: [opened, synchronize]
+
+		concurrency:
+		  group: final-\${{ github.ref }}
+		  cancel-in-progress: true
+
+		jobs:
+		  final:
+		    name: final
+		    if: \${{ always() && github.event.pull_request.draft == false }}
+		    needs: [ci, cross]
+		    runs-on: ubuntu-latest
+		    steps:
+		      - run: $1
+	EOF
+}
+
+@test "a fan-in that enumerates only some of its needs is refused, and the omission named" {
+	# The defect itself: `final` waited on four jobs and asserted three, so a red
+	# `msrv` left green the one check branch protection requires (CLOUD-351).
+	fanin '[ "${{ needs.ci.result }}" = "success" ]'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"job 'final' waits on 'cross' but never asserts it"* ]]
+}
+
+@test "a fan-in asserting over needs.* passes, and stays passing when a leg is added" {
+	# The fix has to be the SET, not a longer enumeration: a list that happens to
+	# be complete today is the same defect one job later. So the second half of
+	# this case adds a dependency without touching the assertion.
+	fanin "[ \"\${{ contains(needs.*.result, 'failure') }}\" = \"false\" ]"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+
+	workflow msrv "    if: \${{ github.event.pull_request.draft == false }}" "cancel-in-progress: true" "ci"
+	sed -i 's/^CI_REQUIRED_CHECKS = .*/CI_REQUIRED_CHECKS = "ci,cross,final,msrv"/' "$MANIFEST"
+	sed -i 's/^    needs: \[ci, cross\]$/    needs: [ci, cross, msrv]/' "$WF/final.yml"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
 @test "this repository's real workflows pass" {
 	# The assertion that catches the gate drifting from what it guards.
 	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ

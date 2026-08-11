@@ -233,9 +233,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:
+      # Asserted over `needs.*`, never over an enumeration of it. The enumerated
+      # form listed three of the four dependencies — `msrv` was added to `needs:`
+      # and never to the assertion — so a red `msrv` produced a green `final`,
+      # which is the only check the host requires (CLOUD-351). A fan-in whose
+      # assertion is a hand-written restatement of its own `needs:` has two
+      # authorities for one fact, and only the restatement decides. This form has
+      # one: a job added to `needs:` is gated the moment it is added, which is
+      # what the fan-in design promised and did not have.
+      #
+      # Three conclusions rather than one `= "success"` per job: `contains`
+      # cannot express "all", so the equivalent is "none of the not-success
+      # ones". That set is exhaustive for a `needs` result — success, failure,
+      # cancelled, skipped — so this is the same predicate, not a weaker one.
       - name: Assert all required jobs passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "ci=${{ needs.ci.result }} cross=${{ needs.cross.result }} darwin-link=${{ needs.darwin-link.result }}"
-          [ "${{ needs.ci.result }}" = "success" ] &&
-            [ "${{ needs.cross.result }}" = "success" ] &&
-            [ "${{ needs['darwin-link'].result }}" = "success" ]
+          echo "$RESULTS"
+          [ "${{ contains(needs.*.result, 'failure') }}" = "false" ] &&
+            [ "${{ contains(needs.*.result, 'cancelled') }}" = "false" ] &&
+            [ "${{ contains(needs.*.result, 'skipped') }}" = "false" ]

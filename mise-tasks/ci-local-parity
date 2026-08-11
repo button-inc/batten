@@ -42,8 +42,14 @@
 #      CLOUD-327 is — and a listed name matching no job waits forever for a run
 #      nothing will ever create. Both directions, over the committed text.
 #
+#   6. A FAN-IN ASSERTS ITS WHOLE `needs:` SET. Branch protection points at one
+#      aggregating job so that adding a leg never needs a ruleset change — which
+#      only holds if that job's assertion follows `needs:` by itself. `final`
+#      enumerated three of its four dependencies, so a red `msrv` left green the
+#      one check the host requires (CLOUD-351).
+#
 # Scoped to `pull_request`-triggered workflows: a scheduled or release workflow
-# is not on the landing path and none of the three properties apply to it.
+# is not on the landing path and none of these properties apply to it.
 set -uo pipefail
 
 workflows="${PARITY_WORKFLOWS:-.github/workflows}"
@@ -119,6 +125,56 @@ $(awk '
 		done <<<"$ungated"
 	fi
 
+	# A fan-in job must assert over its WHOLE `needs:` set. `needs:` is the real
+	# dependency list; an assertion enumerating it by hand is a second authority
+	# for the same fact, and only the second one decides the verdict. `final`
+	# carried exactly that: four dependencies, three asserted, so a red `msrv`
+	# left green the one check branch protection requires (CLOUD-351).
+	#
+	# Satisfied EITHER by a set-wide predicate (`needs.*`, which cannot go stale
+	# because it names nothing) OR by naming every dependency. Both spellings of
+	# a name count — `needs.darwin-link` and `needs['darwin-link']` — since a key
+	# with a hyphen is legal in both.
+	unasserted=$(awk '
+		function flush(   i, n, parts, miss) {
+			if (job == "" || needs == "") return
+			if (index(body, "needs.*")) return
+			n = split(needs, parts, /[ ,]+/); miss = ""
+			for (i = 1; i <= n; i++) {
+				if (parts[i] == "") continue
+				if (index(body, "needs." parts[i])) continue
+				if (index(body, "needs[\x27" parts[i] "\x27]")) continue
+				miss = miss (miss == "" ? "" : ",") parts[i]
+			}
+			if (miss != "") print job "\t" miss
+		}
+		/^jobs:/ { injobs = 1; next }
+		injobs && /^[a-z]/ { flush(); injobs = 0 }
+		injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+			flush()
+			job = $1; sub(":", "", job); needs = ""; body = ""; inneeds = 0
+			next
+		}
+		injobs && /^    needs:[[:space:]]*\[/ {
+			line = $0; sub(/^[^[]*\[/, "", line); sub(/\].*$/, "", line)
+			gsub(/["\x27]/, "", line); needs = line; inneeds = 0; next
+		}
+		injobs && /^    needs:[[:space:]]*$/ { inneeds = 1; next }
+		injobs && inneeds && /^      -[[:space:]]/ {
+			line = $0; sub(/^      -[[:space:]]*/, "", line)
+			gsub(/["\x27]/, "", line); needs = needs " " line; next
+		}
+		injobs && inneeds && /^    [A-Za-z]/ { inneeds = 0 }
+		injobs { body = body "\n" $0 }
+		END { flush() }
+	' "$wf")
+	if [ -n "$unasserted" ]; then
+		while IFS=$'\t' read -r job missing; do
+			[ -n "$job" ] || continue
+			problem "$wf job '$job' waits on '$missing' but never asserts it — a fan-in that enumerates its own needs: goes stale the next time one is added (CLOUD-351). Assert over needs.* instead."
+		done <<<"$unasserted"
+	fi
+
 	# `mise run <task>` in the STEPS, not in the prose. These files carry long
 	# comments that name tasks to explain why they are absent, and a plain grep
 	# read those as spend — a gate that fires on its own documentation is a gate
@@ -167,4 +223,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, running nothing verify does not, and named in full by CI_REQUIRED_CHECKS; the release PR opens as a draft"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, running nothing verify does not, asserting every needs: they wait on, and named in full by CI_REQUIRED_CHECKS; the release PR opens as a draft"
