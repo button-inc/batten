@@ -74,6 +74,37 @@ Everything goes through [mise](mise.toml) tasks so local runs, git hooks, and
 CI execute byte-identical commands; [CONTRIBUTING.md](CONTRIBUTING.md) has the
 per-clone setup and the task tour.
 
+## Performance
+
+Batten runs as a `PreToolUse` hook, so its cost is paid on **every** mediated
+tool call rather than once per commit. These are measured numbers, not targets —
+`mise run bench` reproduces them, and `mise run bench-assert` fails when a
+measured p95 leaves its budget.
+
+| path    | what it does                                   | p50    | p95    | budget   |
+| ------- | ---------------------------------------------- | ------ | ------ | -------- |
+| `noop`  | process start, command tree, render             | 2.4 ms | 2.9 ms | ≤ 100 ms |
+| `check` | + config load, trust resolution, one-rule tree   | 2.5 ms | 2.7 ms | —        |
+| `hook`  | + envelope decode, adjudication, decision write | 2.6 ms | 3.1 ms | ≤ 100 ms |
+
+100 ms is the [Command Line Interface Guidelines'][clig] floor for a response
+that reads as instant. It is an absolute ceiling rather than a tight band around
+the measured value: a shared runner's p95 moves by more than a percentage band
+between two runs of identical bytes, so a tighter gate would fire on noise
+instead of on regressions. `check` is measured and deliberately not budgeted —
+its cost is bounded by the repository it is pointed at, not by Batten, and no
+ceiling here could tell a large tree apart from a regression.
+
+<!-- prettier-ignore -->
+> Measured at `140ec24`, 2026-08-11, on a 4-core x86_64 Linux container:
+> release build, 10 warmup runs discarded, 100 timed runs per path, p95 from
+> the sorted run times. Your machine will differ; the budget is what the gate
+> holds, and the schedule in
+> [`.github/workflows/bench.yml`](.github/workflows/bench.yml) is what keeps
+> holding it.
+
+[clig]: https://clig.dev/#responsiveness
+
 ## Exit-code contract
 
 One table, total, with no per-verb exception. `batten --help` prints the same

@@ -14,6 +14,19 @@ hk = "1.54.0"                                                # git-hook runner (
 "aqua:anchore/syft" = "1.42"                                 # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom)
 "aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
 "aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
+# The measurement instrument for `mise run bench` (CLOUD-207). Batten runs as a
+# PreToolUse hook, so its startup cost is paid on every mediated tool call, and
+# that number is only defensible if the thing producing it is fixed: a change in
+# how the sampler warms, discards outliers, or computes a quantile enters the
+# series as a step change indistinguishable from a real regression. Pinned here
+# with every other tool, so `mise.lock` carries its per-platform checksums.
+#
+# `aqua:`, never `cargo:` — batten.toml's `no-source-built-tool` rule refuses a
+# tool compiled here, and hyperfine ships prebuilt linux-arm64/x64 and macOS
+# assets, so `mise run lock-complete` can hold every platform this repo installs
+# on. Deliberately NOT in ci.yml's install lists: nothing on the landing path
+# measures (see .github/workflows/bench.yml for why measurement is scheduled).
+"aqua:sharkdp/hyperfine" = "1.20.0"
 # NOTE: the MSRV gate (`mise run msrv`) deliberately pins NO tool. cargo-msrv
 # would be the obvious choice and cannot be used: upstream ships no
 # aarch64-unknown-linux binary in ANY release, so a release-asset backend locks

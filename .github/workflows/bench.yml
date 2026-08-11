@@ -1,0 +1,107 @@
+name: bench
+
+# The measurement half of CLOUD-207, on a clock rather than on the landing path.
+#
+# WHY NOT `pull_request`. Two independent reasons, and either alone decides it:
+#
+#   * A p95 is only worth what the machine under it is worth. A shared runner
+#     contending with other jobs produces a distribution wide enough that a
+#     per-PR gate would fail on noise and be switched off within a week — which
+#     is exactly what CLOUD-207's own flakiness posture warns about, and why the
+#     budget this asserts is an absolute ceiling rather than a band.
+#   * A release build plus 330 timed invocations is minutes of runner time per
+#     push, spent to re-derive a number that a commit almost never moves. CI
+#     minutes are metered; `ci-local-parity` exists to keep the landing path to
+#     things a local `mise run verify` already proved.
+#
+# WHAT DEFENDS THE NUMBER PER-COMMIT, then, is `tests/bench-assert.bats`: the
+# gate is a pure function of records on stdin, so its decision runs in the hk
+# gate on every commit in milliseconds, with no build and no hyperfine. This
+# workflow supplies the one thing that suite cannot — a real measurement of the
+# real binary — and applies the same gate to it. The split is the repo's
+# standing agents-fetch/gates-decide pattern, and the `coverage.yml` /
+# `lock-currency.yml` precedent for "a property of the world runs on a clock".
+#
+# Not a push-to-main trigger either, for the reason stated in every other
+# scheduled workflow here: `main` only ever advances by fast-forward to a commit
+# a PR already tested, so a push trigger would re-run work that is by
+# construction already done. The schedule is what samples `main`.
+#
+# UNLIKE `coverage.yml`, THIS ONE HAS A THRESHOLD AND MAY FAIL. Coverage is a
+# report because a percentage rewards line-touching over assertion; latency is
+# not that shape. There is one honest number, a published claim resting on it,
+# and a budget with a citation — so a run that leaves the budget is a defect,
+# not a datum for a human to weigh.
+
+on:
+  schedule:
+    # Daily, 05:00 UTC — ahead of the Monday 06:00-07:30 cluster of weekly jobs,
+    # so nothing contends with a measurement. Daily rather than weekly because
+    # the series only reads as a trend at a resolution finer than the interval
+    # over which a regression would land (CLOUD-172).
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). Every
+  # workflow using mise-action must set this; `mise run lock-complete` fails if
+  # one does not.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  bench:
+    name: bench
+    runs-on: ubuntu-latest
+    # `grandfathered` rather than a derived budget, and deliberately so: this job
+    # has no run history, so there is no p95 to multiply and any number written
+    # here would be the asserted-instead-of-measured claim this very ticket
+    # exists to delete. Locally a full `mise run bench` — cold release build,
+    # three paths, 110 invocations each — measured 48.7s on four cores; the
+    # runner adds checkout and install on top, and pays the full dependency
+    # build whenever the cache misses. `mise run timeout-drift` is the mechanism
+    # that replaces this with a measured budget once runs exist to measure.
+    timeout-minutes: 20 # budget: grandfathered measured=2026-08-11
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # rust builds the binary under measurement, hyperfine samples it, jq
+          # reads the sampler's JSON back out. Nothing else is invoked.
+          # `mise run ci-tools-check` fails if a name here drifts from mise.toml.
+          install_args: rust aqua:sharkdp/hyperfine aqua:jqlang/jq
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A release profile, which no other job builds, so a shared cache entry
+          # would thrash.
+          key: bench
+      # Redirected into a file and read back, never piped into the gate. A
+      # pipeline hands its exit status to the LAST stage, so `bench |
+      # bench-assert` would discard exactly the measurement failure that must
+      # stop this job — the false-green shape `mise run run-shape-guard` refuses
+      # locally, and no less wrong in a workflow.
+      - name: Measure
+        run: mise run bench >"$RUNNER_TEMP/bench.txt"
+      - name: Assert the budget
+        run: mise run bench-assert <"$RUNNER_TEMP/bench.txt"
+      # Always, including on a budget violation: the records are the evidence
+      # for the failure, and a run that fails without publishing what it measured
+      # sends the reader to re-run it by hand.
+      - name: Publish the records
+        if: always()
+        run: |
+          {
+            echo '## Invocation cost'
+            echo
+            echo 'Budgets are enforced by `mise run bench-assert`; see README, Performance.'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/bench.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

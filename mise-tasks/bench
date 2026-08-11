@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+#MISE description="Measure batten's invocation cost on the no-op, check and hook paths, and print one byte-stable record per path"
+#
+# CLOUD-207. Batten runs as a `PreToolUse` hook, so its startup cost is paid on
+# EVERY mediated tool call — not per commit, not per CI run, but per tool use in
+# every agent trajectory that installs it. That makes latency an adoption
+# property rather than a nicety: a policy engine slow enough to be annoying gets
+# routed around, and the rule it enforces stops binding. The repo asserted speed
+# nowhere and measured it nowhere before this task.
+#
+# THIS MEASURES; IT DOES NOT DECIDE. The verdict is `mise run bench-assert`'s, a
+# pure function of the records below, for the same reason every board gate here
+# splits that way (`graph-check`, `claim-check`, `ci-wait`): agents fetch, gates
+# decide. A measurement needs a quiet machine, a release build and a couple of
+# minutes; a decision needs none of those, so keeping them apart is what lets the
+# decision run in the hk gate on every commit while the measurement runs where it
+# can be trusted (.github/workflows/bench.yml, on a schedule).
+#
+# THE THREE PATHS, chosen because they bracket what a hook actually costs:
+#
+#   noop    `batten --help` — process start, clap tree construction, render.
+#           No config read, no git, no rules. This is the floor: nothing batten
+#           does at a call site can be faster than this, so a regression here is
+#           a regression in every path at once.
+#   check   `batten check` over a one-rule fixture repo. Adds config load, trust
+#           resolution and a tree walk — the `mise run batten-check` shape.
+#   hook    `batten hook --harness claude-code` over a canned PreToolUse
+#           envelope. The path that runs per mediated call, and the one the
+#           published number is about.
+#
+# FIXTURES ARE REUSED, NOT INVENTED. The check path materialises
+# `crates/batten/tests/fixtures/repos/forbid-clean/`, and the hook path feeds
+# `crates/batten/tests/fixtures/hooks/claude-code.json` — the same bytes the Rust
+# suite already pins against drift. A second corpus maintained only for the bench
+# would drift from the one the tests assert on, and then the published number
+# would describe an input nothing else uses.
+#
+# WHY A RELEASE BUILD: the published figure is about the binary users install.
+# A debug build's startup is dominated by unoptimised code and is not the number
+# being defended, so measuring one would publish a claim about an artifact that
+# ships nowhere.
+#
+# `--warmup` before every run, because the first invocation pays page cache and
+# dynamic-linker cost that no subsequent call at a hook site pays. Outliers are
+# reported by hyperfine, never silently dropped.
+#
+# OUTPUT IS A POINTER, NEVER A PAYLOAD (non-negotiable rule 4): one KEY=VALUE
+# record per path on stdout and nothing else, so a caller can redirect it into
+# `bench-assert`, append it to a series (CLOUD-172), or paste it into a summary
+# without a parser. The raw hyperfine JSON stays under target/ for a human.
+#
+# Task bodies do not run under `set -e`, and a number computed from a failed
+# build is a misleading measurement rather than a missing one, so every step
+# whose failure would change the record is guarded by hand.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Where the measurement's working files go. Under target/, which is git-ignored,
+# so a bench run never dirties a clone and never has to be cleaned up by hand.
+#
+# Resolved to an ABSOLUTE path below, once it exists: the check path runs with
+# the fixture repo as its working directory, and a relative one would put that
+# path's JSON and stderr inside the fixture — where the first of them failed to
+# open at all, since the directory does not exist relative to there.
+bench_out="${BENCH_OUT_DIR:-target/bench}"
+
+# Runs per path. hyperfine's default (10, or as many as fit its time budget) is
+# tuned for commands measured in seconds; these are measured in milliseconds, so
+# a fixed, larger count is both affordable and what makes a p95 mean anything.
+# One knob, so a caller that wants a faster smoke run turns down exactly one
+# number and the record still says what it was.
+readonly RUNS="${BENCH_RUNS:-100}"
+readonly WARMUP="${BENCH_WARMUP:-10}"
+
+for tool in hyperfine jq; do
+	if ! command -v "$tool" >/dev/null 2>&1; then
+		echo "::error:: bench: $tool is not installed — run \`mise install\`; it is pinned in mise.toml." >&2
+		exit 1
+	fi
+done
+
+# The binary under measurement. Built once, up front: hyperfine would otherwise
+# time the first invocation of an unbuilt binary as if the compile were startup.
+if ! cargo build --quiet --release -p batten; then
+	echo "::error:: bench: the release build failed, so there is nothing to measure. No records written." >&2
+	exit 1
+fi
+readonly BIN="target/release/batten"
+if [ ! -x "$BIN" ]; then
+	echo "::error:: bench: $BIN is missing after a successful build — refusing to measure something else." >&2
+	exit 1
+fi
+
+rm -rf "$bench_out"
+mkdir -p "$bench_out"
+OUT_DIR="$(cd "$bench_out" && pwd)"
+readonly OUT_DIR
+
+# The check path's repository: a fixture with one `forbid` rule and one file to
+# match it against. `.in` is the suite's convention for a fixture file that gets
+# materialised under a real name, so the copy is the un-suffixed one.
+readonly FIXTURE_REPO="crates/batten/tests/fixtures/repos/forbid-clean"
+readonly FIXTURE_HOOK="crates/batten/tests/fixtures/hooks/claude-code.json"
+for f in "$FIXTURE_REPO/batten.toml.in" "$FIXTURE_REPO/lib.rs.in" "$FIXTURE_HOOK"; do
+	if [ ! -f "$f" ]; then
+		echo "::error:: bench: fixture $f is missing, so the measured input is not the one the test suite pins." >&2
+		exit 1
+	fi
+done
+
+readonly CHECK_REPO="$OUT_DIR/check-repo"
+mkdir -p "$CHECK_REPO"
+cp "$FIXTURE_REPO/batten.toml.in" "$CHECK_REPO/batten.toml"
+cp "$FIXTURE_REPO/lib.rs.in" "$CHECK_REPO/lib.rs"
+
+# The absolute path, because the check path runs with the fixture repo as its
+# working directory and a relative one would resolve against that instead.
+readonly ABS_BIN="$PWD/$BIN"
+readonly ABS_HOOK="$PWD/$FIXTURE_HOOK"
+
+# One record per path, in a fixed order so two runs of this task differ only in
+# their numbers — byte-stable output, house style §6.
+#
+# `id`, the command, and the directory to run it in. Held as data rather than
+# spelled out three times below, so adding a path is adding a row.
+measure() {
+	local id="$1" dir="$2" command="$3"
+	local json="$OUT_DIR/$id.json"
+
+	# `--input` rather than a `<` inside the shell command: hyperfine would
+	# otherwise time a shell that in turn spawns batten, which is a different
+	# measurement (and the one that makes every path look 3ms slower).
+	local -a args=(
+		--warmup "$WARMUP"
+		--runs "$RUNS"
+		--shell=none
+		--export-json "$json"
+		--style none
+	)
+	if [ "$id" = hook ]; then
+		args+=(--input "$ABS_HOOK")
+	fi
+
+	# Guarded, not chained: a failed measurement must not fall through to the
+	# jq below, which would read a stale or absent JSON file and emit a record
+	# that looks like a successful run.
+	#
+	# NO `-i`. Every path here exits 0 on its fixture — the check fixture is
+	# clean and the claude-code channel returns its deny as JSON on stdout with
+	# exit 0 — so ignoring exit codes would buy nothing and cost the one thing
+	# this task gets for free: a binary that has started failing outright is
+	# still perfectly timeable, and without the check it would be published as
+	# a fast number rather than a broken path.
+	if ! (cd "$dir" && hyperfine "${args[@]}" "$command" >/dev/null 2>"$OUT_DIR/$id.err"); then
+		echo "::error:: bench: measuring the $id path failed — see $OUT_DIR/$id.err. No records written." >&2
+		exit 1
+	fi
+
+	# hyperfine reports seconds; the record is in milliseconds, because that is
+	# the unit the budget and the published figure are written in and a
+	# conversion at read time is a second place to get it wrong.
+	#
+	# p95 from the sorted per-run times rather than from mean+2sd: startup
+	# latency is right-skewed (a stray page fault, a scheduler preemption), so a
+	# normal assumption understates exactly the tail the budget is about.
+	if ! jq -er --arg id "$id" --argjson runs "$RUNS" '
+		.results[0] as $r
+		| ($r.times | sort) as $t
+		| ($t | length) as $n
+		| (($n - 1) * 0.5 | floor) as $i50
+		| (($n - 1) * 0.95 | ceil) as $i95
+		| "path=\($id) p50=\($t[$i50] * 1000 | . * 100 | round / 100) p95=\($t[$i95] * 1000 | . * 100 | round / 100) mean=\($r.mean * 1000 | . * 100 | round / 100) runs=\($n)"
+	' "$json"; then
+		echo "::error:: bench: could not read the $id measurement out of $json. No records written." >&2
+		exit 1
+	fi
+}
+
+measure noop "$PWD" "$ABS_BIN --help"
+measure check "$CHECK_REPO" "$ABS_BIN check"
+measure hook "$PWD" "$ABS_BIN hook --harness claude-code"
