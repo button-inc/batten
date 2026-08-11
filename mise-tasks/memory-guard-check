@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#MISE description="The pure decision behind memory-guard: print a redirect and exit 1 if a write-shaped action targets the memories tree"
+#
+# Split from the hook adapter for the same reason `gh-guard-check` is: the policy
+# table is then directly callable and directly testable, and the adapter shrinks
+# to field extraction. Both of the guard's branches live here, which is what
+# keeps the guarded path written exactly once (CLOUD-185 §1).
+#
+# The defect this closes. `memory-guard` was wired to the
+# `Write|Edit|MultiEdit|NotebookEdit` matcher only, so the tool wrapper was the
+# thing being matched rather than the effective action — the same class as the
+# `mise exec -- gh …` bypass (CLOUD-181). A Bash heredoc, redirect, `tee`,
+# `sed -i`, `cp`, or `git mv` into `.serena/memories/` reached the tree unjudged,
+# and did: memories in this repo were written by heredoc while the guard was
+# installed and saw nothing.
+#
+# The rename is the shape worth the most. `rename_memory` is the only thing that
+# rewrites `mem:` referrers, so a `git mv` orphans every reference to the moved
+# memory in one silent step. `memories-check` catches that damage at commit time,
+# which makes this guard defence-in-depth at the moment of action rather than the
+# only line — and is why it can afford to stay narrow.
+#
+# Narrow on purpose. This is honest-error protection, not a reference monitor:
+# it does not attempt every possible bash write form, and anything it cannot
+# resolve is ALLOWED. A guard that guesses is a guard that blocks correct work,
+# and a blocked guard gets bypassed.
+#
+# Usage: memory-guard-check path <file_path>
+#        memory-guard-check command <bash_command>
+# Prints the deny reason on stdout and exits 1; exits 0 silently to allow.
+set -uo pipefail
+
+# The one authoritative spelling of the guarded location. Both branches below
+# read it, so the Write/Edit path and the Bash table can never disagree about
+# what "a memory" is.
+MEMORIES='.serena/memories/'
+
+kind="${1:-}"
+value="${2:-}"
+[ -n "$kind" ] && [ -n "$value" ] || exit 0
+
+is_memory() { [[ "$1" == *"$MEMORIES"* ]]; }
+
+# Pointer, never payload (non-negotiable rule 4): the memory NAME identifies what
+# was refused without disclosing a byte of what was being written.
+mem_name() {
+	local n=${1##*"$MEMORIES"}
+	printf '%s' "${n%.md}"
+}
+
+# One deny message shape, parameterised by the tool that should have been used.
+# It names the route rather than only refusing, because a refusal with no
+# redirect is what gets bypassed.
+deny() {
+	local tool=$1 name=$2 what=$3
+	printf '%s\n' "Refused: $what. Memories are not ordinary files — use the Serena tool \`$tool\` with memory name \"$name\".
+
+The memory layer enforces a size ceiling on write and rewrites \`mem:\` cross-references on rename; a direct file operation skips both silently, and a rename skipped that way orphans every reference to the memory in one step. \`memories-check\` will fail the commit afterwards, but by then the referrers are already broken.
+
+Tools: write_memory / edit_memory / rename_memory / delete_memory. If the Serena server is unavailable, set BATTEN_MEMORY_GUARD_BYPASS=1."
+	exit 1
+}
+
+# --- the Write/Edit branch --------------------------------------------------
+
+if [ "$kind" = path ]; then
+	is_memory "$value" || exit 0
+	deny write_memory "$(mem_name "$value")" "a direct file write to \`$MEMORIES\`"
+fi
+
+[ "$kind" = command ] || exit 0
+
+# --- the Bash branch --------------------------------------------------------
+#
+# Heredoc BODIES are dropped first and quoted spans neutralised second, so a
+# commit message, an issue body, or documentation *describing* one of these
+# shapes is not judged as one. The opener LINE is kept: `cat > memories/x <<MD`
+# is exactly the write being guarded, and lives on that line. `<<<` is a
+# here-STRING, not a heredoc, and must not start a skip that never terminates.
+# (Both rules are `run-shape-guard`'s, learned there the hard way.)
+body=$(awk '
+	!inheredoc && /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?/ && !/<<</ {
+		line = $0
+		sub(/^.*<<-?[[:space:]]*/, "", line)
+		sub(/[^A-Za-z0-9_'"'"'"].*$/, "", line)
+		gsub(/['"'"'"]/, "", line)
+		if (line != "") { term = line; inheredoc = 1 }
+		print; next
+	}
+	inheredoc { if ($0 ~ "^[[:space:]]*" term "[[:space:]]*$") inheredoc = 0; next }
+	{ print }
+' <<<"$value")
+# -z, so a quoted span is neutralised across NEWLINES — a multi-line commit
+# message is the single most likely place for someone to write these shapes down.
+scrubbed=$(printf '%s' "$body" | sed -zE "s/'[^']*'/QUOTED/g; s/\"[^\"]*\"/QUOTED/g")
+
+# Judged per SEGMENT, not per command string. A read in one segment must not be
+# condemned by a write in another, and — the direction that actually matters —
+# a write must not be excused by a read.
+segments=$(sed -E 's/(\&\&|\|\||[;|&])/\n/g' <<<"$scrubbed")
+
+while IFS= read -r seg; do
+	[ -n "$seg" ] || continue
+
+	# --- a redirect whose target is a memory ---------------------------------
+	# `>`/`>>`/`&>` followed by a memories path. File-descriptor duplications
+	# (`2>&1`) carry no path and cannot match.
+	target=$(grep -oE ">>?[[:space:]]*[^[:space:];|&<>]*${MEMORIES//./\\.}[^[:space:];|&<>]*" <<<"$seg" | head -1 || true)
+	if [ -n "$target" ]; then
+		target=${target#*>}
+		target=${target#>}
+		target=${target## }
+		deny write_memory "$(mem_name "$target")" "a shell redirect into \`$MEMORIES\`"
+	fi
+
+	# --- a program whose write-shaped action targets a memory ----------------
+	read -r -a toks <<<"$seg"
+	count=${#toks[@]}
+	i=0
+	while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
+	# Look through wrapper programs so the EFFECTIVE program is judged, not the
+	# wrapper — in the web sandbox `mise exec -- …` is often the only working
+	# form, so a guard that stops at the wrapper token sees nothing that matters.
+	# Known wrappers only; anything unrecognised keeps the fail-open posture.
+	while :; do
+		case "${toks[$i]:-}" in
+		env | command | nice | stdbuf | timeout | xargs | sudo | doas)
+			i=$((i + 1))
+			while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[A-Za-z_][A-Za-z0-9_]*=|[0-9]) ]]; do i=$((i + 1)); done
+			;;
+		mise)
+			case "${toks[$((i + 1))]:-}" in
+			exec | x)
+				i=$((i + 2))
+				while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[^ ]*@) ]]; do i=$((i + 1)); done
+				;;
+			*) break ;;
+			esac
+			;;
+		*) break ;;
+		esac
+	done
+
+	prog=${toks[$i]:-}
+	[ -n "$prog" ] || continue
+	prog=${prog##*/}
+	rest=("${toks[@]:$((i + 1))}")
+
+	# `git mv` / `git rm` are the same actions one word further in.
+	inplace=0
+	if [ "$prog" = git ]; then
+		case "${rest[0]:-}" in
+		mv | rm)
+			prog=${rest[0]}
+			rest=("${rest[@]:1}")
+			;;
+		*) continue ;;
+		esac
+	fi
+	# Only `sed -i` writes; a filtering `sed` is a read.
+	if [ "$prog" = sed ]; then
+		for t in "${rest[@]}"; do
+			case "$t" in -i | -i.* | --in-place | --in-place=*) inplace=1 ;; esac
+		done
+		[ "$inplace" = 1 ] || continue
+	fi
+
+	# Operands, flags dropped. A value-taking flag leaves its value behind, which
+	# can only ever ADD a candidate operand — it never hides one.
+	operands=()
+	for t in "${rest[@]}"; do
+		case "$t" in -*) ;; *) operands+=("$t") ;; esac
+	done
+	n=${#operands[@]}
+	[ "$n" -gt 0 ] || continue
+
+	src_mem="" dst_mem=""
+	for ((k = 0; k < n - 1; k++)); do
+		is_memory "${operands[$k]}" && src_mem=${operands[$k]}
+	done
+	is_memory "${operands[$((n - 1))]}" && dst_mem=${operands[$((n - 1))]}
+
+	case "$prog" in
+	tee | sponge)
+		# Every operand is a destination.
+		for t in "${operands[@]}"; do
+			is_memory "$t" && deny write_memory "$(mem_name "$t")" "\`$prog\` writing into \`$MEMORIES\`"
+		done
+		;;
+	sed)
+		for t in "${operands[@]}"; do
+			is_memory "$t" && deny edit_memory "$(mem_name "$t")" "\`sed -i\` rewriting a file under \`$MEMORIES\` in place"
+		done
+		;;
+	mv)
+		# Both ends matter, and they mean different things. Out of the tree is a
+		# delete; into it is a write; within it is the rename that orphans
+		# referrers — the shape this guard exists for.
+		if [ -n "$src_mem" ] && [ -n "$dst_mem" ]; then
+			deny rename_memory "$(mem_name "$src_mem")" "\`mv\` renaming a memory inside \`$MEMORIES\`"
+		elif [ -n "$src_mem" ]; then
+			deny delete_memory "$(mem_name "$src_mem")" "\`mv\` moving a memory out of \`$MEMORIES\`"
+		elif [ -n "$dst_mem" ]; then
+			deny write_memory "$(mem_name "$dst_mem")" "\`mv\` moving a file into \`$MEMORIES\`"
+		fi
+		;;
+	cp | install)
+		# Only the destination is a write; copying a memory OUT is a read.
+		[ -n "$dst_mem" ] && deny write_memory "$(mem_name "$dst_mem")" "\`$prog\` copying a file into \`$MEMORIES\`"
+		;;
+	rm | shred | truncate)
+		for t in "${operands[@]}"; do
+			is_memory "$t" && deny delete_memory "$(mem_name "$t")" "\`$prog\` removing a file under \`$MEMORIES\`"
+		done
+		;;
+	esac
+done < <(printf '%s\n' "$segments")
+
+exit 0

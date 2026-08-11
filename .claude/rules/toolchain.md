@@ -111,9 +111,18 @@ restate its count here), each failing open on anything it can't parse:
   table in `mise-tasks/gh-guard-check`, gated by `mise run test:bats`. Reads
   (`gh pr view`/`list`/`create`, `gh pr ready`, `gh api`, `gh run view`) are not
   blocked. Bypass: `BATTEN_GH_GUARD_BYPASS=1`.
-- `memory-guard` denies a direct Write/Edit to `.serena/memories/`; they go
-  through the Serena tools, which enforce the size ceiling and rewrite `mem:`
-  references on rename. Bypass: `BATTEN_MEMORY_GUARD_BYPASS=1`.
+- `memory-guard` denies a write to `.serena/memories/`; they go through the
+  Serena tools, which enforce the size ceiling and rewrite `mem:` references on
+  rename. It is wired to **both** matchers, because matching the tool wrapper
+  rather than the effective action is what let a Bash heredoc write memories
+  while the guard was installed (CLOUD-185): the Write/Edit branch judges
+  `file_path`, the Bash branch judges a command's write-shaped segments —
+  redirects, `tee`, `sed -i`, `mv`/`cp`/`rm`, `git mv`/`git rm`. Reads stay
+  allowed, and a `mv` inside the tree names `rename_memory` specifically, since
+  that is the only route that rewrites referrers. Decision table in
+  `mise-tasks/memory-guard-check` — the guarded path is written once there, so
+  the two branches cannot disagree — gated by `mise run test:bats`. Bypass:
+  `BATTEN_MEMORY_GUARD_BYPASS=1`.
 - `policy-budget` gates AGENTS.md plus anything always-loaded against a token
   budget — what every agent pays every turn. It is `batten policy budget`, not a
   shell task: the counted set and both thresholds are `[budget.instructions]` in
