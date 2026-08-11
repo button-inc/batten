@@ -54,10 +54,22 @@ setup() {
 	git -C "$ROOT" update-ref refs/remotes/origin/main HEAD
 }
 
-# `batten check` inside the fixture. Built from the working tree, so the gate
-# judges this commit's engine and this commit's config as the pair that ships.
+# The committed ruleset inside the fixture. Built from the working tree, so the
+# gate judges this commit's engine and this commit's config as the pair that
+# ships.
+#
+# `enforce`, not `check`, since CLOUD-229: the copied batten.toml carries a
+# `command` rule (no-conflict-markers delegates to hk), and a rule kind that
+# spawns a process is refused outright by the read-effect verb — so every case
+# below failed on that refusal rather than on the rule it is about. Same reason
+# `mise run batten-check` moved.
+#
+# It costs nothing here: `crates` is a symlink in this fixture and the walk
+# counts regular files only, so the delegating rule's `crates/**` glob matches
+# nothing and no process is spawned. The rows these cases are about are `forbid`
+# rows over mise.toml and the workflows, which `enforce` runs identically.
 check() {
-	(cd "$ROOT" && cargo run --quiet -p batten -- check)
+	(cd "$ROOT" && cargo run --quiet -p batten -- enforce)
 }
 
 # A minimal mise.toml, plus whatever `[tools]` line the case needs.
