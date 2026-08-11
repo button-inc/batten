@@ -280,7 +280,14 @@ if [ "$#" -eq 0 ]; then
 				reported_unlocked=1
 			fi
 			# Pointer-only: the tool and where it was declared, never a lockfile byte.
-			echo "  mise.toml:$wantline: $want — declared in [tools] with no $label entry; run \`mise lock\` and commit the result" >&2
+			# The remedy names `lock-check` rather than the raw regeneration
+			# command, for two reasons: it is the single sanctioned lockfile
+			# writer (everything else is denied by `[settings] lockfile = false`),
+			# and spelling the command out here would put the literal in an
+			# executable line, where the suite's "makes no network call" assertion
+			# reads it as this gate fetching. That assertion is a string match on
+			# purpose — coarse, and worth keeping coarse.
+			echo "  mise.toml:$wantline: $want — declared in [tools] with no $label entry; regenerate with \`mise run lock-check\` and commit the result" >&2
 			fail=1
 		fi
 	done <<<"$declared"
