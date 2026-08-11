@@ -918,6 +918,19 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
+    // Rewrites every record into the current version. `write`, not
+    // `destructive`: it upgrades records in place and removes none. Its own verb
+    // rather than an implicit upgrade on a read path — a `check` that silently
+    // rewrote the store would break an older binary reading it from a sibling
+    // worktree (CLOUD-78's no-implicit-upgrade rule).
+    CommandDecl {
+        path: "state migrate",
+        about: "Upgrade the findings store to this binary's record version",
+        // Reports counts on stderr; there is no document to emit.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
     // Store reads plus fixed read-only git plumbing. A `read` verb may run a
     // fixed VCS query; what it must never reach is user-supplied code, and no
     // configured command is reachable from this path (CLOUD-170).

@@ -40,12 +40,32 @@
 //! different refs must not read as change, which is exactly what a repo-global
 //! count would produce.
 //!
-//! # What is deliberately absent
+//! # Disposition is a join-semilattice, not a workflow (CLOUD-78)
 //!
-//! **No disposition field.** `acted` / `rejected-wrong` / `rejected-by-design`,
-//! their precedence-merge, and the effective-false-positive rate are CLOUD-78.
-//! This issue supplies the model those attach to; adding a disposition here
-//! would be building the thing this exists to make buildable.
+//! [`Disposition`] is three-valued — `acted` / `rejected-by-design` /
+//! `rejected-wrong` — and its **precedence doubles as the concurrent-merge
+//! rule**: `acted > rejected-by-design > rejected-wrong`, merged with `max`.
+//! That single choice buys commutativity, associativity and idempotence, so two
+//! worktrees writing conflicting dispositions converge to the same answer in
+//! either order, and a migration-merge is computed rather than adjudicated.
+//!
+//! # Not-shown is not shown-and-ignored
+//!
+//! [`Presentation`] carries the second axis the effective-false-positive rate
+//! needs. A finding Batten itself declined to surface — drain-suppressed, over a
+//! cardinality cap, or blocked by an absent host capability — never had the
+//! chance to be acted on, so counting it as a false positive would let the
+//! engine's own suppression machinery inflate the very number it exists to
+//! measure. Only [`Presentation::Shown`] findings enter [`effective_fp_rates`].
+//!
+//! # Severity is stored once, and a count never escalates it
+//!
+//! Exactly one severity field is persisted — the [`AdvisoryTier`]. Rule severity
+//! and report level are derived through [`crate::severity`]'s rank table at the
+//! boundary that needs them. Occurrence count and tier are **independent axes**:
+//! observing a finding an Nth time changes [`Instance::occurrences`] and must
+//! never change [`FindingRecord::tier`] (CLOUD-80's no-escalation law, which is
+//! testable for the first time here because this is what counts duplicates).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -55,12 +75,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::identity::{CountChange, Fingerprint, StoredIdentity, compare_to_anchor};
 use crate::rules::Finding;
-use crate::severity::RuleSeverity;
+use crate::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
 
 /// The on-disk record's schema version, versioned independently of the store's
 /// own: the ledger's shape and the store's identity evolve for unrelated
 /// reasons.
-pub const FINDINGS_SCHEMA: u32 = 1;
+///
+/// The newest version this binary can **write**. Reads accept anything from
+/// [`FINDINGS_SCHEMA_MIN`] up, which is the read-both half of the rolling
+/// window; which version is actually written is the store's recorded format
+/// (see [`crate::journal`]), never this constant, so upgrading a binary does not
+/// silently upgrade a store.
+pub const FINDINGS_SCHEMA: u32 = 2;
+
+/// The oldest record version this binary can still read.
+pub const FINDINGS_SCHEMA_MIN: u32 = 1;
 
 /// The subdirectory holding one file per identity.
 const FINDINGS_DIR: &str = "findings";
@@ -136,6 +165,155 @@ impl Observation {
     }
 }
 
+/// What an agent did about a finding, once.
+///
+/// Declared **weakest-first**, so the derived [`Ord`] *is* the precedence
+/// `acted > rejected-by-design > rejected-wrong`. That is deliberate: [`merge`]
+/// is `max`, which makes the concurrent-merge rule a join on a total order —
+/// commutative, associative and idempotent — rather than a policy an
+/// implementation could get subtly wrong per call site.
+///
+/// [`merge`]: Disposition::merge
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Disposition {
+    /// Surfaced, and the agent judged it a false positive.
+    RejectedWrong,
+    /// Surfaced, and the agent judged the flagged shape intentional.
+    RejectedByDesign,
+    /// Surfaced, and the agent changed something in response.
+    Acted,
+}
+
+impl Disposition {
+    /// Every disposition, weakest-first, so coverage tests are total.
+    pub const ALL: &'static [Disposition] = &[
+        Disposition::RejectedWrong,
+        Disposition::RejectedByDesign,
+        Disposition::Acted,
+    ];
+
+    /// The stable token used in the store and in machine output.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Disposition::RejectedWrong => "rejected-wrong",
+            Disposition::RejectedByDesign => "rejected-by-design",
+            Disposition::Acted => "acted",
+        }
+    }
+
+    /// Whether the agent acted on it. The **only** non-false-positive outcome:
+    /// "a finding the agent does not act on is counted as a false positive
+    /// regardless of truth" is the measurement this store exists to make, and
+    /// letting `rejected-by-design` off the hook would be exactly the
+    /// self-serving exemption that makes the number meaningless.
+    #[must_use]
+    pub const fn is_acted(self) -> bool {
+        matches!(self, Disposition::Acted)
+    }
+
+    /// Whether this record must survive GC.
+    ///
+    /// `rejected-by-design` is GC-exempt: it is a standing decision, and losing
+    /// it would re-raise a finding the agent already settled, every time the ref
+    /// it was settled on died. The price is unbounded retention for that one
+    /// class, accepted and stated rather than discovered later.
+    #[must_use]
+    pub const fn is_gc_exempt(self) -> bool {
+        matches!(self, Disposition::RejectedByDesign)
+    }
+
+    /// The converged disposition of two concurrent writes.
+    ///
+    /// `max` over the declared order. Commutative and associative by
+    /// construction, which is what lets two worktrees merge shards in either
+    /// order and reach the same store.
+    #[must_use]
+    pub fn merge(self, other: Disposition) -> Disposition {
+        self.max(other)
+    }
+}
+
+/// Why Batten did not surface a finding it knew about.
+///
+/// Each variant is a decision the **engine** made, never the agent — which is
+/// what disqualifies it from the false-positive rate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NotShown {
+    /// The drain coalesced it away this boundary.
+    DrainSuppressed,
+    /// Its rule was over the per-rule cardinality cap.
+    OverCardinalityCap,
+    /// The host does not declare the capability the emission needed.
+    CapabilityAbsent,
+}
+
+/// Whether a finding ever reached the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Presentation {
+    /// Emitted to the agent, so its silence is a judgement.
+    Shown,
+    /// Withheld by the engine, so its silence says nothing.
+    NotShown(NotShown),
+}
+
+impl Presentation {
+    /// Whether this finding is admissible evidence for a false-positive rate.
+    #[must_use]
+    pub const fn is_shown(self) -> bool {
+        matches!(self, Presentation::Shown)
+    }
+}
+
+/// The per-check effective false-positive rate, as its two raw counts.
+///
+/// Counts rather than a bare float so a caller can report `n/m` as a pointer and
+/// so the zero-denominator case cannot be silently rendered as `0.0` — a check
+/// that has shown nothing has no rate, which is different from a perfect one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FpRate {
+    /// Findings from this check that reached the agent.
+    pub shown: u64,
+    /// Of those, the ones not acted on.
+    pub ignored: u64,
+}
+
+impl FpRate {
+    /// The rate, or `None` when nothing was shown.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn rate(self) -> Option<f64> {
+        (self.shown > 0).then(|| self.ignored as f64 / self.shown as f64)
+    }
+}
+
+/// The effective false-positive rate per rule, over every stored record.
+///
+/// **Per check, never per finding**: acknowledging findings one at a time is the
+/// ritual this measurement replaces. Not-shown findings are excluded from both
+/// numerator and denominator — see [`Presentation`].
+///
+/// The result is a rate, deliberately not a verdict: it triggers sampled review,
+/// and nothing here can produce an exit code.
+#[must_use]
+pub fn effective_fp_rates(records: &[FindingRecord]) -> BTreeMap<String, FpRate> {
+    let mut rates: BTreeMap<String, FpRate> = BTreeMap::new();
+    for record in records {
+        if !record.presentation.is_shown() {
+            continue;
+        }
+        let rate = rates.entry(record.rule.clone()).or_default();
+        rate.shown += 1;
+        if !record.disposition.is_some_and(Disposition::is_acted) {
+            rate.ignored += 1;
+        }
+    }
+    rates
+}
+
 /// One observation of one identity in one context.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Instance {
@@ -169,10 +347,36 @@ pub struct FindingRecord {
     /// The rule's severity at the time of writing. Recorded, never an identity
     /// input — a re-rating must not re-mint.
     pub severity: RuleSeverity,
+    /// The **one** persisted severity axis: required response latency.
+    ///
+    /// Derived from [`FindingRecord::severity`] through the rank table when the
+    /// record is minted, then never recomputed — and never touched by an
+    /// occurrence count (CLOUD-80's no-escalation law). Defaulted on read so a
+    /// schema-1 record loads without a migration having run.
+    #[serde(default = "default_tier")]
+    pub tier: AdvisoryTier,
+    /// What the agent did about it, once it was shown. `None` is "not yet
+    /// settled", which is distinct from any of the three settled answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disposition: Option<Disposition>,
+    /// Whether it ever reached the agent. Schema-1 records predate suppression
+    /// and were all emitted, so the default is the honest answer for them.
+    #[serde(default = "default_presentation")]
+    pub presentation: Presentation,
     /// One instance per context, sorted by context so the file is byte-stable.
     pub instances: Vec<Instance>,
-    // No disposition: that is CLOUD-78's, and adding one here would build the
-    // thing this model exists to be built on.
+}
+
+/// The tier a schema-1 record loads with: the weakest, because a record written
+/// before tiers existed carries no evidence for a stronger one, and inventing
+/// urgency during a read is how a migration changes verdicts.
+fn default_tier() -> AdvisoryTier {
+    AdvisoryTier::Advisory
+}
+
+/// A record written before suppression existed was, by construction, shown.
+fn default_presentation() -> Presentation {
+    Presentation::Shown
 }
 
 impl FindingRecord {
@@ -209,10 +413,33 @@ impl FindingRecord {
     /// repository lands by rebase and fast-forward, so a merged branch's commits
     /// are not ancestors of anything and an ancestry test would GC live work.
     /// The caller supplies the live set for that reason.
+    ///
+    /// A `rejected-by-design` record survives with no live instance at all
+    /// ([`Disposition::is_gc_exempt`]): the decision outlives the branch it was
+    /// made on, and dropping it would re-raise a settled finding.
     pub fn retain_live(&mut self, live: &BTreeSet<Context>) -> bool {
         self.instances
             .retain(|instance| live.contains(&instance.context));
-        !self.instances.is_empty()
+        !self.instances.is_empty() || self.is_gc_exempt()
+    }
+
+    /// Whether GC must keep this record even with no live context.
+    #[must_use]
+    pub fn is_gc_exempt(&self) -> bool {
+        self.disposition.is_some_and(Disposition::is_gc_exempt)
+    }
+
+    /// Apply a concurrent write's disposition, converging by precedence.
+    ///
+    /// An unset disposition loses to any set one, and two set ones join with
+    /// [`Disposition::merge`], so replaying shards in any order lands the same
+    /// record.
+    pub fn merge_disposition(&mut self, incoming: Option<Disposition>) {
+        self.disposition = match (self.disposition, incoming) {
+            (Some(current), Some(new)) => Some(current.merge(new)),
+            (current, None) => current,
+            (None, new) => new,
+        };
     }
 }
 
@@ -231,10 +458,16 @@ fn record_path(store_dir: &Path, fingerprint: Fingerprint) -> PathBuf {
 /// Fail-closed, the posture [`crate::store`] and [`crate::receipt`] both take: a
 /// truncated or future-schema record is not partially trusted, because a
 /// half-read finding would silently lose the instances it could not parse.
+/// Read-both, deliberately a range rather than an equality: the rolling window
+/// is what lets a new binary run against a store it has not migrated. A record
+/// from the *future* is still absent — that half stays fail-closed, because a
+/// field this binary cannot see is a field it would silently drop on write.
 fn read_record(path: &Path) -> Option<FindingRecord> {
     let text = std::fs::read_to_string(path).ok()?;
     let record: FindingRecord = serde_json::from_str(&text).ok()?;
-    (record.schema == FINDINGS_SCHEMA).then_some(record)
+    (FINDINGS_SCHEMA_MIN..=FINDINGS_SCHEMA)
+        .contains(&record.schema)
+        .then_some(record)
 }
 
 /// Write one record atomically, so a concurrent worktree never reads a torn file.
@@ -253,6 +486,28 @@ fn write_record(store_dir: &Path, record: &FindingRecord) -> Result<()> {
     std::fs::rename(&temp, record_path(store_dir, record.identity.fingerprint))
         .with_context(|| format!("publish the finding in {}", dir.display()))?;
     Ok(())
+}
+
+/// One record by identity, or `None` when this store has never seen it.
+///
+/// # Errors
+///
+/// Infallible today; the signature matches [`load_all`] so a caller can handle
+/// both the same way.
+pub fn load_one(store_dir: &Path, fingerprint: Fingerprint) -> Result<Option<FindingRecord>> {
+    Ok(read_record(&record_path(store_dir, fingerprint)))
+}
+
+/// Publish one record.
+///
+/// The write half, exposed so [`crate::journal`] can fold dispositions in
+/// without growing a second writer — one module writes a finding file.
+///
+/// # Errors
+///
+/// Returns an error when the record cannot be written or published.
+pub fn save_one(store_dir: &Path, record: &FindingRecord) -> Result<()> {
+    write_record(store_dir, record)
 }
 
 /// Every stored finding, sorted by fingerprint hex.
@@ -298,6 +553,11 @@ pub struct Recorded {
 /// are untouched, which is what keeps a defect fixed in one worktree from
 /// resolving the finding while another worktree still sees it.
 ///
+/// `schema` is the version **the store is written in**, supplied by the caller
+/// from [`crate::journal::Format`] rather than read from [`FINDINGS_SCHEMA`]
+/// here: write-old is what keeps a newer binary from silently upgrading a store
+/// an older sibling worktree is still reading.
+///
 /// # Errors
 ///
 /// Returns an error when a record cannot be read or written.
@@ -307,6 +567,7 @@ pub fn record(
     commit: &str,
     worktree: Option<&str>,
     findings: &[Finding],
+    schema: u32,
 ) -> Result<Recorded> {
     // Fold to a multiset first: identical spans in one file are ONE identity
     // with a count, never several findings.
@@ -327,13 +588,21 @@ pub fn record(
         let mut existing = read_record(&path).unwrap_or_else(|| {
             summary.minted += 1;
             FindingRecord {
-                schema: FINDINGS_SCHEMA,
+                schema,
                 identity: identity.clone(),
                 rule: finding.rule.clone(),
                 severity: finding.severity,
+                // Derived once, at mint, through the rank table — the one place
+                // a tier is decided. Re-deriving it on every observation would
+                // let a re-rated rule silently re-tier settled findings.
+                tier: row_for_rule(finding.severity).tier,
+                disposition: None,
+                presentation: Presentation::Shown,
                 instances: Vec::new(),
             }
         });
+        // The tier is NOT touched here. Observing a finding again changes its
+        // count and nothing else (CLOUD-80's no-escalation law).
         existing.upsert(Instance {
             context: context.clone(),
             occurrences: Observation::Observed(count),
@@ -456,6 +725,9 @@ mod tests {
             identity: identity_for("r", "src/a.rs", "TODO"),
             rule: "r".to_owned(),
             severity: RuleSeverity::Deny,
+            tier: row_for_rule(RuleSeverity::Deny).tier,
+            disposition: None,
+            presentation: Presentation::Shown,
             instances,
         }
     }
@@ -562,6 +834,187 @@ mod tests {
                 .occurrences,
             Observation::Observed(1),
             "the other context is not re-evaluated by a scan that never ran there"
+        );
+    }
+
+    #[test]
+    fn disposition_precedence_is_a_commutative_join() {
+        // Acceptance (a) at the model level: `acted > rejected-by-design >
+        // rejected-wrong`, merged with max, so concurrent writers converge
+        // regardless of order. Asserted over every ordered pair, not samples —
+        // a merge rule that commutes for the cases someone thought of is not a
+        // merge rule.
+        for &a in Disposition::ALL {
+            for &b in Disposition::ALL {
+                assert_eq!(a.merge(b), b.merge(a), "merge must commute: {a:?} {b:?}");
+                assert_eq!(a.merge(a), a, "merge must be idempotent: {a:?}");
+                for &c in Disposition::ALL {
+                    assert_eq!(
+                        a.merge(b).merge(c),
+                        a.merge(b.merge(c)),
+                        "merge must be associative"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            Disposition::Acted.merge(Disposition::RejectedByDesign),
+            Disposition::Acted
+        );
+        assert_eq!(
+            Disposition::RejectedByDesign.merge(Disposition::RejectedWrong),
+            Disposition::RejectedByDesign
+        );
+    }
+
+    #[test]
+    fn an_unset_disposition_loses_to_any_settled_one() {
+        // `None` is "not yet settled", which must never overwrite a decision an
+        // agent already made in another worktree.
+        let mut record = record_of(Vec::new());
+        record.merge_disposition(Some(Disposition::RejectedWrong));
+        record.merge_disposition(None);
+        assert_eq!(record.disposition, Some(Disposition::RejectedWrong));
+        record.merge_disposition(Some(Disposition::Acted));
+        assert_eq!(record.disposition, Some(Disposition::Acted));
+    }
+
+    #[test]
+    fn not_shown_findings_are_excluded_from_the_false_positive_rate() {
+        // Acceptance (b): the engine's own suppression must not inflate the
+        // number it exists to measure. Two shown-and-ignored out of three shown
+        // is 2/3 — the two not-shown records enter neither side of it.
+        let shown = |disposition| FindingRecord {
+            disposition,
+            ..record_of(Vec::new())
+        };
+        let withheld = |why| FindingRecord {
+            presentation: Presentation::NotShown(why),
+            disposition: None,
+            ..record_of(Vec::new())
+        };
+        let records = vec![
+            shown(Some(Disposition::Acted)),
+            shown(Some(Disposition::RejectedWrong)),
+            shown(None),
+            withheld(NotShown::DrainSuppressed),
+            withheld(NotShown::OverCardinalityCap),
+        ];
+        let rates = effective_fp_rates(&records);
+        let rate = rates.get("r").copied().unwrap();
+        assert_eq!(
+            rate,
+            FpRate {
+                shown: 3,
+                ignored: 2
+            },
+            "only shown findings count, on both sides of the ratio"
+        );
+        assert!((rate.rate().unwrap() - 2.0 / 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn a_check_that_showed_nothing_has_no_rate_rather_than_a_perfect_one() {
+        // A zero denominator is "unmeasured", and rendering it as 0.0 would let
+        // a check that never surfaced anything look flawless.
+        assert_eq!(FpRate::default().rate(), None);
+        let withheld = FindingRecord {
+            presentation: Presentation::NotShown(NotShown::CapabilityAbsent),
+            ..record_of(Vec::new())
+        };
+        assert!(
+            effective_fp_rates(&[withheld]).is_empty(),
+            "a rule with nothing shown gets no row at all"
+        );
+    }
+
+    #[test]
+    fn rejected_by_design_is_the_only_disposition_that_is_not_a_false_positive_exempt() {
+        // "Not acted on is a false positive regardless of truth" — including the
+        // agent's own by-design rejection. Letting that off the hook is exactly
+        // the self-serving exemption that makes the measurement worthless.
+        assert!(Disposition::Acted.is_acted());
+        assert!(!Disposition::RejectedByDesign.is_acted());
+        assert!(!Disposition::RejectedWrong.is_acted());
+    }
+
+    #[test]
+    fn an_nth_occurrence_changes_the_count_and_never_the_tier() {
+        // Acceptance (c), CLOUD-80's no-escalation law — testable for the first
+        // time here, because this is what counts duplicates. Asserted over the
+        // STORED tier, not one derived at read time.
+        let mut record = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        let minted = record.tier;
+        for n in 2..=10 {
+            record.upsert(instance("refs/heads/a", Observation::Observed(n)));
+            assert_eq!(
+                record.tier, minted,
+                "observing a finding again must not re-tier it"
+            );
+        }
+        assert_eq!(
+            record
+                .instance(&Context::new("refs/heads/a"))
+                .unwrap()
+                .occurrences,
+            Observation::Observed(10),
+            "the count is the axis that moved"
+        );
+    }
+
+    #[test]
+    fn a_rejected_by_design_record_survives_the_death_of_every_ref() {
+        // GC-exempt: the decision outlives the branch it was made on, so a
+        // settled finding does not re-raise when that branch is deleted.
+        let mut record = FindingRecord {
+            disposition: Some(Disposition::RejectedByDesign),
+            ..record_of(vec![instance("refs/heads/a", Observation::Observed(1))])
+        };
+        assert!(
+            record.retain_live(&BTreeSet::new()),
+            "a by-design rejection is kept with no live context at all"
+        );
+
+        // Every other disposition collects normally.
+        for disposition in [None, Some(Disposition::Acted), Some(Disposition::RejectedWrong)] {
+            let mut other = FindingRecord {
+                disposition,
+                ..record_of(vec![instance("refs/heads/a", Observation::Observed(1))])
+            };
+            assert!(
+                !other.retain_live(&BTreeSet::new()),
+                "{disposition:?} is not GC-exempt"
+            );
+        }
+    }
+
+    #[test]
+    fn a_schema_one_record_loads_without_a_migration() {
+        // Read-both: the rolling window is what lets a new binary run against a
+        // store it has not migrated. The defaults must be the honest reading of
+        // a record written before the fields existed.
+        // The identity is serialized from the real type rather than hand-written,
+        // so this fixture cannot drift from what the store actually writes; the
+        // point of the test is the three fields schema 1 does NOT carry.
+        let legacy = serde_json::json!({
+            "schema": FINDINGS_SCHEMA_MIN,
+            "identity": serde_json::to_value(identity_for("r", "src/a.rs", "TODO")).unwrap(),
+            "rule": "r",
+            "severity": "deny",
+            "instances": [],
+        });
+        let record: FindingRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(record.schema, FINDINGS_SCHEMA_MIN);
+        assert_eq!(record.disposition, None, "unsettled, not invented");
+        assert_eq!(
+            record.presentation,
+            Presentation::Shown,
+            "records predating suppression were all shown"
+        );
+        assert_eq!(
+            record.tier,
+            AdvisoryTier::Advisory,
+            "the weakest tier: a legacy record carries no evidence for urgency"
         );
     }
 

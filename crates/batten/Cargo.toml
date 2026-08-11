@@ -25,6 +25,7 @@ anyhow.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 etcetera.workspace = true
+fs4.workspace = true
 hmac.workspace = true
 flate2.workspace = true
 schemars.workspace = true

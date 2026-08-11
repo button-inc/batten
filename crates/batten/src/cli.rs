@@ -164,6 +164,8 @@ pub enum StateCommand {
     },
     /// Record this ref's findings into the store.
     Record,
+    /// Upgrade the store's record version. The only upgrade path.
+    Migrate,
     /// List stored findings.
     List {
         /// Emit the listing as byte-stable JSON instead of pointer lines.
@@ -349,6 +351,7 @@ fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
             store: matches.get_one::<String>("store").cloned(),
         }),
         ("record", _) => Some(StateCommand::Record),
+        ("migrate", _) => Some(StateCommand::Migrate),
         ("list", matches) => Some(StateCommand::List {
             json: flag(matches, "json"),
         }),

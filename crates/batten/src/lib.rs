@@ -22,6 +22,7 @@ pub mod findings;
 pub mod git;
 pub mod hook;
 pub mod identity;
+pub mod journal;
 pub mod judge;
 pub mod lint;
 pub mod markers;
@@ -144,6 +145,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::State { command }) => match command {
             StateCommand::Adopt { store } => store::run_adopt(store.as_deref(), err),
             StateCommand::Record => run_state_record(&overrides, err),
+            StateCommand::Migrate => run_state_migrate(err),
             StateCommand::List { json } => run_state_list(json, mode, out, err),
         },
     }
@@ -278,6 +280,18 @@ fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCo
         writeln!(err, "batten: {note}")?;
     }
 
+    // The store's own version decides what gets written, never this binary's
+    // (CLOUD-78's write-old rule). A store newer than this binary is read-only:
+    // it still dedupes, it just does not persist, and it says so rather than
+    // reporting a record that did not happen.
+    let access = journal::open(&bound.dir)?;
+    if let journal::Access::DegradedReadOnly { reason, .. } = &access {
+        writeln!(err, "batten: degraded read-only: {reason}")?;
+        writeln!(err, "batten: state record {context}: persisted:false")?;
+        return Ok(ExitCode::Success);
+    }
+    let schema = access.format().findings_schema;
+
     // The worktree actually scanned, not the main root — this is metadata for a
     // human reading a report, and naming the wrong directory would misdirect it.
     let here = std::env::current_dir().ok();
@@ -287,7 +301,19 @@ fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCo
         &commit,
         here.as_deref().and_then(Path::to_str),
         &found,
+        schema,
     )?;
+
+    // Fold any dispositions this worktree journalled since the last record. A
+    // lost lock race is not a failure — the entries stay in the shard and the
+    // next record folds them — so it reports and carries on.
+    let merged = journal::merge(&bound.dir)?;
+    if merged == journal::Merge::Busy {
+        writeln!(
+            err,
+            "batten: shard-merge busy; dispositions stay queued in this worktree's shard"
+        )?;
+    }
 
     // Ref-death GC rides the same verb: the live set is what exists now, so a
     // branch deleted since the last record loses its instances here.
@@ -296,6 +322,12 @@ fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCo
         .map(findings::Context::new)
         .collect();
     let dropped = findings::gc(&bound.dir, &live)?;
+    if dropped > 0 {
+        // GC's half of the cursor handshake: a new generation, so every
+        // outstanding drain cursor resyncs instead of computing a delta against
+        // records that are gone.
+        journal::new_generation(&bound.dir)?;
+    }
 
     // Pointer-only counts on stderr; `record` emits no data document, so the
     // stdout channel stays empty for it.
@@ -304,6 +336,36 @@ fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCo
         "batten: state record {context}: {} minted, {} updated, {} resolved, {dropped} instances GC'd",
         recorded.minted, recorded.updated, recorded.resolved
     )?;
+    Ok(ExitCode::Success)
+}
+
+/// Upgrade the store's record version. The one explicit upgrade path.
+///
+/// A `write` verb by declaration and in fact: it rewrites every record. No read
+/// path may do this, which is what keeps a routine `check` in one worktree from
+/// rewriting a store an older binary is using in another.
+fn run_state_migrate(err: &mut dyn Write) -> Result<ExitCode> {
+    let repo = git::repo_root(Path::new("."))?;
+    let opened = store::resolve(&repo)?;
+    let Some(dir) = store::bound_dir(&opened) else {
+        return Err(UsageError::raise(
+            "no store is bound to this repository; run `batten state adopt` first",
+        ));
+    };
+    let migrated = journal::migrate(&dir)?;
+    if migrated.from == migrated.to {
+        writeln!(
+            err,
+            "batten: state migrate: already at record version {}",
+            migrated.to
+        )?;
+    } else {
+        writeln!(
+            err,
+            "batten: state migrate: {} record(s) {} -> {}",
+            migrated.records, migrated.from, migrated.to
+        )?;
+    }
     Ok(ExitCode::Success)
 }
 
