@@ -131,6 +131,29 @@ pattern = "<<<<<<< "
 severity = "deny"
 scope = "tree"
 
+# Identity keys (CLOUD-164). A finding carries a fingerprint over its normalized
+# span, so a formatter reflow does not re-mint it and an inserted neighbour does
+# not move it. Two optional keys tune that, and neither is needed by an ordinary
+# rule.
+#
+# `verbatim` hashes the matched span exactly, instead of collapsing whitespace.
+# For a rule whose subject IS literal content, where a reformat genuinely changes
+# the thing being flagged. The default (collapse) follows `git patch-id`.
+#
+# `identity_key` splits one identity into several. It is split-only BY
+# CONSTRUCTION: the default identity is hashed as a field of the override, so a
+# discriminator can fragment a group and is unable to merge two. Changing it is a
+# deliberate re-mint, not a rename.
+[[rule]]
+id = "no-hardcoded-banner"
+kind = "forbid"
+glob = "**/*.txt"
+pattern = "ACME CORP"
+severity = "warn"
+scope = "tree"
+verbatim = true
+identity_key = "banner"
+
 # A shape rule refuses a banned COMMAND rather than a banned file, so it is
 # adjudicated by `batten hook` against one mediated tool call at a time and is
 # never evaluated by `check`. That is what `scope` selects: "tree" is the working

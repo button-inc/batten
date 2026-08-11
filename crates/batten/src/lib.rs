@@ -18,6 +18,7 @@ pub mod epoch;
 pub mod error;
 pub mod exec;
 pub mod exit;
+pub mod findings;
 pub mod git;
 pub mod hook;
 pub mod identity;
@@ -136,6 +137,8 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // not a policy question and no `batten.toml` may answer it.
         Some(Command::State { command }) => match command {
             StateCommand::Adopt { store } => store::run_adopt(store.as_deref(), err),
+            StateCommand::Record => run_state_record(&overrides, err),
+            StateCommand::List { json } => run_state_list(json, mode, out, err),
         },
     }
 }
@@ -173,6 +176,112 @@ fn run_worktree_status(json: bool, overrides: &Overrides, out: &mut dyn Write) -
         }
     }
     Ok(ExitCode::verdict(at_risk.any()))
+}
+
+/// Bind the store, scan this ref, and fold the findings in as its instances.
+///
+/// **The scan is `rules::run_static`** — the read-effect surface, no process
+/// spawn. A recording verb that could execute a configured command would put
+/// user-supplied code behind a store write, which is a different and much larger
+/// promise than "remember what the read-only gates found".
+///
+/// A detached `HEAD` records **nothing**, loudly. An observation is keyed by ref,
+/// and a detached head has none; inventing a synthetic one would mint an
+/// instance that ref-death GC could never collect, because the ref it names
+/// never existed to die.
+fn run_state_record(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
+    let repo = git::repo_root(Path::new("."))?;
+    // **The ref comes from HERE, not from `repo`.** `repo_root` answers with the
+    // MAIN worktree's root — which is exactly what makes every linked worktree
+    // share one store — so asking it for the branch would report the main
+    // checkout's ref no matter which worktree the scan ran in, and every
+    // worktree's observations would pile onto one context. Measured: the
+    // worktree-pair fixture recorded both scans as `refs/heads/main`.
+    let Some(branch) = git::current_branch(Path::new("."))? else {
+        return Err(UsageError::raise(
+            "HEAD is detached, so this scan belongs to no ref; check out a branch to record it",
+        ));
+    };
+    let context = findings::Context::new(format!("refs/heads/{branch}"));
+    let commit = git::head_commit(Path::new("."))?;
+
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    let found = rules::run_static(&config.rules, Path::new("."))?;
+
+    let bound = store::commit(store::resolve(&repo)?)?;
+    if let Some(note) = &bound.note {
+        writeln!(err, "batten: {note}")?;
+    }
+
+    // The worktree actually scanned, not the main root — this is metadata for a
+    // human reading a report, and naming the wrong directory would misdirect it.
+    let here = std::env::current_dir().ok();
+    let recorded = findings::record(
+        &bound.dir,
+        &context,
+        &commit,
+        here.as_deref().and_then(Path::to_str),
+        &found,
+    )?;
+
+    // Ref-death GC rides the same verb: the live set is what exists now, so a
+    // branch deleted since the last record loses its instances here.
+    let live = git::refs(&repo)?
+        .into_iter()
+        .map(findings::Context::new)
+        .collect();
+    let dropped = findings::gc(&bound.dir, &live)?;
+
+    // Pointer-only counts on stderr; `record` emits no data document, so the
+    // stdout channel stays empty for it.
+    writeln!(
+        err,
+        "batten: state record {context}: {} minted, {} updated, {} resolved, {dropped} instances GC'd",
+        recorded.minted, recorded.updated, recorded.resolved
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// List what the store holds.
+///
+/// **Always [`ExitCode::Success`].** A stored finding is a record, not a fresh
+/// verdict — `check` already spent the `2` when it found the thing. Emitting a
+/// violation here would put the store on the deny channel and let a stale record
+/// block a call, which is exactly the interaction law the identity module
+/// states: identity governs advisory reporting and never touches an exit path.
+fn run_state_list(
+    json: bool,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = git::repo_root(Path::new("."))?;
+    let opened = store::resolve(&repo)?;
+    let Some(dir) = store::bound_dir(&opened) else {
+        // Nothing bound yet: an empty listing, not an error. The note rides the
+        // §3 ladder above `normal` rather than being written directly — an
+        // unbound store is an ordinary first-run state, and a read verb's clean
+        // piped run prints nothing unless the caller asked for detail.
+        output::message(
+            mode,
+            output::Verbosity::Verbose,
+            err,
+            "no store is bound to this repository yet",
+        )?;
+        if json {
+            writeln!(out, "{}", serde_json::to_string_pretty(&Vec::<u8>::new())?)?;
+        }
+        return Ok(ExitCode::Success);
+    };
+    let records = findings::load_all(&dir)?;
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&records)?)?;
+    } else {
+        for line in findings::pointer_lines(&records) {
+            writeln!(out, "{line}")?;
+        }
+    }
+    Ok(ExitCode::Success)
 }
 
 /// Judge the always-loaded instruction set against its declared budget

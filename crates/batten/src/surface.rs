@@ -853,6 +853,27 @@ pub const SURFACE: &[CommandDecl] = &[
             "The store id to bind, when resolution cannot decide for itself",
         )],
     },
+    // Folds a scan into the store as the current ref's instances. A writer, and
+    // deliberately its own verb rather than a flag on `check`: a `--record` there
+    // would flip `check` from `read` to `write` and drop it out of the derived
+    // agent allowlist, for a side effect nobody asked that invocation for.
+    CommandDecl {
+        path: "state record",
+        about: "Record this ref's findings into the store, and GC instances whose ref is gone",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
+    },
+    // Store reads plus fixed read-only git plumbing. A `read` verb may run a
+    // fixed VCS query; what it must never reach is user-supplied code, and no
+    // configured command is reachable from this path (CLOUD-170).
+    CommandDecl {
+        path: "state list",
+        about: "List stored findings and the refs they were observed in",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
 ];
 
 /// Whether `token` is a declared spelling of a flag that consumes the *next*

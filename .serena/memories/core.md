@@ -214,6 +214,18 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   asked. A root commit or remote URL is identity-bearing and auto-adopts; a
   matching common dir ALONE is not (a path can be reused by a stranger) and
   yields `Candidate`, bound only by `batten state adopt`.
+- `findings.rs` — what the store HOLDS (CLOUD-164), split from `store.rs`'s
+  _which store_: identity is stable for a repo's life, contents change per scan,
+  and CLOUD-78 extends only this half. One `FindingRecord` per identity, one file
+  each, with `Instance`s INSIDE it — "one finding" is structural, not a join two
+  worktrees could disagree about. Instances key on **ref**, never worktree path
+  (ephemeral, randomly named); the path is metadata. `Observation` is the
+  load-bearing type: `Observed(0)` resolves, `NotObserved` HOLDS — a skipped or
+  errored rule reports nothing, and reading that silence as zero is how
+  fail-closed becomes fail-open. Every comparison is per (identity × context), so
+  interleaved scans from different refs never read as change. GC is by ref
+  EXISTENCE, never reachability — these repos land by fast-forward, so a landed
+  branch is an ancestor of nothing. No disposition field: that is CLOUD-78's.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
   predicates over the repo. `run_static` (read-effect, no process spawn) backs
   `check`; `run_all` (every kind) backs `enforce`. `check` refuses a

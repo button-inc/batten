@@ -370,6 +370,13 @@
           "description": "A stable identifier for the rule, surfaced in findings so a violation\npoints back at the policy that produced it.",
           "type": "string"
         },
+        "identity_key": {
+          "description": "A per-rule identity discriminator: split one identity into several.\n\n**Split-only by construction, not by validation.** The default identity\nis hashed as a field of the override's preimage\n([`crate::identity::override_fingerprint`]), so two spans with different\ndefault identities cannot collide under any discriminator — this can\nfragment a group and is mathematically unable to merge two. Changing it\nis a deliberate re-mint, not a rename.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "kind": {
           "description": "Which predicate to apply to the matched files.",
           "$ref": "#/$defs/RuleKind"
@@ -410,6 +417,13 @@
         "severity": {
           "description": "What a match does: `deny` fails the run, `warn` reports without failing\n(until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the\nrule off (cargo-deny's model, CLOUD-61).\n\n**Required, deliberately**: every committed rule states its severity\ndefault explicitly, and there is no implicit fallback — omitting the key\nis a usage error (exit `1`), never a silently assumed level.",
           "$ref": "#/$defs/RuleSeverity"
+        },
+        "verbatim": {
+          "description": "Hash the matched span **verbatim** rather than collapsing its whitespace.\n\nFor a rule whose subject *is* literal content, where a reformat genuinely\nchanges the thing being flagged. The default collapses whitespace on the\n`git patch-id` model, so a formatter reflow does not re-mint an identity;\na `verbatim` rule trades that for sensitivity to the bytes it is about.\n`Option<bool>` rather than `bool` so the column census can see presence\n(`Rule::columns`), which is what makes a `verbatim` on a kind that hashes\nno span a usage error instead of an ignored key.",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,

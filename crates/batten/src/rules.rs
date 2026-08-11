@@ -44,6 +44,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
+use crate::identity;
 use crate::severity::{self, ReportLevel, RuleSeverity};
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
@@ -133,8 +134,14 @@ impl RuleKind {
     #[must_use]
     pub const fn permits(self) -> &'static [&'static str] {
         match self {
-            RuleKind::Forbid => &["glob", "pattern"],
-            RuleKind::Command => &["glob", "run"],
+            // `verbatim` narrows a hashed span, so only the kind that hashes one
+            // accepts it: a `verbatim` on a command rule would name a
+            // normalization that applies to nothing, and reading as configured.
+            RuleKind::Forbid => &["glob", "pattern", "verbatim", "identity_key"],
+            RuleKind::Command => &["glob", "run", "identity_key"],
+            // A shape rule is adjudicated per mediated call and never reaches
+            // the store, so an identity column on one is decorative by
+            // construction (non-negotiable rule 6).
             RuleKind::Shape => &["pattern", "reason", "contains", "policy_url"],
         }
     }
@@ -276,6 +283,27 @@ pub struct Rule {
     /// matched paths; omit it and the command self-discovers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
+    /// Hash the matched span **verbatim** rather than collapsing its whitespace.
+    ///
+    /// For a rule whose subject *is* literal content, where a reformat genuinely
+    /// changes the thing being flagged. The default collapses whitespace on the
+    /// `git patch-id` model, so a formatter reflow does not re-mint an identity;
+    /// a `verbatim` rule trades that for sensitivity to the bytes it is about.
+    /// `Option<bool>` rather than `bool` so the column census can see presence
+    /// (`Rule::columns`), which is what makes a `verbatim` on a kind that hashes
+    /// no span a usage error instead of an ignored key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbatim: Option<bool>,
+    /// A per-rule identity discriminator: split one identity into several.
+    ///
+    /// **Split-only by construction, not by validation.** The default identity
+    /// is hashed as a field of the override's preimage
+    /// ([`crate::identity::override_fingerprint`]), so two spans with different
+    /// default identities cannot collide under any discriminator — this can
+    /// fragment a group and is mathematically unable to merge two. Changing it
+    /// is a deliberate re-mint, not a rename.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_key: Option<String>,
 }
 
 impl Rule {
@@ -313,7 +341,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 6] {
+    fn columns(&self) -> [(&'static str, bool); 8] {
         [
             ("glob", self.glob.is_some()),
             ("pattern", self.pattern.is_some()),
@@ -321,6 +349,8 @@ impl Rule {
             ("contains", self.contains.is_some()),
             ("reason", self.reason.is_some()),
             ("policy_url", self.policy_url.is_some()),
+            ("verbatim", self.verbatim.is_some()),
+            ("identity_key", self.identity_key.is_some()),
         ]
     }
 
@@ -434,6 +464,16 @@ pub struct Finding {
     /// `None` for a rule-scoped finding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
+    /// The finding's identity, minted **engine-side** (CLOUD-164).
+    ///
+    /// Position is deliberately not an input: `line` moves when a neighbour is
+    /// inserted and this does not, which is what lets a store recognise the same
+    /// defect across an edit. Before this field existed the churn pack read the
+    /// matched line and hashed it test-side, which could pin the identity
+    /// *function* but never the extractor — there was none. This is the
+    /// extractor, and deleting that test-side join is how the pack now proves it
+    /// picks the right span.
+    pub identity: crate::identity::StoredIdentity,
 }
 
 /// The name of the verb that runs process-spawning rule kinds, quoted in the
@@ -673,9 +713,15 @@ fn run_once(
     };
 
     if !status.success() {
+        // A command condemns a batch rather than a span, so its identity is the
+        // scope kind keyed on the glob it selected — the same pointer the
+        // finding reports.
+        let scope_key = rule.glob.as_deref().unwrap_or(&rule.id);
+        let default = identity::scope_fingerprint(&rule.id, scope_key);
         findings.push(Finding {
             rule: rule.id.clone(),
             severity: rule.severity,
+            identity: identity_of(rule, identity::FindingKind::Scope, default),
             // The rule's glob is the tightest honest pointer for a finding a
             // command condemned as a batch. A command kind cannot load without
             // one, so the fallback is unreachable; naming the rule id rather
@@ -710,6 +756,33 @@ pub fn any_blocking(findings: &[Finding], fail_on_warning: bool) -> bool {
     })
 }
 
+/// Mint a finding's identity for `rule`, applying its per-rule identity keys.
+///
+/// One function so the two construction sites cannot drift on how `verbatim` and
+/// `identity_key` are read. The override is composed *after* the default, which
+/// is what keeps it split-only: the default is a field of the override's
+/// preimage, so no discriminator can merge two defaults.
+fn identity_of(
+    rule: &Rule,
+    kind: identity::FindingKind,
+    default: identity::Fingerprint,
+) -> identity::StoredIdentity {
+    let fingerprint = match rule.identity_key.as_deref() {
+        Some(discriminator) => identity::override_fingerprint(default, discriminator),
+        None => default,
+    };
+    identity::StoredIdentity::new(kind, fingerprint)
+}
+
+/// How a rule's matched span is normalized before hashing.
+fn span_mode(rule: &Rule) -> identity::SpanNormalization {
+    if rule.verbatim == Some(true) {
+        identity::SpanNormalization::Verbatim
+    } else {
+        identity::SpanNormalization::Collapsed
+    }
+}
+
 /// Emit a finding for every line of `rel_path` that contains the rule's literal
 /// `pattern`. A non-UTF-8 file cannot contain the literal, so it never matches.
 fn forbid_in_file(
@@ -732,13 +805,20 @@ fn forbid_in_file(
             rule.id
         )));
     };
+    let mode = span_mode(rule);
     for (index, line) in text.lines().enumerate() {
         if line.contains(pattern) {
+            // The whole matched line is the span, which is exactly what the
+            // churn pack hashed test-side before this existed — so its fixtures
+            // keep their assertions, and that unchanged-ness is the evidence the
+            // engine picks the same span.
+            let default = identity::code_fingerprint(&rule.id, rel_path, line, mode)?;
             findings.push(Finding {
                 rule: rule.id.clone(),
                 severity: rule.severity,
                 path: rel_path.to_owned(),
                 line: Some(index + 1),
+                identity: identity_of(rule, identity::FindingKind::Code, default),
             });
         }
     }
@@ -1046,6 +1126,8 @@ mod tests {
             reason: None,
             policy_url: None,
             run: None,
+            verbatim: None,
+            identity_key: None,
         }
     }
 
@@ -1101,22 +1183,29 @@ mod tests {
 
         let findings = run_static(&[forbid("no-todo", "**/*.rs", "TODO")], &dir).unwrap();
 
+        // Projected rather than compared whole: a finding now carries a
+        // fingerprint, and rebuilding the expected one here would be the
+        // test-side join CLOUD-164 exists to delete. What this test is about is
+        // which lines matched.
         assert_eq!(
-            findings,
+            findings
+                .iter()
+                .map(|f| (f.rule.as_str(), f.path.as_str(), f.line))
+                .collect::<Vec<_>>(),
             vec![
-                Finding {
-                    rule: "no-todo".to_owned(),
-                    severity: RuleSeverity::Deny,
-                    path: "src/a.rs".to_owned(),
-                    line: Some(2),
-                },
-                Finding {
-                    rule: "no-todo".to_owned(),
-                    severity: RuleSeverity::Deny,
-                    path: "src/a.rs".to_owned(),
-                    line: Some(3),
-                },
+                ("no-todo", "src/a.rs", Some(2)),
+                ("no-todo", "src/a.rs", Some(3)),
             ]
+        );
+        // The two matched lines differ in content ("TODO here" vs "another
+        // TODO"), so they are two identities — identity is derived from the
+        // span, not from the path the finding points at. The same-span-twice
+        // case is one identity with a count, and is pinned where it belongs, in
+        // `identity`'s own pack and the churn fixtures.
+        assert_ne!(findings[0].identity, findings[1].identity);
+        assert_eq!(
+            findings[0].identity.version,
+            identity::FindingKind::Code.identity_version()
         );
     }
 
@@ -1378,14 +1467,16 @@ mod tests {
 
         let fail = run_all(&[command("bad", "**/*.rs", "false")], &dir).unwrap();
         assert_eq!(
-            fail,
-            vec![Finding {
-                rule: "bad".to_owned(),
-                severity: RuleSeverity::Deny,
-                // Rule-scoped: the exit code condemns the batch, not a line.
-                path: "**/*.rs".to_owned(),
-                line: None,
-            }]
+            fail.iter()
+                .map(|f| (f.rule.as_str(), f.path.as_str(), f.line))
+                .collect::<Vec<_>>(),
+            // Rule-scoped: the exit code condemns the batch, not a line.
+            vec![("bad", "**/*.rs", None)]
+        );
+        // A command rule mints the scope kind, not the code kind.
+        assert_eq!(
+            fail[0].identity.version,
+            identity::FindingKind::Scope.identity_version()
         );
     }
 

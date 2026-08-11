@@ -816,6 +816,8 @@ mod tests {
             reason: Some(format!("use the sanctioned path for {id}")),
             policy_url: None,
             run: None,
+            verbatim: None,
+            identity_key: None,
         }
     }
 

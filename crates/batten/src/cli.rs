@@ -141,6 +141,13 @@ pub enum StateCommand {
         /// resolution that refused to decide for itself.
         store: Option<String>,
     },
+    /// Record this ref's findings into the store.
+    Record,
+    /// List stored findings.
+    List {
+        /// Emit the listing as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
 }
 
 /// Subcommands of `receipt`.
@@ -334,6 +341,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             .and_then(|(name, matches)| match name {
                 "adopt" => Some(StateCommand::Adopt {
                     store: matches.get_one::<String>("store").cloned(),
+                }),
+                "record" => Some(StateCommand::Record),
+                "list" => Some(StateCommand::List {
+                    json: flag(matches, "json"),
                 }),
                 _ => None,
             })

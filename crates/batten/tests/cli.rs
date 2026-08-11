@@ -3906,3 +3906,215 @@ fn an_unknown_payload_class_is_refused_rather_than_ignored() {
     let output = common::run(&dir, &["config", "lint"]);
     assert_eq!(output.status.code(), Some(1));
 }
+
+// --- the findings ledger (CLOUD-164) ------------------------------------------
+
+/// One stored finding as `state list -J` reports it.
+#[derive(Debug, PartialEq, Eq)]
+struct StoredFinding {
+    fingerprint: String,
+    rule: String,
+    /// `(context, observed count)` per instance, in the order the store emits.
+    instances: Vec<(String, i64)>,
+}
+
+/// `state list -J`, parsed.
+///
+/// Read through the machine channel rather than the pointer lines, so these
+/// assert the contract a consumer depends on rather than a rendering.
+fn stored_findings(dir: &std::path::Path, home: &std::path::Path) -> Vec<StoredFinding> {
+    let output = store_cmd(dir, home, &["state", "list", "-J"]);
+    assert_eq!(output.status.code(), Some(0), "state list always succeeds");
+    let text = String::from_utf8(output.stdout).expect("stdout is UTF-8");
+    let parsed: serde_json::Value = serde_json::from_str(&text).expect("state list -J is JSON");
+    parsed
+        .as_array()
+        .expect("a JSON array")
+        .iter()
+        .map(|record| {
+            let instances = record["instances"]
+                .as_array()
+                .expect("instances")
+                .iter()
+                .map(|instance| {
+                    (
+                        instance["context"].as_str().expect("context").to_owned(),
+                        instance["occurrences"]["Observed"]
+                            .as_i64()
+                            .expect("an observed count"),
+                    )
+                })
+                .collect();
+            StoredFinding {
+                fingerprint: record["identity"]["fingerprint"]
+                    .as_str()
+                    .expect("fingerprint")
+                    .to_owned(),
+                rule: record["rule"].as_str().expect("rule").to_owned(),
+                instances,
+            }
+        })
+        .collect()
+}
+
+/// A repo whose config forbids `TODO`, with one offending file.
+fn ledger_fixture(name: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nseverity = \"deny\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\n")
+        .file("src/a.rs", "fn main() {}\n// TODO fix me\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    (repo, home)
+}
+
+#[test]
+fn a_defect_seen_from_two_worktrees_is_one_finding_with_two_instances() {
+    // Acceptance (a), end to end. The same defect observed from two worktrees
+    // must be ONE finding — and fixing it in one must not disturb the other's
+    // count, or the pair would flap as scans interleave.
+    let (repo, home) = ledger_fixture("ledger-worktree");
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+
+    let tree = repo.parent().unwrap().join("wt");
+    git_in(
+        &repo,
+        &["worktree", "add", "-b", "topic", tree.to_str().unwrap()],
+    );
+    assert_eq!(
+        store_cmd(&tree, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+
+    let stored = stored_findings(&repo, &home);
+    assert_eq!(
+        stored.len(),
+        1,
+        "one defect is one finding, not one per worktree"
+    );
+    assert_eq!(stored[0].rule, "no-todo");
+    assert_eq!(
+        stored[0].instances,
+        vec![
+            ("refs/heads/main".to_owned(), 1),
+            ("refs/heads/topic".to_owned(), 1),
+        ],
+        "one instance per ref, sorted, each counting for itself"
+    );
+
+    // Fix it on `topic` only. The finding survives, `topic` goes to zero, and
+    // `main`'s count is untouched — a scan that never ran there re-evaluates
+    // nothing there.
+    common::write(&tree, "src/a.rs", "fn main() {}\n");
+    assert_eq!(
+        store_cmd(&tree, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+
+    let after = stored_findings(&repo, &home);
+    assert_eq!(after.len(), 1, "the finding survives a fix in one context");
+    assert_eq!(
+        after[0].instances,
+        vec![
+            ("refs/heads/main".to_owned(), 1),
+            ("refs/heads/topic".to_owned(), 0),
+        ],
+        "no count-thrash: only the context that was scanned moved"
+    );
+
+    // Re-recording with nothing changed is byte-identical — no flap.
+    assert_eq!(
+        store_cmd(&tree, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+    assert_eq!(
+        stored_findings(&repo, &home),
+        after,
+        "a repeat scan changes nothing"
+    );
+}
+
+#[test]
+fn deleting_a_ref_gcs_its_instances_and_keeps_the_finding() {
+    // Acceptance (d). Liveness is ref EXISTENCE: these repos land by
+    // fast-forward, so a reachability test would collect work that landed fine.
+    let (repo, home) = ledger_fixture("ledger-gc");
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+
+    let tree = repo.parent().unwrap().join("wt");
+    git_in(
+        &repo,
+        &["worktree", "add", "-b", "doomed", tree.to_str().unwrap()],
+    );
+    assert_eq!(
+        store_cmd(&tree, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+    assert_eq!(stored_findings(&repo, &home)[0].instances.len(), 2);
+
+    // Remove the worktree and its branch, then re-record from the survivor.
+    git_in(
+        &repo,
+        &["worktree", "remove", "--force", tree.to_str().unwrap()],
+    );
+    git_in(&repo, &["branch", "-D", "doomed"]);
+    assert_eq!(
+        store_cmd(&repo, &home, &["state", "record"]).status.code(),
+        Some(0)
+    );
+
+    let after = stored_findings(&repo, &home);
+    assert_eq!(
+        after.len(),
+        1,
+        "the finding survives on its remaining instance"
+    );
+    assert_eq!(
+        after[0].instances,
+        vec![("refs/heads/main".to_owned(), 1)],
+        "the dead ref's instance is collected, the live one is not"
+    );
+}
+
+#[test]
+fn recording_on_a_detached_head_is_refused_rather_than_keyed_to_nothing() {
+    // An instance is keyed by ref, and a detached HEAD has none. Inventing a
+    // synthetic key would mint an instance ref-death GC could never collect,
+    // because the ref it names never existed to die.
+    let (repo, home) = ledger_fixture("ledger-detached");
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    git_in(&repo, &["checkout", "--detach", head.trim()]);
+
+    let output = store_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("detached"),
+        "the refusal names why"
+    );
+}
+
+#[test]
+fn listing_an_unbound_repository_succeeds_and_says_nothing_by_default() {
+    // A stored finding is a record, never a fresh verdict: `check` already spent
+    // the 2. `state list` must not put the store on the deny channel.
+    let (repo, home) = ledger_fixture("ledger-unbound");
+    let output = store_cmd(&repo, &home, &["state", "list"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stdout.is_empty(), "no findings, no pointer lines");
+    assert!(
+        output.stderr.is_empty(),
+        "an unbound store is an ordinary first-run state, not progress to announce"
+    );
+
+    // The note is on the ladder, not deleted: asking for detail produces it.
+    let loud = store_cmd(&repo, &home, &["state", "list", "-v"]);
+    assert!(String::from_utf8_lossy(&loud.stderr).contains("no store is bound"));
+}

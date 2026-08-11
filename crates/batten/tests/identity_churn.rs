@@ -13,14 +13,14 @@
 //! it. `tests/primitives.rs` is the precedent for driving the library surface
 //! directly: neither module mints a subcommand, so `mise run test` is their gate.
 //!
-//! **The join in [`Scan::of`] is not the engine's yet.** A [`Finding`] carries
-//! `path` and `line` and no fingerprint, so nothing in the engine mints an
-//! identity for a rule match — reading the matched line and hashing it is done
-//! here, in the test. That makes these fixtures honest about the identity
-//! *function* and no stronger: they cannot catch an extractor that picks the
-//! wrong span, because there is no extractor yet. Wiring a finding to its
-//! identity belongs to the two-level store model (CLOUD-164), and when it lands
-//! this helper is what it replaces.
+//! **These now run over engine-minted identities** (CLOUD-164). A [`Finding`]
+//! carries its own fingerprint, so [`Scan::of`] reads it rather than re-deriving
+//! it: the test-side join this pack used to carry is deleted, not kept
+//! alongside. That strengthens every fixture below from a claim about the
+//! identity *function* to a claim about the extractor too — a span the engine
+//! picked wrongly would now fail here, where before there was no extractor to be
+//! wrong. The fixtures themselves are unchanged across that switch, which is the
+//! evidence that the engine picks the same span the test used to.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use batten::identity::{self, CountChange, Fingerprint, SpanNormalization};
+use batten::identity::{self, CountChange, Fingerprint};
 use batten::rules::{self, Finding, Rule};
 use batten::{Config, config};
 
@@ -66,27 +66,20 @@ struct Scan {
 }
 
 impl Scan {
-    /// Scan `root` and name every finding.
+    /// Scan `root` and fold the findings' own identities into a multiset.
     ///
-    /// The span is the matched line, read back from the file the engine pointed
-    /// at — see the module doc on why this join lives in the test.
+    /// **The engine mints these** (CLOUD-164). The previous version of this
+    /// helper read the matched line back out of the file and hashed it here,
+    /// because a `Finding` carried no fingerprint — which meant the pack could
+    /// pin the identity *function* and never the extractor. The fixtures below
+    /// are unchanged across that deletion, and that is the point: they were
+    /// written against the whole matched line, and they still pass, so the
+    /// engine demonstrably picks the same span the test used to.
     fn of(root: &Path, rules: &[Rule]) -> Self {
         let findings = rules::run_static(rules, root).expect("scan the tree");
-        let identities = identity::count_occurrences(findings.iter().map(|finding| {
-            let line = finding.line.expect("a forbid finding locates a line");
-            let text = fs::read_to_string(root.join(&finding.path)).expect("read the matched file");
-            let span = text
-                .lines()
-                .nth(line - 1)
-                .expect("the matched line is still there");
-            identity::code_fingerprint(
-                &finding.rule,
-                &finding.path,
-                span,
-                SpanNormalization::Collapsed,
-            )
-            .expect("the engine reports repo-relative paths")
-        }));
+        let identities = identity::count_occurrences(
+            findings.iter().map(|finding| finding.identity.fingerprint),
+        );
         Scan {
             findings,
             identities,

@@ -101,7 +101,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use hmac::{Hmac, Mac};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
@@ -191,6 +191,76 @@ impl fmt::Display for Fingerprint {
 impl Serialize for Fingerprint {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl Fingerprint {
+    /// Parse the 64-character lowercase hex form back into a fingerprint.
+    ///
+    /// The inverse of [`Fingerprint::to_hex`], and it exists because a store has
+    /// to read its own keys back. Strict on purpose — exactly 64 characters, and
+    /// lowercase only: uppercase hex would round-trip to the same bytes but a
+    /// *different string*, and the store's on-disk keys and its sort order are
+    /// both the string. Accepting both spellings would let one identity occupy
+    /// two filenames.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] when `hex` is not 64 lowercase hex characters.
+    pub fn from_hex(hex: &str) -> anyhow::Result<Fingerprint> {
+        if hex.len() != 64
+            || !hex
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(UsageError::raise(format!(
+                "not a fingerprint: expected 64 lowercase hex characters, got {:?}",
+                hex.chars().take(72).collect::<String>()
+            )));
+        }
+        let mut bytes = [0u8; 32];
+        for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+            // Each nibble is already known to be a hex digit by the guard above,
+            // so the fold cannot fail; `?` keeps the path total regardless.
+            let high = char::from(pair[0]).to_digit(16).unwrap_or(0);
+            let low = char::from(pair[1]).to_digit(16).unwrap_or(0);
+            // Both nibbles are < 16, so the assembled byte cannot exceed 0xff.
+            bytes[index] = u8::try_from(high * 16 + low).unwrap_or(0);
+        }
+        Ok(Fingerprint(bytes))
+    }
+}
+
+impl<'de> Deserialize<'de> for Fingerprint {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Fingerprint, D::Error> {
+        let hex = String::deserialize(deserializer)?;
+        Fingerprint::from_hex(&hex).map_err(de::Error::custom)
+    }
+}
+
+/// A minted identity as it travels and as it is stored: the fingerprint, plus
+/// the per-kind version that produced it.
+///
+/// **The version rides beside the hash, never inside it.** That asymmetry is
+/// what makes a migration possible at all: an equality-join needs two extractor
+/// versions to produce comparable hashes for the same span, which a version
+/// hashed into the preimage would make impossible by construction.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct StoredIdentity {
+    /// The fingerprint itself.
+    pub fingerprint: Fingerprint,
+    /// The [`FindingKind::identity_version`] of the function that minted it.
+    pub version: String,
+}
+
+impl StoredIdentity {
+    /// Pair a freshly minted fingerprint with its kind's current version.
+    #[must_use]
+    pub fn new(kind: FindingKind, fingerprint: Fingerprint) -> Self {
+        StoredIdentity {
+            fingerprint,
+            version: kind.identity_version().to_owned(),
+        }
     }
 }
 

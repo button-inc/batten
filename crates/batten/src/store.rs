@@ -280,6 +280,22 @@ pub enum Opened {
     },
 }
 
+/// Where a resolved store lives on disk, when one is already bound.
+///
+/// Read-only by design, and the reason `state list` can exist as a `read` verb:
+/// it answers "is there a store, and where" without minting or writing one.
+/// [`Opened::Fresh`] and [`Opened::Stranger`] return `None` — neither names an
+/// existing store, and a read path must not create one to answer.
+#[must_use]
+pub fn bound_dir(opened: &Opened) -> Option<PathBuf> {
+    match opened {
+        Opened::Existing { dir, .. } | Opened::Adopted { dir, .. } => Some(dir.clone()),
+        // A candidate is not bound until a human binds it, so a listing that
+        // read from it would be reporting a store this repository may not own.
+        Opened::Candidate { .. } | Opened::Fresh { .. } | Opened::Stranger { .. } => None,
+    }
+}
+
 /// Fold a remote URL to `host/owner/repo` for comparison.
 ///
 /// Both spellings of the same remote — `git@host:owner/repo.git` and

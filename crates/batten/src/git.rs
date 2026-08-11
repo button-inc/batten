@@ -738,6 +738,56 @@ pub fn current_branch(dir: &Path) -> Result<Option<String>> {
     Ok((name != "HEAD").then_some(name))
 }
 
+/// The commit `HEAD` points at, as a full SHA.
+///
+/// Recorded beside every observation so a stored count says *which tree* it
+/// counted, rather than being a number with no anchor.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository or
+/// has no commits.
+pub fn head_commit(dir: &Path) -> Result<String> {
+    query(
+        dir,
+        &["rev-parse", "--verify", "--end-of-options", "HEAD^{commit}"],
+        "cannot resolve HEAD; this is not a git repository, or it has no commits",
+    )
+}
+
+/// Every local branch and remote-tracking ref, as full ref names.
+///
+/// The liveness set instance GC is computed against. **Ref existence, never
+/// reachability**: these consumers land by rebase and fast-forward, so a landed
+/// branch's commits are ancestors of nothing and a reachability test would
+/// collect live work. Listing what exists asks a question that has an honest
+/// answer.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
+pub fn refs(dir: &Path) -> Result<Vec<String>> {
+    let listing = query(
+        dir,
+        &[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+        "cannot list refs; this is not a git repository",
+    )?;
+    let mut found: Vec<String> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    found.sort();
+    found.dedup();
+    Ok(found)
+}
+
 /// The upstream `HEAD` tracks, as a full ref name, or `None` when it tracks
 /// nothing (including on a detached `HEAD`).
 ///

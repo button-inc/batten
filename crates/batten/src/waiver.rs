@@ -412,6 +412,19 @@ mod tests {
             severity: RuleSeverity::Deny,
             path: path.to_owned(),
             line: Some(3),
+            // A real minted identity rather than a placeholder: waiving is
+            // orthogonal to identity, and a fabricated one would let these
+            // fixtures pass over a shape the engine cannot produce.
+            identity: crate::identity::StoredIdentity::new(
+                crate::identity::FindingKind::Code,
+                crate::identity::code_fingerprint(
+                    rule,
+                    path,
+                    "span",
+                    crate::identity::SpanNormalization::Collapsed,
+                )
+                .expect("a repo-relative fixture path"),
+            ),
         }
     }
 
