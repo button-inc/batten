@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+#MISE description="Gate: a turn that cites path:line evidence and makes no durable write stranded a finding (reads a transcript path on stdin; pointer-only)"
+#
+# CLOUD-252, the unmet first acceptance bullet of CLOUD-248: "a turn that states a
+# finding in prose and makes no durable write is reported". The shipped
+# `stop-posture-check` catches the finding written TWICE — once durably, once as
+# editorial. This catches the opposite and worse case: the finding written
+# NOWHERE, which dies with the chat.
+#
+# Two inputs, two predicates, nothing shared to drift: that one reads
+# `last_assistant_message` and matches a literal set; this one reads the
+# transcript and joins prose against the turn's own `tool_use` records. The
+# transcript is what makes the join possible at all — `last_assistant_message`
+# carries only the final text block (measured: 26,893 of 60,916 assistant-prose
+# characters, and under 10% on 7 turns), so a finding stated mid-turn is invisible
+# to that field by construction.
+#
+# ONE SHAPE, AND IT IS MEASURED. CLOUD-252 specified three; over a real 113-turn
+# transcript, restricted to turns with no durable write:
+#
+#   path:line citation   1 firing  — the true positive          KEEP
+#   exit N / EXIT= claim 2 firings — and the only false positive DROP
+#   fenced command block 0 firings — never fires at all          DROP
+#
+# The exit-claim shape fires on an ordinary status summary ("… filed, fixed,
+# gated green"), which every working session produces constantly. The fenced
+# shape fires on nothing, and a branch nothing exercises is the dead code
+# CLOUD-235 already cost this repo. So the predicate is a `path:line` citation
+# and nothing else — one shape that fired once, correctly, on a turn whose two
+# findings were filed several turns later.
+#
+# NO "ALREADY FILED" EXEMPTION, deliberately. CLOUD-248 wanted a turn discussing
+# an already-filed finding exempted, and the obvious rule — cites a CLOUD-<n>, so
+# skip — SUPPRESSES THE TRUE POSITIVE: that turn cites three issue keys while
+# stating two unfiled findings. Measured, not reasoned. An exemption that silences
+# the one case a gate exists for is worse than no exemption.
+#
+# POINTER, NEVER PAYLOAD — and here that is not a privacy rule, it is the
+# mechanism. Handing the matched prose back would return the agent's own sentences
+# to it as input, and a mirror can be cleared by RESTATING, which is the exact
+# double-write CLOUD-200 and CLOUD-248 exist to kill. A coordinate cannot be
+# cleared that way: the only way to answer `turn:46` is to go look. The bare
+# question "Done?" is the same shape and is what surfaced nine real findings in
+# one session while carrying no information at all.
+set -uo pipefail
+
+transcript=$(cat) || exit 2
+transcript="${transcript//[[:space:]]/}"
+if [ -z "$transcript" ] || [ ! -r "$transcript" ]; then
+	echo "::error:: no readable transcript path on stdin" >&2
+	exit 2
+fi
+
+# A finding shape: a source citation with a line number. Two accepted forms, and
+# the second is not optional here — half this repo's programs are the
+# extensionless files under `mise-tasks/`, and a finding about one cites
+# `mise-tasks/land:200`. An extension-only anchor misses every one of them, which
+# is most of the shell layer.
+#
+#   a/b:12          a path separator, which a bare "word:digits" lacks
+#   thing.rs:12     a known source extension, for a bare filename
+#
+# Anchored rather than open so an arbitrary "word:digits" in prose — a duration
+# (12:30), a ratio (3:1), a URL port — is not read as evidence. Those carry
+# neither a separator nor an extension.
+CITATION='([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\.(rs|toml|yml|yaml|bats|md|json|pkl|sh|lock)):[0-9]+'
+
+# A durable write: the tracker or a memory. Matched on the tool-name SUFFIX, never
+# the server prefix — the same connector appears as `mcp__Linear__save_issue` and
+# as `mcp__<uuid>__save_issue` within one session (CLOUD-178), so a prefix anchor
+# silently misses whichever name is live.
+DURABLE='(save_issue|save_comment|save_document|write_memory|edit_memory|rename_memory)$'
+
+# Turns are built in one jq pass, main-thread only. A subagent's write must never
+# be credited to the orchestrator's turn, and its prose must never be judged as
+# the orchestrator's — so `isSidechain == true` is dropped on both sides.
+#
+# A turn opens at a real user prompt. A `tool_result` arrives as a user record too
+# and is NOT a prompt; counting it would split one turn into many and hand each
+# fragment its own verdict.
+if ! report=$(jq -rs '
+    [ .[] | select(.isSidechain != true) ]
+    | reduce .[] as $r ({turn: 0, prose: {}, durable: {}};
+        if $r.type == "user"
+           and ( ($r.message.content | type) == "string"
+                 or ( ($r.message.content | type) == "array"
+                      and ( [ $r.message.content[] | select(type == "object" and .type == "text") ] | length ) > 0 ) )
+        then .turn += 1
+        elif $r.type == "assistant" and .turn > 0
+        then
+          reduce ($r.message.content // [])[] as $b (.;
+            if ($b | type) != "object" then .
+            elif $b.type == "text"
+              then .prose[.turn | tostring] = ((.prose[.turn | tostring] // "") + "\n" + ($b.text // ""))
+            elif $b.type == "tool_use"
+              then .durable[.turn | tostring] = ((.durable[.turn | tostring] // []) + [$b.name // ""])
+            else . end)
+        else . end)
+    | . as $s
+    | [ range(1; $s.turn + 1) as $t
+        | { turn: $t,
+            prose: ($s.prose[$t | tostring] // ""),
+            tools: ($s.durable[$t | tostring] // []) } ]
+    | .[] | "\(.turn)\(.tools | join(","))\(.prose | gsub("\n"; " "))"
+  ' "$transcript" 2>/dev/null); then
+	echo "::error:: transcript is not readable JSONL: $transcript" >&2
+	exit 2
+fi
+
+# ONLY THE TURN THAT JUST ENDED. Judging the whole transcript is what the first
+# wiring did, and running it live exposed the defect immediately: it reported a
+# turn from hours earlier whose findings had long since been filed, and it would
+# have re-reported that same turn at every Stop for the rest of the session. A
+# stale pointer is worse than none — it is unactionable, so it trains the reader
+# to skip the channel, which is the failure this whole mechanism exists to avoid.
+#
+# At a turn boundary the only turn still actionable is the last one. Earlier turns
+# were either already answered or already missed; neither is this nudge's business.
+last=$(tail -n 1 <<<"$report")
+turns=$(grep -c . <<<"$report")
+
+fired=0
+while IFS=$'\001' read -r turn tools prose; do
+	[ -n "$turn" ] || continue
+	grep -qE "$CITATION" <<<"$prose" || continue
+	# Any one durable tool name in the same turn clears it.
+	if [ -n "$tools" ]; then
+		clean=0
+		while IFS= read -r name; do
+			[ -n "$name" ] || continue
+			if grep -qE "$DURABLE" <<<"$name"; then
+				clean=1
+				break
+			fi
+		done <<<"$(tr ',' '\n' <<<"$tools")"
+		[ "$clean" = 0 ] || continue
+	fi
+	# The whole output contract, in one line: a coordinate and a count. Never a
+	# byte of `$prose` — that variable is read and never printed.
+	echo "turn:$turn finding-without-durable-write"
+	fired=$((fired + 1))
+done <<<"$last"
+
+# A transcript with no turns is exit 0, not a finding — but it is also not proof
+# of anything, so it says so. Anti-vacuity: a gate that cannot fire must not be
+# indistinguishable from one that found nothing.
+if [ "$turns" = 0 ]; then
+	echo "finding-sink-check: no turns in $transcript — nothing to judge" >&2
+	exit 0
+fi
+
+[ "$fired" = 0 ] && exit 0
+echo "finding-sink-check: the last of $turns turn(s) cited path:line evidence and wrote nothing durable" >&2
+exit 1

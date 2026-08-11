@@ -53,7 +53,32 @@ msg=$(printf '%s' "$raw" | jq -r '.last_assistant_message // empty' 2>/dev/null)
 check="$(dirname -- "${BASH_SOURCE[0]}")/stop-posture-check"
 [ -x "$check" ] || exit 0
 
-reason=$(printf '%s' "$msg" | "$check") && exit 0
+reason=$(printf '%s' "$msg" | "$check") || true
+
+# The second rule (CLOUD-252), and it is SECOND on purpose: one advisory per turn.
+# `hedged-flag-framing` keeps precedence because it is the enforcing rule with the
+# higher measured precision (3/3 vs 1/1), and two nudges on one turn is how a
+# channel stops being read.
+#
+# It reads the transcript rather than `last_assistant_message`, so it reaches
+# prose the shipped rule cannot see — the final text block is under half the
+# turn's assistant prose. Its emitted line is a COORDINATE, never content: a turn
+# pointer, nothing else. Handing back the matched prose would make this a mirror,
+# and a mirror is cleared by restating, which is the double-write CLOUD-200 and
+# CLOUD-248 exist to kill. `tests/stop-guard.bats` asserts the emitted bytes carry
+# no substring of the prose, so a later edit cannot turn the nudge into one.
+if [ -z "$reason" ]; then
+	sink="$(dirname -- "${BASH_SOURCE[0]}")/finding-sink-check"
+	path=$(printf '%s' "$raw" | jq -r '.transcript_path // empty' 2>/dev/null) || path=""
+	if [ -n "$path" ] && [ -x "$sink" ]; then
+		# A fired predicate is exit 1 with the pointer on stdout; anything else
+		# (clean, unreadable, absent) leaves `reason` empty and the turn silent.
+		pointer=$(printf '%s' "$path" | "$sink" 2>/dev/null) || true
+		[ -z "$pointer" ] || reason="$pointer
+A finding was stated here and nothing durable was written. Go re-derive it and file it, or confirm it is already tracked."
+	fi
+fi
+
 [ -n "$reason" ] || exit 0
 
 jq -n --arg r "$reason" '{

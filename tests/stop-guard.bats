@@ -95,6 +95,77 @@ kicked() {
 	[ "$status" -eq 0 ]
 }
 
+# --- the second rule: the stranded finding (CLOUD-252) ------------------------
+#
+# `hedged-flag-framing` reads the final message; this one reads the transcript and
+# reaches prose that field cannot carry. One advisory per turn, the shipped rule
+# first.
+
+# A payload carrying a real transcript path. The turn below strands a finding.
+stranded() {
+	local t="$BATS_TEST_TMPDIR/stranded.jsonl"
+	: >"$t"
+	jq -nc '{type:"user",isSidechain:false,message:{content:"go"}}' >>"$t"
+	jq -nc --arg x "$1" '{type:"assistant",isSidechain:false,message:{content:[{type:"text",text:$x}]}}' >>"$t"
+	jq -nc --arg m "${2:-Pushed and green.}" --arg p "$t" \
+		'{hook_event_name:"Stop", session_id:"s", cwd:".",
+		  transcript_path:$p, stop_hook_active:false, last_assistant_message:$m}' | "$GUARD"
+}
+
+@test "a turn that strands a finding is pointed at, and the turn still ends" {
+	run stranded 'The wiring is missing at mise-tasks/stop-guard:55.'
+	[ "$status" -eq 0 ]
+	kicked "$output"
+	[[ "$output" == *"turn:1"* ]]
+	[[ "$output" == *"finding-without-durable-write"* ]]
+}
+
+@test "POINTER, NEVER PAYLOAD: the advisory carries no byte of the turn's prose" {
+	# The design in one assertion. Returning the prose makes this a mirror, and a
+	# mirror is cleared by restating — the double-write CLOUD-200 and CLOUD-248
+	# exist to kill. A coordinate can only be answered by going to look.
+	run stranded 'Broken at mise-tasks/land:200 and SENTINELXYZZY marks it.'
+	[[ "$output" != *"SENTINELXYZZY"* ]]
+	[[ "$output" != *"Broken at"* ]]
+}
+
+@test "the advisory says what to do, since a coordinate alone is not an instruction" {
+	run stranded 'Broken at mise-tasks/land:200.'
+	[[ "$output" == *"file it"* ]]
+}
+
+@test "the shipped rule keeps precedence when both would fire" {
+	# One nudge per turn. Two is how a channel stops being read, and the enforcing
+	# rule has the higher measured precision.
+	run stranded 'Broken at mise-tasks/land:200.' 'Worth noting the receipt is stale.'
+	[[ "$output" == *"hedged-flag-framing"* ]]
+	[[ "$output" != *"finding-without-durable-write"* ]]
+}
+
+@test "a turn that strands nothing is silent" {
+	run stranded 'Rebased, pushed, and the gate is green.'
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "an unreadable transcript is silent, not a kick" {
+	# Fail open, like every other path in this guard: a missing file must not
+	# manufacture an advisory.
+	run stop 'Pushed and green.'
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "the recursion bound still holds for the second rule" {
+	local t="$BATS_TEST_TMPDIR/active.jsonl"
+	: >"$t"
+	jq -nc '{type:"user",isSidechain:false,message:{content:"go"}}' >>"$t"
+	jq -nc '{type:"assistant",isSidechain:false,message:{content:[{type:"text",text:"Broken at mise-tasks/land:200."}]}}' >>"$t"
+	run bash -c "jq -nc --arg p '$t' '{hook_event_name:\"Stop\",session_id:\"s\",cwd:\".\",transcript_path:\$p,stop_hook_active:true,last_assistant_message:\"x\"}' | '$GUARD'"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
 # --- wiring ------------------------------------------------------------------
 
 @test "the Stop hook is registered in settings" {
