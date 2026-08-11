@@ -1138,7 +1138,9 @@ fn run_config(
         // An unparseable config is a Usage error, raised by the loader.
         // The epoch is a pure function of the tracked files' bytes, so it is
         // read-effect and byte-stable. An unreadable tracked path propagates as
-        // an internal error (exit 3) rather than being skipped — see `epoch`.
+        // a Usage error (exit 1) rather than being skipped: the `[epoch]
+        // tracked` set is config, so a path it names that cannot be read is
+        // unreadable config, which §7 routes to 1 — see `epoch`.
         ConfigCommand::Epoch { json } => {
             // The epoch covers whichever authority governed the run: under
             // `--config-from` that is the ref's surface, never the working
