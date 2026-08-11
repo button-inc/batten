@@ -527,6 +527,16 @@ local gate = new Mapping<String, Step> {
   // Deriving that union from batten.toml by hand makes hk.pkl a second authority
   // over it, which narrows silently the next time a rule adds a glob — half a
   // change by non-negotiable 2. `batten-glob-check` below is the other half.
+  //
+  // The task runs `batten enforce` since CLOUD-229 — the committed
+  // no-conflict-markers rule delegates to `hk util check-merge-conflict`, and a
+  // `command` rule spawns a process, which the read-effect `check` verb refuses.
+  // `depends` STAYS, against that issue's scope note. Its premise was that
+  // delegation removes the cargo build; it does not. The task still shells
+  // `cargo run --quiet -p batten -- enforce`, so the step still takes the
+  // target-dir lock, and dropping the chain would put it back in contention with
+  // `test` — the race CLOUD-201 and CLOUD-220 were both about. What delegation
+  // moved is which binary does the scanning, not whether one has to be built.
   ["batten-check"] {
     // `slow` tier: `cargo run`, so it pays a debug build — 9.47s cold, 133-141ms
     // warm (CLOUD-212 run 1, D8).

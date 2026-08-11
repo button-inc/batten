@@ -3573,12 +3573,54 @@ fn the_committed_repo_config_gates_a_repository() {
     committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
     // A file the committed no-conflict-markers rule must flag. The marker is
-    // assembled at runtime so this source file never carries the banned shape
-    // itself — the gate this test backs scans the whole tree, including here.
+    // still assembled at runtime, but for a narrower reason than before
+    // (CLOUD-229): the rule now delegates to `hk util check-merge-conflict`,
+    // which only fires on a marker at the START of a line, so the seven
+    // characters appearing mid-line in this source file no longer trip the gate
+    // this test backs. Writing it out would be safe and would also stop proving
+    // that the fixture's marker is the line-initial shape hk actually judges.
     let marker = format!("{} HEAD\n", "<".repeat(7));
     let src = dir.join("crates/x/src");
     fs::create_dir_all(&src).expect("create fixture source tree");
     fs::write(src.join("lib.rs"), marker).expect("write fixture source");
+    // `enforce`, not `check`: a `command` rule spawns a process, so the
+    // read-effect verb refuses the whole ruleset (exit 1, naming this verb).
+    // That refusal is asserted on its own below.
+    //
+    // This spawns `hk`, so it needs hk on PATH — true under `mise run
+    // test:cargo` and false under a bare `cargo test`, where it fails loudly
+    // with "cannot run `hk`: not found on PATH" rather than passing silently.
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .output()
+        .expect("run batten enforce");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the committed rule must fire on the shape it names"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "crates/** no-conflict-markers\n",
+        "a command condemns a batch, so the pointer is the glob and carries no line"
+    );
+}
+
+#[test]
+fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
+    // The visible consequence of delegation, pinned rather than left implicit:
+    // `batten check` cannot run this repository's own committed config any more,
+    // because a `command` rule reaches user-supplied code and `check` promises
+    // it never does (§5, CLOUD-170). The refusal must name the verb that does
+    // run it — that is what `mise run batten-check` was pointed at.
+    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let dir = repo_with_config("config-committed-read-refusal", &contents);
+    committed_config_fixture_git(&dir);
+    committed_budget_surfaces(&dir);
+
     let output = batten()
         .arg("check")
         .current_dir(&dir)
@@ -3587,13 +3629,51 @@ fn the_committed_repo_config_gates_a_repository() {
         .expect("run batten check");
     assert_eq!(
         output.status.code(),
-        Some(2),
-        "the committed rule must fire on the shape it names"
+        Some(1),
+        "a spawning kind is refused loudly by the read-effect verb, never skipped"
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("batten enforce"),
+        "the refusal must name the verb that runs it, got: {stderr}"
+    );
+}
+
+#[test]
+fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
+    // "The glob is a gate before it is an argv source", asserted for the SHIPPED
+    // rule rather than only in unit fixtures (CLOUD-229's acceptance).
+    //
+    // The discriminator is that this tree carries a conflict marker hk would
+    // certainly fail on — at the start of a line, in a file the delegate would
+    // read happily — placed OUTSIDE `crates/`. Exit 0 is therefore only
+    // reachable if the glob selected nothing and no process was spawned at all.
+    // A version of this test with an empty tree would pass just as well against
+    // an engine that spawned the delegate over zero files.
+    let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    let contents = fs::read_to_string(&committed).expect("read batten.toml");
+    let dir = repo_with_config("config-committed-glob-miss", &contents);
+    committed_config_fixture_git(&dir);
+    committed_budget_surfaces(&dir);
+    let marker = format!("{} HEAD\n", "<".repeat(7));
+    fs::write(dir.join("notes.txt"), marker).expect("write out-of-glob source");
+
+    let output = batten()
+        .arg("enforce")
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten enforce");
     assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "crates/x/src/lib.rs:1 no-conflict-markers\n",
-        "pointer-only finding, byte-stable"
+        output.status.code(),
+        Some(0),
+        "a marker outside the declared glob is not this rule's business"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a glob miss reports nothing, got: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 
@@ -3648,13 +3728,18 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
     fs::write(dirty.join("crates/demo/notes.txt"), &payload).expect("write fixture notes");
 
+    // `enforce` since CLOUD-229: the committed table now carries a `command`
+    // rule, so the read-effect verb refuses the whole ruleset. The expected
+    // bytes below are unchanged, and that is the point — these fixtures carry no
+    // line-initial conflict marker, so the delegating rule spawns hk over them
+    // and contributes nothing, leaving the CLOUD-7 findings alone on stdout.
     let output = batten()
-        .arg("check")
+        .arg("enforce")
         .current_dir(&dirty)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
-        .expect("run batten check");
+        .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -3685,12 +3770,12 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     fs::write(ordinary.join("lib.rs"), "pub fn ok() {}\n").expect("write clean source");
 
     let output = batten()
-        .arg("check")
+        .arg("enforce")
         .current_dir(&clean)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
-        .expect("run batten check");
+        .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
         Some(0),
@@ -3725,12 +3810,14 @@ fn the_committed_example_config_loads_over_the_binary() {
     // nothing. Same runtime-assembled marker discipline as the repo-config test.
     let marker = format!("{} HEAD\n", "<".repeat(7));
     fs::write(dir.join("main.rs"), marker).expect("write fixture source");
+    // `enforce`: the example's shipped rule delegates too, so the template
+    // teaches the same verb the repo's own config needs (CLOUD-229).
     let output = batten()
-        .arg("check")
+        .arg("enforce")
         .current_dir(&dir)
         .env_remove("BATTEN_STRICTNESS")
         .output()
-        .expect("run batten check");
+        .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -3738,7 +3825,8 @@ fn the_committed_example_config_loads_over_the_binary() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "main.rs:1 no-conflict-markers\n"
+        "**/*.rs no-conflict-markers\n",
+        "a command condemns a batch, so the pointer is the glob and carries no line"
     );
 }
 

@@ -208,9 +208,49 @@ retry — or just `mise run land`, which drives the whole loop. A red run on a \
 freshly-readied PR means that step was skipped, and the CI minutes are already \
 spent by then."""
 
-# A conflict marker reaching a source file means a botched merge landed. The
-# shape is unambiguous and no compiler catches it in every file type, which is
-# exactly the banned-shape case `forbid` exists for.
+# A conflict marker reaching a source file means a botched merge landed — and
+# this row DELEGATES that check rather than re-implementing it (CLOUD-229).
+#
+# It used to be `kind = "forbid"`, `pattern = "<<<<<<< "`, which is a strictly
+# worse copy of a checker hk already ships and this repo already runs. Measured
+# against the pinned hk: a marker at the start of a line fails both, while the
+# same seven characters inside a string literal fail only the substring match.
+# That false positive is why `crates/batten/tests/cli.rs` had to assemble the
+# marker at runtime — the test file would otherwise trip the gate it is testing.
+# A workaround that exists to dodge your own rule is the rule telling you it is
+# wrong, and AGENTS.md's scope reminder says the same thing in advance: adopt
+# prior art, do not rebuild it.
+#
+# What the delegation states is the division of labour the config should have
+# been stating all along. Batten owns **which paths are asked about, and what a
+# non-zero exit means downstream** — the severity, the waiver surface, the
+# receipt, the ready gate. The tool that already owns the check keeps owning it.
+# Conflict markers are the right vehicle for showing that precisely because the
+# check is trivial and owned elsewhere; a rule worth writing here is one no
+# existing tool answers.
+#
+# The predicate is the EXIT CODE ALONE (CLOUD-93). hk's stdout is discarded, so
+# what a finding reports is this rule's own pointer — the glob it selected, with
+# no line number, since a command condemns a batch rather than a span.
+#
+# `{{files}}` expands in place to the matched paths, batched under the argv
+# bound. THE GLOB IS A GATE BEFORE IT IS AN ARGV SOURCE: no match means no
+# process is spawned at all, which is what keeps a delegating rule cheap on the
+# commits it does not concern.
+#
+# WHY `crates/**` AND NOT `**`: the widening is deliberate and so is its bound.
+# `crates/**/*.rs` was narrow because a substring grep over Rust mostly overlaps
+# with what the compiler already catches — a justification that stops holding the
+# moment the rule is neither a substring match nor Rust-only. `crates/**` reaches
+# the files a botched merge corrupts and no compiler reads: the manifest, the
+# changelog, and every fixture under tests/, including the `.toml.in` configs and
+# the expected-stdout files whose bytes are the assertions. Going all the way to
+# `**` is what the engine cannot honestly do yet: the walk skips only `.git`, so
+# it has no gitignore, and a rule's `glob` is one pattern with no exclude form.
+# Counted in this checkout, `**` selects 15326 files, 14665 of them build output
+# under target/ — a delegate invoked over the compiler's own scratch space.
+# Closing that is CLOUD-214 (`ignore` + `globset` behind the walk), not a wider
+# glob here.
 #
 # `severity` (what a match does: "deny" fails the run, "warn" reports without
 # failing, "allow" switches the rule off) is required on every rule — the
@@ -218,9 +258,9 @@ spent by then."""
 # separate key with its own vocabulary; "tree" is the whole working tree.
 [[rule]]
 id = "no-conflict-markers"
-kind = "forbid"
-glob = "crates/**/*.rs"
-pattern = "<<<<<<< "
+kind = "command"
+glob = "crates/**"
+check = "hk util check-merge-conflict --assume-in-merge {{files}}"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "resolve the conflict by hand: choosing a side is a judgement no command can make"
