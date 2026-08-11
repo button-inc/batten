@@ -26,6 +26,12 @@ setup() {
 		ln -s "$REPO/$entry" "$ROOT/$entry"
 	done
 	cp "$REPO/batten.toml" "$ROOT/batten.toml"
+	# COPIED, not symlinked: the copied batten.toml declares
+	# `[budget.instructions]` over AGENTS.md, and since CLOUD-50 `batten check`
+	# enforces every declared budget — an entry matching no file is exit 1 per
+	# entry (CLOUD-298). The tree walk counts regular files only, so a symlink
+	# here would be invisible to it and the entry would read as dead.
+	cp "$REPO/AGENTS.md" "$ROOT/AGENTS.md"
 	export CARGO_TARGET_DIR="$REPO/target"
 }
 
