@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.62](https://github.com/button-inc/batten/compare/v0.0.61...v0.0.62) - 2026-08-12
+
+### Added
+
+- *(bench)* measure and gate the path that is actually wired
+- *(judge)* add the advisory-only judge rule kind, unable to block by type
+- *(hook)* gate a mediated call on a receipt, retiring ready-guard's predicate
+- *(hook)* adjudicate write tools, so the write matcher stops being unjudged
+- *(findings)* settle a finding with a check, and never clear one nothing looked at
+- *(design)* audit a design-evidence claim stream for record integrity
+- *(install)* ship a single-binary-first install path with a verified download
+- *(action)* ship a GitHub Action whose empty `with:` block is the whole configuration
+- *(refusal)* one refusal type, so no deny can ship a bare "no"
+- *(config)* gate the predecessor consumer's repo name
+- *(rules)* [**breaking**] rename the command kind's `run` column to `check`, reserve `fix`
+- *(lint)* gate a delegation brief on the facts that do not inherit
+- *(bench)* measure the invocation cost, publish it, and gate it
+- *(state)* record where a session left the journal
+- *(session)* give a warm fork somewhere to resume from
+- *(spec)* emit the derived read-only allowlist beside the tree
+- *(rules)* give forbid a regex alternative and an exclude column
+- *(config)* give the override layer its own type, schema, and honoured keys
+- *(epoch)* cache the config epoch and revalidate it stat-style
+- *(budget)* count Serena's always-given prompt against the instruction set
+- *(budget)* count a string embedded in a host's config file
+- *(check)* emit a finding's identity on the -J channel
+- *(selfwrite)* flag a memory write in a turn no user message opened
+
+### Fixed
+
+- *(hook)* [**breaking**] resolve receipts for the command, not for the whole policy
+- *(rules)* reconcile the judge kind with the receipt kind after the rebase
+- *(rules)* [**breaking**] make severity a per-kind column, so a judge row can omit it
+- *(rules)* stop the tree walk at a nested repository, so both halves of a ratchet select the same set
+- *(lint)* add the lint rows to the two committed surface lists, and fix the census's clippy denial
+- *(bench)* keep the workflow's summary block off shellcheck's SC2016
+- *(budget)* give the validate fixture the new embedded field
+- *(spec)* pin the four surface rows house-style §2 disagreed with
+
+### Other
+
+- *(fuzz)* fuzz the hook envelope and the config parsers, and gate the corpus on every landing
+- *(rules)* keep the census arm a one-liner, so clippy and rustfmt agree
+- *(judge)* rustfmt the module, the kind and their suites
+- *(judge)* satisfy the workspace lints on the new module and its suite
+- *(rules)* classify the judge kind's two required columns in the pairing census
+- *(judge)* drive every acceptance bullet through the compiled binary
+- *(submodule)* rustfmt the new acceptance fixture
+- *(design)* rustfmt the module and its suite
+- *(design)* drive every acceptance bullet through the compiled binary
+- *(markers)* assert the permission drop landed, and audit every site that needs one
+- *(readme)* lead with the completion gate, not the policy-engine category
+- *(deps)* drop dev-dependencies that duplicate the normal ones
+- *(resolve)* mark §5's max_effect as specified, not implemented
+- *(session)* compare the whole store across a restart, not a subset
+- *(session)* pin what a warm fork must keep
+- *(findings)* hold the no-escalation law over the bytes, not over a struct
+- *(resolve)* carry the layered tables and path sets as values
+- *(budget)* seed the committed budget's surfaces in the config fixtures
+- *(config)* the epoch dispatch comment claimed exit 3 too
+- widen the gate bar from computable to deciding
+- *(store)* state the store id's construction, not a disagreement with the spec
+
 ## [0.0.61](https://github.com/button-inc/batten/compare/v0.0.60...v0.0.61) - 2026-08-11
 
 ### Added
