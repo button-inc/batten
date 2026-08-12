@@ -216,3 +216,78 @@ lease() {
 	run ready
 	[[ "$output" == *'"permissionDecision": "deny"'* ]]
 }
+
+# --- the stale-base predicate (rebase, do not repair) --------------------------
+
+# Advance origin/main past a commit that ADDS the landing-loop memory, which is
+# how the guard derives the landing commit's identity — a sha it cannot store,
+# because the commit that introduces the predicate is the one that mints it.
+landing_commit() {
+	git checkout -q "$MAIN_SHA"
+	mkdir -p .serena/memories/workflow
+	: >.serena/memories/workflow/landing-loop.md
+	git add .serena/memories/workflow/landing-loop.md
+	git commit -q -m "feat(land): the landing loop"
+	LANDING_SHA="$(git rev-parse HEAD)"
+	git update-ref refs/remotes/origin/main "$LANDING_SHA"
+	git checkout -q "$BRANCH"
+}
+
+@test "a branch whose merge-base predates the landing commit is refused" {
+	# The branch forked before the landing work, so rebasing through it produces
+	# conflicts in exactly the files where "take ours" undoes the change. Caught
+	# before the rebase rather than at review.
+	receipts
+	landing_commit
+	# The receipt must match the main the guard now sees, or the earlier
+	# linear-check check fires first and this row proves nothing about the one
+	# under test.
+	printf '%s' "$LANDING_SHA" >"$RECEIPTS/linear-check.$HEAD_SHA"
+	run ready
+	[[ "$output" == *'"permissionDecision": "deny"'* ]]
+	[[ "$output" == *"REBASE, DO NOT REPAIR"* ]]
+	[[ "$output" == *"mem:workflow/landing-loop"* ]]
+}
+
+@test "the refusal names no file to edit back" {
+	# A message that says "fix mise-tasks/land" is the instruction that produces
+	# the repair. It must point at a rebase and at the memory, never at an edit.
+	receipts
+	landing_commit
+	printf '%s' "$LANDING_SHA" >"$RECEIPTS/linear-check.$HEAD_SHA"
+	run ready
+	[[ "$output" == *"git rebase origin/main"* ]]
+	[[ "$output" != *"edit"* ]]
+}
+
+@test "a branch that contains the landing commit is allowed" {
+	# The negative control. Without it a guard that denied everything would pass
+	# both rows above.
+	receipts
+	lease ""
+	landing_commit
+	git merge -q --no-edit "$LANDING_SHA"
+	printf '%s' "$LANDING_SHA" >"$RECEIPTS/linear-check.$(git rev-parse HEAD)"
+	printf '%s' "$(($(date +%s) + 120))" >"$RECEIPTS/lease.${BRANCH//\//-}"
+	: >"$RECEIPTS/verify.$(git rev-parse HEAD)"
+	run ready
+	[[ "$output" != *'"permissionDecision": "deny"'* ]]
+}
+
+@test "FAIL OPEN: an origin/main that never carried the landing commit allows" {
+	# During rollout this is not an edge case, it is every clone. A guard that
+	# refused here would stop landing everywhere the moment it shipped.
+	receipts
+	lease ""
+	run ready
+	[[ "$output" != *"REBASE, DO NOT REPAIR"* ]]
+}
+
+@test "THE PROPERTY: the landing commit is DERIVED, never a literal" {
+	# The chicken-and-egg made structural: the sha is minted by the commit that
+	# adds this predicate, so it cannot appear in the file that predicate lives
+	# in. A future author hardcoding one would also be wrong in every clone that
+	# received a rebased copy rather than the original object.
+	run grep -cE '[0-9a-f]{40}' "$GUARD"
+	[ "$output" -eq 0 ]
+}

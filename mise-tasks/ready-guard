@@ -144,4 +144,37 @@ esac
 [ "$lease_expires" -gt "$now" ] ||
 	deny "Refused: the landing lease for '$branch' lapsed $((now - lease_expires))s ago, so another branch may already be landing. A lease is renewed by \`land\`'s heartbeat, so a lapsed one means that \`land\` is gone. Run \`mise run land\` (background it) rather than readying on top of a lease nobody is holding. Bypass with BATTEN_READY_GUARD_BYPASS=1."
 
+# --- REBASE, DO NOT REPAIR -----------------------------------------------------
+#
+# The threat is not malice, it is an agent on a clone that predates the landing
+# work reading its shape as breakage and repairing it back — a raced wait with no
+# clock, a verdict that answers "no answer", a lease held by a live process. Each
+# looks like a defect from an older tree, and each is the change. This is the one
+# predicate that catches it BEFORE the rebase whose conflicts in `mise-tasks/land*`
+# and `tests/land*.bats` are exactly where "take ours" undoes it.
+#
+# THE LANDING COMMIT IS DERIVED, NOT STORED, and the chicken-and-egg is why. Its
+# sha is minted by the commit that introduces this predicate, so no file that
+# commit adds can name it; and a rebase or cherry-pick mints a different sha
+# anyway, so a hardcoded value would be wrong in every clone that did not receive
+# the exact original object. What IS stable in every clone is a fact of history:
+# the commit that first ADDED the memory this same change ships.
+#
+# Read along `origin/main`, never HEAD. HEAD is the thing being judged — on the
+# stale branch this exists to catch, the path is absent from HEAD's history
+# entirely, so deriving from HEAD would answer "no landing commit" and fail open
+# on precisely the case that matters. `origin/main` is already in hand two checks
+# above, and `linear-check` — demanded above — is what refreshes it.
+#
+# `tail -1` takes the OLDEST addition, so a delete-and-re-add cannot move the
+# epoch forward and quietly re-admit a stale base.
+marker=".serena/memories/workflow/landing-loop.md"
+landing=$(git log --diff-filter=A --format=%H "$current_main" -- "$marker" 2>/dev/null | tail -1) || exit 0
+# FAIL OPEN while this clone's origin/main has never carried the landing commit.
+# During rollout that is not an edge case, it is every clone.
+[ -n "$landing" ] || exit 0
+
+git merge-base --is-ancestor "$landing" HEAD 2>/dev/null ||
+	deny "Refused: this branch's merge-base predates the landing commit ${landing:0:8}, where \`land\`, the lease and their suites took their current shape. Everything you are about to rebase through will look like breakage from here — a wait with no clock, a verdict that answers 'no answer yet', a lease held by a live process — and repairing it back is how the change gets undone one branch at a time. REBASE, DO NOT REPAIR: \`git fetch origin main && git rebase origin/main\`, take the incoming side in \`mise-tasks/land*\` and \`tests/land*.bats\`, re-run \`mise run verify\`, then retry. Read \`mem:workflow/landing-loop\` first if any of it reads as a bug. Bypass with BATTEN_READY_GUARD_BYPASS=1."
+
 exit 0
