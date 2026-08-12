@@ -201,7 +201,10 @@ case "\$2" in
     # racing the fast-forward answer is by construction the one started after
     # this lap's comment. Counting them separately is not cosmetic — a single
     # shared counter is read stale by the second watcher and neither ever wins.
-    if [ -s "$BATS_TEST_TMPDIR/comments" ]; then role=answer; else role=ci; fi
+    # The role is TOLD to us by land (LAND_RACE), never deduced from whether a
+    # comment exists yet: that file is mutated by the same lap, so a slow fork
+    # read it after the comment landed and took the other race's counter.
+    role=\${LAND_RACE:-ci}
     n=\$(cat "$BATS_TEST_TMPDIR/mw.\$role.calls" 2>/dev/null || echo 0)
     n=\$((n + 1)); echo "\$n" >"$BATS_TEST_TMPDIR/mw.\$role.calls"
     wins=\$(cat "$BATS_TEST_TMPDIR/mw.\$role.wins" 2>/dev/null || echo 0)

@@ -353,6 +353,14 @@ while :; do
 	fi
 
 	# --- race the two answers: green, or no longer landable ---
+	# LAND_RACE labels which of the two waits this watcher serves. `main-watch`
+	# ignores it; it exists so an observer never has to INFER the role from
+	# racing state. tests/land.bats used to deduce it from whether a comment had
+	# been posted yet — a file this same lap mutates — so a watcher that forked
+	# slowly classified itself as the other race and won one it was never
+	# scripted to win. That reordering is rare on an idle box and ordinary under
+	# a loaded one, which made a real assertion fail only inside a full gate run
+	# and pass six times out of six alone (CLOUD-426).
 	rc_ci="$(mktemp)"
 	rc_main="$(mktemp)"
 	: >"$rc_ci"
@@ -363,7 +371,7 @@ while :; do
 	) &
 	ci_pid=$!
 	(
-		mise run main-watch "$base_main" >/dev/null 2>&1
+		LAND_RACE=ci mise run main-watch "$base_main" >/dev/null 2>&1
 		echo $? >"$rc_main"
 	) &
 	main_pid=$!
@@ -438,7 +446,7 @@ while :; do
 	rc_ff="$(mktemp)"
 	: >"$rc_ff"
 	(
-		mise run main-watch "$base_main" >/dev/null 2>&1
+		LAND_RACE=answer mise run main-watch "$base_main" >/dev/null 2>&1
 		echo $? >"$rc_ff"
 	) &
 	ff_watch_pid=$!
