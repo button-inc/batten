@@ -137,7 +137,22 @@ case "\$sub" in
       # which is what decides whether a confirming run was ever spent
       # (CLOUD-247), so a case can script it.
       *commits/*check-runs*) emit "\$(cat "$BATS_TEST_TMPDIR/checkruns")" ;;
-      *actions/workflows/*)  emit "\$(nth runs)" ;;
+      # CLOUD-408: the /fast-forward directive is now POSTed through the API so
+      # its comment id — the key the verdict filter matches on — comes back.
+      # `rc.comment` makes the POST fail the way a secondary rate limit does.
+      *issues/*/comments*)
+        if [ -f "$BATS_TEST_TMPDIR/rc.comment" ]; then
+          echo "GraphQL: was submitted too quickly (addComment)" >&2; exit 1
+        fi
+        echo "\$all" >>"$BATS_TEST_TMPDIR/comments"
+        emit '{"id":7}' ;;
+      # CLOUD-414: a query that fails writes its error body to STDOUT, which is
+      # exactly how a 403 used to reach the verdict as a refusal.
+      *actions/workflows/*)
+        if [ -f "$BATS_TEST_TMPDIR/rc.runs" ]; then
+          emit '{"message":"API rate limit exceeded","status":"403"}'; exit 1
+        fi
+        emit "\$(nth runs)" ;;
       # CLOUD-369: the runs this lap started, and the cancel that ends them.
       # The url is recorded rather than counted, so a case can assert WHICH run
       # was cancelled and not merely that something was.
@@ -451,13 +466,23 @@ pr_state() {
 # not concluded yet.
 workflow_runs() {
 	local file="$1" conclusion="${2:-}" created="${3:-2099-01-01T00:00:00Z}"
+	# The 4th argument is `display_title`, defaulting to the KEY this lap mints
+	# (CLOUD-409). Without a default every existing refusal row would silently
+	# stop matching the new filter and the suite would go red for the wrong
+	# reason; with it, a row that wants a STRANGER's refusal says so explicitly.
+	local title="${4:-fast-forward #150 @7}"
 	if [ -z "$conclusion" ]; then
 		printf '{"workflow_runs":[]}' >"$BATS_TEST_TMPDIR/$file"
 	else
-		printf '{"workflow_runs":[{"created_at":"%s","status":"completed","conclusion":"%s"}]}' \
-			"$created" "$conclusion" >"$BATS_TEST_TMPDIR/$file"
+		printf '{"workflow_runs":[{"created_at":"%s","status":"completed","conclusion":"%s","display_title":"%s"}]}' \
+			"$created" "$conclusion" "$title" >"$BATS_TEST_TMPDIR/$file"
 	fi
 }
+
+# A refusal belonging to some other PR's lap, inside our own SINCE window.
+sibling_refuses() { workflow_runs "$1" failure 2099-01-01T00:00:00Z "fast-forward #999 @4242"; }
+comment_fails() { : >"$BATS_TEST_TMPDIR/rc.comment"; }
+runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 
 @test "a refusal starts the next lap instead of ending the run" {
 	# THE REGRESSION, and then its second half. Note the check-runs endpoint is
@@ -480,14 +505,101 @@ workflow_runs() {
 	[[ "$output" == *"already carries a verify receipt"* ]]
 }
 
-@test "a cancelled run is a refusal too, not just a failure" {
+@test "a cancelled run is the bot failing to DECIDE, not a refusal" {
+	# REWRITTEN, and the old row pinned exactly the behaviour CLOUD-413 says is
+	# wrong. A cancelled run judged nothing; calling it a refusal narrated "main
+	# moved under the branch" and bought a full lap — measured across 24 laps of
+	# one landing where several "refusals" were the bot's own rate limit and
+	# `main` had not moved at all.
 	pr_state OPEN MERGED
 	workflow_runs runs.1 cancelled
 	workflow_runs runs.last
 	run "$LAND"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"refused (cancelled)"* ]]
+	[[ "$output" == *"no readable answer"* ]]
+	[[ "$output" != *"refused (cancelled)"* ]]
+	[[ "$output" != *"main moved under"* ]]
+}
+
+@test "a SIBLING PR's refusal is not this lap's verdict (CLOUD-409)" {
+	# At the measured cadence the SINCE window held 243 strangers' refusals, any
+	# of which this lap would have read as its own — which is how "the bot is
+	# silent or slow" was inferred while the bot answered every attempt inside
+	# 23 seconds. The run below is keyed to PR #999; ours is #150.
+	pr_state OPEN OPEN MERGED
+	sibling_refuses runs.1
+	workflow_runs runs.last
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"the fast-forward bot refused"* ]]
+	[ "$(comments)" -eq 1 ]
+}
+
+@test "a keyed refusal IS still read — the filter did not stop reading" {
+	# The negative control for the row above. A fix that keyed too tightly would
+	# never see a refusal again and would reintroduce CLOUD-235's hang.
+	pr_state OPEN MERGED
+	workflow_runs runs.1 failure
+	workflow_runs runs.last
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"the fast-forward bot refused (failure)"* ]]
 	[ "$(comments)" -eq 2 ]
+}
+
+@test "a /fast-forward the API refused is never reported as posted (CLOUD-408)" {
+	# Measured on PR #330: GitHub answered the secondary rate limit, `gh` exited
+	# non-zero, nothing read it, and land printed "commented /fast-forward …
+	# waiting for the merge" over a comment that did not exist — then blocked
+	# waiting for a merge nothing had been asked to perform.
+	comment_fails
+	pr_state OPEN
+	LAND_ANSWER_MAX_UNKNOWNS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"commented /fast-forward on #150"* ]]
+	[[ "$output" == *"could not ask #150 to fast-forward"* ]]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "a 403 from the runs query is not an answer (CLOUD-414)" {
+	# `gh` writes the error body to STDOUT, so the unfiltered body reached the
+	# verdict where the test was `[ -z ]` — any non-empty string was a refusal,
+	# and a transport error was indistinguishable from one. The bound is a COUNT
+	# of unreadable answers, never a clock on the poll.
+	runs_query_403
+	pr_state OPEN
+	LAND_ANSWER_MAX_UNKNOWNS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"refused"* ]]
+	[[ "$output" == *"no readable answer"* ]]
+	[[ "$output" == *"gh api rate_limit"* ]]
+}
+
+@test "an unreadable answer re-asks without buying a CI run" {
+	# The whole reason an unknown re-asks rather than stopping: on an unmoved
+	# `main` the lap is free — the verify receipt still keys to this HEAD, the
+	# head already graded so neither ready fires, and the push moves nothing.
+	runs_query_403
+	pr_state OPEN
+	LAND_ANSWER_MAX_UNKNOWNS=2 run "$LAND"
+	[ "$status" -eq 1 ]
+	# Lap 1 readies, which is the one confirming run a landing is supposed to
+	# buy. The property is that the RE-ASK adds nothing: one ready across both
+	# passes, and one verify, because the head never changed.
+	[ "$(grep -c '^ready$' "$BATS_TEST_TMPDIR/calls")" -le 1 ]
+	[ "$(grep -c '^run verify$' "$BATS_TEST_TMPDIR/misecalls")" -eq 1 ]
+}
+
+@test "the fast-forward verdict is KEYED, not merely windowed" {
+	# The structural sensor, in the shape of the no-wall-clock row below: the
+	# filter is only sound while the workflow keeps minting the key, and nothing
+	# else in the tree couples the two files.
+	run grep -c 'per_page=20' "$REAL_LAND"
+	[ "$output" -eq 0 ]
+	run grep -c 'display_title' "$REAL_LAND"
+	[ "$output" -ge 1 ]
+	run grep -c '^run-name:' "$BATS_TEST_DIRNAME/../.github/workflows/fast-forward.yml"
+	[ "$output" -eq 1 ]
 }
 
 @test "a lap rebases onto the main that moved, then re-verifies the new SHA" {
@@ -1150,8 +1262,8 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$REAL_LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 19 ] || {
-		echo "land has $stops stopping conditions; this suite covers 19."
+	[ "$stops" -eq 20 ] || {
+		echo "land has $stops stopping conditions; this suite covers 20."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -1175,8 +1287,8 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# path that speculates and may reserve), the successor pushed and lapped, the
 	# successor is already in flight for this head, and the winner found main had
 	# moved while it waited. Each is exercised below.
-	[ "$laps" -eq 11 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 11."
+	[ "$laps" -eq 13 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 13."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}

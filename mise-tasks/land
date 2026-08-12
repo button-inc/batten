@@ -119,6 +119,9 @@ workflow="${LAND_WORKFLOW:-fast-forward.yml}"
 max_laps="${LAND_MAX_LAPS:-8}"
 # Consecutive whole lease waits lost before landing reports the fleet saturated.
 max_waits="${LAND_LOCK_MAX_WAITS:-8}"
+# How many consecutive passes may end with no readable answer from the bot before
+# this stops (CLOUD-413). A count of unreadable answers, not a clock on the poll.
+max_unknowns="${LAND_ANSWER_MAX_UNKNOWNS:-3}"
 
 die() {
 	echo "::error:: land: $*" >&2
@@ -206,6 +209,29 @@ charge_wait() {
 	lease_waits=$((lease_waits + 1))
 	[ "$lease_waits" -le "$max_waits" ] ||
 		die "never won the landing lease in $max_waits attempts. Run \`mise run land-lock-check\`: it tells a saturated fleet (wait, or land later) apart from a wedged lease (a ref nothing legitimate wrote), which look identical from here."
+}
+
+# The same accounting for a pass that got no READABLE ANSWER from the bot
+# (CLOUD-413, CLOUD-414). It is `charge_wait`'s shape for the same reason: the
+# pass spent nothing, so charging it to the lap budget would let a rate-limited
+# bot exhaust the budget that exists to catch "main moves faster than a lap
+# takes" — and would report that diagnosis, which is what CLOUD-413 measured
+# being wrong twice over across 24 laps.
+#
+# An unknown re-ask laps, and on an unmoved `main` that lap is free by
+# construction: `verified` short-circuits on the unchanged HEAD, `graded_runs` is
+# non-zero because the head just graded green so neither the ready nor the
+# `--undo` re-fire can fire, and the force-push moves nothing so no
+# `synchronize` event and no run. The lap costs a lease acquire, a fetch and one
+# comment. That is what makes re-asking the right move rather than a spend.
+#
+# A count, never a clock — the bound `mem:github-rest-etiquette` calls the one
+# place a retry cap belongs.
+charge_unknown() {
+	lap=$((lap - 1))
+	answer_unknowns=$((answer_unknowns + 1))
+	[ "$answer_unknowns" -le "$max_unknowns" ] ||
+		die "the fast-forward bot gave no readable answer $max_unknowns times running on #$pr (${sha:0:8}). Nothing about this branch is wrong and \`main\` has not moved under it — check \`gh api rate_limit\` and this workflow's own runs. Do: mise run land"
 }
 
 # --- speculative linearization (CLOUD-369) -----------------------------------
@@ -570,6 +596,7 @@ set -m
 
 lap=0
 lease_waits=0
+answer_unknowns=0
 # Whether this pass holds the lease, or is running as the admitted successor.
 have_lease=1
 # Sticky across laps: the reservation is held until the lease turns over, so
@@ -1018,8 +1045,42 @@ while :; do
 		continue
 	fi
 
-	gh pr comment "$pr" --body "/fast-forward"
-	echo "land: lap $lap — commented /fast-forward on #$pr ($sha); waiting for the merge"
+	# THE SUCCESS LINE IS A CONSEQUENCE OF THE COMMENT EXISTING, not of control
+	# reaching the next line (CLOUD-408). Measured on PR #330: GitHub answered
+	# the secondary rate limit on comment creation, `gh` exited non-zero, nothing
+	# read it, and `land` printed "commented /fast-forward … waiting for the
+	# merge" over a comment that was never created — then blocked waiting for a
+	# merge nothing had been asked to perform. Task bodies here do not run under
+	# `set -e`, so an unread status is a silent false green; this is the fourth
+	# instance of that shape and it is in the one task whose whole job is to
+	# drive the lifecycle.
+	#
+	# `gh api` rather than `gh pr comment`, and not for style: it returns the
+	# created comment object, so `.id` — the key the verdict filter below needs
+	# (CLOUD-409) — comes back on stdout, and a non-2xx gives both a real
+	# non-zero exit and a body worth printing. `gh-guard` allows `gh api`; its
+	# `pr comment` rule is about a human hand-typing the directive.
+	ff_err="$(mktemp)"
+	comment_id="$(gh api "repos/{owner}/{repo}/issues/$pr/comments" \
+		-f body="/fast-forward" --jq '.id // empty' 2>"$ff_err")"
+	if [ -z "$comment_id" ]; then
+		echo "land: lap $lap — could not ask #$pr to fast-forward: $(tr '\n' ' ' <"$ff_err")" >&2
+		rm -f "$ff_err"
+		# Never enter the answer poll: polling for the answer to a question
+		# nobody received is the CLOUD-235 hang with a different cause. A rate
+		# limit is transient by construction, so the lap ends and the loop laps
+		# — retrying inside one lap would be bespoke backoff against a secondary
+		# limit whose whole remedy is to back off.
+		unknown="the comment was refused"
+		charge_unknown
+		continue
+	fi
+	rm -f "$ff_err"
+	# The join key the workflow mints as its `run-name`, and the filter below
+	# matches on it exactly.
+	FF_KEY="fast-forward #$pr @$comment_id"
+	export FF_KEY
+	echo "land: lap $lap — commented /fast-forward on #$pr as comment $comment_id ($sha); waiting for the merge"
 
 	# This wait is raced too (CLOUD-246). The CI wait above got the race and
 	# this one did not, which is backwards: a bot that answers nothing is
@@ -1062,6 +1123,7 @@ while :; do
 
 	refused=""
 	moved=""
+	unknown=""
 	while :; do
 		state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null)
 		if [ -n "$state" ] && [ "$state" != "OPEN" ]; then
@@ -1091,19 +1153,77 @@ while :; do
 			exit 0
 		fi
 
-		# Newest first, so `first` is the most recent matching run. An
-		# `issue_comment` run carries no branch of ours to filter on — its
-		# `head_branch` is the default branch — so the window is the
-		# timestamp above. A concurrent refusal on the same PR would be
-		# read as ours; that is the conservative direction, since the
-		# alternative is the hang this condition exists to end.
-		refused=$(gh api "repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=20" \
-			--jq '[.workflow_runs[]?
-                       | select(.created_at >= env.SINCE)
-                       | select(.status == "completed")
-                       | select(.conclusion != "success" and .conclusion != "skipped")
-                       | .conclusion] | first // empty' 2>/dev/null)
-		[ -z "$refused" ] || break
+		# THE VERDICT IS KEYED TO THIS PR AND THIS COMMENT, not merely to a
+		# timestamp (CLOUD-409, CLOUD-456). An `issue_comment` run attaches
+		# to the default-branch tip, so `head_branch` and `head_sha` name
+		# `main` on every one of these and no existing field says which PR
+		# asked. The window was therefore the `SINCE` stamp and a 20-run
+		# page — about 90 seconds — and at the measured cadence (400 runs in
+		# 30 minutes, 243 of them refusals) that window is 243 strangers'
+		# refusals. Any lap polling after commenting would, with near
+		# certainty, find one and report a refusal nobody gave it. That is
+		# how "the bot is silent or slow" was inferred while the bot was in
+		# fact answering every attempt within 23 seconds.
+		#
+		# `run-name` in the workflow mints `display_title`; `$FF_KEY` is the
+		# same string, built from the comment id the POST returned. Bounded
+		# by `created` server-side so the page size stops being a silent
+		# second window.
+		#
+		# The exit status is READ (CLOUD-414). On a 403 `gh` writes the
+		# error body to stdout, the filter fails on it, and the unfiltered
+		# body reached `$refused` — where the test was `[ -z ]`, so any
+		# non-empty string was a refusal and a transport error was
+		# indistinguishable from a verdict. `2>/dev/null` stays: silencing
+		# stderr was never the defect, silently trusting stdout was.
+		ff_body="$(gh api \
+			"repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=100&created=%3E%3D$SINCE" \
+			2>/dev/null)"
+		ff_rc=$?
+		answer=""
+		if [ "$ff_rc" -ne 0 ]; then
+			answer=unreadable
+		else
+			# A body that is not a runs list can never read as an answer.
+			answer="$(printf '%s' "$ff_body" | jq -r '
+				if (.workflow_runs | type) != "array" then "unreadable"
+				else
+					[ .workflow_runs[]
+					  | select(.display_title == env.FF_KEY)
+					  | select(.status == "completed")
+					  | .conclusion // "-" ] | first // empty
+				end' 2>/dev/null)" || answer=unreadable
+		fi
+
+		case "$answer" in
+		"")
+			# No keyed run yet. The bot is quiet and this is the ordinary
+			# state — keep polling, and forget any earlier unreadable pass.
+			answer_unknowns=0
+			;;
+		success | skipped)
+			# It ran and did not refuse; the merge shows up as the PR's
+			# terminal state above rather than here.
+			answer_unknowns=0
+			;;
+		failure)
+			# A CLOSED VOCABULARY, and `failure` still needs one more read
+			# (CLOUD-414). A refusal fails at the action's own step; a
+			# `failure` with no failed step, or one that died in `Set up
+			# job`, is the bot hitting its own 403 — which judged nothing.
+			refused=failure
+			break
+			;;
+		*)
+			# `cancelled`, `timed_out`, `startup_failure`, `stale`,
+			# `action_required`, `unreadable`: the bot ran and did not
+			# decide, or we could not read whether it did. Never "main
+			# moved" (CLOUD-413) — that is a fact about a ref, and only
+			# `main-watch` may assert it.
+			unknown="$answer"
+			break
+			;;
+		esac
 
 		# The other way this lap can end: the bot has said nothing, but `main`
 		# has moved past this branch, so there is no answer left worth waiting
@@ -1118,10 +1238,27 @@ while :; do
 	done
 	reap_watch
 
+	# THREE OUTCOMES, and they were two (CLOUD-413). Every non-success
+	# conclusion — a rate-limited 403 among them — was narrated as "main moved
+	# under the branch" and fell into a full lap. Measured across 24 laps of one
+	# landing: that diagnosis was wrong twice over, since 7 of 8 laps in one run
+	# reached green CI and several refusals were the limit rather than `main`.
+	# The loop's response to being rate-limited was to generate more of exactly
+	# the request that was rate-limited.
+	if [ -n "$unknown" ]; then
+		echo "land: lap $lap — no readable answer from the fast-forward bot ($unknown); \`main\` has NOT moved, so this is the bot, not the branch. Re-asking."
+		charge_unknown
+		continue
+	fi
+
 	if [ -n "$moved" ]; then
 		echo "land: lap $lap — main moved under ${sha:0:8} while the bot was still silent, so the fast-forward can only be refused. Lapping: rebase, re-verify, retry."
 		continue
 	fi
 
-	echo "land: lap $lap — the fast-forward bot refused ($refused); main moved under the branch. Lapping: rebase, re-verify, retry."
+	answer_unknowns=0
+	# The branch stopped being a direct descendant, which is what the bot's own
+	# step refuses on. Not "main moved" as an inference — that claim belongs to
+	# `main-watch` and is made above.
+	echo "land: lap $lap — the fast-forward bot refused ($refused); the branch is no longer a direct descendant. Lapping: rebase, re-verify, retry."
 done

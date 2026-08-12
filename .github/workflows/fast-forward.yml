@@ -1,5 +1,21 @@
 name: fast-forward
 
+# THE RUN CARRIES THE PR IT ANSWERS FOR (CLOUD-409, CLOUD-456). An
+# `issue_comment` run attaches to the default-branch tip, so `head_branch` and
+# `head_sha` name `main` for every one of these — there is no field on the run
+# object that says which PR asked. `land` therefore had only the timestamp to
+# filter on, and at the measured cadence (400 runs in 30 minutes, 243 of them
+# refusals) its ~90s window was 243 strangers' refusals, any of which it would
+# read as its own verdict. `run-name` surfaces as `display_title` on the run,
+# which gives the filter an exact key.
+#
+# Both interpolations are integers from the event payload. NOT
+# `github.event.comment.body`, which is attacker-controlled and is the template
+# injection zizmor exists to refuse. The comment id is the stronger of the two on
+# its own: it names THIS lap's request on THIS head, so it also subsumes the
+# `SINCE` fence against an earlier lap of the same PR.
+run-name: fast-forward #${{ github.event.issue.number }} @${{ github.event.comment.id }}
+
 # GitHub's merge button cannot fast-forward: "Rebase and merge" rewrites every
 # commit under a new SHA, and "Merge" adds a merge commit. Both discard the exact
 # objects CI tested. This workflow lands a PR by *true* fast-forward instead —
