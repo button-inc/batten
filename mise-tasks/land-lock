@@ -281,10 +281,19 @@ sha_held_for() {
 	local seen prev_sha prev_at
 	seen="$state_dir/seen"
 	mkdir -p "$state_dir"
-	read -r prev_sha prev_at <"$seen" 2>/dev/null || {
-		prev_sha=
-		prev_at=
-	}
+	prev_sha=
+	prev_at=
+	# Absence is guarded BEFORE the redirect, not caught after it (CLOUD-433).
+	# Bash opens an input redirect before the `2>/dev/null` on the same command
+	# is in effect, so `read <"$seen" 2>/dev/null` on a missing file still
+	# printed `No such file or directory` to the CALLER's stderr — on every
+	# first sighting of a sha, which is every acquire that reaches this path.
+	if [ -f "$seen" ]; then
+		read -r prev_sha prev_at <"$seen" 2>/dev/null || {
+			prev_sha=
+			prev_at=
+		}
+	fi
 	if [ "$prev_sha" != "$observed_sha" ] || [ -z "$prev_at" ]; then
 		printf '%s %s\n' "$observed_sha" "$(now)" >"$seen"
 		echo 0
@@ -293,7 +302,18 @@ sha_held_for() {
 	echo $(($(now) - prev_at))
 }
 mine() { [ -n "$observed_holder" ] && [ "$observed_holder" = "$(holder_id)" ]; }
-age() { echo $((ttl - (observed_expires - $(now)))); }
+# A tombstone is a HANDOVER, not an expiry, and every verb that renders seconds
+# must say so (CLOUD-433). `expires: 0` is a sentinel, not an instant, so the
+# ordinary arithmetic against it yields wall-clock epoch — `released after
+# 1786501354s`, observed live. Written as an `if` rather than `released && …`
+# because a false `&&` list would be the function's exit status under `set -e`.
+age() {
+	if released; then
+		echo 0
+		return 0
+	fi
+	echo $((ttl - (observed_expires - $(now))))
+}
 
 # CLOUD-432: is the land this heartbeat serves still alive? `land` passes its
 # pid down as LAND_LOCK_HOLDER_PID; unset means "no holder declared", which is
@@ -324,6 +344,19 @@ acquire)
 	delay=2
 	while :; do
 		observe || exit 2
+		# Record the sighting on EVERY observation, not only once expired
+		# (CLOUD-433). The corroboration clock starts at the first time we saw
+		# this sha, and starting it only after expiry meant it started when the
+		# backoff had already grown to 8–30s: measured 19s from expiry to steal
+		# at TTL=4/beat=2, against this file's own promise of one extra beat.
+		# Recording here lands the steal on the FIRST post-expiry check.
+		#
+		# This shortens no precondition — the sha must still have sat unchanged
+		# for a full beat, and a live holder still remints it every beat. It
+		# removes an accidental delay, it does not make anything stealable
+		# sooner than the design intends.
+		held_for=0
+		[ -z "$observed_sha" ] || held_for=$(sha_held_for)
 		if mine && ! expired; then
 			echo "land-lock: already held by this clone"
 			exit 0
@@ -342,7 +375,7 @@ acquire)
 			# Absent, or explicitly handed over. Both are statements rather than
 			# deductions, so neither needs corroboration or a clock.
 			steal=yes
-		elif expired && [ "$(sha_held_for)" -ge "$beat" ]; then
+		elif expired && [ "$held_for" -ge "$beat" ]; then
 			steal=yes
 		fi
 		if [ "$steal" = yes ]; then
@@ -462,6 +495,13 @@ release)
 	# fires on every exit path, including ones that never acquired. Exiting
 	# non-zero there would turn an orderly cleanup into a reported failure.
 	{ [ -n "$observed_sha" ] && mine; } || exit 0
+	# Already handed over: re-tombstoning it would mint a second release of the
+	# same lease and report an epoch-scale age for it (CLOUD-433). A release is
+	# idempotent in effect, so it must be idempotent in what it says too.
+	if released; then
+		echo "land-lock: already released"
+		exit 0
+	fi
 	# A tombstone, not a delete: CAS the expiry to now, which leaves the lease
 	# instantly claimable by anyone. That is all a release has to mean, and it
 	# keeps every write in this task the same single operation.
@@ -481,6 +521,15 @@ status)
 	# a lease nobody released is the tell for a session that died holding one.
 	if [ -z "$observed_sha" ]; then
 		echo "land-lock: unheld"
+		exit 0
+	fi
+	# Checked BEFORE `expired`, because a tombstone satisfies both: its expiry is
+	# 0, so `now >= 0` is trivially true and the expired branch would render
+	# `free for <epoch>s` — `free for 1786499426s`, observed live after the
+	# lease's first fleet release (CLOUD-433). `land-lock-check` already drew
+	# this distinction; `status` never did.
+	if released; then
+		echo "land-lock: released — last held by $observed_holder"
 		exit 0
 	fi
 	if expired; then

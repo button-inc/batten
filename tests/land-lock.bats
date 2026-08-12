@@ -93,13 +93,116 @@ teardown() {
 	lock "$MINE" acquire
 	run lock "$MINE" release
 	[ "$status" -eq 0 ]
-	# Released is a TOMBSTONE, not a deletion: the ref survives, carrying an
-	# expiry in the past. What a caller must see is that the lease is free.
+	# Released is a TOMBSTONE, not a deletion: the ref survives, carrying the
+	# sentinel expiry 0. What a caller must see is that the lease is free — and
+	# since CLOUD-433 it is told so as a HANDOVER rather than as an expiry,
+	# which is the true statement about how it became free.
 	lease_sha
 	run lock "$MINE" status
-	[[ "$output" == *"unheld"* ]]
+	[[ "$output" == *"released"* ]]
 	run lock "$RIVAL" acquire
 	[ "$status" -eq 0 ]
+}
+
+@test "THE DEFECT: a released lease's status names the last holder, never an epoch" {
+	# `expires: 0` is a SENTINEL, not an instant, so `now - expires` renders
+	# wall-clock epoch. Observed live after the lease's first fleet release:
+	# `free for 1786499426s`. `land-lock-check` already special-cased the
+	# tombstone; `status` never did.
+	#
+	# `released` has to be tested BEFORE `expired`, because a tombstone
+	# satisfies both — `now >= 0` is trivially true — so an expired-first
+	# ordering reintroduces the defect exactly.
+	lock "$MINE" acquire
+	holder=$(cat "$MINE/.git/batten-land-lock/holder")
+	lock "$MINE" release
+	run lock "$MINE" status
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"released"* ]]
+	[[ "$output" == *"$holder"* ]]
+	# No epoch-scale DURATION, whatever wording is used to render one. Anchored
+	# on the trailing `s` rather than on ten digits alone, because the holder id
+	# is random hex and can itself contain ten consecutive digits — an
+	# unanchored version of this assertion fails on roughly one id in ten for a
+	# reason that has nothing to do with the defect.
+	[[ ! "$output" =~ [0-9]{10}s ]]
+	[[ "$output" != *"free for"* ]]
+}
+
+@test "THE DEFECT: releasing an already-released lease says so, and reports no epoch age" {
+	# `age()` had no tombstone branch and `release` never consulted `released()`
+	# before swapping, so a second release re-tombstoned the lease and printed
+	# `released after 1786501354s`. Observed live 2026-08-12.
+	lock "$MINE" acquire
+	lock "$MINE" release
+	run lock "$MINE" release
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"already released"* ]]
+	# Anchored on the trailing `s` for the same reason as above.
+	[[ ! "$output" =~ [0-9]{10}s ]]
+}
+
+@test "THE DEFECT: a first sighting of a sha emits no shell error on stderr" {
+	# `read -r … <"$seen" 2>/dev/null` — bash opens the input redirect before
+	# the stderr redirect on the same command takes effect, so a missing file
+	# still printed `No such file or directory` to the CALLER's stderr, on every
+	# acquire that reached the corroboration path. Harmless to the verdict, and
+	# noise in the one task whose output contract is pointer-only.
+	#
+	# Driven through a CONTENDED acquire, because that is the path that reaches
+	# corroboration at all: the rival holds a live lease, so this acquire
+	# observes a sha it has never seen and gives up at the wait deadline.
+	lock "$RIVAL" acquire
+	run lock "$MINE" acquire
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"No such file or directory"* ]]
+	[[ "$output" != *"land-lock: line"* ]]
+}
+
+@test "THE DEFECT: a LIVE lease is sighted, so the corroboration clock is already running when it expires" {
+	# The mechanism, asserted deterministically. The latency row below states the
+	# promise a caller cares about, but a wall-clock bound is a poor gate: the
+	# defective path steals at ~9-12s and the fixed one at ~3-4s, so any single
+	# threshold sits uncomfortably close to one of them. THIS row is the one that
+	# discriminates, and it cannot flake — it asserts the sighting was RECORDED,
+	# which is the whole change.
+	#
+	# The defect recorded a sighting only inside the `expired &&` branch, so
+	# observing a live lease left no trace at all and the clock started from
+	# scratch after expiry — by which time the backoff had grown to 8-30s.
+	LAND_LOCK_TTL=60 lock "$RIVAL" acquire
+	held=$(lease_sha)
+	LAND_LOCK_TTL=60 LAND_LOCK_WAIT=1 run lock "$MINE" acquire
+	[ "$status" -eq 1 ]
+	# The lease is nowhere near expiry, so under the defect nothing here exists.
+	[ -f "$MINE/.git/batten-land-lock/seen" ]
+	read -r seen_sha _ <"$MINE/.git/batten-land-lock/seen"
+	[ "$seen_sha" = "$held" ]
+}
+
+@test "THE DEFECT: a lease sighted before it expired is taken on the first check after" {
+	# The corroboration clock used to start at the first POST-expiry
+	# observation, by which time acquire's backoff had grown to 8–30s: measured
+	# 19s from expiry to steal at TTL=4/beat=2, against this task's own promise
+	# of one extra beat. Recording the sighting on every observation is the fix.
+	#
+	# Asserted as a DURATION because that is the promise the header makes. The
+	# bound has to sit between the two behaviours rather than merely above the
+	# fixed one: measured, the defect steals at ~9-12s here and the fix at ~3-4s,
+	# and an earlier version of this row used `< 12` — which the defect passes,
+	# so it graded nothing. The row above is the flake-proof half; this one
+	# states the user-visible promise.
+	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 lock "$RIVAL" acquire
+	# Sight the live lease now, before it expires: this is the observation the
+	# defect discarded.
+	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 LAND_LOCK_WAIT=1 run lock "$MINE" acquire
+	[ "$status" -eq 1 ]
+	start=$SECONDS
+	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 LAND_LOCK_WAIT=30 run lock "$MINE" acquire
+	elapsed=$((SECONDS - start))
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"took the lease"* ]]
+	[ "$elapsed" -lt 8 ]
 }
 
 @test "a released lease is not still held by its releaser" {
@@ -182,6 +285,10 @@ teardown() {
 	LAND_LOCK_REMOTE="$BATS_TEST_TMPDIR/nope.git" run lock "$MINE" status
 	[ "$status" -eq 2 ]
 	[[ "$output" != *"unheld"* ]]
+	# `released` is the second way `status` can say "free" (CLOUD-433), so it is
+	# forbidden here too. A fail-closed row that names only one of the free
+	# wordings stops being fail-closed the moment another is added.
+	[[ "$output" != *"released"* ]]
 }
 
 @test "an unreachable remote fails acquire closed too" {
@@ -367,11 +474,16 @@ fake_land() {
 	done
 	! kill -0 "$hold_pid" 2>/dev/null
 	grep -q "releasing rather than renewing for nobody" "$BATS_TEST_TMPDIR/hold.out"
-	# Released means instantly claimable: the rival sees an unheld lease, not a
-	# TTL it has to wait out.
+	# Released means instantly claimable: the rival sees a handover, not a TTL it
+	# has to wait out. The wording is `released` rather than `unheld` since
+	# CLOUD-433 — the tether releases, and a release is a tombstone, which is a
+	# different and more informative statement than "expired".
 	run lock "$RIVAL" status
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"unheld"* ]]
+	[[ "$output" == *"released"* ]]
+	# And claimable in fact, not merely in wording.
+	run lock "$RIVAL" acquire
+	[ "$status" -eq 0 ]
 }
 
 @test "a live land keeps its heartbeat renewing — the tether never fires on a healthy hold" {
@@ -410,7 +522,9 @@ fake_land() {
 	! kill -0 "$hold_pid" 2>/dev/null
 	run lock "$RIVAL" status
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"unheld"* ]]
+	# `released`, not `unheld`, since CLOUD-433: the tether RELEASES, and a
+	# release is a tombstone — a handover rather than an expiry.
+	[[ "$output" == *"released"* ]]
 	kill "$imposter" 2>/dev/null || true
 }
 
