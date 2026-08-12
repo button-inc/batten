@@ -53,7 +53,20 @@ while :; do
 
 	server_floor=$(printf '%s' "$resp" | sed -n 's/^[Xx]-[Pp]oll-[Ii]nterval: //p' | head -n1)
 	wait_for="$interval"
-	if [ -n "$server_floor" ] && [ "$server_floor" -gt "$interval" ] 2>/dev/null; then
+	# A NUMERIC comparison, not an integer one. `-gt` is integer-only, and the
+	# `2>/dev/null` beside it turned "this interval is not an integer" into "the
+	# server did not ask for a floor" — so any fractional MAIN_WATCH_INTERVAL
+	# silently dropped a floor the endpoint is entitled to set. Found by
+	# CLOUD-390 setting the suite's interval to 0.2; the same hole was open to
+	# any caller configuring a sub-second poll.
+	#
+	# `sleep` already accepts fractions, which is what makes a fractional
+	# interval legal in the first place, so the comparison is the only thing
+	# that was assuming otherwise. Values come from the environment and the
+	# response header, so both are coerced with `+0` and a non-numeric floor
+	# reads as 0 — i.e. no floor, which is the fail-open direction.
+	if [ -n "$server_floor" ] &&
+		awk -v f="$server_floor" -v i="$interval" 'BEGIN { exit !((f + 0) > (i + 0)) }'; then
 		wait_for="$server_floor"
 	fi
 

@@ -15,7 +15,14 @@ setup() {
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"
-	export PATH MAIN_WATCH_INTERVAL=1
+	# A FRACTION, because the poll interval is scaffolding here and not the
+	# property (CLOUD-390). Five cases each burned ~3s waiting out whole-second
+	# cycles — ~15s of the suite — to observe behaviour that is about WHICH
+	# answer wins, never about how long a cycle takes. `main-watch` passes this
+	# straight to `sleep`, which takes fractions, and `tests/target-ensure.bats`
+	# already relies on that. Every assertion below is unchanged: a case that
+	# stopped exercising its race would be worse than a slow one.
+	export PATH MAIN_WATCH_INTERVAL=0.2
 	: >"$BATS_TEST_TMPDIR/requests"
 	stub_gh
 }
