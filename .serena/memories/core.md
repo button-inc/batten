@@ -585,6 +585,38 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   `lint.rs`'s `judge-over-protected-unstated`: a silent safe default is
   indistinguishable from a decision nobody made, and the next diff widening `raw`
   inherits the omission unseen.
+  **The execution half landed with CLOUD-56**, in the same module: `[judge] run`
+  (command template, first token a program on PATH, run DIRECTLY — never a shell)
+  and `model` (opaque to the engine, substituted at `{{model}}`; the placeholder
+  with no model set is refused rather than passed through as a literal argv
+  token). `argv()` resolves the two; `invoke()` spawns with the payload on
+  **stdin** and stdout/stderr to `/dev/null`, which is what makes "reads the exit
+  code only" true rather than aspirational — a judge's prose can never re-enter
+  the engine as a decision input (CLOUD-93). `Verdict::of`: `0` clean, `2` raised,
+  **anything else (and a signal) unresolved**. That third arm is load-bearing —
+  reading any non-zero as a raise, or any non-two as clean, converts a plumbing
+  failure into a verdict.
+  The `judge` RULE KIND (CLOUD-56) is `rules.rs` vocabulary only —
+  `spawns_processes() == true`, so `run_static` already refuses it on `check`
+  naming `batten enforce`, with no new code. Columns: `criteria` (required, the
+  committed question), `tier` (`AdvisoryTier`, default `advisory`), and
+  `no_fix_reason` **required** — a judge finding reaches the store and CLOUD-81
+  refuses a stored finding nothing can close, and a model's opinion has no
+  mechanical fix. `settling_argv` is the judge's answer to CLOUD-81's settling
+  question: neither `Reevaluate` (the engine cannot re-decide a model's verdict)
+  nor `None` (that means "never reaches the store"), but the judge's own argv.
+  **Blocking is unrepresentable, not forbidden.** A judge outcome is a
+  `findings::Advisory`, never a `rules::Finding`, so `any_blocking` and
+  `--fail-on-warning` have nothing to see; `findings::record_advisory` is its own
+  door because the tier comes off the ROW (there is no severity to derive one
+  from) and because a judge invocation is one row's answer, so it must not
+  resolve findings it never looked at. The walker reaches the same place by its
+  own route: a judge row's severity is `allow` — refused as a config key and
+  injected by `config::parse` before deserialization — so `run_rule` returns
+  before any kind dispatch. The injection exists because `Rule::severity` is
+  required and non-`Option` by an equally deliberate decision; the faithful fix
+  (per-kind presence, so the derived SCHEMA stops flagging a correct judge row)
+  is CLOUD-445.
 - `design.rs` — design-evidence integrity gates (CLOUD-53): is the RECORD behind a
   decision sound, whatever the decision was? Input is a JSONL claim stream on
   **stdin and nothing else** (CLOUD-324) — stdin SUBSUMES a config path (a corpus
