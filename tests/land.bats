@@ -661,6 +661,81 @@ workflow_runs() {
 	[[ "$(ready_calls)" == *"--undo"* ]]
 }
 
+# --- CLOUD-458: the tap closes on every non-merged exit, not only on red ------
+#
+# What `checks-green` answers for the head when a landing stops. Absent means
+# GREEN, since the mise stub's default is exit 0 — so every case above that ends
+# without merging asserts the leave-it-ready side by construction, which is why
+# none of them needed changing.
+head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
+
+@test "a landing interrupted on an ungraded head re-drafts, not only a red one" {
+	# The measured leak: `land` readied, something other than red ended the run,
+	# and the PR stayed ready for good — so every later push bought a full
+	# matrix with no landing attempt in progress at all.
+	head_verdict 3
+	fails rebase
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$(ready_calls)" == *"--undo"* ]]
+	[[ "$output" == *"stopped without merging"* ]]
+}
+
+@test "the same interruption over a green head leaves it ready" {
+	# The other direction, and what makes the guard load-bearing rather than
+	# decorative: the pre-push ready fires only on a head with NO graded run, so
+	# re-drafting a green head strands it — and readying it again would buy a
+	# whole matrix to get back where it already was. Green resumes for free.
+	fails rebase
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+}
+
+@test "a head whose verdict could not be read is left ready, never stranded" {
+	# `checks-green` exit 2 is "I could not look", which is not evidence of
+	# anything. Acting on it would strand a green head on a reading we failed to
+	# take; the leak it leaves open costs a run, and the strand costs a wedge.
+	head_verdict 2
+	fails rebase
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+}
+
+@test "a landing that merges leaves the PR alone" {
+	# The one exit with no tap to close. The verdict lever is set to the value
+	# that WOULD re-draft, so this asserts the `landed` flag rather than the
+	# absence of an opportunity.
+	pr_state MERGED
+	head_verdict 3
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+}
+
+@test "a refused second land does not re-draft the live one's PR" {
+	# A land that never took the singleton owns neither the lease nor the PR.
+	# Its EXIT trap already knows not to release the lock; this is the same
+	# discipline applied to the other side effect.
+	task_fails singleton
+	head_verdict 3
+	run "$LAND"
+	[ "$status" -ne 0 ]
+	[[ "$(ready_calls)" != *"--undo"* ]]
+}
+
+@test "a re-draft that cannot happen does not change the exit code" {
+	# Cleanup that can fail an exit path is worse than the leak it closes: the
+	# status must still be the rebase conflict's, not the re-draft's.
+	head_verdict 3
+	undo_fails
+	fails rebase
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"re-drafted"* ]]
+}
+
 @test "a draft PR is readied, which is the event that spends the run" {
 	# Readying is what starts CI, so it happens once the tree is proven and
 	# pushed and never earlier — and it is how a PR re-drafted by an earlier red

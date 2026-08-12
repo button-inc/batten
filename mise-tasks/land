@@ -112,7 +112,7 @@ die() {
 # — spending another runner on a failure nobody has fixed yet.
 redraft() {
 	gh pr ready "$pr" --undo >/dev/null 2>&1 &&
-		echo "land: re-drafted #$pr — CI does not run on drafts, so nothing more is spent until this is fixed locally"
+		echo "land: re-drafted #$pr — ${1:-CI does not run on drafts, so nothing more is spent until this is fixed locally}"
 }
 
 # --- the landing lease (CLOUD-393) ----------------------------------------
@@ -198,7 +198,57 @@ export BATTEN_TASK_PID=$$
 # `target-ensure`'s `held` flag, for the same reason.
 singleton_held=no
 
+# CLOUD-458. Readying is how this task says "a landing is in progress"; nothing
+# said the opposite when it stopped. Only the RED path re-drafted, so a landing
+# interrupted any other way — a lost lease, a rebase conflict, a stopped task —
+# left the PR ready for good, and every later push to it bought a full matrix
+# with no landing attempt in progress at all. Measured 2026-08-12: four
+# concurrent `pull_request` matrices, three of the four PRs `draft=false` behind
+# an interrupted land.
+landed=no
+
+# CONDITIONAL ON THE VERDICT, which is the design rather than a caveat. The
+# pre-push ready fires only on a head with NO graded run, so re-drafting a head
+# that already graded green strands it: unmergeable while draft, and unreadyable
+# because `graded_runs` is no longer zero. Readying it anyway is the worse
+# repair — `ready_for_review` is a CI trigger, so recovering a green head would
+# buy a whole matrix, where today that resume is a free fast-forward.
+#
+# `checks-green` is the authority for "is this head green", NOT `graded_runs`:
+# the two answer different questions, and the one that counts a failed or
+# cancelled run as an answer would leave a green head ready only by accident.
+close_the_tap() {
+	[ "$landed" = no ] || return 0
+	# A land that never took the singleton owns neither the lease nor the PR —
+	# the discipline `singleton_held` already enforces for the release, and the
+	# reason a REFUSED second land must not touch the live one's work.
+	[ "$singleton_held" = yes ] || return 0
+	[ -n "${pr:-}" ] || return 0
+	# Only the draft state is asked for, in the same call shape the ready block
+	# uses. Whether the PR is still OPEN is already answered: a merge sets
+	# `landed`, and a PR closed without merging has died above — re-drafting one
+	# would fail, which `redraft` swallows. Asking anyway would cost a `pr view
+	# --json state`, and that call is sequenced by the poll it belongs to.
+	local rc=0
+	[ "$(gh pr view "$pr" --json isDraft --jq .isDraft 2>/dev/null)" = "false" ] || return 0
+	mise run checks-green >/dev/null 2>&1 || rc=$?
+	# 0 green: leave it ready, since the resume costs nothing. 2 could not look:
+	# never strand a head on a reading we failed to take. 1 red and 3 no-answer
+	# both mean the resume needs a fresh run whatever happens, so the draft
+	# costs nothing and stops every push until one starts.
+	case "$rc" in
+	1 | 3) ;;
+	*) return 0 ;;
+	esac
+	redraft "the landing stopped without merging, so no later push spends a runner until one starts again"
+}
+
 on_exit() {
+	# Before the lease drop: the tap is what another session's spend depends on,
+	# and a failure here must not stop the rest of the trap. `redraft` already
+	# swallows its own failure, which is the required posture — an exit path
+	# that can fail on cleanup is worse than the leak it closes.
+	close_the_tap || true
 	drop_lease
 	if [ "$singleton_held" = yes ]; then
 		mise run singleton release land >/dev/null 2>&1 || true
@@ -700,6 +750,9 @@ while :; do
 			git fetch -q origin main
 			echo "land: PR #$pr is $state after $lap lap(s); origin/main is now $(git rev-parse --short origin/main)"
 			[ "$state" = "MERGED" ] || die "PR #$pr is $state — closed without merging."
+			# The one exit that must leave the PR alone (CLOUD-458): it landed,
+			# so there is no tap to close and nothing left to re-draft.
+			landed=yes
 			# The branch has done its whole job and trunk-based development is
 			# explicit that it should not outlive it: keep the review's
 			# commentary, delete the branch (CLOUD-349). A name left behind is
