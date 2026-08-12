@@ -742,10 +742,44 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	# never stops moving must reach LAND_MAX_LAPS and say so, not loop forever.
 	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
 	LAND_MAX_LAPS=3 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 5 ]
 	[[ "$output" == *"still not linear after 3 laps"* ]]
 	[ "$(verify_calls)" -eq 3 ]
 	[ "$(comments)" -eq 0 ]
+}
+
+@test "CLOUD-399: the two exhaustions are told apart by CODE, not by prose" {
+	# The pair is the point. A saturated fleet ("wait, and land later — nothing
+	# is wrong") and a runaway branch ("main moves faster than a lap takes —
+	# look") both ended in `exit 1`, so a caller keying on a status could not
+	# tell "retry me later" from "I am broken". Swapping the two verdicts must
+	# red this case; a single-code assertion would pass on the swap.
+	#
+	# The wait side also asserts the COST, which is the whole reason the two are
+	# priced differently: a branch that never won a turn must have bought no
+	# matrix at all — no ready, no push, no comment.
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	saturated="$status"
+	[ "$saturated" -eq 4 ]
+	[[ "$output" == *"fleet is saturated"* ]]
+	[ "$(call_order)" = "" ]
+	[ "$(comments)" -eq 0 ]
+
+	setup
+
+	echo 2 >"$BATS_TEST_TMPDIR/rc.mise.verify"
+	LAND_MAX_LAPS=1 run "$LAND"
+	runaway="$status"
+	[ "$runaway" -eq 5 ]
+	[[ "$output" == *"moving faster than a lap takes"* ]]
+
+	# The property itself, stated once: distinguishable, and neither is the
+	# generic stop that every other `die` in this task uses.
+	[ "$saturated" -ne "$runaway" ]
+	[ "$saturated" -ne 1 ]
+	[ "$runaway" -ne 1 ]
 }
 
 @test "a body that defers a decision with no ticket stops before review is asked for" {
@@ -850,7 +884,7 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	# main is moving faster than a lap takes, which a human should see.
 	workflow_runs runs.last failure
 	LAND_MAX_LAPS=2 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 5 ]
 	[[ "$output" == *"after 2 laps"* ]]
 	[ "$(comments)" -eq 2 ]
 }
@@ -1340,7 +1374,14 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# The property that would have caught the dead branch: an exit nothing
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
-	stops=$(grep -o 'die "' "$REAL_LAND" | wc -l | tr -d ' ')
+	#
+	# BOTH SPELLINGS ARE COUNTED (CLOUD-399). The two exhaustions now carry their
+	# own exit codes through `die_with`, and counting only `die "` would have let
+	# this sensor read 18-of-20 as "two stops removed" — or, worse, let a future
+	# `die_with` stop be added completely uncounted. That is the exact blindness
+	# this assertion exists to prevent, reintroduced by the change that split the
+	# helper. `die_with` is matched on its code argument, which every call carries.
+	stops=$(grep -cE 'die "|die_with "?\$?[A-Za-z_]' "$REAL_LAND")
 	[ "$stops" -eq 20 ] || {
 		echo "land has $stops stopping conditions; this suite covers 20."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
@@ -1488,7 +1529,7 @@ lock_calls() { grep -c "^run land-lock $1\b" "$BATS_TEST_TMPDIR/misecalls" || tr
 	pr_state MERGED
 	LAND_LOCK_MAX_WAITS=2 run "$LAND"
 	# No push, so no CI was spent on a branch that could not have landed.
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$output" == *"another branch holds the landing lease"* ]]
 	[ "$(call_order)" = "" ]
 	# And it ends on the saturation signal, not the lap cap: a wait is not a lap,
@@ -1512,7 +1553,7 @@ exit 0
 EOF
 	chmod +x "$STUB/mise"
 	run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 5 ]
 	[[ "$output" == *"lease was lost before the comment"* ]]
 	[ ! -s "$BATS_TEST_TMPDIR/comments" ]
 }
@@ -1733,7 +1774,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	spec_head holder-branch
 	pr_state MERGED
 	LAND_LOCK_MAX_WAITS=1 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	grep -q '^fetch -q origin +refs/heads/holder-branch:refs/batten-spec/base$' "$BATS_TEST_TMPDIR/gitlog"
 	grep -q '^rebase 5peccccc5peccccc$' "$BATS_TEST_TMPDIR/gitlog"
 	[[ "$output" == *"the main that is about to exist"* ]]
@@ -1745,7 +1786,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	lease_lost
 	pr_state MERGED
 	LAND_LOCK_MAX_WAITS=1 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$output" != *"speculatively linearized"* ]]
 	[[ "$(cat "$BATS_TEST_TMPDIR/gitlog")" != *batten-spec* ]]
 }
@@ -1760,7 +1801,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_rebase"
 	pr_state MERGED
 	LAND_LOCK_MAX_WAITS=1 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$output" == *"conflicts with this branch; not speculating"* ]]
 	# It ends on the wait backstop — the ordinary saturation signal — never on
 	# the rebase-conflict stop, which is reserved for the one real decision.
@@ -1787,7 +1828,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	# speculative state alone rather than about the successor path.
 	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
 	LAND_LOCK_MAX_WAITS=4 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$output" == *"did not land; unwinding"* ]]
 	grep -q '^reset -q --hard cafe1234cafe1234$' "$BATS_TEST_TMPDIR/gitlog"
 	# Nothing was published from the speculative state.
@@ -1816,7 +1857,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	is_draft
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=1 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$output" == *"admitted as the successor"* ]]
 	[[ "$output" == *"overlaps the merge in flight"* ]]
 	# Readied and pushed — but never commented: the fast-forward needs the lease,
@@ -1836,7 +1877,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	is_draft
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=1 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$output" != *"admitted as the successor"* ]]
 	[ "$(call_order)" = "" ]
 	[ "$(ready_calls)" = "" ]
@@ -1861,7 +1902,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	is_draft
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=2 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$output" == *"main moved to"* ]]
 	[[ "$output" == *"lapping rather than confirming a head it will refuse"* ]]
 	# Nothing spent, and the lease handed straight back rather than held across
@@ -1890,7 +1931,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	is_draft
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=3 run "$LAND"
-	[ "$status" -eq 1 ]
+	[ "$status" -eq 4 ]
 	[[ "$(call_order)" == "ready push"* ]]
 	[ "$(grep -c '^push$' "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
 	[[ "$output" == *"its run is already in flight"* ]]

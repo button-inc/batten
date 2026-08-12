@@ -116,16 +116,50 @@ if [ -z "$pr" ]; then
 fi
 interval="${LAND_INTERVAL:-10}"
 workflow="${LAND_WORKFLOW:-fast-forward.yml}"
-max_laps="${LAND_MAX_LAPS:-8}"
+# THE TWO BACKSTOPS BOUND DIFFERENT RESOURCES, AND USED TO BE PRICED AS IF THEY
+# BOUND THE SAME ONE (CLOUD-399). A lap is METERED: it buys a CI matrix, measured
+# at ~17 job-minutes. A lease wait is FREE: a conditional poll against a ref, no
+# runner. Both defaulted to 8, which authorised ~2 runner-hours of metered spend
+# against ~16 minutes of free waiting — the expensive budget draining first
+# (measured on #302, 2026-08-12, four active sessions: 5 waits lost and 3 laps
+# entered in 22 minutes). The trade these defaults must express is MANY FREE
+# WAITS, FEW PAID LAPS.
+#
+# Neither is a clock. `max_laps` counts laps, `max_waits` counts whole lease turns
+# lost; a wall-clock cap on either reintroduces the VM-reap gap and lands as a
+# false "refused" on a slow bot (`mem:workflow/landing-loop`).
+max_laps="${LAND_MAX_LAPS:-2}"
 # Consecutive whole lease waits lost before landing reports the fleet saturated.
-max_waits="${LAND_LOCK_MAX_WAITS:-8}"
+# ~64 is the queue depth a contended fleet reaches — ~2h at the observed 2-5
+# minute lease turn — and waiting that long costs nothing but wall clock.
+max_waits="${LAND_LOCK_MAX_WAITS:-64}"
 # How many consecutive passes may end with no readable answer from the bot before
 # this stops (CLOUD-413). A count of unreadable answers, not a clock on the poll.
 max_unknowns="${LAND_ANSWER_MAX_UNKNOWNS:-3}"
 
-die() {
+# EXIT CODES, NOT PROSE, ARE WHAT A CALLER DECIDES ON (CLOUD-399). Every stop
+# used to be `exit 1`, so a saturated fleet ("wait, and land later — nothing is
+# wrong") and a runaway branch ("`main` moves faster than a lap takes — look")
+# were indistinguishable to anything but a human reading stderr. A fleet driver
+# keying on a status could not tell "retry me later" from "I am broken", which is
+# the same class of defect as reading a non-answer as an answer.
+#
+# The two exhaustions therefore get their OWN codes, and `die` keeps 1 so the
+# other eighteen call sites are unchanged. The house-style 0/1/2/3 table governs
+# the CLI's verbs; `land` is a lifecycle task, and these are additive stop
+# reasons above that range rather than a re-spelling of it.
+readonly LAND_EXIT_FLEET_SATURATED=4
+readonly LAND_EXIT_RUNAWAY=5
+
+die_with() {
+	local code="$1"
+	shift
 	echo "::error:: land: $*" >&2
-	exit 1
+	exit "$code"
+}
+
+die() {
+	die_with 1 "$@"
 }
 
 # THE ROSTER, GUARDED WHERE AN EXIT CAN ACTUALLY EXIT (CLOUD-467). `graded_runs`
@@ -226,7 +260,8 @@ charge_wait() {
 	lap=$((lap - 1))
 	lease_waits=$((lease_waits + 1))
 	[ "$lease_waits" -le "$max_waits" ] ||
-		die "never won the landing lease in $max_waits attempts. Run \`mise run land-lock-check\`: it tells a saturated fleet (wait, or land later) apart from a wedged lease (a ref nothing legitimate wrote), which look identical from here."
+		die_with "$LAND_EXIT_FLEET_SATURATED" \
+			"never won the landing lease in $max_waits attempts, having spent no CI matrix. The fleet is saturated: wait, or land later. Run \`mise run land-lock-check\`, which tells that apart from a wedged lease (a ref nothing legitimate wrote) — they look identical from here."
 }
 
 # The same accounting for a pass that got no READABLE ANSWER from the bot
@@ -619,7 +654,8 @@ admitted_sha=
 while :; do
 	lap=$((lap + 1))
 	[ "$lap" -le "$max_laps" ] ||
-		die "still not linear after $max_laps laps; main is moving faster than a lap takes. Look before lapping again."
+		die_with "$LAND_EXIT_RUNAWAY" \
+			"still not linear after $max_laps laps, each of which bought a CI matrix; \`main\` is moving faster than a lap takes. Look before lapping again."
 
 	# A lap holds the lease only across its own CI window. Dropping it here — at
 	# the top, covering every `continue` below uniformly — means a lap that lost
