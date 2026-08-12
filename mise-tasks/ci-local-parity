@@ -233,7 +233,9 @@ $(awk '
 	# response on `main` re-drafts the whole fleet through the mechanism built to
 	# protect it. Counted rather than grepped for absence, because the two forms
 	# differ only by a suffix and a `grep -v` would pass a file carrying both.
+	# shellcheck disable=SC2016  # `$body` is the workflow's text being searched for, not this script's variable
 	invocations=$(grep -c 'bash -c "\$body"' "$wf" || true)
+	# shellcheck disable=SC2016  # ditto — the pattern is the YAML's own `bash -c "$body" || exit 0`
 	tolerant=$(grep -c 'bash -c "\$body" || exit 0' "$wf" || true)
 	[ "$invocations" = "$tolerant" ] ||
 		problem "$wf runs the fetched precondition body without \`|| exit 0\` — a body that will not parse must not red the first step of every job (CLOUD-420)."
