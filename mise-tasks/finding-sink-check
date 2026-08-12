@@ -71,75 +71,94 @@ CITATION='([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\.(rs|toml|yml|yaml|ba
 # silently misses whichever name is live.
 DURABLE='(save_issue|save_comment|save_document|write_memory|edit_memory|rename_memory)$'
 
-# Turns are built in one jq pass, main-thread only. A subagent's write must never
-# be credited to the orchestrator's turn, and its prose must never be judged as
-# the orchestrator's — so `isSidechain == true` is dropped on both sides.
+# ONLY THE TURN THAT JUST ENDED, AND ONLY THAT TURN IS READ. Judging the whole
+# transcript is what the first wiring did, and running it live exposed the defect
+# immediately: it reported a turn from hours earlier whose findings had long since
+# been filed, and it would have re-reported that same turn at every Stop for the
+# rest of the session. A stale pointer is worse than none — it is unactionable, so
+# it trains the reader to skip the channel, which is the failure this whole
+# mechanism exists to avoid.
 #
-# A turn opens at a real user prompt. A `tool_result` arrives as a user record too
-# and is NOT a prompt; counting it would split one turn into many and hand each
-# fragment its own verdict.
-if ! report=$(jq -rs '
-    [ .[] | select(.isSidechain != true) ]
-    | reduce .[] as $r ({turn: 0, prose: {}, durable: {}};
-        if $r.type == "user"
-           and ( ($r.message.content | type) == "string"
-                 or ( ($r.message.content | type) == "array"
-                      and ( [ $r.message.content[] | select(type == "object" and .type == "text") ] | length ) > 0 ) )
-        then .turn += 1
-        elif $r.type == "assistant" and .turn > 0
-        then
-          reduce ($r.message.content // [])[] as $b (.;
-            if ($b | type) != "object" then .
-            elif $b.type == "text"
-              then .prose[.turn | tostring] = ((.prose[.turn | tostring] // "") + "\n" + ($b.text // ""))
-            elif $b.type == "tool_use"
-              then .durable[.turn | tostring] = ((.durable[.turn | tostring] // []) + [$b.name // ""])
-            else . end)
-        else . end)
-    | . as $s
-    | [ range(1; $s.turn + 1) as $t
-        | { turn: $t,
-            prose: ($s.prose[$t | tostring] // ""),
-            tools: ($s.durable[$t | tostring] // []) } ]
-    | .[] | "\(.turn)\(.tools | join(","))\(.prose | gsub("\n"; " "))"
+# At a turn boundary the only turn still actionable is the last one. Earlier turns
+# were either already answered or already missed; neither is this nudge's business.
+#
+# THE COST THAT MADE THIS TWO PASSES (CLOUD-479). The first implementation built
+# every turn's prose and tool map and then took `tail -n 1`, so the work behind
+# every turn but one was discarded by design on every turn end, and it grew with
+# session length. Measured over a real 2.9MB / 1237-line transcript: 338ms total,
+# of which the slurp was 66ms. The slurp was never the cost — computing turns whose
+# verdict is thrown away was. So the classifying pass reads the whole file and the
+# per-block pass reads one turn, and only the cheap half grows.
+#
+# ONE RECORD PER LINE is a new and load-bearing assumption: pass 1 addresses the
+# turn boundary by LINE, which a pretty-printed record would break. The harness
+# writes JSONL and this task's own error text has always said so, so the assumption
+# is stated here rather than left to be discovered.
+#
+# Main-thread only, on both passes. A subagent's write must never be credited to
+# the orchestrator's turn, and its prose must never be judged as the
+# orchestrator's — so `isSidechain == true` is dropped on both sides.
+
+# PASS 1 — turn boundaries, streaming, no slurp. A turn opens at a real user
+# prompt: a `tool_result` also arrives as a user record and is NOT a prompt, so
+# counting it would split one turn into many and hand each fragment its own
+# verdict. The COUNT of boundaries is the turn number — the last turn IS turn N —
+# and the LAST boundary is the line the turn under judgement begins on.
+if ! boundaries=$(jq -r '
+    select(.isSidechain != true)
+    | select(.type == "user")
+    | select( (.message.content | type) == "string"
+              or ( (.message.content | type) == "array"
+                   and ( [ .message.content[] | select(type == "object" and .type == "text") ] | length ) > 0 ) )
+    | input_line_number
   ' "$transcript" 2>/dev/null); then
 	echo "::error:: transcript is not readable JSONL: $transcript" >&2
 	exit 2
 fi
 
-# ONLY THE TURN THAT JUST ENDED. Judging the whole transcript is what the first
-# wiring did, and running it live exposed the defect immediately: it reported a
-# turn from hours earlier whose findings had long since been filed, and it would
-# have re-reported that same turn at every Stop for the rest of the session. A
-# stale pointer is worse than none — it is unactionable, so it trains the reader
-# to skip the channel, which is the failure this whole mechanism exists to avoid.
-#
-# At a turn boundary the only turn still actionable is the last one. Earlier turns
-# were either already answered or already missed; neither is this nudge's business.
-last=$(tail -n 1 <<<"$report")
-turns=$(grep -c . <<<"$report")
+turns=$(grep -c . <<<"$boundaries")
+start=$(tail -n 1 <<<"$boundaries")
 
 fired=0
-while IFS=$'\001' read -r turn tools prose; do
-	[ -n "$turn" ] || continue
-	grep -qE "$CITATION" <<<"$prose" || continue
+if [ -n "$start" ]; then
+	# PASS 2 — the last turn's assistant blocks only. Each block is tagged with one
+	# leading character rather than collected into a record, so prose and tool names
+	# stay separable without reading the slice twice.
+	if ! blocks=$(tail -n +"$start" "$transcript" | jq -r '
+	    select(.isSidechain != true)
+	    | select(.type == "assistant")
+	    | (.message.content // [])[]
+	    | select(type == "object")
+	    | if .type == "text" then "T" + ((.text // "") | gsub("\n"; " "))
+	      elif .type == "tool_use" then "U" + (.name // "")
+	      else empty end
+	  ' 2>/dev/null); then
+		echo "::error:: transcript is not readable JSONL: $transcript" >&2
+		exit 2
+	fi
+
+	prose=$(grep '^T' <<<"$blocks")
+	tools=$(grep '^U' <<<"$blocks")
+
 	# Any one durable tool name in the same turn clears it.
+	clean=0
 	if [ -n "$tools" ]; then
-		clean=0
 		while IFS= read -r name; do
 			[ -n "$name" ] || continue
-			if grep -qE "$DURABLE" <<<"$name"; then
+			if grep -qE "$DURABLE" <<<"${name#U}"; then
 				clean=1
 				break
 			fi
-		done <<<"$(tr ',' '\n' <<<"$tools")"
-		[ "$clean" = 0 ] || continue
+		done <<<"$tools"
 	fi
-	# The whole output contract, in one line: a coordinate and a count. Never a
-	# byte of `$prose` — that variable is read and never printed.
-	echo "turn:$turn finding-without-durable-write"
-	fired=$((fired + 1))
-done <<<"$last"
+
+	if [ "$clean" = 0 ] && grep -qE "$CITATION" <<<"$prose"; then
+		# The whole output contract, in one line: a coordinate and a count. Never a
+		# byte of `$prose` — that variable is read and never printed.
+		echo "turn:$turns finding-without-durable-write"
+		fired=$((fired + 1))
+	fi
+fi
 
 # A transcript with no turns is exit 0, not a finding — but it is also not proof
 # of anything, so it says so. Anti-vacuity: a gate that cannot fire must not be
