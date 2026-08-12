@@ -147,6 +147,16 @@ That's a rule, so it ships with mechanisms — the hooks wired in
 restate its count here), each failing open on anything it can't parse. Most are
 `PreToolUse`; the two exceptions name their event:
 
+**The `PreToolUse` and `PostToolBatch` entries are unwired right now, and the
+predicates below are unenforced — self-enforce them.** Six `mise run` launches
+per Bash call cost a measured 1.247 s serial / 605 ms concurrent to do
+milliseconds of policy, ~93% of it task-runner startup, so CLOUD-435 phase 1
+removed them; phase 2 re-wires the same predicates behind
+`batten hook --harness claude-code`, the path `bench` measures and
+`bench-assert` budgets. The programs and their bats suites are untouched — only
+the invocation path changed — so `mise run <guard>` still decides, by hand.
+Delete this paragraph when phase 2 lands.
+
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision
   table in `mise-tasks/gh-guard-check`, gated by `mise run test:bats`. Reads

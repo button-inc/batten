@@ -16,16 +16,6 @@
         ]
       }
     ],
-    "PostToolBatch": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mise run -q contract-drift"
-          }
-        ]
-      }
-    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -42,46 +32,6 @@
           {
             "type": "command",
             "command": "mise run -q stop-guard"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mise run gh-guard"
-          },
-          {
-            "type": "command",
-            "command": "mise run ready-guard"
-          },
-          {
-            "type": "command",
-            "command": "mise run issue-guard"
-          },
-          {
-            "type": "command",
-            "command": "mise run run-shape-guard"
-          },
-          {
-            "type": "command",
-            "command": "mise run memory-guard"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "mise run memory-guard"
-          },
-          {
-            "type": "command",
-            "command": "mise run claim-guard"
           }
         ]
       }
