@@ -286,6 +286,17 @@ watcher_detaches() { : >"$BATS_TEST_TMPDIR/detach"; }
 verify_is_slow() { : >"$BATS_TEST_TMPDIR/verify.slow"; }
 main_moves_during_verify() { echo "$1" >"$BATS_TEST_TMPDIR/mw.verify.wins"; }
 verify_watch_fails_once() { : >"$BATS_TEST_TMPDIR/vwatch.fail"; }
+# Alive means RUNNING, not merely unreaped: a SIGKILLed process lingers as a
+# zombie until its (dead) parent's reaper gets to it, `kill -0` answers true
+# for zombies, and under a loaded gate the reap can outlast any fixed settle —
+# measured as a flake of the escalation case inside a full parallel verify.
+# The state field is read past the comm's closing paren, since comm may
+# legally contain the space that would break a naive field split.
+alive_not_zombie() {
+	local st
+	st=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f1) || return 1
+	[ -n "$st" ] && [ "$st" != "Z" ]
+}
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
 # The push leaves the remote ref where it was, so no `synchronize` event fires
 # and nothing starts a run — the one shape that still needs the `--undo`.
@@ -1027,11 +1038,11 @@ EOF
 	local pid deadline
 	while read -r pid; do
 		[ -n "$pid" ] || continue
-		deadline=$((SECONDS + 2))
-		while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+		deadline=$((SECONDS + 4))
+		while alive_not_zombie "$pid" && [ "$SECONDS" -lt "$deadline" ]; do
 			sleep 0.1
 		done
-		! kill -0 "$pid" 2>/dev/null
+		! alive_not_zombie "$pid"
 	done <"$BATS_TEST_TMPDIR/stubborn.pids"
 }
 
