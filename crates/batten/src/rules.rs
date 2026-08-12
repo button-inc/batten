@@ -2560,9 +2560,7 @@ mod tests {
                         // `blank` already sets one; naming it here keeps the
                         // census total now that it is a per-kind column.
                         "severity" => rule.severity = Some(RuleSeverity::Deny),
-                        "criteria" => {
-                            rule.criteria = Some("does this read as intentional".to_owned())
-                        }
+                        "criteria" => rule.criteria = Some("intentional?".to_owned()),
                         "no_fix_reason" => rule.no_fix_reason = Some("answered by hand".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
                     }
