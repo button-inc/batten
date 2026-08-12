@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+#MISE description="The pure decision behind plan-hold-guard: is a background hold live, so a turn that hands control to a human will not end idle?"
+#
+# CLOUD-451. Handing control to a human — `ExitPlanMode`, `AskUserQuestion` — is
+# the one turn end that is CORRECTLY idle: nothing is running because nothing
+# should be, the session is waiting on a person. The container reclaims idle
+# sessions anyway, and the cost lands on the human rather than the agent: text
+# already typed into the approval box is discarded, or the plan closes and
+# reopens empty. The longer someone reads before approving, the likelier their
+# input is destroyed, which makes careful review the *punished* behaviour.
+#
+# `run-shape-guard` already names the failure ("an idle turn gets the VM
+# reclaimed") and AGENTS.md carries it as a rule. Both are about the agent's own
+# idleness and neither reaches this boundary, so the rule shipped without its
+# mechanism (non-negotiable 2). `plan-hold` is the mechanism; this is its
+# predicate, split out for the same reason `memory-guard-check` is split from
+# `memory-guard`: the decision is then directly callable and directly testable,
+# and the sentinel location is spelled exactly once, here.
+#
+# **A hold is live when a sentinel names a pid that still answers.** Two parts,
+# never one. A bare "the file exists" would let a killed hold — a reclaimed
+# container, a `land` that took the process down — read as protection that is not
+# there, which is worse than no guard at all because it is silent. This is the
+# same corpse-versus-free-lock distinction `alive` draws over `batten-tasks` and
+# `target-ensure` draws over its lock, and the asymmetry is chosen the same way:
+# here a dead hold read as LIVE is the expensive direction, because it licenses
+# exactly the idle handoff this exists to prevent. So an unevaluable probe reads
+# as dead, and the cost of being wrong is one redundant `mise run plan-hold`.
+#
+# **Reporting a corpse also reaps it** (again `alive`'s shape), so the hold
+# directory is self-healing rather than an accumulating pile of headstones that
+# would each need a `kill -0` on every future call.
+#
+# One sentinel per PID, not one per session. `CLAUDE_SESSION_ID` is not reliably
+# exported into a task's environment, and a single per-repo path would have two
+# concurrent sessions overwriting each other's record. A file named by pid needs
+# no identity plumbing at all, and "is anything holding this clone open" is the
+# question the guard actually asks.
+#
+# Usage: plan-hold-check live      — exit 0 live / 1 not live / 2 cannot look
+#        plan-hold-check dir       — print the hold directory (for plan-hold and
+#                                    plan-hold-release, so the path has one home)
+#
+# Exit codes are §7's: 0 the predicate holds, 1 it does not, 2 the question could
+# not be asked. There is deliberately no exit code for "reaped something" — that
+# is bookkeeping, not a verdict.
+set -uo pipefail
+
+# The one authoritative spelling of the hold location. Under `$GIT_DIR` rather
+# than `$TMPDIR` because that is where this repo already keeps per-clone
+# machinery (`batten-receipts`, `batten-tasks`), and because `claim-guard`
+# already treats the git dir as machinery rather than work — so a hold can be
+# armed inside plan mode without a write to any tracked path.
+# ABSOLUTE, deliberately: `--git-dir` answers `.git` from the repo root, and this
+# path is consumed by hooks whose working directory is the harness's rather than
+# the one the hold was armed from. A relative answer would have two callers
+# resolving the same hold to different directories, which is a false not-live —
+# the reading that licenses the idle handoff.
+hold_dir() {
+	local git_dir
+	git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
+	[ -n "$git_dir" ] || return 1
+	printf '%s\n' "$git_dir/batten-holds"
+}
+
+mode="${1:-live}"
+
+case "$mode" in
+dir)
+	dir=$(hold_dir) || {
+		echo "::error:: plan-hold-check: not a git repository — no hold directory" >&2
+		exit 2
+	}
+	printf '%s\n' "$dir"
+	exit 0
+	;;
+live) ;;
+*)
+	echo "::error:: plan-hold-check: unknown mode \"$mode\" (want: live | dir)" >&2
+	exit 2
+	;;
+esac
+
+dir=$(hold_dir) || {
+	echo "::error:: plan-hold-check: not a git repository — cannot say whether a hold is live" >&2
+	exit 2
+}
+
+# The refusal text, written once. Both the not-live exits below reach it, so the
+# fix a caller is told about cannot drift between them — a deny that does not
+# carry its fix is the shape `refusal.rs` exists to make impossible, and this is
+# the shell side keeping the same bargain.
+#
+# Pointer-only (non-negotiable 4): a command and a path. Never a plan, never a
+# question, never a line of whatever the session was about to ask.
+not_live() {
+	cat <<'FIX'
+No background hold is live, so ending this turn would leave the container idle
+while a human reads — and an idle container is reclaimed, destroying whatever
+they had already typed.
+
+Arm one first, in its own tool call, with run_in_background:
+
+  mise run plan-hold
+
+It prints nothing until it is released, costs no tokens while it waits, and
+exits within one poll of the human's reply — that exit is the wake-up. Bypass
+with BATTEN_PLAN_HOLD_BYPASS=1 when ending the turn idle is genuinely intended.
+FIX
+	exit 1
+}
+
+# Never created, so nothing has ever held this clone open. That is a real answer
+# — not live — and NOT the same as being unable to look, which is exit 2 above.
+[ -d "$dir" ] || not_live
+
+# Present but unreadable is "could not look". Distinguished from absence for the
+# same reason `alive` distinguishes them: collapsing the two would report a
+# broken registry as a confident verdict.
+[ -r "$dir" ] && [ -x "$dir" ] || {
+	echo "::error:: plan-hold-check: hold directory at $dir is unreadable — cannot say whether a hold is live" >&2
+	exit 2
+}
+
+live=0
+# Lexical glob order, so repeated calls over the same state are byte-stable
+# (non-negotiable 5) rather than dependent on readdir order.
+for file in "$dir"/*; do
+	[ -f "$file" ] || continue
+	pid=$(head -n 1 -- "$file" 2>/dev/null) || continue
+	# A half-written record is not a hold. Inventing one from a blank or a
+	# non-numeric line would be a claim, so it is reaped like a corpse.
+	case "$pid" in
+	'' | *[!0-9]*)
+		rm -f -- "$file" 2>/dev/null || true
+		continue
+		;;
+	esac
+	if kill -0 "$pid" 2>/dev/null; then
+		live=$((live + 1))
+	else
+		rm -f -- "$file" 2>/dev/null || true
+	fi
+done
+
+[ "$live" -gt 0 ] || not_live
+
+# Pointer-only on the allow path too: a count, never a pid list and never what
+# the hold is holding for.
+echo "plan-hold-check: $live hold(s) live"

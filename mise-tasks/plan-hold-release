@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#MISE description="UserPromptSubmit hook body: release every live hold, so the sleeper exits on the human's reply instead of being killed by it"
+#
+# CLOUD-451. The other half of `plan-hold`. A human answering is the event that
+# ends the wait, and `UserPromptSubmit` is where the harness announces it —
+# already wired, once per prompt rather than once per tool call, so this costs
+# nothing in the class CLOUD-435 removed.
+#
+# **Release, not kill.** Removing the sentinel lets the hold finish on its own
+# terms: it returns 0, and its completion is a wake-up the harness delivers with
+# the human's message already in hand. Signalling it instead would end the
+# process without that exit, which is the same "the work runs and the session
+# loses its wake-up" failure `run-shape-guard` catalogues — and this file sends
+# no signal at all, so the property holds structurally rather than by review.
+#
+# Releasing EVERY hold, not one keyed to this session: two sessions sharing a
+# clone is already discouraged, the worst case is that one of them stops waiting
+# a little early, and the alternative is threading a session id through a task
+# environment that does not reliably carry one.
+#
+# Silent and always 0. A hook on the prompt path has no verdict to deliver and
+# nothing worth saying — an agent does not need to be told that a sentinel it
+# never sees was removed.
+set -uo pipefail
+
+# Drain stdin so the harness never sees a closed pipe on a payload this hook has
+# no interest in. The event's own fields are not read: "a prompt arrived" is the
+# whole predicate.
+cat >/dev/null 2>&1 || true
+
+check="$(dirname -- "${BASH_SOURCE[0]}")/plan-hold-check"
+[ -x "$check" ] || exit 0
+
+dir=$("$check" dir 2>/dev/null) || exit 0
+[ -n "$dir" ] && [ -d "$dir" ] || exit 0
+
+for file in "$dir"/*; do
+	[ -f "$file" ] || continue
+	rm -f -- "$file" 2>/dev/null || true
+done
+
+exit 0

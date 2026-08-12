@@ -183,6 +183,14 @@ answer, not this list's.
 `::error::` line every call and a `systemMessage` once per session. Silence
 means it is mediating.
 
+**One `PreToolUse` entry is not the engine**, and it names its reason:
+`plan-hold-guard` on `ExitPlanMode|AskUserQuestion` (CLOUD-451). The predicate is
+"a named background process is live", which no rule kind expresses — a linked
+capability gap, like the others above — and CLOUD-435's cost argument does not
+reach it: those two tools fire at most once per turn, the frequency class of the
+`Stop` and `UserPromptSubmit` entries it kept, so no Bash call pays for it. It is
+invoked by path for the same reason the launcher is.
+
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision
   table in `mise-tasks/gh-guard-check`, gated by `mise run test:bats`. Reads
@@ -288,6 +296,19 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   Readying is the single event that starts CI, so this is the one precondition
   whose cost is paid in CI minutes when it is skipped. Bypass:
   `BATTEN_READY_GUARD_BYPASS=1`.
+- `plan-hold-guard` denies `ExitPlanMode` and `AskUserQuestion` while no
+  background hold is live, because handing control to a human is the one turn
+  end that is correctly idle — and an idle container is reclaimed, destroying
+  whatever the human had already typed into the approval box (CLOUD-451). The
+  remedy the deny names is `mise run plan-hold`, launched with
+  `run_in_background`: a sleeper that prints nothing until it is released, so it
+  costs no tokens while someone reads. `plan-hold-release` on `UserPromptSubmit`
+  removes its sentinel when the reply arrives, so the hold **exits** rather than
+  being killed — that exit is the wake-up. The predicate is a sentinel naming a
+  pid that still answers `kill -0`, in `mise-tasks/plan-hold-check`, which is
+  where the hold directory is spelled; a corpse is reaped on sight, the way
+  `alive` treats a dead `batten-tasks` entry. Bypass:
+  `BATTEN_PLAN_HOLD_BYPASS=1`, for deliberately ending a turn idle.
 
 `mise run landed-check` is a board gate on the same stdin pattern: an
 issue In Progress whose ref appears on `main` has landed, and landed is In

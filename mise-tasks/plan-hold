@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+#MISE description="Hold the session open while a human answers: a no-op background task that sleeps until released, so a handoff turn does not end idle"
+#
+# CLOUD-451. Launch this with `run_in_background` immediately before any turn
+# that hands control to a person — `ExitPlanMode`, `AskUserQuestion` — and the
+# container stays alive while they read and type. `plan-hold-check` carries the
+# diagnosis and owns the sentinel path; this file is the process that occupies it.
+#
+# **Why a task and not a hook.** A hook fires and returns; it cannot create a
+# background task the harness tracks, and a `nohup … &` daemon is precisely the
+# `orphaned-run` shape `run-shape-guard` refuses — the call returns at once, the
+# work runs unsupervised, and the session loses its wake-up. The hold must
+# therefore be a real backgrounded tool call the agent makes. What the hook does
+# instead is refuse the handoff until one exists (`plan-hold-guard`).
+#
+# **Silent until released, on purpose.** A model call is metered in the same
+# category as CI minutes (AGENTS.md), so a hold that chattered while waiting
+# would spend tokens to buy patience. It prints one line, at exit, and that exit
+# is the wake-up the harness delivers with the human's reply already in hand —
+# which is also why the release path removes the sentinel rather than killing the
+# process: a killed hold wakes nothing.
+#
+# **The cap is a leak stop, never a wall clock on the wait.** AGENTS.md bans
+# bounding a poll by elapsed time, and that ban is about waits with a real exit
+# condition — CI going terminal, `main` advancing. This wait's exit condition is
+# a person, who may simply never come back; without a ceiling the sleeper
+# outlives the conversation. Four hours is far outside any review and well inside
+# a container's life.
+#
+# Exit 0 on both terminal paths — released and capped are outcomes, not verdicts;
+# this is not a gate. Exit 2 if the hold could not be established at all.
+set -euo pipefail
+
+# Seconds between checks. Five, because the cost of a poll is a `test -e` and the
+# thing it buys is bounded lateness on the wake-up — the human's reply is already
+# delivered by the harness, so this only decides how promptly the sleeper notices
+# it is done.
+POLL=${BATTEN_PLAN_HOLD_POLL:-5}
+MAX=${BATTEN_PLAN_HOLD_MAX:-14400}
+
+# By path, not `mise run`: this task is launched at every handoff, and CLOUD-435
+# measured ~150 ms of task-runner startup per nested launch to do milliseconds of
+# work. `stop-guard` calls `stop-posture-check` the same way, for the same reason.
+check="$(dirname -- "${BASH_SOURCE[0]}")/plan-hold-check"
+
+dir=$("$check" dir) || {
+	echo "::error:: plan-hold: no git dir — cannot arm a hold here" >&2
+	exit 2
+}
+
+# Idempotent by design. A guard that denies until a hold is live invites a second
+# launch when the first one is already running (a retried tool call, a re-entered
+# plan), and two sleepers hold the door no wider than one while doubling what a
+# release has to clean up.
+if "$check" live >/dev/null 2>&1; then
+	echo "plan-hold: already held"
+	exit 0
+fi
+
+mkdir -p -- "$dir" || {
+	echo "::error:: plan-hold: cannot create $dir" >&2
+	exit 2
+}
+
+sentinel="$dir/$$"
+printf '%s\n' "$$" >"$sentinel" || {
+	echo "::error:: plan-hold: cannot write the sentinel at $sentinel" >&2
+	exit 2
+}
+
+# Remove our own record however we leave — released, capped, killed, or crashed.
+# `plan-hold-check` reaps corpses anyway, so this is belt and braces rather than
+# the mechanism; the reason it is still here is that a container reclaim does not
+# run traps, and a sentinel surviving into the next session with a recycled pid is
+# exactly the false-live reading the check is written to avoid.
+trap 'rm -f -- "$sentinel" 2>/dev/null || true' EXIT INT TERM
+
+waited=0
+while [ -e "$sentinel" ]; do
+	if [ "$waited" -ge "$MAX" ]; then
+		echo "plan-hold: capped after ${waited}s — nobody answered"
+		exit 0
+	fi
+	sleep "$POLL"
+	waited=$((waited + POLL))
+done
+
+echo "plan-hold: released after ${waited}s"
