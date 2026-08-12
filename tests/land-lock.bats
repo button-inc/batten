@@ -50,6 +50,21 @@ EOF
 lock() { (cd "$1" && shift && "$LOCK" "$@"); }
 lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land-lock; }
 
+# A failing `[ … ]` in bats prints the source line and nothing about WHY, which
+# for the rows below is the difference between the two readings an author has to
+# tell apart: `land-lock` refused a lease it should have taken, or the runner
+# never got round to letting it try. CLOUD-448 cost two laps to exactly that
+# ambiguity, and CLOUD-450's budgets are only affordable BECAUSE a failure names
+# which of the two it was — a 60s wait that fails silently is a worse report than
+# the 6s one it replaced, not a better one.
+#
+# Returns non-zero so `set -e` ends the case at the same place a bare assertion
+# would have; it is a diagnostic on the way out, never a recovery.
+bail() { # <diagnostic>
+	echo "$1" >&2
+	return 1
+}
+
 teardown() {
 	# CLOUD-434's lesson applied to this suite's own plumbing: a hold that a
 	# case leaked — a regressed tether, a mutant under test — must cost a stray
@@ -234,12 +249,38 @@ teardown() {
 		[ "$attempt" -lt 3 ] ||
 			skip "setup not created after $attempt attempts: the rival's 4s lease expired before it could be sighted. That is the runner being descheduled, not a verdict about land-lock (CLOUD-448)"
 	done
-	start=$SECONDS
+	# CLOUD-450 — THE DURATION COMES FROM THE PROGRAM, NOT FROM $SECONDS. The old
+	# form timed the whole `run`: bash startup, the ls-remote/fetch/commit-tree/
+	# push chain, and whatever deschedule the retry loop above had just paid for,
+	# all charged to `land-lock` and graded against 8s. `acquire` already reports
+	# the one interval that is actually its own — `swap`ping a dead lease prints
+	# the seconds between the PREVIOUS HOLDER'S EXPIRY and the steal, computed
+	# inside the process from the observed body — and that is precisely the
+	# promise this row's header makes, with every cost that is not this task's
+	# excluded rather than merely budgeted for.
+	#
+	# Anchored on words on BOTH sides of the number. A sed anchored on one side,
+	# or on the digits alone, keeps matching after a rewording and starts
+	# grading something else; anchored on both, a reworded sentence matches
+	# nothing, `took` comes back empty and the row FAILS loudly — the one
+	# outcome a silently-empty duration assertion never produces.
+	#
+	# HONEST RESIDUAL, because a smaller wall clock is still a wall clock: both
+	# ends of this delta are instants on one clock, so a deschedule landing
+	# between the expiry and the winning probe still inflates it. The window is
+	# strictly smaller than `$SECONDS` spanned — it starts at the expiry rather
+	# than at the retry loop — and that is all it is. It is not a proof. Closing
+	# it needs `acquire` to report the number of PROBES it spent, which is a
+	# count on no clock at all; that stays open on CLOUD-450.
 	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 LAND_LOCK_WAIT=30 run lock "$MINE" acquire
-	elapsed=$((SECONDS - start))
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"took the lease"* ]]
-	[ "$elapsed" -lt 8 ]
+	took=$(printf '%s\n' "$output" |
+		sed -n 's/.*took the lease \([0-9][0-9]*\)s after .*stopped holding it.*/\1/p')
+	[ -n "$took" ] ||
+		bail "acquire reported no steal delta in the shape this row parses, so the sentence in land-lock moved and this assertion silently stopped grading anything (CLOUD-450): $output"
+	[ "$took" -lt 6 ] ||
+		bail "acquire took ${took}s from the previous holder's expiry to the steal, against a promise of one extra beat (CLOUD-433/CLOUD-450): $output"
 }
 
 @test "a released lease is not still held by its releaser" {
@@ -277,10 +318,27 @@ teardown() {
 	# Expiry alone no longer authorises a steal — see the clock-skew case below.
 	# A short beat makes the corroboration accrue in a second rather than thirty,
 	# which is the same contract at test speed.
+	#
+	# The `sleep 2` over a 1s TTL is the SAFE shape of this pattern and stays
+	# (CLOUD-450): nothing here has to happen while the lease is still live, so a
+	# deschedule can only make it more expired than the row needs. Contrast the
+	# reservation case, which needs the lease ALIVE at a particular instant and
+	# is retried for that reason.
+	#
+	# THE BUDGET IS NOT THE PROPERTY. `LAND_LOCK_WAIT` is a wall clock INSIDE the
+	# program under test, spanning two real fetches and a randomised backoff, and
+	# 6s of it was grading the runner: `acquire` computes its deadline before the
+	# first `ls-remote`, so one slow fetch made the second probe — the one that
+	# corroborates and steals — arrive past a deadline that had nothing to do
+	# with land-lock. This row asserts the lease IS taken and never how fast; the
+	# duration promise lives in exactly one place, the CLOUD-433 row above. So
+	# the budget goes to 60, which costs a passing run nothing (the steal exits
+	# the instant it wins) and costs a genuine hang 54 extra seconds once.
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
-	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=6 run lock "$RIVAL" acquire
-	[ "$status" -eq 0 ]
+	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=60 run lock "$RIVAL" acquire
+	[ "$status" -eq 0 ] ||
+		bail "a corroborated dead lease was not taken inside a 60s wait, which is a refusal to steal rather than a slow runner (CLOUD-450): $output"
 	[[ "$output" == *"took the lease"* ]]
 	LAND_LOCK_HEARTBEAT=1 run lock "$RIVAL" held
 	[ "$status" -eq 0 ]
@@ -297,7 +355,21 @@ teardown() {
 @test "THE FENCE: a holder whose lease was stolen reports not-held" {
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
-	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=6 lock "$RIVAL" acquire
+	# THE STEAL IS SETUP, SO IT IS ASSERTED (CLOUD-450). It used to be a bare
+	# call under a 6s in-program wait, and the two halves of that were separately
+	# wrong. A steal the runner was too slow to complete failed nothing here —
+	# MINE's own 1s lease is gone either way, so `held` answers 1 whether it was
+	# STOLEN or merely lapsed, and the fence's actual claim ("the holder notices
+	# somebody else took it") went ungraded on precisely the loaded runs. That is
+	# a pass for the wrong reason, which is worse than a flake: it is silent.
+	#
+	# So the budget goes to 60 for the reason the corroboration row above states
+	# — the wait bounds a fetch, not the property — and the precondition it buys
+	# is now read from the observable the steal itself produces.
+	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=60 run lock "$RIVAL" acquire
+	if [ "$status" -ne 0 ] || [[ "$output" != *"took the lease"* ]]; then
+		bail "the rival did not steal the expired lease, so the fence below would have graded a lapse rather than a theft (CLOUD-450): $output"
+	fi
 	# This is the check `land` runs immediately before commenting /fast-forward.
 	# Without it the original holder would act on a lease it no longer has, which
 	# is the collision the lock exists to remove.
@@ -308,6 +380,14 @@ teardown() {
 @test "an expired lease reads as free, and still names who left it" {
 	# Free is what a caller acts on; the name is what a human diagnoses a dead
 	# session with, so the report carries both rather than choosing.
+	#
+	# CLOUD-450 audited every `TTL=1` + `sleep 2` in this file and left this one
+	# alone deliberately. The property is expiry and nothing else — no call has
+	# to land while the lease is still live — so a descheduled runner makes the
+	# lease MORE expired than the row asked for, never less, and the assertion
+	# below is the same one either way. That is what separates it from "a
+	# reservation does not extend the holder's lease", where `reserve` refuses a
+	# lease that is not live and the same two lines are a race the case can lose.
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
 	run lock "$MINE" status
@@ -415,6 +495,12 @@ teardown() {
 	# one direction makes a live lease look expired. Stealing on that reading is
 	# the two-holders bug. Corroboration is that the sha has sat unchanged for a
 	# beat, which is a duration on one clock and cannot be forged by skew.
+	#
+	# Another `TTL=1` + `sleep 2` CLOUD-450 left alone, for the reason spelled
+	# out on "an expired lease reads as free": expiry is the whole precondition,
+	# and a slow runner overshoots it rather than missing it. The 30s beat below
+	# is likewise not a budget — it is chosen so no amount of waiting inside the
+	# 1s wait can corroborate, which is the refusal this row is about.
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
 	# First sighting: expired by the body, but no persistence evidence yet.
@@ -429,12 +515,45 @@ teardown() {
 @test "a dead lease IS taken once the sha has demonstrably stopped moving" {
 	# The other half: corroboration must not become a deadlock. With a short beat
 	# the evidence accrues quickly and the lease is claimable.
+	#
+	# CLOUD-450 — THIS ROW WAS GREEN THROUGH THE WRONG BRANCH, which is why it is
+	# rewritten rather than merely rebudgeted. The first probe is meant to be a
+	# REFUSAL that leaves a sighting behind, and `HEARTBEAT=1 WAIT=1` reads like
+	# "one probe, nothing corroborated yet". It is not. `acquire` tests its
+	# deadline AFTER the steal test and then sleeps `2 + RANDOM % 2`, so unless
+	# the first `ls-remote` happens to cross a second boundary — the only way a
+	# 1s deadline can fire on probe 1 — a second probe lands 2-3s later with the
+	# sha unchanged for longer than the 1s beat, corroborates, and STEALS.
+	# Measured over seven runs of the old form: six stole, reporting `took the
+	# lease 3-4s after …`, and one refused. The rival then walked away holding a
+	# fresh 120s lease, so every assertion below passed through `already held by
+	# this clone` and graded re-entrancy — which the row four cases up already
+	# covers — while this row's own subject went ungraded on six runs in seven.
+	# `|| true` is what hid it: it discarded the one exit status that said which
+	# branch had run.
+	#
+	# So the sighting probe now gets a beat that nothing inside its own wait can
+	# corroborate — 30s of persistence demanded against 1s of wait — and its
+	# refusal is ASSERTED instead of discarded. A setup step whose outcome nobody
+	# reads is a setup step the case is not entitled to assume (CLOUD-249).
 	LAND_LOCK_TTL=1 lock "$MINE" acquire
 	sleep 2
-	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=1 lock "$RIVAL" acquire >/dev/null 2>&1 || true
+	LAND_LOCK_HEARTBEAT=30 LAND_LOCK_WAIT=1 run lock "$RIVAL" acquire
+	if [ "$status" -ne 1 ] || [[ "$output" != *"still held by"* ]]; then
+		bail "the sighting probe TOOK the lease instead of only recording it, so the steal below is a re-entrant acquire and grades nothing about corroboration (CLOUD-450): $output"
+	fi
+	# Age that sighting past the beat the measurement runs under. Safe in the way
+	# the expiry sleeps above are safe: `sha_held_for` is a duration on one clock,
+	# so a descheduled runner makes the sha look like it has sat unchanged for
+	# LONGER than the row needs, never for less.
 	sleep 2
-	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=6 run lock "$RIVAL" acquire
-	[ "$status" -eq 0 ]
+	# 60 rather than 6, for the reason the corroboration row states: the wait
+	# bounds two fetches and a randomised backoff, and this row asserts that the
+	# steal HAPPENS, never how quickly.
+	LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=60 run lock "$RIVAL" acquire
+	if [ "$status" -ne 0 ] || [[ "$output" != *"took the lease"* ]]; then
+		bail "a sha that had demonstrably stopped moving was not taken as a corroborated steal (CLOUD-450): $output"
+	fi
 	run lock "$RIVAL" held
 	[ "$status" -eq 0 ]
 }
@@ -497,14 +616,56 @@ fake_land() {
 	echo $!
 }
 
+# PROOF THAT A BEAT RAN — the precondition every `hold` case below actually
+# needs, and the one none of them used to establish (CLOUD-450). They stood a
+# `sleep 2.5` or a 5s deadline in for it, spanning a fork, a bash startup, one
+# beat, a /proc read, a fetch and a push; on a loaded runner the hold had not
+# been scheduled at all by the time the row read its verdict, and the healthy-hold
+# rows then passed VACUOUSLY — alive because nothing had run, "held by" because
+# the acquire on the line above had put it there. A tether wrongly firing on a
+# healthy hold was therefore invisible on exactly the loaded runs, which is the
+# regression class this suite exists to catch.
+#
+# The observable is the lease SHA, and it is the right one rather than merely the
+# convenient one. `swap` mints a fresh nonce on every write, so EVERY beat moves
+# the sha — the healthy renew and the tether's tombstone alike — which makes a
+# moved sha proof that a beat executed, and keeps that proof true under the
+# mutant as well as under the fix: delete the tether and the beat renews, and the
+# sha still moves. A case skipping on "no beat ever landed" therefore erases no
+# coverage it would otherwise have had. What the sha cannot say is WHICH beat
+# ran, which is why every case keeps its own assertion about the outcome.
+#
+# Bounded by an attempt COUNT and never by a clock, and it ends in `skip` rather
+# than in a verdict: "the runner never scheduled the hold" is a statement about
+# the runner, and asserting through a precondition the environment failed to
+# create is what CLOUD-249 forbids. A healthy run returns on the first or second
+# look, so the bound is paid only when something is already wrong.
+wait_for_beat() { # <lease sha as it stood before the beat>
+	local before="$1" attempt=0
+	while [ "$attempt" -lt 100 ]; do
+		[ "$(lease_sha)" = "$before" ] || return 0
+		attempt=$((attempt + 1))
+		sleep 0.2
+	done
+	return 1
+}
+
 @test "a hold whose land died releases within a beat instead of renewing for nobody" {
 	run lock "$MINE" acquire
 	[ "$status" -eq 0 ]
+	before=$(lease_sha)
 	land_pid=$(fake_land)
 	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HOLDER_PID="$land_pid" \
 		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
 	hold_pid=$!
 	kill -9 "$land_pid"
+	# The land is dead before the first beat, so the first beat IS the tether's:
+	# it tombstones the lease, which moves the sha exactly as a renew would. Wait
+	# for that rather than for a wall clock — the 5s deadline below then measures
+	# only the interval it was written for, the hold noticing it is finished,
+	# instead of also covering the fork and the startup that precede it.
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the tether (CLOUD-450)"
 	deadline=$((SECONDS + 5))
 	while kill -0 "$hold_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
 		sleep 0.2
@@ -524,16 +685,34 @@ fake_land() {
 }
 
 @test "a live land keeps its heartbeat renewing — the tether never fires on a healthy hold" {
+	# THE VACUOUS PASS THIS ROW USED TO HAVE (CLOUD-450), and the reason it is
+	# the most important of the four. `sleep 2.5` stood in for "two beats
+	# happened", and when the runner never scheduled the hold BOTH assertions
+	# passed for the wrong reason: the process is alive because it has not run
+	# yet, and the rival sees "held by" because the acquire two lines up put it
+	# there. A tether wrongly firing on a healthy hold — the exact regression
+	# this case names — was therefore invisible on precisely the loaded runs
+	# where a tether is most likely to misread a live land as gone.
 	run lock "$MINE" acquire
 	[ "$status" -eq 0 ]
+	before=$(lease_sha)
 	land_pid=$(fake_land)
 	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HOLDER_PID="$land_pid" \
 		"$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
 	hold_pid=$!
-	sleep 2.5
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the tether (CLOUD-450)"
 	kill -0 "$hold_pid" 2>/dev/null
 	run lock "$RIVAL" status
 	[[ "$output" == *"held by"* ]]
+	# AND THE ASSERTION THAT MAKES THE ROW DISCRIMINATING once the vacuous pass
+	# is gone. `held by` alone does not separate the two outcomes: a tombstone
+	# renders `released — last held by <id>`, which contains `held by`, so a
+	# wrongly fired tether satisfied the line above rather than failing it. A
+	# tether that fires here RELEASES, so the word `released` is the thing that
+	# must not appear — stated as its own line so a failure names which half of
+	# the claim broke.
+	[[ "$output" != *"released"* ]]
 	kill "$hold_pid" 2>/dev/null || true
 	kill "$land_pid" 2>/dev/null || true
 	run lock "$MINE" release
@@ -547,11 +726,19 @@ fake_land() {
 	# a dead holder — failing toward release, the cheap direction.
 	run lock "$MINE" acquire
 	[ "$status" -eq 0 ]
+	before=$(lease_sha)
 	sleep 60 >/dev/null 2>&1 3>&- &
 	imposter=$!
 	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HOLDER_PID="$imposter" \
 		"$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
 	hold_pid=$!
+	# Same precondition as the tether case above, and needed for the same reason:
+	# the 5s deadline was covering the fork and the bash startup as well as the
+	# beat it was written to bound, so a slow runner failed the row for having
+	# been slow. The imposter is not a land, so the first beat tombstones and the
+	# sha moves.
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the pid probe (CLOUD-450)"
 	deadline=$((SECONDS + 5))
 	while kill -0 "$hold_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
 		sleep 0.2
@@ -566,14 +753,27 @@ fake_land() {
 }
 
 @test "an unset holder pid keeps today's behaviour, so no other caller changes" {
+	# The healthy-hold pair to the row above, and vacuous in exactly the same way
+	# before CLOUD-450: with no beat proven to have run, "the process is alive"
+	# and "the rival sees a holder" were both true of a hold that had never
+	# started. This row is the one that says an UNSET holder pid changes nothing
+	# for every caller that is not `land`, so a hold that never beat is precisely
+	# the state in which it proves nothing.
 	run lock "$MINE" acquire
 	[ "$status" -eq 0 ]
+	before=$(lease_sha)
 	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 "$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
 	hold_pid=$!
-	sleep 2.5
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the unset-pid path (CLOUD-450)"
 	kill -0 "$hold_pid" 2>/dev/null
 	run lock "$RIVAL" status
 	[[ "$output" == *"held by"* ]]
+	# `held by` is a substring of `released — last held by <id>`, so it alone
+	# cannot tell a renewed lease from a tombstoned one. An unset pid must renew,
+	# so the tombstone wording is forbidden here for the same reason it is on the
+	# healthy-hold row above.
+	[[ "$output" != *"released"* ]]
 	kill "$hold_pid" 2>/dev/null || true
 	run lock "$MINE" release
 	[ "$status" -eq 0 ]
@@ -623,6 +823,12 @@ rival_holds_for() { # <branch>
 }
 
 @test "authorises: an expired lease stops nobody" {
+	# The third `TTL=1` + `sleep 2` CLOUD-450 audited and deliberately left as it
+	# is. `authorises` reads the lease and answers; nothing has to happen while
+	# the lease is still live, so a deschedule between these two lines makes it
+	# more expired than the row needs rather than less. The reservation case
+	# below is the one that inverts this — `reserve` refuses a lease that is not
+	# live, so there the same two lines are a race, and it is retried for it.
 	LAND_LOCK_TTL=1 rival_holds_for feature-x
 	sleep 2
 	run lock "$MINE" authorises feature-y
@@ -830,8 +1036,39 @@ receipt() {
 @test "a reservation does not extend the holder's lease" {
 	# Recomputing the expiry here would hand a holder a fresh TTL every time a
 	# waiter arrived, so a busy fleet could keep one lease alive indefinitely.
-	LAND_LOCK_TTL=1 rival_holds_for feature-x
-	lock "$MINE" reserve feature-y
+	#
+	# CLOUD-450 — THE SETUP IS THE RACE, exactly as in the CLOUD-448 case above,
+	# and this is the one `TTL=1` in the file where that is true. `reserve`
+	# refuses a lease that is not live ("no lease is held; acquire rather than
+	# reserve"), so a deschedule longer than one second between the acquire and
+	# the reserve turns the reserve into a refusal — and the bare call then ended
+	# the case on a line that was grading the runner's scheduler, not whether a
+	# reservation extends an expiry.
+	#
+	# A SUCCESSFUL RESERVE IS THE PRECONDITION, and it is read from the reserve
+	# itself rather than guessed at: the verb answering 0 IS the statement that
+	# the lease was live when it was re-minted, which is the only state in which
+	# the assertion below means anything. Setup is retried, never the
+	# measurement.
+	local attempt=0
+	while :; do
+		attempt=$((attempt + 1))
+		# Reset what a failed attempt left behind. The RELEASE is load-bearing:
+		# a lapsed attempt leaves an EXPIRED lease, and `acquire` refuses to
+		# steal one of those until the sha has sat unchanged for a beat — 30s by
+		# default — so a retry without it would fail on the acquire instead. A
+		# tombstone is a handover and needs no corroboration, so the next attempt
+		# starts from a genuinely free lease.
+		(cd "$RIVAL" && "$LOCK" release >/dev/null 2>&1) || true
+		LAND_LOCK_TTL=1 rival_holds_for feature-x
+		run lock "$MINE" reserve feature-y
+		[ "$status" -ne 0 ] || break
+		[ "$attempt" -lt 3 ] ||
+			skip "setup not created after $attempt attempts: the rival's 1s lease expired before the reservation could land on it. That is the runner being descheduled, not a verdict about whether a reservation extends a lease (CLOUD-450)"
+	done
+	# Safe to keep as a plain sleep, and the contrast with the retry above is the
+	# whole point: past this line the row wants the lease EXPIRED, and load can
+	# only deepen an expiry.
 	sleep 2
 	run lock "$MINE" authorises feature-z
 	[ "$status" -eq 0 ]
