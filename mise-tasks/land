@@ -294,10 +294,19 @@ speculate() {
 		return 0
 	}
 	base=$(git rev-parse "$spec_ref" 2>/dev/null) || return 0
+	# ONE OUTSTANDING BET AT A TIME. A waiter laps repeatedly while the same
+	# holder lands, and re-betting on each lap would overwrite `spec_undo` with a
+	# HEAD that is itself speculative — so unwinding would restore a tree that
+	# still carried somebody else's commits, which is the exact hazard the undo
+	# exists to remove. It would also re-mint a sha every lap and throw away a
+	# verify receipt for no gain, since the base has not changed.
+	[ "$spec_base" != "$base" ] || return 0
 	# Already a descendant — nothing to speculate, and rebasing would be a no-op
 	# that still mints a new sha and throws away this HEAD's verify receipt.
 	git merge-base --is-ancestor "$base" HEAD && return 0
-	spec_undo=$(git rev-parse HEAD)
+	# Only ever our own last NON-speculative HEAD. Settling clears it, so a bet
+	# placed after a settled one records the right undo point.
+	[ -n "$spec_undo" ] || spec_undo=$(git rev-parse HEAD)
 	if ! git rebase "$base" >/dev/null 2>&1; then
 		git rebase --abort 2>/dev/null || true
 		git reset -q --hard "$spec_undo" 2>/dev/null || true

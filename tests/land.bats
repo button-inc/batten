@@ -1521,7 +1521,10 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	# a world that moved before it was placed would never settle anything.
 	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
 	echo 2 >"$BATS_TEST_TMPDIR/main_moves_after"
-	LAND_LOCK_MAX_WAITS=2 run "$LAND"
+	# Not admitted, so nothing is published and the assertion below is about the
+	# speculative state alone rather than about the successor path.
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
+	LAND_LOCK_MAX_WAITS=4 run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"did not land; unwinding"* ]]
 	grep -q '^reset -q --hard cafe1234cafe1234$' "$BATS_TEST_TMPDIR/gitlog"
@@ -1535,8 +1538,9 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	echo 1 >"$BATS_TEST_TMPDIR/rc.reset"
 	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
 	echo 2 >"$BATS_TEST_TMPDIR/main_moves_after"
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
 	pr_state OPEN
-	LAND_LOCK_MAX_WAITS=2 run "$LAND"
+	LAND_LOCK_MAX_WAITS=4 run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"could not unwind the speculative rebase"* ]]
 	[ "$(call_order)" = "" ]
