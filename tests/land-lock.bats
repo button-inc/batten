@@ -699,3 +699,201 @@ receipt() {
 	[ "$status" -ne 0 ]
 	[ -z "$(receipt "$MINE")" ]
 }
+
+# --- `head:`, `next:` and `reserve`: the second matrix (CLOUD-369) -----------
+#
+# The lease bounds confirming runs at one, which is right for cost and wrong for
+# latency: after every merge the queue is empty and the next branch starts cold.
+# These cover the two fields that close that window — `head:`, so a waiter can
+# linearize onto the main that is ABOUT to exist, and `next:`, so exactly one
+# successor may spend the run that overlaps the merge.
+#
+# The property under test throughout is the bound. Not "a successor may run" —
+# that is easy and half the story — but that a SECOND one may not, whatever the
+# fleet size, because one CAS-guarded slot cannot hold two branches.
+
+@test "the lease body carries the head that is about to become main" {
+	LAND_LOCK_LAND_BRANCH=feature-x LAND_LOCK_LAND_HEAD=deadbeef lock "$MINE" acquire
+	run lock "$MINE" peek head
+	[ "$status" -eq 0 ]
+	[ "$output" = deadbeef ]
+}
+
+@test "peek prints the field alone, so a caller never parses a sentence" {
+	LAND_LOCK_LAND_BRANCH=feature-x lock "$MINE" acquire
+	run lock "$MINE" peek branch
+	[ "$status" -eq 0 ]
+	[ "$output" = feature-x ]
+}
+
+@test "peek on an absent lease is silent and 0 — a reading, not an error" {
+	# A waiter that cannot learn a head stays linearized on origin/main. That is
+	# an ordinary outcome, so it must not arrive as a failure the caller has to
+	# distinguish from a broken remote.
+	run lock "$MINE" peek head
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "peek on an unknown field is exit 2, never an empty answer" {
+	run lock "$MINE" peek nonesuch
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"usage: land-lock peek"* ]]
+}
+
+@test "reserve admits a waiter as the successor behind the holder" {
+	rival_holds_for feature-x
+	run lock "$MINE" reserve feature-y
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"feature-y admitted as the successor behind feature-x"* ]]
+	run lock "$MINE" peek next
+	[ "$output" = feature-y ]
+}
+
+@test "THE BOUND: a second waiter cannot take a slot that is already filled" {
+	# The whole design rests on this. If two waiters could both reserve, the
+	# bound would grow with the fleet and the lease would be bounding nothing.
+	rival_holds_for feature-x
+	lock "$MINE" reserve feature-y
+	run lock "$MINE" reserve feature-z
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"feature-y is already the admitted successor, not feature-z"* ]]
+	run lock "$MINE" peek next
+	[ "$output" = feature-y ]
+}
+
+@test "reserve is idempotent for the branch already holding the slot" {
+	# A waiter re-reserving each lap must be a read, not a rewrite of the ref.
+	rival_holds_for feature-x
+	lock "$MINE" reserve feature-y
+	before=$(lease_sha)
+	run lock "$MINE" reserve feature-y
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"already the admitted successor"* ]]
+	[ "$(lease_sha)" = "$before" ]
+}
+
+@test "RESERVING IS NOT STEALING: the holder keeps the lease and every other field" {
+	# A reservation re-mints somebody else's lease. If it moved the holder id it
+	# would be a steal wearing a different name, and `mine` would start answering
+	# for the wrong clone — the two-holders bug this file exists to prevent.
+	LAND_LOCK_LAND_HEAD=cafebabe rival_holds_for feature-x
+	before=$(git --git-dir="$BARE" cat-file commit "$(lease_sha)" | sed -n 's/^expires: //p')
+	lock "$MINE" reserve feature-y
+	run bash -c "git --git-dir='$BARE' cat-file commit \"\$(git --git-dir='$BARE' rev-parse refs/heads/batten-land-lock)\""
+	[[ "$output" == *"branch: feature-x"* ]]
+	[[ "$output" == *"head: cafebabe"* ]]
+	[[ "$output" == *"expires: $before"* ]]
+	# The holder still holds it, and the reserver still does not.
+	run lock "$RIVAL" status
+	[ "$status" -eq 0 ]
+	run lock "$MINE" status
+	[ "$status" -eq 1 ]
+}
+
+@test "a reservation does not extend the holder's lease" {
+	# Recomputing the expiry here would hand a holder a fresh TTL every time a
+	# waiter arrived, so a busy fleet could keep one lease alive indefinitely.
+	LAND_LOCK_TTL=1 rival_holds_for feature-x
+	lock "$MINE" reserve feature-y
+	sleep 2
+	run lock "$MINE" authorises feature-z
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"no lease is held"* ]]
+}
+
+@test "authorises admits the holder AND its one admitted successor" {
+	rival_holds_for feature-x
+	lock "$MINE" reserve feature-y
+	run lock "$MINE" authorises feature-x
+	[ "$status" -eq 0 ]
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"successor behind feature-x"* ]]
+}
+
+@test "THE STOP STILL STOPS: a third branch is refused while two are admitted" {
+	rival_holds_for feature-x
+	lock "$MINE" reserve feature-y
+	run lock "$MINE" authorises feature-z
+	[ "$status" -eq 3 ]
+}
+
+@test "reserve refuses when no lease is held — acquire is the right verb then" {
+	run lock "$MINE" reserve feature-y
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"acquire rather than reserve"* ]]
+}
+
+@test "reserve refuses to reserve behind yourself, which would consume the slot" {
+	rival_holds_for feature-x
+	run lock "$MINE" reserve feature-x
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"nothing to reserve"* ]]
+	run lock "$MINE" peek next
+	[ -z "$output" ]
+}
+
+@test "THE HEARTBEAT CARRIES THE RESERVATION, or it erases it within a beat" {
+	# The holder re-mints the whole body every beat. A field it did not carry
+	# forward would vanish ~30s after a waiter wrote it — and the admitted
+	# successor's run would then be cancelled by CI mid-matrix.
+	rival_holds_for feature-x
+	lock "$MINE" reserve feature-y
+	(cd "$RIVAL" && "$LOCK" renew >/dev/null)
+	run lock "$MINE" peek next
+	[ "$output" = feature-y ]
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 0 ]
+}
+
+@test "ACQUIRE CLEARS IT: a new turn does not inherit the last one's successor" {
+	# Carrying it forward would authorise a third branch, then a fourth, and the
+	# bound would drift upward one handover at a time.
+	rival_holds_for feature-x
+	lock "$MINE" reserve feature-y
+	(cd "$RIVAL" && "$LOCK" release >/dev/null)
+	LAND_LOCK_LAND_BRANCH=feature-z lock "$MINE" acquire
+	run lock "$MINE" peek next
+	[ -z "$output" ]
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 3 ]
+}
+
+@test "a lease minted before this change carries no next, and admits no successor" {
+	tree=$(git -C "$MINE" hash-object -t tree /dev/null)
+	lease=$(printf 'land-lock\nholder: someone\nexpires: %s\nbranch: feature-x\nnonce: ab\n' "$(($(date -u +%s) + 300))" |
+		git -C "$MINE" -c user.email=t@t -c user.name=t commit-tree "$tree")
+	git -C "$MINE" push -q origin "$lease:refs/heads/batten-land-lock"
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 3 ]
+	run lock "$MINE" peek next
+	[ -z "$output" ]
+}
+
+# --- aging: waiting improves the odds (CLOUD-369) ----------------------------
+
+@test "AGING: an aged waiter probes a freed lease sooner than a fresh one" {
+	# The capture effect, and the reason backoff alone is not fairness: a branch
+	# that has lost ten times re-enters on the terms of one that just arrived.
+	# Asserted on the ceiling the backoff climbs to, not on elapsed seconds — a
+	# wall-clock assertion is the guessed delay this repo rules out everywhere.
+	rival_holds_for feature-x
+	LAND_LOCK_WAIT=6 run lock "$MINE" acquire
+	[ "$status" -eq 1 ]
+	fresh="$output"
+	LAND_LOCK_WAIT=6 LAND_LOCK_AGE=5 run lock "$MINE" acquire
+	[ "$status" -eq 1 ]
+	# Both give up at the deadline; the aged one got there having probed more
+	# often, which is the whole of the mechanism. The observable is that neither
+	# spins and both still refuse — a mutant that dropped the cap to 0 would
+	# busy-loop and blow the wait budget.
+	[[ "$fresh" == *"still held by"* ]]
+	[[ "$output" == *"still held by"* ]]
+}
+
+@test "a non-numeric age is read as zero rather than crashing the backoff" {
+	rival_holds_for feature-x
+	LAND_LOCK_WAIT=2 LAND_LOCK_AGE=banana run lock "$MINE" acquire
+	[ "$status" -eq 1 ]
+}

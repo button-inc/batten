@@ -167,12 +167,21 @@ stub_git() {
 	# moved nothing", and those two take different paths (CLOUD-254). A
 	# successful push advances it to HEAD, exactly as a real one does.
 	echo staleremote >"$BATS_TEST_TMPDIR/remote_ref"
+	echo cafe1234cafe1234 >"$BATS_TEST_TMPDIR/headsha"
+	echo ma1nma1nma1nma1n >"$BATS_TEST_TMPDIR/mainsha"
+	echo 5peccccc5peccccc >"$BATS_TEST_TMPDIR/specsha"
+	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_rebase"
+	echo 0 >"$BATS_TEST_TMPDIR/rc.reset"
 	cat >"$STUB/git" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"$BATS_TEST_TMPDIR/gitlog"
 case "\$*" in
-  "rev-parse HEAD")              echo cafe1234cafe1234 ;;
-  "rev-parse origin/main")       echo ma1nma1nma1nma1n ;;
+  "rev-parse HEAD")              cat "$BATS_TEST_TMPDIR/headsha" ;;
+  # Read from a file rather than echoed, because CLOUD-369 made "did main move
+  # while this lap waited for the lease" a real question land asks twice in one
+  # lap. A constant could not express the one answer that matters.
+  "rev-parse origin/main")       cat "$BATS_TEST_TMPDIR/mainsha" ;;
+  "rev-parse refs/batten-spec/base") cat "$BATS_TEST_TMPDIR/specsha" ;;
   "rev-parse origin/"*)          cat "$BATS_TEST_TMPDIR/remote_ref" ;;
   "rev-parse --abbrev-ref HEAD") cat "$BATS_TEST_TMPDIR/branch" ;;
   "rev-parse --short"*)          echo abc1234 ;;
@@ -180,7 +189,12 @@ case "\$*" in
   "fetch"*)                      exit "\$(cat "$BATS_TEST_TMPDIR/rc.fetch")" ;;
   "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.linear")" ;;
   "rebase --abort")              exit 0 ;;
-  "rebase"*)                     exit "\$(cat "$BATS_TEST_TMPDIR/rc.rebase")" ;;
+  # The SPECULATIVE rebase is a different event from the lap's rebase onto main
+  # (CLOUD-369) and fails differently: a conflict here is information about a
+  # base that may never land, so it falls back rather than stopping.
+  "rebase origin/main")          exit "\$(cat "$BATS_TEST_TMPDIR/rc.rebase")" ;;
+  "rebase"*)                     exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_rebase")" ;;
+  "reset -q --hard"*)            exit "\$(cat "$BATS_TEST_TMPDIR/rc.reset")" ;;
   "push -q origin --delete "*)
     # The post-merge cleanup (CLOUD-349). Recorded separately from the landing
     # push: it is not part of the lap, and folding it into \`calls\` would move
@@ -258,6 +272,27 @@ case "\$2" in
     # lap spawn" and assert each one is gone (CLOUD-434's trap gap).
     echo "\$\$" >>"$BATS_TEST_TMPDIR/watch.pids"
     [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
+  land-lock)
+    # Per-verb levers (CLOUD-369). The whole-task \`rc.mise.land-lock\` file
+    # still works through the generic check above; this is what a case needs to
+    # say "acquire loses but reserve wins", which is the successor's whole path.
+    rcv="$BATS_TEST_TMPDIR/rc.mise.land-lock.\$3"
+    if [ -f "\$rcv" ]; then
+      # A lease lost while main moves under the waiter is one event, not two:
+      # the acquire that fails is the same acquire during which trunk advanced.
+      [ ! -f "$BATS_TEST_TMPDIR/main_moves_in_wait" ] ||
+        cat "$BATS_TEST_TMPDIR/main_moves_in_wait" >"$BATS_TEST_TMPDIR/mainsha"
+      exit "\$(cat "\$rcv")"
+    fi
+    if [ "\$3" = acquire ] && [ -f "$BATS_TEST_TMPDIR/main_moves_in_wait" ]; then
+      cat "$BATS_TEST_TMPDIR/main_moves_in_wait" >"$BATS_TEST_TMPDIR/mainsha"
+    fi
+    if [ "\$3" = peek ]; then
+      f="$BATS_TEST_TMPDIR/lease.\$4"
+      [ ! -f "\$f" ] || cat "\$f"
+    fi
+    [ "\$3" != held ] || exit 0
+    exit 0 ;;
   main-watch)
     echo "\$\$" >>"$BATS_TEST_TMPDIR/watch.pids"
     # CLOUD-434's stubborn lever. A stubborn watcher ignores the TERM, so only
@@ -1036,8 +1071,8 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$REAL_LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 15 ] || {
-		echo "land has $stops stopping conditions; this suite covers 15."
+	[ "$stops" -eq 16 ] || {
+		echo "land has $stops stopping conditions; this suite covers 16."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -1391,4 +1426,162 @@ head_is_skipped_then_graded() {
 	run "$LAND"
 	[ "$status" -eq 0 ]
 	[ -z "$(cancels)" ]
+}
+
+# --- speculative linearization and the admitted successor (CLOUD-369) --------
+#
+# The lease bounds confirming runs at one, which is right for cost and wrong for
+# latency: after every merge the queue is empty and the next branch starts cold.
+# Two mechanisms close that window, and the cases below pin the property that
+# makes each SAFE rather than merely fast — a speculation that cannot be pushed
+# when the bet loses, and a successor slot that exactly one waiter can hold.
+
+spec_head() { echo "$1" >"$BATS_TEST_TMPDIR/lease.branch"; }
+lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
+
+@test "a waiter linearizes onto the HOLDER's head, not onto the main it is replacing" {
+	# Rebasing onto origin/main warms nothing: the holder is about to replace
+	# that commit, so the waiter is stale again the moment it wins. The main
+	# worth linearizing against is the one about to EXIST.
+	lease_lost
+	spec_head holder-branch
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	grep -q '^fetch -q origin +refs/heads/holder-branch:refs/batten-spec/base$' "$BATS_TEST_TMPDIR/gitlog"
+	grep -q '^rebase 5peccccc5peccccc$' "$BATS_TEST_TMPDIR/gitlog"
+	[[ "$output" == *"the main that is about to exist"* ]]
+}
+
+@test "a lease naming no head leaves the branch linearized on main, and says nothing" {
+	# Every lease minted before this change is exactly this, so during rollout
+	# the row is not an edge case — it is every lease.
+	lease_lost
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"speculatively linearized"* ]]
+	[[ "$(cat "$BATS_TEST_TMPDIR/gitlog")" != *batten-spec* ]]
+}
+
+@test "A CONFLICTING SPECULATION FALLS BACK — it is information, not a stop" {
+	# The conflict is real and arrives when that branch lands. But it is a
+	# conflict against a base that may never exist, so resolving it now would be
+	# resolving it against nothing, and DYING on it would stop a lap that has
+	# spent nothing and done nothing wrong.
+	lease_lost
+	spec_head holder-branch
+	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_rebase"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"conflicts with this branch; not speculating"* ]]
+	# It ends on the wait backstop — the ordinary saturation signal — never on
+	# the rebase-conflict stop, which is reserved for the one real decision.
+	[[ "$output" == *"never won the landing lease"* ]]
+	[[ "$output" != *"resolve it and run land again"* ]]
+	grep -q '^rebase --abort$' "$BATS_TEST_TMPDIR/gitlog"
+}
+
+@test "THE BET CANNOT BE PUSHED WHEN IT LOSES: a stale speculation is unwound first" {
+	# The hazard that makes this whole mechanism dangerous if done naively. A
+	# speculative rebase puts ANOTHER branch's unlanded commits into this
+	# branch's history; fast-forwarding from there would land somebody else's
+	# unmerged work as a side effect of ours. `origin/main --is-ancestor HEAD`
+	# does not catch it — the speculated base is itself a descendant of main.
+	lease_lost
+	spec_head holder-branch
+	pr_state MERGED
+	# main moves to something that is NOT the speculated base: the bet lost.
+	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
+	LAND_LOCK_MAX_WAITS=2 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"did not land; unwinding"* ]]
+	grep -q '^reset -q --hard cafe1234cafe1234$' "$BATS_TEST_TMPDIR/gitlog"
+	# Nothing was published from the speculative state.
+	[ "$(call_order)" = "" ]
+}
+
+@test "an unwind the tree refuses is a stop, not a lap onto an unknown HEAD" {
+	lease_lost
+	spec_head holder-branch
+	echo 1 >"$BATS_TEST_TMPDIR/rc.reset"
+	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=2 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"could not unwind the speculative rebase"* ]]
+	[ "$(call_order)" = "" ]
+}
+
+@test "THE SECOND MATRIX: an admitted successor readies and pushes without the lease" {
+	# The saving. Its run overlaps the holder's merge instead of starting cold
+	# after it, which is the ~8 minutes of idle main this closes.
+	lease_lost
+	spec_head holder-branch
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"admitted as the successor"* ]]
+	[[ "$output" == *"overlaps the merge in flight"* ]]
+	# Readied and pushed — but never commented: the fast-forward needs the lease,
+	# and asking for a merge without holding it is the collision the lease exists
+	# to prevent.
+	[ "$(call_order)" = "ready push" ]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "A WAITER THAT IS NOT ADMITTED STAYS IN DRAFT — this is what bounds the cost" {
+	# The negative that gives the case above its meaning. Without it, "every
+	# waiter readies" would pass the test above and spend a matrix per session,
+	# which is the defect the whole issue is about.
+	lease_lost
+	spec_head holder-branch
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"admitted as the successor"* ]]
+	[ "$(call_order)" = "" ]
+	[ "$(ready_calls)" = "" ]
+}
+
+@test "the successor reserves only once, however many laps it waits" {
+	# Re-reserving each lap would rewrite the ref to say what it already says.
+	lease_lost
+	spec_head holder-branch
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=3 run "$LAND"
+	[ "$(lock_calls reserve)" -eq 1 ]
+}
+
+@test "MAIN MOVING DURING THE WAIT: the winner laps rather than confirming a doomed head" {
+	# `acquire` waits up to a full TTL, so the winner is at its most stale in the
+	# instant it wins. Readying here buys a matrix the fast-forward will refuse —
+	# which is the oldest waste in this loop, measured on PR #325 as 8 laps, 8
+	# greens and zero commits landed.
+	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"main moved to"* ]]
+	[[ "$output" == *"lapping rather than confirming a head it will refuse"* ]]
+	# Nothing spent, and the lease handed straight back rather than held across
+	# a rebase the next lap will do anyway.
+	[ "$(call_order)" = "" ]
+	[ "$(lock_calls release)" -ge 1 ]
+}
+
+@test "a lap whose main did not move confirms and proceeds — the negative of the case above" {
+	# Without this, a re-confirmation that ALWAYS lapped would pass the case
+	# above and land nothing, ever.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"lapping rather than confirming"* ]]
+	[[ "$(call_order)" == *push* ]]
 }

@@ -186,6 +186,137 @@ drop_lease() {
 	mise run land-lock release >/dev/null 2>&1 || true
 }
 
+# A lap reads `origin/main` twice now — once to rebase onto, once inside the
+# hold to confirm it has not moved (CLOUD-369) — and the failure is the same
+# failure both times. One definition, so the two cannot drift into disagreeing
+# about what an unreachable remote means.
+fetch_main() {
+	git fetch -q origin main ||
+		die "cannot fetch origin/main; read mem:github-access before concluding the network is blocked."
+}
+
+# A wait is a lap that spent no CI, and there are now two ways to have one: the
+# lease was held by someone else, or it was won over a `main` that had moved. Both
+# must refund the lap — a busy fleet would otherwise exhaust LAND_MAX_LAPS on
+# waiting alone and give up without ever having attempted — and both must count
+# toward the wait backstop, because "never counted" is how a loop becomes
+# unbounded with no condition that can fire.
+charge_wait() {
+	lap=$((lap - 1))
+	lease_waits=$((lease_waits + 1))
+	[ "$lease_waits" -le "$max_waits" ] ||
+		die "never won the landing lease in $max_waits attempts. Run \`mise run land-lock-check\`: it tells a saturated fleet (wait, or land later) apart from a wedged lease (a ref nothing legitimate wrote), which look identical from here."
+}
+
+# --- speculative linearization (CLOUD-369) -----------------------------------
+#
+# PRE-WARMING IS A LINEARIZATION, NOT A REFRESH. A waiter that rebases onto
+# `origin/main` warms nothing: the branch holding the lease is about to replace
+# that commit, so the waiter is stale again the moment it wins — which is the
+# cold window this exists to close, paid earlier and no cheaper. The `main` worth
+# linearizing against is the one about to EXIST, and the lease publishes it as
+# `head:`.
+#
+# Done while waiting, this costs nothing. Local execution is free and CI does not
+# run on drafts, so a waiter can rebase, resolve and re-verify indefinitely for
+# the price of CPU this sandbox does not meter.
+#
+# THE HAZARD, AND THE INVARIANT THAT ANSWERS IT. A speculative rebase puts
+# ANOTHER BRANCH'S unlanded commits into this branch's history. If that branch
+# then fails to land, a fast-forward from here would carry them onto `main` —
+# landing somebody else's unmerged work as a side effect of ours, which is a far
+# worse failure than the cold window. `origin/main --is-ancestor HEAD` does NOT
+# catch it: the speculated base is itself a descendant of main, so that check
+# passes for exactly the case that must fail.
+#
+# So the bet is recorded and settled, never assumed:
+#
+#   spec_base  the commit we rebased onto; the bet is "this becomes main"
+#   spec_undo  our HEAD before the rebase; the bet losing costs a reset to it
+#
+# and `settle_speculation` runs at the TOP of every lap, before anything can
+# push. Won (the base is now an ancestor of `origin/main`) keeps the tree; lost
+# resets it. There is no path from a losing bet to a push, which is the property
+# that makes speculating safe rather than merely fast.
+spec_base=
+spec_undo=
+spec_main=
+spec_ref=refs/batten-spec/base
+
+# THREE OUTCOMES, NOT TWO, and conflating the middle one with the last is the
+# defect worth naming: a bet is usually still PENDING at the next lap. The holder
+# takes minutes to land, so "not on main yet" is the normal reading, and
+# unwinding on it would undo the linearization every single lap and leave the
+# mechanism running while achieving nothing — warm, then cold, then warm again.
+#
+#   won      the base is an ancestor of `origin/main`; the holder landed
+#   pending  `origin/main` has not moved since the bet; nothing has been decided
+#   lost     `main` moved and took something else; the bet cannot come true
+settle_speculation() {
+	[ -n "$spec_base" ] || return 0
+	if git merge-base --is-ancestor "$spec_base" origin/main 2>/dev/null; then
+		echo "land: the speculation landed — already linearized on $(git rev-parse --short origin/main), no rebase needed"
+		spec_base=
+		spec_undo=
+		spec_main=
+		return 0
+	fi
+	if [ "$(git rev-parse origin/main)" = "$spec_main" ]; then
+		# Undecided. Keep the tree: the holder is still landing, and this branch
+		# is already linearized behind it.
+		return 0
+	fi
+	# The bet lost: the holder did not land, or `main` took something else. Undo
+	# it rather than trying to salvage it — our own commits are all that
+	# `spec_undo` holds, and the lap's ordinary rebase onto `origin/main` is
+	# about to run anyway.
+	echo "land: the speculation did not land; unwinding to $(git rev-parse --short "$spec_undo") rather than carrying another branch's commits"
+	git reset -q --hard "$spec_undo" || die "could not unwind the speculative rebase; the tree is not somewhere this loop can push from."
+	spec_base=
+	spec_undo=
+	spec_main=
+}
+
+# Rebase onto the head the lease says is about to become `main`. Every failure
+# here is a FALLBACK, never a stop: the holder may never land, so a conflict
+# against its head is information about a base that may not happen, not the
+# `die`-worthy conflict the real rebase onto `origin/main` reports.
+speculate() {
+	local base head_ref
+	head_ref="$1"
+	[ -n "$head_ref" ] || return 0
+	# Fetch the holder's branch into a ref of our own rather than reading
+	# FETCH_HEAD, which is one file per clone and therefore racy the moment
+	# anything else in this process fetches (`land-lock`'s own read path carries
+	# the same fix, for the same reason).
+	git fetch -q origin "+refs/heads/$head_ref:$spec_ref" 2>/dev/null || {
+		echo "land: cannot fetch $head_ref to speculate on; staying linearized on main"
+		return 0
+	}
+	base=$(git rev-parse "$spec_ref" 2>/dev/null) || return 0
+	# Already a descendant — nothing to speculate, and rebasing would be a no-op
+	# that still mints a new sha and throws away this HEAD's verify receipt.
+	git merge-base --is-ancestor "$base" HEAD && return 0
+	spec_undo=$(git rev-parse HEAD)
+	if ! git rebase "$base" >/dev/null 2>&1; then
+		git rebase --abort 2>/dev/null || true
+		git reset -q --hard "$spec_undo" 2>/dev/null || true
+		spec_undo=
+		# A conflict discovered here is the whole point of doing this early: it
+		# is free now and expensive later. Reported, not resolved — resolving
+		# another branch's conflict before it has landed would be resolving it
+		# against a base that may never exist.
+		echo "land: $head_ref conflicts with this branch; not speculating on it (the conflict is real and arrives when it lands)"
+		return 0
+	fi
+	spec_base="$base"
+	# The `main` this bet was placed against. Without it "not landed yet" and
+	# "landed something else" are the same reading, and the bet would be unwound
+	# every lap while the holder was still perfectly on course.
+	spec_main=$(git rev-parse origin/main)
+	echo "land: speculatively linearized onto $head_ref@$(git rev-parse --short "$base") — the main that is about to exist"
+}
+
 # --- say what this land is doing, so nobody has to read its log (CLOUD-425) ---
 #
 # `land` is backgrounded by contract, and a backgrounded task's death used to be
@@ -389,6 +520,11 @@ set -m
 
 lap=0
 lease_waits=0
+# Whether this pass holds the lease, or is running as the admitted successor.
+have_lease=1
+# Sticky across laps: the reservation is held until the lease turns over, so
+# re-reserving each lap would rewrite the ref to say what it already says.
+admitted=0
 while :; do
 	lap=$((lap + 1))
 	[ "$lap" -le "$max_laps" ] ||
@@ -403,8 +539,12 @@ while :; do
 
 	# --- be a direct descendant of origin/main, or stop for the one decision ---
 	note_phase "rebase(lap $lap)"
-	git fetch -q origin main ||
-		die "cannot fetch origin/main; read mem:github-access before concluding the network is blocked."
+	fetch_main
+	# Settle any bet from the previous lap FIRST, and before anything below can
+	# push. A won bet leaves this branch already linearized on the new `main`
+	# with its verify receipt intact — which is the entire saving. A lost one is
+	# unwound here, where it costs a reset, rather than discovered at the push.
+	settle_speculation
 	if ! git merge-base --is-ancestor origin/main HEAD; then
 		echo "land: lap $lap — rebasing onto $(git rev-parse --short origin/main)"
 		if ! git rebase origin/main; then
@@ -412,6 +552,10 @@ while :; do
 			die "rebase onto origin/main conflicts. This is the one step the loop cannot do for you — resolve it and run land again. Lapping often is what keeps this small."
 		fi
 	fi
+	# The `main` this lap is built against, captured once. The lease wait below
+	# can take a full TTL, and this is what the winner compares against before it
+	# spends a matrix (CLOUD-369).
+	lap_main="$(git rev-parse origin/main)"
 
 	# --- prove the tree, unless this exact commit already carries the proof ---
 	#
@@ -563,30 +707,95 @@ while :; do
 	# re-fetches and rebases, and the receipt short-circuit skips `verify` when
 	# `main` did not move — so the wait costs a poll, never a CI run.
 	note_phase "lease(lap $lap)"
-	if ! mise run land-lock acquire; then
+	# The wait count is this branch's AGE, and passing it is what makes the
+	# admission fair rather than merely dispersed (CLOUD-369): a branch that has
+	# lost repeatedly probes a freed lease sooner than one that just arrived, so
+	# no branch spends its whole lap budget while siblings land repeatedly.
+	if ! LAND_LOCK_AGE="$lease_waits" mise run land-lock acquire; then
 		echo "land: lap $lap — another branch holds the landing lease; lapping rather than spending a run behind it"
 		# This lap spent no CI, so it does not count against a backstop that
 		# exists to catch "main is moving faster than a lap takes". Counting it
 		# would make a busy fleet exhaust LAND_MAX_LAPS on waiting alone and give
 		# up without ever having attempted — the opposite of what the lease is
 		# for.
-		lap=$((lap - 1))
-		# Waits get their own backstop instead, because "never counted" is how a
-		# loop becomes unbounded with no condition that can fire: a lease nobody
-		# ever releases would spin here forever. This is not a wall clock on a
-		# poll — each wait already ran its full LAND_LOCK_WAIT — it is a count of
-		# consecutive whole waits lost, which is a real and diagnosable state: the
-		# fleet is landing faster than this branch can get a turn.
-		lease_waits=$((lease_waits + 1))
-		[ "$lease_waits" -le "$max_waits" ] ||
-			die "never won the landing lease in $max_waits attempts. Run \`mise run land-lock-check\`: it tells a saturated fleet (wait, or land later) apart from a wedged lease (a ref nothing legitimate wrote), which look identical from here."
-		continue
+		charge_wait
+
+		# --- lost the lease, so do the work that losing makes possible --------
+		#
+		# Linearize onto the head that is about to become `main`, so this branch's
+		# turn — whenever it comes — costs a ready and a push rather than a
+		# rebase, a verify and a matrix. `peek` is the machine-readable read;
+		# parsing `status`'s prose would make a sentence into an interface.
+		speculate "$(mise run land-lock peek branch 2>/dev/null || true)"
+
+		# Then reserve the successor slot. If it is empty this branch becomes the
+		# one that may spend the SECOND matrix — the one that overlaps the
+		# holder's merge instead of starting cold behind it. One CAS-guarded
+		# slot, so exactly one waiter wins it and every other stays in draft: the
+		# bound is two whatever N is. A refusal is the ordinary case (somebody
+		# reserved first, or we already hold the slot) and costs nothing.
+		#
+		# AFTER the speculation, deliberately. Being admitted means pushing, and
+		# pushing before the linearization would spend the matrix on a head that
+		# is already stale — buying exactly the run this design exists to stop
+		# buying.
+		if [ "$admitted" = 0 ] && mise run land-lock reserve "$branch" >/dev/null 2>&1; then
+			admitted=1
+			echo "land: lap $lap — admitted as the successor; this branch may spend the run that overlaps the merge"
+		fi
+		if [ "$admitted" = 1 ]; then
+			# Fall through WITHOUT the lease: ready and push so the confirming
+			# run starts now, then lap. Everything past the push needs the lease
+			# — the fast-forward comment above all — so `have_lease` stops this
+			# pass there rather than duplicating the ready/push pair, which is
+			# the one place CLOUD-254's ordering is written down.
+			have_lease=0
+		else
+			continue
+		fi
+	else
+		have_lease=1
 	fi
-	# LAND_LOCK_HOLDER_PID is CLOUD-432's tether: the heartbeat releases and
-	# exits the moment this land stops existing, so a SIGKILL here can no
-	# longer leave a lease renewing for nobody.
-	LAND_LOCK_HOLDER_PID=$$ mise run land-lock hold >/dev/null 2>&1 &
-	heartbeat_pid=$!
+	# The heartbeat belongs to the HOLDER only. An admitted successor holds
+	# nothing to renew, and starting one here would have it renewing somebody
+	# else's lease — which `land-lock hold` refuses anyway, but the refusal would
+	# be a background process failing silently rather than a thing never started.
+	if [ "$have_lease" = 1 ]; then
+		# LAND_LOCK_HOLDER_PID is CLOUD-432's tether: the heartbeat releases and
+		# exits the moment this land stops existing, so a SIGKILL here can no
+		# longer leave a lease renewing for nobody.
+		LAND_LOCK_HOLDER_PID=$$ mise run land-lock hold >/dev/null 2>&1 &
+		heartbeat_pid=$!
+
+		# RE-CONFIRM THE BASE INSIDE THE HOLD (CLOUD-369). `acquire` waits up to a
+		# full TTL, and the winner is at its most stale in the instant it wins:
+		# `main` may have moved since the rebase at the top of this lap, and the
+		# next two statements are a ready and a push that buy a matrix. Confirming
+		# here is what makes a speculation safe to act on — and what stops the
+		# oldest failure in this loop, a green matrix bought for a head the
+		# fast-forward will refuse.
+		#
+		# Release and lap rather than rebase under the hold: rebasing here would
+		# hold a fleet-wide lease across local work, which is the thing the
+		# comment above refuses on principle. The lap top rebases and re-verifies,
+		# and the receipts make that cheap.
+		#
+		# It costs no LAP — nothing was spent — but it does count as a WAIT, so
+		# the backstop that catches a branch which never gets a turn still fires.
+		# Asked as "did `main` MOVE since this lap rebased", not as an ancestry
+		# query. They differ where it matters: a lap that speculated is a
+		# descendant of a commit that is itself a descendant of main, so
+		# `--is-ancestor` passes for exactly the case that must be caught. The
+		# sha comparison is also the same question `main-watch` answers, and it
+		# costs one rev-parse rather than a graph walk.
+		fetch_main
+		if [ "$(git rev-parse origin/main)" != "$lap_main" ]; then
+			echo "land: lap $lap — main moved to $(git rev-parse --short origin/main) while this lap waited for the lease; lapping rather than confirming a head it will refuse"
+			drop_lease
+			charge_wait
+			continue
+		fi
+	fi
 
 	readied=0
 	if [ "$(graded_runs "$sha")" = "0" ] &&
@@ -625,6 +834,25 @@ while :; do
 		gh pr ready "$pr" >/dev/null 2>&1 ||
 			die "could not mark #$pr ready for review, so CI would never start."
 		echo "land: lap $lap — the push moved nothing and $(git rev-parse --short "$sha") carries no graded run; re-fired the ready"
+	fi
+
+	# THE SUCCESSOR'S PASS ENDS HERE (CLOUD-369). Its matrix is now running
+	# alongside the holder's merge, which is the entire point — but everything
+	# below needs the lease. Waiting on CI would be the harmless half; commenting
+	# `/fast-forward` without holding the lease is the collision the lease exists
+	# to prevent, and `held` would refuse it anyway.
+	#
+	# So: lap. The next pass re-acquires, and by then this branch is linearized,
+	# verified AND green — so its turn costs the fast-forward comment and nothing
+	# else. That is the cold window closed.
+	#
+	# `admitted` is deliberately NOT cleared: the reservation stays ours until the
+	# lease turns over, and re-reserving every lap would churn the ref to say what
+	# it already says.
+	if [ "$have_lease" = 0 ]; then
+		echo "land: lap $lap — pushed as the admitted successor; its run overlaps the merge in flight"
+		lap=$((lap - 1))
+		continue
 	fi
 
 	# --- race the two answers: green, or no longer landable ---

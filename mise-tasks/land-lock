@@ -136,8 +136,17 @@ reserve)
 		exit 2
 	fi
 	;;
+peek)
+	case "${2:-}" in
+	branch | head | next) ;;
+	*)
+		echo "::error:: usage: land-lock peek <branch|head|next>" >&2
+		exit 2
+		;;
+	esac
+	;;
 *)
-	echo "::error:: usage: land-lock <acquire|hold|renew|held|release|status|authorises|reserve>" >&2
+	echo "::error:: usage: land-lock <acquire|hold|renew|held|release|status|authorises|reserve|peek>" >&2
 	exit 2
 	;;
 esac
@@ -507,7 +516,37 @@ acquire)
 	# already argues for. The jitter is the load-bearing half: without it every
 	# waiter wakes on the same schedule and re-collides the instant a lease drops,
 	# which is the herd this task exists to disperse.
+	#
+	# AGING (CLOUD-369), and it is what stops the capture effect the analogy
+	# predicts. Backoff alone disperses a herd but does not make it FAIR: a branch
+	# that has lost ten times re-enters on exactly the terms of one that just
+	# arrived, so aggregate throughput stays healthy — `main` advancing is the
+	# fleet working — while an individual station starves and then abandons its
+	# lap budget having landed nothing. Measured on PR #325: 8 laps, 8 greens,
+	# zero commits landed.
+	#
+	# So an aged waiter probes a freed lease SOONER: its ceiling falls as its
+	# waits accumulate, which raises its chance of being the one holding the CAS
+	# when the ref drops. Deliberately weaker than FIFO — strict ordering needs a
+	# coordinator, which this design rules out — and deliberately not a priority
+	# written anywhere: age is a count this process observed about itself, never
+	# shared state, so two clones cannot disagree about it because they never
+	# compare it.
+	#
+	# The floor is 1, never 0: a zero delay is a spin, and the busy loop is what
+	# the backoff exists to prevent. The jitter survives every value of age, since
+	# two equally-aged waiters are exactly the collision it disperses.
+	age="${LAND_LOCK_AGE:-0}"
+	case "$age" in
+	'' | *[!0-9]*) age=0 ;;
+	esac
+	cap=30
+	while [ "$age" -gt 0 ] && [ "$cap" -gt 2 ]; do
+		cap=$((cap / 2))
+		age=$((age - 1))
+	done
 	delay=2
+	[ "$delay" -le "$cap" ] || delay="$cap"
 	while :; do
 		observe || exit 2
 		# Record the sighting on EVERY observation, not only once expired
@@ -566,7 +605,7 @@ acquire)
 			exit 1
 		fi
 		sleep $((delay + RANDOM % delay))
-		[ "$delay" -ge 30 ] || delay=$((delay * 2))
+		[ "$delay" -ge "$cap" ] || delay=$((delay * 2))
 	done
 	;;
 
@@ -791,6 +830,29 @@ authorises)
 	# diagnosable rather than mysterious. No lease body, no expiry arithmetic.
 	echo "land-lock: the lease authorises $observed_branch, not $want"
 	exit 3
+	;;
+
+peek)
+	# CLOUD-369. ONE ADVISORY FIELD, ON STDOUT, FOR A CALLER THAT MEANS TO ACT ON
+	# IT. `status` is prose for a human; a caller parsing that sentence would turn
+	# a message into an interface, and the next edit to the wording would be a
+	# silent breakage. This prints the field alone, or nothing.
+	#
+	# Silent and 0 when the lease is absent, released or expired: "no lease names
+	# a head" is a legitimate reading a waiter handles by staying on `origin/main`,
+	# not an error it should report. Exit 2 stays reserved for "could not look".
+	if ! observe; then
+		exit 2
+	fi
+	if [ -z "$observed_sha" ] || released || expired; then
+		exit 0
+	fi
+	case "$2" in
+	branch) printf '%s\n' "$observed_branch" ;;
+	head) printf '%s\n' "$observed_head" ;;
+	next) printf '%s\n' "$observed_next" ;;
+	esac
+	exit 0
 	;;
 
 reserve)
