@@ -12,6 +12,9 @@
 //! exercises the whole of it. Nothing here reaches a network, which is also why
 //! these run in CI at all.
 
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 mod common;
 
 use std::path::{Path, PathBuf};

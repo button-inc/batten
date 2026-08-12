@@ -266,13 +266,13 @@ pub const SIGNALLED: i32 = -1;
 pub fn invoke(rule: &str, argv: &[String], payload: &[u8]) -> anyhow::Result<Verdict> {
     use std::io::Write as _;
 
-    let Some((program, args)) = argv.split_first() else {
+    let Some((program, arguments)) = argv.split_first() else {
         return Err(UsageError::raise(format!(
             "rule {rule}: `[judge].run` resolved to no program"
         )));
     };
     let mut child = Command::new(program)
-        .args(args)
+        .args(arguments)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
