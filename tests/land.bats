@@ -33,7 +33,16 @@
 # skip is only real if `verified` answers from what `verify` actually left.
 
 setup() {
-	LAND="$BATS_TEST_DIRNAME/../mise-tasks/land"
+	REAL_LAND="$BATS_TEST_DIRNAME/../mise-tasks/land"
+	# CLOUD-434: the program under test launches with bats' fd 3 closed, in ONE
+	# place rather than at every call site. A backgrounded descendant that
+	# outlives its reap otherwise holds the TAP stream, and bats-exec-file waits
+	# on that fd's EOF — so one leaked watcher wedged the whole gate, silently,
+	# with every test green. With the fd closed a leak costs a stray process,
+	# never a hung file.
+	LAND="$BATS_TEST_TMPDIR/land-under-test"
+	printf '#!/usr/bin/env bash\nexec 3>&- || true\nexec "%s" "$@"\n' "$REAL_LAND" >"$LAND"
+	chmod +x "$LAND"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"
@@ -197,6 +206,16 @@ case "\$2" in
   deferral-check) exit 0 ;;
   ci-wait)  [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
   main-watch)
+    # CLOUD-434's two levers. A stubborn watcher ignores the TERM, so only the
+    # escalated reap can end it; a detaching one leaves the process group
+    # entirely, so only the closed fd 3 keeps it off the TAP stream.
+    if [ -f "$BATS_TEST_TMPDIR/stubborn" ]; then
+      trap '' TERM
+      echo "\$\$" >>"$BATS_TEST_TMPDIR/stubborn.pids"
+    fi
+    if [ -f "$BATS_TEST_TMPDIR/detach" ] && [ ! -f "$BATS_TEST_TMPDIR/detached.pid" ]; then
+      setsid bash -c "echo \\\$\\\$ >'$BATS_TEST_TMPDIR/detached.pid'; sleep 30" >/dev/null 2>&1 &
+    fi
     # A lap starts two watchers, and they are told apart by WHEN: the one
     # racing the fast-forward answer is by construction the one started after
     # this lap's comment. Counting them separately is not cosmetic — a single
@@ -233,6 +252,9 @@ ci_is_slow() { : >"$BATS_TEST_TMPDIR/ci-wait.slow"; }
 # case says which of the two moves `main` and on which lap.
 main_moves_on_lap() { echo "$1" >"$BATS_TEST_TMPDIR/mw.ci.wins"; }
 main_moves_during_answer_wait() { echo "$1" >"$BATS_TEST_TMPDIR/mw.answer.wins"; }
+# CLOUD-434's levers — see the stub's main-watch case.
+watcher_is_stubborn() { : >"$BATS_TEST_TMPDIR/stubborn"; }
+watcher_detaches() { : >"$BATS_TEST_TMPDIR/detach"; }
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
 # The push leaves the remote ref where it was, so no `synchronize` event fires
 # and nothing starts a run — the one shape that still needs the `--undo`.
@@ -506,7 +528,7 @@ workflow_runs() {
 	# A hang is fixed by an exit condition that can fire, never by capping the
 	# poll — a cap reintroduces the VM-reap gap and would land as a false
 	# "refused" on a slow bot. The lap CAP is a count, not a clock.
-	run grep -cE '\btimeout [0-9]' "$LAND"
+	run grep -cE '\btimeout [0-9]' "$REAL_LAND"
 	[ "$output" -eq 0 ]
 }
 
@@ -779,7 +801,7 @@ workflow_runs() {
 	# The property that would have caught the dead branch: an exit nothing
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
-	stops=$(grep -o 'die "' "$LAND" | wc -l | tr -d ' ')
+	stops=$(grep -o 'die "' "$REAL_LAND" | wc -l | tr -d ' ')
 	[ "$stops" -eq 14 ] || {
 		echo "land has $stops stopping conditions; this suite covers 14."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
@@ -794,7 +816,7 @@ workflow_runs() {
 	# saturated — every turn lost) and two laps (the lease is held by someone
 	# else, and the lease was lost before the comment). This assertion caught all
 	# three the moment they were added, which is the whole point of it.
-	laps=$(grep -cE '^[[:space:]]*continue$' "$LAND")
+	laps=$(grep -cE '^[[:space:]]*continue$' "$REAL_LAND")
 	[ "$laps" -eq 6 ] || {
 		echo "land has $laps lap-ending continues; this suite covers 6."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
@@ -920,6 +942,50 @@ EOF
 	# Asserted structurally because reproducing it needs a never-exiting child,
 	# which is exactly what would hang this suite. Comments are stripped so this
 	# file's own rationale cannot satisfy the rule it explains.
-	run bash -c "sed 's/#.*//' '$LAND' | grep -nE '^[[:space:]]*wait[[:space:]]*(2>|\$)'"
+	run bash -c "sed 's/#.*//' '$REAL_LAND' | grep -nE '^[[:space:]]*wait[[:space:]]*(2>|\$)'"
 	[ "$status" -ne 0 ]
+}
+
+@test "a watcher that shrugs off the TERM is escalated, never left to outlive the lap" {
+	# CLOUD-434. The group TERM measurably missed grandchildren inside one
+	# loaded gate run, and the survivors wedged bats through the fd they still
+	# held. The reap now verifies the group died and escalates a survivor to
+	# SIGKILL; this is that claim's discriminating case — with the escalation
+	# deleted, the stubborn watcher outlives the run and this goes red.
+	watcher_is_stubborn
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ -s "$BATS_TEST_TMPDIR/stubborn.pids" ]
+	local pid deadline
+	while read -r pid; do
+		[ -n "$pid" ] || continue
+		deadline=$((SECONDS + 2))
+		while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+			sleep 0.1
+		done
+		! kill -0 "$pid" 2>/dev/null
+	done <"$BATS_TEST_TMPDIR/stubborn.pids"
+}
+
+@test "a detached descendant cannot hold bats' output stream — fd 3 is closed beneath the program under test" {
+	# CLOUD-434's other half. A watcher that leaves the process group entirely
+	# is beyond any reap; what makes it harmless is that nothing under the
+	# launcher carries bats' fd 3, so the file completes and the leak costs a
+	# stray process rather than a wedged gate. With the launcher's `exec 3>&-`
+	# deleted, the child holds the TAP fd and this goes red (bounded: the
+	# stand-in sleeps 30s rather than forever, so even the mutant run ends).
+	watcher_detaches
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	local deadline pid
+	deadline=$((SECONDS + 3))
+	while [ ! -s "$BATS_TEST_TMPDIR/detached.pid" ] && [ "$SECONDS" -lt "$deadline" ]; do
+		sleep 0.1
+	done
+	[ -s "$BATS_TEST_TMPDIR/detached.pid" ]
+	pid=$(cat "$BATS_TEST_TMPDIR/detached.pid")
+	[ ! -e "/proc/$pid/fd/3" ]
+	kill -9 "$pid" 2>/dev/null || true
 }

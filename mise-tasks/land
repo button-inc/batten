@@ -128,9 +128,21 @@ redraft() {
 # leaves a beating lease that nobody can steal, which is the one failure mode
 # that would wedge the fleet rather than merely slow it.
 heartbeat_pid=
+# CLOUD-434: a group TERM is a request, not a fact — it demonstrably missed
+# grandchildren twice in one loaded gate run, and the survivors held bats'
+# output fd and wedged the whole gate. So after every TERM-and-wait, the reap
+# verifies the GROUP is gone — `kill -0 -- -pgid` answers for any surviving
+# member, where `wait` proves only that the leader died — and escalates a
+# survivor to SIGKILL rather than trusting it to die eventually. Run AFTER the
+# wait, so a group exiting gracefully is never escalated for being mid-exit.
+reap_residue() {
+	! kill -0 -- -"$1" 2>/dev/null || kill -9 -- -"$1" 2>/dev/null
+}
 drop_lease() {
 	if [ -n "$heartbeat_pid" ]; then
 		kill -- -"$heartbeat_pid" 2>/dev/null || true
+		wait "$heartbeat_pid" 2>/dev/null
+		reap_residue "$heartbeat_pid"
 		heartbeat_pid=
 	fi
 	mise run land-lock release >/dev/null 2>&1 || true
@@ -310,7 +322,10 @@ while :; do
 			die "never won the landing lease in $max_waits attempts. Run \`mise run land-lock-check\`: it tells a saturated fleet (wait, or land later) apart from a wedged lease (a ref nothing legitimate wrote), which look identical from here."
 		continue
 	fi
-	mise run land-lock hold >/dev/null 2>&1 &
+	# LAND_LOCK_HOLDER_PID is CLOUD-432's tether: the heartbeat releases and
+	# exits the moment this land stops existing, so a SIGKILL here can no
+	# longer leave a lease renewing for nobody.
+	LAND_LOCK_HOLDER_PID=$$ mise run land-lock hold >/dev/null 2>&1 &
 	heartbeat_pid=$!
 
 	readied=0
@@ -390,6 +405,8 @@ while :; do
 	# every check green and the SHA landable, logging nothing. CLOUD-383 names
 	# the shape; the heartbeat turned an intermittent hang into a certain one.
 	wait "$ci_pid" "$main_pid" 2>/dev/null
+	reap_residue "$ci_pid"
+	reap_residue "$main_pid"
 	ci_rc="$(cat "$rc_ci" 2>/dev/null)"
 	main_rc="$(cat "$rc_main" 2>/dev/null)"
 	rm -f "$rc_ci" "$rc_main"
@@ -466,6 +483,9 @@ while :; do
 		kill "$ff_watch_pid" 2>/dev/null
 		kill -- -"$ff_watch_pid" 2>/dev/null
 		wait "$ff_watch_pid" 2>/dev/null
+		# The wait proves the leader died; only the group check proves the
+		# TREE did (CLOUD-434).
+		reap_residue "$ff_watch_pid"
 		rm -f "$rc_ff"
 	}
 
