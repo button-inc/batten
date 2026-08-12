@@ -75,6 +75,12 @@ teardown() {
 	# loser, must cost a stray process for one teardown and never a stub that
 	# outlives the whole gate run holding a fd.
 	#
+	# Not hypothetical: main-watch has blocked forever for its own losers since
+	# CLOUD-246, and a box mid-way through this change was carrying three of
+	# them at 50 minutes old, each with the land that spawned it still parked in
+	# `wait`. That is what an unswept never-answering stub looks like, and the
+	# two levers below just made two more of them possible.
+	#
 	# Matched on the per-test stub PATH, not on `mise` or on a task name: bats
 	# gives every case its own $BATS_TEST_TMPDIR, so this pattern names a file
 	# only this case can have executed. Under the parallel runner a sibling's
@@ -323,12 +329,11 @@ case "\$2" in
     # wait is exactly the abort under test — the receipt line is never
     # reached, so the abort-leaves-no-receipt property is observed for real.
     #
-    # CLOUD-390: the wait does not end on its own. It used to be a 30s sleep,
-    # which is a guess at how long a real gate outlives its race, and a guess
-    # in this position is the wrong way round — a verify race that never killed
-    # its loser still finished, thirty seconds late and GREEN, so the defect
-    # these rows exist to catch passed slowly instead of failing. The only exit
-    # is land's kill, which is precisely the claim under test.
+    # CLOUD-390: the wait does not end on its own. It used to be a 30s sleep —
+    # a guess at how long a real gate outlives its race — and a self-ending
+    # stub is a way for these rows to reach green without land having killed
+    # anything, which is the one thing they are about. Same reasoning as the
+    # ci-wait lever above; the two are the same defect written twice.
     if [ -f "$BATS_TEST_TMPDIR/verify.slow" ]; then
       rm -f "$BATS_TEST_TMPDIR/verify.slow"
       while :; do sleep 1; done
@@ -353,17 +358,21 @@ case "\$2" in
     # lap spawn" and assert each one is gone (CLOUD-434's trap gap).
     echo "\$\$" >>"$BATS_TEST_TMPDIR/watch.pids"
     # CLOUD-390: "CI is still running" is a wait that does not return, not one
-    # that returns after a guessed 30s. The guess was load-bearing in the wrong
-    # direction — a reap that missed this watcher, or a race that never killed
-    # its loser, still finished thirty seconds later and GREEN, so the exact
-    # defect these rows exist to catch passed SLOWLY instead of failing. This
-    # is the shape main-watch already uses for its own loser further down.
+    # that returns after a guessed 30s, and this is the shape main-watch
+    # already uses for its own loser further down. The guess was not merely
+    # imprecise, it was a SECOND way for a reap row to go green: a stub that
+    # terminates itself satisfies "the watcher is gone" without anything having
+    # reaped it, so those rows held only while 30 stayed larger than the settle
+    # windows they poll with (4s below). Two guessed numbers that must stay
+    # ordered, with nothing checking the order. Now the only exit is land's
+    # kill, which is the claim the rows are about.
     #
     # Consumed on the first slow call, exactly as verify.slow is. The lever
     # says "lose THIS lap", and a landing that laps must reach a lap whose CI
     # does answer or it never merges: left standing, it wedged lap 2 of the two
-    # race rows forever, and those rows only ever completed by sitting out the
-    # 30s there — 31.5s for one of them, measured before this change.
+    # race rows forever. Those rows used to reach green by sitting out the full
+    # sleep on lap 2 — 31.5s for "main moving mid-wait", measured before this
+    # change and 1.5s after it.
     if [ -f "$BATS_TEST_TMPDIR/ci-wait.slow" ]; then
       rm -f "$BATS_TEST_TMPDIR/ci-wait.slow"
       while :; do sleep 1; done

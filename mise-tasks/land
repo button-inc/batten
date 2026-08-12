@@ -128,6 +128,24 @@ die() {
 	exit 1
 }
 
+# THE ROSTER, GUARDED WHERE AN EXIT CAN ACTUALLY EXIT (CLOUD-467). `graded_runs`
+# reads `$CI_REQUIRED_CHECKS`, and its abort on an unset one used to be swallowed
+# by a `|| n=0` written for a transient API failure — so the one input this task
+# cannot compute became `0`, which both call sites read as "this head carries no
+# graded run": the branch that FIRES THE READY THAT STARTS CI.
+#
+# The guard belongs HERE and not in that function, which is the correction that
+# matters. Both call sites wrap it in `$( )`, so a `die` inside it exits the
+# SUBSHELL only — the lap then continues with an empty reading and falls into the
+# unbounded answer poll, turning a fail-closed guard into a hang. Measured: the
+# suite stopped terminating at all.
+#
+# `checks-green` guards the same variable for the same reason, and the two are
+# deliberately paired, so opposite behaviour on a missing roster is exactly the
+# drift that pairing exists to prevent.
+[ -n "${CI_REQUIRED_CHECKS:-}" ] ||
+	die "CI_REQUIRED_CHECKS is unset — run this through \`mise run land\`, which is where the required set is declared. Readying a PR against an unknown roster would spend a matrix to answer a question this task could not ask."
+
 # Stopping on a red run without closing the tap is a leak this exists to plug:
 # CI skips drafts, so re-drafting is what stops the next push — from any source
 # — spending another runner on a failure nobody has fixed yet.
@@ -537,22 +555,14 @@ stopped_run() {
 
 graded_runs() {
 	local n
-	# THE ROSTER IS GUARDED BEFORE THE CALL, not swallowed after it (CLOUD-467).
-	# `${CI_REQUIRED_CHECKS:?}` below aborts the command substitution when the
-	# roster is unset, and the `|| n=0` at the bottom then converted that abort
-	# into `0` — which both call sites read as "this head carries no graded run",
-	# the branch that FIRES THE READY THAT STARTS CI. So the one input this task
-	# cannot compute became the answer that spends a full matrix.
-	#
-	# `checks-green:86-88` already gets this right on the same variable, and the
-	# two are deliberately paired, so opposite behaviour on a missing roster is
-	# exactly the drift the pairing exists to prevent.
+	# The roster is guarded at TOP LEVEL, not here — see the check beside the
+	# other preconditions. A `die` in this function would run inside the `$( )`
+	# its callers wrap it in, so it would exit the SUBSHELL and the lap would
+	# carry on with an empty reading (CLOUD-467).
 	#
 	# The `|| n=0` below is KEPT for what it was written for: a transient `gh` or
 	# `awk` failure answering "ungraded" is the choice that makes progress, and
-	# stopping the loop on it would be worse. Only the unset-roster path changes.
-	[ -n "${CI_REQUIRED_CHECKS:-}" ] ||
-		die "CI_REQUIRED_CHECKS is unset — run this through \`mise run land\`, which is where the required set is declared. Readying a PR against an unknown roster would spend a matrix to answer a question this task could not ask."
+	# stopping the loop on it would be worse.
 	n=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" \
 		--jq '.check_runs[]? | "\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null |
 		awk -F'\t' -v req="${CI_REQUIRED_CHECKS:?}" '
