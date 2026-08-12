@@ -674,6 +674,7 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# and the PR stayed ready for good — so every later push bought a full
 	# matrix with no landing attempt in progress at all.
 	head_verdict 3
+	not_linear
 	fails rebase
 	run "$LAND"
 	[ "$status" -eq 1 ]
@@ -686,6 +687,7 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# decorative: the pre-push ready fires only on a head with NO graded run, so
 	# re-drafting a green head strands it — and readying it again would buy a
 	# whole matrix to get back where it already was. Green resumes for free.
+	not_linear
 	fails rebase
 	run "$LAND"
 	[ "$status" -eq 1 ]
@@ -697,6 +699,7 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# anything. Acting on it would strand a green head on a reading we failed to
 	# take; the leak it leaves open costs a run, and the strand costs a wedge.
 	head_verdict 2
+	not_linear
 	fails rebase
 	run "$LAND"
 	[ "$status" -eq 1 ]
@@ -730,6 +733,7 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# status must still be the rebase conflict's, not the re-draft's.
 	head_verdict 3
 	undo_fails
+	not_linear
 	fails rebase
 	run "$LAND"
 	[ "$status" -eq 1 ]
