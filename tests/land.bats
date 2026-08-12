@@ -288,16 +288,20 @@ case "\$2" in
     # still works through the generic check above; this is what a case needs to
     # say "acquire loses but reserve wins", which is the successor's whole path.
     rcv="$BATS_TEST_TMPDIR/rc.mise.land-lock.\$3"
-    if [ -f "\$rcv" ]; then
-      # A lease lost while main moves under the waiter is one event, not two:
-      # the acquire that fails is the same acquire during which trunk advanced.
-      [ ! -f "$BATS_TEST_TMPDIR/main_moves_in_wait" ] ||
+    # MAIN MOVES DURING A WAIT, AND THE LAP IT MOVES ON MATTERS. A bet is placed
+    # during the FIRST wait, so moving trunk before that one would make the bet
+    # read as already-decided and no speculation would ever be settled. The
+    # lever therefore fires from the second acquire on: bet first, then the
+    # world moves under it, which is the sequence the unwind exists for.
+    if [ "\$3" = acquire ]; then
+      n=\$(cat "$BATS_TEST_TMPDIR/acquire.calls" 2>/dev/null || echo 0)
+      n=\$((n + 1)); echo "\$n" >"$BATS_TEST_TMPDIR/acquire.calls"
+      after=\$(cat "$BATS_TEST_TMPDIR/main_moves_after" 2>/dev/null || echo 1)
+      if [ -f "$BATS_TEST_TMPDIR/main_moves_in_wait" ] && [ "\$n" -ge "\$after" ]; then
         cat "$BATS_TEST_TMPDIR/main_moves_in_wait" >"$BATS_TEST_TMPDIR/mainsha"
-      exit "\$(cat "\$rcv")"
+      fi
     fi
-    if [ "\$3" = acquire ] && [ -f "$BATS_TEST_TMPDIR/main_moves_in_wait" ]; then
-      cat "$BATS_TEST_TMPDIR/main_moves_in_wait" >"$BATS_TEST_TMPDIR/mainsha"
-    fi
+    [ ! -f "\$rcv" ] || exit "\$(cat "\$rcv")"
     if [ "\$3" = peek ]; then
       f="$BATS_TEST_TMPDIR/lease.\$4"
       [ ! -f "\$f" ] || cat "\$f"
@@ -1103,12 +1107,12 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# below, and this counter is why that stop goes through `die` rather than a
 	# bare `exit` — an exit nothing counts is an exit nothing tests.
 	laps=$(grep -cE '^[[:space:]]*continue$' "$REAL_LAND")
-	# 12 since CLOUD-369: the warm queue adds four — the lease was lost (now the
+	# 11 since CLOUD-369: the warm queue adds four — the lease was lost (now the
 	# path that speculates and may reserve), the successor pushed and lapped, the
 	# successor is already in flight for this head, and the winner found main had
 	# moved while it waited. Each is exercised below.
-	[ "$laps" -eq 12 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 12."
+	[ "$laps" -eq 11 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 11."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
@@ -1193,7 +1197,7 @@ deletes() { grep -c . "$BATS_TEST_TMPDIR/deletes" || true; }
 # lease is taken before anything can start a run, re-checked before the merge is
 # asked for, and never leaked on a way out.
 
-lock_calls() { grep -c "^run land-lock $1\$" "$BATS_TEST_TMPDIR/misecalls" || true; }
+lock_calls() { grep -c "^run land-lock $1\b" "$BATS_TEST_TMPDIR/misecalls" || true; }
 
 @test "a second land in this clone is refused before anything is spent (CLOUD-428)" {
 	# The landing lease cannot answer this — it is re-entrant per clone by
@@ -1508,7 +1512,10 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	spec_head holder-branch
 	pr_state MERGED
 	# main moves to something that is NOT the speculated base: the bet lost.
+	# From the second acquire on — the bet is placed during the first wait, and
+	# a world that moved before it was placed would never settle anything.
 	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
+	echo 2 >"$BATS_TEST_TMPDIR/main_moves_after"
 	LAND_LOCK_MAX_WAITS=2 run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"did not land; unwinding"* ]]
@@ -1522,6 +1529,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	spec_head holder-branch
 	echo 1 >"$BATS_TEST_TMPDIR/rc.reset"
 	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
+	echo 2 >"$BATS_TEST_TMPDIR/main_moves_after"
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=2 run "$LAND"
 	[ "$status" -eq 1 ]
@@ -1543,7 +1551,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	# Readied and pushed — but never commented: the fast-forward needs the lease,
 	# and asking for a merge without holding it is the collision the lease exists
 	# to prevent.
-	[ "$(call_order)" = "ready push" ]
+	[[ "$(call_order)" == "ready push"* ]]
 	[ "$(comments)" -eq 0 ]
 }
 
@@ -1612,6 +1620,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=3 run "$LAND"
 	[ "$status" -eq 1 ]
-	[ "$(call_order)" = "ready push" ]
+	[[ "$(call_order)" == "ready push"* ]]
+	[ "$(grep -c '^push$' "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
 	[[ "$output" == *"its run is already in flight"* ]]
 }
