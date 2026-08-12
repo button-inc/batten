@@ -27,6 +27,14 @@ setup() {
 	git commit -q --allow-empty -m "work"
 	HEAD_SHA="$(git rev-parse HEAD)"
 	RECEIPTS="$REPO/.git/batten-receipts"
+	# A SLASHED branch, because every branch in this repository has one
+	# (`claude/…`, `wenzowski/…`) and a scratch repo's default branch is the one
+	# shape that does not. Keying a receipt on the raw name makes `lease.claude/x`
+	# a path through a directory that never exists, so nothing is written and the
+	# guard refuses everything while looking like it works. The fixture is the
+	# real shape now; `receipts()` writes through the same transform the task does.
+	git checkout -q -b claude/scratch-work
+	BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 }
 
 ready() { printf '{"tool_input":{"command":"%s"}}' "${1:-gh pr ready 42}" | "$GUARD"; }
@@ -35,6 +43,22 @@ receipts() {
 	mkdir -p "$RECEIPTS"
 	date -u +%FT%TZ >"$RECEIPTS/verify.$HEAD_SHA"
 	printf '%s' "${1:-$MAIN_SHA}" >"$RECEIPTS/linear-check.$HEAD_SHA"
+	# The landing lease (CLOUD-420 §4). Written by `land-lock`'s `swap` — its only
+	# writer, so acquire, renew, the heartbeat's steal path and release all reach
+	# it — and refreshed on every beat, which is why a live one is the default here
+	# and a case that wants it absent or lapsed has to say so.
+	lease "${2:-$(($(date +%s) + 120))}"
+}
+
+# Empty argument removes it; anything else is the expiry instant it carries.
+lease() {
+	mkdir -p "$RECEIPTS"
+	local key="lease.${BRANCH//\//-}"
+	if [ -z "${1:-}" ]; then
+		rm -f "$RECEIPTS/$key"
+	else
+		printf '%s' "$1" >"$RECEIPTS/$key"
+	fi
 }
 
 @test "denies ready with no receipts at all" {
@@ -120,4 +144,75 @@ receipts() {
 @test "a plain gh pr ready is still gated" {
 	run ready 'gh pr ready 167'
 	[[ "$output" == *'"deny"'* ]]
+}
+
+# ---------------------------------------------------------------------------
+# The landing lease, CLOUD-420's free half. The runner's precondition catches the
+# same mistake, but only after a matrix has been dispatched and cancelled; this
+# costs nothing and happens before the event that starts CI.
+
+@test "denies ready when this clone does not hold the landing lease" {
+	# THE CASE THIS EXISTS FOR. Four concurrent matrices ran on 2026-08-12 while
+	# three sessions handed the lease around correctly — every one of them was a
+	# push to a PR that was already ready, which is the state a hand-ready leaves
+	# behind permanently.
+	receipts
+	lease ""
+	run ready
+	[[ "$output" == *'"permissionDecision": "deny"'* ]]
+	[[ "$output" == *"landing lease"* ]]
+}
+
+@test "the lease refusal names the task to run, not merely the refusal" {
+	receipts
+	lease ""
+	run ready
+	[[ "$output" == *"mise run land"* ]]
+}
+
+@test "a LAPSED lease is refused, and the refusal says how long ago" {
+	# The receipt is refreshed by the heartbeat, so a lapsed one does not mean
+	# "you never had it" — it means the `land` that was holding it is gone, and
+	# another branch may already have taken it.
+	receipts
+	lease "$(($(date +%s) - 30))"
+	run ready
+	[[ "$output" == *'"permissionDecision": "deny"'* ]]
+	[[ "$output" == *"lapsed 3"* ]]
+}
+
+@test "a live lease allows the ready" {
+	receipts
+	run ready
+	[ -z "$output" ]
+}
+
+@test "FAIL OPEN: an unparseable lease receipt allows rather than guessing" {
+	# Same posture as every other unknown in this file. The runner's precondition
+	# is the backstop and it is the one that costs money, so this half never has
+	# to guess.
+	receipts
+	lease "not-a-timestamp"
+	run ready
+	[ -z "$output" ]
+}
+
+@test "FAIL OPEN: a detached HEAD has no branch to key a lease by" {
+	receipts
+	git checkout -q --detach
+	run ready
+	[ -z "$output" ]
+}
+
+@test "the lease is keyed by BRANCH, so another branch's lease does not vouch for this one" {
+	# Keyed by branch rather than by sha, like `claim-check`'s and unlike
+	# `verify`'s: a lease is a decision about which branch may land, which every
+	# commit on it continues to serve. That is exactly why it must not be readable
+	# from a different branch.
+	receipts
+	lease ""
+	mkdir -p "$RECEIPTS"
+	printf '%s' "$(($(date +%s) + 120))" >"$RECEIPTS/lease.some-other-branch"
+	run ready
+	[[ "$output" == *'"permissionDecision": "deny"'* ]]
 }

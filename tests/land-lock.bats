@@ -38,6 +38,7 @@ EOF
 		git init -q "$d"
 		git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed
 		git -C "$d" remote add origin "$BARE"
+		git -C "$d" checkout -q -b claude/work
 	done
 	export LAND_LOCK_WAIT=1
 }
@@ -640,4 +641,61 @@ rival_holds_for() { # <branch>
 	LAND_LOCK_LAND_BRANCH=feature-x lock "$MINE" acquire
 	run bash -c "git --git-dir='$BARE' cat-file commit \"\$(git --git-dir='$BARE' rev-parse refs/heads/batten-land-lock)\""
 	[[ "$output" != *"branch: batten-land-lock"* ]]
+}
+
+# ---------------------------------------------------------------------------
+# The receipt `ready-guard` reads (CLOUD-420 §4). Written from `swap`, which is
+# the lease's ONLY writer — acquire, renew, the heartbeat's steal path and
+# release all reach the remote through it — so one insertion covers every way
+# the lease can change hands, and no caller can take it without leaving one.
+
+# The key is the branch with `/` folded to `-`, the transform `claim-check` and
+# `claim-guard` already use — read here the same way the task writes it, and
+# exercised on a SLASHED branch because that is the only shape this repository
+# actually produces.
+receipt() {
+	local b
+	b="$(git -C "$1" rev-parse --abbrev-ref HEAD)"
+	cat "$1/.git/batten-receipts/lease.${b//\//-}" 2>/dev/null
+}
+
+@test "acquire leaves a receipt carrying the instant the lease expires" {
+	lock "$MINE" acquire
+	exp="$(receipt "$MINE")"
+	[ -n "$exp" ]
+	# Within the TTL of now, rather than an exact equality: the receipt is
+	# computed a few milliseconds after the lease body it describes.
+	now="$(date +%s)"
+	[ "$exp" -gt "$now" ]
+	[ "$exp" -le "$((now + 120))" ]
+}
+
+@test "a renew REFRESHES the receipt — a lease held for a long lap is still held" {
+	# The reason this lives in `swap` and not in `acquire`: `verify` runs longer
+	# than one TTL, and `land` readies after its push. A receipt minted once at
+	# acquire would read as lapsed by the time it mattered.
+	LAND_LOCK_TTL=1 lock "$MINE" acquire
+	first="$(receipt "$MINE")"
+	LAND_LOCK_TTL=300 lock "$MINE" renew
+	second="$(receipt "$MINE")"
+	[ "$second" -gt "$first" ]
+}
+
+@test "release REMOVES the receipt rather than letting it age out" {
+	# A release is a declaration that this clone no longer holds it. Leaving the
+	# receipt to lapse would let `ready-guard` honour a lease already handed on.
+	lock "$MINE" acquire
+	[ -n "$(receipt "$MINE")" ]
+	lock "$MINE" release
+	[ -z "$(receipt "$MINE")" ]
+}
+
+@test "A REFUSED ACQUIRE LEAVES NO RECEIPT — the whole point of the predicate" {
+	# If a lost race still wrote one, `ready-guard` would wave through exactly
+	# the clone the lease just refused, which is worse than having no receipt at
+	# all: it would be a gate that passes precisely when it should not.
+	lock "$RIVAL" acquire
+	run lock "$MINE" acquire
+	[ "$status" -ne 0 ]
+	[ -z "$(receipt "$MINE")" ]
 }
