@@ -339,3 +339,29 @@ mandatory_green() {
 		"completed	success	ci")" run "$GREEN"
 	[ "$status" -eq 3 ]
 }
+
+@test "PRESSURE: a name with THREE runs on one SHA is judged by its latest" {
+	# CLOUD-436 grades each name by its latest run, and the two-run case is
+	# covered above. This is the shape the landing loop actually produces once a
+	# transient is re-run (CLOUD-483): the draft-era skip, the red that never
+	# reached a verdict, and the re-run that did — three runs, one name, and only
+	# the third is an answer. Judged by the union, or by the first, or by any
+	# rule that stops at two, this reads as red and re-drafts a healthy PR.
+	CHECKS_GREEN_RUNS="$(mandatory_green \
+		"completed	skipped	ci	2026-08-12T01:00:00Z	10" \
+		"completed	failure	ci	2026-08-12T02:00:00Z	20" \
+		"completed	success	ci	2026-08-12T03:00:00Z	30")" run "$GREEN"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"every required check terminal and green"* ]]
+}
+
+@test "PRESSURE: three runs whose LATEST is red is still red" {
+	# The anti-vacuity half. A rule that always took the greenest of N runs would
+	# pass the row above and launder every failure that follows a success.
+	CHECKS_GREEN_RUNS="$(mandatory_green \
+		"completed	success	ci	2026-08-12T01:00:00Z	10" \
+		"completed	skipped	ci	2026-08-12T02:00:00Z	20" \
+		"completed	failure	ci	2026-08-12T03:00:00Z	30")" run "$GREEN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"is not green"* ]]
+}
