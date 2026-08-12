@@ -31,6 +31,21 @@ on:
   issue_comment:
     types: [created]
 
+# Keyed by ISSUE, not by `github.ref`, and that is the whole decision: an
+# `issue_comment` run attaches to the default-branch tip, so every landing
+# attempt in the repository shares one ref — a ref-keyed group would put them
+# all in one bucket, and a PR's `/fast-forward` would cancel an unrelated PR's
+# merge already in flight. Per-issue serialises the thing that actually races
+# (two attempts to advance `main` from one PR) and leaves distinct PRs
+# independent.
+#
+# `cancel-in-progress: false` for the same reason release-artifacts uses it: a
+# half-completed fast-forward is worse than a slow one, and the attempt in
+# flight is the one holding the landing lease.
+concurrency:
+  group: fast-forward-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write

@@ -60,8 +60,33 @@
 #      enumeration: a fan-in cannot start before its dependencies are terminal,
 #      so it can never spend a runner ahead of the cancellation.
 #
-# Scoped to `pull_request`-triggered workflows: a scheduled or release workflow
-# is not on the landing path and none of these properties apply to it.
+#   8. EVERY WORKFLOW DECLARES A CONCURRENCY GROUP. Property 2 is the landing
+#      path's half of this and was the whole of it, which is why eleven
+#      workflows had none: it is guarded on `pull_request`, and
+#      `fast-forward.yml` is `issue_comment` while the scheduled ones avoid
+#      `pull_request` on purpose (see the scoping note below). So the property
+#      that matters off the landing path — that a workflow cannot have two runs
+#      racing at all — reached none of them. `fast-forward.yml` is the one that
+#      cost: N concurrent `/fast-forward` comments ran N concurrent attempts to
+#      advance `main`, measured as 245 refusals against 6 merges in a half hour
+#      (CLOUD-393). The two arms are NOT one: a PR workflow supersedes itself
+#      (`cancel-in-progress: true`), a scheduled one must NOT be killed by its
+#      own next tick, so declaring a group is all this asks of it.
+#
+#   9. NO TWO SCHEDULES COLLIDE. Every scheduled workflow's header claims a
+#      staggered slot and nothing checked, so two pairs drifted onto the same
+#      minute — and the second pair landed AFTER the first was found. Compared
+#      as LITERAL cron expressions, never as firing times: `auto-release-land`
+#      runs `*/30 * * * *`, which genuinely overlaps every `:00` and `:30` slot,
+#      and flagging that would make the property fire forever on a workflow
+#      doing nothing wrong. Literal equality is also what "a staggered slot"
+#      means in the headers making the claim.
+#
+# Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
+# release workflow is not on the landing path and they do not apply to it. 8 and
+# 9 are the exceptions — they are about a workflow racing itself or its
+# neighbour, which is not a property of the landing path — so they judge every
+# workflow, and 8 sits before the `pull_request` filter for that reason.
 set -uo pipefail
 
 workflows="${PARITY_WORKFLOWS:-.github/workflows}"
@@ -99,6 +124,7 @@ want_names=$(printf '%s\n' "$required" | tr ',' '\n' | base_names)
 job_names=""
 
 checked=0
+all_seen=0
 for wf in "$workflows"/*.yml; do
 	[ -e "$wf" ] || continue
 	# The trigger list is the two-space-indented block under `on:`. Read into a
@@ -106,6 +132,17 @@ for wf in "$workflows"/*.yml; do
 	# producer killed by that SIGPIPE makes the pipeline report failure on a
 	# MATCH — the inversion `pipefail-grep-check` exists to catch.
 	triggers=$(awk '/^on:/{p=1;next} /^[a-z]/{p=0} p' "$wf")
+
+	# Property 8, and it sits HERE — above the filter — on purpose: a workflow
+	# racing itself is not a property of the landing path, so scoping it to
+	# `pull_request` is what left eleven workflows unjudged. Only the group's
+	# existence is asked for; `cancel-in-progress` is property 2's arm below,
+	# because the right value differs by trigger and a single answer is wrong
+	# for one of them.
+	all_seen=$((all_seen + 1))
+	grep -q '^concurrency:' "$wf" ||
+		problem "$wf declares no concurrency group, so two of its runs can race — add one, with cancel-in-progress: true if it triggers on pull_request and false otherwise."
+
 	grep -q '^  pull_request:' <<<"$triggers" || continue
 	checked=$((checked + 1))
 
@@ -267,6 +304,37 @@ if [ "$checked" -eq 0 ]; then
 	problem "no pull_request-triggered workflow found under $workflows — either the path is wrong or the landing path is untested."
 fi
 
+# Properties 8 and 9 judge every workflow, so they need their own "did I look at
+# anything" guard: a directory holding only scheduled workflows leaves `checked`
+# at zero above while these two did real work, and reusing that counter would
+# report a wrong reason for a right refusal.
+if [ "$all_seen" -eq 0 ]; then
+	problem "no workflow found under $workflows at all — the path is wrong, and every property here silently judged nothing."
+fi
+
+# Property 9. A schedule line is `- cron: "<expr>"` under `schedule:`; a comment
+# cannot match, because the anchor requires the dash before the key. Quotes are
+# stripped so a file quoting differently cannot hide a collision, and the
+# comparison is over the LITERAL expression — see the header for why firing-time
+# overlap is deliberately not what this asks.
+crons=$(for wf in "$workflows"/*.yml; do
+	[ -e "$wf" ] || continue
+	awk -v f="$wf" '
+		/^[[:space:]]*-[[:space:]]*cron:/ {
+			sub(/^[^:]*:[[:space:]]*/, "")
+			gsub(/["'"'"']/, "")
+			sub(/[[:space:]]+$/, "")
+			if ($0 != "") print $0 "\t" f
+		}
+	' "$wf"
+done)
+while IFS= read -r expr; do
+	[ -n "$expr" ] || continue
+	# Pointer-only: the expression and the file names, never the file bodies.
+	files=$(printf '%s\n' "$crons" | awk -F'\t' -v e="$expr" '$1 == e { n = split($2, p, "/"); printf "%s ", p[n] }')
+	problem "cron \"$expr\" is declared by more than one workflow (${files% }) — they contend for the same runners at the same minute, and every one of these headers claims a staggered slot. Move one to a free minute."
+done < <(printf '%s\n' "$crons" | sed '/^$/d' | cut -f1 | sort | uniq -d)
+
 # Property 4. Read as committed text, like everything else here: the key set to
 # anything but `true` is the same defect as the key absent, so match the value.
 if [ ! -f "$release_plz" ]; then
@@ -288,4 +356,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, and named in full by CI_REQUIRED_CHECKS; the release PR opens as a draft"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, and named in full by CI_REQUIRED_CHECKS; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group and no two share a cron expression"

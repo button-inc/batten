@@ -27,6 +27,10 @@ on:
         required: false
         type: string
 
+concurrency:
+  group: release-assets
+  cancel-in-progress: false
+
 permissions: {}
 
 env:

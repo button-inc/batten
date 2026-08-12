@@ -26,6 +26,10 @@ on:
     - cron: "15 6 * * 1"
   workflow_dispatch:
 
+concurrency:
+  group: ci-drift
+  cancel-in-progress: false
+
 permissions: {}
 
 env:

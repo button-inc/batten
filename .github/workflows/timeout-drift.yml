@@ -23,10 +23,18 @@ name: timeout-drift
 
 on:
   schedule:
-    # Mondays, 07:00 UTC — after lock-currency (06:00) and release-assets (06:30),
-    # staggered into the same weekly slot rather than contending with them.
-    - cron: "0 7 * * 1"
+    # Mondays, 07:15 UTC — one rung of the weekly 15-minute ladder, after
+    # coverage (07:00) and before branch-hygiene (07:30). It was 07:00, which is
+    # coverage's slot: both headers claimed a staggered slot and nothing checked,
+    # so two long jobs contended for the same runner minute. `ci-local-parity`
+    # property 9 is now the thing that checks, so this comment cannot drift back
+    # into a claim.
+    - cron: "15 7 * * 1"
   workflow_dispatch:
+
+concurrency:
+  group: timeout-drift
+  cancel-in-progress: false
 
 permissions: {}
 

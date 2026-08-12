@@ -41,6 +41,10 @@ on:
         required: false
         default: "60"
 
+concurrency:
+  group: fuzz
+  cancel-in-progress: false
+
 permissions: {}
 
 env:

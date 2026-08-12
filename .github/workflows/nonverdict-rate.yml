@@ -30,11 +30,17 @@ name: nonverdict-rate
 
 on:
   schedule:
-    # Mondays, 08:00 UTC — after zizmor-advisories (07:45), continuing the weekly
-    # property-of-the-world block rather than contending with it, so the whole
-    # sweep reads as one group in the Actions list.
-    - cron: "0 8 * * 1"
+    # Mondays, 08:15 UTC — the last rung of the weekly 15-minute ladder, after
+    # fuzz (08:00), continuing the property-of-the-world block so the whole sweep
+    # reads as one group in the Actions list. It was 08:00, which is fuzz's slot:
+    # the collision was introduced by reading the block's end as free rather than
+    # by checking it, which is what `ci-local-parity` property 9 now does.
+    - cron: "15 8 * * 1"
   workflow_dispatch:
+
+concurrency:
+  group: nonverdict-rate
+  cancel-in-progress: false
 
 permissions: {}
 

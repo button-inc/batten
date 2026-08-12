@@ -60,6 +60,20 @@ workflow() {
 	EOF
 }
 
+# A minimal scheduled workflow — the population properties 8 and 9 exist for,
+# and the one the `pull_request` filter skips entirely. `conc=no` drops the
+# concurrency block, which is the only thing most of these cases vary.
+scheduled() {
+	local name="$1" cron="$2" conc="${3:-yes}"
+	{
+		printf 'name: %s\n\non:\n  schedule:\n    - cron: "%s"\n  workflow_dispatch:\n\n' "$name" "$cron"
+		if [ "$conc" = yes ]; then
+			printf 'concurrency:\n  group: %s\n  cancel-in-progress: false\n\n' "$name"
+		fi
+		printf 'jobs:\n  %s:\n    name: %s\n    runs-on: ubuntu-latest\n    steps:\n      - run: mise run ci\n' "$name" "$name"
+	} >"$WF/$name.yml"
+}
+
 @test "a draft-gated, self-superseding workflow running a verify task passes" {
 	workflow ci
 	run "$GATE"
@@ -118,9 +132,15 @@ workflow() {
 	[[ "$output" == *"mise run other"* ]]
 }
 
-@test "a workflow not triggered by pull_request is out of scope" {
-	# A scheduled or release workflow is not on the landing path, so none of
-	# the three properties apply to it.
+@test "a workflow not triggered by pull_request is out of scope for the landing-path properties" {
+	# A scheduled or release workflow is not on the landing path, so properties
+	# 1-7 do not apply to it — `mise run other` here is a task `verify` does not
+	# run, and that is deliberately not a finding.
+	#
+	# Properties 8 and 9 DO apply, which is the correction: this fixture used to
+	# carry no concurrency group and passed, because the only concurrency
+	# question was guarded on `pull_request`. That scoping is what left eleven
+	# real workflows unjudged, so the group is now required here too.
 	workflow ci
 	cat >"$WF/nightly.yml" <<-'EOF'
 		name: nightly
@@ -128,6 +148,10 @@ workflow() {
 		on:
 		  schedule:
 		    - cron: "0 6 * * 1"
+
+		concurrency:
+		  group: nightly
+		  cancel-in-progress: false
 
 		jobs:
 		  nightly:
@@ -330,4 +354,102 @@ fanin() {
 	run "$GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"lease-gated before they spend"* ]]
+}
+
+# --- property 8: every workflow declares a concurrency group ------------------
+#
+# The arm that property 2 could not reach. Property 2 is guarded on
+# `pull_request`, so a scheduled or `issue_comment` workflow was never asked the
+# question at all — which is how eleven of them ended up with no group.
+
+@test "a scheduled workflow with no concurrency group is refused, and named" {
+	workflow ci
+	scheduled nightly "0 5 * * *" no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"nightly.yml declares no concurrency group"* ]]
+}
+
+@test "a scheduled workflow that declares one passes, with cancel-in-progress false" {
+	# The two arms are not one. A scheduled run must NOT be cancelled by its own
+	# next tick, so `false` is correct here — while property 2 still demands
+	# `true` of a pull_request workflow. A gate collapsing them is wrong for one.
+	workflow ci
+	scheduled nightly "0 5 * * *"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the concurrency property judges every workflow, not only the pull_request ones" {
+	# The regression that matters: if this check ever moves below the
+	# `pull_request` filter it silently stops seeing the population it exists
+	# for, and every case above still passes.
+	workflow ci
+	scheduled nightly "0 5 * * *" no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"all 2 workflow(s)"* ]] || [[ "$output" == *"nightly.yml"* ]]
+}
+
+@test "the success line reports how many workflows were judged for concurrency" {
+	workflow ci
+	scheduled nightly "0 5 * * *"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"all 2 workflow(s) declare a concurrency group"* ]]
+}
+
+# --- property 9: no two schedules collide -------------------------------------
+
+@test "two workflows sharing a cron expression are refused, and both named" {
+	workflow ci
+	scheduled alpha "0 7 * * 1"
+	scheduled beta "0 7 * * 1"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'cron "0 7 * * 1" is declared by more than one workflow'* ]]
+	[[ "$output" == *"alpha.yml"* ]]
+	[[ "$output" == *"beta.yml"* ]]
+}
+
+@test "a staggered pair passes" {
+	workflow ci
+	scheduled alpha "0 7 * * 1"
+	scheduled beta "15 7 * * 1"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "an every-30-minutes schedule beside a weekly slot is not a collision" {
+	# The false positive this property is deliberately shaped to avoid.
+	# `auto-release-land` runs `*/30 * * * *`, which genuinely fires at the same
+	# minute as every `:00` and `:30` weekly slot — so a firing-time comparison
+	# would flag it forever, on a workflow doing nothing wrong. Literal equality
+	# is the predicate, and this is the case that pins it.
+	workflow ci
+	scheduled alpha "0 7 * * 1"
+	scheduled beta "*/30 * * * *"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a cron named only in a comment is not read as a schedule" {
+	# These headers explain their slot in prose, often quoting a neighbour's
+	# expression. A gate firing on its own documentation is a gate people delete.
+	workflow ci
+	scheduled alpha "0 7 * * 1"
+	scheduled beta "15 7 * * 1"
+	printf '# neighbours the 0 7 * * 1 slot\n#     - cron: "0 7 * * 1"\n' >>"$WF/beta.yml"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "an empty workflow directory is refused rather than silently green" {
+	# Properties 8 and 9 judge every workflow, so they need their own
+	# did-I-look-at-anything guard: reusing the pull_request counter would report
+	# a wrong reason, and reporting nothing would be a false green over an empty
+	# or mistyped path.
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no workflow found under"* ]]
 }
