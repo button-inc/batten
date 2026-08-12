@@ -111,7 +111,14 @@ schedules, so every session computes the same frontier. Fan-out protocol:
 **`ci-wait` decides terminality over a named required set, never over "any graded
 run"** (CLOUD-327). `$CI_REQUIRED_CHECKS` in `mise.toml [env]` names the checks
 that carry a verdict about this repository, and `land`'s `graded_runs` reads the
-same value, so the two cannot drift. Green means at least one required check
+same value, so the two cannot drift. **Each name is judged by its LATEST run**
+(CLOUD-436): a SHA accumulates a check-run per event, so a PR created as a draft
+carries its `opened`-event skip set forever, and judging the union let that
+residue veto a verdict that already existed — an unbounded poll over a green
+head, and once over a completed red. `started_at` orders them, the run `id`
+breaks a same-second tie, and a reading that carries neither answers as the
+union did. Both readers share the rule for the same reason they share the
+roster. Green means at least one required check
 graded, none skipped, none pending; a required check that skipped is not an
 answer and the poll continues, while an unrelated check gets neither a vote nor a
 veto. `skipped` is still not a bad conclusion — it is the draft's economy, and

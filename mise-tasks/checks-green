@@ -28,13 +28,39 @@
 # produces no check-run for it at all. Requiring every name to be PRESENT would
 # hang forever on the ordinary PR; requiring none to be skipped does not.
 #
+# ONE NAME, ONE ANSWER: ITS LATEST RUN (CLOUD-436). A SHA accumulates a
+# check-run per event, and a PR created as a draft mints a whole `skipped` set
+# from its `opened` event. Ready it without pushing — `land`'s ordinary first
+# lap whenever the branch was pushed before `gh pr create --draft` — and the
+# graded set lands BESIDE those skips, on the same SHA, permanently. Judged as
+# a union, the residue vetoes a verdict that already exists: measured three
+# times in one evening, twice as an unbounded poll over a fully green head
+# (#342, #345) and once, worse, as a poll blind to a completed `failure`
+# (#343) — so the red that re-drafts a broken PR never fired.
+#
+# The skip is not wrong and is not ignored; it is SUPERSEDED, and only the
+# newest run for a name speaks for it. `started_at` orders them — ISO-8601
+# sorts lexicographically, so a string compare is chronological — with the run
+# `id` breaking a tie inside one second. Measured on #345's residue: the skip
+# at 03:18:10Z (id ...182343) against the success at 03:20:16Z (id ...484435),
+# so either field alone discriminates and the two agree.
+#
+# The draft economy is untouched (CLOUD-247, CLOUD-327): a name whose LATEST
+# run skipped is still not an answer. What changed is only that a skip some
+# graded run has already replaced stops speaking for that name.
+#
 # Four outcomes, because the caller's next move differs for each: 0 green, 1 red
 # (a required check failed — terminal, stop), 2 could not look (unset roster, an
 # API that would not answer — the case where this gate decided nothing), 3 no
 # answer yet (pending, or a required check skipped — poll again, or hold). A
 # reading is injectable through $CHECKS_GREEN_RUNS as TSV lines
-# `status<TAB>conclusion<TAB>name`, which is both how `ci-wait` hands over the
-# body it already fetched conditionally and how the tests run with no network.
+# `status<TAB>conclusion<TAB>name<TAB>started_at<TAB>id`, which is both how
+# `ci-wait` hands over the body it already fetched conditionally and how the
+# tests run with no network. The last two fields are the ordering key. A
+# reading that omits them still answers, and answers exactly as it did before
+# latest-per-name existed: where two runs of one name cannot be ordered, the
+# LEAST conclusive of them wins, so an unorderable pair can never read greener
+# than the union it replaces.
 #
 # Output is pointer-only per non-negotiable rule 4: a `<conclusion> <check>`
 # coordinate, never a run's log.
@@ -66,22 +92,55 @@ else
 	repo="${REPO:-}"
 	[ -n "$repo" ] || repo='{owner}/{repo}'
 	runs=$(gh api "repos/$repo/commits/$sha/check-runs?per_page=100" \
-		--jq '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)"' 2>/dev/null) ||
+		--jq '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null) ||
 		fail_input "could not read the check-runs for $sha. A reading this gate cannot take is not a pass."
 fi
 
 # One pass over the required subset. `|`-separated because a tab is IFS
 # whitespace and `read` collapses runs of it, which would shift an empty name
 # list into the wrong variable; no check-run name contains a pipe.
-verdict=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
-	BEGIN { n = split(req, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
+	BEGIN { n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1 }
 	!NF || !($3 in want) { next }
-	$1 != "completed" { pending++; next }
-	$2 == "skipped" { skipped = skipped sep3 $3; sep3 = ", "; next }
-	$2 == "success" || $2 == "neutral" { graded++; next }
-	{ graded++; bad = bad sep4 $3 " " $2; sep4 = ", " }
-	END { printf "%d|%d|%s|%s", graded + 0, pending + 0, skipped, bad }
+	{
+		name = $3
+		# ISO-8601 sorts lexicographically, so a string compare is chronological;
+		# the zero-padded id breaks a tie inside one second.
+		key = $4 "|" sprintf("%020d", $5 + 0)
+		# The precedence that makes an UNORDERABLE pair fail closed: a reading
+		# carrying no started_at/id leaves every key equal, and then the least
+		# conclusive row wins, which is the union answer this replaces.
+		rank = ($1 != "completed") ? 4 : ($2 == "skipped" ? 3 : (($2 == "success" || $2 == "neutral") ? 1 : 2))
+		if (!(name in bestkey) || key > bestkey[name] ||
+			(key == bestkey[name] && rank > bestrank[name])) {
+			bestkey[name] = key
+			bestrank[name] = rank
+			beststatus[name] = $1
+			bestconcl[name] = $2
+		}
+	}
+	END {
+		# Iterated in roster order rather than `for (name in ...)`, whose order
+		# awk does not define — this output is a contract (house style §6).
+		for (i = 1; i <= n; i++) {
+			name = roster[i]
+			if (!(name in bestkey)) continue
+			print "SUMMARY|" bestconcl[name] "\t" name
+			if (beststatus[name] != "completed") { pending++; continue }
+			if (bestconcl[name] == "skipped") { skipped = skipped sep3 name; sep3 = ", "; continue }
+			graded++
+			if (bestconcl[name] != "success" && bestconcl[name] != "neutral") {
+				bad = bad sep4 name " " bestconcl[name]
+				sep4 = ", "
+			}
+		}
+		printf "VERDICT|%d|%d|%s|%s\n", graded + 0, pending + 0, skipped, bad
+	}
 ')
+# The judged view — one line per required name that has a run, carrying the very
+# rows the verdict was taken over, so the summary can never contradict it.
+summary=$(printf '%s\n' "$reading" | sed -n 's/^SUMMARY|//p')
+verdict=$(printf '%s\n' "$reading" | sed -n 's/^VERDICT|//p')
 IFS='|' read -r graded pending ungraded failed <<<"$verdict"
 
 if [ "$graded" -eq 0 ] || [ "$pending" -gt 0 ] || [ -n "$ungraded" ]; then
@@ -93,7 +152,7 @@ if [ "$graded" -eq 0 ] || [ "$pending" -gt 0 ] || [ -n "$ungraded" ]; then
 	exit 3
 fi
 
-printf '%s\n' "$runs" | awk -F'\t' 'NF {print $2"\t"$3}' | sort -u
+printf '%s\n' "$summary"
 if [ -n "$failed" ]; then
 	echo "::error:: CI is not green on $sha — $failed. Reproduce and fix locally." >&2
 	exit 1

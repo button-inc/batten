@@ -213,12 +213,33 @@ trap 'exit 1' INT TERM
 graded_runs() {
 	local n
 	n=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" \
-		--jq '.check_runs[]? | "\(.conclusion // "-")\t\(.name)"' 2>/dev/null |
+		--jq '.check_runs[]? | "\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null |
 		awk -F'\t' -v req="${CI_REQUIRED_CHECKS:?}" '
-			BEGIN { n = split(req, a, ","); for (i = 1; i <= n; i++) want[a[i]] = 1 }
-			($2 in want) && ($1 == "success" || $1 == "failure" || $1 == "timed_out" ||
-				$1 == "cancelled" || $1 == "action_required") { hit++ }
-			END { print hit + 0 }
+			BEGIN { n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1 }
+			!($2 in want) { next }
+			{
+				# The same latest-per-name rule `checks-green` judges by, over
+				# the same roster (CLOUD-436). A draft-created head keeps its
+				# skip set forever, and counting a superseded run would report
+				# an answer this head does not have — leaving the ready that
+				# starts CI unfired.
+				key = $3 "|" sprintf("%020d", $4 + 0)
+				rank = ($1 == "skipped" || $1 == "-") ? 2 : 1
+				if (!($2 in bestkey) || key > bestkey[$2] ||
+					(key == bestkey[$2] && rank > bestrank[$2])) {
+					bestkey[$2] = key
+					bestrank[$2] = rank
+					bestconcl[$2] = $1
+				}
+			}
+			END {
+				for (i = 1; i <= n; i++) {
+					c = bestconcl[roster[i]]
+					if (c == "success" || c == "failure" || c == "timed_out" ||
+						c == "cancelled" || c == "action_required") hit++
+				}
+				print hit + 0
+			}
 		') || n=0
 	echo "${n:-0}"
 }

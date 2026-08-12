@@ -1109,3 +1109,47 @@ EOF
 		! alive_not_zombie "$pid"
 	done <"$BATS_TEST_TMPDIR/watch.pids"
 }
+
+# --- graded_runs judges the latest run too (CLOUD-436) -----------------------
+#
+# `graded_runs` asks "does this SHA carry an answer yet", and it decides whether
+# the ready that STARTS CI is fired. It shares $CI_REQUIRED_CHECKS with
+# `checks-green` so the two cannot disagree about what is required; they now
+# share the latest-per-name rule for the same reason. A draft-created head keeps
+# its `opened`-event skip set forever, so counting a superseded run answers for
+# a head that has no answer — and the ready never fires.
+
+head_is_graded_then_skipped() {
+	head_checks '{"check_runs":[
+		{"name":"ci","status":"completed","conclusion":"success","started_at":"2026-08-12T01:00:00Z","id":1},
+		{"name":"ci","status":"completed","conclusion":"skipped","started_at":"2026-08-12T02:00:00Z","id":2}]}'
+}
+
+head_is_skipped_then_graded() {
+	head_checks '{"check_runs":[
+		{"name":"ci","status":"completed","conclusion":"skipped","started_at":"2026-08-12T01:00:00Z","id":1},
+		{"name":"ci","status":"completed","conclusion":"success","started_at":"2026-08-12T02:00:00Z","id":2}]}'
+}
+
+@test "a head whose LATEST required run is a skip has no answer, so the ready is fired" {
+	# The discriminating case: without the dedup the superseded success is
+	# counted, the head reads as answered, and the one event that starts CI
+	# never happens.
+	is_draft
+	head_is_graded_then_skipped
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ -n "$(ready_calls)" ]
+}
+
+@test "a skip its own re-run superseded is an answer, so nothing buys a second run" {
+	# The residue shape that wedged #342 and #345, from the other side: the
+	# graded run is current, so this head must not spend another matrix.
+	is_draft
+	head_is_skipped_then_graded
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ -z "$(ready_calls)" ]
+}

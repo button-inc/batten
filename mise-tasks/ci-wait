@@ -66,7 +66,7 @@ while :; do
 	if [ "$status" != "304" ]; then
 		body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
 		runs=$(printf '%s' "$body" |
-			jq -r '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)"' 2>/dev/null) || runs=""
+			jq -r '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null) || runs=""
 	fi
 
 	# The reading this poll already holds, handed over rather than re-fetched:
