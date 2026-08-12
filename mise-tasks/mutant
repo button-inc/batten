@@ -106,6 +106,34 @@ for gate in ${gates//,/ }; do
 		[ -n "${slug:-}" ] || continue
 		declared=$((declared + 1))
 		cp "$src" "$work/$src" || fail_input "could not stage $src"
+
+		# THE CASE MUST BE GREEN BEFORE IT IS MUTATED, and this is the third
+		# evasion rather than a nicety. "Red under mutation" is only evidence if
+		# the row was green without it: a case that CANNOT pass — an assertion
+		# that never holds, a fixture that never builds — is red either way, and
+		# every mutation aimed at it reads as caught. Measured on this branch:
+		# `checks-green`'s CLOUD-376 row asserted `[[ "$output" != *"red"* ]]`
+		# against a message that says "requi-red check(s)", so it was permanently
+		# red, and the mutation pointed at an expression that could not change its
+		# outcome. Both defects were invisible because they cancelled out. Costs
+		# one extra filtered bats run per row, which is what an anti-vacuity term
+		# is worth.
+		clean_out="$(cd "$work" && "$bats_bin" --filter "$want" "$suite" 2>&1)"
+		clean_rc=$?
+		# "Named no case" is read BEFORE the status, because a filter matching
+		# nothing is itself a non-zero exit on this runner — and reporting that as
+		# "already red" would name the wrong defect to whoever has to fix it.
+		if ! grep -qE '^(ok|not ok) ' <<<"$clean_out"; then
+			echo "$gate/$slug names-no-case ($want)"
+			failures=$((failures + 1))
+			continue
+		fi
+		if [ "$clean_rc" != 0 ]; then
+			echo "$gate/$slug case-already-red ($want)"
+			failures=$((failures + 1))
+			continue
+		fi
+
 		if ! sed -i "$script" "$work/$src"; then
 			echo "$gate/$slug unappliable-mutation"
 			failures=$((failures + 1))

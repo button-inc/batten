@@ -241,7 +241,13 @@ mandatory_green() {
 	# paid for getting backwards.
 	CHECKS_GREEN_RUNS="$(mandatory_green "completed	stale	ci	2026-08-12T01:00:00Z	99")" run "$GREEN"
 	[ "$status" -eq 3 ]
-	[[ "$output" != *"red"* ]]
+	# Assert the VERDICT, not the word. A `!= *"red"*` test can never pass here:
+	# every "no answer" line says "requi-red check(s)", so the row was red on the
+	# commit that introduced it and stayed red — a discriminator that cannot
+	# discriminate, on the very change that added the mutation harness. Red is a
+	# specific line and a specific status, so name both.
+	[[ "$output" != *"is not green"* ]]
+	[[ "$output" == *"no verdict: ci stale"* ]]
 }
 
 @test "CLOUD-376: a known bad conclusion is still red — the anti-vacuity half" {

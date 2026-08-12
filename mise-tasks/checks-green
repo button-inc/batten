@@ -99,7 +99,12 @@
 # MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
 # the script to a throwaway copy of this file must turn the named case RED.
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
-#MUTANT answered-catch-all|s/!(\$2 in isanswer) ? 3/0 ? 3/|CLOUD-376: AN UNKNOWN CONCLUSION HOLDS THE POLL OPEN
+# The row targets the VERDICT site, not the tie-break rank. Its first form
+# mutated `!($2 in isanswer) ? 3` in the ranking expression — which only decides
+# an UNORDERABLE pair, so the named case (one orderable row) took the same path
+# mutated or not, and the row never discriminated. It read as caught only
+# because that case could not pass unmutated either.
+#MUTANT answered-catch-all|s/if (!(bestconcl\[name\] in isanswer)) {/if (0) {/|CLOUD-376: AN UNKNOWN CONCLUSION HOLDS THE POLL OPEN
 
 set -uo pipefail
 

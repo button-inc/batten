@@ -38,17 +38,22 @@ EOF
 }
 
 toy_suite() {
-	cat >"$REPO/tests/toy.bats" <<'EOF'
-#!/usr/bin/env bats
-@test "over the limit is refused" {
-	run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 99
-	[ "$status" -eq 1 ]
-}
-@test "under the limit passes" {
-	run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 1
-	[ "$status" -eq 0 ]
-}
-EOF
+	# `<<-` and TAB-indented, so no fixture line begins with `@test `. The count
+	# gate in `[tasks."test:bats"]` derives its expectation from
+	# `git grep -c '^@test '`, which cannot tell a case from a case this file
+	# WRITES — three phantom counts here made the suite report 1333 of 1337 and
+	# fail a gate whose whole job is noticing a suite that ran fewer tests.
+	cat >"$REPO/tests/toy.bats" <<-'EOF'
+		#!/usr/bin/env bats
+		@test "over the limit is refused" {
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 99
+			[ "$status" -eq 1 ]
+		}
+		@test "under the limit passes" {
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 1
+			[ "$status" -eq 0 ]
+		}
+	EOF
 }
 
 # `<slug>|<sed script>|<case name>`, inserted where a real gate carries it.
@@ -181,14 +186,38 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	declare_mutant 'limit-removed|s/^LIMIT=10$/LIMIT=1000/|over the limit is refused'
 	commit
 	# Now break the gate further and rewrite the suite WITHOUT committing.
-	cat >>"$REPO/tests/toy.bats" <<'EOF'
-@test "an uncommitted case is exercised" {
-	run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 50
-	[ "$status" -eq 1 ]
-}
-EOF
+	cat >>"$REPO/tests/toy.bats" <<-'EOF'
+		@test "an uncommitted case is exercised" {
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 50
+			[ "$status" -eq 1 ]
+		}
+	EOF
 	sed -i 's/^#MUTANT .*/#MUTANT fresh|s\/^LIMIT=10$\/LIMIT=1000\/|an uncommitted case is exercised/' "$REPO/mise-tasks/toy"
 	run_mutant
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"every one caught"* ]]
+}
+
+@test "ANTI-VACUITY: a case that is red BEFORE the mutation is not evidence" {
+	# The third evasion, and the one that hid two defects at once on this branch:
+	# `checks-green`'s CLOUD-376 row asserted `[[ "$output" != *"red"* ]]` against
+	# a message reading "requi-red check(s)", so it could never pass — and the
+	# mutation aimed at it targeted an expression that could not change its
+	# outcome. Red under mutation is only evidence if the row was green without
+	# it, so a case already failing is reported rather than counted as caught.
+	toy_gate
+	cat >"$REPO/tests/toy.bats" <<-'EOF'
+		#!/usr/bin/env bats
+		@test "over the limit is refused" {
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 99
+			[ "$status" -eq 99 ]
+		}
+	EOF
+	declare_mutant 'limit-removed|s/^LIMIT=.*/LIMIT=999/|over the limit is refused'
+	commit
+	run env MUTANT_GATES=toy bash -c "cd '$REPO' && '$MUTANT'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"case-already-red"* ]]
+	# And it is NOT reported as caught, which is the whole point.
+	[[ "$output" != *"every one caught"* ]]
 }
