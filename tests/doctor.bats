@@ -26,6 +26,12 @@ EOF
 	# `git rev-parse --git-path`. Without it these cases would grade whatever the
 	# developer's checkout happens to have installed, and the suite would be a
 	# report on the machine rather than on the task.
+	# The suite owns this variable, because the task READS it: `doctor` skips the
+	# hook check under CI (a CI checkout has no commit path to gate), so leaving
+	# the runner's own `CI=true` in the environment would make every case below
+	# grade the skip instead of the check — green here, green in CI, asserting
+	# nothing. The CI case sets it back, explicitly, for the one row it is about.
+	unset CI
 	git init -q "$BATS_TEST_TMPDIR/clone"
 	export GIT_DIR="$BATS_TEST_TMPDIR/clone/.git"
 	HOOKS="$GIT_DIR/hooks"
