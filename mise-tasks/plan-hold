@@ -48,13 +48,31 @@ dir=$("$check" dir) || {
 	exit 2
 }
 
-# Idempotent by design. A guard that denies until a hold is live invites a second
-# launch when the first one is already running (a retried tool call, a re-entered
-# plan), and two sleepers hold the door no wider than one while doubling what a
-# release has to clean up.
+# ONE SLEEPER, AND ALWAYS A FULL WINDOW. A guard that denies until a hold is live
+# invites a second launch while the first is still running — a retried tool call,
+# a re-entered plan, or a previous handoff whose release never fired. The first
+# version answered "already held" and exited, which keeps one sleeper but hands
+# the NEW handoff whatever is left of the OLD one's cap.
+#
+# That erodes silently, and it is not hypothetical (CLOUD-485). A release fires on
+# the human's answer, and there are answers neither path sees — a reply typed
+# mid-turn arrives `<`-wrapped and reads as a machine turn, so the hold from that
+# handoff never releases. The next handoff then inherits a partly spent window,
+# the one after that less, until one is guarded by a hold about to cap and the
+# container is reclaimed while somebody is still reading. Nothing blocks, so
+# nothing announces it.
+#
+# So a second launch RELEASES the incumbent and arms fresh. The invariant is
+# strictly stronger than the one it replaces — at most one sleeper, and every
+# handoff gets the whole cap — and it costs one extra process for the poll it
+# takes the old sleeper to notice its sentinel is gone. Released, never signalled,
+# for the reason the release path is written that way: a killed hold wakes nothing.
 if "$check" live >/dev/null 2>&1; then
-	echo "plan-hold: already held"
-	exit 0
+	for stale in "$dir"/*; do
+		[ -f "$stale" ] || continue
+		rm -f -- "$stale" 2>/dev/null || true
+	done
+	echo "plan-hold: already held — released the incumbent so this handoff gets a full window"
 fi
 
 mkdir -p -- "$dir" || {

@@ -318,9 +318,16 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   whatever the human had already typed into the approval box (CLOUD-451). The
   remedy the deny names is `mise run plan-hold`, launched with
   `run_in_background`: a sleeper that prints nothing until it is released, so it
-  costs no tokens while someone reads. `plan-hold-release` on `UserPromptSubmit`
-  removes its sentinel when the reply arrives, so the hold **exits** rather than
-  being killed — that exit is the wake-up. The predicate is a sentinel naming a
+  costs no tokens while someone reads. Two events release it, because a human
+  can answer in two ways: `plan-hold-release` on `UserPromptSubmit` for a typed
+  reply, and `plan-hold-release-tool` on `PostToolUse` over the same two tools
+  the guard gates, because answering `AskUserQuestion` or approving
+  `ExitPlanMode` produces a **tool result and not a prompt** — so the prompt path
+  could never see the case the mechanism exists for (CLOUD-485). Either way the
+  sentinel is removed and the hold **exits** rather than being killed; that exit
+  is the wake-up. Only the answer releases: a turn merely ending must leave the
+  hold standing, or the reclaim comes back through the fix. The tool path runs no
+  classifier — provenance is structural there, where a prompt's is not. The predicate is a sentinel naming a
   pid that still answers `kill -0`, in `mise-tasks/plan-hold-check`, which is
   where the hold directory is spelled; a corpse is reaped on sight, the way
   `alive` treats a dead `batten-tasks` entry. Bypass:

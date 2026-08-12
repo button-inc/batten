@@ -14,6 +14,7 @@ setup() {
 	HOLD="$BATS_TEST_DIRNAME/../mise-tasks/plan-hold"
 	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-check"
 	RELEASE="$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release"
+	RELEASE_TOOL="$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-tool"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet
@@ -126,15 +127,41 @@ dir() { printf '%s\n' "$(git -C "$REPO" rev-parse --absolute-git-dir)/batten-hol
 	[ "$status" -eq 1 ]
 }
 
-@test "a second launch while one is live is a no-op, not a second sleeper" {
+# CLOUD-485 changed this property, and the replacement is strictly stronger: one
+# sleeper still, but the incumbent is RELEASED rather than inherited, so every
+# handoff gets the whole cap. The old behaviour handed a new handoff whatever was
+# left of a previous one's window — which erodes with every handoff whose release
+# never fired, and ends with a container reclaimed while somebody is reading.
+@test "a second launch releases the incumbent rather than inheriting its window" {
 	mkdir -p "$(dir)"
 	sleep 30 &
 	local pid=$!
 	printf '%s\n' "$pid" >"$(dir)/$pid"
-	run env BATTEN_PLAN_HOLD_MAX=60 "$HOLD"
+	run env BATTEN_PLAN_HOLD_MAX=1 BATTEN_PLAN_HOLD_POLL=1 "$HOLD"
 	kill "$pid" 2>/dev/null || true
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"already held"* ]]
+	[[ "$output" == *"released the incumbent"* ]]
+	# The incumbent's sentinel is gone, so its sleeper exits on its next poll
+	# rather than being signalled — a killed hold wakes nothing.
+	[ ! -e "$(dir)/$pid" ]
+	# And this launch really did arm: it reached its own cap instead of returning
+	# immediately, which is what proves the window is fresh rather than inherited.
+	[[ "$output" == *"capped after"* ]]
+}
+
+# Still one sleeper. The stronger invariant must not have been bought by letting
+# them accumulate — that was the original reason for the no-op.
+@test "a second launch leaves exactly one sentinel behind, never two" {
+	mkdir -p "$(dir)"
+	sleep 30 &
+	local pid=$!
+	printf '%s\n' "$pid" >"$(dir)/$pid"
+	run env BATTEN_PLAN_HOLD_MAX=1 BATTEN_PLAN_HOLD_POLL=1 "$HOLD"
+	kill "$pid" 2>/dev/null || true
+	# The launch capped and cleaned up after itself, so the directory is empty —
+	# one sleeper existed at a time, and neither was left behind.
+	run bash -c "ls -1 '$(dir)' 2>/dev/null | wc -l"
+	[ "$output" -eq 0 ]
 }
 
 @test "the reported duration is wall clock, not a sum of poll intervals" {
@@ -233,4 +260,70 @@ human() { jq -nc --arg p "${1:-please continue}" '{prompt: $p}'; }
 		run bash -c "printf '%s' $(printf '%q' "$payload") | '$classify'"
 		[ "$status" -eq 1 ]
 	done
+}
+
+# --- the answer itself, not a prompt about it -----------------------------------
+#
+# THE MEASURED DEFECT (CLOUD-485): the guard gates `PreToolUse` on
+# `ExitPlanMode|AskUserQuestion` while the release listens on
+# `UserPromptSubmit`, and a human answering either of those two produces a TOOL
+# RESULT rather than a prompt. So the answer was invisible to the release: a hold
+# armed, an `AskUserQuestion` answered, and the hold still live afterwards, ended
+# by removing its sentinel by hand.
+#
+# No classifier is exercised below, deliberately. The prompt path must decide
+# whether a person typed; this path's provenance is structural, because the event
+# fires only after a tool whose whole purpose is to ask one.
+
+@test "answering a handoff tool releases the hold" {
+	for tool in AskUserQuestion ExitPlanMode; do
+		mkdir -p "$(dir)"
+		printf '4242\n' >"$(dir)/4242"
+		run bash -c "jq -nc --arg t '$tool' '{tool_name: \$t}' | '$RELEASE_TOOL'"
+		[ "$status" -eq 0 ]
+		[ ! -e "$(dir)/4242" ]
+	done
+}
+
+# THE DIRECTION A SIMPLIFICATION WOULD BREAK, with nothing else going red. A
+# handoff turn ends idle on purpose and the hold must outlive it — only the
+# ANSWER releases. Measured in the same session: a hold that stayed live after
+# `ExitPlanMode` with no reply yet was CORRECT, and a release keyed on the turn
+# ending would have reintroduced the reclaim CLOUD-451 exists to prevent.
+@test "a tool that is not a handoff leaves the hold standing" {
+	for tool in Bash Write Edit Read; do
+		mkdir -p "$(dir)"
+		printf '4242\n' >"$(dir)/4242"
+		run bash -c "jq -nc --arg t '$tool' '{tool_name: \$t}' | '$RELEASE_TOOL'"
+		[ "$status" -eq 0 ]
+		[ -e "$(dir)/4242" ]
+	done
+}
+
+@test "an unreadable or nameless tool payload never releases" {
+	for payload in 'not json' '{}' '{"tool_name":""}' ''; do
+		mkdir -p "$(dir)"
+		printf '4242\n' >"$(dir)/4242"
+		run bash -c "printf '%s' $(printf '%q' "$payload") | '$RELEASE_TOOL'"
+		[ "$status" -eq 0 ]
+		[ -e "$(dir)/4242" ]
+	done
+}
+
+@test "the tool release is silent on success" {
+	mkdir -p "$(dir)"
+	printf '4242\n' >"$(dir)/4242"
+	run bash -c "jq -nc '{tool_name: \"AskUserQuestion\"}' | '$RELEASE_TOOL'"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+# The sentinel path is spelled in `plan-hold-check` and nowhere else, and this
+# file must ask for it rather than re-deriving it — the same property asserted
+# for the check above, now over the second releaser.
+@test "the tool release derives the hold directory from the check, not from itself" {
+	# Code only: the header names the path while explaining why it does not
+	# re-derive it, and a prose mention is the opposite of the defect here.
+	run bash -c "grep -vE '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-tool' | grep -c 'batten-holds'"
+	[ "$output" -eq 0 ]
 }
