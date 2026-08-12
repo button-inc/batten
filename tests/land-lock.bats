@@ -541,3 +541,103 @@ fake_land() {
 	run lock "$MINE" release
 	[ "$status" -eq 0 ]
 }
+
+# --- `authorises`: the verb a runner asks (CLOUD-420) ------------------------
+#
+# Every other verb answers about THIS clone, via a holder id no GitHub job can
+# compare itself against. `authorises` answers about a BRANCH, which is the one
+# identifier the runner and the lease both carry. Its exits are 0 run / 3 stop /
+# 2 could not look, and it is the only verb here that fails OPEN: a lease it
+# cannot read would otherwise stop every job in the fleet.
+
+# A lease held by the rival clone, authorising a named branch.
+rival_holds_for() { # <branch>
+	(cd "$RIVAL" && LAND_LOCK_LAND_BRANCH="$1" "$LOCK" acquire >/dev/null)
+}
+
+@test "authorises: an absent lease lets any branch run" {
+	run lock "$MINE" authorises feature-x
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"no lease is held"* ]]
+}
+
+@test "authorises: the branch the lease names may run" {
+	rival_holds_for feature-x
+	run lock "$MINE" authorises feature-x
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"authorises feature-x"* ]]
+}
+
+@test "THE STOP: a branch the lease does not name is refused with exit 3" {
+	# 3 rather than 1, because 1 already means "held by someone else" — a reason
+	# to stop, not the instruction. A caller keying on 3 cannot confuse a
+	# refusal with an error.
+	rival_holds_for feature-x
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 3 ]
+	[[ "$output" == *"authorises feature-x, not feature-y"* ]]
+}
+
+@test "authorises: a released lease stops nobody" {
+	rival_holds_for feature-x
+	(cd "$RIVAL" && "$LOCK" release >/dev/null)
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 0 ]
+}
+
+@test "authorises: an expired lease stops nobody" {
+	LAND_LOCK_TTL=1 rival_holds_for feature-x
+	sleep 2
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 0 ]
+}
+
+@test "FAIL OPEN: a lease carrying no branch runs rather than guessing" {
+	# Every lease minted before CLOUD-420 is exactly this, so during rollout the
+	# row is not an edge case — it is every lease. Stopping here would stop the
+	# whole fleet on the deploy.
+	tree=$(git -C "$MINE" hash-object -t tree /dev/null)
+	lease=$(printf 'land-lock\nholder: someone\nexpires: %s\nnonce: ab\n' "$(($(date -u +%s) + 300))" |
+		git -C "$MINE" -c user.email=t@t -c user.name=t commit-tree "$tree")
+	git -C "$MINE" push -q origin "$lease:refs/heads/batten-land-lock"
+	run lock "$MINE" authorises feature-y
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"names no branch"* ]]
+}
+
+@test "FAIL OPEN: an unreachable remote runs, where every other verb refuses" {
+	# The deliberate asymmetry. `status` and `acquire` exit 2 here, because a
+	# lease they cannot read must never read as free. This verb inverts that: an
+	# unreadable lease stops every job in the fleet, and waving one matrix
+	# through costs one matrix.
+	LAND_LOCK_REMOTE="$BATS_TEST_TMPDIR/nope.git" run lock "$MINE" authorises feature-y
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cannot read the lease"* ]]
+	LAND_LOCK_REMOTE="$BATS_TEST_TMPDIR/nope.git" run lock "$MINE" status
+	[ "$status" -eq 2 ]
+}
+
+@test "authorises: a missing branch argument is exit 2, never a verdict" {
+	run lock "$MINE" authorises
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"usage: land-lock authorises"* ]]
+}
+
+@test "the lease body carries the branch it authorises, and still ends with the nonce" {
+	LAND_LOCK_LAND_BRANCH=feature-x lock "$MINE" acquire
+	run bash -c "git --git-dir='$BARE' cat-file commit \"\$(git --git-dir='$BARE' rev-parse refs/heads/batten-land-lock)\""
+	[[ "$output" == *"branch: feature-x"* ]]
+	# The nonce stays terminal: its uniqueness is what makes every mint a
+	# distinct sha, and land-lock-check's fixture treats it as the last line.
+	run bash -c "git --git-dir='$BARE' cat-file commit \"\$(git --git-dir='$BARE' rev-parse refs/heads/batten-land-lock)\" | tail -1"
+	[[ "$output" == nonce:* ]]
+}
+
+@test "the lease's own ref name is never mistaken for the branch it authorises" {
+	# `branch` and `land_branch` are one character apart in a diff and mean
+	# different things; writing the wrong one stamps `batten-land-lock` into
+	# every lease and looks correct in review.
+	LAND_LOCK_LAND_BRANCH=feature-x lock "$MINE" acquire
+	run bash -c "git --git-dir='$BARE' cat-file commit \"\$(git --git-dir='$BARE' rev-parse refs/heads/batten-land-lock)\""
+	[[ "$output" != *"branch: batten-land-lock"* ]]
+}
