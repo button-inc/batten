@@ -75,14 +75,27 @@ printf '%s\n' "$$" >"$sentinel" || {
 # exactly the false-live reading the check is written to avoid.
 trap 'rm -f -- "$sentinel" 2>/dev/null || true' EXIT INT TERM
 
-waited=0
+# **The cap is counted in WALL CLOCK, never by summing the poll interval.**
+# Summing `POLL` per iteration assumes every `sleep` sleeps the whole interval,
+# and a `sleep` need not: the traps installed above make EINTR possible, and any
+# early return inflates the counter faster than time passes. The failure that
+# would produce is the one this file exists to prevent — the hold giving up while
+# somebody is still reading — arriving through the line meant to be a safety net,
+# so it is worth not depending on the assumption at all.
+#
+# No such short sleep has been measured here; this is the cheaper invariant, not
+# a fix for an observed bug. `date` makes the number a reading rather than an
+# estimate, the same distinction non-negotiable 3 draws for gates, and it costs
+# one `date` per poll.
+started=$(date -u +%s)
+elapsed() { echo $(($(date -u +%s) - started)); }
+
 while [ -e "$sentinel" ]; do
-	if [ "$waited" -ge "$MAX" ]; then
-		echo "plan-hold: capped after ${waited}s — nobody answered"
+	if [ "$(elapsed)" -ge "$MAX" ]; then
+		echo "plan-hold: capped after $(elapsed)s — nobody answered"
 		exit 0
 	fi
 	sleep "$POLL"
-	waited=$((waited + POLL))
 done
 
-echo "plan-hold: released after ${waited}s"
+echo "plan-hold: released after $(elapsed)s"

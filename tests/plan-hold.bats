@@ -137,6 +137,24 @@ dir() { printf '%s\n' "$(git -C "$REPO" rev-parse --absolute-git-dir)/batten-hol
 	[[ "$output" == *"already held"* ]]
 }
 
+@test "the reported duration is wall clock, not a sum of poll intervals" {
+	# Measured on a container: a hold left alone reported `capped after 14400s`
+	# and had genuinely waited four hours — the number has to mean that, so a
+	# short `sleep` must not be able to inflate it. POLL is deliberately larger
+	# than MAX here: summing intervals would report 4, the clock reports ~2.
+	local before after
+	before=$(date -u +%s)
+	run env BATTEN_PLAN_HOLD_MAX=2 BATTEN_PLAN_HOLD_POLL=4 "$HOLD"
+	after=$(date -u +%s)
+	[ "$status" -eq 0 ]
+	[[ "$output" =~ capped\ after\ ([0-9]+)s ]]
+	local reported="${BASH_REMATCH[1]}"
+	local actual=$((after - before))
+	# Within a second of the truth, in both directions.
+	[ "$reported" -le $((actual + 1)) ]
+	[ "$reported" -ge $((actual - 1)) ]
+}
+
 @test "the hold prints nothing until it exits" {
 	# The token cost of waiting is the whole reason this is a sleeper and not a
 	# poller that reports. One line, at the end, is the budget.
