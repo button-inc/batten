@@ -139,7 +139,9 @@ case "\$sub" in
       *commits/*check-runs*) emit "\$(cat "$BATS_TEST_TMPDIR/checkruns")" ;;
       # CLOUD-408: the /fast-forward directive is now POSTed through the API so
       # its comment id — the key the verdict filter matches on — comes back.
-      # `rc.comment` makes the POST fail the way a secondary rate limit does.
+      # The rc.comment sentinel makes the POST fail the way a secondary rate
+      # limit does. No backticks in here: this heredoc is unquoted, so shfmt
+      # reads a backtick pair as command substitution and rewrites it.
       *issues/*/comments*)
         if [ -f "$BATS_TEST_TMPDIR/rc.comment" ]; then
           echo "GraphQL: was submitted too quickly (addComment)" >&2; exit 1

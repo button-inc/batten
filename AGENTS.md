@@ -34,6 +34,7 @@ auto-loaded. Read the matching one at its trigger; don't reconstruct the detail.
 | `core`                         | navigating `crates/batten/src`; asking what a module does or where to add one       |
 | `workflow/board-states`        | starting/finishing a `CLOUD-*` issue; reasoning about what is in flight             |
 | `workflow/agent-fanout`        | spawning a subagent, or running more than one session against this repo             |
+| `workflow/landing-loop`        | landing a branch; before "repairing" `land`, the lease, the CI wait or their suites |
 | `github-access`                | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"                |
 | `github-rest-etiquette`        | writing a task that calls the GitHub API; diagnosing a 403/429/abuse response       |
 | `toolchain-and-hooks`          | pinning a tool, adding a task, touching `hk.pkl` or the gate                        |
@@ -126,10 +127,9 @@ run in the web sandbox — read `mem:github-access` before doubting.)
    branch is rebased on current `origin/main`. "Green but stale" is not green.
 3. **`mise run linear-check`.** Don't ready by hand: `land` readies, after its
    push, and a ready spent before that buys only draft-era skips (CLOUD-247).
-4. **`mise run land`, backgrounded.** It drives the whole loop — rebase →
-   `verify` → push → wait → `/fast-forward` → lap — racing `ci-wait` (**no timeout,
-   no cap, never the PR webhook**) against `main-watch`. It stops for three things
-   only: a rebase conflict, a failed `verify`, or red CI, re-drafting the PR.
+4. **`mise run land`, backgrounded.** It drives the whole loop — **no timeout, no
+   cap, never the PR webhook** — and stops for three things only: a rebase
+   conflict, a failed `verify`, or red CI, re-drafting the PR. `mem:workflow/landing-loop`.
 5. **Never re-run CI on an already-tested SHA.** Fast-forward means `main` takes
    the PR's exact, already-passed commits. Don't add push-to-`main` triggers.
 
