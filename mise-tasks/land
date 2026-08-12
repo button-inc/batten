@@ -167,7 +167,34 @@ drop_lease() {
 	fi
 	mise run land-lock release >/dev/null 2>&1 || true
 }
-trap drop_lease EXIT
+
+# --- say what this land is doing, so nobody has to read its log (CLOUD-425) ---
+#
+# `land` is backgrounded by contract, and a backgrounded task's death used to be
+# observable only as a harness notification that does not survive a container
+# restart. Pushing the phase at transitions this loop ALREADY has means the
+# answer is readable — by `mise run alive` — without cooperation from a process
+# blocked in a 200s gate, and without anyone grepping this task's log.
+#
+# Every call is best-effort: a land must never fail because its own bookkeeping
+# could not be written. The registry degrades to silence; it never lies.
+note_phase() {
+	mise run task-registry phase "$$" "$1" >/dev/null 2>&1 || true
+}
+mise run task-registry register land "$$" starting >/dev/null 2>&1 || true
+# Nested gates report against THIS task's entry rather than minting one per
+# subprocess: `step-receipt check` reads it to name the step `verify` is on, so
+# a land blocked in a 200s `cargo test` says `test:cargo` rather than `verify`.
+export BATTEN_TASK_PID=$$
+
+on_exit() {
+	drop_lease
+	# A SIGKILLed land cannot run this, which is exactly the case `alive` reports
+	# as crashed rather than as absent — the distinction that cost seventeen
+	# minutes of guessing on 2026-08-12.
+	mise run task-registry unregister "$$" >/dev/null 2>&1 || true
+}
+trap on_exit EXIT
 trap 'exit 1' INT TERM
 
 # "Does this SHA carry an answer yet?" — the conclusions `ci-wait` grades, over
@@ -218,6 +245,7 @@ while :; do
 	drop_lease
 
 	# --- be a direct descendant of origin/main, or stop for the one decision ---
+	note_phase "rebase(lap $lap)"
 	git fetch -q origin main ||
 		die "cannot fetch origin/main; read mem:github-access before concluding the network is blocked."
 	if ! git merge-base --is-ancestor origin/main HEAD; then
@@ -240,6 +268,7 @@ while :; do
 	# ordinary answer — the commit was just made — and printing it on every
 	# successful landing is how `::error::` stops meaning anything. The same call
 	# below is a GUARD, where a no really is the failure, and it keeps its voice.
+	note_phase "verify(lap $lap)"
 	if mise run verified >/dev/null 2>&1; then
 		echo "land: lap $lap — HEAD already carries a verify receipt; not re-proving it"
 	else
@@ -350,6 +379,7 @@ while :; do
 	# `gh pr view` is a read `gh-guard` allows. A body that cannot be fetched
 	# fails OPEN — this gate is about what a body says, and a body it never saw
 	# is not evidence of anything.
+	note_phase "deferral-check(lap $lap)"
 	body=$(gh pr view "$pr" --json body --jq .body 2>/dev/null || true)
 	if [ -n "$body" ] && ! printf '%s' "$body" | mise run deferral-check; then
 		die "#$pr defers a decision with no ticket. File it and name the issue in that paragraph, then run land again."
@@ -375,6 +405,7 @@ while :; do
 	# waited, so someone else is mid-landing and `main` is about to move. Lapping
 	# re-fetches and rebases, and the receipt short-circuit skips `verify` when
 	# `main` did not move — so the wait costs a poll, never a CI run.
+	note_phase "lease(lap $lap)"
 	if ! mise run land-lock acquire; then
 		echo "land: lap $lap — another branch holds the landing lease; lapping rather than spending a run behind it"
 		# This lap spent no CI, so it does not count against a backstop that
@@ -448,6 +479,7 @@ while :; do
 	# scripted to win. That reordering is rare on an idle box and ordinary under
 	# a loaded one, which made a real assertion fail only inside a full gate run
 	# and pass six times out of six alone (CLOUD-426).
+	note_phase "ci-wait(lap $lap)"
 	rc_ci="$(mktemp)"
 	rc_main="$(mktemp)"
 	: >"$rc_ci"
@@ -512,6 +544,7 @@ while :; do
 	# Now that the task laps by itself the window is load-bearing twice over:
 	# without it, lap 2 would read lap 1's refusal and abandon its own attempt
 	# instantly, turning the old hang into a livelock.
+	note_phase "fast-forward(lap $lap)"
 	SINCE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	export SINCE
 

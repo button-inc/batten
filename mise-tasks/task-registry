@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+#MISE description="Record what a long-running task is doing, so its liveness and phase can be read without a log"
+#
+# CLOUD-425. AGENTS.md forces anything over ~2 minutes into the background, and
+# nothing was ever built to observe the result. A backgrounded task's death
+# surfaces only as a harness notification, which does not survive a container
+# restart and cannot be asked again. So "is it alive?" and "what is it doing?"
+# had exactly one available answer: read the log and `pgrep`. That is the
+# payload-reading non-negotiable 4 forbids everywhere else, and it is unreliable
+# — measured 2026-08-12, a dead `land` was reported to a human as "still in
+# verify" twice, seventeen minutes apart, because `pgrep -f` matched the asking
+# subshell and nothing checked whether the work processes existed.
+#
+# **State is pushed, not polled.** Each task writes its phase here at transitions
+# it already has; reading it requires no cooperation from a blocked process and
+# no signal at all. That is not a stylistic preference, it is forced by three
+# facts from signal(7) and kill(2):
+#
+#   * `kill -0` sends no signal — existence and permission checks only. Free and
+#     safe against any process, whatever it is doing. This is the reliable half,
+#     and it works while the target is blocked in a 200s `cargo test`.
+#   * SIGUSR1/SIGUSR2's default disposition is **Term**. Signalling a task that
+#     never installed a handler KILLS it, so a broadcast to "all batten
+#     processes" is a footgun that terminates the work it meant to inspect.
+#   * A bash trap does not run while a foreground child runs. Handlers fire
+#     between commands, so a task blocked in `cargo test` cannot answer a signal
+#     until that child exits — precisely when the answer is wanted.
+#
+# So on-demand signalling cannot be the primary mechanism for shell tasks, and
+# this file never sends a signal. `mise run alive` is the reader.
+#
+# **Shape.** CLOUD-425's refinement says "a shared preamble every long task
+# sources". There is no sourced library anywhere in `mise-tasks/` — all 70 tasks
+# are standalone — and the directory is auto-scanned by mise, so a library file
+# here would also surface as a runnable task. This follows the established
+# precedent instead: a verb-dispatching task that siblings shell out to, exactly
+# as `land-lock` and `step-receipt` already are. Phase transitions are per-lap,
+# not per-second, so a subprocess per transition costs nothing.
+#
+# **Composition, not re-derivation** (non-negotiable, house-style §2): this says
+# what is RUNNING. It does not re-answer any verdict — "is this SHA green" stays
+# `checks-green`'s, "is the lease held" stays `land-lock-check`'s.
+#
+# Exit codes follow the one contract: 0 recorded, 2 could not look.
+set -euo pipefail
+
+verb="${1:-}"
+case "$verb" in
+register | phase | unregister) ;;
+*)
+	echo "::error:: usage: task-registry <register <task> <pid> [phase]|phase <pid> <phase>|unregister <pid>>" >&2
+	exit 2
+	;;
+esac
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
+	echo "::error:: task-registry: not a git repository" >&2
+	exit 2
+}
+
+# One entry per running task, keyed by pid, under the `batten-<noun>` convention
+# `batten-receipts/` and `batten-land-lock/` already use.
+state_dir="$git_dir/batten-tasks"
+
+now() { date -u +%s; }
+
+# A registry that cannot be written is not an error the CALLER should die on: a
+# `land` must not fail because its bookkeeping is unwritable. Registration
+# degrades to a no-op, and the reader reports "could not look" rather than
+# "nothing runs" — those two are different answers and conflating them is the
+# defect this issue exists to fix.
+mkdir -p "$state_dir" 2>/dev/null || exit 0
+
+entry() { printf '%s/%s\n' "$state_dir" "$1"; }
+
+# The whole entry is rewritten on every update. It is four short lines, and a
+# rewrite via a temp file plus `mv` is atomic, so a reader never sees a half
+# written record — which a line-edit in place could not promise.
+write_entry() { # <pid> <task> <pgid> <phase> <started_at>
+	local file tmp
+	file=$(entry "$1")
+	tmp="$file.$$"
+	printf 'task: %s\npid: %s\npgid: %s\nphase: %s\nstarted_at: %s\n' \
+		"$2" "$1" "$3" "$4" "$5" >"$tmp" 2>/dev/null || return 0
+	mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+}
+
+field() { # <file> <name>
+	sed -n "s/^$2: //p" "$1" 2>/dev/null | head -n 1
+}
+
+case "$verb" in
+register)
+	task="${2:-}"
+	pid="${3:-}"
+	[ -n "$task" ] && [ -n "$pid" ] || {
+		echo "::error:: task-registry register: need <task> <pid>" >&2
+		exit 2
+	}
+	# `set -m` already puts each task's tree in its own process group, so
+	# recording the pgid lets a prober reason about the TREE rather than the one
+	# shell — which is what `land`'s own group kills already depend on. An
+	# unreadable pgid is recorded as the pid: a group of one is the truth for a
+	# task that was not started under job control.
+	pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || pgid=
+	[ -n "$pgid" ] || pgid="$pid"
+	write_entry "$pid" "$task" "$pgid" "${4:-starting}" "$(now)"
+	;;
+phase)
+	pid="${2:-}"
+	new="${3:-}"
+	[ -n "$pid" ] && [ -n "$new" ] || {
+		echo "::error:: task-registry phase: need <pid> <phase>" >&2
+		exit 2
+	}
+	file=$(entry "$pid")
+	# A phase update for a task that never registered is a no-op rather than a
+	# fabricated entry: the registry records what registered, and inventing a
+	# record here would let a half-wired task look fully wired.
+	[ -f "$file" ] || exit 0
+	write_entry "$pid" "$(field "$file" task)" "$(field "$file" pgid)" \
+		"$new" "$(field "$file" started_at)"
+	;;
+unregister)
+	pid="${2:-}"
+	[ -n "$pid" ] || {
+		echo "::error:: task-registry unregister: need <pid>" >&2
+		exit 2
+	}
+	# Called from the task's EXIT trap, which also runs on INT/TERM given the
+	# `trap 'exit 1' INT TERM` pairing every long task in this repo already has.
+	# A task that is SIGKILLed cannot run it — that is exactly the case `alive`
+	# reports as crashed rather than as absent.
+	rm -f "$(entry "$pid")" 2>/dev/null || true
+	;;
+esac

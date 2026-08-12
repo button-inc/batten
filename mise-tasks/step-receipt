@@ -86,6 +86,21 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+# --- say which step the gate is on (CLOUD-425) -------------------------------
+#
+# CLOUD-425 wants `verify` to push its phase "between steps". This is that point,
+# and it is the ONLY one: every expensive step in `verify` already opens with
+# `step-receipt check <step>`, so instrumenting here covers all of them at once
+# instead of threading nine call sites that would drift apart.
+#
+# `BATTEN_TASK_PID` names the long-running task whose phase this is — `land`
+# exports its own pid, and nothing else sets it, so this is inert for a bare
+# `mise run verify` and in CI. Best-effort by construction: a step's verdict is
+# the run's, and bookkeeping that cannot be written must never change it.
+if [ -n "${BATTEN_TASK_PID:-}" ] && [ "$verb" = "check" ]; then
+	mise run task-registry phase "$BATTEN_TASK_PID" "$step" >/dev/null 2>&1 || true
+fi
+
 # CI must keep running the full gate on every commit, so the cache answers
 # "run" and records nothing there. Same under the bypass, which exists so a
 # measurement or a diagnosis can see the uncached cost on demand.
