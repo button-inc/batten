@@ -110,6 +110,16 @@ step submodules git submodule update --init --recursive
 # log pointer, and a non-zero exit at the end.
 step doctor mise run doctor
 
+# The binary the `PreToolUse` hook executes (CLOUD-312). Built HERE, in the
+# synchronous provisioning window, for the same reason the steps above are: a
+# fresh container has no `target/`, and `.claude/hooks/batten-hook.sh` fails
+# OPEN when it finds none — so without this a session would start with policy
+# unenforced, which is a state the guards it replaced could not reach. The
+# launcher still says so loudly if this step did not run or did not succeed;
+# belt and braces, because a silent unmediated session is the failure with no
+# symptom.
+step batten-build mise run build:release
+
 # `hk install` is deliberately NOT run here, though AGENTS.md lists it as a
 # per-clone step. The hook it generates is `exec hk run pre-commit`, calling
 # `hk` bare — which resolves only where mise's shims are on PATH. In this

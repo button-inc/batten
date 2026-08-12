@@ -160,15 +160,26 @@ That's a rule, so it ships with mechanisms — the hooks wired in
 restate its count here), each failing open on anything it can't parse. Most are
 `PreToolUse`; the two exceptions name their event:
 
-**The `PreToolUse` and `PostToolBatch` entries are unwired right now, and the
-predicates below are unenforced — self-enforce them.** Six `mise run` launches
-per Bash call cost a measured 1.247 s serial / 605 ms concurrent to do
-milliseconds of policy, ~93% of it task-runner startup, so CLOUD-435 phase 1
-removed them; phase 2 re-wires the same predicates behind
-`batten hook --harness claude-code`, the path `bench` measures and
-`bench-assert` budgets. The programs and their bats suites are untouched — only
-the invocation path changed — so `mise run <guard>` still decides, by hand.
-Delete this paragraph when phase 2 lands.
+**`PreToolUse` is now ONE entry — the engine** (`.claude/hooks/batten-hook.sh`
+→ `batten hook --harness claude-code`), reading the `mediated_call` rows of
+`batten.toml` and nothing else (CLOUD-312). Six `mise run` launches per Bash
+call cost a measured 1.247 s serial / 605 ms concurrent to do milliseconds of
+policy, ~93% of it task-runner startup (CLOUD-435).
+
+**What that leaves unenforced, so you self-enforce it rather than assume
+coverage.** The engine carries the `gh` lifecycle, the protected-path gate over
+both shell verbs and write tools, and `ready-guard`'s receipt predicate. It does
+**not** yet carry `run-shape-guard`, `issue-guard`, `claim-guard`,
+`memory-guard`'s `cp`/`sed -i`/`git mv`/`git rm` shapes, or `contract-drift` —
+each is a linked capability gap on CLOUD-312, and each guard still runs by hand
+(`mise run <guard>`, payload on stdin). The bullets below describe every
+guard's predicate; which of them a hook actually fires is the settings file's
+answer, not this list's.
+
+**A missing binary fails open, loudly.** `session-start.sh` builds it
+(`mise run build:release`); if that did not run, the launcher emits an
+`::error::` line every call and a `systemMessage` once per session. Silence
+means it is mediating.
 
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision

@@ -358,6 +358,19 @@ if ! cargo deny check; then exit 1; fi
 mise run step-receipt record deny || true
 '''
 
+[tasks."build:release"]
+description = "Build the release binary the PreToolUse hook executes"
+# The one place the hook's binary is produced, so `.claude/hooks/batten-hook.sh`,
+# `session-start.sh` and `mise-tasks/bench` name a task rather than three copies
+# of a cargo line that could drift in their flags.
+#
+# Release, not debug, and not `cargo run`: this runs on EVERY mediated tool call.
+# `cargo run` re-walks the build graph per invocation and contends for the
+# target-dir lock `hk.pkl` deliberately serialises — fine for a gate that judges
+# the working tree, disqualifying on the hottest path in the binary. The gates
+# keep `cargo run` for exactly the reason stated at `batten-check` below.
+run = "cargo build --quiet --release -p batten"
+
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"
 # `cargo run` rather than an installed binary, so the gate always judges the

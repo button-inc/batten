@@ -403,6 +403,38 @@ redirect = "write through the surface that owns the file"
 # differential suite asserts. It is per-verb rather than per-path, exactly as
 # `rm`'s is, so it names the general remedy and leaves the specific one to the
 # path in the message.
+# The write-shaped programs whose EVERY operand is a target, ported from
+# `memory-guard-check`'s table (CLOUD-312). Its own comments are the authority
+# for which those are: "every operand is a destination" for tee/sponge, and
+# rm/shred/truncate grouped together.
+#
+# Deliberately NOT ported here: `cp` and `install`, because that table says
+# "only the destination is a write; copying a memory OUT is a read" — and the
+# engine's gate treats every operand as a candidate, so a row for `cp` would
+# refuse `cp batten.toml /tmp/backup.toml`. That is a false positive the bash
+# guard does not have, and a guard that refuses reads is one people switch off.
+# `sed -i`, `git mv` and `git rm` are out for the same class of reason: they
+# need a flag- or subcommand-qualified verb. Both gaps are their own issue.
+[[verb]]
+verb = "tee"
+effect = "write"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+[[verb]]
+verb = "sponge"
+effect = "write"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+[[verb]]
+verb = "truncate"
+effect = "destructive"
+redirect = "change the file through the surface that owns it, rather than emptying it in place"
+
+[[verb]]
+verb = "shred"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or remove it through the surface that owns it"
+
 [[verb]]
 verb = "Write"
 effect = "write"
