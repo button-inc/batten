@@ -604,6 +604,32 @@ pub struct Rule {
     /// the key can only make a gate stricter than intended, never weaker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<ReceiptKey>,
+    /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
+    /// instruction handed to the judge command (CLOUD-56).
+    ///
+    /// **Committed, and that is the point.** The question a model is asked is
+    /// policy: it belongs in the authority a reviewer reads and a diff shows,
+    /// not in a prompt assembled at run time out of something else. It is also
+    /// the one payload class that carries no egress question at all
+    /// ([`crate::judge::RuleText`]) — it is the config author's own words, on
+    /// their way back to them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria: Option<String>,
+    /// How fast a [`RuleKind::Judge`] finding must be answered
+    /// ([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means
+    /// [`AdvisoryTier::Advisory`], the least-urgent rank.
+    ///
+    /// This is the axis a judge row declares **instead of** `severity`, and the
+    /// substitution is the whole advisory bound: `severity` decides the exit
+    /// contract, `tier` decides a response deadline. A judge row is refused the
+    /// `severity` column outright, so the axis a model's opinion could ride into
+    /// the exit code does not exist for this kind.
+    ///
+    /// A default rather than a required column, unlike `severity` on every other
+    /// kind: an omitted deadline resolves to the weakest one, which withholds no
+    /// gate because there is no gate here to withhold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<AdvisoryTier>,
 }
 
 /// Which git fact a receipt is keyed to, and therefore what invalidates it.
@@ -624,33 +650,6 @@ pub enum ReceiptKey {
     Head,
     /// Keyed to the branch; every commit on it continues to serve the claim.
     Branch,
-    /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
-    /// instruction handed to the judge command (CLOUD-56).
-    ///
-    /// **Committed, and that is the point.** The question a model is asked is
-    /// policy: it belongs in the authority a reviewer reads and a diff shows,
-    /// not in a prompt assembled at run time out of something else. It is also
-    /// the one payload class that carries no egress question at all
-    /// ([`crate::judge::RuleText`]) — it is the config author's own words, on
-    /// their way back to them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub criteria: Option<String>,
-    /// How fast a [`RuleKind::Judge`] finding must be answered
-    /// ([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means
-    /// [`AdvisoryTier::Advisory`], the least-urgent rank.
-    ///
-    /// This is the axis a judge row declares **instead of** `severity`, and the
-    /// substitution is the whole advisory bound: `severity` decides the exit
-    /// contract, `tier` decides a response deadline. A judge row carrying
-    /// `severity` is refused before deserialization (`config::parse`), so the
-    /// column a model's opinion could ride into the exit code does not exist for
-    /// this kind.
-    ///
-    /// A default rather than a required column, unlike `severity` on every other
-    /// kind: an omitted deadline resolves to the weakest one, which withholds no
-    /// gate because there is no gate here to withhold.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tier: Option<AdvisoryTier>,
 }
 
 /// Which way a ratcheted count may move.
@@ -751,10 +750,10 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 17] {
+    fn columns(&self) -> [(&'static str, bool); 19] {
         [
             // In the census because it is now per-kind, which is what makes
-            // "required by four kinds, refused by the fifth" a fact the existing
+            // "required by every kind but the judge" a fact the existing
             // machinery decides rather than a special case anyone maintains.
             ("severity", self.severity.is_some()),
             ("criteria", self.criteria.is_some()),
@@ -2720,7 +2719,7 @@ mod tests {
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            5,
+            6,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

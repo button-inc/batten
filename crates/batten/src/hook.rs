@@ -895,7 +895,7 @@ fn receipt_rules(policy: &Policy, command: &str, facts: &ReceiptFacts) -> Decisi
             .filter(|token| !token.starts_with('-'))
             .collect();
         for rule in &policy.shapes {
-            if rule.kind != RuleKind::Receipt || !blocks(rule.severity, policy.fail_on_warning) {
+            if rule.kind != RuleKind::Receipt || !blocks(rule.severity(), policy.fail_on_warning) {
                 continue;
             }
             let Some((program, wanted)) = rule.trigger() else {
