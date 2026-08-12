@@ -391,10 +391,34 @@ rate_limit_pause() {
 # push. Won (the base is now an ancestor of `origin/main`) keeps the tree; lost
 # resets it. There is no path from a losing bet to a push, which is the property
 # that makes speculating safe rather than merely fast.
+#
+# AND THE THIRD READING, WHICH THE FIRST VERSION DID NOT HAVE (CLOUD-495). "Won"
+# and "lost" are both statements about `main` MOVING, so a holder that abandons
+# while `main` stays put falls through to "pending" — and pending returned 0
+# forever. Measured: a holder whose CI died in a provider incident held the lease
+# going nowhere, a sibling linearized onto its published head, and the two
+# branches ended at the identical sha with neither able to land. Left to run, the
+# waiter wins the lease over an unmoved `main`, the in-hold re-confirmation asks
+# only whether `main` moved, and the `/fast-forward` lands the other branch's
+# unmerged commits.
+#
+# So pending is now a POSITIVE claim rather than the absence of the other two: a
+# bet is live only while the branch the lease names NOW is somebody else's and
+# still carries the base. Everything else is stale — the lease freed, the lease
+# passed on, the lease won by us, the lease unreadable.
 spec_base=
 spec_undo=
 spec_main=
+# Set once the bet has been PUSHED. An unwind then owes the remote a correction
+# too: without one, a `die` or a spent lap budget leaves origin holding another
+# branch's commits under an open PR, which is the measured two-PRs-at-one-sha
+# state.
+spec_pushed=0
 spec_ref=refs/batten-spec/base
+# A SECOND ref, deliberately. The bet's base and the tip it is checked against are
+# two different commits, and reusing `$spec_ref` would overwrite the base while
+# answering a question about it.
+spec_live_ref=refs/batten-spec/live
 
 # THREE OUTCOMES, NOT TWO, and conflating the middle one with the last is the
 # defect worth naming: a bet is usually still PENDING at the next lap. The holder
@@ -405,6 +429,54 @@ spec_ref=refs/batten-spec/base
 #   won      the base is an ancestor of `origin/main`; the holder landed
 #   pending  `origin/main` has not moved since the bet; nothing has been decided
 #   lost     `main` moved and took something else; the bet cannot come true
+#
+# IS THE BET STILL LIVE? Asked of the lease as it reads NOW, not of the lease as
+# it read when the bet was placed. Fails closed everywhere: an unreadable lease,
+# an unfetchable branch and an unknown ancestry are all "stale", because failing
+# open here would make a network blip the thing that lands somebody else's work.
+bet_is_live() {
+	local now
+	now=$(mise run land-lock peek branch 2>/dev/null || true)
+	# Nobody holds it, or WE do. Holding the lease with the base not yet on
+	# `main` can only mean the branch we bet on is gone: a base that actually
+	# landed is caught one arm earlier, by the ancestry check against
+	# `origin/main`. So this costs a warm tree in no case that was going to win.
+	[ -n "$now" ] || return 1
+	[ "$now" != "$branch" ] || return 1
+	git fetch -q origin "+refs/heads/$now:$spec_live_ref" 2>/dev/null || return 1
+	# The holder may have changed, or force-pushed past our base. Either way the
+	# question is the same one: is the commit we bet on still on the branch that
+	# is about to become `main`. Asked of the REF rather than a sha resolved from
+	# it, so a ref the fetch did not actually write is a non-zero exit here rather
+	# than a resolve step that has to remember to fail closed.
+	git merge-base --is-ancestor "$spec_base" "$spec_live_ref" 2>/dev/null
+}
+
+# Drop the borrowed range, and correct the remote if the bet was published. The
+# lap's ordinary rebase onto `origin/main` runs immediately after this returns,
+# so there is nothing to re-linearize by hand — and `speculate` re-bets on
+# whoever holds the lease now, which is the "rewind onto the next holder" half.
+unwind_speculation() {
+	echo "land: $1; unwinding to $(git rev-parse --short "$spec_undo") rather than carrying another branch's commits"
+	git reset -q --hard "$spec_undo" || die "could not unwind the speculative rebase; the tree is not somewhere this loop can push from."
+	if [ "$spec_pushed" = 1 ]; then
+		# Re-draft BEFORE moving the ref, the same ordering the red path uses:
+		# the corrective push emits a `synchronize`, and a ready PR would spend a
+		# matrix on it. The next lap readies again when it has something worth
+		# confirming.
+		redraft "its published head carried a base that is not landing, so the branch is being rewound"
+		git push --force-with-lease -u origin "$branch" >/dev/null 2>&1 ||
+			echo "land: could not rewind the published branch; it still carries commits that are not landing"
+		spec_pushed=0
+		# The run in flight graded a head this branch no longer has, so the
+		# successor's ready/push pair is owed again for the new one.
+		admitted_sha=
+	fi
+	spec_base=
+	spec_undo=
+	spec_main=
+}
+
 settle_speculation() {
 	[ -n "$spec_base" ] || return 0
 	if git merge-base --is-ancestor "$spec_base" origin/main 2>/dev/null; then
@@ -412,22 +484,26 @@ settle_speculation() {
 		spec_base=
 		spec_undo=
 		spec_main=
+		spec_pushed=0
 		return 0
 	fi
 	if [ "$(git rev-parse origin/main)" = "$spec_main" ]; then
-		# Undecided. Keep the tree: the holder is still landing, and this branch
-		# is already linearized behind it.
+		# `main` has not moved, which used to end the question. It does not: the
+		# holder can go away without `main` moving at all, and that reading is
+		# indistinguishable from "still landing" unless the lease is re-read.
+		if bet_is_live; then
+			# Undecided. Keep the tree: the holder is still landing, and this
+			# branch is already linearized behind it.
+			return 0
+		fi
+		unwind_speculation "the branch this speculation bet on is no longer the base that is about to land"
 		return 0
 	fi
 	# The bet lost: the holder did not land, or `main` took something else. Undo
 	# it rather than trying to salvage it — our own commits are all that
 	# `spec_undo` holds, and the lap's ordinary rebase onto `origin/main` is
 	# about to run anyway.
-	echo "land: the speculation did not land; unwinding to $(git rev-parse --short "$spec_undo") rather than carrying another branch's commits"
-	git reset -q --hard "$spec_undo" || die "could not unwind the speculative rebase; the tree is not somewhere this loop can push from."
-	spec_base=
-	spec_undo=
-	spec_main=
+	unwind_speculation "the speculation did not land"
 }
 
 # Rebase onto the head the lease says is about to become `main`. Every failure
@@ -1033,6 +1109,25 @@ while :; do
 			charge_wait
 			continue
 		fi
+
+		# AND RE-SETTLE THE BET, for the reading `main` cannot answer (CLOUD-495).
+		# The top-of-lap settle can be a full TTL old by the time `acquire`
+		# returns, and this is the last computable moment before the ready, the
+		# push and the fast-forward comment. Winning the lease is itself the
+		# strongest evidence a bet is dead: the branch we bet on is not the one
+		# holding the lease any more.
+		#
+		# An unwind here moved HEAD, so `$sha` and this lap's receipts describe a
+		# commit this branch no longer has. Lap rather than push from it — the lap
+		# top rebases onto `origin/main` and re-verifies, and it costs no lap for
+		# the same reason the arm above does not.
+		spec_head_before="$(git rev-parse HEAD)"
+		settle_speculation
+		if [ "$spec_head_before" != "$(git rev-parse HEAD)" ]; then
+			drop_lease
+			charge_wait
+			continue
+		fi
 	fi
 
 	readied=0
@@ -1063,6 +1158,12 @@ while :; do
 		fi
 		die "push rejected, and \`$branch\` IS on the remote at a SHA this clone did not expect. Someone else moved it; look before forcing."
 	fi
+
+	# The bet is now PUBLISHED (CLOUD-495). Speculation was justified as free
+	# because local execution costs nothing; this is the statement that it stopped
+	# being local, and it is what an unwind reads to know the remote is owed a
+	# correction too.
+	[ -z "$spec_base" ] || spec_pushed=1
 
 	base_main="$(git rev-parse origin/main)"
 

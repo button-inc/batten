@@ -243,6 +243,11 @@ stub_git() {
 	echo 5peccccc5peccccc >"$BATS_TEST_TMPDIR/specsha"
 	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_rebase"
 	echo 0 >"$BATS_TEST_TMPDIR/rc.reset"
+	# 0 by default: the bet is LIVE — the branch the lease names still carries the
+	# base we bet on, which is what "the holder is still landing" looks like. The
+	# defect CLOUD-495 fixes is reading every pending bet as this one.
+	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_live"
+	echo 0 >"$BATS_TEST_TMPDIR/rc.fetch_live"
 	# 1 by default: the holder's head is NOT already in our history, and the base
 	# we bet on has NOT landed. Both are the ordinary readings — a lease is held
 	# by someone whose work is still in flight.
@@ -261,6 +266,10 @@ case "\$*" in
   "rev-parse --abbrev-ref HEAD") cat "$BATS_TEST_TMPDIR/branch" ;;
   "rev-parse --short"*)          echo abc1234 ;;
   "rev-parse --show-toplevel")   echo "$BATS_TEST_TMPDIR" ;;
+  # The liveness fetch has its own rc (CLOUD-495): rc.fetch is the fetch of
+  # \`main\`, whose failure is a die, and a case about an unreadable LEASE must not
+  # be forced to stop the whole lap to say so.
+  "fetch"*refs/batten-spec/live) exit "\$(cat "$BATS_TEST_TMPDIR/rc.fetch_live")" ;;
   "fetch"*)                      exit "\$(cat "$BATS_TEST_TMPDIR/rc.fetch")" ;;
   # TWO DIFFERENT ANCESTRY QUESTIONS, and one file could not answer both. The
   # lap asks "am I a descendant of main"; CLOUD-369's speculation asks "is the
@@ -269,6 +278,11 @@ case "\$*" in
   # silently returned early — which the suite then reported as the mechanism
   # never having run.
   "merge-base --is-ancestor origin/main HEAD") exit "\$(cat "$BATS_TEST_TMPDIR/rc.linear")" ;;
+  # A THIRD ancestry question (CLOUD-495): "is the base I bet on still carried by
+  # the branch the lease names NOW". The comment above is the reason this needs
+  # its own file rather than another caller of rc.spec_ancestor — an rc that
+  # answered two questions is what made the speculation silently no-op once.
+  "merge-base --is-ancestor"*refs/batten-spec/live) exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_live")" ;;
   "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_ancestor")" ;;
   "ls-remote --heads origin "*)  cat "$BATS_TEST_TMPDIR/lsremote" ;;
   "rebase --abort")              exit 0 ;;
@@ -423,6 +437,15 @@ case "\$2" in
         # lap proceeded to a poll that, with no terminal PR state, never
         # returned. Measured as a hung case that leaked a watcher per run.
         echo "\$(cat "$BATS_TEST_TMPDIR/main_moves_in_wait")\$n" >"$BATS_TEST_TMPDIR/mainsha"
+      fi
+      # THE HOLDER GOES AWAY WHILE MAIN STAYS PUT (CLOUD-495). The lease is a
+      # ref, so abandonment is observable exactly as a change to what \`peek
+      # branch\` answers — the lease freed (empty), or taken by somebody else.
+      # Same shape as the main-moves lever, and fired from the same lap on, so
+      # the bet is placed before the world moves under it.
+      if [ -f "$BATS_TEST_TMPDIR/lease_abandons_after" ] &&
+        [ "\$n" -ge "\$(cat "$BATS_TEST_TMPDIR/lease_abandons_after")" ]; then
+        cat "$BATS_TEST_TMPDIR/lease_abandons_to" >"$BATS_TEST_TMPDIR/lease.branch"
       fi
     fi
     [ ! -f "\$rcv" ] || exit "\$(cat "\$rcv")"
@@ -1628,8 +1651,11 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# path that speculates and may reserve), the successor pushed and lapped, the
 	# successor is already in flight for this head, and the winner found main had
 	# moved while it waited. Each is exercised below.
-	[ "$laps" -eq 13 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 13."
+	# 14 since CLOUD-495: winning the lease can now settle a bet the holder
+	# abandoned, and an unwind there moved HEAD — so the lap ends rather than
+	# pushing a commit this branch no longer has. Exercised below.
+	[ "$laps" -eq 14 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 14."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
@@ -2156,4 +2182,133 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	[[ "$(call_order)" == "ready push"* ]]
 	[ "$(grep -c '^push$' "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
 	[[ "$output" == *"its run is already in flight"* ]]
+}
+
+# --- an abandoned base is not a pending one (CLOUD-495) ----------------------
+#
+# The unwind above fires on ONE reading of a lost bet: `main` moved and took
+# something else. The holder abandoning while `main` stays put reads as *pending*
+# through that predicate, and pending returns 0 forever — no lap budget, no
+# re-read of who holds the lease. So the waiter keeps a borrowed tree, later wins
+# the lease, and the in-hold re-confirmation asks only whether `main` moved. It
+# did not. What lands is another branch's unmerged commits.
+#
+# The predicate that closes it: a bet is LIVE only while the branch the lease
+# names *now* is somebody else's and still carries the base. Everything else —
+# lease freed, lease passed on, lease won by us, lease unreadable — is stale.
+
+# The holder lets go from the Nth acquire on. Empty means the lease freed; a name
+# means it passed to that branch.
+lease_abandons() {
+	printf '%s' "${1-}" >"$BATS_TEST_TMPDIR/lease_abandons_to"
+	echo "${2:-2}" >"$BATS_TEST_TMPDIR/lease_abandons_after"
+}
+bet_is_dead() { echo 1 >"$BATS_TEST_TMPDIR/rc.spec_live"; }
+
+@test "AN ABANDONED HOLDER IS NOT A PENDING BET: the lease freed unwinds it" {
+	# The hazard in one row. Nothing about `main` changes, so every reading the
+	# old settle had says "the holder is still landing" — while the holder is
+	# gone and the base can never land.
+	lease_lost
+	spec_head holder-branch
+	lease_abandons ""
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=4 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"no longer the base that is about to land; unwinding"* ]]
+	grep -q '^reset -q --hard cafe1234cafe1234$' "$BATS_TEST_TMPDIR/gitlog"
+	# `main` never moved, which is what makes this distinct from the case above.
+	[[ "$output" != *"did not land; unwinding"* ]]
+	[ "$(call_order)" = "" ]
+}
+
+@test "the lease passing to a branch that does not carry our base unwinds it" {
+	# The other abandonment shape: somebody else won the lease, and their head has
+	# nothing to do with the commit we bet on.
+	lease_lost
+	spec_head holder-branch
+	lease_abandons other-branch
+	bet_is_dead
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=4 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"no longer the base that is about to land; unwinding"* ]]
+	grep -q '^fetch -q origin +refs/heads/other-branch:refs/batten-spec/live$' "$BATS_TEST_TMPDIR/gitlog"
+}
+
+@test "A LIVE BET IS LEFT ALONE — without this, the unwind fires every lap" {
+	# The negative that gives the two rows above their meaning, and the property
+	# the pending arm exists for: unwinding an undecided bet would undo the
+	# linearization each lap and leave the mechanism running while achieving
+	# nothing. The holder still holds, and still carries the base.
+	lease_lost
+	spec_head holder-branch
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=4 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" != *"unwinding"* ]]
+	[[ "$(cat "$BATS_TEST_TMPDIR/gitlog")" != *"reset -q --hard"* ]]
+}
+
+@test "a liveness read that fails is stale, never live — the fetch fails closed" {
+	# An unreadable lease must never certify a borrowed tree. Failing open here
+	# would make a network blip the thing that lands somebody else's commits.
+	lease_lost
+	spec_head holder-branch
+	lease_abandons other-branch
+	echo 1 >"$BATS_TEST_TMPDIR/rc.fetch_live"
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
+	pr_state MERGED
+	LAND_LOCK_MAX_WAITS=4 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"no longer the base that is about to land; unwinding"* ]]
+}
+
+@test "WINNING THE LEASE SETTLES THE BET FIRST: no borrowed tree is readied, pushed or merged" {
+	# The severe case, end to end. The waiter holds a bet, the holder abandons,
+	# `main` stays put — and the waiter then WINS. Holding the lease with the base
+	# not yet on `main` can only mean the branch we bet on is gone, so the settle
+	# inside the hold is what stops the `/fast-forward`. Merged is asserted absent
+	# rather than present: nothing may be published from a borrowed tree.
+	spec_head holder-branch
+	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"
+	lease_abandons ""
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=2 run "$LAND"
+	[[ "$output" == *"no longer the base that is about to land; unwinding"* ]]
+	# The unwind precedes anything that spends: no ready, no push, no comment
+	# while the borrowed range was still in the tree.
+	unwind=$(grep -n 'reset -q --hard' "$BATS_TEST_TMPDIR/gitlog" | head -1 | cut -d: -f1)
+	[ -n "$unwind" ]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "a bet already PUSHED is re-drafted before its remote is rewound" {
+	# The successor publishes (`ready`, `push`), so an unwind that touched only
+	# the tree would leave origin holding the foreign commits with an open PR
+	# pointing at them — which is exactly the two-PRs-at-one-SHA state measured on
+	# this loop. Re-draft first, so the corrective push buys no matrix: the same
+	# close-the-tap-before-moving-the-ref ordering the red path already uses.
+	lease_lost
+	spec_head holder-branch
+	lease_abandons "" 3
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=4 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"no longer the base that is about to land; unwinding"* ]]
+	[[ "$output" == *"re-drafted"* ]]
+	# The successor's publish (ready, push), then the re-draft and the rewinding
+	# push. Both `gh pr ready` forms record as `ready`, so the ORDER is read from
+	# calls and the second one's `--undo` from what it was invoked with.
+	[[ "$(call_order)" == "ready push ready push"* ]]
+	[ "$(grep -c -- '--undo' "$BATS_TEST_TMPDIR/ready")" -ge 1 ]
+	# The corrective push is force-with-lease, like every other push this loop
+	# makes: rewinding a published branch is exactly the case that ref guard is
+	# for.
+	grep -q 'push --force-with-lease' "$BATS_TEST_TMPDIR/gitlog"
 }
