@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the shipped skill stays inside its line budget and describes only the surface the binary actually ships (CLOUD-213)"
+#
+# CLOUD-213. The skill is the dispositional third of the interaction model: hooks
+# bind, the CLI consults, the skill teaches when to consult and what a deny
+# means. Two properties of it are specification rather than taste, and a
+# specification without a gate is prose (non-negotiable rule 2).
+#
+# THE BUDGET IS EVIDENCE, NOT STYLE. In head-to-head evaluation a 341-line skill
+# outscored a 2,187-line one: terse beats comprehensive, because a skill competes
+# for the same context the task needs. So ~300 lines is a ceiling somebody
+# measured, and the number lives HERE and nowhere else — a second copy in prose
+# would be the drift this repo keeps paying for.
+#
+# THE EXPENSIVE FAILURE IS FICTION. A skill that teaches a verb the binary does
+# not have is worse than no skill: it sends an agent to build a command line that
+# cannot work, and the failure surfaces as a confusing usage error rather than as
+# a documentation bug. Nothing else in the tree would notice — the skill is
+# markdown, so no compiler reads it, and the verbs it names are the exact thing a
+# `forbid` rule cannot check.
+#
+# So the verb check reads `batten spec`, the shipped spec-as-data surface (house
+# style §11), rather than a second copy of the command tree. That is the same
+# move `completions-check` and `schema-check` make: derive from the one
+# authority, diff against the artifact. A verb renamed or dropped fails here
+# instead of leaving the skill quietly wrong. Same for the exit table, whose
+# authority is the binary's own `--help` rendering — the assertion
+# `crates/batten/tests/doctor.rs` already makes over the README.
+#
+# AND ONE SET OF BYTES. The skill is authored at `skills/` and reached through a
+# vendor path by symlink, the `CLAUDE.md` -> `AGENTS.md` shape already in the
+# tree. If that ever becomes a copy, this gate judges one file while agents load
+# the other, which is the worst of both.
+#
+# Output is a pointer, never a payload (non-negotiable rule 4): a `path:line` and
+# the predicate id, never a line of the skill. Exit 0 clean / 1 violation / 2
+# could not look, matching the other `*-check` decision halves.
+set -euo pipefail
+
+cd "${SKILL_CHECK_ROOT:-$(git rev-parse --show-toplevel)}"
+
+skill="${1:-skills/batten/SKILL.md}"
+vendor="${2:-.claude/skills/batten/SKILL.md}"
+# The ceiling, stated once. Raising it is a visible diff in this file.
+max_lines="${SKILL_MAX_LINES:-300}"
+
+# Both readings come from the binary. `BATTEN_BIN` lets the suite point at an
+# already-built binary instead of paying a cargo invocation per case; the default
+# is the same `cargo run` shape `policy-budget` uses, so a developer needs no
+# setup.
+batten_bin="${BATTEN_BIN:-}"
+run_batten() {
+	if [ -n "$batten_bin" ]; then
+		"$batten_bin" "$@"
+	else
+		cargo run --quiet -p batten -- "$@"
+	fi
+}
+
+[ -f "$skill" ] || {
+	echo "::error:: skill-check: no skill at $skill" >&2
+	exit 2
+}
+
+if ! spec=$(run_batten spec --format json 2>/dev/null) || [ -z "$spec" ]; then
+	echo "::error:: skill-check: could not read \`batten spec\` — cannot judge the verbs" >&2
+	exit 2
+fi
+if ! help=$(run_batten --help 2>/dev/null) || [ -z "$help" ]; then
+	echo "::error:: skill-check: could not read \`batten --help\` — cannot judge the exit table" >&2
+	exit 2
+fi
+
+# Every command path the binary declares, one per line. The root declares itself
+# as `batten`; every other row is the path as a consumer types it.
+if ! paths=$(jq -r '[.. | objects | select(has("path")) | .path] | .[]' <<<"$spec" 2>/dev/null); then
+	echo "::error:: skill-check: \`batten spec\` is not the JSON this gate expects" >&2
+	exit 2
+fi
+# The paths that DISPATCH — a row declaring subcommands of its own. The
+# distinction decides whether a trailing word is a positional argument or
+# fiction, and nothing else can supply it: `receipt status verify` is a leaf
+# plus an argument, `receipt invent` is a noun plus a subcommand that does not
+# exist, and the two are the same shape until you know which parent is which.
+parents=$(jq -r '[.. | objects | select(((.subcommands // []) | length) > 0) | .path] | .[]' <<<"$spec" 2>/dev/null || true)
+
+violations=0
+report() { # pointer-only: path:line predicate-id
+	echo "$1 $2" >&2
+	violations=$((violations + 1))
+}
+
+# --- the budget ---------------------------------------------------------------
+lines=$(wc -l <"$skill")
+if [ "$lines" -gt "$max_lines" ]; then
+	report "$skill:$lines" "skill-over-budget ($lines > $max_lines)"
+fi
+
+# --- no fiction: every verb named resolves in the spec -------------------------
+#
+# Judged over COMMAND CONTEXTS only — an inline code span, or a `$ batten …`
+# line in a console block — never over prose. Prose legitimately says "Batten"
+# as a proper noun and "batten.toml" as a filename, and a scan loose enough to
+# read those as verbs would report the English rather than the commands.
+#
+# A named verb may carry flags and positional arguments the spec does not
+# declare (`receipt status verify`), so the longest run of bare lowercase words
+# is shortened one word at a time until it resolves. Only a phrase whose every
+# prefix fails is fiction.
+resolves() {
+	grep -qxF "$1" <<<"$paths"
+}
+dispatches() {
+	grep -qxF "$1" <<<"$parents"
+}
+
+while IFS=: read -r line phrase; do
+	[ -n "$phrase" ] || continue
+	# Trim to the argument-free head: stop at the first flag, placeholder, or
+	# redirect, keeping only bare lowercase words.
+	head_words=""
+	for word in $phrase; do
+		case "$word" in
+		[a-z] | [a-z][a-z-]*) head_words="${head_words:+$head_words }$word" ;;
+		*) break ;;
+		esac
+	done
+	[ -n "$head_words" ] || continue
+	candidate="$head_words"
+	trailing=0
+	while :; do
+		resolves "$candidate" && break
+		# Drop the last word and try the shorter prefix.
+		case "$candidate" in
+		*\ *)
+			candidate="${candidate% *}"
+			trailing=1
+			;;
+		*)
+			candidate=""
+			break
+			;;
+		esac
+	done
+	if [ -z "$candidate" ]; then
+		report "$skill:$line" "skill-unknown-verb ($head_words)"
+	elif [ "$trailing" -eq 1 ] && dispatches "$candidate"; then
+		# The prefix resolved, but it is a NOUN that dispatches, so the word after
+		# it had to be one of its declared subcommands and was not. Shortening past
+		# a dispatching row is what would let `receipt invent` pass by resolving to
+		# `receipt` — fiction hiding behind a real parent.
+		report "$skill:$line" "skill-unknown-subcommand ($head_words)"
+	fi
+done < <(
+	{
+		# Inline spans: `batten check -J`
+		grep -noE '`batten [^`]+`' "$skill" | sed 's/`//g; s/^\([0-9]*\):batten /\1:/'
+		# Console blocks: $ batten receipt status verify
+		grep -noE '^\$ batten .+' "$skill" | sed 's/^\([0-9]*\):\$ batten /\1:/'
+	} | sort -u
+)
+
+# --- the exit contract, as the binary renders it -------------------------------
+#
+# `--help` prints "  <code>  <meaning>"; the skill must carry both halves of
+# every row. This is the README assertion in `crates/batten/tests/doctor.rs`,
+# applied to the other document that restates the table.
+while IFS= read -r row; do
+	code=${row%% *}
+	meaning=${row#* }
+	if ! grep -qF -- "$meaning" "$skill"; then
+		report "$skill:0" "skill-exit-meaning-missing ($code)"
+	fi
+	if ! grep -qF -- "\`$code\`" "$skill"; then
+		report "$skill:0" "skill-exit-code-unnamed ($code)"
+	fi
+done < <(sed -n 's/^  \([0-3]\)  \(.*\)$/\1 \2/p' <<<"$help")
+
+# --- one set of bytes, not two -------------------------------------------------
+if [ ! -L "$vendor" ]; then
+	report "$vendor:0" "skill-vendor-path-not-a-symlink"
+elif [ "$(readlink -f "$vendor")" != "$(readlink -f "$skill")" ]; then
+	report "$vendor:0" "skill-vendor-path-resolves-elsewhere"
+fi
+
+if [ "$violations" -ne 0 ]; then
+	echo "::error:: skill-check: $violations violation(s) — the shipped skill is over budget or describes a surface the binary does not have" >&2
+	exit 1
+fi
+echo "skill-check: $skill is $lines/$max_lines lines, names only declared verbs, and carries the exit table the binary renders"

@@ -285,6 +285,29 @@ local gate = new Mapping<String, Step> {
     glob = List("batten.toml", "hk.pkl")
     check = "mise run batten-glob-check"
   }
+  // The shipped skill is the dispositional surface of the interaction model, and
+  // two of its properties are specification rather than taste: a ~300-line
+  // budget somebody measured (a 341-line skill beat a 2,187-line one head to
+  // head), and the requirement that it describe only verbs the binary has.
+  // Markdown compiles against nothing, so without this the skill can name a verb
+  // that does not exist and stay green forever — teaching an agent to build a
+  // command line that cannot work (CLOUD-213).
+  //
+  // Globbed on `crates/batten/src/{surface,exit}.rs` as well as the skill: the
+  // authorities are `batten spec` and `batten --help`, so RENAMING a verb or
+  // changing an exit meaning must re-run this, not just editing the prose. That
+  // is the same both-ends glob `completions-check` carries.
+  ["skill-check"] {
+    glob =
+      List(
+        "skills/**",
+        ".claude/skills/**",
+        "mise-tasks/skill-check",
+        "crates/batten/src/surface.rs",
+        "crates/batten/src/exit.rs",
+      )
+    check = "mise run skill-check"
+  }
   // The macOS release artifacts are linked on Linux by zig with no Apple SDK.
   // A dependency that links a system framework breaks that, and `cross-check`
   // cannot see it because `cargo check` never links — so without this gate the
