@@ -193,6 +193,17 @@ if [ -f "\$rc" ]; then
 fi
 case "\$2" in
   verify)
+    # CLOUD-434's detach lever lives HERE, not in the raced watcher: a group
+    # kill races the watcher's first write, and CI measurably won that race
+    # (not ok 485) while a fast local box lost it — the CLOUD-426 class,
+    # rebuilt by accident. The verify stub runs to completion in the fd case,
+    # so the spawn is kill-race-free; the fd property is position-independent,
+    # since any descendant of the launcher demonstrates it. setsid --fork is
+    # load-bearing too: bare setsid execs IN-PROCESS when the caller is no
+    # group leader, which kept the "detached" child killable.
+    if [ -f "$BATS_TEST_TMPDIR/detach" ] && [ ! -f "$BATS_TEST_TMPDIR/detached.pid" ]; then
+      setsid --fork bash -c "echo \\\$\\\$ >'$BATS_TEST_TMPDIR/detached.pid'; sleep 30" >/dev/null 2>&1
+    fi
     # CLOUD-423's lever, consumed BEFORE the sleep: a verify killed mid-gate
     # must not slow the lap that retries it, and the kill landing during the
     # sleep is exactly the abort under test — the receipt line is never
@@ -204,8 +215,11 @@ case "\$2" in
     : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
   verified)
     if [ ! -f "$BATS_TEST_TMPDIR/receipt" ]; then
-      # $(verified) is a gate: a missing receipt is a failure and it SAYS so.
+      # 'verified' is a gate: a missing receipt is a failure and it SAYS so.
       # Modelling that is what makes the quiet-success property meaningful.
+      # (Quoted plainly on purpose — this heredoc is unquoted, so a dollar-
+      # paren here is a live substitution that ran a nonexistent command at
+      # setup time and salted every failure dump with its stderr.)
       echo "::error:: HEAD is NOT verified — no verify receipt for this commit." >&2
       exit 1
     fi
@@ -215,15 +229,12 @@ case "\$2" in
   deferral-check) exit 0 ;;
   ci-wait)  [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
   main-watch)
-    # CLOUD-434's two levers. A stubborn watcher ignores the TERM, so only the
-    # escalated reap can end it; a detaching one leaves the process group
-    # entirely, so only the closed fd 3 keeps it off the TAP stream.
+    # CLOUD-434's stubborn lever. A stubborn watcher ignores the TERM, so only
+    # the escalated reap can end it. (The detach lever spawns from the verify
+    # stub instead — see there for the measured kill-race that moved it.)
     if [ -f "$BATS_TEST_TMPDIR/stubborn" ]; then
       trap '' TERM
       echo "\$\$" >>"$BATS_TEST_TMPDIR/stubborn.pids"
-    fi
-    if [ -f "$BATS_TEST_TMPDIR/detach" ] && [ ! -f "$BATS_TEST_TMPDIR/detached.pid" ]; then
-      setsid bash -c "echo \\\$\\\$ >'$BATS_TEST_TMPDIR/detached.pid'; sleep 30" >/dev/null 2>&1 &
     fi
     # CLOUD-423's no-verdict lever: the verify-race watcher dying without an
     # answer, once, so the lap that follows re-proves instead of guessing.
