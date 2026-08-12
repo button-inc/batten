@@ -181,14 +181,28 @@ drop_lease() {
 note_phase() {
 	mise run task-registry phase "$$" "$1" >/dev/null 2>&1 || true
 }
-mise run task-registry register land "$$" starting >/dev/null 2>&1 || true
 # Nested gates report against THIS task's entry rather than minting one per
 # subprocess: `step-receipt check` reads it to name the step `verify` is on, so
 # a land blocked in a 200s `cargo test` says `test:cargo` rather than `verify`.
 export BATTEN_TASK_PID=$$
 
+# --- one land per clone (CLOUD-428) ------------------------------------------
+#
+# The landing lease cannot answer this: it is re-entrant per clone by design, so
+# two `land` processes in one checkout both acquire and the second heartbeat
+# renews the first's lease. Measured 2026-08-12 — three concurrent lands on one
+# branch, rebasing and pushing against each other for ~30 minutes.
+#
+# `singleton_held` is why the release is conditional: a REFUSED land must run
+# its EXIT trap without deleting the lock the live one holds. Same discipline as
+# `target-ensure`'s `held` flag, for the same reason.
+singleton_held=no
+
 on_exit() {
 	drop_lease
+	if [ "$singleton_held" = yes ]; then
+		mise run singleton release land >/dev/null 2>&1 || true
+	fi
 	# A SIGKILLed land cannot run this, which is exactly the case `alive` reports
 	# as crashed rather than as absent — the distinction that cost seventeen
 	# minutes of guessing on 2026-08-12.
@@ -196,6 +210,22 @@ on_exit() {
 }
 trap on_exit EXIT
 trap 'exit 1' INT TERM
+
+# Before anything else: a second land must spend no CI, take no lease and move
+# no ref. The refusal names the live pid and its phase, so the answer to "then
+# what is running?" comes with the refusal rather than needing a hunt.
+# A `die`, not a bare `exit`, so `tests/land.bats`'s stop counter sees it: an
+# exit nothing counts is an exit nothing tests, and that assertion exists
+# precisely to stop a new stopping condition being added silently. The pid and
+# phase come from `singleton`'s own refusal on the line above.
+if ! mise run singleton acquire land "$$"; then
+	die "refusing to start a second land in this clone — the live one is named above."
+fi
+singleton_held=yes
+
+# Registered only past the refusal, so a refused run leaves no entry claiming it
+# is running.
+mise run task-registry register land "$$" starting >/dev/null 2>&1 || true
 
 # "Does this SHA carry an answer yet?" — the conclusions `ci-wait` grades, over
 # the checks `ci-wait` requires, so the two agree by construction on what counts

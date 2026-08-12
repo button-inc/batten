@@ -150,6 +150,30 @@ hold_lock() { # <seconds>
 	grep -qxF "$T" "$STATE/installed"
 }
 
+@test "AN EMPTY PID FILE IS HELD, NEVER FREE — absence of evidence is not evidence" {
+	# The subtlest rule this idiom asserts, and it had no row until CLOUD-428
+	# generalised the idiom into `mise-tasks/singleton` and went looking for one.
+	# An empty pid file is a holder caught between its `mkdir` and its write, not
+	# a corpse; reading it as free is how two processes both believe they won,
+	# which is the CLOUD-220 rollback this lock exists to prevent.
+	#
+	# Driven by the timeout, because the correct behaviour here is to WAIT: a
+	# reclaim would be the bug. Deliberately short, since the assertion is that
+	# it did not proceed, and every second past the first is spent proving it
+	# again.
+	lock="$SYSROOT/lib/rustlib/.batten-target-lock"
+	mkdir -p "$lock"
+	: >"$lock/pid"
+	run env TARGET_LOCK_TIMEOUT=1 "$ENSURE" "$T"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"timed out waiting for the toolchain lock"* ]]
+	# It waited rather than stealing: the lock is still the empty-pid holder's.
+	[ -e "$lock" ]
+	[ ! -s "$lock/pid" ]
+	# And it never reached the effect the lock guards.
+	[ ! -s "$STATE/calls" ]
+}
+
 @test "the pre-CLOUD-286 lock FILE does not wedge the directory lock" {
 	# Every machine that ran doctor before CLOUD-286 has a regular file at this
 	# path. mkdir can never succeed against it, so an unhandled one is a 600s

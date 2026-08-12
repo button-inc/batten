@@ -849,8 +849,8 @@ workflow_runs() {
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$REAL_LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 14 ] || {
-		echo "land has $stops stopping conditions; this suite covers 14."
+	[ "$stops" -eq 15 ] || {
+		echo "land has $stops stopping conditions; this suite covers 15."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -866,6 +866,9 @@ workflow_runs() {
 	# 8 since CLOUD-423: the verify race adds two more — main moved while verify
 	# ran, and a verify race that produced no verdict. Both exercised below, and
 	# this assertion caught both the moment the race landed.
+	# 15 since CLOUD-428: one land per clone. Exercised by the singleton case
+	# below, and this counter is why that stop goes through `die` rather than a
+	# bare `exit` — an exit nothing counts is an exit nothing tests.
 	laps=$(grep -cE '^[[:space:]]*continue$' "$REAL_LAND")
 	[ "$laps" -eq 8 ] || {
 		echo "land has $laps lap-ending continues; this suite covers 8."
@@ -954,6 +957,24 @@ deletes() { grep -c . "$BATS_TEST_TMPDIR/deletes" || true; }
 # asked for, and never leaked on a way out.
 
 lock_calls() { grep -c "^run land-lock $1\$" "$BATS_TEST_TMPDIR/misecalls" || true; }
+
+@test "a second land in this clone is refused before anything is spent (CLOUD-428)" {
+	# The landing lease cannot answer this — it is re-entrant per clone by
+	# design, so two lands in one checkout both acquire and the second heartbeat
+	# renews the first's lease. Measured 2026-08-12: three concurrent lands on
+	# one branch for ~30 minutes.
+	#
+	# The refusal has to land BEFORE any spend, so the assertions below are
+	# about what did NOT happen: no ready, no push, no lease taken.
+	task_fails singleton
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"refusing to start a second land in this clone"* ]]
+	[ "$(call_order)" = "" ]
+	[ "$(ready_calls)" = "" ]
+	[ "$(lock_calls acquire)" -eq 0 ]
+}
 
 @test "the lease is taken before the push, so no run starts unheld" {
 	pr_state MERGED
