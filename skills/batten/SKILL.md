@@ -15,11 +15,11 @@ model; the subject is always the repository.
 
 ## Three surfaces, and only one of them asks anything of you
 
-| Surface      | Role      | What you do                                        |
-| ------------ | --------- | -------------------------------------------------- |
-| The **hook** | binds     | nothing — it fires on calls you cannot decline     |
-| The **CLI**  | consults  | run it to learn the repository's verdict           |
-| This skill   | disposes  | tells you when consulting is worth the call        |
+| Surface      | Role     | What you do                                    |
+| ------------ | -------- | ---------------------------------------------- |
+| The **hook** | binds    | nothing — it fires on calls you cannot decline |
+| The **CLI**  | consults | run it to learn the repository's verdict       |
+| This skill   | disposes | tells you when consulting is worth the call    |
 
 You are gated whether or not you read any of this. The hook fires before a call
 runs and reads committed, out-of-band config that your context cannot influence.
@@ -176,19 +176,19 @@ $ batten receipt status verify -J
 
 Four verdicts, evaluated in this order — the first that matches wins:
 
-| Verdict       | What happened                                                             |
-| ------------- | -------------------------------------------------------------------------- |
-| `missing`     | no receipt, unreadable, or recorded in a different clone or worktree       |
-| `stale-head`  | a receipt exists, but HEAD has moved since — an amend, a commit, a rebase  |
-| `stale-main`  | HEAD matches, but the trunk it was judged against has moved                |
-| `valid`       | the receipt attests to these exact bytes against this trunk                |
+| Verdict      | What happened                                                             |
+| ------------ | ------------------------------------------------------------------------- |
+| `missing`    | no receipt, unreadable, or recorded in a different clone or worktree      |
+| `stale-head` | a receipt exists, but HEAD has moved since — an amend, a commit, a rebase |
+| `stale-main` | HEAD matches, but the trunk it was judged against has moved               |
+| `valid`      | the receipt attests to these exact bytes against this trunk               |
 
 The ordering is the useful part. `missing` is checked before staleness, so a
 receipt from another checkout is reported as absent rather than as stale — it
 never attested to anything here.
 
-**Why an amend invalidates a passing check:** the receipt attests to *those exact
-bytes*. Amending produces different bytes, so the evidence no longer describes
+**Why an amend invalidates a passing check:** the receipt attests to _those exact
+bytes_. Amending produces different bytes, so the evidence no longer describes
 what you have. Same for `stale-main`: "green against the trunk as it was" is not
 "green against the trunk as it is", and the gap is where a semantic conflict
 lives. A `stale-*` verdict is not a bug and not a reason to force anything — it
