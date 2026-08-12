@@ -250,6 +250,32 @@ mise run task-registry register land "$$" starting >/dev/null 2>&1 || true
 # push. Counting them made this read "answered" on a head whose own checks were
 # all draft-era skips, so the ready was never re-fired and the skips were never
 # replaced — the #182/#177 shape, reached from the other direction.
+# CANCEL WHAT IS ALREADY VOID (CLOUD-369, and CLOUD-240 is what permits it).
+# When `main-watch` wins the CI race the run in flight cannot land — its verdict
+# is void by construction, which is why the lap ends. But the run keeps BILLING
+# until something supersedes it, and the only thing that does is the next push's
+# `concurrency: cancel-in-progress`. Since the lease budgets were re-priced
+# (CLOUD-399) that next push can be many whole lease waits away, so a doomed
+# four-job matrix bills for minutes to produce an answer nobody will read.
+#
+# CLOUD-240 refused hand-cancelling and its wording is the licence here:
+# "supersede your own runs, never someone else's", and "cancelling another ref's
+# runs would reverse" that. This reaches runs for THIS lap's head sha and nothing
+# else — a sha no other branch has, so the blast radius is one push's worth of
+# runs by construction rather than by filtering.
+#
+# Best-effort throughout: a cancellation that fails costs the minutes it would
+# have saved and changes no verdict, so nothing here is guarded into a stop. The
+# lap is already over.
+cancel_own_run() {
+	local id
+	for id in $(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$1&per_page=30" \
+		--jq '.workflow_runs[]? | select(.status != "completed") | .id' 2>/dev/null); do
+		gh api -X POST "repos/{owner}/{repo}/actions/runs/$id/cancel" >/dev/null 2>&1 &&
+			echo "land: cancelled run $id on ${1:0:8} — void the moment main moved, and a void run still bills"
+	done
+}
+
 graded_runs() {
 	local n
 	n=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" \
@@ -584,6 +610,7 @@ while :; do
 
 	if [ -z "$ci_rc" ] && [ "$main_rc" = "0" ]; then
 		echo "land: lap $lap — main moved under ${sha:0:8} before CI finished; that run's verdict is void. Lapping early rather than paying it out."
+		cancel_own_run "$sha"
 		continue
 	fi
 	if [ -n "$ci_rc" ] && [ "$ci_rc" != "0" ]; then

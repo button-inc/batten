@@ -71,6 +71,11 @@ stub_gh() {
 #!/usr/bin/env bash
 sub="\$1 \$2"
 url="\$2"
+# "gh api -X POST URL" puts the url after the flag, so position is not enough
+# (CLOUD-369). Take the first argument that looks like an endpoint instead.
+# No backticks here: the heredoc is unquoted, so they would open a command
+# substitution in the TEST file rather than quote a word in the stub.
+for a in "\$@"; do case "\$a" in repos/*) url="\$a"; break ;; esac; done
 all="\$*"
 filter=""
 while [ \$# -gt 0 ]; do
@@ -115,6 +120,12 @@ case "\$sub" in
       # (CLOUD-247), so a case can script it.
       *commits/*check-runs*) emit "\$(cat "$BATS_TEST_TMPDIR/checkruns")" ;;
       *actions/workflows/*)  emit "\$(nth runs)" ;;
+      # CLOUD-369: the runs this lap started, and the cancel that ends them.
+      # The url is recorded rather than counted, so a case can assert WHICH run
+      # was cancelled and not merely that something was.
+      */cancel)              echo "\$url" >>"$BATS_TEST_TMPDIR/cancels" ;;
+      *actions/runs?head_sha*)
+        emit '{"workflow_runs":[{"id":4242,"status":"in_progress"},{"id":99,"status":"completed"}]}' ;;
       *)                     emit '{}' ;;
     esac ;;
 esac
@@ -320,6 +331,7 @@ alive_not_zombie() {
 	[ -n "$st" ] && [ "$st" != "Z" ]
 }
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
+cancels() { cat "$BATS_TEST_TMPDIR/cancels" 2>/dev/null || true; }
 # The push leaves the remote ref where it was, so no `synchronize` event fires
 # and nothing starts a run — the one shape that still needs the `--undo`.
 push_moves_nothing() { echo cafe1234cafe1234 >"$BATS_TEST_TMPDIR/remote_ref"; }
@@ -1225,4 +1237,35 @@ head_is_skipped_then_graded() {
 	run "$LAND"
 	[ "$status" -eq 0 ]
 	[ -z "$(ready_calls)" ]
+}
+
+@test "a run main moved under is CANCELLED, not left to bill for an answer nobody reads" {
+	# CLOUD-369. The lap already ends early here (CLOUD-240's race), but ending
+	# the lap does not end the RUN: only the next push supersedes it, and with
+	# the re-priced lease budgets that push can be many whole waits away. So a
+	# doomed four-job matrix bills the whole time.
+	#
+	# CLOUD-240's refusal is scoped rather than absolute — "supersede your own
+	# runs, never someone else's" — and this reaches only runs on this lap's own
+	# head sha, which no other branch has.
+	ci_is_slow
+	main_moves_on_lap 1
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"cancelled run 4242"* ]]
+	# The in-progress run, and only it: a completed run has nothing to cancel
+	# and asking would be a wasted call.
+	[[ "$(cancels)" == *"/4242/cancel"* ]]
+	[[ "$(cancels)" != *"/99/cancel"* ]]
+}
+
+@test "a lap that CI answered cancels nothing — only a voided run is void" {
+	# The discriminating half. Cancelling on any lap ending would reach runs
+	# about to deliver a usable verdict, which inverts the economy: a green run
+	# is the one thing worth paying out.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[ -z "$(cancels)" ]
 }
