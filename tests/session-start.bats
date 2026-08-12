@@ -140,3 +140,26 @@ print('registered')
 	after=$(git -C "$BATS_TEST_DIRNAME/.." status --porcelain -- mise.lock)
 	[ "$before" = "$after" ]
 }
+
+@test "the git hooks are installed — the per-clone step that was absent" {
+	# CLOUD-476: `hk install` was named in two prose files, performed by nothing
+	# and asserted by nothing, so 24 commits in one container went through no
+	# gate. This is the end-to-end half; `doctor` decides the same state on every
+	# later run, and tests/git-hook.bats owns what the installed body does.
+	#
+	# Idempotent, and it installs into THIS clone — which is the point: the suite
+	# that asserts the step is also the thing that performs it here.
+	run env CLAUDE_PROJECT_DIR="$BATS_TEST_DIRNAME/.." "$HOOK"
+	[ "$status" -eq 0 ]
+
+	local root hooks name
+	root=$(cd "$BATS_TEST_DIRNAME/.." && pwd)
+	hooks=$(git -C "$root" rev-parse --git-path hooks)
+	for name in pre-commit commit-msg; do
+		[ -x "$hooks/$name" ]
+		# A symlink, not a copy: a copy is a second authority that goes stale the
+		# moment the checked-in body changes, and doctor would keep passing over it.
+		[ -L "$hooks/$name" ]
+		[ "$(readlink "$hooks/$name")" = "$root/.claude/hooks/git-hook" ]
+	done
+}

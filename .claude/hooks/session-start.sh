@@ -120,14 +120,44 @@ step doctor mise run doctor
 # symptom.
 step batten-build mise run build:release
 
-# `hk install` is deliberately NOT run here, though AGENTS.md lists it as a
-# per-clone step. The hook it generates is `exec hk run pre-commit`, calling
-# `hk` bare — which resolves only where mise's shims are on PATH. In this
-# environment they are not, so installing it makes every `git commit` fail with
-# `hk: not found`. Measured: adding the step here broke the very commit that
-# added it. The gate is still enforced, by `mise run ci`/`verify` and by CI;
-# a local pre-commit hook is a convenience, and a broken one is worse than
-# none. Restoring it needs the PATH question answered first (CLOUD-196).
+# The third per-clone step from AGENTS.md, performed at last (CLOUD-476).
+#
+# It used to be deliberately absent, and the reasoning was sound as far as it
+# went: `hk install` writes `exec hk run pre-commit`, calling `hk` BARE, which
+# resolves only where mise's shims are on PATH. In this environment they are
+# not, so that hook makes every `git commit` fail with `hk: not found` —
+# measured, on the very commit that added the step. A broken hook is worse than
+# none, so the step was dropped and 24 commits in one container went through no
+# gate at all.
+#
+# The answer is not to run `hk install` but to install a hook this repo owns:
+# `.claude/hooks/git-hook` resolves `hk` through `mise exec --`, which is the
+# form that works here, and refuses to re-enter a gate that is already running.
+# Both properties are its own file's to explain; this step owns only the WHEN.
+#
+# A symlink, not a copy: a copy is a second authority that goes stale silently
+# the moment the checked-in body changes, and `doctor` would keep passing over
+# it. `-f` so a clone carrying hk's generated hook is repaired rather than
+# skipped, which is the state every existing clone is in.
+install_git_hooks() {
+	local root hooks src name
+	root=$(git rev-parse --show-toplevel) || return 1
+	hooks=$(git rev-parse --git-path hooks) || return 1
+	src="$root/.claude/hooks/git-hook"
+	[ -x "$src" ] || {
+		echo "no executable hook body at $src" >&2
+		return 1
+	}
+	mkdir -p "$hooks" || return 1
+	# Both hooks hk defines (hk.pkl `hooks`), through one body that dispatches on
+	# the name it is invoked as. commit-msg carries the Conventional Commits
+	# check that release-plz's semver depends on, so leaving it out would gate
+	# the expensive half and not the one that decides a version.
+	for name in pre-commit commit-msg; do
+		ln -sfn "$src" "$hooks/$name" || return 1
+	done
+}
+step git-hooks install_git_hooks
 
 if [ "$fail" -ne 0 ]; then
 	echo "::error:: session-start: setup incomplete — expect missing tools or MCP servers" >&2
