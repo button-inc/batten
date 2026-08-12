@@ -151,9 +151,17 @@ if [ -z "${stop:-}" ]; then
 	if ! lock_body=$(from_ref mise-tasks/land-lock "$from"); then
 		run_anyway "cannot read mise-tasks/land-lock from $from"
 	fi
-	mkdir -p "$work"
-	printf '%s\n' "$lock_body" >"$work/land-lock"
-	chmod +x "$work/land-lock"
+	# THE WORKSPACE IS A GUARDED STEP, NOT AN ASSUMED ONE (CLOUD-420). None of the
+	# setup below was checked, and with `set -e` deliberately off a failure fell
+	# through to the `cd` at the bottom — reaching fail-open by ACCIDENT of the
+	# `*)` arm, which then blamed `land-lock` for an answer it was never asked for.
+	# Guarding it here keeps the same verdict (run) and stops misattributing the
+	# cause, which is the line a human reads when the fleet misbehaves.
+	if ! mkdir -p "$work" ||
+		! printf '%s\n' "$lock_body" >"$work/land-lock" ||
+		! chmod +x "$work/land-lock"; then
+		run_anyway "cannot build the lease workspace under ${RUNNER_TEMP:-/tmp}"
+	fi
 
 	# `land-lock` reads the lease with `git ls-remote "$remote"`, and this
 	# repository is private — so the precondition must carry its own credential
@@ -163,12 +171,18 @@ if [ -z "${stop:-}" ]; then
 	#
 	# Header rather than a userinfo URL: `land-lock` prints `$remote` when it
 	# cannot reach it, and a token in that string is a token in the log.
-	git init -q "$work/clone"
-	git -C "$work/clone" remote add origin "$server/$repo"
+	if ! git init -q "$work/clone" ||
+		! git -C "$work/clone" remote add origin "$server/$repo"; then
+		run_anyway "cannot build the lease workspace clone under ${RUNNER_TEMP:-/tmp}"
+	fi
 	if [ -n "${GH_TOKEN:-}" ]; then
-		auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
-		git -C "$work/clone" config --local \
-			"http.$server/.extraheader" "AUTHORIZATION: basic $auth"
+		# The token never reaches the log on any path, including this one — the
+		# message names the config that failed, never the value it carried.
+		if ! auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n') ||
+			! git -C "$work/clone" config --local \
+				"http.$server/.extraheader" "AUTHORIZATION: basic $auth"; then
+			run_anyway "cannot configure the lease workspace credential"
+		fi
 	fi
 
 	rc=0

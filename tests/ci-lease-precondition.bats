@@ -170,6 +170,45 @@ cancels() { cat "$BATS_TEST_TMPDIR/cancels" 2>/dev/null || true; }
 	[ -z "$(cancels)" ]
 }
 
+@test "CLOUD-420: A WORKSPACE THAT CANNOT BE BUILT STILL EXITS 0" {
+	# THE UNTESTED LINE. `set -euo pipefail` became `set -uo pipefail` to keep the
+	# header's promise — "AND IT NEVER EXITS NON-ZERO" — and nothing exercised the
+	# case that promise exists for. Eighteen cases covered `gh` and fetch failures;
+	# every one of them still handed the script a working `RUNNER_TEMP`.
+	#
+	# The whole setup chain is unguarded: the `RUNNER_TEMP` fallback, `mkdir -p`,
+	# the redirect that writes land-lock, `chmod +x`, `git init`, `remote add` and
+	# `config --local`. With `-e` restored the first of them ends the script
+	# non-zero, the job reds before its cancellation lands, the RUN concludes
+	# `failure` rather than `cancelled`, `final` fails its needs assertion, and
+	# `land` re-drafts the PR — the fleet-wide re-drafting this design exists to
+	# avoid, arriving through its own remedy.
+	#
+	# A FILE where a directory must be. `mkdir -p "$file/batten-lease.$$"` cannot
+	# succeed, and every later step inherits the failure.
+	: >"$BATS_TEST_TMPDIR/not-a-dir"
+	export RUNNER_TEMP="$BATS_TEST_TMPDIR/not-a-dir"
+	# The lease says STOP, so this row cannot pass by never reaching the workspace:
+	# it is the expensive path, the one that builds the clone and consults the lock.
+	land_lock_exits 3
+	run "$PRECOND"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-420: a broken workspace is not reported as land-lock's answer" {
+	# The fail-open above is reached BY ACCIDENT — a cd/exec failure falls into the
+	# `*)` arm, whose message says `land-lock answered <rc>, which is neither run
+	# nor stop`. That attributes a workspace failure to a predicate that was never
+	# consulted, and it is the line a human reads when the fleet misbehaves.
+	: >"$BATS_TEST_TMPDIR/not-a-dir"
+	export RUNNER_TEMP="$BATS_TEST_TMPDIR/not-a-dir"
+	land_lock_exits 3
+	run "$PRECOND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"workspace"* ]]
+	[[ "$output" != *"land-lock answered"* ]]
+}
+
 @test "FAIL OPEN: a refused cancellation runs rather than reddening" {
 	land_lock_exits 3
 	touch "$BATS_TEST_TMPDIR/cancel-refused"
