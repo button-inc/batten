@@ -932,10 +932,21 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	pr_state OPEN
 	workflow_runs runs.last
 	local out="$BATS_TEST_TMPDIR/still-waiting" rc=0
-	# `|| rc=$?` because a bats body aborts on a non-zero command, and 124 is
-	# the result this case is asserting rather than a failure of it.
+	# `|| rc=$?` because a bats body aborts on a non-zero command, and a timeout
+	# is the result this case is asserting rather than a failure of it.
 	timeout -k 1 5 "$LAND" >"$out" 2>&1 || rc=$?
-	[ "$rc" -eq 124 ]
+	# 124 OR 137 (CLOUD-464). Both are `timeout` saying "the command did not
+	# finish", which is the whole property here; what separates them is machine
+	# load, not behaviour. GNU `timeout` returns 124 when the process dies from
+	# the TERM it sent and 137 when `-k` had to escalate to KILL because TERM was
+	# not serviced within the grace second — and `land` runs `set -m`, installs
+	# an EXIT trap and reaps two watcher process groups, so how long that takes
+	# depends on what else is running. Asserting 124 alone made a contended box
+	# red and an idle one green, which is CLOUD-426's shape in its sibling case.
+	#
+	# Not a loosening: a `land` that ended the lap on its own exits with its own
+	# status, so neither code can appear and a broken poll still fails this.
+	[ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]
 	# This is the only case that kills `land` mid-poll, and `land` runs `set -m`
 	# so each watcher has its own process group and outlives the parent. Left
 	# alone they block forever and the suite never exits — so this reaps the
