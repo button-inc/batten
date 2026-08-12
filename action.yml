@@ -50,6 +50,10 @@ inputs:
     description: Directory the verb runs in. Batten reads the `batten.toml` here — configuration is one committed authority with no upward walk (house-style §8).
     required: false
     default: "."
+  stdin:
+    description: "Text piped to the verb on standard input. Required by `hook`, which reads its mediated-call payload there and is otherwise unreachable from a workflow; empty for every tree verb."
+    required: false
+    default: ""
   version:
     description: Batten version to run, without a leading `v`. Empty means this action ref's own crate version, which is the pinning that makes an empty `with:` correct.
     required: false
@@ -257,6 +261,7 @@ runs:
         BINARY: ${{ steps.resolve.outputs.binary }}
         COMMAND: ${{ inputs.command }}
         ARGS: ${{ inputs.args }}
+        STDIN: ${{ inputs.stdin }}
         FAIL: ${{ inputs.fail }}
       run: |
         set -uo pipefail
@@ -270,7 +275,21 @@ runs:
         # zero-config invocation this action exists to serve.
         read -ra extra <<<"$ARGS"
 
-        "$BINARY" "$COMMAND" ${extra[@]+"${extra[@]}"}
+        # `hook` reads its mediated-call payload on stdin, so without this branch
+        # half of Batten's surface is unreachable from a workflow.
+        #
+        # THE `</dev/null` IS NOT SYMMETRY. A step's stdin on a runner is not
+        # guaranteed to be at EOF, and a verb that reads it would block a job
+        # until the timeout with nothing to show for it. Closing it explicitly on
+        # the empty path makes "no stdin" mean end-of-input rather than "wait".
+        #
+        # `printf '%s'` rather than a here-string: a here-string appends a
+        # newline, and a payload is bytes the caller supplied, not bytes plus one.
+        if [ -n "$STDIN" ]; then
+          printf '%s' "$STDIN" | "$BINARY" "$COMMAND" ${extra[@]+"${extra[@]}"}
+        else
+          "$BINARY" "$COMMAND" ${extra[@]+"${extra[@]}"} </dev/null
+        fi
         code=$?
 
         # WRITTEN BEFORE THE EXIT, so the code is published whether or not this

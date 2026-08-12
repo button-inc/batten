@@ -1,16 +1,33 @@
 name: test
 
-# The shipped Action's own self-test (CLOUD-68). `action.yml` is the one thing in
-# this repository that no `mise` task can exercise: its contract is what a GitHub
-# runner does with it, so the only honest proof is a runner doing it.
+# The shipped Action's own self-test (CLOUD-68, extended by CLOUD-110).
+# `action.yml` is the one thing in this repository that no `mise` task can
+# exercise: its contract is what a GitHub runner does with it, so the only honest
+# proof is a runner doing it.
 #
-# THE POINT OF THIS JOB IS THE LITERAL ABSENCE OF A `with:` KEY. CLOUD-68's
-# acceptance is that the Action works with an empty `with:` block, and a workflow
-# that passed `working-directory:` to reach a fixture would be asserting
-# zero-config rather than executing it. So the repository is checked out into a
-# subdirectory and the fixture is materialized at the workspace root instead —
-# which leaves `- uses: ./action` with nothing to configure, and its default
-# working directory pointing at the fixture repository.
+# TWO CLAIMS ARE UNDER TEST HERE, and they are different claims.
+#
+#   `action` — ZERO-CONFIG. CLOUD-68's acceptance is that the Action works with an
+#   empty `with:` block, and a workflow that passed `working-directory:` to reach
+#   a fixture would be asserting that rather than executing it. So the repository
+#   is checked out into a subdirectory and the fixture is materialized at the
+#   workspace root instead, which leaves `- uses: ./action` with nothing to
+#   configure. Across three runner OSes, because the target mapping, the
+#   `Expand-Archive` branch and the bash-3.2 array guard are the only genuinely
+#   OS-dependent code in the Action.
+#
+#   `action-*` — THE EXIT-CODE CONTRACT (CLOUD-110). The Action's real interface
+#   is the code it returns at the harness boundary, and a self-test that only ever
+#   asserts 0 would stay green against an Action that returned 1 for every
+#   violation. Each negative job asserts an EXACT code through the `exit-code`
+#   output, which is what `fail: false` exists for.
+#
+# A JOB THAT CANNOT FAIL CERTIFIES NOTHING, so every negative job runs the Action
+# TWICE: once on the clean fixture, which must be 0, and then on its own. The
+# first run is the liveness control. Without it `action-usage` — which asserts
+# 1 — would be satisfied by an Action that never installed a binary at all, since
+# a missing binary is exactly how a 1 arrives. Those two runs are on different
+# fixtures in different directories, so neither can mask the other.
 #
 # Path-filtered, on the same economy as zizmor.yml: it costs nothing on a PR that
 # touches neither the action, this file, nor the corpus it runs. `ci-wait` reads
@@ -49,7 +66,13 @@ jobs:
     # pulls — `land` re-drafts a failing PR, and a job missing this guard would
     # keep spending while the failure is diagnosed.
     if: ${{ github.event.pull_request.draft == false }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One OS failing must not cancel the others: which platforms an install
+      # path breaks on is the finding, and fail-fast would report only the first.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     timeout-minutes: 10 # budget: grandfathered measured=2026-08-11
     permissions:
       # The action downloads a release asset from this repository with the job
@@ -171,3 +194,408 @@ jobs:
       # musl asset, and runs `batten check` in the workspace root, which is now
       # the fixture repository. The step fails unless Batten exits 0.
       - uses: ./action
+
+  # --- the exit-code contract (CLOUD-110) ------------------------------------
+  #
+  # `2` is the policy verdict on BOTH surfaces, and that is the point of testing
+  # them separately: a tree violation and a denied mediated call are the same kind
+  # of answer under house-style §7, so an Action that translated one of them would
+  # be caught here rather than by a consumer whose guard stopped blocking.
+
+  action-violation:
+    name: action-violation
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: action
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            action.yml
+            Cargo.toml
+            crates/batten/tests/fixtures/repos
+
+      # Each fixture gets its OWN directory, and the Action is pointed at it with
+      # `working-directory`. Unlike the zero-config job above, these jobs are not
+      # asserting anything about an empty `with:` — they are asserting codes — so
+      # reaching two fixtures in one job is the honest shape. It also removes the
+      # need for the stray-`.rs` sensor: a rule's glob is rooted at the working
+      # directory, so `action/` is outside every one of them.
+      - name: Materialize the fixtures
+        shell: bash
+        env:
+          CORPUS: action/crates/batten/tests/fixtures/repos
+          CLEAN: forbid-clean
+          CASE: forbid-deny
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          materialize() {
+            local fixture="$1" dest="$2" f base found=0
+            mkdir -p "$dest"
+            for f in "$CORPUS/$fixture"/*.in; do
+              base=$(basename "$f")
+              if [ "$base" = expected.in ]; then
+                continue
+              fi
+              cp "$f" "$dest/${base%.in}"
+              found=$((found + 1))
+            done
+            [ "$found" -gt 0 ] || {
+              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
+              exit 1
+            }
+          }
+          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
+          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+
+      # The liveness control. If this is not 0 the Action is broken upstream of
+      # the verb, and the assertion below would be reading a code nobody produced.
+      - uses: ./action
+        id: clean
+        with:
+          working-directory: clean
+          fail: "false"
+
+      - uses: ./action
+        id: case
+        with:
+          working-directory: case
+          fail: "false"
+
+      - name: Assert the codes
+        shell: bash
+        env:
+          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
+          CASE_CODE: ${{ steps.case.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          [ "$CLEAN_CODE" = 0 ] || {
+            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — the Action is broken upstream of the verb, so nothing below this proves anything." >&2
+            exit 1
+          }
+          [ "$CASE_CODE" = 2 ] || {
+            echo "::error::a policy violation returned $CASE_CODE, not 2. Exit 2 is the policy verdict on every surface (house-style §7)." >&2
+            exit 1
+          }
+
+  action-deny:
+    name: action-deny
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: action
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            action.yml
+            Cargo.toml
+            crates/batten/tests/fixtures/repos
+
+      - name: Materialize the fixtures
+        shell: bash
+        env:
+          CORPUS: action/crates/batten/tests/fixtures/repos
+          CLEAN: forbid-clean
+          CASE: shape-mediated-call
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          materialize() {
+            local fixture="$1" dest="$2" f base found=0
+            mkdir -p "$dest"
+            for f in "$CORPUS/$fixture"/*.in; do
+              base=$(basename "$f")
+              if [ "$base" = expected.in ]; then
+                continue
+              fi
+              cp "$f" "$dest/${base%.in}"
+              found=$((found + 1))
+            done
+            [ "$found" -gt 0 ] || {
+              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
+              exit 1
+            }
+          }
+          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
+          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+
+      - uses: ./action
+        id: clean
+        with:
+          working-directory: clean
+          fail: "false"
+
+      # A mediated call is adjudicated by `hook`, which reads its PreToolUse
+      # payload on stdin — so this is also the job that proves the `stdin` input
+      # reaches the process at all. The fixture's shape rule denies `gh pr merge`.
+      - uses: ./action
+        id: denied
+        with:
+          working-directory: case
+          command: hook
+          args: --harness exit-code
+          stdin: '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"gh pr merge 42"}}'
+          fail: "false"
+
+      # The other direction, so the deny above is not passing vacuously: the same
+      # policy, the same invocation, a command it does not match. A guard that
+      # denied everything would look identical without this.
+      - uses: ./action
+        id: allowed
+        with:
+          working-directory: case
+          command: hook
+          args: --harness exit-code
+          stdin: '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}'
+          fail: "false"
+
+      - name: Assert the codes
+        shell: bash
+        env:
+          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
+          DENIED_CODE: ${{ steps.denied.outputs.exit-code }}
+          ALLOWED_CODE: ${{ steps.allowed.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          [ "$CLEAN_CODE" = 0 ] || {
+            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — the Action is broken upstream of the verb, so nothing below this proves anything." >&2
+            exit 1
+          }
+          [ "$DENIED_CODE" = 2 ] || {
+            echo "::error::a denied mediated call returned $DENIED_CODE, not 2. Every host reads 2 as deny, so a wrong code here changes an enforcement outcome rather than a report." >&2
+            exit 1
+          }
+          [ "$ALLOWED_CODE" = 0 ] || {
+            echo "::error::an unmatched command returned $ALLOWED_CODE, not 0 — the deny above proves nothing if this policy denies everything." >&2
+            exit 1
+          }
+
+  action-usage:
+    name: action-usage
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: action
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            action.yml
+            Cargo.toml
+            crates/batten/tests/fixtures/repos
+
+      - name: Materialize the fixtures
+        shell: bash
+        env:
+          CORPUS: action/crates/batten/tests/fixtures/repos
+          CLEAN: forbid-clean
+          CASE: missing-severity
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          materialize() {
+            local fixture="$1" dest="$2" f base found=0
+            mkdir -p "$dest"
+            for f in "$CORPUS/$fixture"/*.in; do
+              base=$(basename "$f")
+              if [ "$base" = expected.in ]; then
+                continue
+              fi
+              cp "$f" "$dest/${base%.in}"
+              found=$((found + 1))
+            done
+            [ "$found" -gt 0 ] || {
+              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
+              exit 1
+            }
+          }
+          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
+          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+
+      # THE CONTROL THIS JOB CANNOT DO WITHOUT. A missing or unexecutable binary
+      # also exits 1, so without a clean run proving the install worked, this job
+      # would be green against an Action that installed nothing.
+      - uses: ./action
+        id: clean
+        with:
+          working-directory: clean
+          fail: "false"
+
+      - uses: ./action
+        id: case
+        with:
+          working-directory: case
+          fail: "false"
+
+      - name: Assert the codes
+        shell: bash
+        env:
+          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
+          CASE_CODE: ${{ steps.case.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          [ "$CLEAN_CODE" = 0 ] || {
+            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — a 1 below would then be an install failure wearing a config error's code." >&2
+            exit 1
+          }
+          [ "$CASE_CODE" = 1 ] || {
+            echo "::error::an unloadable config returned $CASE_CODE, not 1. Exit 1 is fail-loud-do-not-block: it must never be the deny code." >&2
+            exit 1
+          }
+
+  action-internal:
+    name: action-internal
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is absent deliberately: `chmod 000` does not deny a read there,
+        # so the precondition this job rests on cannot be created. Excluding it is
+        # honest; running it and watching the sensor below fire every time is not.
+        os: [ubuntu-latest, macos-latest]
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: action
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            action.yml
+            Cargo.toml
+            crates/batten/tests/fixtures/repos
+
+      - name: Materialize the fixtures
+        shell: bash
+        env:
+          CORPUS: action/crates/batten/tests/fixtures/repos
+          CLEAN: forbid-clean
+          CASE: forbid-deny
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          materialize() {
+            local fixture="$1" dest="$2" f base found=0
+            mkdir -p "$dest"
+            for f in "$CORPUS/$fixture"/*.in; do
+              base=$(basename "$f")
+              if [ "$base" = expected.in ]; then
+                continue
+              fi
+              cp "$f" "$dest/${base%.in}"
+              found=$((found + 1))
+            done
+            [ "$found" -gt 0 ] || {
+              echo "::error::no fixture files materialized from $CORPUS/$fixture" >&2
+              exit 1
+            }
+          }
+          materialize "$CLEAN" "$GITHUB_WORKSPACE/clean"
+          materialize "$CASE" "$GITHUB_WORKSPACE/case"
+
+      # An internal failure is a file Batten cannot READ inside a rule's glob:
+      # `rules::forbid_in_file` surfaces the I/O error, and `main.rs` maps
+      # anything that is neither a denial nor a usage error onto 3.
+      #
+      # THE SENSOR IS THE POINT (CLOUD-249). Root defeats `chmod 000`, so on a
+      # runner that happened to be root the file would stay readable, the run
+      # would exit 2, and a job written without this would report a precondition
+      # it never established. Measured while writing this: a `chmod -R a+rX`
+      # ordered after the `chmod 000` silently re-granted read and turned the
+      # whole measurement into a 0.
+      - name: Make the file unreadable, and prove that it is
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/case"
+          chmod 000 lib.rs
+          if [ -r lib.rs ]; then
+            echo "::error::lib.rs is still readable after chmod 000 — this runner defeats the precondition (running as root?), so a 3 here would prove nothing. Fix the precondition rather than the assertion." >&2
+            exit 1
+          fi
+
+      - uses: ./action
+        id: clean
+        with:
+          working-directory: clean
+          fail: "false"
+
+      - uses: ./action
+        id: case
+        with:
+          working-directory: case
+          fail: "false"
+
+      # The same fixture, readable, is a policy verdict. Asserting it here is what
+      # ties the 3 above to the unreadable file rather than to anything else the
+      # fixture happens to contain.
+      - name: Restore the file and re-run
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod u+r,g+r,o+r "$GITHUB_WORKSPACE/case/lib.rs"
+
+      - uses: ./action
+        id: readable
+        with:
+          working-directory: case
+          fail: "false"
+
+      - name: Assert the codes
+        shell: bash
+        env:
+          CLEAN_CODE: ${{ steps.clean.outputs.exit-code }}
+          CASE_CODE: ${{ steps.case.outputs.exit-code }}
+          READABLE_CODE: ${{ steps.readable.outputs.exit-code }}
+        run: |
+          set -euo pipefail
+          [ "$CLEAN_CODE" = 0 ] || {
+            echo "::error::the clean fixture returned $CLEAN_CODE, not 0 — the Action is broken upstream of the verb, so nothing below this proves anything." >&2
+            exit 1
+          }
+          [ "$CASE_CODE" = 3 ] || {
+            echo "::error::a file Batten could not read returned $CASE_CODE, not 3. Exit 3 is fail-loud-do-not-block, and it must be distinguishable from the policy verdict — a check that could not look is not a check that found nothing." >&2
+            exit 1
+          }
+          [ "$READABLE_CODE" = 2 ] || {
+            echo "::error::the same fixture readable returned $READABLE_CODE, not 2 — without this the 3 above is not tied to the unreadable file." >&2
+            exit 1
+          }
+
+  action-final:
+    name: action-final
+    if: ${{ github.event.pull_request.draft == false }}
+    needs: [action, action-violation, action-deny, action-usage, action-internal]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # budget: grandfathered measured=2026-08-12
+    permissions: {}
+    steps:
+      # OVER `needs.*`, NOT A LIST OF NAMES. Branch protection points at this one
+      # job so that adding a leg never needs a ruleset change — which only holds
+      # if the assertion follows `needs:` by itself. A hand-enumerated set goes
+      # stale the next time a variant is added, and `ci-local-parity` refuses one
+      # (CLOUD-351).
+      - name: Every variant succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        shell: bash
+        run: |
+          echo "::error::a self-test variant did not succeed — see the failing job above." >&2
+          exit 1

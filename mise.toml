@@ -134,15 +134,15 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,semver,final,action"
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,semver,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
-# has not registered yet. Exactly two names earn it, and each earns it twice
+# has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
 # over, on two independent grounds:
 #
 #   1. Their workflow is PATHS-FILTERED. `zizmor.yml` fires on
-#      `.github/workflows/**` + `action.yml`; `test.yml` (the `action` job) on
-#      `action.yml`, its own file, and the fixture corpus. A PR touching none of
+#      `.github/workflows/**` + `action.yml`; `test.yml` on `action.yml`, its own
+#      file, and the fixture corpus. A PR touching none of
 #      those paths creates no run for them, ever, on any event.
 #   2. Neither declares `types:`, so both take the default
 #      [opened, synchronize, reopened] — which omits `ready_for_review`,
@@ -150,6 +150,13 @@ CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-dar
 #      workflow names that type explicitly (see ci.yml, commit-lint.yml), so a
 #      lap that re-readies a PR mints runs for all of them and none for these
 #      two. Either ground alone would be enough; both hold.
+#
+# Two workflows, but TEN NAMES, because both grounds are properties of the
+# WORKFLOW and `test.yml` now carries nine jobs (CLOUD-110). The matching here is
+# by exact check-run name — `checks-green` splits this on `,` and compares against
+# the run's `name`, matrix suffix included — so listing `action` alone would leave
+# the other eight strict, and a lap that re-readies would then wait forever for
+# runs that event cannot mint. Every job in a workflow named here belongs here.
 #
 # UNSET OR EMPTY IS THE STRICT DIRECTION — every roster name must be PRESENT —
 # and that is the safe default because the two failures are not symmetric. A
@@ -161,7 +168,7 @@ CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-dar
 # that one success as the whole roster, and `land` posted /fast-forward into a
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
-CI_ABSENT_OK_CHECKS = "zizmor,action"
+CI_ABSENT_OK_CHECKS = "zizmor,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The conclusions that CONSTITUTE AN ANSWER about a required check, written once
 # and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
 # reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the

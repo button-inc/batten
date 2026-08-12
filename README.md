@@ -399,6 +399,7 @@ fails loudly rather than substituting another version.
 | `command`           | `check`               | the verb to run                                                   |
 | `args`              | `""`                  | extra arguments, split on whitespace                              |
 | `working-directory` | `.`                   | where the verb runs, and therefore which `batten.toml` governs    |
+| `stdin`             | `""`                  | text piped to the verb; `hook` reads its payload there            |
 | `version`           | `""`                  | empty means this action ref's own version                         |
 | `github-token`      | `${{ github.token }}` | reads the release asset                                           |
 | `cache`             | `true`                | restore and save the downloaded binary                            |
@@ -422,6 +423,32 @@ step went red" — the run continues and the code arrives on `exit-code`:
     fail: false
 - run: test "${{ steps.batten.outputs.exit-code }}" = "2"
 ```
+
+Which matters most where `2` sits: a violation and a denied mediated call are the
+**same** code because they are the same kind of answer, so a caller that wants to
+tell "policy said no" from "Batten could not run" is reading `1` and `3`, not the
+absence of `0`. The Action's own self-test asserts all four exactly
+(`.github/workflows/test.yml`), including the `3` that a file Batten cannot read
+produces — a check that could not look is not a check that found nothing.
+
+### Mediating a call with `hook`
+
+`hook` adjudicates one command rather than walking a tree, and it reads the
+harness payload on **stdin** — which is what the `stdin` input is for:
+
+```yaml
+- uses: button-inc/batten@v0.0.61
+  id: guard
+  with:
+    command: hook
+    args: --harness exit-code
+    stdin: '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"gh pr merge 42"}}'
+    fail: false
+- run: test "${{ steps.guard.outputs.exit-code }}" = "2"
+```
+
+With `stdin` empty the Action closes the descriptor rather than leaving it open,
+so a verb that reads standard input ends at EOF instead of blocking the job.
 
 The Action does **not** prepend its install directory to `PATH`. A `$GITHUB_PATH`
 write changes how every later step in the job resolves a command, which is a
