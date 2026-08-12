@@ -844,7 +844,14 @@ fn run_hook(
     // "cheap when irrelevant" applied to the hottest path in the binary — this
     // runs on every mediated tool call — and it is also what keeps a bypassed or
     // command-less call from being able to fail on an unrelated config error.
-    let policy = if bypass || envelope.command.is_empty() {
+    //
+    // "Command-less" is no longer the same claim as "nothing to judge": a write
+    // tool carries a path and no command, and skipping the config load for it
+    // is what made the write matcher unjudgeable even once `adjudicate` grew
+    // the gate (CLOUD-312). The cheap-refusals-first ordering is intact — a
+    // bypassed call, and a payload that is neither a command nor a write, still
+    // never touch config.
+    let policy = if bypass || (envelope.command.is_empty() && envelope.writes.is_none()) {
         hook::Policy::declaring_nothing()
     } else {
         load_policy(overrides)?

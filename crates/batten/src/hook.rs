@@ -123,6 +123,38 @@ impl Harness {
     pub const fn reason_travels_in_band(self) -> bool {
         matches!(self, Harness::ClaudeCode | Harness::Cursor)
     }
+
+    /// The tools on this host whose call **writes the path it names**.
+    ///
+    /// A host fact, so it lives in the adapter rather than in `[[rule]]`: the
+    /// consumer declares *which paths* are protected, and the adapter declares
+    /// *which of its tools* are a write. Neither table can be derived from the
+    /// other, and a consumer cannot be asked to name a host's tool inventory.
+    ///
+    /// The set has to be named because a path alone does not say what is being
+    /// done to it. `Read` and `Write` both carry `file_path`, so judging every
+    /// payload that has one would refuse reading a protected file — a deny with
+    /// no rationale, and the kind of false positive that gets a guard switched
+    /// off.
+    ///
+    /// Each host answers for itself even where the answers coincide, because
+    /// coincidence is not agreement: [`Harness::CodexCli`] is a near-verbatim
+    /// clone of Claude's wire format *today*, and folding it into a shared
+    /// constant would silently re-point it if that ever stopped being true.
+    #[must_use]
+    pub const fn write_tools(self) -> &'static [&'static str] {
+        match self {
+            Harness::ClaudeCode | Harness::CodexCli => {
+                &["Write", "Edit", "MultiEdit", "NotebookEdit"]
+            }
+            Harness::GeminiCli => &["WriteFile", "Edit", "Write", "MultiEdit", "NotebookEdit"],
+            Harness::Cursor => &["Write", "Edit", "MultiEdit", "write", "edit"],
+            Harness::CopilotCli => &["Write", "Edit", "MultiEdit", "StrReplaceEditor"],
+            // The neutral contract: a caller composing the envelope by hand is
+            // stating the normalized shape, so it gets the normalized spellings.
+            Harness::ExitCode => &["Write", "Edit", "MultiEdit", "NotebookEdit"],
+        }
+    }
 }
 
 /// What one host can and cannot do (CLOUD-45).
@@ -428,6 +460,17 @@ pub struct Envelope {
     pub input: Value,
     /// The command text for shell-shaped tools; empty when the tool has none.
     pub command: String,
+    /// The path this call writes, when the tool is one of its host's writers.
+    ///
+    /// Resolved by the adapter from [`Harness::write_tools`], so the core stays
+    /// harness-blind: by the time [`adjudicate`] sees an envelope, "this is a
+    /// write, and here is its target" is already a normalized fact rather than
+    /// a tool-name comparison the policy layer would have to make.
+    ///
+    /// `None` for every read, for a shell call, and for a write whose payload
+    /// named no path — all three are "nothing to judge here", which is not the
+    /// same claim as an empty path.
+    pub writes: Option<String>,
     /// The host's working directory, when it reported one.
     pub cwd: Option<PathBuf>,
     /// The host's session id, when it reported one.
@@ -510,6 +553,25 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
             .to_owned()
     };
 
+    // The write target, resolved here so the core never compares a tool name.
+    // `notebook_path` is read alongside `file_path` because `NotebookEdit`
+    // spells it differently and a notebook under a protected path is the same
+    // write — omitting it would have left one tool in the matcher unjudged,
+    // which is the CLOUD-185 shape (the guard was installed and one route
+    // around it stayed open).
+    let writes = harness
+        .write_tools()
+        .contains(&tool.as_str())
+        .then(|| {
+            input
+                .pointer("/file_path")
+                .or_else(|| input.pointer("/notebook_path"))
+                .and_then(Value::as_str)
+                .filter(|path| !path.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .flatten();
+
     Some(Envelope {
         event,
         raw_event,
@@ -519,6 +581,7 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
+        writes,
         input,
         cwd: value
             .get("cwd")
@@ -686,6 +749,10 @@ impl Policy {
     /// Both halves must be empty. The protected gate needs *both* its tables to
     /// bite, so a repository declaring verbs but no protected paths (or the
     /// reverse) can deny nothing through it — but a shape row alone still can.
+    ///
+    /// This holds for the write gate too, and deliberately: a write tool is
+    /// classified through the same `[[verb]]` table a shell program is, so
+    /// "which calls mutate" stays one declared list rather than two.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.shapes.is_empty() && (self.verbs.is_empty() || self.protected.is_empty())
@@ -711,7 +778,30 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, bypass: bool) -> Decisio
     if envelope.event != Event::PreTool {
         return Decision::Allow;
     }
-    if bypass || envelope.command.is_empty() || policy.is_empty() {
+    if bypass || policy.is_empty() {
+        return Decision::Allow;
+    }
+    // The write gate, before the command gate and not inside it: a write tool
+    // carries no command, so every path below this point used to return Allow
+    // for it. That is why the `Write|Edit|MultiEdit|NotebookEdit` matcher was
+    // adjudicated by nothing at all — the rows existed, the payload decoded,
+    // and `command.is_empty()` sent it home (CLOUD-312).
+    //
+    // The tool is classified through the SAME `[[verb]]` table a shell program
+    // is, rather than through a second list of write tools in config. A `Write`
+    // aimed at a protected path and an `echo x >` aimed at it are one predicate
+    // — {mutating verb} × {protected path} — and splitting them into two tables
+    // is how the two halves come to disagree. It also means the refusal keeps
+    // its declared `redirect`, so the consumer's own remedy text survives the
+    // move out of bash, which is what CLOUD-312's differential suite asserts.
+    if let Some(path) = envelope.writes.as_deref() {
+        if let Some(verb) = crate::verbs::classify(&policy.verbs, &envelope.tool) {
+            if policy.protected.contains(normalise(path)) {
+                return Decision::Deny(protected_refusal(&envelope.tool, path, verb));
+            }
+        }
+    }
+    if envelope.command.is_empty() {
         return Decision::Allow;
     }
     // Explicit rows first, then the derived gate: a row a reviewer wrote by hand
@@ -1327,6 +1417,23 @@ mod tests {
             tool: "Bash".to_owned(),
             input: Value::Null,
             command: command.to_owned(),
+            writes: None,
+            cwd: None,
+            session: None,
+        }
+    }
+
+    /// A write-tool envelope: no command, a target path, as the adapter decodes
+    /// one. The unit tests build it directly so the write gate is exercised
+    /// without a harness in the way; `tests/cli.rs` covers the decode end.
+    fn write_envelope(tool: &str, path: &str) -> Envelope {
+        Envelope {
+            event: Event::PreTool,
+            raw_event: ASSUMED_EVENT.to_owned(),
+            tool: tool.to_owned(),
+            input: Value::Null,
+            command: String::new(),
+            writes: Some(path.to_owned()),
             cwd: None,
             session: None,
         }
@@ -1741,6 +1848,85 @@ mod tests {
     #[test]
     fn the_same_verb_against_an_unprotected_path_is_allowed() {
         assert_eq!(guarded("rm target/debug/scratch"), Decision::Allow);
+    }
+
+    /// The write gate's policy: the same two consumer tables, with the write
+    /// TOOL declared as a mutating verb the way `batten.toml` declares it.
+    fn write_guarded(tool: &str, path: &str) -> Decision {
+        adjudicate(
+            &protected_policy(vec![
+                verb("rm", Some("restore it with git")),
+                verb("Write", Some("use the surface that owns the file")),
+            ]),
+            &write_envelope(tool, path),
+            false,
+        )
+    }
+
+    #[test]
+    fn a_write_tool_against_a_protected_path_is_denied() {
+        // The hole CLOUD-312 found: a write carries no command, and every path
+        // in `adjudicate` returned Allow for it, so the whole
+        // `Write|Edit|MultiEdit|NotebookEdit` matcher was adjudicated by
+        // nothing while the rows sat in config reading as coverage.
+        assert!(matches!(
+            write_guarded("Write", ".serena/memories/core.md"),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn a_write_tool_against_an_unprotected_path_is_allowed() {
+        assert_eq!(
+            write_guarded("Write", "crates/batten/src/new.rs"),
+            Decision::Allow
+        );
+    }
+
+    /// The false positive that would get this gate switched off.
+    ///
+    /// `Read` and `Write` both carry `file_path`, so a gate keyed on "the
+    /// payload names a protected path" would refuse *reading* the policy file.
+    /// The tool must be classified, and an unclassified one is not a write.
+    #[test]
+    fn an_undeclared_tool_against_a_protected_path_is_allowed() {
+        assert_eq!(
+            write_guarded("Read", ".serena/memories/core.md"),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn a_write_deny_carries_the_declared_redirect_not_a_generic_message() {
+        // The refusal contract (CLOUD-122) survives the move out of bash: the
+        // consumer's own remedy text is what reaches the model, which is what
+        // makes retiring `memory-guard` a port rather than a downgrade.
+        let Decision::Deny(refusal) = write_guarded("Write", "batten.toml") else {
+            panic!("a declared write verb against a protected path must deny");
+        };
+        let rendered = refusal.render();
+        assert!(rendered.contains("Write"), "got: {rendered}");
+        assert!(rendered.contains("batten.toml"), "got: {rendered}");
+        assert!(
+            rendered.contains("use the surface that owns the file"),
+            "the declared redirect must reach the reader; got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_write_is_judged_only_at_the_pre_tool_event() {
+        // Same reading the command gate takes: a refusal after the fact is not
+        // a decision any host offers, so it could only be noise.
+        let mut envelope = write_envelope("Write", ".serena/memories/core.md");
+        envelope.event = Event::PostTool;
+        assert_eq!(
+            adjudicate(
+                &protected_policy(vec![verb("Write", Some("use the owning surface"))]),
+                &envelope,
+                false,
+            ),
+            Decision::Allow
+        );
     }
 
     #[test]

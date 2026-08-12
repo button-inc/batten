@@ -27,10 +27,19 @@ raw=$(cat) || exit 0
 path=$(printf '%s' "$raw" | jq -r '.tool_input.file_path // empty' 2>/dev/null) || exit 0
 cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
 
+# Invoked BY PATH, never `mise run`: this is a per-tool-call hook, and a mise
+# startup here is pure latency — measured 176ms through `mise run` against 18ms
+# by path, the whole of the difference being mise resolving its tool graph to
+# exec a script that finishes in milliseconds (CLOUD-435). Same reasoning, and
+# the same spelling, as `stop-guard`'s sub-checks. The check needs no tool mise
+# provides: it is bash and string matching.
+check="$(dirname -- "${BASH_SOURCE[0]}")/memory-guard-check"
+[ -x "$check" ] || exit 0
+
 if [ -n "$path" ]; then
-	reason=$(mise run memory-guard-check path "$path" 2>/dev/null) && exit 0
+	reason=$("$check" path "$path" 2>/dev/null) && exit 0
 elif [ -n "$cmd" ]; then
-	reason=$(mise run memory-guard-check command "$cmd" 2>/dev/null) && exit 0
+	reason=$("$check" command "$cmd" 2>/dev/null) && exit 0
 else
 	exit 0
 fi

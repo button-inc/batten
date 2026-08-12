@@ -354,6 +354,43 @@ verb = ">>"
 effect = "write"
 redirect = "write through the surface that owns the file"
 
+# The write TOOLS, classified through the same table as the shell programs
+# (CLOUD-312). A `Write` aimed at a protected path and an `echo x >` aimed at it
+# are one predicate — {mutating verb} × {protected path} — so they are declared
+# once, here, rather than as a second "which tools write" list the engine would
+# have to keep in agreement with this one.
+#
+# Which of a host's tools are writers is the ADAPTER's fact and is not declared
+# here (`hook::Harness::write_tools`); what a write MEANS for this repository is,
+# and that is the redirect. Until these rows existed the whole
+# `Write|Edit|MultiEdit|NotebookEdit` matcher was adjudicated by nothing: a write
+# carries no command, and every path in `adjudicate` returned Allow for it.
+#
+# The redirect is the one `memory-guard-check` renders, kept verbatim so the
+# refusal survives the move out of bash unchanged — which is what CLOUD-312's
+# differential suite asserts. It is per-verb rather than per-path, exactly as
+# `rm`'s is, so it names the general remedy and leaves the specific one to the
+# path in the message.
+[[verb]]
+verb = "Write"
+effect = "write"
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `write_memory`, which enforces the size ceiling and the `mem:` reference rewrite a direct write skips"
+
+[[verb]]
+verb = "Edit"
+effect = "write"
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `edit_memory`"
+
+[[verb]]
+verb = "MultiEdit"
+effect = "write"
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `edit_memory`"
+
+[[verb]]
+verb = "NotebookEdit"
+effect = "write"
+redirect = "change the file through the surface that owns it"
+
 # The governing config surface, hashed into `batten config epoch` (CLOUD-32).
 #
 # This list is consumer-specific ON PURPOSE, and it lives here rather than in
