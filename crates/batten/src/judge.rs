@@ -1018,12 +1018,15 @@ mod tests {
     fn a_judge_row_with_no_table_or_no_run_cannot_resolve_a_command() {
         // Both spellings of "there is nothing to ask", and both name the row —
         // a config error has to point at the line that changes.
-        for judge in [None, Some(&Judge {
-            raw: Vec::new(),
-            max_payload_bytes: None,
-            run: None,
-            model: None,
-        })] {
+        for judge in [
+            None,
+            Some(&Judge {
+                raw: Vec::new(),
+                max_payload_bytes: None,
+                run: None,
+                model: None,
+            }),
+        ] {
             let err = argv("r", judge).expect_err("no run is a usage error");
             assert!(err.to_string().contains("rule r"), "{err}");
         }
@@ -1043,7 +1046,10 @@ mod tests {
 
     #[test]
     fn the_model_is_substituted_wherever_the_placeholder_appears() {
-        let judge = runner("stub --model {{model}} --also={{model}}", Some("some-model"));
+        let judge = runner(
+            "stub --model {{model}} --also={{model}}",
+            Some("some-model"),
+        );
         assert_eq!(
             argv("r", Some(&judge)).unwrap(),
             ["stub", "--model", "some-model", "--also=some-model"]
@@ -1087,7 +1093,8 @@ mod tests {
         // is the fixture here (not how a judge row is invoked — `invoke` never
         // uses a shell) because it can assert on stdin and choose an exit code.
         let payload = b"PAYLOAD-SENTINEL-crossed-on-stdin";
-        let script = "read -r line; case \"$line\" in *PAYLOAD-SENTINEL*) exit 2;; *) exit 9;; esac";
+        let script =
+            "read -r line; case \"$line\" in *PAYLOAD-SENTINEL*) exit 2;; *) exit 9;; esac";
         let argv = vec!["sh".to_owned(), "-c".to_owned(), script.to_owned()];
         assert_eq!(
             invoke("r", &argv, payload).unwrap(),

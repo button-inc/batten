@@ -1176,7 +1176,10 @@ fn run_judges(
             continue;
         };
         let criteria = rule.criteria.clone().unwrap_or_default();
-        let matched: Vec<&String> = files.iter().filter(|path| rules::glob_match(glob, path)).collect();
+        let matched: Vec<&String> = files
+            .iter()
+            .filter(|path| rules::glob_match(glob, path))
+            .collect();
         // No match is no question: a judge asked about nothing would spend a
         // metered model call to be told so. The glob is a gate before it is a
         // payload source, the same reading `run_rule` gives a command row.

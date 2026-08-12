@@ -2560,7 +2560,9 @@ mod tests {
                         // `blank` already sets one; naming it here keeps the
                         // census total now that it is a per-kind column.
                         "severity" => rule.severity = Some(RuleSeverity::Deny),
-                        "criteria" => rule.criteria = Some("does this read as intentional".to_owned()),
+                        "criteria" => {
+                            rule.criteria = Some("does this read as intentional".to_owned())
+                        }
                         "no_fix_reason" => rule.no_fix_reason = Some("answered by hand".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
                     }
@@ -2695,7 +2697,10 @@ mod tests {
         // a finding at all", and it is exactly what `run_rule` acts on. This is
         // the walker-side half of "a judge outcome is never a Finding".
         let rule = blank("j", RuleKind::Judge);
-        assert_eq!(rule.severity, None, "the column is refused, so it is absent");
+        assert_eq!(
+            rule.severity, None,
+            "the column is refused, so it is absent"
+        );
         assert_eq!(rule.severity(), RuleSeverity::Allow);
     }
 

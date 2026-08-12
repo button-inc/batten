@@ -155,7 +155,11 @@ fn a_judge_that_raises_cannot_move_the_exit_code() {
     assert_pointer_only(&output);
 
     let records = stored(&repo, &home);
-    assert_eq!(records.len(), 1, "the raise is recorded, it just cannot block");
+    assert_eq!(
+        records.len(),
+        1,
+        "the raise is recorded, it just cannot block"
+    );
     assert_eq!(records[0]["rule"].as_str(), Some(RULE));
 }
 
