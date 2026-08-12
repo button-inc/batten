@@ -265,22 +265,31 @@ teardown() {
 	# nothing, `took` comes back empty and the row FAILS loudly — the one
 	# outcome a silently-empty duration assertion never produces.
 	#
-	# HONEST RESIDUAL, because a smaller wall clock is still a wall clock: both
-	# ends of this delta are instants on one clock, so a deschedule landing
-	# between the expiry and the winning probe still inflates it. The window is
-	# strictly smaller than `$SECONDS` spanned — it starts at the expiry rather
-	# than at the retry loop — and that is all it is. It is not a proof. Closing
-	# it needs `acquire` to report the number of PROBES it spent, which is a
-	# count on no clock at all; that stays open on CLOUD-450.
+	# THE RESIDUAL IS CLOSED, AND THE WALL CLOCK IS GONE (CLOUD-450). This used to
+	# grade `took` — seconds between the previous holder's expiry and the steal —
+	# and both ends of that delta are instants on one clock, so a deschedule
+	# landing between them inflated it. Under the parallel runner that fired on
+	# roughly 2 of every 4 `verify` runs, and it blocked CLOUD-274's landing
+	# directly: `land` refused to push on a `verify` whose only failure was this
+	# case, behaving exactly as designed over a signal that was wrong. A flaky
+	# gate is a bypassed gate.
+	#
+	# The promise was never really about seconds. "A dead lease costs one extra
+	# beat" IS "the steal lands on the FIRST post-expiry probe", and `acquire` now
+	# reports that count — a quantity no amount of load can move. The seconds stay
+	# in the sentence because they are what a human reads; nothing grades them.
 	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 LAND_LOCK_WAIT=30 run lock "$MINE" acquire
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"took the lease"* ]]
-	took=$(printf '%s\n' "$output" |
-		sed -n 's/.*took the lease \([0-9][0-9]*\)s after .*stopped holding it.*/\1/p')
-	[ -n "$took" ] ||
-		bail "acquire reported no steal delta in the shape this row parses, so the sentence in land-lock moved and this assertion silently stopped grading anything (CLOUD-450): $output"
-	[ "$took" -lt 6 ] ||
-		bail "acquire took ${took}s from the previous holder's expiry to the steal, against a promise of one extra beat (CLOUD-433/CLOUD-450): $output"
+	probes=$(printf '%s\n' "$output" |
+		sed -n 's/.*probes since expiry: \([0-9][0-9]*\).*/\1/p')
+	# Anchored on words on both sides of the number, for the reason the header
+	# above gives: a reworded sentence must match NOTHING and fail loudly, never
+	# match something else and grade it silently.
+	[ -n "$probes" ] ||
+		bail "acquire reported no probe count in the shape this row parses, so the sentence in land-lock moved and this assertion silently stopped grading anything (CLOUD-450): $output"
+	[ "$probes" -eq 1 ] ||
+		bail "acquire spent $probes probes on an expired lease, against a promise of one (CLOUD-433/CLOUD-450): $output"
 }
 
 @test "a released lease is not still held by its releaser" {

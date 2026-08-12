@@ -557,6 +557,10 @@ acquire)
 	done
 	delay=2
 	[ "$delay" -le "$cap" ] || delay="$cap"
+	# CLOUD-450: how many observations this acquire spent looking at an EXPIRED
+	# lease before it won. A count, on no clock, so the suite can assert the
+	# "one extra beat" promise without grading wall time on a loaded runner.
+	post_expiry_probes=0
 	while :; do
 		observe || exit 2
 		# Record the sighting on EVERY observation, not only once expired
@@ -572,6 +576,11 @@ acquire)
 		# sooner than the design intends.
 		held_for=0
 		[ -z "$observed_sha" ] || held_for=$(sha_held_for)
+		# Counted here, where every observation passes, so it measures probes and
+		# not loop iterations that skipped the read (CLOUD-450).
+		if [ -n "$observed_sha" ] && expired; then
+			post_expiry_probes=$((post_expiry_probes + 1))
+		fi
 		if mine && ! expired; then
 			echo "land-lock: already held by this clone"
 			exit 0
@@ -599,7 +608,21 @@ acquire)
 					# Seconds since the previous holder's expiry, computed here
 					# rather than through `age`: that helper measures a lease
 					# against OUR ttl, not the one its last holder ran under.
-					echo "land-lock: took the lease $(($(now) - observed_expires))s after $observed_holder stopped holding it"
+					# THE PROBE COUNT IS THE HONEST QUANTITY (CLOUD-450). The
+					# seconds are kept because they are what a human reads, but
+					# both ends of that delta are instants on one clock, so a
+					# deschedule between the expiry and the winning probe inflates
+					# it — which made `tests/land-lock.bats`'s duration assertion
+					# a wall clock that failed under the parallel runner ~2 runs
+					# in 4, and a flaky gate is a bypassed gate.
+					#
+					# `probes` counts the observations this acquire spent after
+					# the lease expired. It is a count on no clock at all, so a
+					# loaded box cannot move it: the promise "a dead lease costs
+					# one extra beat" is exactly "the steal lands on the FIRST
+					# post-expiry probe", and that is now stated rather than
+					# inferred from elapsed time.
+					echo "land-lock: took the lease $(($(now) - observed_expires))s after $observed_holder stopped holding it (probes since expiry: $post_expiry_probes)"
 				else
 					echo "land-lock: acquired by $(holder_id), ${ttl}s lease"
 				fi
