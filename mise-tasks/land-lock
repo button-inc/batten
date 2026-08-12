@@ -91,6 +91,23 @@
 # cannot read stops every job in the fleet, where waving one matrix through costs
 # one matrix.
 #
+# WHO MAY SPEND THE SECOND RUNNER (CLOUD-369). The lease bounds confirming runs
+# at one, which is right for cost and wrong for latency: after every merge the
+# queue is empty and the next branch starts cold. `next:` names ONE admitted
+# successor, written by the waiter itself through `reserve` — the holder cannot
+# name one, since waiters are registered nowhere — and `authorises` admits it
+# alongside the holder. The bound is therefore two, enforced at the runner rather
+# than merely agreed between cooperating sessions, and it does not grow with the
+# fleet: one CAS-guarded slot cannot hold two branches.
+#
+# `head:` is the third advisory field, and it is what makes WAITING productive:
+# it names the commit that is about to become `main`, so a waiter can rebase onto
+# the trunk that is coming rather than onto the one the holder is about to
+# replace. All three — `branch:`, `head:`, `next:` — are read by CI and by
+# waiters, and by no predicate that decides ownership. `mine` compares holder ids
+# and nothing else; an identity another clone could DERIVE is one it could
+# accidentally claim.
+#
 # Output is pointer-only (non-negotiable 4): a holder id and an age in seconds,
 # never a ref body. Exit codes follow the one contract: 0 acquired/held, 1 held
 # by someone else, 2 could not look — plus 3 from `authorises` alone, for "stop",
@@ -111,8 +128,16 @@ authorises)
 		exit 2
 	fi
 	;;
+reserve)
+	# Takes the branch reserving, for the same reason `authorises` does: the
+	# caller may be reserving on behalf of a checkout this process is not in.
+	if [ -z "${2:-}" ]; then
+		echo "::error:: usage: land-lock reserve <branch>" >&2
+		exit 2
+	fi
+	;;
 *)
-	echo "::error:: usage: land-lock <acquire|hold|renew|held|release|status|authorises>" >&2
+	echo "::error:: usage: land-lock <acquire|hold|renew|held|release|status|authorises|reserve>" >&2
 	exit 2
 	;;
 esac
@@ -139,6 +164,29 @@ wait_for="${LAND_LOCK_WAIT:-$ttl}"
 # bare clone) and must never become the string "HEAD".
 land_branch="${LAND_LOCK_LAND_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)}"
 [ "$land_branch" != HEAD ] || land_branch=
+
+# THE HEAD THIS LEASE IS LANDING (CLOUD-369). `branch:` says who may spend a
+# matrix; `head:` says what the next `main` is about to be, which is the thing a
+# WAITER needs. A waiter that rebases onto `origin/main` warms nothing — the
+# holder is about to replace it — so pre-warming is only a linearization when it
+# targets the commit that is about to become trunk.
+#
+# Advisory exactly like `branch:`: read by a waiter deciding what to rebase onto,
+# never by any predicate that decides ownership. `mine` still compares holder ids
+# and nothing else, and that separation is load-bearing — an identity another
+# clone could DERIVE (from a branch, a head, an issue key) is an identity another
+# clone could accidentally claim, which is the two-holders bug this file exists
+# to prevent.
+land_head="${LAND_LOCK_LAND_HEAD:-$(git rev-parse HEAD 2>/dev/null || true)}"
+
+# THE ADMITTED SUCCESSOR (CLOUD-369). A branch that has reserved the right to
+# spend the SECOND matrix — the one that overlaps the holder's merge instead of
+# starting cold after it. Empty on every lease until a waiter reserves.
+#
+# Carried through every mint rather than re-derived, because the holder's
+# heartbeat re-mints the lease every beat and a field it did not carry forward
+# would be erased within 30 seconds of being written by someone else.
+land_next="${LAND_LOCK_LAND_NEXT:-}"
 
 git rev-parse --git-dir >/dev/null 2>&1 || {
 	echo "::error:: land-lock: not a git repository" >&2
@@ -204,9 +252,22 @@ mint() {
 	# added expressiveness. `nonce:` stays LAST: its uniqueness argument above is
 	# what makes every mint a distinct sha, and `land-lock-check`'s fixture
 	# treats it as the terminal line.
-	printf 'land-lock\nholder: %s\nexpires: %s\nbranch: %s\nnonce: %s\n' \
-		"$(holder_id)" "$([ "${1:-}" = 0 ] && echo 0 || echo "$(($(now) + ${1:-$ttl}))")" \
-		"$land_branch" \
+	# `head:` and `next:` join `branch:` as ADVISORY fields, on the same terms:
+	# read by a waiter and by CI, never by an ownership predicate. They sit
+	# between `branch:` and `nonce:` so the nonce stays terminal.
+	#
+	# Every one of the five is overridable through a `mint_*` global, and that is
+	# what `reserve` needs rather than a convenience: a waiter appending itself as
+	# `next:` must re-mint the HOLDER's lease — its holder, its expiry, its branch,
+	# its head — changing one field and nothing else. Without the overrides that
+	# path would have to duplicate this printf, and a second writer of the lease
+	# body is precisely where a divergence from `observe` would be invisible.
+	printf 'land-lock\nholder: %s\nexpires: %s\nbranch: %s\nhead: %s\nnext: %s\nnonce: %s\n' \
+		"${mint_holder:-$(holder_id)}" \
+		"${mint_expires:-$([ "${1:-}" = 0 ] && echo 0 || echo "$(($(now) + ${1:-$ttl}))")}" \
+		"${mint_branch:-$land_branch}" \
+		"${mint_head:-$land_head}" \
+		"${mint_next:-$land_next}" \
 		"$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')" |
 		GIT_AUTHOR_NAME=batten GIT_AUTHOR_EMAIL=batten@localhost \
 			GIT_COMMITTER_NAME=batten GIT_COMMITTER_EMAIL=batten@localhost \
@@ -217,6 +278,8 @@ observed_sha=
 observed_holder=
 observed_expires=
 observed_branch=
+observed_head=
+observed_next=
 # Reads the remote lease, leaving the three `observed_*` empty when it is absent.
 # Exit 2 is reserved for "could not look" — an unreachable remote must never read
 # as an unheld lock, since that is precisely the misread that would let two
@@ -230,6 +293,8 @@ observe() {
 	# same process is the FETCH_HEAD-class misread the comment below describes,
 	# reached through a variable instead of a file.
 	observed_branch=
+	observed_head=
+	observed_next=
 	ls=$(git ls-remote "$remote" "$ref" 2>/dev/null) || {
 		echo "::error:: land-lock: cannot reach $remote; read mem:github-access before concluding the network is blocked." >&2
 		return 2
@@ -273,6 +338,12 @@ observe() {
 	# `authorises` treats it as "cannot tell" — which fails OPEN, since failing
 	# closed on an unreadable lease would stop every PR in the fleet.
 	observed_branch=$(printf '%s\n' "$body" | sed -n 's/^branch: //p')
+	# Absent on every lease minted before CLOUD-369, exactly as `branch:` is
+	# absent on every lease minted before CLOUD-420. Empty is a reading, not a
+	# failure: a waiter that cannot learn the head speculates on `origin/main`
+	# instead, and `authorises` admits nobody as `next` when none is named.
+	observed_head=$(printf '%s\n' "$body" | sed -n 's/^head: //p')
+	observed_next=$(printf '%s\n' "$body" | sed -n 's/^next: //p')
 	# A lease we cannot parse is one we do not understand, and treating it as
 	# free would be the same misread as an unreachable remote. Give it a full
 	# TTL from now so it is respected until it ages out, never ignored.
@@ -502,6 +573,17 @@ acquire)
 renew)
 	observe || exit 2
 	{ [ -n "$observed_sha" ] && mine; } || exit 1
+	# CARRY THE RESERVATION FORWARD (CLOUD-369). A renewal re-mints the whole
+	# body, so a `next:` written by a waiter between two beats would be erased
+	# within 30 seconds of being written — by the holder, silently, and the
+	# admitted successor would then be cancelled by CI mid-run.
+	#
+	# Renew and hold carry it; ACQUIRE DELIBERATELY DOES NOT. A fresh acquire is
+	# a new turn, and the previous holder's successor has already had its
+	# admission — carrying it forward would authorise a third branch, then a
+	# fourth, and the bound this whole design rests on would drift upward one
+	# handover at a time.
+	land_next="$observed_next"
 	swap "$observed_sha" || exit 1
 	exit 0
 	;;
@@ -545,10 +627,14 @@ hold)
 			# that, and pretending otherwise is how two sessions both comment.
 			echo "land-lock: lease lost to $observed_holder"
 			exit 1
-		elif swap "$observed_sha"; then
-			misses=0
-			continue
 		else
+			# Carry the reservation across the beat. See `renew` for why this is
+			# carried here and deliberately cleared on acquire.
+			land_next="$observed_next"
+			if swap "$observed_sha"; then
+				misses=0
+				continue
+			fi
 			misses=$((misses + 1))
 		fi
 		[ "$misses" -lt 3 ] || {
@@ -631,7 +717,16 @@ status)
 		echo "land-lock: unheld — last held by $observed_holder, free for $(($(now) - observed_expires))s"
 		exit 0
 	fi
-	echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left"
+	# The successor is named when there is one, because "who else may be spending
+	# a matrix right now" is the question a reader of this verb is actually
+	# asking, and a bound of two that reports as a bound of one is the kind of
+	# gap between mechanism and diagnosis this file keeps closing. Pointer-only
+	# still: a ref name, never a body.
+	if [ -n "$observed_next" ]; then
+		echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left, $observed_next admitted behind it"
+	else
+		echo "land-lock: held by $observed_holder, $((observed_expires - $(now)))s left"
+	fi
 	mine && exit 0
 	exit 1
 	;;
@@ -678,10 +773,91 @@ authorises)
 		echo "land-lock: the lease authorises $want"
 		exit 0
 	fi
+	# THE ADMITTED SUCCESSOR (CLOUD-369), and the reason the bound is two rather
+	# than one. A branch that reserved the slot behind this holder is buying the
+	# matrix that overlaps the holder's merge — so stopping it here would cancel
+	# the very run the reservation exists to start, and the queue would be cold
+	# again with the mechanism intact and useless.
+	#
+	# Exactly one, by construction: `reserve` fills the slot with a CAS, so the
+	# lease can name one successor and never two. Nothing here counts, compares
+	# ages or breaks ties — the field is either this branch or it is not.
+	if [ -n "$observed_next" ] && [ "$observed_next" = "$want" ]; then
+		echo "land-lock: the lease authorises $want as the successor behind $observed_branch"
+		exit 0
+	fi
 	# Pointer-only (non-negotiable 4): the holder's branch is a ref name the
 	# caller could read for itself, and naming it is what makes a stopped run
 	# diagnosable rather than mysterious. No lease body, no expiry arithmetic.
 	echo "land-lock: the lease authorises $observed_branch, not $want"
 	exit 3
+	;;
+
+reserve)
+	# CLOUD-369. THE SECOND MATRIX, AND THE ONLY ONE. The lease bounds confirming
+	# runs at one, which is correct for cost and wrong for latency: after every
+	# merge the queue is empty, and the next branch starts cold — a rebase, a
+	# `verify` and a full matrix — before `main` can move again. Admitting one
+	# successor while the holder is still merging is what overlaps that window.
+	#
+	# THE WAITER WRITES IT, NOT THE HOLDER, and that is forced rather than
+	# chosen: waiters are not registered anywhere, so the holder has no way to
+	# name one. A waiter appending itself is also what makes the slot a RACE with
+	# exactly one winner — the same CAS that makes the lease itself safe, used for
+	# a second, smaller decision.
+	#
+	# IT IS NOT A CLAIM ON THE LEASE. Every other field of the holder's lease is
+	# re-minted verbatim: its holder id, its expiry, its branch, its head. The
+	# holder keeps holding, its heartbeat carries the new field forward, and
+	# `mine` — which compares holder ids and nothing else — still answers for the
+	# holder. A reservation that moved the holder id would be a steal wearing a
+	# different name.
+	want="$2"
+	if ! observe; then
+		echo "::error:: land-lock: cannot read the lease to reserve behind it" >&2
+		exit 2
+	fi
+	# Nothing to reserve behind. Not an error: a free lease means the caller
+	# should be ACQUIRING, and reporting that is more useful than a refusal.
+	if [ -z "$observed_sha" ] || released || expired; then
+		echo "land-lock: no lease is held; acquire rather than reserve"
+		exit 1
+	fi
+	# Reserving behind yourself would authorise your own branch twice and admit
+	# nobody, which is worse than doing nothing: it consumes the one slot.
+	if [ "$observed_branch" = "$want" ]; then
+		echo "land-lock: $want already holds the lease; nothing to reserve"
+		exit 1
+	fi
+	# The slot is taken. Idempotent for the branch that already holds it, so a
+	# waiter re-reserving each lap is a read rather than a churn of the ref.
+	if [ -n "$observed_next" ]; then
+		if [ "$observed_next" = "$want" ]; then
+			echo "land-lock: $want is already the admitted successor"
+			exit 0
+		fi
+		echo "land-lock: $observed_next is already the admitted successor, not $want"
+		exit 1
+	fi
+	# Re-mint the holder's lease with one field added. The `mint_*` overrides are
+	# what keep this a single writer of the body: without them this path would
+	# carry its own copy of the printf, and a copy is where a field silently
+	# stops matching what `observe` reads.
+	#
+	# `mint_expires` is the holder's own instant, NOT recomputed — a reservation
+	# must not extend somebody else's lease, and recomputing it here would hand
+	# the holder a fresh TTL every time a waiter arrived.
+	if mint_holder="$observed_holder" mint_expires="$observed_expires" \
+		mint_branch="$observed_branch" mint_head="$observed_head" \
+		mint_next="$want" swap "$observed_sha"; then
+		echo "land-lock: $want admitted as the successor behind $observed_branch"
+		exit 0
+	fi
+	# Lost the CAS: the holder's heartbeat re-minted, or another waiter took the
+	# slot first. Either way this is an ordinary loss, and the caller's next lap
+	# re-reads and re-decides — no retry here, for the same reason `acquire`
+	# does not retry inside its own CAS.
+	echo "land-lock: could not reserve behind $observed_branch; the lease moved"
+	exit 1
 	;;
 esac
