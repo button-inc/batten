@@ -241,6 +241,20 @@ case "\$2" in
       trap '' TERM
       echo "\$\$" >>"$BATS_TEST_TMPDIR/stubborn.pids"
     fi
+    # THE VERIFY RACE IS SYNCHRONISED, NOT HOPED FOR (CLOUD-426's class, in the
+    # case CLOUD-423 added). Whichever way this watcher is about to answer, it
+    # answers only once the verify it races has registered itself — otherwise
+    # \`land\` group-kills a verify child that has not yet appended its call, the
+    # lap that follows counts one verify instead of two, and the case fails on a
+    # loaded box while passing on an idle one. Measured: it went red inside a
+    # full parallel gate and passed standalone. Bounded, and it waits for a real
+    # event rather than a guessed interval.
+    if [ "\${LAND_RACE:-}" = verify ]; then
+      for _ in \$(seq 200); do
+        grep -q '^run verify\$' "$BATS_TEST_TMPDIR/misecalls" && break
+        sleep 0.05
+      done
+    fi
     # CLOUD-423's no-verdict lever: the verify-race watcher dying without an
     # answer, once, so the lap that follows re-proves instead of guessing.
     if [ "\${LAND_RACE:-}" = verify ] && [ -f "$BATS_TEST_TMPDIR/vwatch.fail" ]; then
