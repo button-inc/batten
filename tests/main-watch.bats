@@ -8,6 +8,9 @@
 # poller is affordable, untested.
 
 setup() {
+	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
+	# tools a stock macOS does not ship (CLOUD-282).
+	load helpers
 	WATCH="$BATS_TEST_DIRNAME/../mise-tasks/main-watch"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
@@ -70,7 +73,7 @@ not_modified() {
 	# the running `sleep` returns, so a TERM would make every blocking case here
 	# cost a full poll interval to end.
 	ref_response resp.last aaaaaaaaaaaaaaaa
-	run timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
+	run run_timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
 	[ "$status" -eq 137 ] || {
 		echo "expected the watch to still be blocking, exited $status"
 		return 1
@@ -86,7 +89,7 @@ not_modified() {
 	ref_response resp.1 aaaaaaaaaaaaaaaa '"etag-one"'
 	not_modified resp.2
 	ref_response resp.last aaaaaaaaaaaaaaaa '"etag-one"'
-	run timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
+	run run_timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
 	[[ "$(sed -n '1p' "$BATS_TEST_TMPDIR/requests")" != *"If-None-Match"* ]]
 	[[ "$(sed -n '2p' "$BATS_TEST_TMPDIR/requests")" == *"If-None-Match: \"etag-one\""* ]]
 }
@@ -97,7 +100,7 @@ not_modified() {
 	# movement on every unchanged poll and lap forever.
 	ref_response resp.1 aaaaaaaaaaaaaaaa
 	not_modified resp.last
-	run timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
+	run run_timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
 	[ "$status" -eq 137 ]
 	[[ "$output" != *"moved"* ]]
 }
@@ -107,7 +110,7 @@ not_modified() {
 	not_modified resp.2
 	not_modified resp.3
 	ref_response resp.last cccccccccccccccc
-	run timeout -s KILL 8 "$WATCH" aaaaaaaaaaaaaaaa
+	run run_timeout -s KILL 8 "$WATCH" aaaaaaaaaaaaaaaa
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"-> cccccccc"* ]]
 }
@@ -118,7 +121,7 @@ not_modified() {
 	# have finished several polls inside.
 	ref_response resp.1 aaaaaaaaaaaaaaaa '"abc"' "X-Poll-Interval: 9"
 	ref_response resp.last dddddddddddddddd
-	run timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
+	run run_timeout -s KILL 3 "$WATCH" aaaaaaaaaaaaaaaa
 	[ "$status" -eq 137 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -eq 1 ]
 }
@@ -128,7 +131,7 @@ not_modified() {
 	# single failed request must not abandon the lap.
 	printf 'boom' >"$BATS_TEST_TMPDIR/resp.1"
 	ref_response resp.last eeeeeeeeeeeeeeee
-	run timeout -s KILL 8 "$WATCH" aaaaaaaaaaaaaaaa
+	run run_timeout -s KILL 8 "$WATCH" aaaaaaaaaaaaaaaa
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"-> eeeeeeee"* ]]
 }

@@ -33,6 +33,9 @@
 # skip is only real if `verified` answers from what `verify` actually left.
 
 setup() {
+	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
+	# tools a stock macOS does not ship (CLOUD-282).
+	load helpers
 	REAL_LAND="$BATS_TEST_DIRNAME/../mise-tasks/land"
 	# CLOUD-434: the program under test launches with bats' fd 3 closed, in ONE
 	# place rather than at every call site. A backgrounded descendant that
@@ -1022,7 +1025,9 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	local out="$BATS_TEST_TMPDIR/still-waiting" rc=0
 	# `|| rc=$?` because a bats body aborts on a non-zero command, and a timeout
 	# is the result this case is asserting rather than a failure of it.
-	timeout -k 1 5 "$LAND" >"$out" 2>&1 || rc=$?
+	# `run_timeout` is tests/helpers.bash's shim: stock macOS ships no `timeout`
+	# (CLOUD-282), and this case is the one that most needs it to exist.
+	run_timeout -k 1 5 "$LAND" >"$out" 2>&1 || rc=$?
 	# 124 OR 137 (CLOUD-464). Both are `timeout` saying "the command did not
 	# finish", which is the whole property here; what separates them is machine
 	# load, not behaviour. GNU `timeout` returns 124 when the process dies from

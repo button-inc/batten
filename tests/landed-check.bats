@@ -13,12 +13,30 @@
 setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/landed-check"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
-	git init -q "$REPO"
+	# The developer's global git config must not reach a fixture repo
+	# (CLOUD-282). `init.defaultBranch=main` is the leak this suite tripped on —
+	# git refuses `branch -f` on the CHECKED-OUT branch, so a machine configured
+	# the modern way failed every test in the file at setup, while CI passed only
+	# because the runner's git still defaults to `master`. `commit.gpgsign` is
+	# the same shape. crates/batten/tests/common/mod.rs:184-185 already does this.
+	export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+	# `-b work`, so the checked-out branch is NAMED rather than inherited. The
+	# `main` created below is a second branch marking the trunk while HEAD stays
+	# on the feature branch — that topology is what these cases exercise — and
+	# the force-create this replaces could only ever build it by accident: it
+	# works while git's default is `master`, and git REFUSES to force the branch
+	# that is currently checked out, so the same line failed outright the moment
+	# a developer's default was the trunk's own name. Naming the branch makes the
+	# topology explicit instead of inheriting it, and `main` is then a fresh name
+	# needing no force at all. `no-branch-f-main` in batten.toml keeps the old
+	# form out; the literal is not spelled here, because that row is a substring
+	# rule over this directory and would fire on its own explanation.
+	git init -q -b work "$REPO"
 	cd "$REPO" || return 1
 	git config user.email t@t
 	git config user.name t
 	git commit -q --allow-empty -m "chore: init"
-	git branch -f main
+	git branch main
 	git update-ref refs/remotes/origin/main main
 }
 

@@ -10,6 +10,9 @@
 # matching the workflows.
 
 setup() {
+	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
+	# tools a stock macOS does not ship (CLOUD-282).
+	load helpers
 	WAIT="$BATS_TEST_DIRNAME/../mise-tasks/ci-wait"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
@@ -60,7 +63,7 @@ response() {
 	stub_gh
 	response resp.1 'W/"a"' '{"check_runs":[{"status":"completed","conclusion":"skipped","name":"ci"}]}'
 	response resp.last 'W/"b"' '{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}'
-	run timeout 20 "$WAIT"
+	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
 }
@@ -81,7 +84,7 @@ response() {
           {"status":"completed","conclusion":"skipped","name":"darwin-link (aarch64-apple-darwin)"}]}'
 	response resp.last 'W/"b"' '{"check_runs":[
           {"status":"completed","conclusion":"success","name":"ci"}]}'
-	run timeout 20 "$WAIT"
+	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
 	# And it says what it is waiting on, as a pointer rather than a log.
@@ -129,7 +132,7 @@ response() {
           {"status":"in_progress","conclusion":null,"name":"ci"}]}'
 	response resp.last 'W/"b"' '{"check_runs":[
           {"status":"completed","conclusion":"success","name":"ci"}]}'
-	run timeout 20 "$WAIT"
+	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
 }
@@ -162,7 +165,7 @@ response() {
 	response resp.1 'W/"a"' '{"check_runs":[{"status":"in_progress","conclusion":null,"name":"ci"}]}'
 	printf 'HTTP/2.0 304 Not Modified\nETag: W/"a"\n\n' >"$BATS_TEST_TMPDIR/resp.2"
 	response resp.last 'W/"b"' '{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}'
-	run timeout 20 "$WAIT"
+	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 3 ]
 }
