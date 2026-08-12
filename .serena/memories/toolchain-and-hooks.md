@@ -214,6 +214,41 @@ list element are all the same substitution. `run-shape-guard` covers the whole
 verdict-bearing family — `mise run`, `git push`/`fetch`/`rebase`, mutating
 `gh pr`, and `cargo` — not just `mise run`.
 
+### Ask a running task; never poll for it
+
+A third habit destroys the same interface from the other end. Once a task is
+backgrounded, **its exit already re-invokes the session with its status** — so a
+wait built to detect that exit is a duplicate of a guaranteed event. It cannot
+fire earlier and cannot carry more information:
+
+```
+until ! pgrep -f "mise run land" >/dev/null; do sleep 15; done   # never this
+```
+
+Measured 2026-08-12: one session had **nine** of these live at once — four
+shadowing `verify`, two `land`, one a merge, one `bats` — a hand-rolled
+re-implementation of the notification the harness was already going to deliver.
+`run-shape-guard` permits it today (CLOUD-482 carved out backgrounded `until`
+loops for genuine external-state waits; CLOUD-489 narrows that to exclude polling
+one's own child).
+
+For "is it still going, and where is it", the answer is **`mise run alive`**
+(CLOUD-425) — one call, one line per task, no log reading:
+
+```
+land ci-wait(lap 0) 9170 1066s
+```
+
+Task, phase, pid, seconds. It beats `pgrep -f` on correctness, not just on
+manners: `pgrep -f` matches a command-line substring, so in a container with
+sibling sessions it answers "some process matches this string", which is not the
+question. A registered task whose process is gone reports `crashed`, which is the
+state worth knowing and the one no `pgrep` can express.
+
+The shape to internalise: **for a task this session started, waiting is free and
+automatic; asking is one call; inferring from the outside is always the wrong
+third option.**
+
 ### Do not hand-roll a waiter for work the harness already supervises
 
 A third habit, same root, no green failure — it just hangs. Backgrounding a
