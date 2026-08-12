@@ -508,6 +508,14 @@ head_runs_cancelled() {
 	printf '{"workflow_runs":[{"id":4242,"status":"completed","conclusion":"cancelled"}]}' \
 		>"$BATS_TEST_TMPDIR/headruns"
 }
+
+# CLOUD-470: the lease says STOP for this branch. `land-lock authorises` is the
+# ONE authority on "was this run declined" — the same verb the runner's own
+# precondition consults — so the declination is scripted through its exit code
+# (3 = stop) rather than through a second reading of the run list. Swapping the
+# raw `conclusion == "cancelled"` read for this is the whole change; the rows
+# below assert the same behaviour they always did.
+lease_declines() { echo 3 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.authorises"; }
 cancels() { cat "$BATS_TEST_TMPDIR/cancels" 2>/dev/null || true; }
 # The push leaves the remote ref where it was, so no `synchronize` event fires
 # and nothing starts a run — the one shape that still needs the `--undo`.
@@ -833,7 +841,7 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	# with nothing broken. Measured: 11 of 13 open PRs carried a `land` predating
 	# the lease, so every one of those agents was sent to debug a disagreement
 	# that did not exist. Nothing local can fix it; the remedy is a rebase.
-	head_runs_cancelled
+	lease_declines
 	task_fails ci-wait
 	run "$LAND"
 	[ "$status" -eq 1 ]
@@ -841,6 +849,34 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[[ "$output" == *"git rebase origin/main"* ]]
 	[[ "$output" != *"verify and CI disagree"* ]]
 	[ "$(comments)" -eq 0 ]
+}
+
+@test "CLOUD-470: the declination is asked of land-lock, not re-derived" {
+	# THE MECHANISM, not the behaviour — the behaviour is the pair above. The Ready
+	# block is explicit that this "calls `land-lock authorises` or it is wrong",
+	# and the first cut answered the same question from a raw
+	# `conclusion == "cancelled"` read of the run list. Two authorities for one
+	# fact is the CLOUD-351 shape, where only the newer one decides.
+	#
+	# Structural, because the behavioural pair cannot tell the two implementations
+	# apart: both print the same message. This is what fails if the verb is swapped
+	# back out for a second predicate.
+	lease_declines
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[ "$(lock_calls authorises)" -ge 1 ]
+	run grep -c 'authorises' "$REAL_LAND"
+	[ "$output" -ge 1 ]
+	# And the raw fingerprint is gone: no second reading of the run list decides
+	# "declined". `cancel_own_run` still reads that endpoint for a different
+	# question — which runs are still in flight — so the assertion is on the
+	# conclusion literal, not on the endpoint.
+	#
+	# CODE ONLY. The comment above `declined_by_lease` names the predicate it
+	# replaced, which is the design record and must survive; a sensor that read it
+	# as the defect would pressure the next author to delete the explanation.
+	[ "$(grep -vE '^[[:space:]]*#' "$REAL_LAND" | grep -c 'conclusion == "cancelled"')" -eq 0 ]
 }
 
 @test "a verdict that could not be READ is not a red one" {
@@ -865,6 +901,52 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[[ "$output" == *"CI_REQUIRED_CHECKS is unset"* ]]
 	[ "$(ready_calls)" = "" ]
 	[ "$(comments)" -eq 0 ]
+}
+
+@test "CLOUD-376: an unset ANSWERED set stops rather than readying, for the same reason" {
+	# The second input `graded_runs` cannot compute, guarded in the same place and
+	# not inside the function: both call sites wrap it in `$( )`, so a `:?` abort
+	# there exits the SUBSHELL only and the lap continues with an empty reading —
+	# which both call sites read as "no graded run", the branch that fires the
+	# ready that spends a matrix. That is CLOUD-467's defect in a new variable, and
+	# it would have shipped with the refactor that introduced it.
+	CI_ANSWERED_CONCLUSIONS= run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CI_ANSWERED_CONCLUSIONS is unset"* ]]
+	[ "$(ready_calls)" = "" ]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "CLOUD-376: no conclusion name is written in mise-tasks outside the manifest" {
+	# The sensor on the property, in the shape `ci-local-parity` already uses for
+	# CI_REQUIRED_CHECKS. Without it this is a refactor that silently un-refactors:
+	# the next edit re-inlines a literal, the two readers drift again, and nothing
+	# notices until they compose into a wedge — which is precisely how CLOUD-363
+	# happened, and it was found by a human reading both files.
+	#
+	# `success` and `neutral` are exempt: they name GREEN, which is a narrower
+	# question than "is this an answer" and is not what the manifest declares.
+	#
+	# SCOPED TO THE TWO READERS THAT SHARE THE MANIFEST, and the exemption is
+	# stated rather than silent. `sonar-gate` judges ONE external check-run by
+	# name, deliberately outside `$CI_REQUIRED_CHECKS` (CLOUD-441) — a different
+	# roster answering a different question, so a literal there is not a second
+	# copy of this one and forcing it to share would couple two unrelated gates.
+	# CODE ONLY, for the reason the CLOUD-470 sensor gives: a comment naming the
+	# literal it removed is the design record, and a sensor that read it as the
+	# defect would pressure the next author to delete the explanation.
+	local leaked=""
+	for c in timed_out action_required cancelled; do
+		for f in mise-tasks/land mise-tasks/checks-green; do
+			[ "$(grep -vE '^[[:space:]]*#' "$BATS_TEST_DIRNAME/../$f" | grep -c "\"$c\"")" -eq 0 ] ||
+				leaked="$leaked $f:$c"
+		done
+	done
+	[ -z "$leaked" ] || {
+		echo "conclusion literals outside mise.toml [env]:$leaked"
+		echo "Declare them once in CI_ANSWERED_CONCLUSIONS; two hand-maintained lists is CLOUD-363."
+		return 1
+	}
 }
 
 @test "a rejected push stops rather than clobbering someone else's branch" {
@@ -1425,8 +1507,8 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# this assertion exists to prevent, reintroduced by the change that split the
 	# helper. `die_with` is matched on its code argument, which every call carries.
 	stops=$(grep -cE 'die "|die_with "?\$?[A-Za-z_]' "$REAL_LAND")
-	[ "$stops" -eq 21 ] || {
-		echo "land has $stops stopping conditions; this suite covers 21."
+	[ "$stops" -eq 22 ] || {
+		echo "land has $stops stopping conditions; this suite covers 22."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}

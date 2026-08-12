@@ -95,6 +95,12 @@
 #
 # Output is pointer-only per non-negotiable rule 4: a `<conclusion> <check>`
 # coordinate, never a run's log.
+#
+# MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
+# the script to a throwaway copy of this file must turn the named case RED.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT answered-catch-all|s/!(\$2 in isanswer) ? 3/0 ? 3/|CLOUD-376: AN UNKNOWN CONCLUSION HOLDS THE POLL OPEN
+
 set -uo pipefail
 
 fail_input() {
@@ -119,6 +125,14 @@ required="${CI_REQUIRED_CHECKS:-}"
 # not recoverable after the fact.
 absent_ok="${CI_ABSENT_OK_CHECKS:-}"
 
+# The conclusions that constitute an ANSWER, declared once in mise.toml [env] and
+# read by `land`'s `graded_runs` too (CLOUD-376). Fatal when unset for the same
+# reason the roster is: an empty set makes every conclusion an answer, which is
+# the false green in a new spelling.
+answered="${CI_ANSWERED_CONCLUSIONS:-}"
+[ -n "$answered" ] ||
+	fail_input "CI_ANSWERED_CONCLUSIONS is unset — run this through \`mise run checks-green\`, which is where the answered set is declared."
+
 sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
 
 # `${VAR+set}` rather than emptiness: an explicitly empty reading is a real
@@ -140,9 +154,11 @@ fi
 # One pass over the required subset. `|`-separated because a tab is IFS
 # whitespace and `read` collapses runs of it, which would shift an empty name
 # list into the wrong variable; no check-run name contains a pipe.
-reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$absent_ok" '
+reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$absent_ok" -v answered="$answered" '
 	BEGIN {
 		n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1
+		# CLOUD-376: one declared set, not a literal repeated here and in `land`.
+		m = split(answered, concls, ","); for (i = 1; i <= m; i++) isanswer[concls[i]] = 1
 		# An unset or empty $CI_ABSENT_OK_CHECKS splits into zero fields, so the
 		# tolerated set is empty and every roster name must be present. The
 		# strict direction is reached by construction here rather than by a
@@ -162,7 +178,7 @@ reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$a
 		# cancelled run judged nothing, so an unorderable pair holding one must
 		# fall to "no answer" rather than to red.
 		rank = ($1 != "completed") ? 4 : \
-			(($2 == "skipped" || $2 == "cancelled") ? 3 : (($2 == "success" || $2 == "neutral") ? 1 : 2))
+			(!($2 in isanswer) ? 3 : (($2 == "success" || $2 == "neutral") ? 1 : 2))
 		if (!(name in bestkey) || key > bestkey[name] ||
 			(key == bestkey[name] && rank > bestrank[name])) {
 			bestkey[name] = key
@@ -194,10 +210,17 @@ reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$a
 			# THE NOT-AN-ANSWER BUCKET, and `cancelled` belongs in it (CLOUD-363).
 			# A cancelled run is the ABSENCE of a verdict, exactly like a
 			# draft-era skip; reading it as red wedged #293 with no exit. The
-			# conclusion is carried beside the name because "no verdict" has two
-			# spellings, and a stall you cannot spell is a stall you cannot
-			# diagnose.
-			if (bestconcl[name] == "skipped" || bestconcl[name] == "cancelled") {
+			# conclusion is carried beside the name because "no verdict" has
+			# several spellings, and a stall you cannot spell is a stall you
+			# cannot diagnose.
+			#
+			# MEMBERSHIP, NOT A LITERAL PAIR (CLOUD-376). The old test named
+			# `skipped` and `cancelled` and let everything else fall through to
+			# red — so a conclusion GitHub adds tomorrow, which nobody has ever
+			# seen, would be reported as a verdict against a head it never
+			# judged. Not in the answered set now means "no answer", and the poll
+			# continues: recoverable, where a false red costs a re-draft and a lap.
+			if (!(bestconcl[name] in isanswer)) {
 				skipped = skipped sep3 name " " bestconcl[name]
 				sep3 = ", "
 				continue

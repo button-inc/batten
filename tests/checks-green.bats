@@ -220,6 +220,38 @@ mandatory_green() {
 	[[ "$output" == *"CI_REQUIRED_CHECKS is unset"* ]]
 }
 
+@test "CLOUD-376: an unset ANSWERED set is fatal for the same reason" {
+	# An empty answered set makes every conclusion an answer, which is the same
+	# false green in a new spelling — so the second shared manifest is guarded
+	# exactly as strictly as the first.
+	CHECKS_GREEN_RUNS="$(runs "completed	skipped	ci")" run env -u CI_ANSWERED_CONCLUSIONS "$GREEN"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"CI_ANSWERED_CONCLUSIONS is unset"* ]]
+}
+
+@test "CLOUD-376: AN UNKNOWN CONCLUSION HOLDS THE POLL OPEN — it is not red" {
+	# The case neither task could express before, and the one that proves the
+	# catch-all is gone. Red used to be defined by NEGATION: anything completed
+	# that was not skipped/cancelled/success/neutral fell through to a failure. So
+	# a conclusion GitHub adds tomorrow — `stale` here — would be reported as a
+	# verdict against a head nothing had judged, costing a re-draft and a lap.
+	#
+	# Not in $CI_ANSWERED_CONCLUSIONS now means "no answer": the poll continues,
+	# which is recoverable. Fail safe, in the direction this repo has repeatedly
+	# paid for getting backwards.
+	CHECKS_GREEN_RUNS="$(mandatory_green "completed	stale	ci	2026-08-12T01:00:00Z	99")" run "$GREEN"
+	[ "$status" -eq 3 ]
+	[[ "$output" != *"red"* ]]
+}
+
+@test "CLOUD-376: a known bad conclusion is still red — the anti-vacuity half" {
+	# Without this pair the change above could be "treat everything as no answer",
+	# which never reports a failure at all and would hang every red branch in the
+	# poll. `timed_out` is in the answered set and is not green.
+	CHECKS_GREEN_RUNS="$(mandatory_green "completed	timed_out	ci	2026-08-12T01:00:00Z	99")" run "$GREEN"
+	[ "$status" -eq 1 ]
+}
+
 # --- one name, one answer: the latest run (CLOUD-436) ------------------------
 #
 # A SHA accumulates a check-run per event, and a draft-created PR mints a whole

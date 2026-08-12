@@ -42,6 +42,12 @@
 # cleared that way: the only way to answer `turn:46` is to go look. The bare
 # question "Done?" is the same shape and is what surfaced nine real findings in
 # one session while carrying no information at all.
+#
+# MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
+# the script to a throwaway copy of this file must turn the named case RED.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT class-split-removed|s@^OPENS_A_ROW=.*@OPENS_A_ROW='save_'@|CLOUD-475: a COMMENT alone is not a home
+
 set -uo pipefail
 
 transcript=$(cat) || exit 2

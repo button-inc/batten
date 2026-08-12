@@ -113,6 +113,16 @@
 # by someone else, 2 could not look — plus 3 from `authorises` alone, for "stop",
 # which is a third answer the 0/1 pair cannot carry (1 already means "held by
 # someone else", a reason to stop rather than the instruction).
+#
+# MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
+# the script to a throwaway copy of this file must turn the named case RED.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#
+# The first row is the regression fixture CLOUD-418 names by hand: a lease that
+# refuses nobody is the fail-open posture taken one step too far, and it is the
+# whole point of the verb the runner spends money on.
+#MUTANT authorises-never-stops|s/^	exit 3$/	exit 0/|THE STOP: a branch the lease does not name is refused with exit 3
+
 set -euo pipefail
 
 verb="${1:-}"

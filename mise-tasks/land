@@ -86,6 +86,13 @@
 # `set -e` is off on purpose: this is a poll, and a transient `gh` failure must
 # cost one iteration rather than abort the landing. Every command whose failure
 # would change the verdict is guarded by hand instead.
+#
+# MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
+# the script to a throwaway copy of this file must turn the named case RED.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT exit-codes-collapse|s/^readonly LAND_EXIT_RUNAWAY=5$/readonly LAND_EXIT_RUNAWAY=4/|CLOUD-399: the two exhaustions are told apart by CODE
+#MUTANT declined-always|s/^\t\[ \"\$rc\" = 3 \]$/\ttrue/|red CI stops the lap without asking for the merge
+
 set -uo pipefail
 
 cd "${LAND_ROOT:-$(git rev-parse --show-toplevel)}" || exit 1
@@ -179,6 +186,13 @@ die() {
 # drift that pairing exists to prevent.
 [ -n "${CI_REQUIRED_CHECKS:-}" ] ||
 	die "CI_REQUIRED_CHECKS is unset — run this through \`mise run land\`, which is where the required set is declared. Readying a PR against an unknown roster would spend a matrix to answer a question this task could not ask."
+# The answered set is guarded HERE for exactly the same reason and in exactly the
+# same place (CLOUD-376, CLOUD-467): `graded_runs` reads it, both call sites wrap
+# that in `$( )`, and a `:?` abort inside a subshell exits the subshell only —
+# turning a fail-closed guard into an empty reading, which both call sites read as
+# "this head carries no graded run". That is the branch that fires the ready.
+[ -n "${CI_ANSWERED_CONCLUSIONS:-}" ] ||
+	die "CI_ANSWERED_CONCLUSIONS is unset — run this through \`mise run land\`, which is where the answered set is declared. An empty set makes every conclusion an answer, which is a false green in a new spelling."
 
 # Stopping on a red run without closing the tap is a leak this exists to plug:
 # CI skips drafts, so re-drafting is what stops the next push — from any source
@@ -590,16 +604,31 @@ cancel_own_run() {
 # exist. The runner already writes the right answer as an annotation; this is the
 # same answer carried back through the channel `land` actually speaks on.
 #
-# The fingerprint is the cancellation, on this head's own runs, read from the
-# endpoint `cancel_own_run` above already uses. FAILS OPEN to the red message on
-# any non-answer, and the asymmetry is deliberate: a wrong "nothing is broken"
-# costs a landing, a wrong "go debug this" costs a session.
-stopped_run() {
-	local n
-	n=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$1&per_page=30" \
-		--jq '[.workflow_runs[]? | select(.conclusion == "cancelled")] | length' 2>/dev/null) || return 1
-	case "$n" in '' | *[!0-9]* | 0) return 1 ;; esac
-	return 0
+# IT CALLS `land-lock authorises` OR IT IS WRONG. The first cut of this read the
+# run list for a raw `conclusion == "cancelled"`, which is a SECOND PREDICATE for
+# "this run was declined" — and two authorities for one fact is the CLOUD-351
+# shape, where only the newer one decides. `authorises` is what the runner itself
+# consults, so asking it here is asking the same question of the same oracle,
+# locally, on a path that is already stopping. It costs nothing on the hot loop.
+#
+# Its contract: 0 run / 3 stop / 2 could not look, fail-open everywhere it cannot
+# tell. Exit 3 is the declination, and it FAILS OPEN to the red message on
+# anything else — the asymmetry is deliberate, because a wrong "nothing is broken"
+# costs a landing while a wrong "go debug this" costs a session.
+#
+# WHAT THIS DELIBERATELY DOES NOT ANSWER, recorded rather than papered over.
+# `authorises` takes a BRANCH and answers about the lease as it is NOW: it has no
+# run id, no SHA and no history, so it cannot literally answer "was this concluded
+# run declined". That is sound for the population CLOUD-470 names — a stale agent
+# takes no lease, so when it reads red the lease authorises someone else and this
+# returns 3 — and for a current `land`, which holds its own lease and gets today's
+# message. What is genuinely lost is a `cancel-in-progress` cancellation, which
+# the raw read also caught; that is a superseded run, not a declined one, and the
+# lap that superseded it is the thing to look at.
+declined_by_lease() {
+	local rc=0
+	mise run land-lock authorises "$1" >/dev/null 2>&1 || rc=$?
+	[ "$rc" = 3 ]
 }
 
 graded_runs() {
@@ -614,8 +643,16 @@ graded_runs() {
 	# stopping the loop on it would be worse.
 	n=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" \
 		--jq '.check_runs[]? | "\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null |
-		awk -F'\t' -v req="${CI_REQUIRED_CHECKS:?}" '
-			BEGIN { n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1 }
+		awk -F'\t' -v req="${CI_REQUIRED_CHECKS:?}" -v answered="${CI_ANSWERED_CONCLUSIONS:?}" '
+			BEGIN {
+				n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1
+				# ONE DECLARED SET, read by `checks-green` too (CLOUD-376). The
+				# two ends kept a hand-maintained list each, in agreement only by
+				# a paragraph of comment — and that is exactly the guarantee that
+				# had already failed: `neutral` was missing from this side until
+				# #302 added it, and nothing detected the gap.
+				m = split(answered, concls, ","); for (i = 1; i <= m; i++) isanswer[concls[i]] = 1
+			}
 			!($2 in want) { next }
 			{
 				# The same latest-per-name rule `checks-green` judges by, over
@@ -624,9 +661,11 @@ graded_runs() {
 				# an answer this head does not have — leaving the ready that
 				# starts CI unfired.
 				key = $3 "|" sprintf("%020d", $4 + 0)
-				# `cancelled` is not an answer here either, or the two ends
-				# disagree and the CLOUD-363 trap survives the other fix.
-				rank = ($1 == "skipped" || $1 == "cancelled" || $1 == "-") ? 2 : 1
+				# Not-an-answer ranks ABOVE an answer on an equal key, so an
+				# unorderable pair falls to "no verdict" rather than to one.
+				# `cancelled` lands here by its absence from the declared set, so
+				# the two ends cannot disagree the way CLOUD-363 did.
+				rank = (!($1 in isanswer)) ? 2 : 1
 				if (!($2 in bestkey) || key > bestkey[$2] ||
 					(key == bestkey[$2] && rank > bestrank[$2])) {
 					bestkey[$2] = key
@@ -636,9 +675,7 @@ graded_runs() {
 			}
 			END {
 				for (i = 1; i <= n; i++) {
-					c = bestconcl[roster[i]]
-					if (c == "success" || c == "neutral" || c == "failure" ||
-						c == "timed_out" || c == "action_required") hit++
+					if (bestconcl[roster[i]] in isanswer) hit++
 				}
 				print hit + 0
 			}
@@ -1083,7 +1120,7 @@ while :; do
 		# non-merged exit, whatever the reason turns out to be.
 		redraft
 		# Three different things arrive here, and only the last one is a red run.
-		if stopped_run "$sha"; then
+		if declined_by_lease "$branch"; then
 			die "the run on ${sha:0:8} was CANCELLED, not red — CI declined it because another branch holds the landing lease (CLOUD-420). Nothing here is broken. Do: git fetch origin main && git rebase origin/main && mise run land"
 		fi
 		[ "$ci_rc" = 1 ] ||

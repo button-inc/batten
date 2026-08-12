@@ -162,6 +162,48 @@ CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-dar
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
 CI_ABSENT_OK_CHECKS = "zizmor,action"
+# The conclusions that CONSTITUTE AN ANSWER about a required check, written once
+# and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
+# reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the
+# defect that motivated it (CLOUD-376).
+#
+# CLOUD-363 was two awk programs disagreeing about one word. `land` counted
+# `cancelled` as an answer; `checks-green` read it as red; the two composed into a
+# branch wedge with no exit, and escaping it took a hand-minted SHA. What kept
+# them in agreement afterwards was a paragraph of comment in each file explaining
+# that the other existed — precisely the guarantee that had already failed:
+# `neutral` was missing from `land`'s list until #302 added it, and nothing
+# detected the gap. A human reading both files found it.
+#
+# `cancelled` and `skipped` are ABSENT from this set, and their absence is now one
+# visible fact rather than an inference across two files. They are not bad
+# conclusions — they are the absence of an answer, and reading either as red
+# wedges a branch with no exit.
+#
+# THE CATCH-ALL IS GONE, which is the half that makes the next unknown conclusion
+# FAIL SAFE. `checks-green` used to define red by negation, so a conclusion nobody
+# had seen would be reported red on a head that had not been judged. Not in this
+# set now means "no answer": the poll continues, which is recoverable, instead of
+# a false red, which costs a re-draft and a lap.
+#
+# Unset is fatal in both readers, exactly as an unset CI_REQUIRED_CHECKS already
+# is: an empty set makes every conclusion an answer, which is the false green in a
+# new spelling.
+CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
+
+# The gates `mise run mutant` ENFORCES (CLOUD-418). A gate named here with no
+# `#MUTANT` declaration in its own file fails the sweep — that is the anti-vacuity
+# term, and without it the task reports success over a set it never touched.
+#
+# A gate NOT named here is a FILED ROW, never a silent exemption: the remaining
+# names are carried on CLOUD-480, `relatedTo` CLOUD-418. The property this buys is
+# "coverage cannot be silently zero", which a visible list with filed gaps has and
+# which forty hastily-written declarations would not — while adding branch age,
+# the thing that multiplies laps and CI runs, to the change that reduces them.
+#
+# Seeded with the gates this bundle touches, so every "mutation-checked per
+# CLOUD-418" obligation in it is cashed rather than cited.
+MUTANT_GATES = "land,land-lock,checks-green,ci-lease-precondition,finding-sink-check"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.

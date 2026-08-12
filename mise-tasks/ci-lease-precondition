@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 #MISE description="CI-side landing-lease precondition: may this head spend a matrix?"
 #MISE hide=true
+#
+# MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
+# the script to a throwaway copy of this file must turn the named case RED.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT workspace-guard-misattributed|s/cannot build the lease workspace under/land-lock answered ?/|CLOUD-420: a broken workspace is not reported as land-lock's answer
+
 set -uo pipefail
 
 # THE LEASE, ENFORCED WHERE THE MONEY IS SPENT (CLOUD-420).
