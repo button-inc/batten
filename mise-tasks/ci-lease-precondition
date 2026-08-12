@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+#MISE description="CI-side landing-lease precondition: may this head spend a matrix?"
+#MISE hide=true
+set -euo pipefail
+
+# THE LEASE, ENFORCED WHERE THE MONEY IS SPENT (CLOUD-420).
+#
+# CLOUD-393's rolling lease serialises landing, but it is enforced entirely
+# inside `mise-tasks/land`: anything else that pushes to a ready PR buys a full
+# matrix without ever touching the lock. Measured 2026-08-12 05:17–05:19Z, four
+# concurrent `pull_request` matrices ran while the lease changed hands three
+# times — every session holding the lease honoured it, and all four ran anyway.
+# The dominant case is residue rather than defiance: `land` re-drafts only on
+# red, so a landing interrupted any other way leaves the PR ready forever.
+#
+# This is the runner's half. It runs as the FIRST step of every `pull_request`
+# job that has no `needs:`, before any checkout or toolchain install, and asks
+# one question: may this branch spend a matrix right now? If not, it cancels the
+# run it is standing in.
+#
+# READ FROM `main`, NEVER FROM THE HEAD BEING JUDGED. The workflow step fetches
+# this file (and `mise-tasks/land-lock` below) from trunk, so a stale clone
+# cannot dodge the predicate by carrying stale rules of its own. That is also
+# why the logic lives here rather than in seven copies of workflow YAML: one
+# authority, gated by `shellcheck`/`shfmt`/`awk-regex-check` like every other
+# task, and testable by bats with `gh` and `git` stubbed — none of which a body
+# embedded in YAML would get.
+#
+# FAIL OPEN AT EVERY UNKNOWN. Every other refusal in this repository fails
+# closed; this one deliberately does not, for the same asymmetry `land-lock
+# authorises` documents: a lease this cannot read would stop every job in the
+# fleet, where waving one matrix through costs one matrix. An unreadable script,
+# an unreachable remote, an unparseable answer — all run.
+#
+# AND IT NEVER EXITS NON-ZERO. A job that reds before its cancellation lands
+# makes the RUN's conclusion `failure` rather than `cancelled`; `final` then runs
+# under `!cancelled()`, fails its `needs:` assertion, and `land` re-drafts the PR
+# — which is the fleet-wide re-drafting this whole design exists to avoid,
+# reintroduced by its own remedy. Stopping is a cancel plus a bounded wait to be
+# killed, never a failure.
+
+repo="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
+head_ref="${LEASE_HEAD_REF:-${GITHUB_HEAD_REF:-}}"
+run_id="${LEASE_RUN_ID:-${GITHUB_RUN_ID:-}}"
+# DELIBERATELY NOT `GITHUB_SHA`. On a `pull_request` event that is the MERGE
+# commit, which carries trunk's `mise-tasks/land` whenever the head did not touch
+# it — so the staleness row below would pass for every stale head, silently, and
+# look implemented. The workflow passes `github.event.pull_request.head.sha`; if
+# it is missing, the row is skipped out loud rather than answered wrongly.
+head_sha="${LEASE_HEAD_SHA:-}"
+server="${GITHUB_SERVER_URL:-https://github.com}"
+# The ref this predicate and its dependencies are read from. Trunk, and
+# overridable only so the suite can point it at a fixture.
+from="${LEASE_FROM_REF:-main}"
+# How long to wait to be killed after asking. GitHub cancels in seconds; this is
+# the backstop on a cancel that never arrives, and it is deliberately inside one
+# job-minute so a failed cancel costs the rounding rather than five minutes.
+cancel_wait="${LEASE_CANCEL_WAIT:-45}"
+
+# Pointer-only, and prefixed so a stopped run is greppable in a log full of
+# runner noise.
+say() { echo "lease-precondition: $*"; }
+
+run_anyway() {
+	say "$1; running rather than stopping the fleet"
+	exit 0
+}
+
+# One read of a file from trunk. `Accept: raw` rather than the default JSON so
+# nothing here has to base64-decode, which is one fewer thing to get wrong on a
+# path that must fail open.
+from_ref() {
+	gh api -H "Accept: application/vnd.github.raw" \
+		"repos/$repo/contents/$1?ref=$2" 2>/dev/null
+}
+
+[ -n "$repo" ] || run_anyway "no repository in the environment"
+[ -n "$head_ref" ] || run_anyway "no head ref in the environment"
+
+# THE BRANCHES THAT LAND WITHOUT `land`, AND WHY STOPPING THEM WOULD COST MORE
+# THAN LETTING THEM RUN.
+#
+# `dependabot/*` and `release-plz-*` land through a `/fast-forward` comment posted
+# by `auto-dependabot-land.yml` / `auto-release-land.yml`, which fire on
+# `workflow_run: types: [completed]` and then re-check that every check on the sha
+# is green. A CANCELLED run is `completed`, so those workflows do fire — find the
+# checks not green, and stop. Nothing retries. The PR then waits for its next
+# rebase to mint a fresh run, which is another whole matrix: cancelling here would
+# not save a matrix, it would DEFER one and add a stall.
+#
+# They are also the population least worth stopping. The release PR is a draft
+# until the debounce readies it, and the debounce fires on 30 minutes of quiet
+# `main` — precisely when nobody holds the lease — while Dependabot PRs are rare.
+# So the overlap this would catch is small and the stall it would cause is not.
+#
+# This is NOT the stale-tooling exemption in disguise: these branches are cut from
+# current `main`, so their `mise-tasks/land` is current; they simply never call it.
+case "$head_ref" in
+dependabot/* | release-plz-*)
+	say "$head_ref lands through /fast-forward rather than through mise run land; not judging it"
+	exit 0
+	;;
+esac
+
+# ---------------------------------------------------------------------------
+# THE STALENESS ROW, WHICH THE LEASE TABLE CANNOT COVER.
+#
+# An agent running tooling that predates the lease TAKES no lease, so the ref
+# reads absent and the table below authorises it. The lease's state is evidence
+# of a free queue only among participants that can see the queue; for everyone
+# else it is evidence of nothing — which is exactly how four matrices ran beside
+# three orderly handoffs.
+#
+# So: does THIS head's own `land` acquire the lease? Read content-wise, from one
+# API call, rather than by ancestry — `merge-base --is-ancestor` needs a deep
+# fetch and answers wrongly after a rebase or a cherry-pick, both of which are
+# the normal shape of work here.
+stale_remedy() {
+	# An ANNOTATION, not a log line, and the column matters: the runner only reads
+	# a workflow command when the line begins with `::` after trimming leading
+	# whitespace, so routing this through `say` (which prefixes
+	# `lease-precondition: `) would emit the token and have it ignored. Verified
+	# against actions/runner's ActionCommand.TryParseV2, which is line-anchored.
+	#
+	# It has to be an annotation because a stopped run is a CANCELLED run with a
+	# red `final` and no failed step of its own — so without this the reader sees
+	# a red check, no annotation, and no clue that the remedy is one rebase.
+	echo "::error::lease-precondition: this head's mise-tasks/land does not take the landing lease, so it cannot be serialised against the fleet. Rebase onto current main and land with it: git fetch origin main && git rebase origin/main && mise run land"
+}
+
+if [ -n "$head_sha" ]; then
+	if head_land=$(from_ref mise-tasks/land "$head_sha"); then
+		if ! grep -q 'land-lock acquire' <<<"$head_land"; then
+			stale_remedy
+			stop=1
+		fi
+	else
+		say "cannot read this head's mise-tasks/land; not judging its age"
+	fi
+else
+	say "no head sha in the environment; not judging this head's age"
+fi
+
+# ---------------------------------------------------------------------------
+# THE LEASE TABLE, answered by the one authority that owns it. `land-lock` is
+# fetched rather than reimplemented: a second reader of the lease body is a
+# second thing to keep in step with `mint`, and the nonce/expiry parsing is
+# precisely where a divergence would be invisible.
+if [ -z "${stop:-}" ]; then
+	work="${RUNNER_TEMP:-/tmp}/batten-lease.$$"
+	if ! lock_body=$(from_ref mise-tasks/land-lock "$from"); then
+		run_anyway "cannot read mise-tasks/land-lock from $from"
+	fi
+	mkdir -p "$work"
+	printf '%s\n' "$lock_body" >"$work/land-lock"
+	chmod +x "$work/land-lock"
+
+	# `land-lock` reads the lease with `git ls-remote "$remote"`, and this
+	# repository is private — so the precondition must carry its own credential
+	# rather than borrow a checkout's, several of which set
+	# `persist-credentials: false`. A throwaway repo in RUNNER_TEMP is what lets
+	# this run as the genuine FIRST step, before any checkout exists.
+	#
+	# Header rather than a userinfo URL: `land-lock` prints `$remote` when it
+	# cannot reach it, and a token in that string is a token in the log.
+	git init -q "$work/clone"
+	git -C "$work/clone" remote add origin "$server/$repo"
+	if [ -n "${GH_TOKEN:-}" ]; then
+		auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+		git -C "$work/clone" config --local \
+			"http.$server/.extraheader" "AUTHORIZATION: basic $auth"
+	fi
+
+	rc=0
+	(cd "$work/clone" && "$work/land-lock" authorises "$head_ref") || rc=$?
+	case "$rc" in
+	0) exit 0 ;;
+	3) stop=1 ;;
+	# `authorises` fails open by contract, so anything else here is this script
+	# holding it wrong — a missing argument, a script that would not execute.
+	# Same posture: one matrix beats a stopped fleet.
+	*) run_anyway "land-lock answered $rc, which is neither run nor stop" ;;
+	esac
+fi
+
+# ---------------------------------------------------------------------------
+# STOP. Not by failing — see the header — but by cancelling the run this job is
+# standing in, and then waiting to be killed.
+[ -n "${run_id:-}" ] || run_anyway "nothing to cancel: no run id in the environment"
+
+# Column 0, for the reason spelled out in `stale_remedy`: `say` would push the
+# `::` behind its prefix and the runner would treat the whole thing as ordinary
+# output. The greppable prefix moves inside the annotation body instead.
+echo "::error::lease-precondition: this run is not authorised to spend a matrix; cancelling run $run_id"
+if ! gh api -X POST "repos/$repo/actions/runs/$run_id/cancel" >/dev/null 2>&1; then
+	run_anyway "the cancellation was refused"
+fi
+
+# Wait to be killed. Exiting 0 here would let the job march on into the matrix
+# this just paid an API call to prevent; exiting non-zero would red the run. So:
+# neither, for as long as a cancellation plausibly takes.
+waited=0
+while [ "$waited" -lt "$cancel_wait" ]; do
+	sleep 5
+	waited=$((waited + 5))
+done
+run_anyway "still alive ${cancel_wait}s after the cancellation was accepted"

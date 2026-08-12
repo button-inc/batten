@@ -35,7 +35,9 @@ setup() {
 # about, so each fixture differs from a passing one in exactly one way.
 workflow() {
 	local name="$1" guard="${2:-    if: \${{ github.event.pull_request.draft == false }}}" \
-		conc="${3:-cancel-in-progress: true}" task="${4:-ci}"
+		conc="${3:-cancel-in-progress: true}" task="${4:-ci}" \
+		lease="${5:-      - name: Landing lease precondition
+        run: ':'}"
 	cat >"$WF/$name.yml" <<-EOF
 		name: $name
 
@@ -53,6 +55,7 @@ workflow() {
 		$guard
 		    runs-on: ubuntu-latest
 		    steps:
+		$lease
 		      - run: mise run $task
 	EOF
 }
@@ -273,4 +276,58 @@ fanin() {
 	cd "$BATS_TEST_DIRNAME/.."
 	run "$GATE"
 	[ "$status" -eq 0 ]
+}
+
+@test "a job that starts without asking the landing lease is refused, and named" {
+	# CLOUD-420. The lease serialises landing, but it was enforced only inside
+	# `mise-tasks/land` — so anything else pushing to a ready PR bought a full
+	# matrix without ever touching the lock. Four concurrent matrices ran that
+	# way on 2026-08-12 while the lease changed hands three times, every holder
+	# honouring it.
+	workflow ci "" "" ci "      - run: echo starting work"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"job 'ci' starts without asking whether the landing lease"* ]]
+	[[ "$output" == *"Landing lease precondition"* ]]
+}
+
+@test "the precondition must be FIRST — a job that asks after installing has already spent" {
+	# Most of what asking saves is the toolchain install and the build behind it.
+	# A precondition placed after them is a precondition in name only, and it
+	# would read as present to any check that merely greps the job.
+	workflow ci "" "" ci "      - uses: actions/checkout@v7
+      - name: Landing lease precondition
+        run: ':'"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"job 'ci' starts without asking"* ]]
+}
+
+@test "a fan-in is exempt, because it cannot start before its dependencies" {
+	# Exempt for a reason rather than by name: `needs:` is what makes a job
+	# unable to spend a runner ahead of the cancellation, so `needs:` is what
+	# the gate reads. `final` carries a checkout, so "has no checkout" — the
+	# rule this replaced — would have demanded a precondition it cannot use.
+	workflow ci
+	# Property 5 would otherwise flag the new job as unrequired, which would
+	# pass this case for the wrong reason.
+	sed -i 's/^CI_REQUIRED_CHECKS = "ci"$/CI_REQUIRED_CHECKS = "ci,final"/' "$MANIFEST"
+	cat >>"$WF/ci.yml" <<-'EOF'
+		  final:
+		    name: final
+		    if: ${{ always() && github.event.pull_request.draft == false }}
+		    needs: [ci]
+		    runs-on: ubuntu-latest
+		    steps:
+		      - run: echo "${{ needs.*.result }}"
+	EOF
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the success line reports the lease gate, so a silent skip is visible" {
+	workflow ci
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"lease-gated before they spend"* ]]
 }

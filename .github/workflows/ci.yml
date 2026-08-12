@@ -56,7 +56,39 @@ jobs:
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
+    # `actions: write` is here for one call and one only: cancelling THIS run
+    # when the landing lease does not authorise this branch (CLOUD-420). A job
+    # that could not cancel itself would have to fail instead, and a failed job
+    # makes the run conclude `failure` rather than `cancelled` — which reds
+    # `final` and makes `land` re-draft a healthy PR.
+    permissions:
+      contents: read
+      actions: write
     steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
+      # First step, before any checkout or toolchain install, because a run this
+      # branch is not authorised to make should cost the rounding rather than a
+      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # justification lives there; it is fetched from `main` rather than from
+      # this head, so a clone carrying stale rules cannot dodge the predicate by
+      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # is the whole posture: waving one matrix through costs one matrix, while
+      # a predicate that cannot read itself would stop the fleet.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          # The HEAD sha, never `github.sha`: on a pull_request event that is the
+          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # head did not touch it — and the staleness row reads exactly that file.
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
@@ -138,7 +170,39 @@ jobs:
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
+    # `actions: write` is here for one call and one only: cancelling THIS run
+    # when the landing lease does not authorise this branch (CLOUD-420). A job
+    # that could not cancel itself would have to fail instead, and a failed job
+    # makes the run conclude `failure` rather than `cancelled` — which reds
+    # `final` and makes `land` re-draft a healthy PR.
+    permissions:
+      contents: read
+      actions: write
     steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
+      # First step, before any checkout or toolchain install, because a run this
+      # branch is not authorised to make should cost the rounding rather than a
+      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # justification lives there; it is fetched from `main` rather than from
+      # this head, so a clone carrying stale rules cannot dodge the predicate by
+      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # is the whole posture: waving one matrix through costs one matrix, while
+      # a predicate that cannot read itself would stop the fleet.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          # The HEAD sha, never `github.sha`: on a pull_request event that is the
+          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # head did not touch it — and the staleness row reads exactly that file.
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
@@ -179,7 +243,39 @@ jobs:
       fail-fast: false
       matrix:
         target: [aarch64-apple-darwin]
+    # `actions: write` is here for one call and one only: cancelling THIS run
+    # when the landing lease does not authorise this branch (CLOUD-420). A job
+    # that could not cancel itself would have to fail instead, and a failed job
+    # makes the run conclude `failure` rather than `cancelled` — which reds
+    # `final` and makes `land` re-draft a healthy PR.
+    permissions:
+      contents: read
+      actions: write
     steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
+      # First step, before any checkout or toolchain install, because a run this
+      # branch is not authorised to make should cost the rounding rather than a
+      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # justification lives there; it is fetched from `main` rather than from
+      # this head, so a clone carrying stale rules cannot dodge the predicate by
+      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # is the whole posture: waving one matrix through costs one matrix, while
+      # a predicate that cannot read itself would stop the fleet.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          # The HEAD sha, never `github.sha`: on a pull_request event that is the
+          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # head did not touch it — and the staleness row reads exactly that file.
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
         with:
@@ -210,7 +306,39 @@ jobs:
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-11
+    # `actions: write` is here for one call and one only: cancelling THIS run
+    # when the landing lease does not authorise this branch (CLOUD-420). A job
+    # that could not cancel itself would have to fail instead, and a failed job
+    # makes the run conclude `failure` rather than `cancelled` — which reds
+    # `final` and makes `land` re-draft a healthy PR.
+    permissions:
+      contents: read
+      actions: write
     steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
+      # First step, before any checkout or toolchain install, because a run this
+      # branch is not authorised to make should cost the rounding rather than a
+      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # justification lives there; it is fetched from `main` rather than from
+      # this head, so a clone carrying stale rules cannot dodge the predicate by
+      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # is the whole posture: waving one matrix through costs one matrix, while
+      # a predicate that cannot read itself would stop the fleet.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          # The HEAD sha, never `github.sha`: on a pull_request event that is the
+          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # head did not touch it — and the staleness row reads exactly that file.
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
         with:
@@ -232,7 +360,44 @@ jobs:
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-12
+    # `actions: write` is here for one call and one only: cancelling THIS run
+    # when the landing lease does not authorise this branch (CLOUD-420). A job
+    # that could not cancel itself would have to fail instead, and a failed job
+    # makes the run conclude `failure` rather than `cancelled` — which reds
+    # `final` and makes `land` re-draft a healthy PR.
+    permissions:
+      contents: read
+      actions: write
     steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
+      # First step, before any checkout or toolchain install, because a run this
+      # branch is not authorised to make should cost the rounding rather than a
+      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # justification lives there; it is fetched from `main` rather than from
+      # this head, so a clone carrying stale rules cannot dodge the predicate by
+      # carrying a stale copy of it. An unreadable body runs — fail open, which
+      # is the whole posture: waving one matrix through costs one matrix, while
+      # a predicate that cannot read itself would stop the fleet.
+      #
+      # This job in particular is the one the sensor caught: `semver` landed on
+      # `main` while this change was in flight, and property 7 refused the merge
+      # until it carried the step too. That is the sensor working, and the reason
+      # it is a gate rather than a paragraph.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          # The HEAD sha, never `github.sha`: on a pull_request event that is the
+          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # head did not touch it — and the staleness row reads exactly that file.
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # The comparison needs the baseline commit, not just this head: the
@@ -267,6 +432,34 @@ jobs:
   # means got wider, and that is the property the fan-in exists to provide.
   final:
     name: final
+    # `always()`, AND NOT `!cancelled()` — which was tried here and reverted,
+    # because the obvious reading of what a cancelled run should do to this job
+    # is the dangerous one. Both halves were checked rather than reasoned about:
+    #
+    #   1. An `always()` job DOES run when the run is cancelled, and then fails
+    #      its `needs:` assertion. Observed on run 31566043914: `ci` cancelled,
+    #      `final` executed at 05:19:37 and went red. So CLOUD-420's cancelling
+    #      of an unauthorised run reds this check, which looks like a reason to
+    #      skip instead.
+    #   2. `!cancelled()` skips it — and GitHub documents that a job skipped by
+    #      its own `if:` "will report its status as 'Success'. It will not
+    #      prevent a pull request from merging, even if it is a required check."
+    #      `final` is the ONLY check the host requires (see above), so that turns
+    #      every lease-stopped run into a green required check over a head where
+    #      nothing was compiled, tested, linted or analysed — and a maintainer's
+    #      `/fast-forward`, whose stated safety property is "that exact SHA
+    #      already has the required checks green", would land it.
+    #
+    # A false red costs a rebase. A false green lands untested code on `main`.
+    # `success` is the only conclusion GitHub lets a job report as "fine", so a
+    # run that was DECLINED must report something else, and red is the only
+    # something else a job that ran can produce. The misleading part of that red
+    # is answered where it belongs — `ci-lease-precondition` emits an `::error::`
+    # annotation naming the lease and the remedy, so the run says why.
+    #
+    # This is also why `always()` is not merely the old value restored: it now
+    # carries the reason it cannot change, so the next reader who notices that a
+    # stopped run reds `final` does not re-derive the skip and ship it.
     if: ${{ always() && github.event.pull_request.draft == false }}
     needs: [ci, cross, darwin-link, msrv, semver]
     runs-on: ubuntu-latest

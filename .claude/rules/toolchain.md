@@ -54,10 +54,12 @@ is what makes a second poller affordable at all. A lap whose HEAD still carries 
 `verify` receipt re-proves nothing, and a **red run re-drafts the PR** — CI skips
 drafts, so that is the only thing that stops the next push buying another run
 while you fix it locally; the next lap readies it again. `mise run
-ci-local-parity` (in the hk `gate`) holds the three properties that make CI a
+ci-local-parity` (in the hk `gate`) holds the properties that make CI a
 confirmation rather than a discovery: no job runs on a draft, every
-`pull_request` workflow supersedes its own runs, and every task CI runs is one
-`verify` runs. `zizmor.yml` broke the first two for its whole life, so a draft
+`pull_request` workflow supersedes its own runs, no job starts before the
+landing lease authorises its branch (CLOUD-420), and every task CI runs is one
+`verify` runs. The task's own header is the list; a count restated here is what
+went stale twice. `zizmor.yml` broke the first two for its whole life, so a draft
 that touched a workflow still spent a runner and re-drafting did not close the
 tap (CLOUD-240).
 
