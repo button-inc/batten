@@ -221,6 +221,23 @@ $(awk '
 		done <<<"$unguarded"
 	fi
 
+	# AND THE STEP MUST BE ALLOWED TO FAIL. The property above matches the step's
+	# NAME, so a copy that reds its own job reads as present and correct. The
+	# precondition's own header promises it "NEVER EXITS NON-ZERO", and its suite
+	# calls that the property that outranks every row — but the promise is made by
+	# the fetched program, and the caller is what decides whether a body that will
+	# not PARSE is fatal. A truncated response, a proxy error page returned 200, or
+	# a bad edit to the trunk copy makes `bash -c` a syntax error in the FIRST step
+	# of every job: the step reds under the runner's default `bash -e {0}`, `final`
+	# fails its `needs:` under `always()`, and `land` re-drafts on red — so one bad
+	# response on `main` re-drafts the whole fleet through the mechanism built to
+	# protect it. Counted rather than grepped for absence, because the two forms
+	# differ only by a suffix and a `grep -v` would pass a file carrying both.
+	invocations=$(grep -c 'bash -c "\$body"' "$wf" || true)
+	tolerant=$(grep -c 'bash -c "\$body" || exit 0' "$wf" || true)
+	[ "$invocations" = "$tolerant" ] ||
+		problem "$wf runs the fetched precondition body without \`|| exit 0\` — a body that will not parse must not red the first step of every job (CLOUD-420)."
+
 	# `mise run <task>` in the STEPS, not in the prose. These files carry long
 	# comments that name tasks to explain why they are absent, and a plain grep
 	# read those as spend — a gate that fires on its own documentation is a gate

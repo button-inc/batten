@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #MISE description="CI-side landing-lease precondition: may this head spend a matrix?"
 #MISE hide=true
-set -euo pipefail
+set -uo pipefail
 
 # THE LEASE, ENFORCED WHERE THE MONEY IS SPENT (CLOUD-420).
 #
