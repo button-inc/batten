@@ -90,12 +90,30 @@ set -uo pipefail
 
 cd "${LAND_ROOT:-$(git rev-parse --show-toplevel)}" || exit 1
 
-pr="${PR:-$(gh pr view --json number --jq .number)}"
+branch="${LAND_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
+# THE OPEN PR FOR THIS BRANCH, AND ONLY AN OPEN ONE (CLOUD-465). A bare
+# `gh pr view` answers with whatever PR this branch name has EVER had, in any
+# state — so once a name has carried a merged PR, every later landing on that
+# name binds to the merged one. That is the default shape here rather than an
+# edge case: trunk-based development deletes the branch on merge (CLOUD-349)
+# while the session harness pins an agent to one branch name for its whole
+# engagement, so the second landing of any session recycles a merged name.
+#
+# Observed: after #366 merged, a new commit and a new PR #368 on the same name
+# produced `could not re-draft #366`. What kept that from being worse was
+# incidental — `redraft` runs before the wait loop and GitHub refuses to
+# re-draft a merged PR, so the run died before reaching the terminal-state read
+# below, which treats MERGED as landed and exits 0. A bound-merged PR is one
+# refactor away from reporting a landing that never happened, and a false
+# completion signal is the one thing this repository exists to refuse.
+#
+# `// empty` rather than a null: `--jq` prints the string "null" for a missing
+# field, which is not empty and would sail past the guard as a PR number.
+pr="${PR:-$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty' 2>/dev/null)}"
 if [ -z "$pr" ]; then
-	echo "::error:: no pull request for this branch, so there is nothing to land." >&2
+	echo "::error:: no open pull request for this branch, so there is nothing to land. Open one first: gh pr create --draft" >&2
 	exit 1
 fi
-branch="${LAND_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 interval="${LAND_INTERVAL:-10}"
 workflow="${LAND_WORKFLOW:-fast-forward.yml}"
 max_laps="${LAND_MAX_LAPS:-8}"

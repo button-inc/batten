@@ -49,6 +49,10 @@ setup() {
 	# A short interval keeps the polling cases quick; PR is supplied so the
 	# stub never has to answer the "which PR" lookup.
 	export PATH PR=150 LAND_INTERVAL=1 LAND_ROOT="$BATS_TEST_TMPDIR"
+	# What `gh pr list --head <branch> --state open` returns. Only the resolution
+	# cases clear PR and read it; every other case pins the number directly.
+	printf '[{"number":150}]' >"$BATS_TEST_TMPDIR/prlist"
+	printf '[{"number":150}]' >"$BATS_TEST_TMPDIR/prlist.all"
 	: >"$BATS_TEST_TMPDIR/comments"
 	: >"$BATS_TEST_TMPDIR/gitlog"
 	: >"$BATS_TEST_TMPDIR/misecalls"
@@ -102,6 +106,17 @@ case "\$sub" in
       *)        [ ! -f "$BATS_TEST_TMPDIR/rc.ready" ] || exit 1 ;;
     esac
     echo readied ;;
+  # CLOUD-465: the OPEN PR for this branch, and the stub FILTERS because the real
+  # endpoint does. Without that a case cannot tell $(--state open) from its
+  # absence, and the assertion that $(land) binds the open PR proves nothing —
+  # measured, when removing the flag left both cases green. Two bodies: what an
+  # open-only query returns, and what an unfiltered one returns for a branch name
+  # whose older PRs merged, which is the shape every second landing produces.
+  "pr list")
+    case "\$all" in
+      *"--state open"*) emit "\$(cat "$BATS_TEST_TMPDIR/prlist" 2>/dev/null)" ;;
+      *)                emit "\$(cat "$BATS_TEST_TMPDIR/prlist.all" 2>/dev/null)" ;;
+    esac ;;
   "pr view")
     case "\$all" in
       *isDraft*) printf '%s' "\$(cat "$BATS_TEST_TMPDIR/isdraft")" ;;
@@ -608,16 +623,34 @@ workflow_runs() {
 	[ "$output" -eq 0 ]
 }
 
-@test "a branch with no PR has nothing to land" {
-	# `gh pr view` on a branch with no PR prints nothing, so the lookup for the
-	# number comes back empty — an empty body through the real `--jq` is what
-	# the stub reproduces.
+@test "a branch with no OPEN PR has nothing to land" {
+	# `gh pr list --state open` on such a branch prints nothing, so the lookup
+	# comes back empty — an empty body through the real `--jq` is what the stub
+	# reproduces.
 	rm -f "$BATS_TEST_TMPDIR"/state.[0-9]*
 	: >"$BATS_TEST_TMPDIR/state.last"
-	PR= run "$LAND"
+	printf '[]' >"$BATS_TEST_TMPDIR/prlist"
+	printf '[{"number":366}]' >"$BATS_TEST_TMPDIR/prlist.all"
+	PR= run timeout -k 1 15 "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"nothing to land"* ]]
 	[ "$(comments)" -eq 0 ]
+}
+
+@test "THE MERGED-NAME CASE: a branch whose old PR merged binds the OPEN one (CLOUD-465)" {
+	# The default shape, not an edge case. Trunk-based development deletes the
+	# branch on merge, and the session harness pins an agent to one branch name
+	# for its whole engagement — so the second landing of any session recycles a
+	# name whose previous PR is merged. A bare `gh pr view` answers with that
+	# merged PR, and `land` then drives a pull request that is already finished.
+	printf '[{"number":368}]' >"$BATS_TEST_TMPDIR/prlist"
+	printf '[{"number":366},{"number":368}]' >"$BATS_TEST_TMPDIR/prlist.all"
+	pr_state MERGED
+	PR= run timeout -k 1 15 "$LAND"
+	[ "$status" -eq 0 ]
+	# Every comment and read went to the open PR, never to the merged one.
+	[[ "$(cat "$BATS_TEST_TMPDIR/comments")" == *"368"* ]]
+	[[ "$(cat "$BATS_TEST_TMPDIR/comments")" != *"366"* ]]
 }
 
 @test "an already-proven HEAD is not proven again" {
