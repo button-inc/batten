@@ -453,3 +453,52 @@ fanin() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"no workflow found under"* ]]
 }
+
+# --- property 10: a workflow_run trigger filters where filtering is free -------
+
+# A `workflow_run` workflow. `branches=no` drops the trigger-level filter;
+# `cond=no` drops the job's head_branch condition, which is what the property is
+# keyed to.
+triggered() {
+	local name="$1" branches="${2:-yes}" cond="${3:-yes}"
+	{
+		printf 'name: %s\n\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n' "$name"
+		if [ "$branches" = yes ]; then
+			printf '    branches: ["dependabot/**"]\n'
+		fi
+		printf '\nconcurrency:\n  group: %s\n  cancel-in-progress: false\n\njobs:\n  %s:\n    name: %s\n' "$name" "$name" "$name"
+		if [ "$cond" = yes ]; then
+			printf "    if: startsWith(github.event.workflow_run.head_branch, 'dependabot/')\n"
+		fi
+		printf '    runs-on: ubuntu-latest\n    steps:\n      - run: mise run ci\n'
+	} >"$WF/$name.yml"
+}
+
+@test "a workflow_run job filtering on head_branch with no trigger filter is refused" {
+	# The measured defect: 1131 runs in 25 hours, 1131 skipped, because a job
+	# `if:` is evaluated after the run already exists.
+	workflow ci
+	triggered autoland no yes
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"autoland.yml filters on workflow_run.head_branch"* ]]
+	[[ "$output" == *"no branches: filter"* ]]
+}
+
+@test "the same workflow with a trigger-level branches filter passes" {
+	workflow ci
+	triggered autoland yes yes
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a workflow_run workflow with no branch condition at all is not asked for a filter" {
+	# The property is keyed to the job's declared intent. Without that it could
+	# not tell a deliberately repository-wide trigger from one that meant to be
+	# narrow and expressed it in the wrong place — and it would demand a filter
+	# of a workflow that legitimately wants every completion.
+	workflow ci
+	triggered autoland no no
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}

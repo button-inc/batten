@@ -82,11 +82,22 @@
 #      doing nothing wrong. Literal equality is also what "a staggered slot"
 #      means in the headers making the claim.
 #
+#  10. A `workflow_run` TRIGGER FILTERS WHERE FILTERING IS FREE. A job `if:` is
+#      evaluated after the run already exists, so a branch scope expressed only
+#      there creates a run and then skips it. `auto-dependabot-land` did that
+#      1131 times in 25 hours and skipped 1131 — no runner minutes, which is why
+#      it survived, but 46% of every run in the repository, and at ~3100
+#      inserted runs a day the global run list shifts page boundaries mid-walk,
+#      so paginating it is not stable. Keyed to the `if:` rather than demanded of
+#      every `workflow_run` trigger: without that, the gate cannot tell a
+#      deliberately repository-wide trigger from one that meant to be narrow.
+#
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
-# release workflow is not on the landing path and they do not apply to it. 8 and
-# 9 are the exceptions — they are about a workflow racing itself or its
-# neighbour, which is not a property of the landing path — so they judge every
-# workflow, and 8 sits before the `pull_request` filter for that reason.
+# release workflow is not on the landing path and they do not apply to it. 8, 9
+# and 10 are the exceptions — a workflow racing itself, colliding with its
+# neighbour, or buying a run it will only skip are none of them properties of the
+# landing path — so they judge every workflow, and 8 and 10 sit before the
+# `pull_request` filter for that reason.
 set -uo pipefail
 
 workflows="${PARITY_WORKFLOWS:-.github/workflows}"
@@ -142,6 +153,19 @@ for wf in "$workflows"/*.yml; do
 	all_seen=$((all_seen + 1))
 	grep -q '^concurrency:' "$wf" ||
 		problem "$wf declares no concurrency group, so two of its runs can race — add one, with cancel-in-progress: true if it triggers on pull_request and false otherwise."
+
+	# Property 10, also above the filter: a `workflow_run` workflow is not on the
+	# landing path, and this is about what it COSTS the run list. Keyed to the
+	# job condition rather than demanded of every `workflow_run` trigger —
+	# otherwise the gate cannot tell a deliberately repository-wide trigger from
+	# one that meant to be narrow and said so in the wrong place. Here-strings
+	# and a direct file read, never a pipe into `grep -q`, for the `pipefail`
+	# reason above.
+	if grep -q '^  workflow_run:' <<<"$triggers" &&
+		grep -q 'workflow_run\.head_branch' "$wf" &&
+		! grep -q '^    branches:' <<<"$triggers"; then
+		problem "$wf filters on workflow_run.head_branch in a job condition but its trigger declares no branches: filter — a job \`if:\` is evaluated after the run already exists, so every non-matching completion still creates a run and then skips it."
+	fi
 
 	grep -q '^  pull_request:' <<<"$triggers" || continue
 	checked=$((checked + 1))

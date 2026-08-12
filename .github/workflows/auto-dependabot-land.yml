@@ -44,6 +44,15 @@ on:
   workflow_run:  # zizmor: ignore[dangerous-triggers]
     workflows: [CI, commit-lint]
     types: [completed]
+    # The branch scope, at the trigger rather than only in the job's `if:`. A
+    # job condition is evaluated after the run already exists, so without this
+    # every CI and commit-lint completion in the repository created a run here
+    # that immediately skipped: 1131 runs in 25 hours, 1131 of them skipped.
+    # That costs no runner minutes, which is why it survived — but it was 46% of
+    # all workflow runs, and at ~3100 inserted runs a day the global run list
+    # shifts page boundaries mid-walk, so paginating it is not stable. The `if:`
+    # below stays as defence in depth; the two answer different failure modes.
+    branches: ["dependabot/**"]
 
 permissions:
   contents: read

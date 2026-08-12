@@ -60,6 +60,13 @@ on:
   workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI, commit-lint]
     types: [completed]
+    # Scoped at the trigger, not only in the job's `if:` — a job condition is
+    # evaluated after the run exists, so this arm created a run on every CI and
+    # commit-lint completion in the repository and skipped 1098 of 1172. The
+    # `schedule:` arm below is deliberately untouched: it is the debounce's
+    # trailing edge and has no head branch to filter on, which is why the job's
+    # `if:` still has to admit `github.event_name == 'schedule'` separately.
+    branches: ["release-plz-**"]
   # The debounce's trailing edge. Nothing fires when `main` goes quiet, so this
   # asks. Half-hourly: the quiet window is 30 minutes, and a tighter cron would
   # only shorten the tail of an already-batched release for a linear increase in
