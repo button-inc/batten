@@ -179,6 +179,43 @@ reason = "apply runs from the pipeline, not a workstation — open a change requ
 # Optional. Appended to the refusal so a caller can read the policy itself.
 policy_url = "https://example.invalid/handbook/infrastructure"
 
+# A judge rule (CLOUD-56) is the one sanctioned surface for a predicate no static
+# shape can express — "this test asserts behaviour, not a tautology". It hands the
+# row's `criteria` and the admitted classes of its matched files to the command in
+# `[judge].run`, and reads that command's EXIT CODE ONLY: 0 clean, 2 raised,
+# anything else unresolved (a judge that failed to answer is never a pass).
+#
+# THE VERDICT CANNOT BLOCK, and not by convention. The evidence base behind this
+# decision measured model judges at AUROC <=0.65 on false-success detection, so a
+# judge verdict may inform and never gate. A judge outcome is not a finding: it
+# goes to the findings store as an advisory, so `--fail-on-warning` has nothing to
+# promote and `batten enforce` exits 0 no matter what the judge says. Deterministic
+# rules stay the default; a predicate no kind can express is an engine issue, never
+# something quietly routed to a model.
+#
+# `severity` is REFUSED on this kind — that column decides the exit contract, and a
+# judge must not reach it by any path. Declare `tier` instead: "advisory" (the
+# default), "caution", or "warning", which is a required RESPONSE LATENCY, not a
+# verdict. `no_fix_reason` is required, because a stored finding is one something
+# later has to close and a model's opinion has no mechanical fix.
+#
+# Because it runs a configured command, `batten check` (a read-effect verb) refuses
+# a config carrying one and names `batten enforce`.
+#
+#   [[rule]]
+#   id = "tests-assert-behaviour"
+#   kind = "judge"
+#   glob = "tests/**/*.rs"
+#   criteria = "Does each test assert an observable behaviour rather than restating the implementation?"
+#   tier = "advisory"
+#   no_fix_reason = "a judge finding is answered by a person, not a command"
+#
+# Commented rather than live, and the reason is a known gap worth stating: the
+# published JSON Schema is derived from the rule type, which marks `severity`
+# required for every kind, so an editor bound to the schema flags the one row
+# that must not carry it. The loader is right and the schema is not yet — see
+# CLOUD-445. Uncomment when it lands.
+
 # Output predicates over a wrapped command's streams (CLOUD-117): literals that,
 # found in `batten exec`'s output, promote a lying exit `0` to a failure.
 #
@@ -341,3 +378,44 @@ binary = "jq"
 # it, since for a budget "may not weaken" means "may not raise".
 [design]
 max_capture_bytes = 16384
+
+# --- the judge's boundary and its command ------------------------------------
+#
+# What may cross into a model call (CLOUD-135), and what to call. The table is
+# optional; without it a `judge` rule cannot resolve a command and is refused at
+# load, which is the intended direction — a judge you did not configure never runs.
+#
+# Every field defaults to the REFUSING reading, because the judge's verdict is
+# advisory and cannot block: content that crosses this boundary buys a signal
+# that is structurally unable to gate, which is an argument for a refusing
+# default rather than a careful one.
+#
+# `raw` names the content classes admitted as bytes: "span_text", "file_text",
+# both, or (the default) neither, which sends pointers and hashes only. There is
+# deliberately no "all" spelling, so the diff that widens the boundary shows what
+# it widened.
+#
+# NOT configurable, deliberately: what happens over the `protected` set. One
+# protected file among a row's matches refuses the WHOLE invocation — not just
+# that file — because silently sending a subset means the verdict is about
+# content the row never described. An opt-in key here is a recorded rejected
+# alternative, not an omission.
+#
+# `max_payload_bytes` is the ceiling on assembled payload bytes; absent means
+# 16384. Over it the invocation is refused whole rather than truncated, since a
+# truncated payload judges a prefix while the record says it judged the row. A
+# local file may lower it and may not raise it.
+#
+# `run` is the command, as a template. Its first whitespace-separated token is a
+# program on your PATH, executed DIRECTLY and never through a shell, so this is
+# data a reviewer can read rather than a script. The payload crosses on the
+# command's stdin — never argv, which is world-readable process state.
+#
+# `model` is opaque to Batten: never parsed, never validated against a list. It is
+# substituted wherever `{{model}}` appears in `run`, and naming the placeholder
+# without setting this key is refused rather than passed through literally.
+[judge]
+raw = ["span_text"]
+max_payload_bytes = 16384
+run = "my-judge --model {{model}}"
+model = "some-model-id"

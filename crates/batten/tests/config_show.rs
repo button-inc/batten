@@ -71,6 +71,8 @@ max_lines = 200
 
 [judge]
 raw = ["span_text"]
+run = "judge-stub --strict"
+model = "some-model"
 
 [design]
 max_capture_bytes = 8192

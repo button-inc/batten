@@ -188,6 +188,26 @@
     "version"
   ],
   "$defs": {
+    "AdvisoryTier": {
+      "description": "Advisory severity as **required response latency** — *how fast it must be\nanswered* (CLOUD-80).\n\nThis is the one severity field the findings store persists (CLOUD-78);\n[`RuleSeverity`] and [`ReportLevel`] are derived from it through [`TABLE`].\nDeclared weakest-first (longest permitted latency first): derived [`Ord`] is\nthe severity rank.\n\n`JsonSchema` because CLOUD-56 made it a *config* vocabulary as well as a\nstored one: a `judge` row declares `tier` where every other kind declares\n`severity`, so the published schema has to describe it or an editor would\nflag the one column that kind cannot do without.",
+      "oneOf": [
+        {
+          "description": "Answer eventually: no bounded response deadline.",
+          "type": "string",
+          "const": "advisory"
+        },
+        {
+          "description": "Answer soon: a bounded deadline, but the session need not stop.",
+          "type": "string",
+          "const": "caution"
+        },
+        {
+          "description": "Answer now: the response is due before the work continues.",
+          "type": "string",
+          "const": "warning"
+        }
+      ]
+    },
     "Budget": {
       "description": "The `[budget]` table: **named** file sets and what each may cost.\n\nA map, not a struct with a field per set. The set name is the *consumer's*\n— `[budget.instructions]` is this repository's name for its always-loaded\ncontext, and an engine type carrying that name would be a consumer-specific\nidentifier in `crates/batten` (non-negotiable rule 1). A second consumer\nbudgeting a different surface declares `[budget.<their-name>]` and needs no\nengine change; before this it needed a new field.",
       "type": "object",
@@ -370,12 +390,26 @@
           "format": "uint",
           "minimum": 0
         },
+        "model": {
+          "description": "The model the operator's command should use, substituted into [`Judge::run`]\nat each `{{model}}` placeholder.\n\n**Opaque to the engine**: never parsed, never validated against a list,\nnever used to decide anything. Batten has no opinion about which model a\nconsumer judges with, and a build that shipped a roster would be stating\none — plus going stale (non-negotiable rule 1: the fact is the consumer's).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "raw": {
           "description": "The content classes admitted **raw** into a model call. Empty — the\ndefault — means pointer-only: no span bytes cross at all.\n\nA class named here is admitted and nothing else is. There is deliberately\nno \"all\" spelling: a config that wants both classes names both, so the\ndiff that widens the boundary shows what it widened.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/PayloadClass"
           }
+        },
+        "run": {
+          "description": "The judge command, as a template. The first whitespace-separated token is\na program on the operator's `PATH`, **executed directly and never through\na shell** — so this is data a reviewer can read, not a script.\n\nAbsent is legal on its own: a `[judge]` table predates the judge that\nreads it (CLOUD-135 landed first), and a repository that declared a\nboundary and no command must keep loading. It is a judge **row** that\ncannot resolve without one — see [`argv`].",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false
@@ -515,21 +549,6 @@
         "binary"
       ]
     },
-    "ReceiptKey": {
-      "description": "Which git fact a receipt is keyed to, and therefore what invalidates it.\n\nThe distinction is not a tuning knob, it is what the receipt *attests*.\nA `head` receipt claims something about those exact bytes, so an amend or a\nrebase must expire it. A `branch` receipt claims a decision about the work,\nwhich every commit on the branch continues to serve, so a SHA-keyed one\nwould demand a re-claim per commit — the false-positive rate that gets a\nguard bypassed. Both spellings are carried from the shell layer that proved\nthem (`ready-guard` keys by SHA, `claim-check` by branch).",
-      "oneOf": [
-        {
-          "description": "Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it.",
-          "type": "string",
-          "const": "head"
-        },
-        {
-          "description": "Keyed to the branch; every commit on it continues to serve the claim.",
-          "type": "string",
-          "const": "branch"
-        }
-      ]
-    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
       "type": "object",
@@ -548,18 +567,15 @@
             "null"
           ]
         },
-        "checks": {
-          "description": "The receipts a [`RuleKind::Receipt`] row requires, all of which must be\nvalid before the matched call is allowed. Required by that kind,\nrejected by every other.\n\nA list rather than a single name because the predicate this ports is\nalready a conjunction — readying a PR requires that the branch both\nverified and is linear on the trunk — and expressing it as two rows\nwould let one be deleted while the other kept the gate looking whole.",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
         "contains": {
           "description": "An extra literal that must appear in the mediated command **as written**\nfor a [`RuleKind::Shape`] rule to fire. Optional, that kind only.\n\nIt exists for one real case rather than as a general escape hatch: a\nlanding directive lives inside a quoted `--body`, so it is not one of the\nwords the shape matches, and without this an ordinary `gh pr comment`\nwould be denied alongside the one that carries the directive. Matched\nagainst the raw text of the same segment, quotes included.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "criteria": {
+          "description": "What a [`RuleKind::Judge`] row asks the model — the committed evaluation\ninstruction handed to the judge command (CLOUD-56).\n\n**Committed, and that is the point.** The question a model is asked is\npolicy: it belongs in the authority a reviewer reads and a diff shows,\nnot in a prompt assembled at run time out of something else. It is also\nthe one payload class that carries no egress question at all\n([`crate::judge::RuleText`]) — it is the config author's own words, on\ntheir way back to them.",
           "type": [
             "string",
             "null"
@@ -606,17 +622,6 @@
           "type": [
             "string",
             "null"
-          ]
-        },
-        "key": {
-          "description": "Which git fact a [`RuleKind::Receipt`] row's receipts are keyed to.\n\nOptional with a pinned default of [`ReceiptKey::Head`], the conservative\none: a HEAD-keyed receipt expires on an amend or a rebase, so omitting\nthe key can only make a gate stricter than intended, never weaker.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReceiptKey"
-            },
-            {
-              "type": "null"
-            }
           ]
         },
         "kind": {
@@ -674,6 +679,17 @@
           "description": "What a match does: `deny` fails the run, `warn` reports without failing\n(until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the\nrule off (cargo-deny's model, CLOUD-61).\n\n**Required, deliberately**: every committed rule states its severity\ndefault explicitly, and there is no implicit fallback — omitting the key\nis a usage error (exit `1`), never a silently assumed level.",
           "$ref": "#/$defs/RuleSeverity"
         },
+        "tier": {
+          "description": "How fast a [`RuleKind::Judge`] finding must be answered\n([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means\n[`AdvisoryTier::Advisory`], the least-urgent rank.\n\nThis is the axis a judge row declares **instead of** `severity`, and the\nsubstitution is the whole advisory bound: `severity` decides the exit\ncontract, `tier` decides a response deadline. A judge row carrying\n`severity` is refused before deserialization (`config::parse`), so the\ncolumn a model's opinion could ride into the exit code does not exist for\nthis kind.\n\nA default rather than a required column, unlike `severity` on every other\nkind: an omitted deadline resolves to the weakest one, which withholds no\ngate because there is no gate here to withhold.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdvisoryTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "verbatim": {
           "description": "Hash the matched span **verbatim** rather than collapsing its whitespace.\n\nFor a rule whose subject *is* literal content, where a reformat genuinely\nchanges the thing being flagged. The default collapses whitespace on the\n`git patch-id` model, so a formatter reflow does not re-mint an identity;\na `verbatim` rule trades that for sensitivity to the bytes it is about.\n`Option<bool>` rather than `bool` so the column census can see presence\n(`Rule::columns`), which is what makes a `verbatim` on a kind that hashes\nno span a usage error instead of an ignored key.",
           "type": [
@@ -713,9 +729,9 @@
           "const": "ratchet"
         },
         {
-          "description": "A mediated call that requires a **verification receipt** to be valid\nbefore it is allowed (CLOUD-312, over CLOUD-203's receipt store).\n\nDistinct from [`RuleKind::Shape`], which refuses a command outright:\nthis one refuses a command *whose precondition has not been proved*, and\nthe same command is allowed the moment the receipt exists. The predicate\nis [`crate::receipt::validity`] — already total and fail-closed — so this\nkind adds a trigger and a refusal, never a second opinion about what a\nvalid receipt is.\n\nThe verdicts are resolved at the hook's boundary and handed to the\nadjudicator as data, because adjudication is contractually pure. That is\nthe same split the bypass hatch already uses.",
+          "description": "A **model-validated** rule (CLOUD-56): hand the row's `criteria` and the\nadmitted classes of its matched files to the command in `[judge].run`,\nand read that command's exit code.\n\nThe kind exists for the predicates no static shape can express — \"this\ntest asserts behaviour, not a tautology\" — and it is the one kind whose\noutcome is **advisory-only and structurally unable to block** (house\nstyle §0.3; the 2026-08-07 evidence base measured model judges at AUROC\n≤0.65 on false-success detection, so a judge verdict may inform and never\ngate).\n\n\"Structurally\" is literal, and it is why this variant looks unfinished\nnext to the others: a judge outcome **never becomes a [`Finding`]**.\n`run_rule` cannot produce one — the row is `allow`, which that walker\nalready skips — so [`any_blocking`] and `--fail-on-warning` have nothing\nto see. Blocking is not forbidden here, it is unrepresentable.\n\nDistinct from [`RuleKind::Command`], which also runs something and reads\nan exit code: that one is an *exit-code predicate* whose command is a\ngate, and its findings deny. This one's command consults a model, and its\nfindings advise. The gate/judge line (CLOUD-93) is exactly this pair.",
           "type": "string",
-          "const": "receipt"
+          "const": "judge"
         }
       ]
     },
