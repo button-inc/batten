@@ -486,6 +486,12 @@ local gate = new Mapping<String, Step> {
         // count and the base rev did not. Both halves stop at a nested
         // repository now, so the row spans depth again and this must follow it.
         "tests/**/*.bats",
+        // CLOUD-383's portability row scopes a `forbid` to `mise-tasks/**`, so
+        // those files are an input to `batten check` now — and a step whose glob
+        // does not cover its own inputs stops running for exactly the commits it
+        // is meant to judge. `batten-glob-check` refused the rule until this
+        // followed it, which is the coupling working rather than a chore.
+        "mise-tasks/**",
         "AGENTS.md",
         ".serena/project.yml",
       )

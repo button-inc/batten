@@ -230,6 +230,39 @@ heartbeat_pid=
 reap_residue() {
 	! kill -0 -- -"$1" 2>/dev/null || kill -9 -- -"$1" 2>/dev/null
 }
+
+# THE RENDEZVOUS (CLOUD-383). `wait -n` needs bash 4.3 and its PID-list form
+# needs 5.1; macOS ships bash 3.2 as `/bin/bash` and `mise registry` carries no
+# bash, so this file was the last bash-4 construct in the tree — CLOUD-282 fixed
+# every other macOS blocker and could not touch it because another session held
+# the file. `darwin-link` is a required check, so this is not hypothetical.
+#
+# A FIFO is the portable form of the same wait: each racer writes one byte AFTER
+# writing its rc file, and the parent's blocking read returns as soon as either
+# does. That ordering is what preserves the invariant both call sites read — the
+# loser is killed before it reaches its `echo`, so its rc file stays EMPTY, and
+# "empty means this racer never finished" still decides the lap.
+#
+# A racer that finishes second may block writing to a FIFO nobody is reading any
+# more. That is harmless and deliberate: the group kill below reaps it, and its
+# rc file was already written before the write it is blocked on.
+# RETURNS non-zero; it does NOT die. Every caller wraps it in a command
+# substitution, and a `die` inside `$( )` exits the SUBSHELL — the lap would carry
+# on with an empty fifo path and both rc files empty, reporting "no verdict" over
+# a race that never ran. `graded_runs` carries the same warning for the same
+# reason (CLOUD-467); this is that defect rediscovered by writing it again.
+new_rendezvous() {
+	local f
+	f="$(mktemp -u)" || return 1
+	mkfifo "$f" 2>/dev/null || return 1
+	printf '%s' "$f"
+}
+await_first() {
+	# The byte itself carries nothing — which racer won is read from the rc files,
+	# where it always was. This waits, and that is all it does.
+	read -r _ <"$1" || true
+	rm -f "$1"
+}
 # The live race pids, so the EXIT trap can reap what an in-flight race spawned.
 # A land that dies THROUGH the trap — a TERM, a die inside a wait — used to
 # reap only the heartbeat, and a measured 10 minutes of orphaned gh-polling
@@ -979,20 +1012,24 @@ while :; do
 		rc_vm="$(mktemp)"
 		: >"$rc_v"
 		: >"$rc_vm"
+		fifo_v="$(new_rendezvous)" ||
+			die "could not create the race rendezvous for verify — the lap cannot wait on two answers without it, and guessing which one won is the false green this race exists to avoid."
 		(
 			mise run verify
 			echo $? >"$rc_v"
+			echo v >"$fifo_v"
 		) &
 		v_pid=$!
 		(
 			LAND_RACE=verify MAIN_WATCH_INTERVAL="${LAND_VERIFY_WATCH_INTERVAL:-1}" \
 				mise run main-watch "$(git rev-parse origin/main)" >/dev/null 2>&1
 			echo $? >"$rc_vm"
+			echo m >"$fifo_v"
 		) &
 		vm_pid=$!
 		race_pid_a=$v_pid
 		race_pid_b=$vm_pid
-		wait -n "$v_pid" "$vm_pid"
+		await_first "$fifo_v"
 		kill -- -"$v_pid" -"$vm_pid" 2>/dev/null
 		wait "$v_pid" "$vm_pid" 2>/dev/null
 		reap_residue "$v_pid"
@@ -1302,25 +1339,31 @@ while :; do
 	rc_main="$(mktemp)"
 	: >"$rc_ci"
 	: >"$rc_main"
+	fifo_ci="$(new_rendezvous)" ||
+		die "could not create the race rendezvous for the CI wait — the lap cannot wait on two answers without it, and guessing which one won is the false green this race exists to avoid."
 	(
 		mise run ci-wait
 		echo $? >"$rc_ci"
+		echo c >"$fifo_ci"
 	) &
 	ci_pid=$!
 	(
 		LAND_RACE=ci mise run main-watch "$base_main" >/dev/null 2>&1
 		echo $? >"$rc_main"
+		echo m >"$fifo_ci"
 	) &
 	main_pid=$!
 	race_pid_a=$ci_pid
 	race_pid_b=$main_pid
-	# Named pids, not a bare `wait -n`. A bare one returns on the FIRST job of
-	# any kind to exit, and the lease heartbeat is also a job of this shell — so
-	# a heartbeat that ends (its lease lost, or a stub in the suite that returns
-	# at once) would be read as this race concluding, leaving both result files
-	# empty and the lap reporting "no verdict". Measured: it turned every lap of
-	# tests/land.bats into a no-verdict lap.
-	wait -n "$ci_pid" "$main_pid"
+	# THIS RACE'S OWN RENDEZVOUS, and only these two racers write to it. The
+	# property the old `wait -n "$ci_pid" "$main_pid"` bought by naming pids is
+	# kept for free here, and it is load-bearing: a bare `wait -n` returns on the
+	# FIRST job of any kind to exit, and the lease heartbeat is also a job of this
+	# shell — so a heartbeat that ended would read as this race concluding,
+	# leaving both result files empty and the lap reporting "no verdict".
+	# Measured: it turned every lap of tests/land.bats into a no-verdict lap. A
+	# FIFO nobody else writes to cannot be woken by a third job at all.
+	await_first "$fifo_ci"
 	kill -- -"$ci_pid" -"$main_pid" 2>/dev/null
 	# NAMED, never bare. A bare `wait` waits for EVERY background job of this
 	# shell, and since CLOUD-393 one of them is the lease heartbeat — which by

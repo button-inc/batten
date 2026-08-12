@@ -615,6 +615,25 @@ no_fix_reason = "restore the assertions, or waive the reduction deliberately"
 # encoded here — this table records what the HOST enforces, and recording a
 # convention as a host rule would be the second authority the whole issue exists
 # to prevent.
+# `wait -n` IS BASH 4.3, AND ITS PID-LIST FORM IS 5.1 (CLOUD-383). macOS ships
+# bash 3.2 as `/bin/bash` and `mise registry` carries no bash, so one executable
+# `wait -n` under `mise-tasks/` makes that task unrunnable on a platform
+# `darwin-link` treats as a required check. `land` raced two unbounded pollers
+# with it and waits on a FIFO rendezvous now; this is the standing half, so the
+# next race cannot reintroduce it — the shape the portability rows above already
+# use.
+#
+# Anchored to a line start so the ban is on RUNNING it, not on naming it: the
+# rendezvous is documented in comments that say what it replaced, and a rule that
+# forbade the words would delete the explanation along with the construct.
+[[rule]]
+id = "no-bash4-wait-n"
+kind = "forbid"
+glob = "mise-tasks/**"
+regex = "^[ \\t]*wait -n"
+severity = "deny"
+scope = "tree"
+
 [ci]
 required_checks = ["final"]
 

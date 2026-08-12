@@ -1645,8 +1645,13 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# 24 since CLOUD-483: absorbing a provisioning transient adds two — a re-run
 	# the API refused, and the retry budget exhausted. Both exercised below; the
 	# budget one is a COUNT, so the no-wall-clock row above still holds.
-	[ "$stops" -eq 24 ] || {
-		echo "land has $stops stopping conditions; this suite covers 24."
+	# 26 since CLOUD-383: a race rendezvous that cannot be created, once per race.
+	# TWO stops rather than one on purpose — the helper RETURNS the failure and
+	# each caller dies at top level, because a `die` inside the `$( )` every
+	# caller wraps it in would exit only the subshell (CLOUD-467, measured again
+	# here). Both are exercised below.
+	[ "$stops" -eq 26 ] || {
+		echo "land has $stops stopping conditions; this suite covers 26."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -2408,4 +2413,57 @@ reruns() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"re-running run"* ]]
 	[[ "$output" == *"gh run rerun"* ]]
+}
+
+# --- CLOUD-383: the race waits without bash 4 --------------------------------
+
+# Fails the Nth `mkfifo`, so a case can reach the SECOND race's rendezvous — the
+# first one succeeding is what gets the lap as far as the CI wait.
+mkfifo_fails_on() {
+	cat >"$STUB/mkfifo" <<EOF
+#!/usr/bin/env bash
+n=\$(cat "$BATS_TEST_TMPDIR/mkfifo.calls" 2>/dev/null || echo 0)
+n=\$((n + 1)); echo "\$n" >"$BATS_TEST_TMPDIR/mkfifo.calls"
+[ "\$n" != "$1" ] || exit 1
+exec /usr/bin/mkfifo "\$@"
+EOF
+	chmod +x "$STUB/mkfifo"
+}
+
+@test "CLOUD-383: a rendezvous that cannot be created stops, rather than guessing" {
+	# The race decides the lap: whichever of verify and main-watch answers first
+	# ends it, and the loser's EMPTY rc file is what says it never finished. With
+	# no rendezvous there is nothing to wait on, so both rc files would read empty
+	# and the lap would report "no verdict" over a race that never ran.
+	mkfifo_fails_on 1
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"rendezvous for verify"* ]]
+}
+
+@test "CLOUD-383: the CI wait's rendezvous stops too, at top level" {
+	# The second call site, and the reason there are two stops rather than one:
+	# `new_rendezvous` returns its failure instead of dying, so each caller must
+	# die itself. A `die` inside the command substitution would exit the subshell
+	# and the lap would continue with an empty path — which is exactly what the
+	# first cut of this did, and what CLOUD-467 warned about in this same file.
+	mkfifo_fails_on 2
+	pr_state OPEN
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"rendezvous for the CI wait"* ]]
+}
+
+@test "CLOUD-383: the races carry no bash-4 construct" {
+	# THE PORTABILITY PROPERTY, structural because no suite running on bash 5 can
+	# observe it. `wait -n` needs 4.3 and its PID-list form needs 5.1; macOS ships
+	# 3.2 as /bin/bash and `mise registry` carries no bash, so a single executable
+	# `wait -n` here is `land` being unrunnable on a platform `darwin-link` makes
+	# a required check. Prose mentions are exempt: the ban is on running it.
+	run grep -cE '^[[:space:]]*wait -n' "$REAL_LAND"
+	[ "$output" -eq 0 ]
+	# And the rendezvous it was replaced with is really there, so this row cannot
+	# pass by the races having been deleted.
+	run grep -c 'await_first' "$REAL_LAND"
+	[ "$output" -ge 2 ]
 }
