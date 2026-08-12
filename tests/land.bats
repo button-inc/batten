@@ -909,3 +909,17 @@ EOF
 	[ "$status" -eq 1 ]
 	[ "$(lock_calls release)" -ge 1 ]
 }
+
+@test "the CI race waits on ITS OWN pids, never on every background job" {
+	# A bare `wait` waits for every background job of the shell, and since the
+	# landing lease one of them is the heartbeat — which by design never exits.
+	# So a bare wait blocks forever the moment CI answers: `land` sat at that
+	# line for five minutes with every check green and the SHA landable, logging
+	# nothing (CLOUD-383's shape, made certain by the heartbeat).
+	#
+	# Asserted structurally because reproducing it needs a never-exiting child,
+	# which is exactly what would hang this suite. Comments are stripped so this
+	# file's own rationale cannot satisfy the rule it explains.
+	run bash -c "sed 's/#.*//' '$LAND' | grep -nE '^[[:space:]]*wait[[:space:]]*(2>|\$)'"
+	[ "$status" -ne 0 ]
+}

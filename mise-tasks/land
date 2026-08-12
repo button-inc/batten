@@ -383,7 +383,13 @@ while :; do
 	# tests/land.bats into a no-verdict lap.
 	wait -n "$ci_pid" "$main_pid"
 	kill -- -"$ci_pid" -"$main_pid" 2>/dev/null
-	wait 2>/dev/null
+	# NAMED, never bare. A bare `wait` waits for EVERY background job of this
+	# shell, and since CLOUD-393 one of them is the lease heartbeat — which by
+	# design never exits. So a bare wait here blocks forever, every time, the
+	# moment CI answers. Measured: `land` sat at this line for five minutes with
+	# every check green and the SHA landable, logging nothing. CLOUD-383 names
+	# the shape; the heartbeat turned an intermittent hang into a certain one.
+	wait "$ci_pid" "$main_pid" 2>/dev/null
 	ci_rc="$(cat "$rc_ci" 2>/dev/null)"
 	main_rc="$(cat "$rc_main" 2>/dev/null)"
 	rm -f "$rc_ci" "$rc_main"
