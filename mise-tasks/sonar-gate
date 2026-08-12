@@ -111,7 +111,13 @@ verdict=$(printf '%s\n' "$runs" | awk -F'\t' -v want="$check" '
 	!NF || $3 != want { next }
 	{
 		key = $4 "|" sprintf("%020d", $5 + 0)
-		rank = ($1 != "completed") ? 4 : ($2 == "skipped" ? 3 : (($2 == "success" || $2 == "neutral") ? 1 : 2))
+		# `cancelled` ranks with `skipped`, not with a failure (CLOUD-363). A
+		# cancelled run judged nothing, so an unorderable pair holding one must
+		# fall to "no answer" rather than to red — the same precedence
+		# `checks-green` takes, which the header above claims to mirror.
+		# (No apostrophes in here: the awk program is single-quoted, and one
+		# closed it mid-comment while this was being written.)
+		rank = ($1 != "completed") ? 4 : (($2 == "skipped" || $2 == "cancelled") ? 3 : (($2 == "success" || $2 == "neutral") ? 1 : 2))
 		if (!seen || key > bestkey || (key == bestkey && rank > bestrank)) {
 			seen = 1; bestkey = key; bestrank = rank
 			beststatus = $1; bestconcl = $2
@@ -139,8 +145,16 @@ success | neutral)
 	echo "sonar-gate: $check is green on $sha"
 	exit 0
 	;;
-skipped)
-	echo "sonar-gate: not an answer yet on $sha — $check skipped"
+skipped | cancelled)
+	# Both spellings of "no verdict", and the word is carried so a stall can be
+	# diagnosed (CLOUD-363). `cancelled` reaching the catch-all below was worse
+	# here than the defect CLOUD-363 originally fixed: this gate runs INSIDE
+	# `final`, and `final` is in the required roster while the analyzer
+	# deliberately is not — so a cancelled analysis reds `final`, `checks-green`
+	# sees an independent `final failure` with an EMPTY no-verdict bucket, and
+	# the fan-in-over-cancelled-upstreams guard cannot fire on a run it cannot
+	# see. `land` then re-drafts a healthy PR.
+	echo "sonar-gate: not an answer yet on $sha — $check $conclusion"
 	exit 3
 	;;
 *)

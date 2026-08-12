@@ -64,6 +64,24 @@ runs() { printf '%s\n' "$@"; }
 	[ "$status" -eq 3 ]
 }
 
+@test "a cancelled analysis is not an answer either — it judged nothing" {
+	# CLOUD-363, in the THIRD reader of check-run conclusions. This file's header
+	# claims "same shape and same rules as checks-green, deliberately"; it carried
+	# the pre-CLOUD-363 rank, so `cancelled` fell through to the catch-all and
+	# reported red.
+	#
+	# Worse here than in the original defect: this gate runs inside `final`, and
+	# `final` IS in the required roster while the analyzer deliberately is not. So
+	# a cancelled analysis reds `final`, `checks-green` sees an independent
+	# `final failure` with nothing in its no-verdict bucket, and the guard
+	# CLOUD-363 added cannot fire on a run it cannot see — `land` re-drafts a
+	# healthy PR.
+	SONAR_GATE_RUNS="$(runs "completed	cancelled	SonarCloud Code Analysis")" run "$GATE"
+	[ "$status" -eq 3 ]
+	[[ "$output" == *"cancelled"* ]]
+	[[ "$output" != *"::error::"* ]]
+}
+
 @test "another check's failure is none of this gate's business" {
 	# This gate judges exactly one name. `final`'s `needs:` assertion is what
 	# judges our own jobs, and two authorities for one fact is the CLOUD-351
