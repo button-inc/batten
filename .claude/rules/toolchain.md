@@ -111,7 +111,13 @@ schedules, so every session computes the same frontier. Fan-out protocol:
 **`ci-wait` decides terminality over a named required set, never over "any graded
 run"** (CLOUD-327). `$CI_REQUIRED_CHECKS` in `mise.toml [env]` names the checks
 that carry a verdict about this repository, and `land`'s `graded_runs` reads the
-same value, so the two cannot drift. **Each name is judged by its LATEST run**
+same value, so the two cannot drift. **An external analyzer stays out of that
+roster and is gated inside `final` instead** (CLOUD-441): `mise run sonar-gate`
+judges the one check-run by name, in CI and in `verify`. It is not a job, so
+`needs:` cannot reach it and `ci-local-parity` would reject its name; it is not
+draft-gated either, so `graded_runs` counting it would read a draft-era skip set
+as answered. Absent is a pass there for the `zizmor` reason; exit 3 passes in
+`verify` (an unpushed HEAD has no verdict) and fails in CI after a bounded retry. **Each name is judged by its LATEST run**
 (CLOUD-436): a SHA accumulates a check-run per event, so a PR created as a draft
 carries its `opened`-event skip set forever, and judging the union let that
 residue veto a verdict that already existed — an unbounded poll over a green

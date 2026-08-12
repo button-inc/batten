@@ -229,11 +229,24 @@ jobs:
 
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
+  #
+  # It aggregates TWO kinds of verdict, and only one of them can arrive through
+  # `needs:`. Our own jobs do. An external analyzer's check-run cannot: `needs:`
+  # resolves to jobs in this file, and `SonarCloud Code Analysis` is posted on
+  # the commit by a GitHub App, so there is no job here to name. It is read by
+  # NAME in the second step instead — which is what keeps the merge contract
+  # itself unchanged. The host still requires exactly `final`; what `final`
+  # means got wider, and that is the property the fan-in exists to provide.
   final:
     name: final
     if: ${{ always() && github.event.pull_request.draft == false }}
     needs: [ci, cross, darwin-link, msrv]
     runs-on: ubuntu-latest
+    # `checks: read` is the whole reason this job now needs a permission at all:
+    # the analyzer's verdict is a check-run on the head commit.
+    permissions:
+      contents: read
+      checks: read
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:
       # Asserted over `needs.*`, never over an enumeration of it. The enumerated
@@ -257,3 +270,40 @@ jobs:
           [ "${{ contains(needs.*.result, 'failure') }}" = "false" ] &&
             [ "${{ contains(needs.*.result, 'cancelled') }}" = "false" ] &&
             [ "${{ contains(needs.*.result, 'skipped') }}" = "false" ]
+
+      # The external half. Ordered after the `needs:` assertion on purpose: a
+      # red leg of ours is the cheaper, more actionable answer, and there is no
+      # reason to spend a checkout and an install to add a second one to it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # `gh` reads the check-runs; `jq` is what `gh --jq` needs. Nothing
+          # else — this job compiles nothing. See the `ci` job for why these
+          # lists are narrow and why auto-install is off.
+          install_args: aqua:cli/cli aqua:jqlang/jq
+      # A bounded RETRY, not a wall-clock wait. The analyzer grades in seconds
+      # (measured on #348: 12s from push, against minutes for the matrix beside
+      # it), so by the time every `needs:` job is terminal its verdict is
+      # essentially always in. "Essentially always" is not always, and exit 3 —
+      # `pending`, or a `skipped` awaiting its replacement — is precisely the
+      # state a moment's patience resolves. Six tries is the backstop on a
+      # runaway, the same shape as `LAND_MAX_LAPS`.
+      #
+      # An exhausted 3 FAILS. A non-answer is not a pass anywhere else in this
+      # repository, and it must not become one on the single check the host
+      # requires.
+      - name: Assert the external analyzer's verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          for attempt in 1 2 3 4 5 6; do
+            mise run sonar-gate && exit 0
+            status=$?
+            [ "$status" = 3 ] || exit "$status"
+            echo "sonar-gate: attempt $attempt of 6 found no answer; retrying in 10s"
+            sleep 10
+          done
+          echo "::error:: the analyzer never reached a verdict on $SHA. A non-answer is not a pass." >&2
+          exit 1

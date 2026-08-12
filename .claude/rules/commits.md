@@ -20,7 +20,11 @@ chore, ci, docs, feat, fix, perf, refactor, revert, style, test`. Enforced
   and discards the objects CI tested. `main` only advances to a commit whose
   exact SHA already passed `final` — the single fan-in job every other leg
   reports through, which is what branch protection requires so that adding a job
-  never needs a ruleset change. Which legs feed it is `ci.yml`'s business, and
+  never needs a ruleset change. That indirection is also what let an EXTERNAL
+  check start blocking a merge with no ruleset edit at all: `final` cannot
+  `needs:` an app-posted check-run, so it reads the analyzer's verdict by name
+  through `mise run sonar-gate` (CLOUD-441). The host still requires exactly
+  `final`; what `final` means got wider. Which legs feed it is `ci.yml`'s business, and
   which check-runs carry a verdict for `ci-wait` is `CI_REQUIRED_CHECKS`'s; the
   host ruleset is the one authority for what blocks a merge, and `mise run
 ci-drift` polices `batten.toml`'s `[ci]` projection of it against the live

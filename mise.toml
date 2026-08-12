@@ -633,6 +633,23 @@ if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mi
   echo "::error:: verify: commit-lint failed. No receipt written." >&2
   exit 1
 fi
+# The external analyzer's verdict on this exact HEAD, which `final` asserts in
+# CI (CLOUD-441). Here for the reason every other gate is: what CI runs, verify
+# runs, so the failure is discovered locally and for free rather than costing a
+# runner and a round trip.
+#
+# Exit 3 is a PASS here and a failure in CI, and the asymmetry is the point: 3
+# means "no answer yet", and locally the ordinary reason is that HEAD has not
+# been pushed, so no analyzer has seen it. Refusing there would fail every
+# pre-push verify on a state that is not a defect. In CI the head is pushed by
+# construction, every leg has already finished, and a missing verdict is a real
+# gap. Only 1 (a red analysis) and 2 (a reading we could not take) stop this.
+sonar_rc=0
+mise run sonar-gate || sonar_rc=$?
+if [ "$sonar_rc" != 0 ] && [ "$sonar_rc" != 3 ]; then
+  echo "::error:: verify: sonar-gate failed — see its message. No receipt written." >&2
+  exit 1
+fi
 # The receipt write is the binary's job (CLOUD-203): `batten receipt record`
 # keys the claim to the exact commit verified — an amend or a rebase produces a
 # new HEAD and therefore no receipt, which is the point (see ready-guard) — and
