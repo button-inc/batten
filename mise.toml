@@ -565,18 +565,69 @@ depends = ["doctor --no-targets"]
 #
 # `$(nproc)` rather than a literal: the number that is right for today's
 # ubuntu-latest is wrong the moment a runner changes size, and a stale literal
-# reads as deliberate. Across-files is already enough — the largest file is 49
-# of 800 tests, so the schedule is not tail-bound — and it is the half that is
-# safe by construction: within-file parallelism would interleave a file's own
+# reads as deliberate. It is also the MEASURED optimum, not merely a plausible
+# default (CLOUD-439). The job count was swept in both directions on a 4-core
+# box, in-gate under `mise run ci`, receipts bypassed, cargo forced to rebuild:
+#
+#   workers      2       4      6      8     12
+#   test:bats  210.7s  100.3s 104.1s 106.0s 105.9s
+#   whole gate 224.9s  111.1s 117.5s 118.0s 120.5s
+#
+# Both directions are worse, so do not "budget" this number down. Halving it
+# doubles the step, because this suite is the pole of the gate — 100s of a 111s
+# hk run — and taking workers off the pole costs far more than the CPU
+# oversubscription it relieves. Raising it past the core count buys nothing
+# either: the cases are fork-bound, but not enough to beat the contention the
+# extra workers add.
+#
+# CLOUD-439 also retired the premise that sent it looking. The suite was read as
+# running 2.65x slower in-gate than alone (72.73s vs 192.59s), attributed to
+# three steps each claiming `nproc` — hk's own `--jobs`, `cargo test`'s pool and
+# clippy's `-j`, ~12 workers on 4 cores. Those two numbers came from DIFFERENT
+# MACHINES: 72.73s local, 192.59s on `ubuntu-latest` (run 31535645426, job
+# 93926035222). Measured on one box, same commit, same suite, in-gate vs alone
+# is 90.26s -> 100.3s: contention costs ~10s, about 1.11x. Capping hk to one
+# slot per chain was measured too and cost ~19s, because the ~23 sub-second
+# gates stop overlapping the two long chains. The gap CLOUD-398 is sizing is a
+# slower runner, not this repo oversubscribing it.
+#
+# Across-files is already enough — the largest file is 54 of 1039 cases, ~21% of
+# a worker's share, so the schedule is not tail-bound — and it is the half that
+# is safe by construction: within-file parallelism would interleave a file's own
 # setup/teardown with its cases, which is exactly what the suites that model
 # lock and race behaviour must not have done to them.
+#
+# THE COUNT IS ASSERTED, NOT THE EXIT CODE. The failure mode every change in
+# this series risks is "faster because it ran fewer", and a green exit is blind
+# to it — a narrowed glob, a stray filter, or a worker that died mid-file all
+# pass. No total is written down: the tracked `@test` declarations are counted
+# and compared against bats' own TAP report, so adding a case needs no edit
+# here. Output stays a pointer (rule 4) — two counts and the worker count, never
+# a case name.
+#
+# This body runs under /bin/sh with no `set -e`, so every step is guarded
+# explicitly rather than trusting the previous line.
 # Receipt-gated (CLOUD-424). Deliberately glob-less in step-receipt's table:
 # these suites read mise.toml, hk.pkl, workflows and fixture trees all over the
 # repo, so the honest input set is the whole tracked tree — a rebase that
 # changed no bytes still skips, and any content change anywhere re-runs.
 run = '''
 if mise run step-receipt check test:bats; then exit 0; fi
-if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$(nproc)" --no-parallelize-within-files tests/*.bats; then exit 1; fi
+expected=$(git grep -c '^@test ' -- 'tests/*.bats' | awk -F: '{s+=$2} END{print s+0}')
+if [ "$expected" -lt 1 ]; then
+  echo "::error:: test:bats: counted $expected @test declarations under tests/ — the count this run is judged against could not be computed, so the run cannot be trusted to have covered the suite." >&2
+  exit 1
+fi
+workers=$(nproc)
+report=$(mktemp -d) || exit 1
+trap 'rm -rf "$report"' EXIT
+if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$workers" --no-parallelize-within-files --report-formatter tap --output "$report" tests/*.bats; then exit 1; fi
+ran=$(grep -cE '^(ok|not ok) ' "$report/report.tap")
+if [ "$ran" != "$expected" ]; then
+  echo "::error:: test:bats: $ran of $expected cases reported by the runner. A suite that got faster by running fewer tests is the failure this asserts against." >&2
+  exit 1
+fi
+echo "test:bats: $ran/$expected cases, $workers workers"
 mise run step-receipt record test:bats || true
 '''
 

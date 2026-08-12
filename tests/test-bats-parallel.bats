@@ -1,7 +1,13 @@
 #!/usr/bin/env bats
 # The shell suite was 83% of the CI critical path (CLOUD-386): 247.01s of the
-# `ci` job's 298.87s, 778 tests run one at a time, and `verify` pays it a second
-# time on every `land` lap. Parallelising it is the change; this is its gate.
+# `ci` job's 298.87s, run one at a time, and `verify` pays it a second time on
+# every `land` lap. Parallelising it is the change; this is its gate.
+#
+# It is still the pole after parallelising — 100s of a 111s hk gate, measured
+# in-gate on a 4-core box (CLOUD-439) — which is why the job count is swept and
+# pinned rather than merely present, and why the count of cases that actually
+# RAN is asserted. A suite that gets faster by losing tests is the failure mode
+# every change in this series risks.
 #
 # A speed-up is the one kind of fix that rots silently. Nothing fails when the
 # `--jobs` flag is dropped in a merge or edited away — the suite still passes,
@@ -43,7 +49,42 @@ setup() {
 	# `$(nproc)` rather than a literal: the 4 that is right for today's
 	# ubuntu-latest is wrong the moment a runner changes size, and a stale
 	# literal reads as deliberate.
-	[[ "$RUN" == *'--jobs "$(nproc)"'* ]]
+	#
+	# Derived ONCE and read from a variable (CLOUD-439). The body reports the
+	# count it used, and a second `$(nproc)` to print it would be a second
+	# authority for one number — the shape non-negotiable 6 refuses, and the
+	# exact defect CLOUD-439 went looking for elsewhere.
+	[[ "$RUN" == *'workers=$(nproc)'* ]]
+	[[ "$RUN" == *'--jobs "$workers"'* ]]
+	run grep -cE '^[^#]*nproc' mise.toml
+	[ "$status" -eq 0 ]
+	[ "$output" -eq 1 ]
+}
+
+@test "the job count is not capped below the machine — that was measured, and it is a large regression" {
+	# CLOUD-439 swept this in both directions in-gate on a 4-core box: at 2
+	# workers `test:bats` went 100.3s -> 210.7s and the whole gate 111.1s ->
+	# 224.9s. This suite is the pole of the gate, so workers taken off it cost
+	# far more than the oversubscription they relieve. The sweep is recorded
+	# beside the invocation; this is the half that makes re-capping it red
+	# rather than merely slow, since `timeout-check` has 3.4x headroom over p95
+	# and would absorb the regression invisibly. A count of 1 has its own case
+	# below; this one refuses every fraction of the machine between them.
+	[[ "$RUN" != *'nproc) / '* ]]
+	[[ "$RUN" != *'nproc)/'* ]]
+}
+
+@test "the run asserts how many cases it executed, not merely that none failed" {
+	# The failure mode every change in this series risks is "faster because it
+	# ran fewer", and a green exit code is blind to it. The body counts the
+	# tracked @test declarations and compares them against bats' own TAP
+	# report; neither number is written down, so adding a case needs no edit
+	# here.
+	[[ "$RUN" == *"--report-formatter tap"* ]]
+	[[ "$RUN" == *"git grep -c '^@test '"* ]]
+	[[ "$RUN" == *'"$ran" != "$expected"'* ]]
+	# Pointer, never payload (rule 4): the failure names counts, never a case.
+	[[ "$RUN" == *'of $expected cases reported by the runner'* ]]
 }
 
 @test "a jobs count of 1 is refused — that is serial wearing the flag's costume" {
@@ -57,7 +98,8 @@ setup() {
 	# over strings, but the ones that touch real toolchain state
 	# (target-ensure.bats, anything invoking doctor) are exactly the ones a
 	# within-file schedule would interleave. Across-files is already enough:
-	# the largest file is 49 of 778 tests, so the schedule is not tail-bound.
+	# the largest file is 54 of 1039 cases — ~21% of a worker's share at the
+	# measured-optimal four workers — so the schedule is not tail-bound.
 	[[ "$RUN" == *"--no-parallelize-within-files"* ]]
 }
 
