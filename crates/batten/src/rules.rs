@@ -2492,6 +2492,8 @@ mod tests {
                         "direction" => rule.direction = Some(Direction::NonDecreasing),
                         "base" => rule.base = Some("HEAD".to_owned()),
                         "checks" => rule.checks = Some(vec!["verify".to_owned()]),
+                        "criteria" => rule.criteria = Some("does this read as intentional".to_owned()),
+                        "no_fix_reason" => rule.no_fix_reason = Some("answered by hand".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
                     }
                 }
