@@ -135,6 +135,33 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
 CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,semver,final,action"
+# The subset of that roster for which ABSENCE — no check-run at all, as opposed
+# to one that graded `skipped` — is a legitimate reading rather than a name that
+# has not registered yet. Exactly two names earn it, and each earns it twice
+# over, on two independent grounds:
+#
+#   1. Their workflow is PATHS-FILTERED. `zizmor.yml` fires on
+#      `.github/workflows/**` + `action.yml`; `test.yml` (the `action` job) on
+#      `action.yml`, its own file, and the fixture corpus. A PR touching none of
+#      those paths creates no run for them, ever, on any event.
+#   2. Neither declares `types:`, so both take the default
+#      [opened, synchronize, reopened] — which omits `ready_for_review`,
+#      precisely the event `land`'s `--undo` re-fire emits. Every other required
+#      workflow names that type explicitly (see ci.yml, commit-lint.yml), so a
+#      lap that re-readies a PR mints runs for all of them and none for these
+#      two. Either ground alone would be enough; both hold.
+#
+# UNSET OR EMPTY IS THE STRICT DIRECTION — every roster name must be PRESENT —
+# and that is the safe default because the two failures are not symmetric. A
+# name this gate waits for that never arrives is a STALL: it is visible in the
+# poll, it names itself, and adding it here clears it. A name it forgives that
+# had merely not registered yet is a FALSE GREEN, and #280 measured where that
+# ends — `commit-lint` grades in seconds on a fresh SHA while `ci`, `cross`,
+# `msrv`, `semver`, `darwin-link` and `final` have not started, the old gate read
+# that one success as the whole roster, and `land` posted /fast-forward into a
+# branch protection still listing the other six as expected. The bot was
+# rejected. A stall is recoverable; a false green is not (CLOUD-337).
+CI_ABSENT_OK_CHECKS = "zizmor,action"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.

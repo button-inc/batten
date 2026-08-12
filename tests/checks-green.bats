@@ -20,11 +20,78 @@ setup() {
 # reading with no ordering key exactly as before is itself a property.
 runs() { printf '%s\n' "$@"; }
 
+# The seven roster names for which ABSENCE is NOT a legitimate reading
+# (CLOUD-337) — $CI_REQUIRED_CHECKS minus $CI_ABSENT_OK_CHECKS — all green, with
+# whatever rows the case names appended after them. Any case whose subject is
+# something OTHER than presence has to carry them now: a reading that omits one
+# answers "no run at all" and exit 3 before it ever reaches the bucket the case
+# is about, so it would pass on the wrong branch or hang the poll in `ci-wait`.
+#
+# Written with an ordering key at the floor of the day and ids 1..7, so a row a
+# case supplies for the same name is NEWER and supersedes it under CLOUD-436's
+# latest-per-name rule. That is what lets the supersession cases below compose
+# with this helper without their own subject being decided here.
+mandatory_green() {
+	runs \
+		"completed	success	ci	2026-08-12T00:00:00Z	1" \
+		"completed	success	cross	2026-08-12T00:00:00Z	2" \
+		"completed	success	commit-lint	2026-08-12T00:00:00Z	3" \
+		"completed	success	darwin-link (aarch64-apple-darwin)	2026-08-12T00:00:00Z	4" \
+		"completed	success	msrv	2026-08-12T00:00:00Z	5" \
+		"completed	success	semver	2026-08-12T00:00:00Z	6" \
+		"completed	success	final	2026-08-12T00:00:00Z	7" \
+		"$@"
+}
+
 @test "a graded, all-success required set is green" {
-	CHECKS_GREEN_RUNS="$(runs "completed	success	ci")" run "$GREEN"
+	# The whole roster present and green — the reading a PR touching `action.yml`
+	# produces, that being the one path in BOTH path filters, so `zizmor` and
+	# `action` grade here rather than being legitimately absent. Its partner is
+	# the CLOUD-327 row further down, which is this set minus exactly those two:
+	# between them they fix that the exemption is a tolerance of absence and
+	# never a discount on a name that did run.
+	CHECKS_GREEN_RUNS="$(mandatory_green \
+		"completed	success	zizmor	2026-08-12T00:00:00Z	8" \
+		"completed	success	action	2026-08-12T00:00:00Z	9")" run "$GREEN"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"success"*"ci"* ]]
 	[[ "$output" == *"every required check terminal and green"* ]]
+}
+
+@test "a partial set on a fresh SHA is not an answer (CLOUD-337)" {
+	# THE DISCRIMINATING ROW: this exited 0 before the fix. `commit-lint` is a
+	# git-log walk that grades in seconds while `ci`, `cross`, `msrv`, `semver`,
+	# `darwin-link` and `final` are still queueing, so a reading of exactly one
+	# graded check is the ORDINARY state of a freshly pushed SHA, not a corner
+	# case. The old `if (!(name in bestkey)) continue` made every unregistered
+	# name invisible, so the roster was answered by whichever check happened to
+	# be quickest, and `land` posted /fast-forward into a branch protection
+	# still listing the other six as expected — the bot was rejected (#280).
+	CHECKS_GREEN_RUNS="$(runs "completed	success	commit-lint")" run "$GREEN"
+	[ "$status" -eq 3 ]
+	# Roster order, and the two tolerated names elided from it — the output is a
+	# contract (house style §6), so the list is asserted as a whole rather than
+	# name by name.
+	[[ "$output" == *"with no run at all: ci, cross, darwin-link (aarch64-apple-darwin), msrv, semver, final"* ]]
+	[[ "$output" != *"zizmor"* ]]
+}
+
+@test "a failure outranks a name that has not registered (CLOUD-337)" {
+	# A GUARD-RAIL, not a discriminator: this PASSED before the fix, because a
+	# name with no run was invisible then and there was no bucket for it to lose
+	# to. It pins the ordering the fix introduces — the missing-name exit 3
+	# fires only when the failed list is EMPTY — and the asymmetry with the
+	# cancelled bucket above is the whole reason it needs pinning. A cancelled
+	# sibling can MANUFACTURE a fan-in failure (`final` needs: the others, #293),
+	# so no-verdict precedes red there; an absent name manufactures nothing, so
+	# a completed failure beside it is an independent verdict on this tree and
+	# must still re-draft the PR. Holding the poll open for the stragglers would
+	# leave a ready PR over a tree already known to be red, buying a runner a lap
+	# to re-learn it.
+	CHECKS_GREEN_RUNS="$(runs "completed	failure	ci")" run "$GREEN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ci failure"* ]]
+	[[ "$output" != *"no run at all"* ]]
 }
 
 @test "an all-skipped required set is not an answer" {
@@ -122,18 +189,27 @@ runs() { printf '%s\n' "$@"; }
 @test "a third-party check gets neither a vote nor a veto" {
 	# Branch protection enforces the required set, so a failure outside it must
 	# not hold `main`.
-	CHECKS_GREEN_RUNS="$(runs \
+	CHECKS_GREEN_RUNS="$(mandatory_green \
 		"completed	failure	SonarCloud Code Analysis" \
-		"completed	skipped	release-plz" \
-		"completed	success	ci")" run "$GREEN"
+		"completed	skipped	release-plz")" run "$GREEN"
 	[ "$status" -eq 0 ]
 }
 
-@test "an absent path-filtered check is not a skipped one" {
-	# `zizmor` produces no check-run at all on a PR touching no workflow.
-	# Requiring every required name to be PRESENT would hang the ordinary PR.
-	CHECKS_GREEN_RUNS="$(runs "completed	success	ci")" run "$GREEN"
+@test "an absent path-filtered check is not a skipped one (CLOUD-327)" {
+	# `zizmor` and the `action` job produce no check-run AT ALL on a PR touching
+	# neither a workflow, `action.yml`, nor the fixture corpus, because both
+	# their workflows are paths-filtered. Requiring them to be PRESENT would
+	# hang the ordinary PR forever, so $CI_ABSENT_OK_CHECKS names them.
+	#
+	# This row used to prove that with a lone `ci` success standing in for the
+	# whole roster — which asserted the CLOUD-337 BUG rather than the CLOUD-327
+	# exemption: it passed because a reading of one graded check answered for
+	# nine, so it would have gone on passing with the exemption deleted. Stated
+	# now the way it is implemented: the seven mandatory names present and
+	# green, and exactly the two tolerated names missing.
+	CHECKS_GREEN_RUNS="$(mandatory_green)" run "$GREEN"
 	[ "$status" -eq 0 ]
+	[[ "$output" == *"every required check terminal and green"* ]]
 }
 
 @test "an unset required set is fatal rather than an empty one" {
@@ -154,7 +230,13 @@ runs() { printf '%s\n' "$@"; }
 	# #342 and #345: readied without a push, the graded set landed beside the
 	# draft-era skips on the same SHA, and the union read it as no answer. The
 	# poll ran unbounded over a head whose every required check was green.
-	CHECKS_GREEN_RUNS="$(runs \
+	#
+	# The helper carries the other six mandatory names (CLOUD-337) and a third
+	# `ci` run at the floor of the day, which BOTH rows below supersede — so the
+	# verdict on `ci` is still decided by this pair and nothing else, and a
+	# regression to union-per-name would put the skip back in the way and turn
+	# this red.
+	CHECKS_GREEN_RUNS="$(mandatory_green \
 		"completed	skipped	ci	2026-08-12T03:18:10Z	93999182343" \
 		"completed	success	ci	2026-08-12T03:20:16Z	93999484435")" run "$GREEN"
 	[ "$status" -eq 0 ]

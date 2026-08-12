@@ -48,7 +48,18 @@ verdict_of="$(dirname "$0")/checks-green"
 echo "ci-wait: polling check-runs for $sha (conditional, ${interval}s)"
 
 while :; do
-	args=(-i "repos/{owner}/{repo}/commits/$sha/check-runs")
+	# `?per_page=100`, because the default page is 30 and this endpoint returns a
+	# check-run PER EVENT per name, not one per name (CLOUD-436). A nine-name
+	# roster that has been readied, re-drafted and re-readied a few times, plus
+	# the third parties, passes 30 rows without anything unusual happening — and
+	# page 2 is never fetched here, so every row past the first 30 simply does
+	# not exist as far as the verdict is concerned. Under the CLOUD-337
+	# predicate a truncated name reads as ABSENT, so the failure mode is a
+	# stall rather than a false green; it was a false green before that landed,
+	# which is how it survived unnoticed. `checks-green`, `sonar-gate` and
+	# `auto-dependabot-land.yml` all already ask for 100 — this was the one
+	# reader that did not.
+	args=(-i "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100")
 	[ -n "$etag" ] && args+=(-H "If-None-Match: $etag")
 	resp=$(gh api "${args[@]}" 2>/dev/null | tr -d '\r')
 

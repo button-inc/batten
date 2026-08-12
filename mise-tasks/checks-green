@@ -33,9 +33,30 @@
 # carries the conclusion alongside the name, because "no verdict" now has two
 # spellings and a stall you cannot spell is a stall you cannot diagnose.
 #
-# ABSENT IS NOT SKIPPED. `zizmor` is path-filtered, so a PR touching no workflow
-# produces no check-run for it at all. Requiring every name to be PRESENT would
-# hang forever on the ordinary PR; requiring none to be skipped does not.
+# ABSENT IS NOT SKIPPED, AND ABSENT IS NOT AN ANSWER EITHER (CLOUD-337). A
+# path-filtered workflow produces no check-run at all, so `zizmor` on a PR
+# touching no workflow is legitimately missing and requiring it would hang. That
+# was implemented as an unconditional `continue` over every name with no run —
+# and the unconditional half is a false green with #261's exact shape, one
+# roster wide instead of one conclusion deep. On a fresh SHA `commit-lint`
+# grades in seconds while `ci`, `cross`, `msrv`, `semver`, `darwin-link` and
+# `final` have not registered, so a reading carrying that single success
+# answered "every required check terminal and green" over a set of one. `land`
+# then posted /fast-forward into a branch protection still listing the other six
+# as expected, and the bot was rejected (measured on #280).
+#
+# So absence is legitimate for exactly the names $CI_ABSENT_OK_CHECKS lists
+# (mise.toml [env] carries the two grounds each of them earns it on), and every
+# other roster name must be PRESENT. Unset or empty is the STRICT direction,
+# because the two failures are not symmetric: a name this gate waits for that
+# never arrives is a stall — visible in the poll, self-naming, cleared by adding
+# it there — while a name it forgives that had merely not registered yet is a
+# landing nobody judged.
+#
+# ORDERING, and it is the subtle half: a real failure OUTRANKS a missing name,
+# so the missing-name exit 3 fires only when the failed list is EMPTY. The
+# asymmetry with the cancelled bucket below is deliberate and is argued where it
+# is implemented, at the verdict.
 #
 # ONE NAME, ONE ANSWER: ITS LATEST RUN (CLOUD-436). A SHA accumulates a
 # check-run per event, and a PR created as a draft mints a whole `skipped` set
@@ -61,7 +82,8 @@
 # Four outcomes, because the caller's next move differs for each: 0 green, 1 red
 # (a required check failed — terminal, stop), 2 could not look (unset roster, an
 # API that would not answer — the case where this gate decided nothing), 3 no
-# answer yet (pending, or a required check skipped — poll again, or hold). A
+# answer yet (pending, a required check skipped, or a required name with no run
+# at all — poll again, or hold). A
 # reading is injectable through $CHECKS_GREEN_RUNS as TSV lines
 # `status<TAB>conclusion<TAB>name<TAB>started_at<TAB>id`, which is both how
 # `ci-wait` hands over the body it already fetched conditionally and how the
@@ -87,6 +109,16 @@ required="${CI_REQUIRED_CHECKS:-}"
 [ -n "$required" ] ||
 	fail_input "CI_REQUIRED_CHECKS is unset — run this through \`mise run checks-green\`, which is where the required set is declared."
 
+# The names for which having NO run at all is a legitimate reading, read beside
+# the roster and deliberately NOT fatal when unset (CLOUD-337). Unset is the
+# empty set, which is the STRICT direction — every roster name must be present —
+# and that asymmetry with $CI_REQUIRED_CHECKS above is the point: forgetting the
+# roster makes every check unrequired, while forgetting this one only makes the
+# gate wait for a name that may never come. A stall is loud, bounded by whoever
+# reads the poll, and costs time; a false green lands a SHA nothing judged and is
+# not recoverable after the fact.
+absent_ok="${CI_ABSENT_OK_CHECKS:-}"
+
 sha="${SHA:-$(git rev-parse HEAD 2>/dev/null || true)}"
 
 # `${VAR+set}` rather than emptiness: an explicitly empty reading is a real
@@ -108,8 +140,15 @@ fi
 # One pass over the required subset. `|`-separated because a tab is IFS
 # whitespace and `read` collapses runs of it, which would shift an empty name
 # list into the wrong variable; no check-run name contains a pipe.
-reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
-	BEGIN { n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1 }
+reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" -v absent_ok="$absent_ok" '
+	BEGIN {
+		n = split(req, roster, ","); for (i = 1; i <= n; i++) want[roster[i]] = 1
+		# An unset or empty $CI_ABSENT_OK_CHECKS splits into zero fields, so the
+		# tolerated set is empty and every roster name must be present. The
+		# strict direction is reached by construction here rather than by a
+		# guard above that a later edit could forget to keep (CLOUD-337).
+		k = split(absent_ok, exempt, ","); for (i = 1; i <= k; i++) tolerated[exempt[i]] = 1
+	}
 	!NF || !($3 in want) { next }
 	{
 		name = $3
@@ -137,7 +176,19 @@ reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
 		# awk does not define — this output is a contract (house style §6).
 		for (i = 1; i <= n; i++) {
 			name = roster[i]
-			if (!(name in bestkey)) continue
+			# NO RUN AT ALL FOR THIS NAME. This was an unconditional `continue`,
+			# which made a name with no run invisible and answered the whole
+			# roster from whichever check happened to grade first (CLOUD-337).
+			# Tolerated only for the names the caller declared absent-ok, whose
+			# workflow is paths-filtered AND takes the default event types, so
+			# it never fires on ready_for_review; every other absence is a name
+			# that has not registered yet, which is a fresh SHA, not an answer.
+			if (!(name in bestkey)) {
+				if (name in tolerated) continue
+				missing = missing sep2 name
+				sep2 = ", "
+				continue
+			}
 			print "SUMMARY|" bestconcl[name] "\t" name
 			if (beststatus[name] != "completed") { pending++; continue }
 			# THE NOT-AN-ANSWER BUCKET, and `cancelled` belongs in it (CLOUD-363).
@@ -157,14 +208,14 @@ reading=$(printf '%s\n' "$runs" | awk -F'\t' -v req="$required" '
 				sep4 = ", "
 			}
 		}
-		printf "VERDICT|%d|%d|%s|%s\n", graded + 0, pending + 0, skipped, bad
+		printf "VERDICT|%d|%d|%s|%s|%s\n", graded + 0, pending + 0, skipped, bad, missing
 	}
 ')
 # The judged view — one line per required name that has a run, carrying the very
 # rows the verdict was taken over, so the summary can never contradict it.
 summary=$(printf '%s\n' "$reading" | sed -n 's/^SUMMARY|//p')
 verdict=$(printf '%s\n' "$reading" | sed -n 's/^VERDICT|//p')
-IFS='|' read -r graded pending ungraded failed <<<"$verdict"
+IFS='|' read -r graded pending ungraded failed missing <<<"$verdict"
 
 # "No answer" is tested BEFORE "red", and the order is load-bearing rather than
 # incidental (CLOUD-363). The measured set on #293 was `final failure` plus five
@@ -179,6 +230,26 @@ if [ "$graded" -eq 0 ] || [ "$pending" -gt 0 ] || [ -n "$ungraded" ]; then
 	else
 		echo "checks-green: not an answer yet on $sha — $pending required check(s) still running, $graded graded"
 	fi
+	exit 3
+fi
+
+# A REQUIRED NAME WITH NO RUN AT ALL IS NOT AN ANSWER EITHER (CLOUD-337) — and
+# unlike the bucket above, it YIELDS to a failure rather than outranking one.
+# The `-z "$failed"` guard is the whole subtlety, and the asymmetry is about
+# what each state can MANUFACTURE.
+#
+# A cancelled sibling can manufacture a fan-in failure: `final` declares
+# `needs:` over the others, so cancelling them makes it fail without judging
+# anything (#293's measured set), and reading that as red wedged the branch with
+# no exit — which is why no-verdict precedes red up there.
+#
+# An absent name manufactures nothing. A check-run that was never created cannot
+# have caused a completed `failure` beside it, so that failure is an independent
+# verdict on this tree and must still exit 1 and re-draft the PR. Holding the
+# poll open for the stragglers instead would leave a PR ready over a tree
+# already known to be red, buying a runner per lap to re-learn it.
+if [ -n "$missing" ] && [ -z "$failed" ]; then
+	echo "checks-green: not an answer yet on $sha — required check(s) with no run at all: $missing"
 	exit 3
 fi
 

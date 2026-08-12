@@ -20,16 +20,20 @@ setup() {
 	export PATH SHA=deadbeef CI_WAIT_INTERVAL=1
 }
 
-# Writes a fake `gh` that replays canned HTTP responses, one per call.
+# Writes a fake `gh` that replays canned HTTP responses, one per call, and
+# records the argv of each call — the request itself is a contract too, and
+# `per_page` living in it is what keeps a busy SHA from being read one page deep
+# (CLOUD-337).
 stub_gh() {
 	cat >"$STUB/gh" <<EOF
 #!/usr/bin/env bash
 n=\$(cat "$BATS_TEST_TMPDIR/calls" 2>/dev/null || echo 0)
 echo \$((n + 1)) >"$BATS_TEST_TMPDIR/calls"
+printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/args"
 cat "$BATS_TEST_TMPDIR/resp.\$((n + 1))" 2>/dev/null || cat "$BATS_TEST_TMPDIR/resp.last"
 EOF
 	chmod +x "$STUB/gh"
-	rm -f "$BATS_TEST_TMPDIR/calls"
+	rm -f "$BATS_TEST_TMPDIR/calls" "$BATS_TEST_TMPDIR/args"
 }
 
 response() {
@@ -41,15 +45,62 @@ response() {
 	} >"$BATS_TEST_TMPDIR/$file"
 }
 
+# A whole response body carrying the seven roster names for which ABSENCE is not
+# a legitimate reading (CLOUD-337) — $CI_REQUIRED_CHECKS minus
+# $CI_ABSENT_OK_CHECKS — all green, with any rows the case names appended after
+# them. Every response meant to END the poll has to carry them: `checks-green`
+# answers "no run at all" over a reading that omits one, and here that does not
+# read as a failed assertion but as a HANG, since the poll is unbounded and only
+# the case's own `run_timeout` stops it.
+green_body() {
+	local rows
+	rows='{"status":"completed","conclusion":"success","name":"ci"},'
+	rows+='{"status":"completed","conclusion":"success","name":"cross"},'
+	rows+='{"status":"completed","conclusion":"success","name":"commit-lint"},'
+	rows+='{"status":"completed","conclusion":"success","name":"darwin-link (aarch64-apple-darwin)"},'
+	rows+='{"status":"completed","conclusion":"success","name":"msrv"},'
+	rows+='{"status":"completed","conclusion":"success","name":"semver"},'
+	rows+='{"status":"completed","conclusion":"success","name":"final"}'
+	if [ "$#" -gt 0 ]; then
+		printf '{"check_runs":[%s,%s]}' "$rows" "$*"
+	else
+		printf '{"check_runs":[%s]}' "$rows"
+	fi
+}
+
 @test "green set exits 0 and prints each conclusion" {
 	stub_gh
-	response resp.last 'W/"a"' '{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}'
+	response resp.last 'W/"a"' "$(green_body)"
 	run "$WAIT"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"success"*"ci"* ]]
 }
 
+@test "the check-runs request asks for a full page, not the default 30 (CLOUD-337)" {
+	# The request is part of the predicate. This endpoint returns a check-run
+	# per EVENT per name (CLOUD-436), so a nine-name roster over a PR that has
+	# been readied, re-drafted and re-readied, plus the third parties, clears 30
+	# rows without anything unusual happening — and nothing here fetches page 2.
+	# Under the CLOUD-337 predicate a truncated name reads as absent and stalls
+	# the poll; before it, it read as green. `checks-green`, `sonar-gate` and
+	# `auto-dependabot-land.yml` had asked for 100 all along, so this reader was
+	# the sole divergence.
+	stub_gh
+	response resp.last 'W/"a"' "$(green_body)"
+	run "$WAIT"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$BATS_TEST_TMPDIR/args")" == *"check-runs?per_page=100"* ]]
+}
+
 @test "a failing check exits 1" {
+	# The reading is deliberately a bare `ci failure` with the other six
+	# mandatory names absent, which makes this the poll-level statement of
+	# CLOUD-337's ordering: a real failure outranks a name that has not
+	# registered, so `ci-wait` exits 1 here rather than holding the poll open for
+	# stragglers on a tree already known to be red — which is what re-drafts the
+	# PR and stops the next push buying another runner. Do not "fix" it by
+	# swapping in `green_body`; that is the one edit that would silently retire
+	# the assertion.
 	stub_gh
 	response resp.last 'W/"a"' '{"check_runs":[{"status":"completed","conclusion":"failure","name":"ci"}]}'
 	run "$WAIT"
@@ -62,7 +113,7 @@ response() {
 	# would clear a PR whose CI never ran.
 	stub_gh
 	response resp.1 'W/"a"' '{"check_runs":[{"status":"completed","conclusion":"skipped","name":"ci"}]}'
-	response resp.last 'W/"b"' '{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}'
+	response resp.last 'W/"b"' "$(green_body)"
 	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
@@ -82,8 +133,7 @@ response() {
           {"status":"completed","conclusion":"skipped","name":"ci"},
           {"status":"completed","conclusion":"skipped","name":"final"},
           {"status":"completed","conclusion":"skipped","name":"darwin-link (aarch64-apple-darwin)"}]}'
-	response resp.last 'W/"b"' '{"check_runs":[
-          {"status":"completed","conclusion":"success","name":"ci"}]}'
+	response resp.last 'W/"b"' "$(green_body)"
 	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
@@ -103,9 +153,11 @@ response() {
           {"status":"completed","conclusion":"failure","name":"final"},
           {"status":"completed","conclusion":"cancelled","name":"ci"},
           {"status":"completed","conclusion":"cancelled","name":"cross"}]}'
-	response resp.last 'W/"b"' '{"check_runs":[
-          {"status":"completed","conclusion":"success","name":"ci"}]}'
-	run timeout 20 "$WAIT"
+	response resp.last 'W/"b"' "$(green_body)"
+	# `run_timeout`, not a bare `timeout`: macOS ships no coreutils `timeout` at
+	# all, and this was the one call site in this suite still naming it directly
+	# (CLOUD-282) — a failure on a missing binary, not on a flag.
+	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
 	[[ "$output" == *"ci cancelled"* ]]
@@ -115,10 +167,9 @@ response() {
 	# Branch protection enforces the required set, so a failure outside it must
 	# not hold `main`. The mirror of the case above: same scoping, other sign.
 	stub_gh
-	response resp.last 'W/"a"' '{"check_runs":[
+	response resp.last 'W/"a"' "$(green_body '
           {"status":"completed","conclusion":"failure","name":"SonarCloud Code Analysis"},
-          {"status":"completed","conclusion":"skipped","name":"release-plz"},
-          {"status":"completed","conclusion":"success","name":"ci"}]}'
+          {"status":"completed","conclusion":"skipped","name":"release-plz"}')"
 	run "$WAIT"
 	[ "$status" -eq 0 ]
 }
@@ -130,8 +181,7 @@ response() {
 	response resp.1 'W/"a"' '{"check_runs":[
           {"status":"completed","conclusion":"success","name":"SonarCloud Code Analysis"},
           {"status":"in_progress","conclusion":null,"name":"ci"}]}'
-	response resp.last 'W/"b"' '{"check_runs":[
-          {"status":"completed","conclusion":"success","name":"ci"}]}'
+	response resp.last 'W/"b"' "$(green_body)"
 	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
@@ -164,7 +214,7 @@ response() {
 	stub_gh
 	response resp.1 'W/"a"' '{"check_runs":[{"status":"in_progress","conclusion":null,"name":"ci"}]}'
 	printf 'HTTP/2.0 304 Not Modified\nETag: W/"a"\n\n' >"$BATS_TEST_TMPDIR/resp.2"
-	response resp.last 'W/"b"' '{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}'
+	response resp.last 'W/"b"' "$(green_body)"
 	run run_timeout 20 "$WAIT"
 	[ "$status" -eq 0 ]
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 3 ]
@@ -174,7 +224,7 @@ response() {
 	stub_gh
 	{
 		printf 'HTTP/2.0 200 OK\nETag: W/"a"\nX-Poll-Interval: 2\n\n'
-		printf '%s\n' '{"check_runs":[{"status":"completed","conclusion":"success","name":"ci"}]}'
+		printf '%s\n' "$(green_body)"
 	} >"$BATS_TEST_TMPDIR/resp.last"
 	run "$WAIT"
 	[ "$status" -eq 0 ]
