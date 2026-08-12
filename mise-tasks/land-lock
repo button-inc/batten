@@ -156,10 +156,19 @@ mint() {
 	# so a released lease hands over immediately while a merely expired one still
 	# has to be corroborated (see `sha_held_for`). Conflating the two made a
 	# release wait a full beat before anyone could take it.
+	# The identity is supplied explicitly, and that is a portability fix rather
+	# than a style choice: `git commit-tree` refuses with "Author identity
+	# unknown" on any machine with no configured `user.email` — a CI runner, a
+	# fresh clone. Measured: every acquiring test in this suite passed locally and
+	# failed in CI for exactly that reason. Pinning it also makes the lease object
+	# independent of whoever runs it, which is the right property for a commit
+	# nobody authored and nothing merges.
 	printf 'land-lock\nholder: %s\nexpires: %s\nnonce: %s\n' \
 		"$(holder_id)" "$([ "${1:-}" = 0 ] && echo 0 || echo "$(($(now) + ${1:-$ttl}))")" \
 		"$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')" |
-		git commit-tree "$tree"
+		GIT_AUTHOR_NAME=batten GIT_AUTHOR_EMAIL=batten@localhost \
+			GIT_COMMITTER_NAME=batten GIT_COMMITTER_EMAIL=batten@localhost \
+			git commit-tree "$tree"
 }
 
 observed_sha=
@@ -233,7 +242,18 @@ observe() {
 #
 # The flag is also named backwards for what it does here. It is the OPPOSITE of a
 # force push: it refuses in exactly the case a plain `--force` would clobber.
-swap() { git push --quiet --force-with-lease="$ref:$1" "$remote" "$(mint "${2:-}"):$ref" 2>/dev/null; }
+# A FAILED MINT MUST NEVER BECOME A DELETE. Interpolating `$(mint)` straight
+# into the refspec meant an empty result produced `":$ref"` — which is git's
+# delete refspec, not a no-op. On the renew path, whose expected value is our own
+# live lease, that CAS would have succeeded and destroyed the lease we held. The
+# mint is captured and checked first so a failure is a refused swap, which every
+# caller already handles.
+swap() {
+	local lease
+	lease=$(mint "${2:-}") || return 1
+	[ -n "$lease" ] || return 1
+	git push --quiet --force-with-lease="$ref:$1" "$remote" "$lease:$ref" 2>/dev/null
+}
 
 # `-ge`, not `-gt`: a lease with zero seconds left has none, and the release
 # tombstone sets the expiry to exactly now. Under `-gt` that read as still-held

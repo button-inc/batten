@@ -285,3 +285,40 @@ lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land
 	run lock "$RIVAL" held
 	[ "$status" -eq 0 ]
 }
+
+@test "NO GIT IDENTITY: the lease is takeable on a machine with no user.email" {
+	# `git commit-tree` refuses with "Author identity unknown" wherever no
+	# user.email is configured — a CI runner, a fresh clone. Every acquiring test
+	# in this suite passed locally and failed in CI for exactly that reason, so
+	# the identity is supplied by `mint` rather than inherited from the machine.
+	# HOME is redirected because a global config would mask the very absence
+	# being tested.
+	HOME="$BATS_TEST_TMPDIR/nohome" GIT_CONFIG_GLOBAL=/dev/null \
+		GIT_CONFIG_SYSTEM=/dev/null run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"acquired by"* ]]
+	lease_sha
+}
+
+@test "A FAILED MINT IS A REFUSED SWAP, NEVER A DELETE" {
+	# `swap` used to interpolate $(mint) straight into the refspec, so an empty
+	# mint produced ":$ref" — git's DELETE refspec. On the renew path, whose
+	# expected value is our own live lease, that CAS would have succeeded and
+	# destroyed the lease we held. Breaking the mint must refuse, not delete.
+	lock "$MINE" acquire
+	before=$(lease_sha)
+	# `git` that fails only for commit-tree: mint breaks, everything else works.
+	cat >"$STUB/git" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" != commit-tree ] || exit 1
+exec /usr/bin/git "$@"
+EOF
+	chmod +x "$STUB/git"
+	run lock "$MINE" renew
+	rm -f "$STUB/git"
+	[ "$status" -ne 0 ]
+	# The lease must still be there, and still be ours.
+	[ "$(lease_sha)" = "$before" ]
+	run lock "$MINE" held
+	[ "$status" -eq 0 ]
+}
