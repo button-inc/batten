@@ -202,6 +202,12 @@ policy_url = "https://example.invalid/handbook/infrastructure"
 # Because it runs a configured command, `batten check` (a read-effect verb) refuses
 # a config carrying one and names `batten enforce`.
 #
+# Commented rather than live, unlike every other rule in this file, and the
+# reason is a property of the kind rather than an oversight: `batten check`
+# refuses a config carrying a judge row outright, so a live one here would make
+# the copied template exit 1 on `check` until you install a judge command.
+# Uncomment it together with a `[judge].run` you actually have.
+#
 #   [[rule]]
 #   id = "tests-assert-behaviour"
 #   kind = "judge"
@@ -209,12 +215,6 @@ policy_url = "https://example.invalid/handbook/infrastructure"
 #   criteria = "Does each test assert an observable behaviour rather than restating the implementation?"
 #   tier = "advisory"
 #   no_fix_reason = "a judge finding is answered by a person, not a command"
-#
-# Commented rather than live, unlike every other rule in this file, and the
-# reason is a property of the kind: `batten check` refuses a config carrying a
-# judge row outright, so a live one here would make the copied template exit 1
-# on `check` until you install a judge command. Uncomment it together with a
-# `[judge].run` you actually have.
 
 # Output predicates over a wrapped command's streams (CLOUD-117): literals that,
 # found in `batten exec`'s output, promote a lying exit `0` to a failure.
