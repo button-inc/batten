@@ -48,6 +48,12 @@ setup() {
 	chmod +x "$LAND"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
+	# CLOUD-413: the backoff honours a delay the SERVER states, so a case that
+	# scripts a real one would pay it in wall clock. The floor and the cap are the
+	# two knobs that bound it; the cases that assert the delay set the header and
+	# read what was chosen, rather than sleeping to prove a number.
+	export LAND_RATE_FLOOR=0
+	export LAND_RATE_PAUSE_MAX=0
 	PATH="$STUB:$PATH"
 	# A short interval keeps the polling cases quick; PR is supplied so the
 	# stub never has to answer the "which PR" lookup.
@@ -167,10 +173,22 @@ case "\$sub" in
       # limit does. No backticks in here: this heredoc is unquoted, so shfmt
       # reads a backtick pair as command substitution and rewrites it.
       *issues/*/comments*)
+        # CLOUD-413: \`land\` asks with \`-i\`, so this answers the way the real
+        # endpoint does — headers, a blank line, then the body. The rate-limit
+        # headers are the whole point of the refusal path: the delay is STATED
+        # there, and asking a second endpoint for it would be one more request
+        # against the limit that just refused this one.
         if [ -f "$BATS_TEST_TMPDIR/rc.comment" ]; then
+          echo "HTTP/2.0 403"
+          cat "$BATS_TEST_TMPDIR/limit-headers" 2>/dev/null
+          echo
+          echo '{"message":"API rate limit exceeded","status":"403"}'
           echo "GraphQL: was submitted too quickly (addComment)" >&2; exit 1
         fi
         echo "\$all" >>"$BATS_TEST_TMPDIR/comments"
+        echo "HTTP/2.0 201"
+        echo "content-type: application/json"
+        echo
         emit '{"id":7}' ;;
       # CLOUD-414: a query that fails writes its error body to STDOUT, which is
       # exactly how a 403 used to reach the verdict as a refusal.
@@ -569,6 +587,16 @@ workflow_runs() {
 # A refusal belonging to some other PR's lap, inside our own SINCE window.
 sibling_refuses() { workflow_runs "$1" failure 2099-01-01T00:00:00Z "fast-forward #999 @4242"; }
 comment_fails() { : >"$BATS_TEST_TMPDIR/rc.comment"; }
+
+# CLOUD-413: what the refused response STATES about when to come back. Written as
+# real header lines so the parser is exercised on the shape it will actually meet,
+# case included — GitHub sends `Retry-After`, not `retry-after`.
+states_retry_after() { printf 'Retry-After: %s\n' "$1" >"$BATS_TEST_TMPDIR/limit-headers"; }
+states_ratelimit_reset() {
+	printf 'X-RateLimit-Remaining: 0\nX-RateLimit-Reset: %s\n' \
+		"$(($(date -u +%s) + $1))" >"$BATS_TEST_TMPDIR/limit-headers"
+}
+states_no_limit_headers() { : >"$BATS_TEST_TMPDIR/limit-headers"; }
 runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 
 @test "a refusal starts the next lap instead of ending the run" {
@@ -648,6 +676,68 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$(comments)" -eq 0 ]
 }
 
+@test "CLOUD-413: a refused comment waits the retry-after the response STATES" {
+	# Measured on PR #323: 24 laps across three invocations, never merging, and not
+	# one lap failed for any of the three reasons `land` stops on. Several refusals
+	# were a 403 rate limit that `land` could not tell from "main moved" — so its
+	# response to being rate-limited was to generate more of exactly the request
+	# that was rate-limited, each retry costing a verify, a CI run and a comment.
+	#
+	# Lapping with NO delay is not backoff; it is the same request again.
+	comment_fails
+	states_retry_after 7
+	pr_state OPEN
+	LAND_ANSWER_MAX_UNKNOWNS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"retry-after"* ]]
+	[[ "$output" == *"7s"* ]]
+	# And it never enters the answer poll: polling for the answer to a question
+	# nobody received is the CLOUD-235 hang with a different cause.
+	[ "$(comments)" -eq 0 ]
+	# The lap was refunded — a refused comment spent no CI, so it must not be
+	# charged to the budget that exists to catch a moving `main`.
+	[[ "$output" != *"moving faster than a lap takes"* ]]
+}
+
+@test "CLOUD-413: with no retry-after it waits until x-ratelimit-reset" {
+	comment_fails
+	states_ratelimit_reset 30
+	pr_state OPEN
+	LAND_ANSWER_MAX_UNKNOWNS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	# The RESET TIME, which the code had all along and used to throw away in
+	# favour of telling the human to go run `gh api rate_limit` for it.
+	[[ "$output" == *"rate limit resets at"* ]]
+	[[ "$output" != *"gh api rate_limit"* ]]
+}
+
+@test "CLOUD-413: a response stating no limit headers still waits a floor" {
+	# Some delay beats none. The floor is the only guessed number here, and it is
+	# reached only when the server states nothing.
+	comment_fails
+	states_no_limit_headers
+	pr_state OPEN
+	LAND_ANSWER_MAX_UNKNOWNS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"stated no limit headers"* ]]
+}
+
+@test "CLOUD-413: exhausting the budget names the LIMIT, not a moving main" {
+	# The second finding from the same run. Over those 24 laps the exhaustion
+	# message — "main is moving faster than a lap takes" — was wrong twice over:
+	# 7 of 8 laps in one invocation reached green CI, and several refusals were the
+	# rate limit rather than `main` at all. A diagnosis that names the wrong cause
+	# sends the reader to look in the wrong place.
+	comment_fails
+	states_retry_after 3
+	pr_state OPEN
+	LAND_ANSWER_MAX_UNKNOWNS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no readable answer"* ]]
+	[[ "$output" == *"retry-after"* ]]
+	[[ "$output" != *"moving faster than a lap takes"* ]]
+}
+
 @test "a 403 from the runs query is not an answer (CLOUD-414)" {
 	# `gh` writes the error body to STDOUT, so the unfiltered body reached the
 	# verdict where the test was `[ -z ]` — any non-empty string was a refusal,
@@ -659,7 +749,13 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$status" -eq 1 ]
 	[[ "$output" != *"refused"* ]]
 	[[ "$output" == *"no readable answer"* ]]
-	[[ "$output" == *"gh api rate_limit"* ]]
+	# It used to end by telling the reader to go run `gh api rate_limit` — asking
+	# a human to fetch a number the code had already been handed. CLOUD-413 makes
+	# the message carry what the response stated; on this path the runs query was
+	# refused rather than the comment, so no limit headers were read and the note
+	# says so rather than inventing a reset time.
+	[[ "$output" != *"gh api rate_limit"* ]]
+	[[ "$output" == *"mise run land"* ]]
 }
 
 @test "an unreadable answer re-asks without buying a CI run" {

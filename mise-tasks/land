@@ -312,7 +312,53 @@ charge_unknown() {
 	lap=$((lap - 1))
 	answer_unknowns=$((answer_unknowns + 1))
 	[ "$answer_unknowns" -le "$max_unknowns" ] ||
-		die "the fast-forward bot gave no readable answer $max_unknowns times running on #$pr (${sha:0:8}). Nothing about this branch is wrong and \`main\` has not moved under it — check \`gh api rate_limit\` and this workflow's own runs. Do: mise run land"
+		die "the fast-forward bot gave no readable answer $max_unknowns times running on #$pr (${sha:0:8}). Nothing about this branch is wrong and \`main\` has not moved under it.${rate_reset_note:-} Do: mise run land"
+}
+
+# HONOUR THE NUMBER THE SERVER STATES (CLOUD-413). Measured on PR #323: 24 laps
+# across three invocations, never merging, and not one lap failed for any of the
+# three reasons `land` stops on. Several refusals were a 403 rate limit, which
+# `land` could not tell from "main moved" — so its response to being rate-limited
+# was to generate more of exactly the request that was rate-limited, each retry
+# costing a `verify`, a CI run and another comment.
+#
+# `mem:github-rest-etiquette` names this in as many words: a 4xx/5xx means fix the
+# interaction rather than retry blindly, and repeated secondary-limit failures get
+# backoff bounded by a COUNT — "the one place a retry cap belongs". That cap is
+# `$max_unknowns` above, unchanged. What was missing is the delay, and a guessed
+# margin is the wrong shape when the server states the number:
+#
+#   retry-after: N                            wait N
+#   x-ratelimit-remaining: 0 + …-reset: EPOCH wait until EPOCH
+#   neither                                   a floor, because some delay beats none
+#
+# NOT A WALL CLOCK ON ANYTHING. This is a delay before re-asking, on a path that
+# has already decided to lap; no wait in this task gains a deadline from it.
+rate_limit_pause() {
+	local headers="$1" retry remaining reset now secs
+	retry=$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*\([0-9]*\).*/\1/p' <"$headers" | head -1)
+	remaining=$(sed -n 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]emaining:[[:space:]]*\([0-9]*\).*/\1/p' <"$headers" | head -1)
+	reset=$(sed -n 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]eset:[[:space:]]*\([0-9]*\).*/\1/p' <"$headers" | head -1)
+	now=$(date -u +%s)
+	secs=""
+	if [ -n "$retry" ] && [ "$retry" -gt 0 ] 2>/dev/null; then
+		secs="$retry"
+		rate_reset_note=" The API asked for ${retry}s (retry-after)."
+	elif [ "${remaining:-1}" = 0 ] && [ -n "$reset" ] && [ "$reset" -gt "$now" ] 2>/dev/null; then
+		secs=$((reset - now))
+		# The reset TIME, which the code has and used to throw away in favour of
+		# telling the human to go run `gh api rate_limit` for it.
+		rate_reset_note=" The rate limit resets at $(date -u -d "@$reset" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "epoch $reset")."
+	else
+		secs="${LAND_RATE_FLOOR:-60}"
+		rate_reset_note=" The response stated no limit headers."
+	fi
+	# A stated reset can be far away; the count is what bounds the loop, so a
+	# single pause is capped only to keep one lap from swallowing the whole
+	# budget in one sleep.
+	[ "$secs" -le "${LAND_RATE_PAUSE_MAX:-900}" ] || secs="${LAND_RATE_PAUSE_MAX:-900}"
+	echo "land: lap $lap — backing off ${secs}s before re-asking;${rate_reset_note}" >&2
+	sleep "$secs"
 }
 
 # --- speculative linearization (CLOUD-369) -----------------------------------
@@ -693,6 +739,9 @@ set -m
 lap=0
 lease_waits=0
 answer_unknowns=0
+# Set by `rate_limit_pause` so the exhaustion message can state the reset time the
+# code already had, instead of telling the human to go run `gh api rate_limit`.
+rate_reset_note=""
 # Whether this pass holds the lease, or is running as the admitted successor.
 have_lease=1
 # Sticky across laps: the reservation is held until the lease turns over, so
@@ -1174,22 +1223,36 @@ while :; do
 	# (CLOUD-409) — comes back on stdout, and a non-2xx gives both a real
 	# non-zero exit and a body worth printing. `gh-guard` allows `gh api`; its
 	# `pr comment` rule is about a human hand-typing the directive.
+	#
+	# `-i` so the RESPONSE HEADERS come back with the body (CLOUD-413): when this
+	# is refused, the reason and the delay are stated there, and asking a second
+	# endpoint for them would be one more request against the limit that just
+	# refused this one. The body split is `main-watch`'s idiom — headers to the
+	# first blank line, body after it — so `--jq` is applied here rather than by
+	# `gh`, which cannot filter a response it is also printing headers for.
 	ff_err="$(mktemp)"
-	comment_id="$(gh api "repos/{owner}/{repo}/issues/$pr/comments" \
-		-f body="/fast-forward" --jq '.id // empty' 2>"$ff_err")"
+	ff_head="$(mktemp)"
+	ff_resp="$(gh api -i "repos/{owner}/{repo}/issues/$pr/comments" \
+		-f body="/fast-forward" 2>"$ff_err")"
+	printf '%s\n' "$ff_resp" | awk '/^\r?$/ { exit } { print }' >"$ff_head"
+	comment_id="$(printf '%s\n' "$ff_resp" |
+		awk 'body { print } /^\r?$/ { body = 1 }' |
+		jq -r '.id // empty' 2>/dev/null)"
 	if [ -z "$comment_id" ]; then
 		echo "land: lap $lap — could not ask #$pr to fast-forward: $(tr '\n' ' ' <"$ff_err")" >&2
 		rm -f "$ff_err"
 		# Never enter the answer poll: polling for the answer to a question
-		# nobody received is the CLOUD-235 hang with a different cause. A rate
-		# limit is transient by construction, so the lap ends and the loop laps
-		# — retrying inside one lap would be bespoke backoff against a secondary
-		# limit whose whole remedy is to back off.
+		# nobody received is the CLOUD-235 hang with a different cause. The lap
+		# ends and the loop laps — but only AFTER the delay the response states,
+		# because lapping with no delay is not backoff, it is the same request
+		# again, which is what CLOUD-413 measured 24 times.
+		rate_limit_pause "$ff_head"
+		rm -f "$ff_head"
 		unknown="the comment was refused"
 		charge_unknown
 		continue
 	fi
-	rm -f "$ff_err"
+	rm -f "$ff_err" "$ff_head"
 	# The join key the workflow mints as its `run-name`, and the filter below
 	# matches on it exactly.
 	FF_KEY="fast-forward #$pr @$comment_id"
