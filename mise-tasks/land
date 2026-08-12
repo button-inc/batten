@@ -484,8 +484,49 @@ cancel_own_run() {
 	done
 }
 
+# A run CI DECLINED is not a run that failed (CLOUD-470). `ci-lease-precondition`
+# stops an unauthorised head by CANCELLING the run it stands in, and `final` reds
+# under `always()` because its `needs:` assertion fails — so the wait comes back
+# non-zero with nothing about this branch broken. The generic red message then
+# tells the agent that verify and CI disagree and to fix the mismatch locally,
+# which names the one cause that is not true and points away from the remedy.
+#
+# Measured on the population that cannot afford a wrong instruction: 11 of 13 open
+# PRs carried a `land` predating the lease, so every one of those agents, on
+# restart, hits a cancelled run and is sent to debug a disagreement that does not
+# exist. The runner already writes the right answer as an annotation; this is the
+# same answer carried back through the channel `land` actually speaks on.
+#
+# The fingerprint is the cancellation, on this head's own runs, read from the
+# endpoint `cancel_own_run` above already uses. FAILS OPEN to the red message on
+# any non-answer, and the asymmetry is deliberate: a wrong "nothing is broken"
+# costs a landing, a wrong "go debug this" costs a session.
+stopped_run() {
+	local n
+	n=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$1&per_page=30" \
+		--jq '[.workflow_runs[]? | select(.conclusion == "cancelled")] | length' 2>/dev/null) || return 1
+	case "$n" in '' | *[!0-9]* | 0) return 1 ;; esac
+	return 0
+}
+
 graded_runs() {
 	local n
+	# THE ROSTER IS GUARDED BEFORE THE CALL, not swallowed after it (CLOUD-467).
+	# `${CI_REQUIRED_CHECKS:?}` below aborts the command substitution when the
+	# roster is unset, and the `|| n=0` at the bottom then converted that abort
+	# into `0` — which both call sites read as "this head carries no graded run",
+	# the branch that FIRES THE READY THAT STARTS CI. So the one input this task
+	# cannot compute became the answer that spends a full matrix.
+	#
+	# `checks-green:86-88` already gets this right on the same variable, and the
+	# two are deliberately paired, so opposite behaviour on a missing roster is
+	# exactly the drift the pairing exists to prevent.
+	#
+	# The `|| n=0` below is KEPT for what it was written for: a transient `gh` or
+	# `awk` failure answering "ungraded" is the choice that makes progress, and
+	# stopping the loop on it would be worse. Only the unset-roster path changes.
+	[ -n "${CI_REQUIRED_CHECKS:-}" ] ||
+		die "CI_REQUIRED_CHECKS is unset — run this through \`mise run land\`, which is where the required set is declared. Readying a PR against an unknown roster would spend a matrix to answer a question this task could not ask."
 	n=$(gh api "repos/{owner}/{repo}/commits/$1/check-runs" \
 		--jq '.check_runs[]? | "\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null |
 		awk -F'\t' -v req="${CI_REQUIRED_CHECKS:?}" '
@@ -934,7 +975,15 @@ while :; do
 		continue
 	fi
 	if [ -n "$ci_rc" ] && [ "$ci_rc" != "0" ]; then
+		# `redraft` first on every arm (CLOUD-458): the tap closes on any
+		# non-merged exit, whatever the reason turns out to be.
 		redraft
+		# Three different things arrive here, and only the last one is a red run.
+		if stopped_run "$sha"; then
+			die "the run on ${sha:0:8} was CANCELLED, not red — CI declined it because another branch holds the landing lease (CLOUD-420). Nothing here is broken. Do: git fetch origin main && git rebase origin/main && mise run land"
+		fi
+		[ "$ci_rc" = 1 ] ||
+			die "could not read CI's verdict on ${sha:0:8} (ci-wait exit $ci_rc) — that is not a red run, and nothing about this branch has been judged. Do: mise run land"
 		die "CI is red on $sha. A red run on a verified branch means verify and CI disagree — fix the mismatch locally, then run land again."
 	fi
 	if [ -z "$ci_rc" ]; then

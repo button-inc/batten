@@ -142,8 +142,12 @@ case "\$sub" in
       # The url is recorded rather than counted, so a case can assert WHICH run
       # was cancelled and not merely that something was.
       */cancel)              echo "\$url" >>"$BATS_TEST_TMPDIR/cancels" ;;
+      # Read from a file so a case can say the head's runs were CANCELLED
+      # (CLOUD-470), defaulting to the body every cancel case already relies on
+      # — so those rows are untouched and this one is additive.
       *actions/runs?head_sha*)
-        emit '{"workflow_runs":[{"id":4242,"status":"in_progress"},{"id":99,"status":"completed"}]}' ;;
+        if [ -s "$BATS_TEST_TMPDIR/headruns" ]; then emit "\$(cat "$BATS_TEST_TMPDIR/headruns")"
+        else emit '{"workflow_runs":[{"id":4242,"status":"in_progress"},{"id":99,"status":"completed"}]}'; fi ;;
       *)                     emit '{}' ;;
     esac ;;
 esac
@@ -404,6 +408,12 @@ alive_not_zombie() {
 	[ -n "$st" ] && [ "$st" != "Z" ]
 }
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
+# CLOUD-470: the head's own runs read as cancelled, which is the fingerprint of a
+# run the lease precondition declined rather than one that failed.
+head_runs_cancelled() {
+	printf '{"workflow_runs":[{"id":4242,"status":"completed","conclusion":"cancelled"}]}' \
+		>"$BATS_TEST_TMPDIR/headruns"
+}
 cancels() { cat "$BATS_TEST_TMPDIR/cancels" 2>/dev/null || true; }
 # The push leaves the remote ref where it was, so no `synchronize` event fires
 # and nothing starts a run — the one shape that still needs the `--undo`.
@@ -579,6 +589,50 @@ workflow_runs() {
 	run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CI is red"* ]]
+	[ "$(comments)" -eq 0 ]
+	# The anti-regression half of the CLOUD-470 pair: a GENUINE red must keep
+	# today's message. A change that printed the rebase remedy unconditionally
+	# would pass the two cases below and misdirect every real CI failure.
+	[[ "$output" != *"CANCELLED"* ]]
+}
+
+@test "a run CI DECLINED is a stop, not a red — the agent is told to rebase" {
+	# CLOUD-470. `ci-lease-precondition` stops an unauthorised head by cancelling
+	# its run, and `final` reds under `always()` — so the wait returns non-zero
+	# with nothing broken. Measured: 11 of 13 open PRs carried a `land` predating
+	# the lease, so every one of those agents was sent to debug a disagreement
+	# that did not exist. Nothing local can fix it; the remedy is a rebase.
+	head_runs_cancelled
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CANCELLED"* ]]
+	[[ "$output" == *"git rebase origin/main"* ]]
+	[[ "$output" != *"verify and CI disagree"* ]]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "a verdict that could not be READ is not a red one" {
+	# `ci-wait` exit 2 is "could not look" (its own contract), and the guard was
+	# `!= 0`, so a verdict nobody obtained was reported as a red run on a
+	# verified branch — sending the agent to reconcile a disagreement that was
+	# never observed.
+	task_fails_once_with ci-wait 2
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"could not read CI's verdict"* ]]
+	[[ "$output" != *"CI is red"* ]]
+}
+
+@test "an unset required roster stops rather than readying (CLOUD-467)" {
+	# `graded_runs` answered 0 on an unset roster, and 0 is the branch that FIRES
+	# THE READY THAT STARTS CI — so the one input this task cannot compute became
+	# the answer that spends a full matrix. `checks-green` guards the same
+	# variable eight lines away in the file it is paired with.
+	CI_REQUIRED_CHECKS= run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CI_REQUIRED_CHECKS is unset"* ]]
+	[ "$(ready_calls)" = "" ]
 	[ "$(comments)" -eq 0 ]
 }
 
@@ -1096,8 +1150,8 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# reaches is an exit nothing tests. Each `die` is covered by a case here,
 	# so a new stopping condition cannot be added silently.
 	stops=$(grep -o 'die "' "$REAL_LAND" | wc -l | tr -d ' ')
-	[ "$stops" -eq 16 ] || {
-		echo "land has $stops stopping conditions; this suite covers 16."
+	[ "$stops" -eq 19 ] || {
+		echo "land has $stops stopping conditions; this suite covers 19."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
