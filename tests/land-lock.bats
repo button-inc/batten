@@ -17,7 +17,11 @@
 # what the remote sees.
 
 setup() {
-	LOCK="$BATS_TEST_DIRNAME/../mise-tasks/land-lock"
+	# `LAND_LOCK_UNDER_TEST` lets a mutation harness point these rows at a COPY.
+	# Mutating the tracked file in place makes a corrupted commit reachable from
+	# any concurrent `git add -A`, which staged a mutant into a pushed commit on
+	# 2026-08-12 (recorded on CLOUD-418). Unset in every normal run.
+	LOCK="${LAND_LOCK_UNDER_TEST:-$BATS_TEST_DIRNAME/../mise-tasks/land-lock}"
 	BARE="$BATS_TEST_TMPDIR/remote.git"
 	MINE="$BATS_TEST_TMPDIR/mine"
 	RIVAL="$BATS_TEST_TMPDIR/rival"
@@ -193,11 +197,43 @@ teardown() {
 	# and an earlier version of this row used `< 12` — which the defect passes,
 	# so it graded nothing. The row above is the flake-proof half; this one
 	# states the user-visible promise.
-	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 lock "$RIVAL" acquire
-	# Sight the live lease now, before it expires: this is the observation the
-	# defect discarded.
-	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 LAND_LOCK_WAIT=1 run lock "$MINE" acquire
-	[ "$status" -eq 1 ]
+	#
+	# CLOUD-448 — THE SETUP IS THE RACE, not the measurement. The sighting below
+	# is only a sighting while the rival's lease is still live, and a 4s TTL is
+	# shorter than `rush --jobs` can deschedule this process for (CLOUD-386 made
+	# the suite parallel). When that happened the sighting acquire STOLE the
+	# lease and the old `[ "$status" -eq 1 ]` failed — grading the runner's
+	# scheduler, not `land-lock`, and telling an author to "reproduce and fix
+	# locally" something that reproduces nowhere. It cost PR #354 and PR #370 a
+	# full `verify` and a lap each.
+	#
+	# So the precondition is now established rather than assumed, and a
+	# precondition the environment failed to create is never asserted through
+	# (CLOUD-249). SETUP is retried — never the measurement, which would be
+	# drive-to-green — because a plain skip would fire often enough to erase the
+	# coverage: this raced twice in one day.
+	#
+	# The TTL stays short deliberately. Raising it would widen the window
+	# without removing the race, and every second added here is paid on every
+	# run of the suite.
+	local attempt=0
+	while :; do
+		attempt=$((attempt + 1))
+		# Reset: whatever the failed attempt left behind. The `seen` file
+		# especially — a stale sighting would pre-age the very clock this case
+		# measures, which is the one thing that must be fresh.
+		lock "$MINE" release >/dev/null 2>&1 || true
+		rm -f "$MINE/.git/batten-land-lock/seen"
+		LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 lock "$RIVAL" acquire >/dev/null
+		# Sight the live lease: this is the observation the defect discarded.
+		# A refusal means the lease was still held, which is the setup this case
+		# needs. Success means it had already expired — no sighting happened, so
+		# there is nothing here to measure.
+		LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 LAND_LOCK_WAIT=1 run lock "$MINE" acquire
+		[ "$status" -ne 1 ] || break
+		[ "$attempt" -lt 3 ] ||
+			skip "setup not created after $attempt attempts: the rival's 4s lease expired before it could be sighted. That is the runner being descheduled, not a verdict about land-lock (CLOUD-448)"
+	done
 	start=$SECONDS
 	LAND_LOCK_TTL=4 LAND_LOCK_HEARTBEAT=2 LAND_LOCK_WAIT=30 run lock "$MINE" acquire
 	elapsed=$((SECONDS - start))
