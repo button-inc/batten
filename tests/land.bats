@@ -298,7 +298,12 @@ case "\$2" in
       n=\$((n + 1)); echo "\$n" >"$BATS_TEST_TMPDIR/acquire.calls"
       after=\$(cat "$BATS_TEST_TMPDIR/main_moves_after" 2>/dev/null || echo 1)
       if [ -f "$BATS_TEST_TMPDIR/main_moves_in_wait" ] && [ "\$n" -ge "\$after" ]; then
-        cat "$BATS_TEST_TMPDIR/main_moves_in_wait" >"$BATS_TEST_TMPDIR/mainsha"
+        # A DISTINCT sha per acquire, not one fixed value. "main is moving
+        # faster than a lap takes" is the condition under test, and a lever that
+        # moved trunk once left the next lap's re-confirmation passing — so the
+        # lap proceeded to a poll that, with no terminal PR state, never
+        # returned. Measured as a hung case that leaked a watcher per run.
+        echo "\$(cat "$BATS_TEST_TMPDIR/main_moves_in_wait")\$n" >"$BATS_TEST_TMPDIR/mainsha"
       fi
     fi
     [ ! -f "\$rcv" ] || exit "\$(cat "\$rcv")"
@@ -1589,7 +1594,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	echo 0ther0ther0ther0 >"$BATS_TEST_TMPDIR/main_moves_in_wait"
 	is_draft
 	pr_state OPEN
-	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	LAND_LOCK_MAX_WAITS=2 run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"main moved to"* ]]
 	[[ "$output" == *"lapping rather than confirming a head it will refuse"* ]]
