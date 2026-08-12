@@ -56,6 +56,7 @@ IN"
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 path=hook p50=90.1 p95=140.5 mean=95.2 runs=100
+path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
 IN"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"hook: p95=140.5ms exceeds the 100ms budget"* ]]
@@ -71,6 +72,7 @@ IN"
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 path=check p50=800.0 p95=1200.0 mean=850.0 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
 IN"
 	[ "$status" -eq 0 ]
 }
