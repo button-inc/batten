@@ -138,7 +138,27 @@ heartbeat_pid=
 reap_residue() {
 	! kill -0 -- -"$1" 2>/dev/null || kill -9 -- -"$1" 2>/dev/null
 }
+# The live race pids, so the EXIT trap can reap what an in-flight race spawned.
+# A land that dies THROUGH the trap — a TERM, a die inside a wait — used to
+# reap only the heartbeat, and a measured 10 minutes of orphaned gh-polling
+# ci-wait followed (CLOUD-434's review finding). Two scalars, not a list: the
+# races are sequential and at most a pair wide, and scalars need no
+# word-splitting. Cleared after every inline reap, so the trap can never kill
+# a recycled pid from a race that already ended.
+race_pid_a=
+race_pid_b=
+reap_races() {
+	local p
+	for p in "$race_pid_a" "$race_pid_b"; do
+		[ -n "$p" ] || continue
+		kill -- -"$p" 2>/dev/null || true
+		reap_residue "$p"
+	done
+	race_pid_a=
+	race_pid_b=
+}
 drop_lease() {
+	reap_races
 	if [ -n "$heartbeat_pid" ]; then
 		kill -- -"$heartbeat_pid" 2>/dev/null || true
 		wait "$heartbeat_pid" 2>/dev/null
@@ -260,11 +280,15 @@ while :; do
 			echo $? >"$rc_vm"
 		) &
 		vm_pid=$!
+		race_pid_a=$v_pid
+		race_pid_b=$vm_pid
 		wait -n "$v_pid" "$vm_pid"
 		kill -- -"$v_pid" -"$vm_pid" 2>/dev/null
 		wait "$v_pid" "$vm_pid" 2>/dev/null
 		reap_residue "$v_pid"
 		reap_residue "$vm_pid"
+		race_pid_a=
+		race_pid_b=
 		verify_rc="$(cat "$rc_v" 2>/dev/null)"
 		vmain_rc="$(cat "$rc_vm" 2>/dev/null)"
 		rm -f "$rc_v" "$rc_vm"
@@ -438,6 +462,8 @@ while :; do
 		echo $? >"$rc_main"
 	) &
 	main_pid=$!
+	race_pid_a=$ci_pid
+	race_pid_b=$main_pid
 	# Named pids, not a bare `wait -n`. A bare one returns on the FIRST job of
 	# any kind to exit, and the lease heartbeat is also a job of this shell — so
 	# a heartbeat that ends (its lease lost, or a stub in the suite that returns
@@ -455,6 +481,8 @@ while :; do
 	wait "$ci_pid" "$main_pid" 2>/dev/null
 	reap_residue "$ci_pid"
 	reap_residue "$main_pid"
+	race_pid_a=
+	race_pid_b=
 	ci_rc="$(cat "$rc_ci" 2>/dev/null)"
 	main_rc="$(cat "$rc_main" 2>/dev/null)"
 	rm -f "$rc_ci" "$rc_main"
@@ -521,6 +549,8 @@ while :; do
 		echo $? >"$rc_ff"
 	) &
 	ff_watch_pid=$!
+	race_pid_a=$ff_watch_pid
+	race_pid_b=
 	# Reap the watcher on every way out of this poll, the merged path included,
 	# so no `gh` poller outlives the task that started it. The pid is killed as
 	# well as its group, and the `wait` names that pid rather than waiting on
@@ -534,6 +564,7 @@ while :; do
 		# The wait proves the leader died; only the group check proves the
 		# TREE did (CLOUD-434).
 		reap_residue "$ff_watch_pid"
+		race_pid_a=
 		rm -f "$rc_ff"
 	}
 

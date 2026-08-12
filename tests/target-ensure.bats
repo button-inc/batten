@@ -95,10 +95,12 @@ hold_lock() { # <seconds>
 	mkdir -p "$SYSROOT/lib/rustlib"
 	local lock="$SYSROOT/lib/rustlib/.batten-target-lock"
 	# $BASHPID is the subshell's own pid, which is what $! names.
+	# 3>&- on every backgrounded child (CLOUD-434): a leaked one must never
+	# hold bats' TAP fd, which is how one orphan wedged the whole gate.
 	{
 		mkdir "$lock" && echo "$BASHPID" >"$lock/pid" && sleep "$1"
 		rm -rf "$lock"
-	} &
+	} 3>&- &
 	holder=$!
 	# The holder takes the lock asynchronously; wait for its pid file so the
 	# caller under test cannot win the lock before the holder has taken it.
@@ -137,7 +139,7 @@ hold_lock() { # <seconds>
 	# flock's release came from the kernel; a directory's comes from the trap,
 	# which a SIGKILLed holder never runs. Reclaim is what keeps that a delay of
 	# one poll instead of the full timeout — a timeout here means it regressed.
-	(exit 0) &
+	(exit 0) 3>&- &
 	corpse=$!
 	wait "$corpse" 2>/dev/null || true
 	lock="$SYSROOT/lib/rustlib/.batten-target-lock"

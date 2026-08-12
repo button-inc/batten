@@ -227,8 +227,13 @@ case "\$2" in
   # CLOUD-323's stop. Passes by default; a case that wants the refusal
   # writes rc.mise.deferral-check, the same lever every other task uses.
   deferral-check) exit 0 ;;
-  ci-wait)  [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
+  ci-wait)
+    # Every watcher records itself, so the trap-reap case can ask "who did a
+    # lap spawn" and assert each one is gone (CLOUD-434's trap gap).
+    echo "\$\$" >>"$BATS_TEST_TMPDIR/watch.pids"
+    [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
   main-watch)
+    echo "\$\$" >>"$BATS_TEST_TMPDIR/watch.pids"
     # CLOUD-434's stubborn lever. A stubborn watcher ignores the TERM, so only
     # the escalated reap can end it. (The detach lever spawns from the verify
     # stub instead — see there for the measured kill-race that moved it.)
@@ -1066,4 +1071,41 @@ EOF
 	pid=$(cat "$BATS_TEST_TMPDIR/detached.pid")
 	[ ! -e "/proc/$pid/fd/3" ]
 	kill -9 "$pid" 2>/dev/null || true
+}
+
+@test "a land killed mid-race takes its watchers with it — the trap reaps the races too" {
+	# CLOUD-434's review finding, closed: dying THROUGH the exit trap used to
+	# reap only the heartbeat, and a TERMed land orphaned a live gh-polling
+	# ci-wait for a measured 10 minutes. The live race pids are globals the
+	# trap reaps, cleared after every inline reap — so this case kills a land
+	# mid-race and demands every watcher the lap spawned be gone once the trap
+	# has run. With reap_races neutered, the slow ci-wait stub survives and
+	# this goes red.
+	ci_is_slow
+	pr_state OPEN
+	"$LAND" >"$BATS_TEST_TMPDIR/late.out" 2>&1 3>&- &
+	land_pid=$!
+	local deadline pid
+	deadline=$((SECONDS + 10))
+	while [ ! -s "$BATS_TEST_TMPDIR/watch.pids" ] && [ "$SECONDS" -lt "$deadline" ]; do
+		sleep 0.2
+	done
+	[ -s "$BATS_TEST_TMPDIR/watch.pids" ]
+	# Let the race pair finish spawning before the kill, so the trap has both
+	# groups to reap rather than a half-started race.
+	sleep 0.5
+	kill -TERM "$land_pid"
+	deadline=$((SECONDS + 5))
+	while alive_not_zombie "$land_pid" && [ "$SECONDS" -lt "$deadline" ]; do
+		sleep 0.1
+	done
+	! alive_not_zombie "$land_pid"
+	while read -r pid; do
+		[ -n "$pid" ] || continue
+		deadline=$((SECONDS + 4))
+		while alive_not_zombie "$pid" && [ "$SECONDS" -lt "$deadline" ]; do
+			sleep 0.1
+		done
+		! alive_not_zombie "$pid"
+	done <"$BATS_TEST_TMPDIR/watch.pids"
 }

@@ -92,9 +92,9 @@ EOF
 }
 
 @test "harness self-test: two raw concurrent adds both roll back (the model can represent the bug)" {
-	rustup target add "$T" &
+	rustup target add "$T" 3>&- &
 	p1=$!
-	rustup target add "$T" &
+	rustup target add "$T" 3>&- &
 	p2=$!
 	s1=0 s2=0
 	wait "$p1" || s1=$?
@@ -111,10 +111,10 @@ EOF
 	# early one had sighted, rolled back, and removed its marker — one add
 	# succeeded. The tombstone makes the conflict sticky; this pins the skewed
 	# interleaving so the harness cannot regress to live-marker detection.
-	rustup target add "$T" &
+	rustup target add "$T" 3>&- &
 	p1=$!
 	sleep 0.4
-	rustup target add "$T" &
+	rustup target add "$T" 3>&- &
 	p2=$!
 	s1=0 s2=0
 	wait "$p1" || s1=$?
@@ -126,9 +126,9 @@ EOF
 }
 
 @test "doctor and darwin-link converge when concurrent: both succeed, target installed" {
-	DOCTOR_TARGETS="$T" "$DOCTOR" >"$STATE/doctor.out" 2>&1 &
+	DOCTOR_TARGETS="$T" "$DOCTOR" >"$STATE/doctor.out" 2>&1 3>&- &
 	pd=$!
-	"$LINK" "$T" >"$STATE/link.out" 2>&1 &
+	"$LINK" "$T" >"$STATE/link.out" 2>&1 3>&- &
 	pl=$!
 	sd=0 sl=0
 	wait "$pd" || sd=$?
@@ -142,9 +142,9 @@ EOF
 }
 
 @test "doctor is idempotent under concurrency: two doctors, one real install" {
-	DOCTOR_TARGETS="$T" "$DOCTOR" >"$STATE/d1.out" 2>&1 &
+	DOCTOR_TARGETS="$T" "$DOCTOR" >"$STATE/d1.out" 2>&1 3>&- &
 	p1=$!
-	DOCTOR_TARGETS="$T" "$DOCTOR" >"$STATE/d2.out" 2>&1 &
+	DOCTOR_TARGETS="$T" "$DOCTOR" >"$STATE/d2.out" 2>&1 3>&- &
 	p2=$!
 	s1=0 s2=0
 	wait "$p1" || s1=$?
