@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="PreToolUse hook body: deny a verdict-bearing command whose exit status is discarded — by a pager/filter pipe, by a trailing list element, or by nohup/&"
+#MISE description="PreToolUse hook body: deny a verdict-bearing command whose exit status is discarded — by a pager/filter pipe, by a trailing list element, or by nohup/& — and a foreground sleep, which spends the session's turn"
 #
 # Shapes that report success while destroying the thing the harness consumes.
 # All of them fail GREEN — exit 0 with plausible output — which is why noticing
@@ -22,12 +22,20 @@
 #                   complete, the work runs unsupervised, and the session loses
 #                   its wake-up — leaving only polling or an idle turn, both
 #                   forbidden, and an idle turn gets the VM reclaimed.
+#   foreground-sleep `cd repo; sleep 90; git log --oneline -1` waits inside the
+#                   call. It fails GREEN only up to ~2 minutes; past that the
+#                   harness kills the call, so the poll that was meant to be
+#                   patient FAILS instead (measured at exit 143 and 144). This
+#                   one destroys the session rather than a verdict, and it is
+#                   the shape the other three's root cause produces when there
+#                   is nothing to read a status from at all.
 #
 # One root cause: treating a Bash call as a terminal that should print something
 # short, when it is a supervised process whose exit status and lifetime are the
 # interface. `| tail` makes the output small and drops the verdict; a trailing
 # `; echo` replaces it; `nohup &` makes the call return fast and drops the
-# supervision.
+# supervision; a foreground `sleep` sits at the terminal waiting, which is the
+# one thing a supervised process must never do.
 #
 # THE SCOPE FIX (CLOUD-199). This guard was scoped to the literal string `mise
 # run`, and its own comment already stated the general rule it did not implement:
@@ -233,6 +241,51 @@ while IFS= read -r line; do
 		;;
 	esac
 done < <(printf '%s\n' "$list")
+
+# --- foreground-sleep ---------------------------------------------------------
+#
+# A DIFFERENT FAMILY FROM THE THREE ABOVE, and it is here because it is the same
+# root cause: treating a Bash call as a terminal you can wait at, when it is a
+# supervised process whose lifetime is the interface. The other three destroy a
+# verdict; this one destroys the SESSION.
+#
+# Measured 2026-08-12. A `git commit` hung inside a gate that had begun calling
+# itself, and the session polled it with `sleep 90`, `sleep 100`, `sleep 180` in
+# the foreground. A foreground call is killed at ~2 minutes, so the last two did
+# not run slower — they FAILED, at exit 143 and 144 — and every turn in between
+# bought nothing. The container was reclaimed with the fix uncommitted, and the
+# branch it was landing is still a draft.
+#
+# AGENTS.md has stated "never use a foreground sleep" for as long as it has
+# stated the other three, and nothing enforced it: this guard mentioned `sleep`
+# only inside one comment's example. Prose is feedforward only (non-negotiable
+# rule 2), and the session that hit this had read the prose.
+#
+# THE PREDICATE IS THE CALL'S OWN SHAPE, not the sleep's duration. A short sleep
+# is not safer, it is the same shape spending less; and a background call's
+# `until … sleep 0.5 … done` is the CORRECT form the tool documentation
+# recommends, so `run_in_background` is what distinguishes them — the one fact
+# about the call that is not in the command string. Judged per stage, so a sleep
+# anywhere in a compound (`cd x; sleep 90; git log`, the exact measured shape)
+# is caught rather than only a leading one.
+if [ "$(printf '%s' "$raw" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)" != true ]; then
+	for element in "${elements[@]}"; do
+		# `mapfile`, not `while read`: the last stage carries no trailing newline,
+		# so a read-loop drops it — which for a one-stage element is every stage.
+		mapfile -t sleep_stages < <(printf '%s' "$element" | tr '|' '\n')
+		for stage in "${sleep_stages[@]}"; do
+			read -r prog _ _ <<<"$(resolve "$stage")"
+			[ "$prog" = sleep ] || continue
+			deny "Refused: a foreground \`sleep\` spends the session's own turn waiting, and the call is killed at ~2 minutes — so a wait longer than that does not run slowly, it FAILS (measured: exit 143 and 144 over a hung commit, then the container was reclaimed with the work uncommitted).
+
+Waiting is the harness's job, not the command's. Put the thing you are waiting for in the background — pass run_in_background on the tool call itself — and act on its exit; the harness re-invokes you. For a condition rather than a process, background a command that EXITS when the condition holds (\`until <test>; do sleep 1; done\`), which is a background wait and is allowed.
+
+Never end a turn idle to watch something, and never poll in the foreground.
+
+Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
+		done
+	done
+fi
 
 # --- piped-verdict ------------------------------------------------------------
 #

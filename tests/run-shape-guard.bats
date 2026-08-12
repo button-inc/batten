@@ -284,3 +284,68 @@ PY"
 	run bash -c "jq -nc '{tool_input:{}}' | $GUARD"
 	! denied "$output"
 }
+
+# --- foreground-sleep ---------------------------------------------------------
+#
+# The fourth shape, and the one that destroys the session rather than a verdict.
+# Measured 2026-08-12: a session polled a hung `git commit` with `sleep 90`,
+# `sleep 100` and `sleep 180` in the foreground; the harness kills a foreground
+# call at ~2 minutes, so the last two failed at exit 143 and 144, and the
+# container was reclaimed with the fix uncommitted. AGENTS.md had forbidden this
+# in prose for as long as it had forbidden the other three, and nothing enforced
+# it — this guard named `sleep` only inside a comment's example.
+
+bg_guard() { # the same call, marked run_in_background
+	jq -nc --arg c "$1" '{tool_input: {command: $c, run_in_background: true}}' | "$GUARD"
+}
+
+@test "THE MEASURED SHAPE: a sleep in the middle of a compound is denied" {
+	run guard 'cd /home/user/batten; sleep 90; git log --oneline -1'
+	denied "$output"
+	[[ "$output" == *"foreground"* ]]
+}
+
+@test "a leading sleep is denied too" {
+	run guard 'sleep 45; echo done'
+	denied "$output"
+}
+
+@test "a SHORT sleep is the same shape spending less" {
+	# The predicate is the call's shape, not the duration: 2 seconds still waits
+	# inside the call, and it is what the measured session reached for next.
+	run guard 'pkill -f hk; sleep 2; git status --short'
+	denied "$output"
+}
+
+@test "the denial names the remedy: background the wait, act on the exit" {
+	run guard 'sleep 60'
+	[[ "$output" == *"run_in_background"* ]]
+	[[ "$output" == *"exit"* ]]
+}
+
+@test "a wrapper does not hide it" {
+	run guard 'timeout 300 sleep 120'
+	denied "$output"
+}
+
+@test "a BACKGROUND sleep is allowed — it is the recommended wait" {
+	# `until <test>; do sleep 1; done` backgrounded is the documented form for
+	# waiting on a condition, so denying it would be a pure false positive, and
+	# a guard with false positives gets bypassed.
+	run bg_guard 'until [ -f /tmp/done ]; do sleep 1; done'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a sleep written INSIDE a quoted span or a heredoc is not a call" {
+	# A commit message or a task body describing the shape is prose, not the
+	# shape — the same scrubbing the other three rules depend on.
+	run guard 'git commit -m "never use a foreground sleep 90 to poll"'
+	[[ "$output" != *'"deny"'* ]]
+	run guard "$(printf 'cat > t.bats <<%s\nrun sleep 5\n%s\n' BATS BATS)"
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a bare command with no sleep and no verdict is still none of this guard's business" {
+	run guard 'ls -la'
+	[[ "$output" != *'"deny"'* ]]
+}

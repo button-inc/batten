@@ -15,7 +15,14 @@ These load when you touch the workshop; deeper detail is in
 **Use mise for everything** — tools via `[tools]`, env via `[env]`, commands as
 `[tasks]` run with `mise run`; never a bare `cargo`/`export`/one-off install, so
 CI, hk, and your shell run byte-identical commands. Per clone: `mise install`,
-`git submodule update --init` (bats, in `tests/bats`), `hk install`.
+`git submodule update --init` (bats, in `tests/bats`), and the git hooks — which
+`.claude/hooks/session-start.sh` now performs and `doctor` asserts (CLOUD-476),
+so none of the three is left to a human remembering a prose list. Not `hk
+install`: its generated hook calls `hk` bare, which does not resolve where
+mise's shims are off PATH, so the installed body is `.claude/hooks/git-hook` —
+which also refuses to re-enter a gate that is already running, the recursion
+that hung a commit when `doctor` first tried to execute a hook from inside the
+gate.
 
 ## The lifecycle tasks
 
@@ -260,7 +267,13 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   first edit this catches. Bypass: `BATTEN_CLAIM_GUARD_BYPASS=1`.
 - `run-shape-guard` denies three ways of throwing away a **verdict-bearing**
   command's exit status: piping it into a pager or filter, following it with `;`
-  or `||` in the same list, and detaching it with `nohup`/`&`. The
+  or `||` in the same list, and detaching it with `nohup`/`&`. A fourth shape
+  throws away the SESSION rather than a verdict, and needs no verdict-bearing
+  command to do it: a **foreground `sleep`**, which the harness kills at ~2
+  minutes, so a poll meant to be patient fails instead — measured at exit 143
+  and 144 over a hung commit, after which the container was reclaimed with the
+  work uncommitted. `run_in_background` on the call is what tells that apart
+  from the recommended `until <test>; do sleep 1; done`, which is allowed. The
   verdict-bearing list is written once as data in the task — `mise run`,
   `git push`/`fetch`/`rebase`, mutating `gh pr`, `cargo` minus its query
   subcommands, and `bats` given a suite (CLOUD-473: `mise run test:bats` was
