@@ -156,6 +156,18 @@ verdict_bearing() {
 	git) [[ "$sub1" =~ ^($GIT_VERDICT)$ ]] ;;
 	cargo) [ -n "$sub1" ] && ! [[ "$sub1" =~ ^($CARGO_QUERY)$ ]] ;;
 	gh) [ "$sub1" = pr ] && [[ "$sub2" =~ ^($GH_PR_VERDICT)$ ]] ;;
+	# `bats` (CLOUD-473). The omission was not an oversight about one runner: it
+	# is every shell gate in this repo. `mise run test:bats` was covered by the
+	# `mise` row, so the same suite was guarded through one spelling and open
+	# through the other two — `mise exec -- bats …` (the web sandbox's working
+	# form) and a path-invoked `tests/bats/bin/bats`. Measured: a suite piped to
+	# `tail` reported green over three failures, one of them a hang.
+	#
+	# An argument is required because it is what makes the run a verdict: bare
+	# `bats`, `bats --version` and `bats --help` print usage and answer nothing.
+	# Flags are already stripped by `resolve`, so `$sub1` is the first file or
+	# directory — or a `-f` filter's pattern, which is still a run.
+	bats) [ -n "$sub1" ] ;;
 	*) false ;;
 	esac
 }

@@ -262,8 +262,11 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   command's exit status: piping it into a pager or filter, following it with `;`
   or `||` in the same list, and detaching it with `nohup`/`&`. The
   verdict-bearing list is written once as data in the task — `mise run`,
-  `git push`/`fetch`/`rebase`, mutating `gh pr`, and `cargo` minus its query
-  subcommands — because the guard was scoped to the literal string `mise run`
+  `git push`/`fetch`/`rebase`, mutating `gh pr`, `cargo` minus its query
+  subcommands, and `bats` given a suite (CLOUD-473: `mise run test:bats` was
+  covered by the `mise` row while `mise exec -- bats` and a path-invoked
+  `tests/bats/bin/bats` ran the same gates unguarded) — because the guard was
+  scoped to the literal string `mise run`
   and an agent complying with it exactly kept making the identical error on the
   next command (CLOUD-199, measured on `git push`, `cargo clippy` and
   `cargo test`). `&&` is deliberately allowed: it short-circuits, so a failure

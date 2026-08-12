@@ -172,11 +172,49 @@ denied() {
 }
 
 @test "mise exec runs a program directly; only the wrapped program is judged" {
-	run guard 'mise exec -- bats tests/foo.bats | tail -3'
+	run guard 'mise exec -- git log --oneline | tail -3'
 	! denied "$output"
 	# ... and the wrapper does not hide a verdict-bearing one.
 	run guard 'mise exec -- cargo test -p batten | tail -3'
 	denied "$output"
+}
+
+# --- bats is verdict-bearing (CLOUD-473) -------------------------------------
+#
+# THE REGRESSION: this file's own wrapper test used `mise exec -- bats
+# tests/foo.bats | tail -3` as its ALLOWED example, so the omission was not
+# merely uncovered — it was asserted. `bats` is how every shell gate in this
+# repo is decided, and the `mise` row covered exactly one of its three
+# spellings: `mise run test:bats` was guarded while `mise exec -- bats …` (the
+# web sandbox's working form) and a path-invoked `tests/bats/bin/bats` were not.
+# Measured on this repo: a suite piped to `tail` reported green over three
+# failures, one of them a hang.
+
+@test "THE MEASURED CASE: a bats suite piped to tail is denied" {
+	run guard './tests/bats/bin/bats tests/land.bats 2>&1 | tail -20'
+	denied "$output"
+	[[ "$output" == *"exit status"* ]]
+}
+
+@test "the wrapper spellings of bats are denied too" {
+	run guard 'mise exec -- bats tests/land.bats | tail -3'
+	denied "$output"
+	run guard 'bats tests/land-lock.bats >/tmp/b.log 2>&1; grep -c "^not ok" /tmp/b.log'
+	denied "$output"
+}
+
+@test "bats without a suite answers nothing, so it is not a verdict" {
+	# The argument is what makes the run a verdict. Usage output is a query, and
+	# denying a pipe over it would be a pure false positive.
+	run guard 'bats --version | head -1'
+	! denied "$output"
+	run guard 'bats --help | grep jobs'
+	! denied "$output"
+}
+
+@test "a bats run alone in the call is the compliant form" {
+	run guard 'mise exec -- bats --jobs 4 tests/land.bats >/tmp/b.log 2>&1'
+	! denied "$output"
 }
 
 @test "a commit message describing the shape is not the shape" {
