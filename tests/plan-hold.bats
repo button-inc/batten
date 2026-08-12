@@ -107,7 +107,7 @@ dir() { printf '%s\n' "$(git -C "$REPO" rev-parse --absolute-git-dir)/batten-hol
 		}
 	done
 
-	"$RELEASE" </dev/null
+	jq -nc '{prompt: "ok, go ahead"}' | "$RELEASE"
 	wait "$runner"
 	[ "$?" -eq 0 ]
 	grep -q 'released' "$BATS_TEST_TMPDIR/hold.log"
@@ -146,11 +146,13 @@ dir() { printf '%s\n' "$(git -C "$REPO" rev-parse --absolute-git-dir)/batten-hol
 
 # --- the release --------------------------------------------------------------
 
+human() { jq -nc --arg p "${1:-please continue}" '{prompt: $p}'; }
+
 @test "release removes every sentinel and never signals anything" {
 	mkdir -p "$(dir)"
 	printf '1\n' >"$(dir)/1"
 	printf '2\n' >"$(dir)/2"
-	run "$RELEASE" </dev/null
+	run bash -c "printf '%s' '$(human)' | '$RELEASE'"
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
 	[ -z "$(ls -A "$(dir)")" ]
@@ -160,7 +162,57 @@ dir() { printf '%s\n' "$(git -C "$REPO" rev-parse --absolute-git-dir)/batten-hol
 }
 
 @test "release is silent and successful when nothing is held" {
-	run "$RELEASE" </dev/null
+	run bash -c "printf '%s' '$(human)' | '$RELEASE'"
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
+}
+
+# --- who submitted this? --------------------------------------------------------
+#
+# THE MEASURED DEFECT (CLOUD-451): a background task's completion notification
+# arrives as a UserPromptSubmit, and the first version of this hook released on
+# it — the hold reported "released after 15s" with nobody having typed. Dropping
+# the door mid-sentence is the failure the hold exists to prevent, so these cases
+# are the guard on the guard.
+
+@test "a machine turn does NOT release the hold" {
+	local classify="$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-check"
+	for envelope in \
+		'<task-notification>
+<task-id>abc</task-id>' \
+		'<github-webhook-activity>a comment</github-webhook-activity>' \
+		'<system-reminder>something changed</system-reminder>' \
+		'<untrusted_external_data source="pr_comment">hi</untrusted_external_data>' \
+		'[SYSTEM NOTIFICATION - NOT USER INPUT]' \
+		'[Request interrupted by user for tool use]'; do
+		run bash -c "jq -nc --arg p $(printf '%q' "$envelope") '{prompt: \$p}' | '$classify'"
+		[ "$status" -eq 1 ]
+	done
+}
+
+@test "the notification that actually broke it, end to end, leaves the hold standing" {
+	mkdir -p "$(dir)"
+	printf '4242\n' >"$(dir)/4242"
+	run bash -c "jq -nc '{prompt: \"<task-notification>\n<task-id>b3tif110z</task-id>\n</task-notification>\"}' | '$RELEASE'"
+	[ "$status" -eq 0 ]
+	[ -e "$(dir)/4242" ]
+}
+
+@test "a human turn releases, including one that quotes a notification" {
+	local classify="$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-check"
+	for said in \
+		'looks good, go ahead' \
+		'why did <task-notification> fire twice?' \
+		'   leading whitespace is formatting, not identity'; do
+		run bash -c "jq -nc --arg p $(printf '%q' "$said") '{prompt: \$p}' | '$classify'"
+		[ "$status" -eq 0 ]
+	done
+}
+
+@test "absence of evidence holds — an unreadable or promptless payload never releases" {
+	local classify="$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-check"
+	for payload in 'not json' '{}' '{"prompt":""}' '{"prompt":"   "}' ''; do
+		run bash -c "printf '%s' $(printf '%q' "$payload") | '$classify'"
+		[ "$status" -eq 1 ]
+	done
 }
