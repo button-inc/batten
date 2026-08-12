@@ -18,11 +18,14 @@
 
 setup() {
 	cd "$BATS_TEST_DIRNAME/.." || return 1
-	# The task body as mise sees it: the `run = "..."` line of [tasks."test:bats"].
-	# Read from the manifest rather than from `mise tasks --json` so the gate
-	# holds without provisioning anything, the same reason task-fail-closed.bats
-	# reads the verify body directly.
-	RUN=$(awk '/^\[tasks\."test:bats"\]/{f=1} f&&/^run = /{print; exit}' mise.toml)
+	# The task body as mise sees it: the whole [tasks."test:bats"] block, bounded
+	# by the next table header. Read from the manifest rather than from `mise
+	# tasks --json` so the gate holds without provisioning anything, the same
+	# reason task-fail-closed.bats reads the verify body directly. The block
+	# form (was: the single `run = ` line) follows the body growing its
+	# step-receipt wrapper (CLOUD-424); every assertion below is a substring
+	# match, so the wider net changes nothing they hold.
+	RUN=$(awk '/^\[tasks\."test:bats"\]/{f=1;next} f&&/^\[tasks/{exit} f' mise.toml)
 	INSTALL_ARGS=$(awk '/^  ci:/{f=1} f&&/install_args:/{print; exit}' .github/workflows/ci.yml)
 }
 

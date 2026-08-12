@@ -187,14 +187,25 @@ description = "Clippy with warnings denied"
 # hk's `cargo-clippy` step overrides the builtin command with THIS task, so the
 # flags live in one place. The workspace lints only mean anything if every
 # target is checked and a warning fails.
-run = "cargo clippy --all-targets --all-features -- -D warnings"
+# Receipt-gated (CLOUD-424): unchanged sources under an unchanged clippy are a
+# verdict already held.
+run = '''
+if mise run step-receipt check lint:clippy; then exit 0; fi
+if ! cargo clippy --all-targets --all-features -- -D warnings; then exit 1; fi
+mise run step-receipt record lint:clippy || true
+'''
 
 [tasks."lint:fmt"]
 description = "rustfmt in check mode"
 # Safe as the single definition: hk's `cargo-fmt` builtin already checks the
 # whole workspace (`--manifest-path {{workspace_indicator}}`), not file by file,
 # so routing it here costs no scoping.
-run = "cargo fmt --all --check"
+# Receipt-gated (CLOUD-424), same shape as lint:clippy.
+run = '''
+if mise run step-receipt check lint:fmt; then exit 0; fi
+if ! cargo fmt --all --check; then exit 1; fi
+mise run step-receipt record lint:fmt || true
+'''
 
 [tasks."lint:toml"]
 description = "taplo: TOML syntax, duplicate keys, schema bindings, and formatting"
@@ -271,7 +282,16 @@ depends = ["test:cargo", "test:bats"]
 
 [tasks."test:cargo"]
 description = "Run the Rust workspace test suite"
-run = "cargo test --workspace"
+# Routed through the per-step receipt (CLOUD-424): same sources, same command,
+# same toolchain ⇒ same verdict, so a hit answers from the receipt instead of
+# rebuilding the workspace. Fail closed — a check that cannot answer runs the
+# suite — and the record is an economy whose failure must never fail a suite
+# that passed.
+run = '''
+if mise run step-receipt check test:cargo; then exit 0; fi
+if ! cargo test --workspace; then exit 1; fi
+mise run step-receipt record test:cargo || true
+'''
 
 [tasks.msrv]
 description = "Gate: the workspace still builds on the `rust-version` it declares"
@@ -298,6 +318,9 @@ shell = "bash -c"
 # line here changes the verdict, so the body opts in explicitly.
 run = '''
 set -euo pipefail
+# Receipt-gated (CLOUD-424): the declared floor lives in Cargo.toml and the
+# host toolchain is in the key, so a bump to either re-derives.
+if mise run step-receipt check msrv; then exit 0; fi
 msrv=$(cargo metadata --format-version 1 --no-deps |
 	jq -r '[.packages[].rust_version | select(. != null)] | unique | .[]' |
 	sort -V | tail -n1)
@@ -319,18 +342,33 @@ fi
 # consumer on the floor compiles our crate, not our test harness. `--all-targets`
 # would drag dev-dependencies' own floors into a claim we do not make about them.
 cargo "+$msrv" check --workspace
+mise run step-receipt record msrv || true
 echo "msrv: the workspace builds on its declared rust-version ($msrv)"
 '''
 
 [tasks.deny]
 description = "cargo-deny: licenses, advisories, sources"
-run = "cargo deny check"
+# Receipt-gated (CLOUD-424) on the dependency set and cargo-deny's own version.
+# The advisory DB is a property of the world, and worlds change on a clock, not
+# on this branch: CI still runs the full check on every PR, which is the same
+# split lock-currency already made.
+run = '''
+if mise run step-receipt check deny; then exit 0; fi
+if ! cargo deny check; then exit 1; fi
+mise run step-receipt record deny || true
+'''
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"
 # `cargo run` rather than an installed binary, so the gate always judges the
 # working tree's engine and config together — the pair that ships.
-run = "cargo run --quiet -p batten -- check"
+# Receipt-gated (CLOUD-424); the key's specs mirror the hk step's glob, which
+# is the union of what `batten check` actually reads.
+run = '''
+if mise run step-receipt check batten-check; then exit 0; fi
+if ! cargo run --quiet -p batten -- check; then exit 1; fi
+mise run step-receipt record batten-check || true
+'''
 
 [tasks.policy-budget]
 description = "Gate: the always-loaded context (AGENTS.md + anything else declared always-load) fits its token budget"
@@ -379,7 +417,12 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # `action.yml` is named alongside `.github/` because the shipped Action (CLOUD-68)
 # is a workflow surface with the same injection and unpinned-uses hazards, and
 # zizmor's directory walk does not reach a repository-root action definition.
-run = "zizmor --min-severity high .github/ action.yml"
+# Receipt-gated (CLOUD-424) on the workflow surface and zizmor's version.
+run = '''
+if mise run step-receipt check zizmor; then exit 0; fi
+if ! zizmor --min-severity high .github/ action.yml; then exit 1; fi
+mise run step-receipt record zizmor || true
+'''
 
 [tasks.lock-check]
 description = "Currency only: would regenerating mise.lock change it? Runs on a schedule, never on the landing path — it fetches and it writes"
@@ -430,6 +473,9 @@ depends = ["doctor"]
 # `darwin-link`, which runs as its own parallel CI job. Checking them here too
 # would be duplicate work on the critical path.
 run = '''
+# Receipt-gated (CLOUD-424): a hit skips the target install too — the verdict
+# is about the sources, and the toolchain half lives in the key.
+if mise run step-receipt check cross-check; then exit 0; fi
 for t in x86_64-pc-windows-gnu; do
   # Guarded because task bodies do not run under `set -e`: with more than one
   # triple in the list, a failed target install would otherwise be masked by a
@@ -453,8 +499,12 @@ for t in x86_64-pc-windows-gnu; do
   # using a Unix-only API without that gate compiled fine here forever
   # (CLOUD-395). It passes today, which is the point of adding the flag now: the
   # property held by luck, and a mechanism is what makes it hold on purpose.
-  cargo check --workspace --all-targets --target "$t"
+  if ! cargo check --workspace --all-targets --target "$t"; then
+    echo "::error:: cross-check: $t does not type-check." >&2
+    exit 1
+  fi
 done
+mise run step-receipt record cross-check || true
 '''
 
 [tasks.hk-version]
@@ -507,7 +557,15 @@ depends = ["doctor --no-targets"]
 # safe by construction: within-file parallelism would interleave a file's own
 # setup/teardown with its cases, which is exactly what the suites that model
 # lock and race behaviour must not have done to them.
-run = 'bats --print-output-on-failure --parallel-binary-name rush --jobs "$(nproc)" --no-parallelize-within-files tests/*.bats'
+# Receipt-gated (CLOUD-424). Deliberately glob-less in step-receipt's table:
+# these suites read mise.toml, hk.pkl, workflows and fixture trees all over the
+# repo, so the honest input set is the whole tracked tree — a rebase that
+# changed no bytes still skips, and any content change anywhere re-runs.
+run = '''
+if mise run step-receipt check test:bats; then exit 0; fi
+if ! bats --print-output-on-failure --parallel-binary-name rush --jobs "$(nproc)" --no-parallelize-within-files tests/*.bats; then exit 1; fi
+mise run step-receipt record test:bats || true
+'''
 
 [tasks.hooks]
 description = "Run the git-hook gate (fmt, lint, test) through hk — the same hk.pkl the pre-commit hook uses, in check-only mode"

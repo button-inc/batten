@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+#MISE description="Economy: per-step receipts keyed by input content — a step whose exact inputs, command and tools already passed is answered from its receipt"
+#
+# CLOUD-424. The whole-gate receipt is keyed to a SHA, so the moment anything
+# about the commit changes — including a rebase that replays no commits and
+# leaves the tree byte-identical — every step re-runs from scratch, the ones
+# whose inputs demonstrably did not change included. A commit touching only
+# mise-tasks/ re-built the whole Rust workspace; a rebase-only lap paid the full
+# ~220s gate twice to re-derive verdicts it already held.
+#
+# This is NOT test-impact selection, which this repo refused and stays refused:
+# nothing here infers what a change "could" affect. The claim is exact and the
+# same one a receipt already makes — same inputs, same command, same tool
+# version ⇒ same verdict — applied per step instead of per commit. A step's key
+# is a content hash over:
+#
+#   * its declared input set, as INDEX blob ids (`git ls-files -s`) — content-
+#     addressed, so a rebase that changes no bytes changes no key, which is the
+#     case a SHA-keyed receipt structurally cannot serve
+#   * its task body, read from `mise tasks info` — the command is part of the
+#     verdict, and reading it from mise keeps this file from becoming a second
+#     authority over what a task runs (a file task's bytes are hashed too)
+#   * the live output of its tools' `--version` — a cached verdict that
+#     survives a toolchain bump is a false green, so the key must not
+#   * any `--arg` the caller passes, for steps whose behaviour takes parameters
+#     (darwin-link's target)
+#
+# FAIL CLOSED, EVERYWHERE. A key that cannot be computed — an unreadable file, a
+# spec that resolves to nothing, a tool whose version will not print, a step this
+# table does not know — is never "assume unchanged": it is "run the step". The
+# same rule `verified` follows for a missing receipt, and the reason either is
+# trustworthy. A corrupted or absent receipt store therefore degrades to running
+# everything, never to skipping anything.
+#
+# THE INDEX IS THE TRUTH THE KEY HASHES, so the worktree must agree with it over
+# the input set: any unstaged divergence or untracked file in the specs is "no
+# key". That is what makes `ls-files -s` an honest hash of what the step will
+# read — and it is free on the paths that matter, since `verify` runs behind
+# `tree-clean` and the pre-commit hook runs behind hk's stash.
+#
+# CHECK AND RECORD ARE A PAIR, and the pending file is what welds them. `check`
+# stores the key it computed; `record` recomputes and refuses on any mismatch —
+# so a tree that changed while the step ran can never mint a receipt claiming
+# the old bytes were judged. A `record` with no pending `check` refuses for the
+# same reason: it has no evidence the key it would write is the one that ran.
+#
+# LOCAL ONLY, BY DESIGN. Under CI (or BATTEN_STEP_RECEIPT_BYPASS=1) `check`
+# always answers "run" and `record` writes nothing: CI's job is to confirm
+# independently, and a cache shared into CI would make its verdict depend on
+# another machine's history.
+#
+# Wrap a step when its cost dwarfs the ~0.3s a check/record pair costs, never
+# reflexively: the cheap hk gates stay unwrapped on purpose.
+#
+# Verbs and exits, per the one contract: `check` — 0 a receipt covers this exact
+# key (skip), 1 run the step (miss, or no key; both mean the same thing to a
+# caller). `record` — 0 recorded, 1 refused with the reason on stderr; a refusal
+# must never fail the step, whose verdict is the run's, so callers guard it.
+# Output is pointer-only: step names and key prefixes, never file contents.
+set -euo pipefail
+
+usage() {
+	echo "::error:: usage: step-receipt <check|record> <step> [--arg <value>]..." >&2
+	exit 2
+}
+
+verb="${1:-}"
+step="${2:-}"
+case "$verb" in
+check | record) ;;
+*) usage ;;
+esac
+[ -n "$step" ] || usage
+shift 2
+
+extra=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--arg)
+		[ $# -ge 2 ] || usage
+		extra="$extra$2
+"
+		shift 2
+		;;
+	*) usage ;;
+	esac
+done
+
+# CI must keep running the full gate on every commit, so the cache answers
+# "run" and records nothing there. Same under the bypass, which exists so a
+# measurement or a diagnosis can see the uncached cost on demand.
+if [ -n "${CI:-}" ] || [ -n "${BATTEN_STEP_RECEIPT_BYPASS:-}" ]; then
+	if [ "$verb" = "check" ]; then
+		exit 1
+	fi
+	exit 0
+fi
+
+# The step table: input pathspecs plus the command that proves the tools'
+# versions. Specs are git pathspecs over TRACKED files — a directory name
+# covers everything under it, which keeps the sets honest by being generous
+# rather than clever. `test:bats` is deliberately glob-less: its suites read
+# mise.toml, hk.pkl, workflows and fixture trees all over the repo, so its
+# input genuinely is the tracked tree.
+#
+# BATTEN_STEP_SPECS / BATTEN_STEP_TOOLS override the table — the lever
+# tests/step-receipt.bats drives the decision table with. A step neither the
+# table nor the override declares has no input set, therefore no key,
+# therefore always runs.
+rust_specs="crates Cargo.toml Cargo.lock"
+rust_tools="rustc --version && cargo --version"
+specs=""
+tools=""
+known=no
+case "$step" in
+lint:fmt)
+	# rustfmt.toml steers the verdict; the clippy/fmt config names below that
+	# do not exist yet cost nothing (a spec set is empty only when ALL of it
+	# resolves to nothing) and stop a later-added config file from being
+	# invisible to the key.
+	specs="$rust_specs rustfmt.toml"
+	tools="cargo fmt --version"
+	known=yes
+	;;
+lint:clippy)
+	specs="$rust_specs clippy.toml .clippy.toml"
+	tools="cargo clippy --version && rustc --version"
+	known=yes
+	;;
+test:cargo | msrv | cross-check)
+	specs="$rust_specs"
+	tools="$rust_tools"
+	known=yes
+	;;
+darwin-link)
+	specs="$rust_specs"
+	tools="cargo zigbuild --version && zig version && rustc --version"
+	known=yes
+	;;
+deny)
+	specs="$rust_specs deny.toml"
+	tools="cargo deny --version"
+	known=yes
+	;;
+zizmor)
+	specs=".github action.yml"
+	tools="zizmor --version"
+	known=yes
+	;;
+batten-check)
+	specs="batten.toml $rust_specs mise.toml .github tests AGENTS.md .serena/project.yml"
+	tools="$rust_tools"
+	known=yes
+	;;
+test:bats)
+	specs=""
+	tools="bats --version"
+	known=yes
+	;;
+esac
+if [ "${BATTEN_STEP_SPECS+set}" = "set" ]; then
+	specs="$BATTEN_STEP_SPECS"
+	known=yes
+fi
+if [ "${BATTEN_STEP_TOOLS+set}" = "set" ]; then
+	tools="$BATTEN_STEP_TOOLS"
+	known=yes
+fi
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
+	echo "step-receipt: $step — not a git repository, so there is nothing to answer from" >&2
+	exit 1
+}
+receipts="$git_dir/batten-receipts"
+safe="${step//[:\/]/-}"
+pending="$receipts/step-pending.$safe"
+
+# Everything the key hashes, one labelled field per line group. Any failure is
+# a bare `return 1`: the caller reads that as "no key", and no key means run.
+material() {
+	local body file fhash toolsout others files
+	[ "$known" = "yes" ] || return 1
+	printf 'step %s\n' "$step"
+	if [ -n "$extra" ]; then
+		printf 'args %s\n' "$extra"
+	fi
+	# The command half of the key, from mise itself so this table never becomes
+	# a second authority over what a task runs. A file task's body is its file,
+	# so those bytes join the key too.
+	body=$(mise tasks info "$step" --json 2>/dev/null | jq -c '{run, file, shell}' 2>/dev/null) || return 1
+	[ -n "$body" ] || return 1
+	printf 'body %s\n' "$body"
+	file=$(jq -r '.file // empty' <<<"$body" 2>/dev/null) || return 1
+	if [ -n "$file" ]; then
+		fhash=$(sha256sum "$file" 2>/dev/null) || return 1
+		printf 'bodyfile %s\n' "$fhash"
+	fi
+	# The tool half. Live output, not a pin read from a file: what answers is
+	# the binary the step would actually invoke.
+	toolsout=$(bash -c "$tools" 2>/dev/null) || return 1
+	[ -n "$toolsout" ] || return 1
+	printf 'tools %s\n' "$toolsout"
+	# The input half: index blob ids, honest only while the worktree agrees
+	# with the index over the set — so any unstaged divergence or untracked
+	# file inside the specs is "no key". An empty resolution is a spec that
+	# failed to resolve, and that also runs the step rather than hitting.
+	if [ -n "$specs" ]; then
+		local spec_arr
+		read -ra spec_arr <<<"$specs"
+		git diff --quiet -- "${spec_arr[@]}" 2>/dev/null || return 1
+		others=$(git ls-files --others --exclude-standard -- "${spec_arr[@]}" 2>/dev/null) || return 1
+		[ -z "$others" ] || return 1
+		files=$(git ls-files -s -- "${spec_arr[@]}" 2>/dev/null) || return 1
+	else
+		git diff --quiet 2>/dev/null || return 1
+		others=$(git ls-files --others --exclude-standard 2>/dev/null) || return 1
+		[ -z "$others" ] || return 1
+		files=$(git ls-files -s 2>/dev/null) || return 1
+	fi
+	[ -n "$files" ] || return 1
+	printf 'inputs\n%s\n' "$files"
+}
+
+compute_key() {
+	# pipefail carries material's refusal through the hash, so a partial
+	# material can never quietly become a key.
+	material | sha256sum | awk '{print $1}'
+}
+
+case "$verb" in
+check)
+	if ! key=$(compute_key) || [ -z "$key" ]; then
+		rm -f "$pending" 2>/dev/null || true
+		echo "step-receipt: $step — no key (dirty, unreadable, or undeclared inputs); running the step"
+		exit 1
+	fi
+	if [ -f "$receipts/step.$safe.$key" ]; then
+		rm -f "$pending" 2>/dev/null || true
+		echo "step-receipt: $step — receipt ${key:0:12} already covers these exact inputs, command and tools; not re-deriving"
+		exit 0
+	fi
+	# The pending key is what a later `record` must match. If it cannot be
+	# stored the step still runs — record will then refuse, which only costs
+	# the economy, never the verdict.
+	if ! { mkdir -p "$receipts" && printf '%s\n' "$key" >"$pending"; } 2>/dev/null; then
+		rm -f "$pending" 2>/dev/null || true
+	fi
+	echo "step-receipt: $step — no receipt for ${key:0:12}; running the step"
+	exit 1
+	;;
+
+record)
+	if [ ! -f "$pending" ]; then
+		echo "step-receipt: $step — no pending key from a paired check; not recording" >&2
+		exit 1
+	fi
+	expected=$(cat "$pending" 2>/dev/null) || expected=""
+	rm -f "$pending" 2>/dev/null || true
+	if ! key=$(compute_key) || [ -z "$key" ] || [ "$key" != "$expected" ]; then
+		echo "step-receipt: $step — the inputs changed while the step ran; a receipt now would attest bytes the run never judged. Not recording" >&2
+		exit 1
+	fi
+	# One receipt per step: the key encodes everything a hit needs, so an older
+	# key is a verdict about inputs that no longer exist here.
+	rm -f "$receipts/step.$safe."* 2>/dev/null || true
+	if ! printf '%s %s\n' "$(date -u +%FT%TZ)" "$key" >"$receipts/step.$safe.$key" 2>/dev/null; then
+		echo "step-receipt: $step — could not write the receipt; the next run re-derives" >&2
+		exit 1
+	fi
+	echo "step-receipt: $step — recorded ${key:0:12}"
+	;;
+esac

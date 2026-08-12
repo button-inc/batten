@@ -61,6 +61,19 @@ confirmation rather than a discovery: no job runs on a draft, every
 that touched a workflow still spent a runner and re-drafting did not close the
 tap (CLOUD-240).
 
+**The expensive steps answer from per-step receipts (CLOUD-424).** The cargo
+chain, `test:bats`, `deny`, `zizmor`, `msrv`, `cross-check`, `darwin-link` and
+`batten-check` route through `mise run step-receipt`: a content-addressed
+receipt under `.git/batten-receipts/`, keyed by the step's input files (index
+blob ids), its task body read from `mise tasks info`, its tools' live
+`--version` output, and any argument. Same inputs, same command, same toolchain
+⇒ same verdict, so a hit skips the step — which is what makes a rebase-only lap
+cheap. This is not test-impact selection: nothing is inferred, and any key that
+cannot be computed runs the step (fail closed). Under CI the cache neither hits
+nor records — CI confirms independently. Spec table and rationale in
+`mise-tasks/step-receipt`; decision table in `tests/step-receipt.bats`. Wrap a
+step only when its cost dwarfs the ~0.3s a check/record pair costs.
+
 Two defects got it here (CLOUD-235, then CLOUD-238), and the second is the
 instructive one. First the refusal was invisible — the predicate's history is in
 the task's own header. Second, restoring the signal and still _exiting_ on a
