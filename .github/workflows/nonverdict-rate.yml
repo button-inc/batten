@@ -1,0 +1,86 @@
+name: nonverdict-rate
+
+# "How often does a required job fail without ever reaching a verdict?" — a
+# question about the runner fleet and the actions we depend on, not about any
+# branch, so it runs on a clock rather than on the landing path. Same split as
+# lock-currency.yml, timeout-drift.yml and release-assets.yml.
+#
+# A job that dies in provisioning — checkout, the toolchain install, a cache
+# restore — spends its minutes, reds the branch, and answers nothing. Every
+# occurrence then costs a human or an agent the time to work out it was never a
+# verdict: CLOUD-404 has five, and the one on #376 sent an agent to reproduce a
+# `commit-lint` failure that passes locally, because `commit-lint` never linted
+# anything.
+#
+# CLOUD-483 stops `land` MISREADING one in the moment. This answers the question
+# neither of those does — how often — so a step change (a runner-image regression,
+# an upstream action shipping a bad release, a cache-key change that cold-starts
+# every job) is visible as a number instead of as whoever gets bitten next.
+#
+# THIS MUST NOT RUN IN THE GATE OR IN `verify`. It is a property of the world, and
+# a branch must not go red because the platform had a bad afternoon —
+# coverage.yml:15-18 states the same boundary for the same reason. What IS gated is
+# the decision: `tests/nonverdict-assert.bats` runs on every commit, because the
+# decider is a pure function of records.
+#
+# Failure here is informational: it means the rate crossed its budget and wants
+# looking at, not that anything in the tree is broken. Nothing here writes to the
+# tree and nothing files an issue or posts a comment — the posture timeout-drift
+# states and lock-currency.yml's header explains.
+
+on:
+  schedule:
+    # Mondays, 08:00 UTC — after zizmor-advisories (07:45), continuing the weekly
+    # property-of-the-world block rather than contending with it, so the whole
+    # sweep reads as one group in the Actions list.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off along
+  # with the install-time write it exists to deny (CLOUD-223).
+  MISE_LOCKFILE: "true"
+
+jobs:
+  nonverdict-rate:
+    name: nonverdict-rate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
+    permissions:
+      actions: read # list recent runs, and read each one's jobs and step conclusions
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      # Measure to a FILE, then read it back — never `scan | assert`. A pipeline
+      # hands the step's exit status to its last stage, so a scan that died would
+      # be judged as an empty window rather than reported (bench.yml:84-92).
+      #
+      # GH_TOKEN through env, never interpolated into the run block: a `${{ }}`
+      # expansion is textual substitution into the shell script, which zizmor gates
+      # at high severity.
+      - name: Measure which required-check failures never reached a verdict
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mise run nonverdict-scan > "$RUNNER_TEMP/nonverdict.txt"
+      - name: Publish the records
+        shell: bash
+        run: |
+          {
+            echo '### nonverdict-rate'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/nonverdict.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      # Always, so the records above are published even when the budget is broken —
+      # the number is the point, and a summary that only appears on green is a
+      # report nobody reads at the moment it matters.
+      - name: Judge the rate against its budget
+        if: always()
+        shell: bash
+        run: mise run nonverdict-assert < "$RUNNER_TEMP/nonverdict.txt"
