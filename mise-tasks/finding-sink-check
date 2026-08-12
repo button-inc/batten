@@ -69,7 +69,34 @@ CITATION='([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\.(rs|toml|yml|yaml|ba
 # the server prefix — the same connector appears as `mcp__Linear__save_issue` and
 # as `mcp__<uuid>__save_issue` within one session (CLOUD-178), so a prefix anchor
 # silently misses whichever name is live.
-DURABLE='(save_issue|save_comment|save_document|write_memory|edit_memory|rename_memory)$'
+#
+# RECORDED IS NOT SCHEDULED (CLOUD-475). One flat list counted `save_comment` as a
+# home with no term for the TARGET'S STATE — so a turn that finds a defect in
+# landed code, comments it onto the Done issue that shipped it, and files nothing
+# scored durable and passed. The board then has no open row for it, no sweep
+# visits it, and no gate notices: the finding is durably RECORDED and permanently
+# UNSCHEDULED. The gate written to catch a stranded finding was cleared by the
+# exact act that strands it.
+#
+# The naive fix — "refuse a comment on a Done issue" — is UNCOMPUTABLE here. No
+# tracker credential exists in a hook, exactly as it does not for `claim-check`,
+# so the target's state cannot be looked up. The predicate therefore keys on the
+# CALL SHAPE, which the transcript already carries:
+#
+#   OPENS a row    `save_issue` with NO `id` — a created issue is open by
+#                  construction, so this needs no state lookup at all.
+#   ANNOTATES      `save_comment`, and `save_issue` WITH an `id`. Both attach to a
+#                  row that already exists and may be terminal. Feedback, not a home.
+#
+# A finding's home must include at least one opens-a-row write. Memory and document
+# writes keep their current standing, deliberately: a memory is read on demand at
+# its trigger, which is a different destination with a different reader, and this
+# rule does not reopen that question.
+#
+# The names carry a `#id`/`#noid` suffix stamped by pass 2 below, so the two
+# classes are distinguishable without a second read of the transcript.
+OPENS_A_ROW='save_issue#noid$'
+OTHER_DURABLE='(save_document|write_memory|edit_memory|rename_memory)#'
 
 # ONLY THE TURN THAT JUST ENDED, AND ONLY THAT TURN IS READ. Judging the whole
 # transcript is what the first wiring did, and running it live exposed the defect
@@ -130,7 +157,9 @@ if [ -n "$start" ]; then
 	    | (.message.content // [])[]
 	    | select(type == "object")
 	    | if .type == "text" then "T" + ((.text // "") | gsub("\n"; " "))
-	      elif .type == "tool_use" then "U" + (.name // "")
+	      elif .type == "tool_use" then "U" + (.name // "") + "#" +
+	             (if ((.input // {}) | type) == "object" and ((.input // {}) | has("id"))
+	              then "id" else "noid" end)
 	      else empty end
 	  ' 2>/dev/null); then
 		echo "::error:: transcript is not readable JSONL: $transcript" >&2
@@ -140,12 +169,20 @@ if [ -n "$start" ]; then
 	prose=$(grep '^T' <<<"$blocks")
 	tools=$(grep '^U' <<<"$blocks")
 
-	# Any one durable tool name in the same turn clears it.
+	# One opens-a-row write in the same turn clears it; so does a memory or
+	# document write, whose standing is unchanged. An ANNOTATION alone does not
+	# (CLOUD-475) — that is the whole of this rule.
 	clean=0
 	if [ -n "$tools" ]; then
 		while IFS= read -r name; do
 			[ -n "$name" ] || continue
-			if grep -qE "$DURABLE" <<<"${name#U}"; then
+			# ONE alternation, not two greps joined by `||`. The two classes stay
+			# separate variables above because they are separate ideas and the
+			# mutation row keys on one of them, but they are matched in a single
+			# pass — `pipefail-grep-check` reads the `||` as a producer piped into
+			# an early-exiting grep, and it is right to: under `pipefail` that
+			# shape is how a MATCH comes to report failure.
+			if grep -qE "($OPENS_A_ROW|$OTHER_DURABLE)" <<<"${name#U}"; then
 				clean=1
 				break
 			fi
@@ -169,5 +206,9 @@ if [ "$turns" = 0 ]; then
 fi
 
 [ "$fired" = 0 ] && exit 0
-echo "finding-sink-check: the last of $turns turn(s) cited path:line evidence and wrote nothing durable" >&2
+# THE REFUSAL NAMES THE PRACTICE, NOT THE RULE (CLOUD-475). "This is not durable"
+# reproduces the confusion it is meant to clear, because an author who commented
+# the finding onto its source issue correctly believes they wrote it down. What
+# they are missing is an OPEN ROW, so that is what the message asks for.
+echo "finding-sink-check: the last of $turns turn(s) cited path:line evidence and opened no row for it. A comment annotates; it does not schedule. File an open issue for the work and link it \`relatedTo\` the source." >&2
 exit 1

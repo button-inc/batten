@@ -20,6 +20,11 @@ tool() { jq -nc --arg n "$1" '{type:"assistant",isSidechain:false,message:{conte
 # A tool_result arrives as a user record and is NOT a prompt — counting it would
 # split one turn into several and give each fragment its own verdict.
 result() { jq -nc '{type:"user",isSidechain:false,message:{content:[{type:"tool_result",content:"ok"}]}}' >>"$T"; }
+# CLOUD-475: the same call, carrying an `id` — which is what makes it an
+# ANNOTATION of a row that already exists rather than the opening of a new one.
+# `tool` above passes `input:{}`, so every existing row here is the id-less shape
+# and keeps its meaning unchanged.
+tool_with_id() { jq -nc --arg n "$1" '{type:"assistant",isSidechain:false,message:{content:[{type:"tool_use",name:$n,input:{id:"CLOUD-199"}}]}}' >>"$T"; }
 sub() { jq -nc --arg t "$1" '{type:"assistant",isSidechain:true,message:{content:[{type:"text",text:$t}]}}' >>"$T"; }
 sub_tool() { jq -nc --arg n "$1" '{type:"assistant",isSidechain:true,message:{content:[{type:"tool_use",name:$n,input:{}}]}}' >>"$T"; }
 
@@ -58,6 +63,52 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	tool "mcp__4db58e41-cd4e-4818-8922-46cf616593f4__save_issue"
 	run check
 	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-475: a COMMENT alone is not a home — recorded is not scheduled" {
+	# The defect this whole rule exists for. A defect is usually found in code
+	# that has already landed, so its source issue is Done — and a comment there
+	# is read by nobody and actioned by nothing. The board has no open row, no
+	# sweep visits it, no gate notices. Durably recorded, permanently unscheduled.
+	#
+	# The state of the target cannot be looked up: no tracker credential exists in
+	# a hook, exactly as for `claim-check`. So this keys on the CALL SHAPE.
+	prompt
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	tool "mcp__Linear__save_comment"
+	run check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"turn:1 finding-without-durable-write"* ]]
+	# And it names the PRACTICE, not the rule: an author who commented the finding
+	# correctly believes they wrote it down, so "not durable" reproduces the
+	# confusion. What they are missing is an open row.
+	[[ "$output" == *"open"* ]] || [[ "$stderr" == *"open row"* ]]
+}
+
+@test "CLOUD-475: comment PLUS a new open row is a home — the CLOUD-473 shape" {
+	# The working practice, executed by hand twice on 2026-08-12 (CLOUD-473 and
+	# CLOUD-474) because a human demanded it in the moment. This row is what makes
+	# it a rule rather than a habit — and it must pass, or the gate punishes the
+	# correct behaviour.
+	prompt
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	tool "mcp__Linear__save_comment"
+	tool "mcp__Linear__save_issue"
+	run check
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "CLOUD-475: save_issue WITH an id is an annotation, not a filing" {
+	# Updating an existing row is not opening one. Without this the rule is
+	# trivially evaded by editing the source issue's own body, which schedules
+	# nothing and is the same stranding in a different spelling.
+	prompt
+	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	tool_with_id "mcp__Linear__save_issue"
+	run check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"turn:1 finding-without-durable-write"* ]]
 }
 
 @test "a memory write counts as durable too, not only the tracker" {
