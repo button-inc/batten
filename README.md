@@ -163,12 +163,12 @@ measure time** rather than hardcoded — so the published figure describes what 
 installed rather than a binary nothing calls. `hook` stays measured beside it so
 the launcher's own share is attributable.
 
-| path    | what it does                                    | p50     | p95     | budget   |
-| ------- | ----------------------------------------------- | ------- | ------- | -------- |
-| `noop`  | process start, command tree, render             | 3.8 ms  | 5.7 ms  | ≤ 100 ms |
-| `check` | + config load, trust resolution, one-rule tree  | 3.9 ms  | 5.3 ms  | —        |
-| `hook`  | + envelope decode, adjudication, decision write | 16.6 ms | 19.1 ms | ≤ 100 ms |
-| `wired` | the hook as `.claude/settings.json` invokes it  | 25.2 ms | 28.7 ms | ≤ 100 ms |
+| path    | what it does                                    | p50    | p95    | budget   |
+| ------- | ----------------------------------------------- | ------ | ------ | -------- |
+| `noop`  | process start, command tree, render             | 2.1 ms | 2.4 ms | ≤ 100 ms |
+| `check` | + config load, trust resolution, one-rule tree  | 2.3 ms | 2.7 ms | —        |
+| `hook`  | + envelope decode, adjudication, decision write | 2.8 ms | 3.0 ms | ≤ 100 ms |
+| `wired` | the hook as `.claude/settings.json` invokes it  | 8.0 ms | 8.4 ms | ≤ 100 ms |
 
 100 ms is the [Command Line Interface Guidelines'][clig] floor for a response
 that reads as instant. It is an absolute ceiling rather than a tight band around
@@ -179,18 +179,23 @@ its cost is bounded by the repository it is pointed at, not by Batten, and no
 ceiling here could tell a large tree apart from a regression.
 
 <!-- prettier-ignore -->
-> Measured at `52764a2`, 2026-08-12, on a 4-core x86_64 Linux container:
-> release build, 10 warmup runs discarded, 100 timed runs per path, p95 from
-> the sorted run times. **This run was taken while other work was building and
-> testing on the same container**, so every figure here is an upper bound rather
-> than a best case — the previous set, at `140ec24`, read ~2.5 ms for `noop` and
-> `check` on a quiet box. That is the honest reason the numbers moved, and it is
-> why the gate holds a ceiling rather than a band around the measured value: a
-> shared runner's p95 moves by more than a percentage band between two runs of
-> identical bytes. Your machine will differ; the budget is what the gate holds,
-> and the schedule in
-> [`.github/workflows/bench.yml`](.github/workflows/bench.yml) is what keeps
+> Measured 2026-08-12 on a 4-core x86_64 Linux container: release build, 10
+> warmup runs discarded, 100 timed runs per path, p95 from the sorted run times.
+> Your machine will differ; the budget is what the gate holds, and the schedule
+> in [`.github/workflows/bench.yml`](.github/workflows/bench.yml) is what keeps
 > holding it.
+
+<!-- prettier-ignore -->
+> **A correction, kept because the mistake is the instructive part.** The
+> previous revision of this table published `hook` at 16.6 ms and blamed a
+> concurrently-loaded container. That explanation was wrong. The cost was a
+> real regression — one `receipt` row made *every* mediated call resolve
+> receipts, four git subprocesses' worth, including calls no receipt rule could
+> ever match (CLOUD-460). Measured on the command that exposed it, the fix is
+> **3.44× ± 0.30 faster**: 9.4 ms → 2.7 ms. It sat inside the ≤ 100 ms budget
+> the whole time, so no gate went red — which is exactly why a wrong
+> explanation in a performance note is worse than none: it tells the next
+> reader the number is environmental and not to look.
 
 [clig]: https://clig.dev/#responsiveness
 

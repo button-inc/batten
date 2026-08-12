@@ -876,7 +876,7 @@ fn run_hook(
     // Resolved only for the names the policy actually requires, so a repository
     // declaring no receipt row does no git work at all on the hottest path in
     // the binary. `None` throughout means "could not look", which allows.
-    let required = policy.required_checks();
+    let required = policy.required_checks_for(&envelope.command);
     let receipts: hook::ReceiptFacts = if required.is_empty() {
         None
     } else {

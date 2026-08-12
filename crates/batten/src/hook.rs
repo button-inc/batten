@@ -745,17 +745,26 @@ impl Policy {
         })
     }
 
-    /// Every receipt name any `receipt` row requires, deduplicated.
+    /// The receipt names this **command** needs proved, deduplicated.
     ///
-    /// The boundary resolves exactly these and no more: a repository declaring
-    /// no receipt row does no git work at all, which keeps the cost off the
-    /// hottest path in the binary for every consumer that does not use them.
+    /// Scoped to the command, not to the policy (CLOUD-460). The earlier form
+    /// asked only "does any row want receipts", which made one row in
+    /// `batten.toml` enough to charge every mediated call: `receipt::verdicts`
+    /// runs four git subprocesses (measured ~1.85ms each) plus a read per name,
+    /// and it was being paid by `ls`, by `gh pr view`, and by every file edit —
+    /// none of which a `pattern = "gh pr ready"` row could ever match.
+    ///
+    /// It fell inside the ≤100ms budget, so no gate caught it. That is the
+    /// shape CLOUD-435 exists to prevent: a ceiling does not notice a fivefold
+    /// move underneath it.
+    ///
+    /// The row selection is [`matching_receipt_rows`] — the same function
+    /// [`receipt_rules`] adjudicates with, so what the boundary resolves and
+    /// what the core then judges cannot disagree about which rows fire.
     #[must_use]
-    pub fn required_checks(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .shapes
-            .iter()
-            .filter(|rule| rule.kind == RuleKind::Receipt)
+    pub fn required_checks_for(&self, command: &str) -> Vec<String> {
+        let mut names: Vec<String> = matching_receipt_rows(self, command)
+            .into_iter()
             .filter_map(|rule| rule.checks.as_ref())
             .flatten()
             .cloned()
@@ -878,12 +887,14 @@ pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
 /// banned. The same call is allowed the moment the receipt exists, which is why
 /// the refusal names the verdict — an operator who reads "stale-head" knows to
 /// re-run, where "missing" alone would send them looking for a file.
-fn receipt_rules(policy: &Policy, command: &str, facts: &ReceiptFacts) -> Decision {
-    // No facts means the boundary could not look. Allow: a guard that cannot
-    // read its own precondition must not become the reason work stops.
-    let Some(facts) = facts.as_ref() else {
-        return Decision::Allow;
-    };
+/// The `receipt` rows whose trigger fires on this command.
+///
+/// One authority for "does this row apply", shared by the boundary that decides
+/// which receipts to resolve and the adjudicator that judges them. Split out
+/// because those two answering separately is how a call comes to pay for a
+/// receipt no rule would have consulted (CLOUD-460).
+fn matching_receipt_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
+    let mut matched: Vec<&Rule> = Vec::new();
     for segment in segments(command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
@@ -915,14 +926,30 @@ fn receipt_rules(policy: &Policy, command: &str, facts: &ReceiptFacts) -> Decisi
                     continue;
                 }
             }
-            // Every named receipt must be valid. An unresolved name is Missing,
-            // never absent-and-therefore-fine: a boundary that answered for
-            // fewer checks than the row requires has not proved the precondition.
-            for check in rule.checks.iter().flatten() {
-                let verdict = facts.get(check).copied().unwrap_or(Validity::Missing);
-                if verdict != Validity::Valid {
-                    return Decision::Deny(receipt_refusal(rule, check, verdict));
-                }
+            // A command with several segments can match one row twice; the row
+            // is still one obligation.
+            if !matched.iter().any(|seen| std::ptr::eq(*seen, rule)) {
+                matched.push(rule);
+            }
+        }
+    }
+    matched
+}
+
+fn receipt_rules(policy: &Policy, command: &str, facts: &ReceiptFacts) -> Decision {
+    // No facts means the boundary could not look. Allow: a guard that cannot
+    // read its own precondition must not become the reason work stops.
+    let Some(facts) = facts.as_ref() else {
+        return Decision::Allow;
+    };
+    for rule in matching_receipt_rows(policy, command) {
+        // Every named receipt must be valid. An unresolved name is Missing,
+        // never absent-and-therefore-fine: a boundary that answered for
+        // fewer checks than the row requires has not proved the precondition.
+        for check in rule.checks.iter().flatten() {
+            let verdict = facts.get(check).copied().unwrap_or(Validity::Missing);
+            if verdict != Validity::Valid {
+                return Decision::Deny(receipt_refusal(rule, check, verdict));
             }
         }
     }
@@ -2038,6 +2065,49 @@ mod tests {
 
     fn adjudicate_ready(facts: &ReceiptFacts) -> Decision {
         adjudicate(&receipt_policy(), &envelope("gh pr ready 42"), false, facts)
+    }
+
+    // --- what the boundary resolves (CLOUD-460) -----------------------------
+
+    #[test]
+    fn a_command_no_receipt_row_matches_resolves_no_checks() {
+        // THE regression case, and the only one that fails on the old
+        // behaviour: `required_checks` asked the policy, not the command, so a
+        // single row in `batten.toml` charged every mediated call four git
+        // subprocesses — `gh pr view`, `ls`, every file edit. A test that only
+        // asserted the positive below passes on the eager form and proves
+        // nothing.
+        assert!(
+            receipt_policy()
+                .required_checks_for("gh pr view 42")
+                .is_empty(),
+            "a command no receipt row matches must resolve nothing"
+        );
+    }
+
+    #[test]
+    fn a_write_resolves_no_checks_because_it_carries_no_command() {
+        // The write matcher pays the same toll otherwise, and no receipt row
+        // has a write trigger today.
+        assert!(receipt_policy().required_checks_for("").is_empty());
+    }
+
+    #[test]
+    fn a_matching_command_resolves_exactly_the_rows_checks() {
+        assert_eq!(
+            receipt_policy().required_checks_for("gh pr ready 42"),
+            vec!["linear-check".to_owned(), "verify".to_owned()],
+        );
+    }
+
+    #[test]
+    fn a_row_matched_by_two_segments_is_still_one_obligation() {
+        // Deduplicated by row, not by name, so a command naming the same
+        // trigger twice does not resolve the same receipt twice.
+        assert_eq!(
+            receipt_policy().required_checks_for("gh pr ready 1 && gh pr ready 2"),
+            vec!["linear-check".to_owned(), "verify".to_owned()],
+        );
     }
 
     #[test]
