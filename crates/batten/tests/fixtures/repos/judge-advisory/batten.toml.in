@@ -1,0 +1,12 @@
+version = 1
+
+[judge]
+run = "batten-judge-stub-not-installed"
+
+[[rule]]
+id = "reads-intentional"
+kind = "judge"
+glob = "**/*.rs"
+criteria = "does this read as intentional"
+tier = "advisory"
+no_fix_reason = "a judge finding is answered by a person, not a command"

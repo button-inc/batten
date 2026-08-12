@@ -301,8 +301,8 @@ fn rule_weakenings(base: &[Rule], working: &[Rule]) -> Vec<Weakening> {
                 Some(other) if other.severity < rule.severity => Some(Weakening::new(
                     WeakeningKind::SeverityLowered,
                     format!("rule[{}].severity", rule.id),
-                    severity_token(rule.severity),
-                    severity_token(other.severity),
+                    severity_token(rule.severity()),
+                    severity_token(other.severity()),
                 )),
                 Some(_) => None,
             }

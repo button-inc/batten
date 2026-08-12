@@ -148,7 +148,7 @@
       ]
     },
     "Rule": {
-      "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
+      "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.\n`severity` is required by every kind but `judge`, which is refused it\n(CLOUD-445). The field is an `Option` so a judge row can omit it, so the\nderived `required` list cannot carry it — and a schema that merely dropped it\nwould stop flagging the missing key on the four kinds that must have one,\nmoving a check out of the editor with nothing taking its place.\n\nThis conditional puts it back, stated once here and derived into both\npublished schemas. It mirrors [`RuleKind::requires`] and\n[`RuleKind::permits`]; `tests::the_schema_conditional_matches_the_column_census`\nis what keeps the two from drifting.",
       "type": "object",
       "properties": {
         "base": {
@@ -274,8 +274,15 @@
           "default": "tree"
         },
         "severity": {
-          "description": "What a match does: `deny` fails the run, `warn` reports without failing\n(until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the\nrule off (cargo-deny's model, CLOUD-61).\n\n**Required, deliberately**: every committed rule states its severity\ndefault explicitly, and there is no implicit fallback — omitting the key\nis a usage error (exit `1`), never a silently assumed level.",
-          "$ref": "#/$defs/RuleSeverity"
+          "description": "What a match does: `deny` fails the run, `warn` reports without failing\n(until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the\nrule off (cargo-deny's model, CLOUD-61).\n\n**Required for every kind but one**, and required *per kind* rather than\nby the type (CLOUD-445). Every committed rule states what a match does\nexplicitly, with no implicit fallback — omitting the key is a usage error\n(exit `1`), never a silently assumed level.\n\nThe exception is [`RuleKind::Judge`], which is **refused** the column: a\njudge verdict is advisory and must not reach the exit contract by any\npath, so the axis it declares instead is [`Rule::tier`]. Both halves come\nfree from the ordinary column census — `severity` is in\n[`RuleKind::requires`] for the other four kinds and absent from\n[`RuleKind::permits`] for this one — which is why this is an `Option`\nrather than a required field with a loader-side exception. A type that\ndemanded the key would make a valid judge config undeserializable, and\nthe derived JSON Schema would flag the one row that must not carry it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RuleSeverity"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "tier": {
           "description": "How fast a [`RuleKind::Judge`] finding must be answered\n([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means\n[`AdvisoryTier::Advisory`], the least-urgent rank.\n\nThis is the axis a judge row declares **instead of** `severity`, and the\nsubstitution is the whole advisory bound: `severity` decides the exit\ncontract, `tier` decides a response deadline. A judge row carrying\n`severity` is refused before deserialization (`config::parse`), so the\ncolumn a model's opinion could ride into the exit code does not exist for\nthis kind.\n\nA default rather than a required column, unlike `severity` on every other\nkind: an omitted deadline resolves to the weakest one, which withholds no\ngate because there is no gate here to withhold.",
@@ -297,10 +304,35 @@
         }
       },
       "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "required": [
+              "severity"
+            ]
+          },
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "judge"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "severity"
+              ]
+            }
+          }
+        }
+      ],
       "required": [
         "id",
-        "kind",
-        "severity"
+        "kind"
       ]
     },
     "RuleKind": {

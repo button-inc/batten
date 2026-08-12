@@ -336,7 +336,7 @@ fn every_source_item_has_exactly_one_recorded_disposition() {
                     _ => RuleSeverity::Deny,
                 };
                 assert_eq!(
-                    rule.severity, expected,
+                    rule.severity(), expected,
                     "{}: rule {id} carries the wrong severity for its bucket",
                     entry.source_name
                 );

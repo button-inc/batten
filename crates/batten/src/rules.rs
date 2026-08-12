@@ -219,24 +219,24 @@ impl RuleKind {
             // `pattern` or `regex`, and this list cannot express "one of"
             // (CLOUD-283). `validate` carries that check, which is also where
             // the both-columns case is refused.
-            RuleKind::Forbid => &["glob"],
+            RuleKind::Forbid => &["glob", "severity"],
             // `check`, never `fix`: enforcement is always the check side (§9),
             // so the gate half is what a row cannot load without. A row
             // carrying only a `fix` declares a mutation with nothing deciding
             // when it is needed.
-            RuleKind::Command => &["glob", "check"],
+            RuleKind::Command => &["glob", "check", "severity"],
             // A shape row's `reason` is required, not optional: the deny it
             // produces reaches a model as the whole explanation, and a refusal
             // with nothing but an id is the un-actionable shape CLOUD-122 exists
             // to prevent.
-            RuleKind::Shape => &["pattern", "reason"],
-            RuleKind::Ratchet => &["glob", "pattern", "direction", "base"],
+            RuleKind::Shape => &["pattern", "reason", "severity"],
+            RuleKind::Ratchet => &["glob", "pattern", "direction", "base", "severity"],
             // Same `reason` obligation as a shape row, for the same reason: the
             // deny reaches a model as the whole explanation. `checks` is
             // required because a receipt row naming none would gate its pattern
             // on nothing and allow every call — a rule that loads, matches, and
             // decides nothing.
-            RuleKind::Receipt => &["pattern", "checks", "reason"],
+            RuleKind::Receipt => &["pattern", "checks", "reason", "severity"],
             // `criteria` is what the model is asked, and a judge row without one
             // sends a payload with no question attached. `no_fix_reason` is
             // required rather than merely permitted because a judge finding
@@ -268,12 +268,20 @@ impl RuleKind {
                 "verbatim",
                 "identity_key",
                 "no_fix_reason",
+                "severity",
             ],
-            RuleKind::Command => &["glob", "check", "fix", "identity_key", "no_fix_reason"],
+            RuleKind::Command => &[
+                "glob",
+                "check",
+                "fix",
+                "identity_key",
+                "no_fix_reason",
+                "severity",
+            ],
             // A shape rule is adjudicated per mediated call and never reaches
             // the store, so an identity column on one is decorative by
             // construction (non-negotiable rule 6).
-            RuleKind::Shape => &["pattern", "reason", "contains", "policy_url"],
+            RuleKind::Shape => &["pattern", "reason", "contains", "policy_url", "severity"],
             // No `identity_key` or `verbatim`: a ratchet hashes no span — its
             // finding is a pair of integers about a whole rule — so either
             // column would name a normalization that applies to nothing.
@@ -285,6 +293,7 @@ impl RuleKind {
                 "reason",
                 "policy_url",
                 "no_fix_reason",
+                "severity",
             ],
             // `key` is the one optional column: it selects which git fact the
             // receipt is keyed to, and it has a pinned default so a row that
@@ -296,11 +305,12 @@ impl RuleKind {
                 "reason",
                 "contains",
                 "policy_url",
+                "severity",
+            ],
             // No `fix`: a judge finding is advisory, and a mutating repair
             // attached to a model's opinion is the shortest path from "may
             // inform" to "acted on the repository". No `severity` either — that
-            // column is refused for this kind before deserialization
-            // (`config::parse`), because the axis a judge feeds is `tier`.
+            // column is the exit contract, and the axis a judge feeds is `tier`.
             RuleKind::Judge => &[
                 "glob",
                 "criteria",
@@ -382,8 +392,23 @@ impl RuleScope {
 /// error, never a silently ignored setting that disables a gate. The struct is
 /// flat rather than an enum with `#[serde(flatten)]` precisely so this guarantee
 /// holds — `flatten` silently defeats `deny_unknown_fields`.
+/// `severity` is required by every kind but `judge`, which is refused it
+/// (CLOUD-445). The field is an `Option` so a judge row can omit it, so the
+/// derived `required` list cannot carry it — and a schema that merely dropped it
+/// would stop flagging the missing key on the four kinds that must have one,
+/// moving a check out of the editor with nothing taking its place.
+///
+/// This conditional puts it back, stated once here and derived into both
+/// published schemas. It mirrors [`RuleKind::requires`] and
+/// [`RuleKind::permits`]; `tests::the_schema_conditional_matches_the_column_census`
+/// is what keeps the two from drifting.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("allOf" = serde_json::json!([{
+    "if": { "properties": { "kind": { "const": "judge" } }, "required": ["kind"] },
+    "then": { "not": { "required": ["severity"] } },
+    "else": { "required": ["severity"] }
+}])))]
 pub struct Rule {
     /// A stable identifier for the rule, surfaced in findings so a violation
     /// points back at the policy that produced it.
@@ -402,10 +427,22 @@ pub struct Rule {
     /// (until `--fail-on-warning` promotes it, CLOUD-49), `allow` switches the
     /// rule off (cargo-deny's model, CLOUD-61).
     ///
-    /// **Required, deliberately**: every committed rule states its severity
-    /// default explicitly, and there is no implicit fallback — omitting the key
-    /// is a usage error (exit `1`), never a silently assumed level.
-    pub severity: RuleSeverity,
+    /// **Required for every kind but one**, and required *per kind* rather than
+    /// by the type (CLOUD-445). Every committed rule states what a match does
+    /// explicitly, with no implicit fallback — omitting the key is a usage error
+    /// (exit `1`), never a silently assumed level.
+    ///
+    /// The exception is [`RuleKind::Judge`], which is **refused** the column: a
+    /// judge verdict is advisory and must not reach the exit contract by any
+    /// path, so the axis it declares instead is [`Rule::tier`]. Both halves come
+    /// free from the ordinary column census — `severity` is in
+    /// [`RuleKind::requires`] for the other four kinds and absent from
+    /// [`RuleKind::permits`] for this one — which is why this is an `Option`
+    /// rather than a required field with a loader-side exception. A type that
+    /// demanded the key would make a valid judge config undeserializable, and
+    /// the derived JSON Schema would flag the one row that must not carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<RuleSeverity>,
     /// Which file domain the rule evaluates over. Independent of `severity` —
     /// scope says *where* the rule looks, severity says *what a match does* —
     /// and neither key's vocabulary parses as the other's. Defaults to
@@ -680,6 +717,24 @@ impl Rule {
         self.check.as_deref()?.split_whitespace().next()
     }
 
+    /// What a match does, for the kinds that decide anything.
+    ///
+    /// Shares its name with the field on purpose: every existing caller wanted
+    /// *the effective severity*, and a differently-named accessor beside a
+    /// public `Option` field would leave the field as a second, wronger way to
+    /// ask.
+    ///
+    /// A [`RuleKind::Judge`] row has none and answers [`RuleSeverity::Allow`],
+    /// which is not a fallback but the accurate statement: `allow` is this
+    /// engine's word for "a match here is not a finding at all", and it is
+    /// exactly what the walker acts on to skip the row. For every other kind the
+    /// column is required at load, so the `unwrap_or` is unreachable through a
+    /// config that parsed.
+    #[must_use]
+    pub fn severity(&self) -> RuleSeverity {
+        self.severity.unwrap_or(RuleSeverity::Allow)
+    }
+
     /// Validate that the per-kind fields present match the declared `kind`.
     ///
     /// The struct is flat (a `#[serde(flatten)]` enum would silently defeat
@@ -696,8 +751,12 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 16] {
+    fn columns(&self) -> [(&'static str, bool); 17] {
         [
+            // In the census because it is now per-kind, which is what makes
+            // "required by four kinds, refused by the fifth" a fact the existing
+            // machinery decides rather than a special case anyone maintains.
+            ("severity", self.severity.is_some()),
             ("criteria", self.criteria.is_some()),
             ("tier", self.tier.is_some()),
             ("no_fix_reason", self.no_fix_reason.is_some()),
@@ -1182,7 +1241,7 @@ fn run_rule(
     // and (for a command kind) never spawns. Severity does not change which
     // surface admits a rule: `run_static`'s spawning refusal fires first,
     // regardless of severity, so the two axes stay independent.
-    if rule.severity == RuleSeverity::Allow {
+    if rule.severity() == RuleSeverity::Allow {
         return Ok(Some(NotObserved::RuleSkipped));
     }
     let matched: Vec<&String> = files.iter().filter(|path| glob_match(glob, path)).collect();
@@ -1219,10 +1278,10 @@ fn run_rule(
         // kind that *is* tree-scoped has to come here.
         //
         // `Judge` is tree-scoped and still unreachable, by a different and
-        // load-bearing route: a judge row's severity is `allow` (refused as a
-        // config key and injected by `config::parse`), so the check twenty lines
-        // up returns before this match. That is not an accident of ordering — it
-        // is what makes "a judge outcome is never a `Finding`" a property of the
+        // load-bearing route: a judge row is refused the `severity` column, so
+        // `Rule::severity` answers `allow` for it and the check twenty lines up
+        // returns before this match. That is not an accident of ordering — it is
+        // what makes "a judge outcome is never a `Finding`" a property of the
         // walker rather than a convention. The judge runs in its own pass, over
         // in `lib.rs`, beside `findings` and never into it.
         RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt | RuleKind::Judge => {}
@@ -1251,7 +1310,7 @@ fn ratchet_rule(
 ) -> anyhow::Result<()> {
     // An `allow` row is configured off. Checked here rather than inherited from
     // the caller's guard, because the ratchet path returns before it.
-    if rule.severity == RuleSeverity::Allow {
+    if rule.severity() == RuleSeverity::Allow {
         return Ok(());
     }
     let (Some(pattern), Some(direction), Some(base)) = (
@@ -1277,7 +1336,7 @@ fn ratchet_rule(
             // no waiver could suppress — and the waiver is the designed hatch
             // for a legitimate reduction.
             rule: rule.id.clone(),
-            severity: rule.severity,
+            severity: rule.severity(),
             // The glob plus the two counts. The glob is the tightest honest
             // pointer — the finding is about the whole matched set, not a file,
             // and naming one would misdirect — and the counts ride here because
@@ -1430,7 +1489,7 @@ fn run_once(
         let default = identity::scope_fingerprint(&rule.id, scope_key);
         findings.push(Finding {
             rule: rule.id.clone(),
-            severity: rule.severity,
+            severity: rule.severity(),
             identity: identity_of(rule, identity::FindingKind::Scope, default),
             // The rule's glob is the tightest honest pointer for a finding a
             // command condemned as a batch. A command kind cannot load without
@@ -1594,7 +1653,7 @@ fn forbid_in_file(
             let default = identity::code_fingerprint(&rule.id, rel_path, line, mode)?;
             findings.push(Finding {
                 rule: rule.id.clone(),
-                severity: rule.severity,
+                severity: rule.severity(),
                 path: rel_path.to_owned(),
                 line: Some(index + 1),
                 identity: identity_of(rule, identity::FindingKind::Code, default),
@@ -2066,7 +2125,13 @@ mod tests {
             id: id.to_owned(),
             kind,
             glob: None,
-            severity: RuleSeverity::Deny,
+            // Per kind, because `severity` is now a per-kind column: the judge
+            // kind is refused it, so handing every fixture one would make the
+            // one kind that must not carry it unloadable in every test here.
+            severity: kind
+                .permits()
+                .contains(&"severity")
+                .then_some(RuleSeverity::Deny),
             scope: kind.scopes()[0],
             pattern: None,
             regex: None,
@@ -2303,7 +2368,7 @@ mod tests {
         // must not clear the findings it covered while it was on.
         let off = super::run_static(
             &[Rule {
-                severity: RuleSeverity::Allow,
+                severity: Some(RuleSeverity::Allow),
                 ..forbid("switched-off", "**/*.rs", "TODO")
             }],
             &dir,
@@ -2492,6 +2557,9 @@ mod tests {
                         "direction" => rule.direction = Some(Direction::NonDecreasing),
                         "base" => rule.base = Some("HEAD".to_owned()),
                         "checks" => rule.checks = Some(vec!["verify".to_owned()]),
+                        // `blank` already sets one; naming it here keeps the
+                        // census total now that it is a per-kind column.
+                        "severity" => rule.severity = Some(RuleSeverity::Deny),
                         "criteria" => rule.criteria = Some("does this read as intentional".to_owned()),
                         "no_fix_reason" => rule.no_fix_reason = Some("answered by hand".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
@@ -2570,6 +2638,65 @@ mod tests {
         let rules = [forbid("dup", "**", "a"), forbid("dup", "**", "b")];
         let err = validate(&rules).expect_err("a duplicated id must be refused");
         assert!(err.downcast_ref::<UsageError>().is_some());
+    }
+
+    #[test]
+    fn the_schema_conditional_matches_the_column_census() {
+        // The published schema states the severity rule a SECOND time, as a
+        // JSON Schema conditional, because a derived `required` list cannot
+        // express "per kind". A second authority narrows silently, so this
+        // asserts the two agree: exactly one kind is refused the column, it is
+        // the one the conditional names, and every other kind requires it.
+        let refused: Vec<RuleKind> = RuleKind::ALL
+            .iter()
+            .copied()
+            .filter(|kind| !kind.permits().contains(&"severity"))
+            .collect();
+        assert_eq!(
+            refused,
+            vec![RuleKind::Judge],
+            "the schema's `if kind == judge` conditional names exactly one kind; \
+             change it in rules.rs's `extend` attribute when this set changes"
+        );
+        for kind in RuleKind::ALL {
+            let required = kind.requires().contains(&"severity");
+            assert_eq!(
+                required,
+                *kind != RuleKind::Judge,
+                "{kind:?}: the schema's else-branch requires `severity` of every \
+                 non-judge kind, so `requires()` must too"
+            );
+        }
+    }
+
+    #[test]
+    fn a_judge_row_is_refused_the_severity_column() {
+        // The bound, at the column census: `severity` decides the exit contract
+        // and a judge verdict must not reach it by any path. Refused rather
+        // than ignored — a key that parses and does nothing reads to a reviewer
+        // as a setting that applies.
+        let mut rule = blank("j", RuleKind::Judge);
+        rule.glob = Some("**".to_owned());
+        rule.criteria = Some("does this read as intentional".to_owned());
+        rule.no_fix_reason = Some("answered by hand".to_owned());
+        assert!(rule.validate().is_ok(), "the row without it loads");
+
+        rule.severity = Some(RuleSeverity::Deny);
+        let err = rule
+            .validate()
+            .expect_err("a judge row declaring severity is refused");
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        assert!(err.to_string().contains("severity"), "{err}");
+    }
+
+    #[test]
+    fn a_judge_rows_effective_severity_is_allow_so_the_walker_skips_it() {
+        // Not a fallback: `allow` is this engine's word for "a match here is not
+        // a finding at all", and it is exactly what `run_rule` acts on. This is
+        // the walker-side half of "a judge outcome is never a Finding".
+        let rule = blank("j", RuleKind::Judge);
+        assert_eq!(rule.severity, None, "the column is refused, so it is absent");
+        assert_eq!(rule.severity(), RuleSeverity::Allow);
     }
 
     #[test]
@@ -2888,7 +3015,7 @@ mod tests {
         let dir = temp_dir("rules-allow-off");
         write(&dir, "a.rs", "TODO\n");
         let mut rule = forbid("no-todo", "**/*.rs", "TODO");
-        rule.severity = RuleSeverity::Allow;
+        rule.severity = Some(RuleSeverity::Allow);
         assert!(
             run_static(std::slice::from_ref(&rule), &dir)
                 .unwrap()
@@ -2909,7 +3036,7 @@ mod tests {
         let dir = temp_dir("rules-allow-validated");
         write(&dir, "a.rs", "x\n");
         let mut rule = forbid("broken", "**/*.rs", "x");
-        rule.severity = RuleSeverity::Allow;
+        rule.severity = Some(RuleSeverity::Allow);
         rule.pattern = None;
         let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
         assert!(err.downcast_ref::<UsageError>().is_some());
@@ -2922,7 +3049,7 @@ mod tests {
         let dir = temp_dir("rules-allow-no-spawn");
         write(&dir, "a.rs", "x\n");
         let mut rule = command("off", "**/*.rs", "definitely-not-a-real-binary-xyz");
-        rule.severity = RuleSeverity::Allow;
+        rule.severity = Some(RuleSeverity::Allow);
         assert!(
             run_all(std::slice::from_ref(&rule), &dir)
                 .unwrap()
@@ -2940,7 +3067,7 @@ mod tests {
         write(&dir, "a.rs", "x\n");
         for &severity in RuleSeverity::ALL {
             let mut rule = command("spawner", "**/*.rs", "true");
-            rule.severity = severity;
+            rule.severity = Some(severity);
             let err = run_static(std::slice::from_ref(&rule), &dir).unwrap_err();
             assert!(
                 err.downcast_ref::<UsageError>().is_some(),
@@ -2959,7 +3086,7 @@ mod tests {
         let dir = temp_dir("rules-warn-reports");
         write(&dir, "a.rs", "TODO\n");
         let mut rule = forbid("no-todo", "**/*.rs", "TODO");
-        rule.severity = RuleSeverity::Warn;
+        rule.severity = Some(RuleSeverity::Warn);
         let findings = run_static(std::slice::from_ref(&rule), &dir).unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, RuleSeverity::Warn);

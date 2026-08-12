@@ -971,12 +971,12 @@ fn shape_rules(policy: &Policy, command: &str) -> Decision {
         for rule in &policy.shapes {
             // Kind-filtered, not scope-filtered: `receipt` rows are
             // `mediated_call`-scoped too and carry a `pattern`, so without this
-            // they would read as shape rows and refuse their trigger
+            // they would read as shape rules and refuse their trigger
             // unconditionally — turning a precondition into a ban.
             if rule.kind != RuleKind::Shape {
                 continue;
             }
-            if !blocks(rule.severity, policy.fail_on_warning) {
+            if !blocks(rule.severity(), policy.fail_on_warning) {
                 continue;
             }
             let Some((program, wanted)) = rule.shape() else {
@@ -1458,7 +1458,7 @@ mod tests {
             id: id.to_owned(),
             kind: crate::rules::RuleKind::Shape,
             glob: None,
-            severity: RuleSeverity::Deny,
+            severity: Some(RuleSeverity::Deny),
             scope: RuleScope::MediatedCall,
             pattern: Some(pattern.to_owned()),
             regex: None,
@@ -1889,7 +1889,7 @@ mod tests {
         // thing here as in the checks pipeline — that is what routing through
         // `severity::promote` buys.
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
-        rule.severity = RuleSeverity::Allow;
+        rule.severity = Some(RuleSeverity::Allow);
         let policy = Policy {
             shapes: vec![rule],
             fail_on_warning: false,
@@ -1905,7 +1905,7 @@ mod tests {
     #[test]
     fn a_warn_shape_rule_blocks_only_once_promotion_is_on() {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
-        rule.severity = RuleSeverity::Warn;
+        rule.severity = Some(RuleSeverity::Warn);
         let call = envelope("gh pr merge 42");
 
         let advisory = Policy {

@@ -1,0 +1,4 @@
+argv: enforce
+exit: 1
+stderr-contains: batten-judge-stub-not-installed
+stdout:

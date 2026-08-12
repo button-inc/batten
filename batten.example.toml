@@ -210,11 +210,11 @@ policy_url = "https://example.invalid/handbook/infrastructure"
 #   tier = "advisory"
 #   no_fix_reason = "a judge finding is answered by a person, not a command"
 #
-# Commented rather than live, and the reason is a known gap worth stating: the
-# published JSON Schema is derived from the rule type, which marks `severity`
-# required for every kind, so an editor bound to the schema flags the one row
-# that must not carry it. The loader is right and the schema is not yet — see
-# CLOUD-445. Uncomment when it lands.
+# Commented rather than live, unlike every other rule in this file, and the
+# reason is a property of the kind: `batten check` refuses a config carrying a
+# judge row outright, so a live one here would make the copied template exit 1
+# on `check` until you install a judge command. Uncomment it together with a
+# `[judge].run` you actually have.
 
 # Output predicates over a wrapped command's streams (CLOUD-117): literals that,
 # found in `batten exec`'s output, promote a lying exit `0` to a failure.

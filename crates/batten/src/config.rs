@@ -351,15 +351,8 @@ pub struct OverrideConfig {
 /// override surface** — including one that is perfectly valid in the file it was
 /// copied from, which is the case this type exists to catch.
 pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
-    // The same judge-row preparation the authority gets. An override may add
-    // rules, so a judge row can arrive here too — and a refusal that held on one
-    // layer and not the other would be a boundary with a door in it.
-    let config: OverrideConfig = match judge_rows_prepared(text, source)? {
-        Some(prepared) => toml::Value::try_into(prepared)
-            .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?,
-        None => toml::from_str(text)
-            .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?,
-    };
+    let config: OverrideConfig = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
     if config.version != SUPPORTED_VERSION {
         return Err(UsageError::raise(format!(
             "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
@@ -390,79 +383,10 @@ pub fn override_schema() -> Result<String> {
     ))?)
 }
 
-/// The `severity` a judge row is given, having been refused the key.
-///
-/// `allow` is not a placeholder — it is the walker's own word for "a match here
-/// is not a finding at all", and `run_rule` returns on it before any kind
-/// dispatch. So the injected value states the truth about the row: it mints
-/// nothing, and a judge outcome reaches the store through its own door rather
-/// than as a [`crate::rules::Finding`].
-const JUDGE_SEVERITY: &str = "allow";
-
-/// Refuse `severity` on a judge row, and supply the one it may not declare.
-///
-/// **Why this runs before deserialization.** [`crate::rules::Rule::severity`] is
-/// a required, non-`Option` field, deliberately: every committed rule states
-/// what a match does, and an omitted key is a usage error rather than a silently
-/// assumed level. A judge row is the one kind with nothing to state — the axis it
-/// feeds is `tier`, a response deadline, and CLOUD-56's bound is that a model's
-/// opinion must not reach the exit contract by any path. Those two facts collide
-/// exactly at the type: the field cannot be absent, and this kind must not carry
-/// it. Deciding it here, over the raw table, is what lets both hold.
-///
-/// The pre-pass is **skipped entirely when no judge row is present**, and that is
-/// deliberate too: `toml::from_str` carries line and column spans that
-/// `toml::Value::deserialize` does not, so every config that predates this kind
-/// keeps the diagnostics it always had, and only a config using the new kind
-/// pays for it.
-///
-/// # Errors
-///
-/// Returns a [`UsageError`] (→ exit `1`) for a malformed file, and for a judge
-/// row declaring `severity` — naming the row, because a config error must point
-/// at the line that has to change.
-fn judge_rows_prepared(text: &str, source: &str) -> Result<Option<toml::Value>> {
-    let mut value: toml::Value = toml::from_str(text)
-        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
-    let Some(rows) = value.get_mut("rule").and_then(toml::Value::as_array_mut) else {
-        return Ok(None);
-    };
-    let mut found = false;
-    for row in rows {
-        let Some(table) = row.as_table_mut() else {
-            continue;
-        };
-        if table.get("kind").and_then(toml::Value::as_str) != Some("judge") {
-            continue;
-        }
-        found = true;
-        if table.contains_key("severity") {
-            // Pointer-only: the row's id and the key, never the row's contents.
-            let id = table
-                .get("id")
-                .and_then(toml::Value::as_str)
-                .unwrap_or("<no id>");
-            return Err(UsageError::raise(format!(
-                "rule {id}: `severity` is not valid for kind \"judge\" — a judge verdict is \
-                 advisory and cannot reach the exit contract; declare `tier` instead"
-            )));
-        }
-        table.insert(
-            "severity".to_owned(),
-            toml::Value::String(JUDGE_SEVERITY.to_owned()),
-        );
-    }
-    Ok(found.then_some(value))
-}
-
 /// The shared body: deserialize and check the schema `version`.
 fn parse_ungated(text: &str, source: &str) -> Result<Config> {
-    let config: Config = match judge_rows_prepared(text, source)? {
-        Some(prepared) => toml::Value::try_into(prepared)
-            .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?,
-        None => toml::from_str(text)
-            .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?,
-    };
+    let config: Config = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
     if config.version != SUPPORTED_VERSION {
         return Err(UsageError::raise(format!(
             "unsupported config version {} in {source}; this build supports version {SUPPORTED_VERSION}",
@@ -923,7 +847,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.rules.len(), 1);
         assert_eq!(
-            config.rules[0].severity,
+            config.rules[0].severity(),
             crate::severity::RuleSeverity::Warn
         );
         assert_eq!(config.rules[0].scope, crate::rules::RuleScope::Tree);
