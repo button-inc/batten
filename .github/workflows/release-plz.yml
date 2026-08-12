@@ -11,6 +11,27 @@ name: release-plz
 # so required checks would never run on the release PR. Add a repo secret
 # RELEASE_PLZ_TOKEN (fine-grained PAT or GitHub App token, contents:write +
 # pull-requests:write) so the release PR triggers CI and can satisfy the ruleset.
+#
+# TWO CREDENTIALS, TWO ISSUES, AND THEY ARE NOT THE SAME ONE.
+#
+#   RELEASE_PLZ_TOKEN is the GitHub credential above, currently a fine-grained
+#   PAT under a personal account with an expiry — bus-factor 1 on release-critical
+#   CI. Its replacement is an ORG-OWNED GITHUB APP minting an installation token
+#   at run time (CLOUD-94), which needs an App installed on the org plus APP_ID /
+#   APP_PRIVATE_KEY secrets. Nothing in this file changes until those exist.
+#
+#   A CARGO REGISTRY credential is the other one, and this repository has none:
+#   `release-plz.toml` sets `publish = false`, so `mise run release` never
+#   contacts a registry (CLOUD-205 keeps the crate unpublished). `id-token: write`
+#   is deliberately NOT declared here — a permission no step uses is a finding for
+#   zizmor's excessive-permissions audit, not a security posture.
+#
+# crates.io OIDC trusted publishing solves the SECOND and does nothing for the
+# first; do not close CLOUD-94 on the strength of it. `mise run
+# publish-credential-check` (in the hk gate) is what holds the line: it refuses a
+# registry token in any workflow, and refuses `publish = true` unless the job
+# carries `id-token: write` in the same commit. Turning publishing on is
+# therefore a change that cannot skip OIDC.
 
 on:
   push:

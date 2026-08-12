@@ -188,6 +188,17 @@ local gate = new Mapping<String, Step> {
       )
     check = "mise run install-check"
   }
+  // Publishing to a registry with a long-lived token is the thing OIDC exists to
+  // retire, and today this repository does neither — `publish = false`, and no
+  // registry secret exists (CLOUD-109). That makes the rule an implication
+  // rather than an edit: while publishing is off the OIDC permission is not
+  // required, and the commit that turns publishing ON must carry
+  // `id-token: write` or fail here. Globbed on the config that decides it and on
+  // every workflow, since a registry credential is refused wherever it appears.
+  ["publish-credential-check"] {
+    glob = List("release-plz.toml", ".github/workflows/*")
+    check = "mise run publish-credential-check"
+  }
   // An MCP allow rule that matches no tool name grants nothing and says nothing
   // about it — the only symptom is an approval prompt on every call, which
   // reads as harness behaviour rather than as a settings bug. This repo shipped
