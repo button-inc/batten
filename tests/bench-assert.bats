@@ -22,6 +22,7 @@ setup() {
 		| `noop`  | 2.6 ms | 3.3 ms | ≤ 100 ms  |
 		| `check` | 2.5 ms | 3.2 ms | —         |
 		| `hook`  | 2.7 ms | 3.5 ms | ≤ 100 ms  |
+		| `wired` | 3.4 ms | 4.1 ms | ≤ 100 ms  |
 	EOF
 }
 
@@ -31,6 +32,7 @@ green_records() {
 		path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 		path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 		path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+		path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
 	EOF
 }
 
@@ -142,4 +144,46 @@ $(green_records)
 IN"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"not found"* ]]
+}
+
+# --- the wired path (CLOUD-435, CLOUD-312) -----------------------------------
+#
+# The path `.claude/settings.json` actually invokes. Budgeted because the whole
+# defect this closes is a gate that stayed green over a binary nothing called:
+# `hook` alone could pass forever while the wiring was absent or slow.
+
+@test "a wired path over budget is named, with its measurement and its ceiling" {
+	run bash -c "'$GATE' '$README' <<'IN'
+path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=check p50=2.54 p95=3.17 mean=2.64 runs=100
+path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+path=wired p50=90.0 p95=140.5 mean=95.0 runs=100
+IN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wired"* ]]
+	[[ "$output" == *"140.5"* ]]
+	[[ "$output" == *"100"* ]]
+}
+
+@test "a missing wired record is exit 2 — could not look is not a pass" {
+	# The case that matters most: deleting the wired stage from `bench` must not
+	# read as "the wired path is fine". It is the same shape as the original
+	# defect, one level up.
+	run bash -c "'$GATE' '$README' <<'IN'
+path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=check p50=2.54 p95=3.17 mean=2.64 runs=100
+path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
+IN"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"wired"* ]]
+}
+
+@test "a README with no wired row fails, so the budget cannot be enforced unpublished" {
+	published="$BATS_TEST_TMPDIR/no-wired.md"
+	grep -v '`wired`' "$README" >"$published"
+	run bash -c "'$GATE' '$published' <<'IN'
+$(green_records)
+IN"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wired"* ]]
 }

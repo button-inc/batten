@@ -138,9 +138,9 @@ measure() {
 		--export-json "$json"
 		--style none
 	)
-	if [ "$id" = hook ]; then
-		args+=(--input "$ABS_HOOK")
-	fi
+	case "$id" in
+	hook | wired) args+=(--input "$ABS_HOOK") ;;
+	esac
 
 	# Guarded, not chained: a failed measurement must not fall through to the
 	# jq below, which would read a stale or absent JSON file and emit a record
@@ -180,3 +180,33 @@ measure() {
 measure noop "$PWD" "$ABS_BIN --help"
 measure check "$CHECK_REPO" "$ABS_BIN check"
 measure hook "$PWD" "$ABS_BIN hook --harness claude-code"
+
+# The path that is actually WIRED, which is the one an agent waits on
+# (CLOUD-435). `hook` above measures the binary; this measures what
+# `.claude/settings.json` invokes, launcher and all — and the gap between them
+# is the launcher's own cost, which nothing would otherwise report.
+#
+# DERIVED from the settings file rather than hardcoded, so the measurement
+# cannot describe a wiring the repository no longer has. That is the whole
+# defect this path exists to close: `bench-assert` was green over an uninvoked
+# binary for as long as the budget existed.
+#
+# One entry today. If the file ever wires several, this measures the first and
+# the count is reported, because a silent "we measured one of four" is the same
+# false green in a smaller size.
+wired_cmd=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command] | .[0] // empty' .claude/settings.json 2>/dev/null || true)
+wired_count=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command] | length' .claude/settings.json 2>/dev/null || echo 0)
+if [ -z "$wired_cmd" ]; then
+	echo "::error:: bench: .claude/settings.json wires no PreToolUse command, so the wired path cannot be measured. No records written." >&2
+	exit 1
+fi
+# The settings file spells the project dir as a variable the harness expands.
+wired_cmd=${wired_cmd//\$CLAUDE_PROJECT_DIR/$PWD}
+if [ ! -x "$wired_cmd" ]; then
+	echo "::error:: bench: the wired PreToolUse command is not executable: $wired_cmd. No records written." >&2
+	exit 1
+fi
+if [ "$wired_count" -ne 1 ]; then
+	echo "::warning:: bench: $wired_count PreToolUse commands wired; measuring only the first ($wired_cmd)." >&2
+fi
+measure wired "$PWD" "$wired_cmd"

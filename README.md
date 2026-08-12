@@ -157,11 +157,18 @@ tool call rather than once per commit. These are measured numbers, not targets �
 `mise run bench` reproduces them, and `mise run bench-assert` fails when a
 measured p95 leaves its budget.
 
-| path    | what it does                                    | p50    | p95    | budget   |
-| ------- | ----------------------------------------------- | ------ | ------ | -------- |
-| `noop`  | process start, command tree, render             | 2.4 ms | 2.9 ms | ≤ 100 ms |
-| `check` | + config load, trust resolution, one-rule tree  | 2.5 ms | 2.7 ms | —        |
-| `hook`  | + envelope decode, adjudication, decision write | 2.6 ms | 3.1 ms | ≤ 100 ms |
+`wired` is the number an agent actually waits on: the entry point
+`.claude/settings.json` invokes, launcher included, **derived from that file at
+measure time** rather than hardcoded — so the published figure describes what is
+installed rather than a binary nothing calls. `hook` stays measured beside it so
+the launcher's own share is attributable.
+
+| path    | what it does                                    | p50     | p95     | budget   |
+| ------- | ----------------------------------------------- | ------- | ------- | -------- |
+| `noop`  | process start, command tree, render             | 3.8 ms  | 5.7 ms  | ≤ 100 ms |
+| `check` | + config load, trust resolution, one-rule tree  | 3.9 ms  | 5.3 ms  | —        |
+| `hook`  | + envelope decode, adjudication, decision write | 16.6 ms | 19.1 ms | ≤ 100 ms |
+| `wired` | the hook as `.claude/settings.json` invokes it  | 25.2 ms | 28.7 ms | ≤ 100 ms |
 
 100 ms is the [Command Line Interface Guidelines'][clig] floor for a response
 that reads as instant. It is an absolute ceiling rather than a tight band around
@@ -172,10 +179,16 @@ its cost is bounded by the repository it is pointed at, not by Batten, and no
 ceiling here could tell a large tree apart from a regression.
 
 <!-- prettier-ignore -->
-> Measured at `140ec24`, 2026-08-11, on a 4-core x86_64 Linux container:
+> Measured at `52764a2`, 2026-08-12, on a 4-core x86_64 Linux container:
 > release build, 10 warmup runs discarded, 100 timed runs per path, p95 from
-> the sorted run times. Your machine will differ; the budget is what the gate
-> holds, and the schedule in
+> the sorted run times. **This run was taken while other work was building and
+> testing on the same container**, so every figure here is an upper bound rather
+> than a best case — the previous set, at `140ec24`, read ~2.5 ms for `noop` and
+> `check` on a quiet box. That is the honest reason the numbers moved, and it is
+> why the gate holds a ceiling rather than a band around the measured value: a
+> shared runner's p95 moves by more than a percentage band between two runs of
+> identical bytes. Your machine will differ; the budget is what the gate holds,
+> and the schedule in
 > [`.github/workflows/bench.yml`](.github/workflows/bench.yml) is what keeps
 > holding it.
 

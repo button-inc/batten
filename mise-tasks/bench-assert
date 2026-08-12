@@ -58,8 +58,16 @@ set -euo pipefail
 # that is not named here is measured and not gated, which is `check`.
 #
 # One field per line: <path-id> <p95-budget-ms>.
+#
+# `wired` is the one an agent actually waits on: the launcher plus the binary,
+# derived by `bench` from `.claude/settings.json` rather than hardcoded. It is
+# budgeted at the same clig floor, because the floor is about what a human
+# perceives and the wiring is what they experience. `hook` stays budgeted
+# alongside it so the launcher's own share stays attributable — a regression in
+# one and not the other says where to look.
 BUDGETS='noop 100
-hook 100'
+hook 100
+wired 100'
 
 # Where the published budget is asserted to match. An argument so the bats suite
 # can point the clause at a fixture; the real file is the default.
