@@ -54,6 +54,20 @@ hk = "1.54.0"                                                # git-hook runner (
 # task provisions it under the nightly libFuzzer needs anyway, pinned and only
 # when missing — off the landing path entirely, like `[tasks.coverage]`'s
 # component and `[tasks.msrv]`'s toolchain.
+# The semver verifier (`mise run semver`, CLOUD-102): does the API delta match the
+# bump release-plz will infer? `github:`, not `ubi:` — same upstream assets, but
+# the github backend locks a url and a per-platform checksum and verifies GitHub
+# artifact attestations and SLSA provenance, which is the CLOUD-281 lesson. Every
+# platform `lock-complete` requires is published (aarch64-apple-darwin,
+# aarch64-unknown-linux-gnu, x86_64-unknown-linux-gnu), so unlike cargo-msrv and
+# cargo-fuzz above this one CAN be pinned as an attested binary.
+#
+# The task runs it under a rustup-fetched toolchain rather than the pin above:
+# 0.50.0 refuses under 1.85.0 (needs >=1.93), and the 1.85-era release cannot
+# resolve this crate's dependencies. That is a property of the TOOL, not of the
+# crate — `mise run msrv` remains the authority on the 1.85 floor. Reasoning in
+# `mise-tasks/semver`.
+"github:obi1kenobi/cargo-semver-checks" = "0.50.0"
 # mise-tasks/ holds real bash programs, so they get the same lint+format
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
@@ -120,7 +134,7 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,final,action"
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,semver,final,action"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -736,7 +750,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "msrv"]
+depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "msrv", "semver"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand. Unguarded,

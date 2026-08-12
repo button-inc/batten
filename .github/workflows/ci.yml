@@ -227,6 +227,34 @@ jobs:
           key: msrv
       - run: mise run msrv
 
+  semver:
+    name: semver
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The comparison needs the baseline commit, not just this head: the
+          # task passes `--baseline-rev origin/main`, and a shallow clone has no
+          # such ref to build the baseline rustdoc from.
+          fetch-depth: 0
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # cargo-semver-checks does the comparison; rust supplies the cargo and
+          # the rustup that fetches the newer toolchain the tool requires — see
+          # the note beside `[tools]` in mise.toml for why that is the tool's
+          # constraint and not the crate's. See the ci job for why these lists
+          # are narrow.
+          install_args: rust github:obi1kenobi/cargo-semver-checks
+      # A distinct key: this job builds rustdoc with a different rustc than every
+      # other job's, so sharing an entry would thrash it — the same reason msrv
+      # carries its own.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: semver
+      - run: mise run semver
+
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
   #
@@ -240,7 +268,7 @@ jobs:
   final:
     name: final
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [ci, cross, darwin-link, msrv]
+    needs: [ci, cross, darwin-link, msrv, semver]
     runs-on: ubuntu-latest
     # `checks: read` is the whole reason this job now needs a permission at all:
     # the analyzer's verdict is a check-run on the head commit.
