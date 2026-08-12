@@ -192,7 +192,16 @@ if [ -f "\$rc" ]; then
   exit "\$code"
 fi
 case "\$2" in
-  verify)   : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
+  verify)
+    # CLOUD-423's lever, consumed BEFORE the sleep: a verify killed mid-gate
+    # must not slow the lap that retries it, and the kill landing during the
+    # sleep is exactly the abort under test — the receipt line is never
+    # reached, so the abort-leaves-no-receipt property is observed for real.
+    if [ -f "$BATS_TEST_TMPDIR/verify.slow" ]; then
+      rm -f "$BATS_TEST_TMPDIR/verify.slow"
+      sleep 30
+    fi
+    : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
   verified)
     if [ ! -f "$BATS_TEST_TMPDIR/receipt" ]; then
       # $(verified) is a gate: a missing receipt is a failure and it SAYS so.
@@ -215,6 +224,12 @@ case "\$2" in
     fi
     if [ -f "$BATS_TEST_TMPDIR/detach" ] && [ ! -f "$BATS_TEST_TMPDIR/detached.pid" ]; then
       setsid bash -c "echo \\\$\\\$ >'$BATS_TEST_TMPDIR/detached.pid'; sleep 30" >/dev/null 2>&1 &
+    fi
+    # CLOUD-423's no-verdict lever: the verify-race watcher dying without an
+    # answer, once, so the lap that follows re-proves instead of guessing.
+    if [ "\${LAND_RACE:-}" = verify ] && [ -f "$BATS_TEST_TMPDIR/vwatch.fail" ]; then
+      rm -f "$BATS_TEST_TMPDIR/vwatch.fail"
+      exit 1
     fi
     # A lap starts two watchers, and they are told apart by WHEN: the one
     # racing the fast-forward answer is by construction the one started after
@@ -255,6 +270,11 @@ main_moves_during_answer_wait() { echo "$1" >"$BATS_TEST_TMPDIR/mw.answer.wins";
 # CLOUD-434's levers — see the stub's main-watch case.
 watcher_is_stubborn() { : >"$BATS_TEST_TMPDIR/stubborn"; }
 watcher_detaches() { : >"$BATS_TEST_TMPDIR/detach"; }
+# CLOUD-423's levers: a verify slow enough to lose its race, a main that moves
+# while it runs, and a verify-race watcher that dies without an answer.
+verify_is_slow() { : >"$BATS_TEST_TMPDIR/verify.slow"; }
+main_moves_during_verify() { echo "$1" >"$BATS_TEST_TMPDIR/mw.verify.wins"; }
+verify_watch_fails_once() { : >"$BATS_TEST_TMPDIR/vwatch.fail"; }
 ready_calls() { cat "$BATS_TEST_TMPDIR/ready"; }
 # The push leaves the remote ref where it was, so no `synchronize` event fires
 # and nothing starts a run — the one shape that still needs the `--undo`.
@@ -816,12 +836,48 @@ workflow_runs() {
 	# saturated — every turn lost) and two laps (the lease is held by someone
 	# else, and the lease was lost before the comment). This assertion caught all
 	# three the moment they were added, which is the whole point of it.
+	# 8 since CLOUD-423: the verify race adds two more — main moved while verify
+	# ran, and a verify race that produced no verdict. Both exercised below, and
+	# this assertion caught both the moment the race landed.
 	laps=$(grep -cE '^[[:space:]]*continue$' "$REAL_LAND")
-	[ "$laps" -eq 6 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 6."
+	[ "$laps" -eq 8 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 8."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
+}
+
+# --- the verify race (CLOUD-423) ---------------------------------------------
+
+@test "main moving during verify ends the lap at the poll, never at the end of the gate" {
+	# The blind window: verify used to run its whole ~220s gate before
+	# linear-check discovered main had moved. Raced, the lap ends within one
+	# poll interval — and the aborted verify left NO receipt, so lap 2 proves
+	# the tree for real rather than trusting a kill to have been clean. That
+	# second verify call IS the abort-safety property, observed live.
+	verify_is_slow
+	main_moves_during_verify 1
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"while verify ran"* ]]
+	[ "$(verify_calls)" -eq 2 ]
+	[[ "$output" != *"already carries a verify receipt"* ]]
+	[ "$(comments)" -eq 1 ]
+}
+
+@test "a verify race with no verdict laps and re-proves rather than guessing" {
+	# The conservative arm, same as the CI race's: a watcher that died without
+	# an answer while verify was still running is not evidence of anything, so
+	# the lap re-proves. With the per-step receipts the retry costs seconds.
+	verify_is_slow
+	verify_watch_fails_once
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"no verdict from verify's race"* ]]
+	[ "$(verify_calls)" -eq 2 ]
+	[ "$(comments)" -eq 1 ]
 }
 
 # --- post-merge branch cleanup (CLOUD-349) -----------------------------------

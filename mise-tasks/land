@@ -233,8 +233,52 @@ while :; do
 		# other non-zero is content, and content still stops on lap 1 with the
 		# message unchanged. Measured on #240: run 1 died here, run 2 landed
 		# after three laps with zero edits.
-		verify_rc=0
-		mise run verify || verify_rc=$?
+		# --- CLOUD-423: verify races main-watch, the same pair as the CI wait ---
+		#
+		# verify used to run blind: only its last step discovered main had moved,
+		# ~220s after the fact, and ~45% of laps paid the full gate to learn what
+		# a 1s conditional poll knew (CLOUD-392 measured the steady state:
+		# survival ≈ e^(-220/363) per lap). The abort is safe by construction —
+		# verify writes its receipt only after its guarded steps
+		# (tests/task-fail-closed.bats pins it), so a killed verify leaves no
+		# receipt and the next lap re-proves, cheaply, from the per-step receipts
+		# (CLOUD-424). Named pids and post-wait residue reaping, per 0552c41 and
+		# CLOUD-434. The interval drops to 1s for this race: a conditional 304
+		# costs no rate limit, so the poll's price is the round trip.
+		rc_v="$(mktemp)"
+		rc_vm="$(mktemp)"
+		: >"$rc_v"
+		: >"$rc_vm"
+		(
+			mise run verify
+			echo $? >"$rc_v"
+		) &
+		v_pid=$!
+		(
+			LAND_RACE=verify MAIN_WATCH_INTERVAL="${LAND_VERIFY_WATCH_INTERVAL:-1}" \
+				mise run main-watch "$(git rev-parse origin/main)" >/dev/null 2>&1
+			echo $? >"$rc_vm"
+		) &
+		vm_pid=$!
+		wait -n "$v_pid" "$vm_pid"
+		kill -- -"$v_pid" -"$vm_pid" 2>/dev/null
+		wait "$v_pid" "$vm_pid" 2>/dev/null
+		reap_residue "$v_pid"
+		reap_residue "$vm_pid"
+		verify_rc="$(cat "$rc_v" 2>/dev/null)"
+		vmain_rc="$(cat "$rc_vm" 2>/dev/null)"
+		rm -f "$rc_v" "$rc_vm"
+		if [ -z "$verify_rc" ] && [ "$vmain_rc" = "0" ]; then
+			echo "land: lap $lap — main moved past $(git rev-parse --short origin/main) while verify ran; its receipt would be void, so the rest of the gate is not paid out. Lapping."
+			continue
+		fi
+		if [ -z "$verify_rc" ]; then
+			# Neither answered: verify died without a verdict and main did not
+			# move. Lap rather than guess — the next lap re-proves from the
+			# step receipts, so the retry costs seconds.
+			echo "land: lap $lap — no verdict from verify's race; re-proving on the next lap"
+			continue
+		fi
 		if [ "$verify_rc" = 2 ]; then
 			echo "land: lap $lap — verify refused only because main moved past $(git rev-parse --short origin/main) while it ran; that is a rebase, not a defect. Lapping."
 			continue
@@ -291,8 +335,12 @@ while :; do
 	#
 	# Here, and not later: the push below is what starts CI, so acquiring first
 	# is what makes "only the holder's matrix runs" true. Not earlier either —
-	# `verify` above is ~150s of purely local work touching no shared resource,
-	# and holding across it would lengthen every hold for no exclusivity.
+	# `verify` above is purely local work, and holding across it would lengthen
+	# every hold for no exclusivity. Its VALIDITY does depend on main, which is
+	# CLOUD-392's correction to this comment's older claim: that dependence is
+	# answered by racing verify against main-watch (CLOUD-423) and by the
+	# per-step receipts that make a re-proof cost seconds (CLOUD-424) — never
+	# by holding a fleet-wide lease across a local gate.
 	#
 	# Before the ready/push pair rather than between them, because that pair is
 	# load-bearing and adjacent (CLOUD-254): readying first makes the push's own
