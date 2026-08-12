@@ -525,6 +525,10 @@ have_lease=1
 # Sticky across laps: the reservation is held until the lease turns over, so
 # re-reserving each lap would rewrite the ref to say what it already says.
 admitted=0
+# The HEAD this branch last pushed as the admitted successor. A speculation that
+# moves HEAD makes it stale, and a stale one means the run in flight grades a
+# commit this branch no longer has — so the pair runs again for the new head.
+admitted_sha=
 while :; do
 	lap=$((lap + 1))
 	[ "$lap" -le "$max_laps" ] ||
@@ -743,7 +747,18 @@ while :; do
 			admitted=1
 			echo "land: lap $lap — admitted as the successor; this branch may spend the run that overlaps the merge"
 		fi
+		# ONCE PER HEAD, not once per lap. A successor that keeps waiting laps
+		# repeatedly, and re-entering the ready/push pair each time would push an
+		# unchanged head — which emits no `synchronize`, buys nothing, and drops
+		# into the `--undo` re-fire path that exists for a different case
+		# entirely. The run it wants is already in flight; what it owes now is
+		# patience.
+		if [ "$admitted" = 1 ] && [ "$admitted_sha" = "$(git rev-parse HEAD)" ]; then
+			echo "land: lap $lap — still the admitted successor, and its run is already in flight"
+			continue
+		fi
 		if [ "$admitted" = 1 ]; then
+			admitted_sha="$(git rev-parse HEAD)"
 			# Fall through WITHOUT the lease: ready and push so the confirming
 			# run starts now, then lap. Everything past the push needs the lease
 			# — the fast-forward comment above all — so `have_lease` stops this

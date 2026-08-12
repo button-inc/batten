@@ -172,6 +172,10 @@ stub_git() {
 	echo 5peccccc5peccccc >"$BATS_TEST_TMPDIR/specsha"
 	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_rebase"
 	echo 0 >"$BATS_TEST_TMPDIR/rc.reset"
+	# 1 by default: the holder's head is NOT already in our history, and the base
+	# we bet on has NOT landed. Both are the ordinary readings — a lease is held
+	# by someone whose work is still in flight.
+	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_ancestor"
 	cat >"$STUB/git" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"$BATS_TEST_TMPDIR/gitlog"
@@ -187,7 +191,14 @@ case "\$*" in
   "rev-parse --short"*)          echo abc1234 ;;
   "rev-parse --show-toplevel")   echo "$BATS_TEST_TMPDIR" ;;
   "fetch"*)                      exit "\$(cat "$BATS_TEST_TMPDIR/rc.fetch")" ;;
-  "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.linear")" ;;
+  # TWO DIFFERENT ANCESTRY QUESTIONS, and one file could not answer both. The
+  # lap asks "am I a descendant of main"; CLOUD-369's speculation asks "is the
+  # holder's head already in my history" and "did the base I bet on land". A
+  # single rc made the second answer yes by accident, and the speculation
+  # silently returned early — which the suite then reported as the mechanism
+  # never having run.
+  "merge-base --is-ancestor origin/main HEAD") exit "\$(cat "$BATS_TEST_TMPDIR/rc.linear")" ;;
+  "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_ancestor")" ;;
   "rebase --abort")              exit 0 ;;
   # The SPECULATIVE rebase is a different event from the lap's rebase onto main
   # (CLOUD-369) and fails differently: a conflict here is information about a
@@ -1092,8 +1103,12 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# below, and this counter is why that stop goes through `die` rather than a
 	# bare `exit` — an exit nothing counts is an exit nothing tests.
 	laps=$(grep -cE '^[[:space:]]*continue$' "$REAL_LAND")
-	[ "$laps" -eq 8 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 8."
+	# 12 since CLOUD-369: the warm queue adds four — the lease was lost (now the
+	# path that speculates and may reserve), the successor pushed and lapped, the
+	# successor is already in flight for this head, and the winner found main had
+	# moved while it waited. Each is exercised below.
+	[ "$laps" -eq 12 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 12."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
@@ -1584,4 +1599,19 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"lapping rather than confirming"* ]]
 	[[ "$(call_order)" == *push* ]]
+}
+
+@test "the successor's run is bought ONCE, not re-pushed on every lap it waits" {
+	# A successor waits many laps by design. Re-entering the ready/push pair each
+	# time would push an unchanged head — which emits no `synchronize`, buys
+	# nothing, and drops into the `--undo` re-fire path that exists for a
+	# different case entirely.
+	lease_lost
+	spec_head holder-branch
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=3 run "$LAND"
+	[ "$status" -eq 1 ]
+	[ "$(call_order)" = "ready push" ]
+	[[ "$output" == *"its run is already in flight"* ]]
 }
