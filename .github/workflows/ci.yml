@@ -144,6 +144,37 @@ jobs:
           # YAML block scalar's continuation lines are not (several tool names
           # here begin with `aqua:` and read as new keys).
           install_args: rust hk aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush pkl node npm:prettier
+      # CLOUD-406. `hk.pkl:14` amends a pkl PACKAGE uri, and pkl resolves it over
+      # the network on every evaluation — a second dependency beside the `hk`
+      # binary `mise.lock` pins, and unpinned at runtime. Measured on run
+      # 31632519615: the fetch of `hk@1.54.0.zip` failed, hk aborted with exit
+      # 134 before reaching a single gate, and the `failure` grade then wedged
+      # the SHA, because `land` re-fires a ready only on a head carrying no
+      # graded run. An upstream blip on a release CDN became a red required
+      # check on a branch that changed nothing.
+      #
+      # This is the only job that reaches hk — `hooks` (`hk check --all`) is a
+      # dependency of `mise run ci` and of nothing else; `cross-check` and
+      # `darwin-link` reach `doctor`, whose hook probe is skipped under CI, and
+      # `msrv`/`semver` run neither. So one cache step covers the whole exposure
+      # this repository controls.
+      #
+      # Keyed on `hk.pkl` itself, because the `amends` url lives in that file: a
+      # version bump changes the key by construction, with no second version
+      # string to keep honest (and `mise run hk-version` already gates that
+      # `mise.toml` agrees with the url). Deliberately no `restore-keys` — a
+      # prefix restore would hand this job a cache that is warm for the WRONG
+      # version, which is a miss wearing a hit's costume.
+      #
+      # A miss behaves exactly as today and then populates, so the exposure
+      # narrows from every run to one run per bump or eviction rather than being
+      # removed. It cannot be removed here: `mise-action`'s own bootstrap fetch
+      # precedes every seam this repository controls, which is why CLOUD-406
+      # carries a recovery half as well as this one.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.pkl/cache
+          key: pkl-${{ runner.os }}-${{ hashFiles('hk.pkl') }}
       # Caching is left at its default (save on), which means each PR writes and
       # restores its OWN cache. That is safe without any `save-if` guard because
       # GitHub scopes a cache to the ref that created it: a `pull_request` run
