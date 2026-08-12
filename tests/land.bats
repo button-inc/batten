@@ -66,6 +66,24 @@ setup() {
 	workflow_runs runs.last
 }
 
+teardown() {
+	# CLOUD-390. The slow-CI and slow-verify levers used to answer after a
+	# guessed 30s, and a guessed margin is self-limiting: whatever a case leaked
+	# died on its own before the next one started. They now model the wait they
+	# are named for — one that does not return — so nothing limits a leak but
+	# this. A regressed reap, or a mutant under test that never kills the race's
+	# loser, must cost a stray process for one teardown and never a stub that
+	# outlives the whole gate run holding a fd.
+	#
+	# Matched on the per-test stub PATH, not on `mise` or on a task name: bats
+	# gives every case its own $BATS_TEST_TMPDIR, so this pattern names a file
+	# only this case can have executed. Under the parallel runner a sibling's
+	# stub lives at a different tmpdir and cannot match — which is the property
+	# tests/land-lock.bats gets for free from serial execution and this file,
+	# stubbing a tool every suite runs, has to buy explicitly.
+	pkill -f "$BATS_TEST_TMPDIR/bin/mise" 2>/dev/null || true
+}
+
 # A fake `gh` covering the three calls land makes. `--jq` is applied with the
 # real jq to a real JSON body, so a filter that stops matching fails here.
 #
@@ -278,14 +296,42 @@ case "\$2" in
     # group leader, which kept the "detached" child killable.
     if [ -f "$BATS_TEST_TMPDIR/detach" ] && [ ! -f "$BATS_TEST_TMPDIR/detached.pid" ]; then
       setsid --fork bash -c "echo \\\$\\\$ >'$BATS_TEST_TMPDIR/detached.pid'; sleep 30" >/dev/null 2>&1
+      # CLOUD-457. setsid returns as soon as the fork is made; it promises
+      # nothing about the child having been SCHEDULED, and until the child runs
+      # its first command the pid file does not exist. The case downstream used
+      # to allow three seconds for that from the test body and read a loaded
+      # box's scheduling delay as "the descendant was never detached" — a red
+      # row for a launcher that did exactly what it claims.
+      #
+      # The waiting belongs HERE, next to the fork, and not in the body: since
+      # CLOUD-434 moved the spawn into this stub, run "\$LAND" has already
+      # returned by the time the body runs, so a body-side loop conditioned on
+      # "the spawning land has exited" is true on entry every single time and
+      # waits for nothing. An attempt cap, never a clock: 200 polls of 0.05s is
+      # a bound on tries, and if the child still has not published, the stub
+      # SAYS so through a marker rather than leaving the body to infer it from
+      # an empty file it cannot tell from a launcher that never spawned.
+      tries=0
+      while [ ! -s "$BATS_TEST_TMPDIR/detached.pid" ] && [ "\$tries" -lt 200 ]; do
+        sleep 0.05
+        tries=\$((tries + 1))
+      done
+      [ -s "$BATS_TEST_TMPDIR/detached.pid" ] || : >"$BATS_TEST_TMPDIR/detach.unscheduled"
     fi
-    # CLOUD-423's lever, consumed BEFORE the sleep: a verify killed mid-gate
+    # CLOUD-423's lever, consumed BEFORE the wait: a verify killed mid-gate
     # must not slow the lap that retries it, and the kill landing during the
-    # sleep is exactly the abort under test — the receipt line is never
+    # wait is exactly the abort under test — the receipt line is never
     # reached, so the abort-leaves-no-receipt property is observed for real.
+    #
+    # CLOUD-390: the wait does not end on its own. It used to be a 30s sleep,
+    # which is a guess at how long a real gate outlives its race, and a guess
+    # in this position is the wrong way round — a verify race that never killed
+    # its loser still finished, thirty seconds late and GREEN, so the defect
+    # these rows exist to catch passed slowly instead of failing. The only exit
+    # is land's kill, which is precisely the claim under test.
     if [ -f "$BATS_TEST_TMPDIR/verify.slow" ]; then
       rm -f "$BATS_TEST_TMPDIR/verify.slow"
-      sleep 30
+      while :; do sleep 1; done
     fi
     : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
   verified)
@@ -306,7 +352,23 @@ case "\$2" in
     # Every watcher records itself, so the trap-reap case can ask "who did a
     # lap spawn" and assert each one is gone (CLOUD-434's trap gap).
     echo "\$\$" >>"$BATS_TEST_TMPDIR/watch.pids"
-    [ ! -f "$BATS_TEST_TMPDIR/ci-wait.slow" ] || sleep 30; exit 0 ;;
+    # CLOUD-390: "CI is still running" is a wait that does not return, not one
+    # that returns after a guessed 30s. The guess was load-bearing in the wrong
+    # direction — a reap that missed this watcher, or a race that never killed
+    # its loser, still finished thirty seconds later and GREEN, so the exact
+    # defect these rows exist to catch passed SLOWLY instead of failing. This
+    # is the shape main-watch already uses for its own loser further down.
+    #
+    # Consumed on the first slow call, exactly as verify.slow is. The lever
+    # says "lose THIS lap", and a landing that laps must reach a lap whose CI
+    # does answer or it never merges: left standing, it wedged lap 2 of the two
+    # race rows forever, and those rows only ever completed by sitting out the
+    # 30s there — 31.5s for one of them, measured before this change.
+    if [ -f "$BATS_TEST_TMPDIR/ci-wait.slow" ]; then
+      rm -f "$BATS_TEST_TMPDIR/ci-wait.slow"
+      while :; do sleep 1; done
+    fi
+    exit 0 ;;
   land-lock)
     # Per-verb levers (CLOUD-369). The whole-task \`rc.mise.land-lock\` file
     # still works through the generic check above; this is what a case needs to
@@ -1502,11 +1564,23 @@ EOF
 	pr_state MERGED
 	run "$LAND"
 	[ "$status" -eq 0 ]
-	local deadline pid
-	deadline=$((SECONDS + 3))
-	while [ ! -s "$BATS_TEST_TMPDIR/detached.pid" ] && [ "$SECONDS" -lt "$deadline" ]; do
-		sleep 0.1
-	done
+	local pid
+	# CLOUD-457. The stand-in is spawned inside the verify stub and waited for
+	# there, where the fork happens — by the time this line runs the land has
+	# already exited, so there is nothing left here to poll against. What the
+	# body reads is the stub's verdict: the marker means the child was never
+	# scheduled, which is a statement about the BOX, not about the launcher.
+	#
+	# Skipping on it erases no coverage. The mutant this row catches is the
+	# launcher's `exec 3>&-` being deleted, and that mutant still spawns the
+	# child and still publishes its pid — the child is identical either way and
+	# differs only in the fd it inherits. So the mutant reaches the /proc
+	# assertion below, which is never skipped, and dies there. A skip here can
+	# only ever swallow "the scheduler was too busy to start a process", which
+	# no mutant of land can cause and no assertion of this row is about.
+	if [ -f "$BATS_TEST_TMPDIR/detach.unscheduled" ]; then
+		skip "CLOUD-457: the detached stand-in was never scheduled; nothing to read an fd from"
+	fi
 	[ -s "$BATS_TEST_TMPDIR/detached.pid" ]
 	pid=$(cat "$BATS_TEST_TMPDIR/detached.pid")
 	[ ! -e "/proc/$pid/fd/3" ]
