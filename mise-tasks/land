@@ -143,6 +143,11 @@ max_waits="${LAND_LOCK_MAX_WAITS:-64}"
 # How many consecutive passes may end with no readable answer from the bot before
 # this stops (CLOUD-413). A count of unreadable answers, not a clock on the poll.
 max_unknowns="${LAND_ANSWER_MAX_UNKNOWNS:-3}"
+# How many provisioning transients may be absorbed by re-running the failed jobs
+# before this stops (CLOUD-483). A count of absorbed transients, not a clock on
+# how long they keep happening: three in a row is a broken world, not a flake,
+# and the stop says so rather than re-running forever.
+max_transients="${LAND_MAX_TRANSIENTS:-3}"
 
 # EXIT CODES, NOT PROSE, ARE WHAT A CALLER DECIDES ON (CLOUD-399). Every stop
 # used to be `exit 1`, so a saturated fleet ("wait, and land later — nothing is
@@ -753,6 +758,74 @@ declined_by_lease() {
 	[ "$rc" = 3 ]
 }
 
+# THE THIRD THING THAT ARRIVES AT THE RED STOP (CLOUD-483). A job that died in the
+# setup action that installs our toolchain reds the branch and answers nothing:
+# measured five times on CLOUD-404, twice with different curl codes, and every
+# time `land` sent the agent to reproduce a failure that passes locally. The remedy it named cost a
+# whole matrix; `gh run rerun --failed` costs one job, measured on #376.
+#
+# IT CALLS `nonverdict-scan` OR IT IS WRONG, for the reason the arm above states.
+# That task owns the classification — a failed job reached a verdict iff one of
+# its failed steps is named `Run mise run <task>` — and it is a CLOSED predicate
+# resting on the invariant `ci-local-parity` gates, not an allowlist of setup
+# steps that goes stale the first time a workflow gains one. A copy of that jq
+# here would be a second authority over the same fact (CLOUD-351).
+#
+# EMPTY IS NOT UNANIMOUS, and this is the whole hazard. Zero records satisfies
+# "every record is a nonverdict" vacuously, and a branch that is genuinely red
+# would then be re-run until the budget ran out. Zero records is what an
+# unreadable payload, a roster miss, or a failure confined to the `final` fan-in
+# all produce — so it is the "could not look" case and falls through to the red
+# message, the same order `checks-green` uses when it tests no-answer before red.
+transient_runs=
+absorbed_transient() {
+	local sha="$1" runs run one records=""
+	transient_runs=
+
+	# No `per_page` here, deliberately: `tests/land.bats`'s keyed-verdict sensor
+	# asserts this file carries no windowed page size, because the fast-forward
+	# verdict must be found by its key rather than by a window. This query is a
+	# different endpoint entirely, and it needs no page size — a head SHA's failed
+	# runs are a handful — so the sensor stays exact instead of being spelled past.
+	runs=$(gh api "repos/{owner}/{repo}/actions/runs?head_sha=$sha&status=failure" \
+		--jq '.workflow_runs[]?.id' 2>/dev/null) || return 1
+	[ -n "${runs//[[:space:]]/}" ] || return 1
+
+	while IFS= read -r run; do
+		[ -n "$run" ] || continue
+		one=$(mise run nonverdict-scan --run "$run" 2>/dev/null) || return 1
+		records="${records}${one}"$'\n'
+	done <<<"$runs"
+
+	[ -n "${records//[[:space:]]/}" ] || return 1
+	! grep -q '^verdict' <<<"$records" || return 1
+
+	transient_runs="$runs"
+	# A here-string, not a pipe: `pipefail-grep-check` refuses a producer piped
+	# into an early-exiting grep, and is right to — under `pipefail` that shape is
+	# how a MATCH comes to report failure. The same rule caught the same mistake
+	# in `finding-sink-check` this morning.
+	grep '^nonverdict' <<<"$records" || true
+	return 0
+}
+
+# Re-run the failed jobs, refund the lap, and charge the count. The pointer is not
+# decoration: an absorbed transient with no durable trace is how the last one was
+# diagnosed correctly and then lost, so every occurrence stays attachable to
+# CLOUD-404.
+charge_transient() {
+	local run
+	for run in $transient_runs; do
+		gh run rerun "$run" --failed >/dev/null 2>&1 ||
+			die "CI on ${sha:0:8} failed before any \`mise run\` step — a provisioning transient, not a verdict — but re-running run $run was refused. Do: gh run rerun $run --failed, then mise run land"
+		echo "land: lap $lap — run $run failed before reaching a verdict; re-ran its failed jobs (CLOUD-404). Not a verdict on this branch."
+	done
+	lap=$((lap - 1))
+	transients=$((transients + 1))
+	[ "$transients" -le "$max_transients" ] ||
+		die "CI failed before reaching a verdict $max_transients times running on ${sha:0:8}. That is not a flake any more — the provisioning path is broken and re-running it again would spend jobs to learn the same thing. Do: look at the failing step, then mise run land"
+}
+
 graded_runs() {
 	local n
 	# The roster is guarded at TOP LEVEL, not here — see the check beside the
@@ -815,6 +888,10 @@ set -m
 lap=0
 lease_waits=0
 answer_unknowns=0
+# Absorbed provisioning transients, counted across the whole invocation rather
+# than reset per lap: three in one landing is the broken-world signal, whether or
+# not a good lap happened in between (CLOUD-483).
+transients=0
 # Set by `rate_limit_pause` so the exhaustion message can state the reset time the
 # code already had, instead of telling the human to go run `gh api rate_limit`.
 rate_reset_note=""
@@ -1275,6 +1352,13 @@ while :; do
 		fi
 		[ "$ci_rc" = 1 ] ||
 			die "could not read CI's verdict on ${sha:0:8} (ci-wait exit $ci_rc) — that is not a red run, and nothing about this branch has been judged. Do: mise run land"
+		# A red that never reached a verdict is not a verdict (CLOUD-483). Tested
+		# after the lease arm and before the red message, because both of those
+		# are answers about the branch and this one is an answer about the runner.
+		if absorbed_transient "$sha"; then
+			charge_transient
+			continue
+		fi
 		die "CI is red on $sha. A red run on a verified branch means verify and CI disagree — fix the mismatch locally, then run land again."
 	fi
 	if [ -z "$ci_rc" ]; then

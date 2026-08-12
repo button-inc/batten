@@ -129,6 +129,15 @@ nth() {
   cat "$BATS_TEST_TMPDIR/\$1.\$n" 2>/dev/null || cat "$BATS_TEST_TMPDIR/\$1.last"
 }
 case "\$sub" in
+  # CLOUD-483: re-running the failed jobs of a run that never reached a verdict.
+  # Recorded by run id, so a case asserts WHICH run was re-run rather than that
+  # something was — and \`rc.rerun\` scripts the refusal arm.
+  "run rerun")
+    # \`\$all\`, not a positional: the parsing loop above has already shifted every
+    # argument away by the time this arm runs.
+    echo "\$all" >>"$BATS_TEST_TMPDIR/reruns"
+    [ ! -f "$BATS_TEST_TMPDIR/rc.rerun" ] || exit 1
+    echo rerun ;;
   "pr comment")
     echo "\$all" >>"$BATS_TEST_TMPDIR/comments"; echo commented ;;
   "pr ready")
@@ -377,6 +386,13 @@ case "\$2" in
       while :; do sleep 1; done
     fi
     : >"$BATS_TEST_TMPDIR/receipt"; exit 0 ;;
+  # CLOUD-483: the classification of a red run, owned by \`nonverdict-scan\` and
+  # only consulted here. Records come from a file so a case scripts the answer;
+  # the DEFAULT IS EMPTY, which is "could not look" and keeps today's red
+  # message — so every pre-existing red-path row is untouched by this arm.
+  nonverdict-scan)
+    cat "$BATS_TEST_TMPDIR/nonverdict" 2>/dev/null || true
+    exit 0 ;;
   verified)
     if [ ! -f "$BATS_TEST_TMPDIR/receipt" ]; then
       # 'verified' is a gate: a missing receipt is a failure and it SAYS so.
@@ -1626,8 +1642,11 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# this assertion exists to prevent, reintroduced by the change that split the
 	# helper. `die_with` is matched on its code argument, which every call carries.
 	stops=$(grep -cE 'die "|die_with "?\$?[A-Za-z_]' "$REAL_LAND")
-	[ "$stops" -eq 22 ] || {
-		echo "land has $stops stopping conditions; this suite covers 22."
+	# 24 since CLOUD-483: absorbing a provisioning transient adds two — a re-run
+	# the API refused, and the retry budget exhausted. Both exercised below; the
+	# budget one is a COUNT, so the no-wall-clock row above still holds.
+	[ "$stops" -eq 24 ] || {
+		echo "land has $stops stopping conditions; this suite covers 24."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -1654,8 +1673,13 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# 14 since CLOUD-495: winning the lease can now settle a bet the holder
 	# abandoned, and an unwind there moved HEAD — so the lap ends rather than
 	# pushing a commit this branch no longer has. Exercised below.
-	[ "$laps" -eq 14 ] || {
-		echo "land has $laps lap-ending continues; this suite covers 14."
+	# 15 since CLOUD-483: a red run whose every failed required job died before
+	# reaching a verdict is re-run and lapped rather than reported. Two sessions
+	# each added a lap ending and each claimed 14 — the rebase conflict here WAS
+	# the sensor catching a count neither branch could see alone, which is what
+	# it is for.
+	[ "$laps" -eq 15 ] || {
+		echo "land has $laps lap-ending continues; this suite covers 15."
 		echo "Add a case for the new one — an exit nothing counts is an exit nothing tests."
 		return 1
 	}
@@ -2311,4 +2335,77 @@ bet_is_dead() { echo 1 >"$BATS_TEST_TMPDIR/rc.spec_live"; }
 	# makes: rewinding a published branch is exactly the case that ref guard is
 	# for.
 	grep -q 'push --force-with-lease' "$BATS_TEST_TMPDIR/gitlog"
+}
+
+# --- CLOUD-483: a red that never reached a verdict is not a verdict -----------
+#
+# `nonverdict-scan` owns the classification; these rows grade what `land` does
+# with it. The trio is the point: absorb, refuse to absorb, and the empty case
+# that a naive "every record is a nonverdict" test gets wrong by vacuity.
+
+nonverdict_records() { printf '%s\n' "$1" >"$BATS_TEST_TMPDIR/nonverdict"; }
+reruns() {
+	if [ -s "$BATS_TEST_TMPDIR/reruns" ]; then grep -c . "$BATS_TEST_TMPDIR/reruns"; else echo 0; fi
+}
+
+@test "CLOUD-483: a run that died before any mise step is re-run, not reported red" {
+	# Measured on #376: commit-lint died in the toolchain setup step, so it
+	# never linted a commit — and `land` sent the agent to reproduce a failure that
+	# passes locally. `gh run rerun --failed` re-queued that one job; a fresh push
+	# would have bought the whole matrix.
+	nonverdict_records "nonverdict	run=4242	job=commit-lint	step=Run jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654"
+	task_fails ci-wait
+	run "$LAND"
+	[[ "$output" != *"verify and CI disagree"* ]]
+	[[ "$output" == *"before reaching a verdict"* ]]
+	[ "$(reruns)" -ge 1 ]
+}
+
+@test "CLOUD-483: a job that reached a verdict is red, and is never re-run" {
+	# The anti-regression half. A change that re-ran unconditionally would pass the
+	# row above and re-run every genuine failure until its budget ran out.
+	nonverdict_records "verdict	run=4242	job=ci	step=Run mise run ci"
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CI is red"* ]]
+	[ "$(reruns)" -eq 0 ]
+}
+
+@test "CLOUD-483: EMPTY IS NOT UNANIMOUS — no records is red, not absorbed" {
+	# The vacuity case. "Every record is a nonverdict" is trivially true of no
+	# records at all, which is what an unreadable payload, a roster miss, or a
+	# failure confined to the `final` fan-in each produce. Absorbing that would
+	# re-run a genuinely red branch until the budget ran out, with no evidence
+	# that anything was transient.
+	nonverdict_records ""
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CI is red"* ]]
+	[ "$(reruns)" -eq 0 ]
+}
+
+@test "CLOUD-483: the retry budget is a COUNT, and exhausting it stops" {
+	# Three in a row is a broken provisioning path, not a flake — and re-running
+	# again would spend jobs to learn the same thing. A count, never a clock: the
+	# no-wall-clock sensor below must keep passing.
+	nonverdict_records "nonverdict	run=4242	job=ci	step=Run actions/checkout@3d3c42e"
+	task_fails ci-wait
+	LAND_MAX_TRANSIENTS=1 run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"not a flake any more"* ]]
+}
+
+@test "CLOUD-483: a re-run the API refuses stops, naming the command" {
+	# The absorbed path depends on a write succeeding. If it does not, laping
+	# would poll the same red forever, so this stops and hands over the one
+	# command that fixes it.
+	nonverdict_records "nonverdict	run=4242	job=ci	step=Run actions/checkout@3d3c42e"
+	: >"$BATS_TEST_TMPDIR/rc.rerun"
+	task_fails ci-wait
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"re-running run"* ]]
+	[[ "$output" == *"gh run rerun"* ]]
 }

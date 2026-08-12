@@ -157,15 +157,38 @@ unreadable=0
 runs_seen=0
 records=""
 
-if ! conditional_get "repos/{owner}/{repo}/actions/runs?status=failure&per_page=$WINDOW"; then
+# SINGLE-RUN MODE (CLOUD-483). `land` asks the same question about ONE concluded
+# run, on its red-CI stop path, to tell a provisioning transient from a verdict.
+# It is a mode rather than a second task because the classification must exist
+# once: two readers deciding "did this job reach a verdict" from two copies of the
+# jq is the CLOUD-351 shape, and the copy that drifts is the one nobody runs on a
+# clock.
+#
+# It emits RECORDS ONLY, no `window` summary — there is no window to summarise,
+# and a caller testing "every record is nonverdict" must not have to special-case
+# a trailing line that is neither. An empty stream is therefore unambiguous: no
+# failed required job was classifiable, which is "could not look" and never
+# "nothing was wrong".
+one_run=""
+if [ "${1:-}" = "--run" ]; then
+	one_run="${2:-}"
+	if [ -z "${one_run//[[:space:]]/}" ]; then
+		echo "::error:: nonverdict-scan: --run needs a run id. Without one there is nothing to classify, and an empty record stream would read as 'no failed job reached a verdict'." >&2
+		exit 2
+	fi
+fi
+
+if [ -n "$one_run" ]; then
+	run_ids="$one_run"
+elif ! conditional_get "repos/{owner}/{repo}/actions/runs?status=failure&per_page=$WINDOW"; then
 	echo "::error:: nonverdict-scan: could not read the run list, so this window judged nothing." >&2
 	printf 'window\truns=0\tfailed_jobs=0\tnonverdict=0\tverdict=0\tunreadable=1\n'
 	exit 0
+else
+	# `.id` and `.conclusion` only. Sorted by id so the record stream is byte-stable
+	# across ticks that see the same window in a different order.
+	run_ids=$(printf '%s' "$body" | jq -r '[.workflow_runs[]? | select(.conclusion == "failure") | .id] | sort | .[]' 2>/dev/null) || run_ids=""
 fi
-
-# `.id` and `.conclusion` only. Sorted by id so the record stream is byte-stable
-# across ticks that see the same window in a different order.
-run_ids=$(printf '%s' "$body" | jq -r '[.workflow_runs[]? | select(.conclusion == "failure") | .id] | sort | .[]' 2>/dev/null) || run_ids=""
 
 failed_jobs=0
 nonverdict=0
@@ -219,5 +242,9 @@ done <<<"$run_ids"
 if [ -n "$records" ]; then
 	printf '%s' "$records" | LC_ALL=C sort
 fi
-printf 'window\truns=%s\tfailed_jobs=%s\tnonverdict=%s\tverdict=%s\tunreadable=%s\n' \
-	"$runs_seen" "$failed_jobs" "$nonverdict" "$verdict" "$unreadable"
+# No summary in single-run mode: there is no window, and a caller asking "is every
+# record a nonverdict" must not have to discount a trailing line that is neither.
+if [ -z "$one_run" ]; then
+	printf 'window\truns=%s\tfailed_jobs=%s\tnonverdict=%s\tverdict=%s\tunreadable=%s\n' \
+		"$runs_seen" "$failed_jobs" "$nonverdict" "$verdict" "$unreadable"
+fi
