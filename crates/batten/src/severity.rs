@@ -160,7 +160,14 @@ impl RuleSeverity {
 /// [`RuleSeverity`] and [`ReportLevel`] are derived from it through [`TABLE`].
 /// Declared weakest-first (longest permitted latency first): derived [`Ord`] is
 /// the severity rank.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+///
+/// `JsonSchema` because CLOUD-56 made it a *config* vocabulary as well as a
+/// stored one: a `judge` row declares `tier` where every other kind declares
+/// `severity`, so the published schema has to describe it or an editor would
+/// flag the one column that kind cannot do without.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AdvisoryTier {
     /// Answer eventually: no bounded response deadline.

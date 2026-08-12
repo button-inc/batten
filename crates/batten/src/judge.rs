@@ -65,15 +65,35 @@
 //!
 //! ## What this module does not do
 //!
-//! It performs no egress and spawns nothing: it is config types plus pure
-//! functions, so a local model stays available by construction and there is no
-//! network path here to review. Which channel a payload crosses on — stdin,
-//! never argv and never a temp file — is CLOUD-56's wiring; this module hands
-//! back bytes and a record, and reaches nothing itself.
+//! [`assemble`] performs no egress and spawns nothing: it is config types plus
+//! pure functions, so a local model stays available by construction and there is
+//! no network path in it to review.
+//!
+//! ## The execution half (CLOUD-56)
+//!
+//! [`argv`] and [`Verdict`] are the wiring the paragraph above used to defer.
+//! They keep the same posture: the payload crosses on the judge command's
+//! **stdin** — never argv, which is world-readable process state, and never a
+//! temp file — and the engine reads the command's **exit code only**.
+//!
+//! That last point is the whole gate/judge line (CLOUD-93). A judge's prose is
+//! not parsed, matched, or inspected: if it were, the model's classification
+//! would re-enter the engine as a decision input, which is the thing
+//! non-negotiable rule 3 forbids. An exit code is the same channel every spawned
+//! predicate in this engine already speaks, and it carries exactly three bits of
+//! meaning — [`Verdict`] enumerates them.
+//!
+//! And a verdict, however it lands, is **advisory**: nothing here constructs a
+//! [`crate::rules::Finding`], so `any_blocking` and `--fail-on-warning` cannot
+//! see a judge outcome. The advisory surface is unable to block by type rather
+//! than by policy.
+
+use std::process::Command;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::error::UsageError;
 use crate::identity;
 use crate::rules::PathSet;
 
@@ -100,6 +120,184 @@ pub struct Judge {
     /// module docs for why that key was removed rather than defaulted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_payload_bytes: Option<usize>,
+    /// The judge command, as a template. The first whitespace-separated token is
+    /// a program on the operator's `PATH`, **executed directly and never through
+    /// a shell** — so this is data a reviewer can read, not a script.
+    ///
+    /// Absent is legal on its own: a `[judge]` table predates the judge that
+    /// reads it (CLOUD-135 landed first), and a repository that declared a
+    /// boundary and no command must keep loading. It is a judge **row** that
+    /// cannot resolve without one — see [`argv`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+    /// The model the operator's command should use, substituted into [`Judge::run`]
+    /// at each `{{model}}` placeholder.
+    ///
+    /// **Opaque to the engine**: never parsed, never validated against a list,
+    /// never used to decide anything. Batten has no opinion about which model a
+    /// consumer judges with, and a build that shipped a roster would be stating
+    /// one — plus going stale (non-negotiable rule 1: the fact is the consumer's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// The `{{model}}` placeholder [`Judge::model`] substitutes for in [`Judge::run`].
+///
+/// A template naming it with no `model` declared is a usage error rather than a
+/// literal `{{model}}` argv token: a command invoked with the placeholder still
+/// in it would ask the operator's judge to evaluate against a model called
+/// `{{model}}`, and whatever that returns is not a verdict about anything.
+pub const MODEL_PLACEHOLDER: &str = "{{model}}";
+
+/// The argv a judge row's command resolves to: program first, arguments after.
+///
+/// Splitting on whitespace is the same reading [`crate::rules::Rule::program`]
+/// gives a `command` rule's `check`, and for the same reason — one authority for
+/// "which token is the program", so a `doctor` PATH probe and the runner can
+/// never disagree about which binary they are talking about.
+///
+/// # Errors
+///
+/// [`UsageError`] (→ exit `1`) when no `[judge]` table is declared, when `run` is
+/// absent, empty or whitespace-only, or when the template names
+/// [`MODEL_PLACEHOLDER`] with no `model` to put there. Each names the judge row,
+/// because a config error must point at the row that has to change.
+pub fn argv(rule: &str, judge: Option<&Judge>) -> anyhow::Result<Vec<String>> {
+    let Some(template) = judge.and_then(|judge| judge.run.as_deref()) else {
+        return Err(UsageError::raise(format!(
+            "rule {rule}: kind \"judge\" needs a `[judge]` table declaring `run`; without a \
+             command there is nothing to ask"
+        )));
+    };
+    let model = judge.and_then(|judge| judge.model.as_deref());
+    if template.contains(MODEL_PLACEHOLDER) && model.is_none() {
+        return Err(UsageError::raise(format!(
+            "rule {rule}: `[judge].run` names {MODEL_PLACEHOLDER} and `[judge].model` is not set"
+        )));
+    }
+    let model = model.unwrap_or_default();
+    let argv: Vec<String> = template
+        .split_whitespace()
+        .map(|token| token.replace(MODEL_PLACEHOLDER, model))
+        .collect();
+    if argv.is_empty() {
+        return Err(UsageError::raise(format!(
+            "rule {rule}: `[judge].run` is empty; a command with no program cannot be invoked"
+        )));
+    }
+    Ok(argv)
+}
+
+/// What a judge command's exit code meant.
+///
+/// Three values because the channel carries three facts, and the third is the
+/// one a naive mapping loses: a judge that **failed to run properly** is not a
+/// judge that passed. Reading any non-zero as "raise" or any non-two as "clean"
+/// both convert a plumbing failure into a verdict, which is the false-green this
+/// engine exists to catch — so an odd exit registers, loudly, as unresolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Verdict {
+    /// `0`: the judge found nothing. No finding registers.
+    Clean,
+    /// `2`: the judge raised something. An advisory finding registers at the
+    /// row's tier. The same `2` every other predicate in this engine speaks —
+    /// and still not a blocking one, because it never becomes a `Finding`.
+    Raised,
+    /// Anything else, including a signal: the judge did not deliver a verdict.
+    /// An `unresolved` finding registers naming the code.
+    Unresolved(i32),
+}
+
+impl Verdict {
+    /// The exit code a judge command returned, read as a verdict.
+    ///
+    /// Total over `i32` by construction, and `None` — a process killed by a
+    /// signal, which `ExitStatus::code` reports as no code — is
+    /// [`Verdict::Unresolved`] with the conventional `128 + signal` stand-in
+    /// spelled as a plain sentinel: a judge the kernel killed said nothing, and
+    /// "said nothing" is exactly what unresolved means.
+    #[must_use]
+    pub const fn of(code: Option<i32>) -> Verdict {
+        match code {
+            Some(0) => Verdict::Clean,
+            Some(2) => Verdict::Raised,
+            Some(other) => Verdict::Unresolved(other),
+            None => Verdict::Unresolved(SIGNALLED),
+        }
+    }
+
+    /// Whether this verdict puts a record in the store.
+    #[must_use]
+    pub const fn registers(self) -> bool {
+        !matches!(self, Verdict::Clean)
+    }
+
+    /// The stable token for the record and machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Verdict::Clean => "clean",
+            Verdict::Raised => "raised",
+            Verdict::Unresolved(_) => "unresolved",
+        }
+    }
+}
+
+/// The stand-in code for "killed by a signal, so it reported none".
+pub const SIGNALLED: i32 = -1;
+
+/// Run `argv` with `payload` on stdin, and read the exit code as a [`Verdict`].
+///
+/// The payload goes to **stdin** and nowhere else (CLOUD-135 decision 4), and
+/// the program is spawned directly rather than through a shell, so nothing in
+/// `run` is word-split, globbed, or interpolated by anything but [`argv`] above.
+///
+/// The judge's stdout and stderr are inherited by nothing and read by nothing:
+/// they are captured and dropped. Capturing keeps a chatty model's prose off
+/// Batten's own channels (§6, rule 4); dropping is what makes "the engine reads
+/// the exit code only" true rather than aspirational.
+///
+/// # Errors
+///
+/// [`UsageError`] (→ exit `1`) when the program cannot be spawned — the
+/// `command`-kind precedent: a program a config names and `PATH` does not have is
+/// a config error about the invocation, never a policy verdict about the repo.
+pub fn invoke(rule: &str, argv: &[String], payload: &[u8]) -> anyhow::Result<Verdict> {
+    use std::io::Write as _;
+
+    let Some((program, args)) = argv.split_first() else {
+        return Err(UsageError::raise(format!(
+            "rule {rule}: `[judge].run` resolved to no program"
+        )));
+    };
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|err| {
+            UsageError::raise(format!(
+                "rule {rule}: cannot run judge program `{program}`: {err}"
+            ))
+        })?;
+    // Take the pipe before waiting: a child blocked writing to a full stdout
+    // pipe while we block on `wait` is the classic deadlock, and the null sinks
+    // above are what make it impossible here.
+    if let Some(mut stdin) = child.stdin.take() {
+        // A judge that closed stdin early is not a failure to report *here* —
+        // it is a judge that chose to answer without reading, and its exit code
+        // is still its answer. Anything else would let a broken pipe outrank a
+        // verdict the command actually delivered.
+        let _ = stdin.write_all(payload);
+    }
+    let status = child.wait().map_err(|err| {
+        UsageError::raise(format!(
+            "rule {rule}: judge program `{program}` could not be waited on: {err}"
+        ))
+    })?;
+    Ok(Verdict::of(status.code()))
 }
 
 /// The engine's payload ceiling when a row names none.
@@ -515,6 +713,8 @@ mod tests {
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
             max_payload_bytes: None,
+            run: None,
+            model: None,
         };
         let refusal = assemble(
             &rule_text(),
@@ -548,6 +748,8 @@ mod tests {
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
             max_payload_bytes: None,
+            run: None,
+            model: None,
         };
         assert!(matches!(
             assemble(
@@ -568,6 +770,8 @@ mod tests {
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
             max_payload_bytes: None,
+            run: None,
+            model: None,
         };
         let assembled = assemble_ok(&spans, Some(&judge));
 
@@ -593,6 +797,8 @@ mod tests {
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
             max_payload_bytes: None,
+            run: None,
+            model: None,
         };
         let assembled = assemble_ok(&spans, Some(&judge));
 
@@ -616,6 +822,8 @@ mod tests {
             Some(Judge {
                 raw: Vec::new(),
                 max_payload_bytes: None,
+                run: None,
+                model: None,
             }),
         ] {
             let assembled = assemble_ok(&spans, judge.as_ref());
@@ -637,6 +845,8 @@ mod tests {
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
             max_payload_bytes: None,
+            run: None,
+            model: None,
         };
         let exact = assemble_ok(&spans, Some(&judge)).serialized.len();
 
@@ -694,6 +904,8 @@ mod tests {
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
             max_payload_bytes: None,
+            run: None,
+            model: None,
         };
         let assembled = assemble_ok(&spans, Some(&judge));
         let record = serde_json::to_vec(&assembled.record).unwrap();
@@ -724,6 +936,8 @@ mod tests {
         let judge = Judge {
             raw: vec![PayloadClass::SpanText],
             max_payload_bytes: None,
+            run: None,
+            model: None,
         };
         let first = assemble_ok(&spans, Some(&judge));
         let second = assemble_ok(&spans, Some(&judge));
@@ -756,5 +970,139 @@ mod tests {
         unique.sort_unstable();
         unique.dedup();
         assert_eq!(tokens.len(), unique.len(), "class tokens must be distinct");
+    }
+
+    // --- the execution half (CLOUD-56) -------------------------------------
+
+    fn runner(run: &str, model: Option<&str>) -> Judge {
+        Judge {
+            raw: Vec::new(),
+            max_payload_bytes: None,
+            run: Some(run.to_owned()),
+            model: model.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_verdict_map_is_total_and_only_two_codes_mean_anything() {
+        // The load-bearing arm is the third: every code that is not 0 or 2 is
+        // unresolved, so a judge that crashed can never read as a pass. Swept
+        // over the whole byte range rather than three hand-picked codes,
+        // because "some other non-zero" is exactly where a naive `!= 0` maps a
+        // plumbing failure onto a verdict.
+        assert_eq!(Verdict::of(Some(0)), Verdict::Clean);
+        assert_eq!(Verdict::of(Some(2)), Verdict::Raised);
+        for code in -8..=255 {
+            if code == 0 || code == 2 {
+                continue;
+            }
+            assert_eq!(
+                Verdict::of(Some(code)),
+                Verdict::Unresolved(code),
+                "exit {code} is not a verdict the judge delivered"
+            );
+        }
+        // A signal reports no code at all, and "said nothing" is unresolved.
+        assert_eq!(Verdict::of(None), Verdict::Unresolved(SIGNALLED));
+    }
+
+    #[test]
+    fn only_a_clean_verdict_registers_nothing() {
+        assert!(!Verdict::Clean.registers());
+        assert!(Verdict::Raised.registers());
+        assert!(Verdict::Unresolved(1).registers());
+        assert!(Verdict::Unresolved(SIGNALLED).registers());
+    }
+
+    #[test]
+    fn a_judge_row_with_no_table_or_no_run_cannot_resolve_a_command() {
+        // Both spellings of "there is nothing to ask", and both name the row —
+        // a config error has to point at the line that changes.
+        for judge in [None, Some(&Judge {
+            raw: Vec::new(),
+            max_payload_bytes: None,
+            run: None,
+            model: None,
+        })] {
+            let err = argv("r", judge).expect_err("no run is a usage error");
+            assert!(err.to_string().contains("rule r"), "{err}");
+        }
+        let blank = runner("   ", None);
+        let err = argv("r", Some(&blank)).expect_err("a blank run is a usage error");
+        assert!(err.to_string().contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn the_program_is_the_first_token_and_the_rest_are_arguments() {
+        let judge = runner("judge-stub --strict -", None);
+        assert_eq!(
+            argv("r", Some(&judge)).unwrap(),
+            ["judge-stub", "--strict", "-"]
+        );
+    }
+
+    #[test]
+    fn the_model_is_substituted_wherever_the_placeholder_appears() {
+        let judge = runner("stub --model {{model}} --also={{model}}", Some("some-model"));
+        assert_eq!(
+            argv("r", Some(&judge)).unwrap(),
+            ["stub", "--model", "some-model", "--also=some-model"]
+        );
+    }
+
+    #[test]
+    fn the_placeholder_with_no_model_refuses_rather_than_passing_itself_through() {
+        // The failure this prevents is quiet: argv carrying a literal
+        // `{{model}}` asks the operator's judge to evaluate against a model of
+        // that name, and whatever comes back is a verdict about nothing.
+        let judge = runner("stub --model {{model}}", None);
+        let err = argv("r", Some(&judge)).expect_err("placeholder with no model refuses");
+        assert!(err.to_string().contains(MODEL_PLACEHOLDER), "{err}");
+    }
+
+    #[test]
+    fn a_model_with_no_placeholder_changes_no_token() {
+        // `model` is opaque and positional-by-template: declaring one without
+        // naming it in `run` must not smuggle an argument in.
+        let judge = runner("stub --strict", Some("some-model"));
+        assert_eq!(argv("r", Some(&judge)).unwrap(), ["stub", "--strict"]);
+    }
+
+    #[test]
+    fn a_program_that_is_not_on_path_is_a_usage_error_naming_it() {
+        let judge = runner("batten-judge-stub-that-does-not-exist", None);
+        let argv = argv("r", Some(&judge)).unwrap();
+        let err = invoke("r", &argv, b"{}").expect_err("an absent program refuses");
+        assert!(
+            err.to_string()
+                .contains("batten-judge-stub-that-does-not-exist"),
+            "the refusal must name the program: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_payload_crosses_on_stdin_and_the_exit_code_is_the_whole_verdict() {
+        // Both halves of the contract in one run over a real process: `sh -c`
+        // is the fixture here (not how a judge row is invoked — `invoke` never
+        // uses a shell) because it can assert on stdin and choose an exit code.
+        let payload = b"PAYLOAD-SENTINEL-crossed-on-stdin";
+        let script = "read -r line; case \"$line\" in *PAYLOAD-SENTINEL*) exit 2;; *) exit 9;; esac";
+        let argv = vec!["sh".to_owned(), "-c".to_owned(), script.to_owned()];
+        assert_eq!(
+            invoke("r", &argv, payload).unwrap(),
+            Verdict::Raised,
+            "the judge saw the payload on stdin, and its 2 is the verdict"
+        );
+
+        for (code, want) in [
+            (0, Verdict::Clean),
+            (2, Verdict::Raised),
+            (1, Verdict::Unresolved(1)),
+            (3, Verdict::Unresolved(3)),
+        ] {
+            let argv = vec!["sh".to_owned(), "-c".to_owned(), format!("exit {code}")];
+            assert_eq!(invoke("r", &argv, payload).unwrap(), want);
+        }
     }
 }

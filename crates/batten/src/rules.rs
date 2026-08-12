@@ -49,7 +49,7 @@ use crate::error::UsageError;
 use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity;
 use crate::refusal::{Fix, Refusal};
-use crate::severity::{self, ReportLevel, RuleSeverity};
+use crate::severity::{self, AdvisoryTier, ReportLevel, RuleSeverity};
 
 /// The kind of predicate a [`Rule`] applies to its matched files.
 ///
@@ -123,6 +123,28 @@ pub enum RuleKind {
     /// adjudicator as data, because adjudication is contractually pure. That is
     /// the same split the bypass hatch already uses.
     Receipt,
+    /// A **model-validated** rule (CLOUD-56): hand the row's `criteria` and the
+    /// admitted classes of its matched files to the command in `[judge].run`,
+    /// and read that command's exit code.
+    ///
+    /// The kind exists for the predicates no static shape can express — "this
+    /// test asserts behaviour, not a tautology" — and it is the one kind whose
+    /// outcome is **advisory-only and structurally unable to block** (house
+    /// style §0.3; the 2026-08-07 evidence base measured model judges at AUROC
+    /// ≤0.65 on false-success detection, so a judge verdict may inform and never
+    /// gate).
+    ///
+    /// "Structurally" is literal, and it is why this variant looks unfinished
+    /// next to the others: a judge outcome **never becomes a [`Finding`]**.
+    /// `run_rule` cannot produce one — the row is `allow`, which that walker
+    /// already skips — so [`any_blocking`] and `--fail-on-warning` have nothing
+    /// to see. Blocking is not forbidden here, it is unrepresentable.
+    ///
+    /// Distinct from [`RuleKind::Command`], which also runs something and reads
+    /// an exit code: that one is an *exit-code predicate* whose command is a
+    /// gate, and its findings deny. This one's command consults a model, and its
+    /// findings advise. The gate/judge line (CLOUD-93) is exactly this pair.
+    Judge,
 }
 
 impl RuleKind {
@@ -137,6 +159,7 @@ impl RuleKind {
         RuleKind::Shape,
         RuleKind::Ratchet,
         RuleKind::Receipt,
+        RuleKind::Judge,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -148,6 +171,7 @@ impl RuleKind {
             RuleKind::Shape => "shape",
             RuleKind::Ratchet => "ratchet",
             RuleKind::Receipt => "receipt",
+            RuleKind::Judge => "judge",
         }
     }
 
@@ -179,7 +203,11 @@ impl RuleKind {
             // every spawning kind with `Tree` alone, which is what keeps `hook`
             // structurally unable to execute a configured command.
             RuleKind::Forbid | RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt => false,
-            RuleKind::Command => true,
+            // Both run a program a `batten.toml` named, which is the whole
+            // predicate — that a judge's program consults a model and a
+            // command's decides a gate makes no difference to the surface
+            // question. `check` refuses both, naming `batten enforce`.
+            RuleKind::Command | RuleKind::Judge => true,
         }
     }
 
@@ -209,6 +237,15 @@ impl RuleKind {
             // on nothing and allow every call — a rule that loads, matches, and
             // decides nothing.
             RuleKind::Receipt => &["pattern", "checks", "reason"],
+            // `criteria` is what the model is asked, and a judge row without one
+            // sends a payload with no question attached. `no_fix_reason` is
+            // required rather than merely permitted because a judge finding
+            // reaches the store and CLOUD-81's ingest refuses one nothing can
+            // close — and a judge finding has no mechanical `fix` by
+            // construction, so the authored reason is the only remediation it
+            // can carry. Requiring it here is what keeps that refusal
+            // unreachable from a config that parses.
+            RuleKind::Judge => &["glob", "criteria", "no_fix_reason"],
         }
     }
 
@@ -259,6 +296,19 @@ impl RuleKind {
                 "reason",
                 "contains",
                 "policy_url",
+            // No `fix`: a judge finding is advisory, and a mutating repair
+            // attached to a model's opinion is the shortest path from "may
+            // inform" to "acted on the repository". No `severity` either — that
+            // column is refused for this kind before deserialization
+            // (`config::parse`), because the axis a judge feeds is `tier`.
+            RuleKind::Judge => &[
+                "glob",
+                "criteria",
+                "tier",
+                "identity_key",
+                "reason",
+                "policy_url",
+                "no_fix_reason",
             ],
         }
     }
@@ -272,7 +322,9 @@ impl RuleKind {
     #[must_use]
     pub const fn scopes(self) -> &'static [RuleScope] {
         match self {
-            RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet => &[RuleScope::Tree],
+            RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet | RuleKind::Judge => {
+                &[RuleScope::Tree]
+            }
             RuleKind::Shape | RuleKind::Receipt => &[RuleScope::MediatedCall],
         }
     }
@@ -535,6 +587,33 @@ pub enum ReceiptKey {
     Head,
     /// Keyed to the branch; every commit on it continues to serve the claim.
     Branch,
+    /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
+    /// instruction handed to the judge command (CLOUD-56).
+    ///
+    /// **Committed, and that is the point.** The question a model is asked is
+    /// policy: it belongs in the authority a reviewer reads and a diff shows,
+    /// not in a prompt assembled at run time out of something else. It is also
+    /// the one payload class that carries no egress question at all
+    /// ([`crate::judge::RuleText`]) — it is the config author's own words, on
+    /// their way back to them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criteria: Option<String>,
+    /// How fast a [`RuleKind::Judge`] finding must be answered
+    /// ([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means
+    /// [`AdvisoryTier::Advisory`], the least-urgent rank.
+    ///
+    /// This is the axis a judge row declares **instead of** `severity`, and the
+    /// substitution is the whole advisory bound: `severity` decides the exit
+    /// contract, `tier` decides a response deadline. A judge row carrying
+    /// `severity` is refused before deserialization (`config::parse`), so the
+    /// column a model's opinion could ride into the exit code does not exist for
+    /// this kind.
+    ///
+    /// A default rather than a required column, unlike `severity` on every other
+    /// kind: an omitted deadline resolves to the weakest one, which withholds no
+    /// gate because there is no gate here to withhold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<AdvisoryTier>,
 }
 
 /// Which way a ratcheted count may move.
@@ -619,6 +698,8 @@ impl Rule {
     /// a column is added here without being placed.
     fn columns(&self) -> [(&'static str, bool); 16] {
         [
+            ("criteria", self.criteria.is_some()),
+            ("tier", self.tier.is_some()),
             ("no_fix_reason", self.no_fix_reason.is_some()),
             ("glob", self.glob.is_some()),
             ("pattern", self.pattern.is_some()),
@@ -769,6 +850,31 @@ impl Rule {
             // Neither reaches the store: both are adjudicated per mediated call
             // and produce a decision, not a finding.
             RuleKind::Shape | RuleKind::Receipt => None,
+            // Neither of the other two answers is true for a judge.
+            // `Reevaluate` would claim the engine can re-decide the finding, and
+            // it cannot — a model reached that verdict and only the model can
+            // revisit it. `None` means "never reaches the store", which is the
+            // shape rule's situation and not this one. So: re-run the judge,
+            // which is exactly what re-decides it.
+            //
+            // The argv is resolved by the caller and threaded in through
+            // [`Rule::settling_argv`], because it lives in the `[judge]` table
+            // rather than on the row — this method sees only the row.
+            RuleKind::Judge => Some(Check::Argv(Vec::new())),
+        }
+    }
+
+    /// [`Rule::settling_check`] for a judge row, given the resolved command.
+    ///
+    /// Split from the method above because the judge's argv is not on the row:
+    /// `[judge].run` is a table-level key, so the row alone cannot answer, and
+    /// returning a placeholder that a caller *might* fill would be the kind of
+    /// half-built value that reads as complete. This one takes what it needs.
+    #[must_use]
+    pub fn settling_argv(&self, argv: &[String]) -> Option<Check> {
+        match self.kind {
+            RuleKind::Judge => Some(Check::Argv(argv.to_vec())),
+            _ => self.settling_check(),
         }
     }
 
@@ -1107,10 +1213,19 @@ fn run_rule(
             }
         }
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
-        // Unreachable: shape and receipt rules are `mediated_call`-scoped and a
-        // ratchet returned above. Stated rather than caught by a wildcard so
-        // adding a kind that *is* tree-scoped has to come here.
-        RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt => {}
+        // Unreachable: shape and receipt rules are `mediated_call`-scoped
+        // and a ratchet
+        // returned above. Stated rather than caught by a wildcard so adding a
+        // kind that *is* tree-scoped has to come here.
+        //
+        // `Judge` is tree-scoped and still unreachable, by a different and
+        // load-bearing route: a judge row's severity is `allow` (refused as a
+        // config key and injected by `config::parse`), so the check twenty lines
+        // up returns before this match. That is not an accident of ordering — it
+        // is what makes "a judge outcome is never a `Finding`" a property of the
+        // walker rather than a convention. The judge runs in its own pass, over
+        // in `lib.rs`, beside `findings` and never into it.
+        RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt | RuleKind::Judge => {}
     }
     Ok(None)
 }
@@ -1966,6 +2081,8 @@ mod tests {
             identity_key: None,
             direction: None,
             base: None,
+            criteria: None,
+            tier: None,
             // The one that needs no argv, so a fixture about a different column
             // does not have to invent a fix command. A `shape` row is refused
             // this column (CLOUD-81), so it gets none — and a kind that also
@@ -2465,7 +2582,8 @@ mod tests {
                 | RuleKind::Command
                 | RuleKind::Shape
                 | RuleKind::Ratchet
-                | RuleKind::Receipt => {}
+                | RuleKind::Receipt
+                | RuleKind::Judge => {}
             }
         }
         assert_eq!(

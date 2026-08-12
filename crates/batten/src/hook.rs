@@ -1473,6 +1473,8 @@ mod tests {
             identity_key: None,
             direction: None,
             base: None,
+            criteria: None,
+            tier: None,
             // A shape rule never reaches the findings store, so it is refused
             // the remediation column (CLOUD-81).
             no_fix_reason: None,

@@ -106,12 +106,24 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // subcommand listing (a usage error, exit 1) before parse returns. Kept
         // total — the workspace lints forbid panicking on a reachable path.
         None => Ok(ExitCode::Success),
-        Some(Command::Check { json }) => {
-            run_rules(out, err, mode, &overrides, rules::run_static, json)
-        }
-        Some(Command::Enforce { json }) => {
-            run_rules(out, err, mode, &overrides, rules::run_all, json)
-        }
+        Some(Command::Check { json }) => run_rules(
+            out,
+            err,
+            mode,
+            &overrides,
+            rules::run_static,
+            Surface::ReadOnly,
+            json,
+        ),
+        Some(Command::Enforce { json }) => run_rules(
+            out,
+            err,
+            mode,
+            &overrides,
+            rules::run_all,
+            Surface::Spawning,
+            json,
+        ),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Doctor { json }) => run_doctor(json, out),
@@ -1104,6 +1116,198 @@ fn transcript_view(
 ///
 /// An unconfigured or absent capability yields no detections rather than an
 /// error — the rule simply did not run, and `ABSENT_NOTICE` is what says so.
+/// Which of the two rule surfaces [`run_rules`] is serving.
+///
+/// The `runner` fn pointer above already encodes this — `run_static` versus
+/// `run_all` — but a fn pointer is not a value you can `match` on, and the judge
+/// pass needs to ask. Stated as data rather than compared by address, so the
+/// question "may this run spawn a configured command?" has one readable answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Surface {
+    /// `check`: declared `read` (§5), so no configured command runs.
+    ReadOnly,
+    /// `enforce`: unclassified, and the only surface a judge runs on.
+    Spawning,
+}
+
+/// Run every configured judge row, and register what the judges said.
+///
+/// **This function returns no [`rules::Finding`], and that is its contract.** A
+/// judge outcome goes to the store through [`findings::record_advisory`] and
+/// nowhere else, so `any_blocking` never sees one and `--fail-on-warning` has
+/// nothing to promote (§0.3, CLOUD-56). The exit code of the run that called
+/// this is decided entirely by the deterministic findings beside it.
+///
+/// The order inside each row is load-bearing and is CLOUD-135's, not this
+/// issue's: match the glob, offer the spans to [`judge::assemble`], and let it
+/// decide protection **before any byte is read into a payload**. A refusal here
+/// is exit 1 — a statement about the invocation, never a policy verdict.
+///
+/// # Errors
+///
+/// [`UsageError`] (→ exit `1`) for a judge row with no resolvable command, a
+/// program absent from `PATH`, or a payload the boundary refuses.
+fn run_judges(
+    err: &mut dyn Write,
+    mode: Mode,
+    config: &resolve::Resolved,
+    root: &Path,
+) -> Result<Vec<findings::Advisory>> {
+    let rows: Vec<&rules::Rule> = config
+        .rules
+        .iter()
+        .filter(|rule| rule.kind == rules::RuleKind::Judge)
+        .collect();
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let protected = rules::PathSet::includes("protected", &config.protected)?;
+    let cap = judge::effective_cap(
+        config.judge.as_ref().and_then(|j| j.max_payload_bytes),
+        None,
+    );
+    let files = rules::tree_files(root)?;
+
+    let mut raised = Vec::new();
+    for rule in rows {
+        let argv = judge::argv(&rule.id, config.judge.as_ref())?;
+        let Some(glob) = rule.glob.as_deref() else {
+            continue;
+        };
+        let criteria = rule.criteria.clone().unwrap_or_default();
+        let matched: Vec<&String> = files.iter().filter(|path| rules::glob_match(glob, path)).collect();
+        // No match is no question: a judge asked about nothing would spend a
+        // metered model call to be told so. The glob is a gate before it is a
+        // payload source, the same reading `run_rule` gives a command row.
+        if matched.is_empty() {
+            continue;
+        }
+        let mut spans = Vec::with_capacity(matched.len());
+        for path in &matched {
+            spans.push(judge::Span {
+                rule: rule.id.clone(),
+                path: Some((*path).clone()),
+                line: None,
+                class: judge::PayloadClass::FileText,
+                bytes: std::fs::read(root.join(path)).unwrap_or_default(),
+            });
+        }
+        let rule_text = judge::RuleText {
+            id: rule.id.clone(),
+            criteria,
+        };
+        let assembled = judge::assemble(&rule_text, &spans, &protected, config.judge.as_ref(), cap)
+            .map_err(|refusal| UsageError::raise(refusal.line()))?;
+        let verdict = judge::invoke(&rule.id, &argv, &assembled.serialized)?;
+        // The pointer-only invocation record, on the error channel and
+        // ladder-gated: it is a statement about Batten's own egress, which a
+        // default run should see and a quiet one need not.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "judge {}: {} bytes to {} over {} file(s) — {}",
+                rule.id,
+                assembled.record.bytes,
+                argv.first().map_or("<none>", String::as_str),
+                assembled.record.matched_files,
+                verdict.as_str()
+            ),
+        )?;
+        if !verdict.registers() {
+            continue;
+        }
+        raised.push(findings::Advisory {
+            rule: rule.id.clone(),
+            // A judge finding is a whole-scope condition — the row and the file
+            // set it named — so it takes the `scope` identity, the same one a
+            // budget or a ledger finding takes. Deliberately NOT the payload
+            // hash: that would re-mint the identity every time any matched file
+            // changed, so a settled judge finding would reappear as a new one
+            // after an unrelated edit, which is the churn CLOUD-123 exists to
+            // prevent.
+            identity: identity::StoredIdentity::new(
+                identity::FindingKind::Scope,
+                identity::scope_fingerprint(&rule.id, glob),
+            ),
+            tier: rule.tier.unwrap_or(severity::AdvisoryTier::Advisory),
+            path: glob.to_owned(),
+            line: None,
+            check: findings::Check::Argv(argv.clone()),
+            remediation: findings::Remediation::NoFix(
+                rule.no_fix_reason.clone().unwrap_or_default(),
+            ),
+        });
+    }
+    Ok(raised)
+}
+
+/// Put judge outcomes in the findings store, or say why they are not there.
+///
+/// Split from [`run_judges`] so the spawn and the persistence are separable: a
+/// judge's verdict is a fact about the tree whether or not a store exists to
+/// hold it, and folding the two together would make an unopenable store look
+/// like a judge that did not run.
+///
+/// **No failure path here reaches the exit code.** A store that is absent,
+/// busy, or newer than this binary reports and returns — the same posture
+/// `state record` takes, and a stronger obligation here, because refusing to
+/// finish an `enforce` over a *bookkeeping* problem would give an advisory
+/// surface the blocking power §0.3 denies it.
+///
+/// # Errors
+///
+/// Propagates a write failure on the error channel.
+fn register_advisories(raised: &[findings::Advisory], err: &mut dyn Write) -> Result<()> {
+    if raised.is_empty() {
+        return Ok(());
+    }
+    let repo = git::repo_root(Path::new("."))?;
+    let Some(branch) = git::current_branch(Path::new("."))? else {
+        // Detached HEAD names no ref, so there is no context to key an instance
+        // on. `state record` raises here; this one reports and carries on, for
+        // the reason in the doc comment.
+        writeln!(
+            err,
+            "batten: HEAD is detached, so {} judge finding(s) belong to no ref: persisted:false",
+            raised.len()
+        )?;
+        return Ok(());
+    };
+    let context = findings::Context::new(format!("refs/heads/{branch}"));
+    let commit = git::head_commit(Path::new("."))?;
+
+    let bound = store::commit(store::resolve(&repo)?)?;
+    if let Some(note) = &bound.note {
+        writeln!(err, "batten: {note}")?;
+    }
+    let access = journal::open(&bound.dir)?;
+    if let journal::Access::DegradedReadOnly { reason, .. } = &access {
+        writeln!(err, "batten: degraded read-only: {reason}")?;
+        writeln!(
+            err,
+            "batten: {} judge finding(s): persisted:false",
+            raised.len()
+        )?;
+        return Ok(());
+    }
+    let schema = access.format().findings_schema;
+    let here = std::env::current_dir().ok();
+    for advisory in raised {
+        findings::record_advisory(
+            &bound.dir,
+            &context,
+            &commit,
+            here.as_deref().and_then(Path::to_str),
+            advisory,
+            schema,
+        )?;
+    }
+    Ok(())
+}
+
 fn scan_self_writes(
     capability: &transcript::Capability,
     declared: Option<&transcript::TranscriptConfig>,
@@ -1197,6 +1401,7 @@ fn run_rules(
     mode: Mode,
     overrides: &Overrides,
     runner: fn(&[rules::Rule], &Path) -> Result<rules::Scan>,
+    surface: Surface,
     json: bool,
 ) -> Result<ExitCode> {
     // The *resolved* rule set, so a local override's added rules are gates a run
@@ -1264,6 +1469,16 @@ fn run_rules(
     // `--fail-on-warning`, which is a promotion path, not a tier.
     let self_writes = scan_self_writes(&capability, config.transcript.as_ref());
     report_self_writes(&self_writes, mode, err)?;
+
+    // The judge (CLOUD-56), joining on exactly the terms above and for the same
+    // §0.3 reason — beside `findings`, never into it. `check` never reaches
+    // here: `run_static` already refused the run for carrying a spawning kind,
+    // so this is not a second gate on the same question, it is the surface that
+    // is allowed to answer it.
+    if surface == Surface::Spawning {
+        let raised = run_judges(err, mode, &config, Path::new("."))?;
+        register_advisories(&raised, err)?;
+    }
 
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function
     // is the single funnel `check` and `enforce` share — they differ only in the

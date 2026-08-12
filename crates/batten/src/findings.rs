@@ -778,6 +778,96 @@ pub fn record(
     Ok(summary)
 }
 
+/// One judge outcome, on its way into the store (CLOUD-56).
+///
+/// **The type is the guarantee.** A judge outcome carries no [`RuleSeverity`],
+/// so it cannot be built into a [`Finding`], so [`crate::rules::any_blocking`]
+/// and `--fail-on-warning` have nothing to promote. The advisory surface is
+/// unable to block because there is no value here that the exit contract knows
+/// how to read — not because a branch declined to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Advisory {
+    /// The judge row that produced it.
+    pub rule: String,
+    /// The identity this outcome is keyed by.
+    pub identity: StoredIdentity,
+    /// How fast it must be answered — **declared on the row**, not derived
+    /// through the rank table, because the row declares no severity to derive
+    /// one from.
+    pub tier: AdvisoryTier,
+    /// Where it is, as a pointer.
+    pub path: String,
+    /// The line, when the outcome locates one. A judge judges a file, so
+    /// usually `None`.
+    pub line: Option<usize>,
+    /// What settles it: re-running the judge command.
+    pub check: Check,
+    /// What to do about it. A judge row's `no_fix_reason`, since a model's
+    /// opinion has no mechanical fix.
+    pub remediation: Remediation,
+}
+
+/// Fold one judge outcome into the store as this context's instance.
+///
+/// The sibling of [`record`], and the differences are exactly two: the tier
+/// comes off the row instead of the rank table, and this door does not resolve
+/// anything it did not see. That second one matters — [`record`] is a *scan*, so
+/// an identity it did not produce is evidence of absence in that context; a
+/// judge invocation is one rule's answer about one row, and reading it as a
+/// statement about every other finding would resolve them on a silence nobody
+/// asked for. Clearing a judge finding is the judge's own `check` re-running
+/// (CLOUD-81), not this.
+///
+/// # Errors
+///
+/// Returns an error when the record cannot be read or written.
+pub fn record_advisory(
+    store_dir: &Path,
+    context: &Context,
+    commit: &str,
+    worktree: Option<&str>,
+    advisory: &Advisory,
+    schema: u32,
+) -> Result<Recorded> {
+    let mut summary = Recorded::default();
+    let path = record_path(store_dir, advisory.identity.fingerprint);
+    let mut existing = read_record(&path).unwrap_or_else(|| {
+        summary.minted += 1;
+        FindingRecord {
+            schema,
+            identity: advisory.identity.clone(),
+            rule: advisory.rule.clone(),
+            // The one field with nothing honest to put in it. `Allow` is the
+            // severity a judge row carries (injected by `config::parse`, which
+            // refuses the key), and it says the right thing here too: this
+            // record's rule denies nothing. The exit contract reads `Finding`s,
+            // and this never was one.
+            severity: RuleSeverity::Allow,
+            tier: advisory.tier,
+            disposition: None,
+            presentation: Presentation::Shown,
+            check: Some(advisory.check.clone()),
+            remediation: Some(advisory.remediation.clone()),
+            instances: Vec::new(),
+        }
+    });
+    // The tier is NOT touched on an existing record, the same no-escalation law
+    // `record` observes (CLOUD-80): seeing a judge raise the same thing twice
+    // changes its count, never its deadline.
+    existing.upsert(Instance {
+        context: context.clone(),
+        occurrences: Observation::Observed(1),
+        observed_at_commit: commit.to_owned(),
+        worktree_path: worktree.map(ToOwned::to_owned),
+        path: advisory.path.clone(),
+        line: advisory.line,
+    });
+    write_record(store_dir, &existing)?;
+    summary.updated += 1;
+    Ok(summary)
+}
+
 /// Drop instances whose ref no longer exists, and findings left with none.
 ///
 /// # Errors
