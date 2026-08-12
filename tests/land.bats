@@ -215,6 +215,11 @@ stub_git() {
 	# moved nothing", and those two take different paths (CLOUD-254). A
 	# successful push advances it to HEAD, exactly as a real one does.
 	echo staleremote >"$BATS_TEST_TMPDIR/remote_ref"
+	# CLOUD-345: whether the branch still EXISTS on the remote, which is a
+	# different question from what SHA it is at. Present by default — the ordinary
+	# world — so a rejected push means a concurrent writer unless a case says
+	# otherwise. Empty output is how `git ls-remote --heads` reports absence.
+	printf 'deadbeef\trefs/heads/feat\n' >"$BATS_TEST_TMPDIR/lsremote"
 	echo cafe1234cafe1234 >"$BATS_TEST_TMPDIR/headsha"
 	echo ma1nma1nma1nma1n >"$BATS_TEST_TMPDIR/mainsha"
 	echo 5peccccc5peccccc >"$BATS_TEST_TMPDIR/specsha"
@@ -247,6 +252,7 @@ case "\$*" in
   # never having run.
   "merge-base --is-ancestor origin/main HEAD") exit "\$(cat "$BATS_TEST_TMPDIR/rc.linear")" ;;
   "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_ancestor")" ;;
+  "ls-remote --heads origin "*)  cat "$BATS_TEST_TMPDIR/lsremote" ;;
   "rebase --abort")              exit 0 ;;
   # The SPECULATIVE rebase is a different event from the lap's rebase onto main
   # (CLOUD-369) and fails differently: a conflict here is information about a
@@ -869,6 +875,43 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"push rejected"* ]]
 	[ "$(comments)" -eq 0 ]
+	# CLOUD-345's anti-vacuity half: a GENUINE concurrent move keeps today's
+	# caution and must never be told to prune. A change that always named the
+	# stale ref would pass the row below and send an operator to force over a
+	# writer who is really there.
+	[[ "$output" == *"Someone else moved it"* ]]
+	[[ "$output" != *"--prune"* ]]
+}
+
+@test "CLOUD-345: a branch ABSENT from the remote is a stale ref, not a rival" {
+	# The deadlock. GitHub deletes the head branch on merge, a plain fetch never
+	# prunes, and the surviving tracking ref names a SHA the remote does not have
+	# — so `--force-with-lease` is rejected as `stale info` forever. No number of
+	# laps clears it, because every lap re-fetched without pruning.
+	#
+	# The old message named the one cause that was not true, and named it toward
+	# the dangerous action: `git log HEAD..origin/<branch>` is EMPTY here, so
+	# every check an operator would run says forcing is safe, for the wrong
+	# reason.
+	fails push
+	: >"$BATS_TEST_TMPDIR/lsremote"
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ABSENT from the remote"* ]]
+	[[ "$output" == *"--prune"* ]]
+	[[ "$output" == *"Do NOT force"* ]]
+	[[ "$output" != *"Someone else moved it"* ]]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "CLOUD-345: every fetch prunes, so a deleted upstream leaves no expectation" {
+	# The cheap half, and the one that makes the loop self-clearing rather than
+	# merely better-diagnosed. `fetch_main` is the single definition both lap
+	# reads share, so this covers both.
+	pr_state MERGED
+	run "$LAND"
+	grep -qE '^fetch -q --prune origin main$' "$BATS_TEST_TMPDIR/gitlog"
+	[ "$(grep -cE '^fetch -q origin main$' "$BATS_TEST_TMPDIR/gitlog")" -eq 0 ]
 }
 
 @test "an unfetchable origin stops instead of lapping on a stale main" {
@@ -1382,8 +1425,8 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# this assertion exists to prevent, reintroduced by the change that split the
 	# helper. `die_with` is matched on its code argument, which every call carries.
 	stops=$(grep -cE 'die "|die_with "?\$?[A-Za-z_]' "$REAL_LAND")
-	[ "$stops" -eq 20 ] || {
-		echo "land has $stops stopping conditions; this suite covers 20."
+	[ "$stops" -eq 21 ] || {
+		echo "land has $stops stopping conditions; this suite covers 21."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}

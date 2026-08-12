@@ -245,8 +245,22 @@ drop_lease() {
 # hold to confirm it has not moved (CLOUD-369) — and the failure is the same
 # failure both times. One definition, so the two cannot drift into disagreeing
 # about what an unreachable remote means.
+# `--prune` IS LOAD-BEARING, NOT TIDINESS (CLOUD-345). When a PR merges the head
+# branch is deleted, but a plain fetch never removes `refs/remotes/origin/<branch>`
+# — so the tracking ref survives, still naming the SHA that landed. Reusing that
+# branch name then hits a `--force-with-lease` whose expectation names a ref the
+# remote does not have, and the push is rejected as `stale info` FOREVER: no
+# number of laps clears it, because every lap re-fetches without pruning.
+#
+# Measured 2026-08-11, and it misled three readers at once: this push ("someone
+# else moved the branch" — nobody had), the harness stop hook ("20 unpushed
+# commits" on a branch whose true unlanded set was 1), and `land`'s own post-merge
+# delete ("already gone, or the remote refused" — both halves were live).
+#
+# It belongs here rather than in each reader: the readers are not all ours, and
+# only the landing loop knows when the ref went stale.
 fetch_main() {
-	git fetch -q origin main ||
+	git fetch -q --prune origin main ||
 		die "cannot fetch origin/main; read mem:github-access before concluding the network is blocked."
 }
 
@@ -944,8 +958,25 @@ while :; do
 		echo "land: lap $lap — readied #$pr before pushing, so the push's own event is the one confirming run"
 	fi
 
-	git push --force-with-lease -u origin "$branch" ||
-		die "push rejected. Someone else moved the branch; look before forcing."
+	# TWO CAUSES, TWO REMEDIES (CLOUD-345). One undifferentiated line named the
+	# only cause that was usually NOT true, and it named it toward the dangerous
+	# action: "someone else moved the branch" describes a concurrent writer, whose
+	# correct response is caution — while the common case is our own merge having
+	# deleted the branch, where every check an operator would run (`git log
+	# HEAD..origin/<branch>` is empty) says forcing looks safe, for the wrong
+	# reason. A message that misnames the cause pushes toward a bare `--force`,
+	# which is the one thing the lease exists to prevent.
+	#
+	# The split is mechanical, not a judgement: absent from the remote is a
+	# different state from present at an unexpected SHA. `--force-with-lease` is
+	# still what pushes in both — the lease is never weakened to a bare force,
+	# which would trade this bug for a worse one.
+	if ! git push --force-with-lease -u origin "$branch"; then
+		if [ -z "$(git ls-remote --heads origin "$branch" 2>/dev/null)" ]; then
+			die "push rejected, and \`$branch\` is ABSENT from the remote — this is a stale tracking ref, not a concurrent writer. Our own merge deleted the branch and the local ref outlived it. Do: git fetch --prune origin && mise run land. Do NOT force."
+		fi
+		die "push rejected, and \`$branch\` IS on the remote at a SHA this clone did not expect. Someone else moved it; look before forcing."
+	fi
 
 	base_main="$(git rev-parse origin/main)"
 
@@ -1174,7 +1205,12 @@ while :; do
 		state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null)
 		if [ -n "$state" ] && [ "$state" != "OPEN" ]; then
 			reap_watch
-			git fetch -q origin main
+			# PRUNING MATTERS MOST EXACTLY HERE (CLOUD-345). This is the merged
+			# path — the instant GitHub deletes the head branch, and therefore the
+			# instant the local tracking ref becomes the phantom that deadlocks the
+			# next reuse of this branch name. Unguarded on purpose: the PR has
+			# already reached a terminal state, so a failed fetch changes no verdict.
+			git fetch -q --prune origin main
 			echo "land: PR #$pr is $state after $lap lap(s); origin/main is now $(git rev-parse --short origin/main)"
 			[ "$state" = "MERGED" ] || die "PR #$pr is $state — closed without merging."
 			# The one exit that must leave the PR alone (CLOUD-458): it landed,
