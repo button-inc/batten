@@ -45,6 +45,15 @@ EOF
 lock() { (cd "$1" && shift && "$LOCK" "$@"); }
 lease_sha() { git --git-dir="$BARE" rev-parse --verify -q refs/heads/batten-land-lock; }
 
+teardown() {
+	# CLOUD-434's lesson applied to this suite's own plumbing: a hold that a
+	# case leaked — a regressed tether, a mutant under test — must cost a stray
+	# process for one teardown, never a wedged file. Within-file execution is
+	# serial and no other suite runs the real land-lock, so the match cannot
+	# reach a sibling test's processes.
+	pkill -f 'mise-tasks/land-lock hold' 2>/dev/null || true
+}
+
 @test "an unheld lease reports unheld, and says so at exit 0" {
 	run lock "$MINE" status
 	[ "$status" -eq 0 ]
@@ -320,5 +329,101 @@ EOF
 	# The lease must still be there, and still be ours.
 	[ "$(lease_sha)" = "$before" ]
 	run lock "$MINE" held
+	[ "$status" -eq 0 ]
+}
+
+# --- the heartbeat's parent tether (CLOUD-432) -------------------------------
+#
+# `hold` had no coverage at all until the 2026-08-12 pressure probe, which also
+# showed an orphaned heartbeat renewing a lease forever after its land was
+# SIGKILLed — the trap never fired, the fleet was wedged, and land-lock-check
+# reported a healthy hold. The tether: land passes LAND_LOCK_HOLDER_PID, and a
+# beat whose holder is gone releases and exits instead of renewing for nobody.
+# Every backgrounded process here closes fd 3 (CLOUD-434): a leaked child must
+# never hold this file's TAP stream.
+
+# A stand-in land: a process whose cmdline passes the identity check (its path
+# ends mise-tasks/land) at a pid the test controls. stdout is detached so the
+# command substitution reading the pid returns instead of waiting out the sleep.
+fake_land() {
+	mkdir -p "$BATS_TEST_TMPDIR/mise-tasks"
+	printf '#!/usr/bin/env bash\nsleep 60\n' >"$BATS_TEST_TMPDIR/mise-tasks/land"
+	chmod +x "$BATS_TEST_TMPDIR/mise-tasks/land"
+	"$BATS_TEST_TMPDIR/mise-tasks/land" >/dev/null 2>&1 3>&- &
+	echo $!
+}
+
+@test "a hold whose land died releases within a beat instead of renewing for nobody" {
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	land_pid=$(fake_land)
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	kill -9 "$land_pid"
+	deadline=$((SECONDS + 5))
+	while kill -0 "$hold_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+		sleep 0.2
+	done
+	! kill -0 "$hold_pid" 2>/dev/null
+	grep -q "releasing rather than renewing for nobody" "$BATS_TEST_TMPDIR/hold.out"
+	# Released means instantly claimable: the rival sees an unheld lease, not a
+	# TTL it has to wait out.
+	run lock "$RIVAL" status
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"unheld"* ]]
+}
+
+@test "a live land keeps its heartbeat renewing — the tether never fires on a healthy hold" {
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	land_pid=$(fake_land)
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	sleep 2.5
+	kill -0 "$hold_pid" 2>/dev/null
+	run lock "$RIVAL" status
+	[[ "$output" == *"held by"* ]]
+	kill "$hold_pid" 2>/dev/null || true
+	kill "$land_pid" 2>/dev/null || true
+	run lock "$MINE" release
+	[ "$status" -eq 0 ]
+}
+
+@test "a pid recycled into something that is not a land reads as gone" {
+	# Existence is not identity: this clone measurably wrapped its pid space
+	# inside 20 minutes, so a live pid may be somebody else entirely. The probe
+	# reads /proc/<pid>/cmdline, and anything that is not a mise-tasks/land is
+	# a dead holder — failing toward release, the cheap direction.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	sleep 60 >/dev/null 2>&1 3>&- &
+	imposter=$!
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HOLDER_PID="$imposter" \
+		"$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	deadline=$((SECONDS + 5))
+	while kill -0 "$hold_pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+		sleep 0.2
+	done
+	! kill -0 "$hold_pid" 2>/dev/null
+	run lock "$RIVAL" status
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"unheld"* ]]
+	kill "$imposter" 2>/dev/null || true
+}
+
+@test "an unset holder pid keeps today's behaviour, so no other caller changes" {
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 "$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	sleep 2.5
+	kill -0 "$hold_pid" 2>/dev/null
+	run lock "$RIVAL" status
+	[[ "$output" == *"held by"* ]]
+	kill "$hold_pid" 2>/dev/null || true
+	run lock "$MINE" release
 	[ "$status" -eq 0 ]
 }

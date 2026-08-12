@@ -295,6 +295,25 @@ sha_held_for() {
 mine() { [ -n "$observed_holder" ] && [ "$observed_holder" = "$(holder_id)" ]; }
 age() { echo $((ttl - (observed_expires - $(now)))); }
 
+# CLOUD-432: is the land this heartbeat serves still alive? `land` passes its
+# pid down as LAND_LOCK_HOLDER_PID; unset means "no holder declared", which is
+# every other caller and keeps their behaviour. Existence is not enough — pids
+# recycle, and this clone measurably wrapped its pid space inside 20 minutes —
+# so the pid must still BE a mise-tasks/land process. Any probe that cannot be
+# evaluated reads as gone: a wrongly released lease costs one lap (the `held`
+# fence catches it before the comment), a wrongly renewed one wedges the fleet
+# for as long as nobody notices, so release is the cheap direction.
+holder_alive() {
+	local pid="${LAND_LOCK_HOLDER_PID:-}" cmd
+	[ -n "$pid" ] || return 0
+	kill -0 "$pid" 2>/dev/null || return 1
+	cmd=$(tr '\0' ' ' </proc/"$pid"/cmdline 2>/dev/null) || return 1
+	case "$cmd" in
+	*"/mise-tasks/land "*) return 0 ;;
+	esac
+	return 1
+}
+
 case "$verb" in
 acquire)
 	deadline=$(($(now) + wait_for))
@@ -378,6 +397,19 @@ hold)
 	misses=0
 	while :; do
 		sleep "$beat"
+		# CLOUD-432, before anything else each beat: a heartbeat whose land is
+		# gone must not renew a lease for nobody. SIGKILL, an OOM kill, and the
+		# harness's un-reaped task stop all skip land's trap, and an orphan
+		# that keeps renewing blocks every rival while land-lock-check reports
+		# a healthy hold. Release first, then exit, so the lease frees now
+		# rather than after a TTL nobody is refreshing.
+		if ! holder_alive; then
+			echo "land-lock: the land holding this lease (pid ${LAND_LOCK_HOLDER_PID:-?}) is gone; releasing rather than renewing for nobody"
+			if observe && [ -n "$observed_sha" ] && mine; then
+				swap "$observed_sha" 0 || true
+			fi
+			exit 1
+		fi
 		if ! observe; then
 			misses=$((misses + 1))
 		elif [ -n "$observed_sha" ] && ! mine; then
