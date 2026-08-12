@@ -1176,9 +1176,16 @@ while :; do
 		# fact answering every attempt within 23 seconds.
 		#
 		# `run-name` in the workflow mints `display_title`; `$FF_KEY` is the
-		# same string, built from the comment id the POST returned. Bounded
-		# by `created` server-side so the page size stops being a silent
-		# second window.
+		# same string, built from the comment id the POST returned.
+		#
+		# BOTH FENCES, and the client-side one is the correctness half. The
+		# `created` query parameter bounds the page server-side so page size
+		# stops being a silent second window — but a query parameter is an
+		# optimisation: mistype it, or meet an endpoint that ignores it, and
+		# the fence vanishes with nothing failing. `select(.created_at >=
+		# env.SINCE)` is what actually holds the line, and it is what stops
+		# an earlier lap's own run being re-read as this lap's verdict —
+		# the livelock the stamp exists to prevent.
 		#
 		# The exit status is READ (CLOUD-414). On a 403 `gh` writes the
 		# error body to stdout, the filter fails on it, and the unfiltered
@@ -1199,6 +1206,7 @@ while :; do
 				if (.workflow_runs | type) != "array" then "unreadable"
 				else
 					[ .workflow_runs[]
+					  | select(.created_at >= env.SINCE)
 					  | select(.display_title == env.FF_KEY)
 					  | select(.status == "completed")
 					  | .conclusion // "-" ] | first // empty

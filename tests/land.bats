@@ -652,14 +652,20 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	# The whole reason an unknown re-asks rather than stopping: on an unmoved
 	# `main` the lap is free — the verify receipt still keys to this HEAD, the
 	# head already graded so neither ready fires, and the push moves nothing.
+	# The head is already GRADED, which is the precondition the property rests
+	# on and which the default fixture does not create: an empty check-runs
+	# reading makes `graded_runs` answer 0, and 0 is the branch that fires the
+	# ready. Without this the row would be asserting the free-lap claim against
+	# a fixture that cannot exhibit it.
+	head_checks '{"check_runs":[{"status":"completed","conclusion":"success","name":"ci","started_at":"2026-01-01T00:00:00Z","id":1}]}'
 	runs_query_403
 	pr_state OPEN
 	LAND_ANSWER_MAX_UNKNOWNS=2 run "$LAND"
 	[ "$status" -eq 1 ]
-	# Lap 1 readies, which is the one confirming run a landing is supposed to
-	# buy. The property is that the RE-ASK adds nothing: one ready across both
-	# passes, and one verify, because the head never changed.
-	[ "$(grep -c '^ready$' "$BATS_TEST_TMPDIR/calls")" -le 1 ]
+	# Nothing is bought across either pass: the head already carries a graded
+	# run so neither the ready nor the `--undo` re-fire can fire, and one verify
+	# because the receipt still keys to this unchanged HEAD.
+	[ "$(grep -c '^ready$' "$BATS_TEST_TMPDIR/calls")" -eq 0 ]
 	[ "$(grep -c '^run verify$' "$BATS_TEST_TMPDIR/misecalls")" -eq 1 ]
 }
 
