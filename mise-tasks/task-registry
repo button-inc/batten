@@ -46,9 +46,9 @@ set -euo pipefail
 
 verb="${1:-}"
 case "$verb" in
-register | phase | unregister) ;;
+register | phase | tick | sig | read | unregister) ;;
 *)
-	echo "::error:: usage: task-registry <register <task> <pid> [phase]|phase <pid> <phase>|unregister <pid>>" >&2
+	echo "::error:: usage: task-registry <register <task> <pid> [phase]|phase <pid> <phase>|tick <pid> <token>|sig <pid> <token>|read <pid> <field>|unregister <pid>>" >&2
 	exit 2
 	;;
 esac
@@ -73,20 +73,62 @@ mkdir -p "$state_dir" 2>/dev/null || exit 0
 
 entry() { printf '%s/%s\n' "$state_dir" "$1"; }
 
-# The whole entry is rewritten on every update. It is four short lines, and a
-# rewrite via a temp file plus `mv` is atomic, so a reader never sees a half
-# written record — which a line-edit in place could not promise.
-write_entry() { # <pid> <task> <pgid> <phase> <started_at>
-	local file tmp
-	file=$(entry "$1")
-	tmp="$file.$$"
-	printf 'task: %s\npid: %s\npgid: %s\nphase: %s\nstarted_at: %s\n' \
-		"$2" "$1" "$3" "$4" "$5" >"$tmp" 2>/dev/null || return 0
-	mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
-}
+# CLOUD-499 doubled the record's job: it must answer "is it MOVING", not only
+# "what is it doing", and there are TWO independent ways to move — see the verbs
+# below. That put the field list past what positional parameters carry legibly,
+# so the entry is loaded into globals, edited, and written back whole. Each
+# writer touches one pair and preserves the rest, which is what stops a `tick`
+# from silently erasing a `phase`.
+e_task=''
+e_pgid=''
+e_phase=''
+e_started_at=''
+e_phase_since=''
+e_tick=''
+e_tick_at=''
+e_sig=''
+e_sig_at=''
 
 field() { # <file> <name>
 	sed -n "s/^$2: //p" "$1" 2>/dev/null | head -n 1
+}
+
+load_entry() { # <file>
+	e_task=$(field "$1" task)
+	e_pgid=$(field "$1" pgid)
+	e_phase=$(field "$1" phase)
+	e_started_at=$(field "$1" started_at)
+	e_phase_since=$(field "$1" phase_since)
+	e_tick=$(field "$1" tick)
+	e_tick_at=$(field "$1" tick_at)
+	e_sig=$(field "$1" sig)
+	e_sig_at=$(field "$1" sig_at)
+}
+
+# The whole entry is rewritten on every update. It is a few short lines, and a
+# rewrite via a temp file plus `mv` is atomic, so a reader never sees a half
+# written record — which a line-edit in place could not promise.
+write_entry() { # <pid>
+	local file tmp
+	file=$(entry "$1")
+	tmp="$file.$$"
+	printf 'task: %s\npid: %s\npgid: %s\nphase: %s\nstarted_at: %s\nphase_since: %s\ntick: %s\ntick_at: %s\nsig: %s\nsig_at: %s\n' \
+		"$e_task" "$1" "$e_pgid" "$e_phase" "$e_started_at" "$e_phase_since" \
+		"$e_tick" "$e_tick_at" "$e_sig" "$e_sig_at" >"$tmp" 2>/dev/null || return 0
+	mv -f "$tmp" "$file" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
+}
+
+# A stamp moves only when its value CHANGES. That one rule is the whole
+# mechanism: a writer re-announcing what it already said — a lap repeating a
+# step, a poll that learned nothing — must not thereby report progress it did
+# not make, because the stall bail's entire job is to disbelieve exactly that.
+# Prints the timestamp to use; `$3` is the stamp currently recorded.
+stamp_for() { # <new> <old> <old_stamp>
+	if [ "$1" = "$2" ] && [ -n "$3" ]; then
+		printf '%s\n' "$3"
+	else
+		now
+	fi
 }
 
 case "$verb" in
@@ -104,9 +146,20 @@ register)
 	# task that was not started under job control.
 	pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || pgid=
 	[ -n "$pgid" ] || pgid="$pid"
-	write_entry "$pid" "$task" "$pgid" "${4:-starting}" "$(now)"
+	e_task="$task"
+	e_pgid="$pgid"
+	e_phase="${4:-starting}"
+	e_started_at=$(now)
+	e_phase_since="$e_started_at"
+	e_tick=''
+	e_tick_at=''
+	e_sig=''
+	e_sig_at=''
+	write_entry "$pid"
 	;;
 phase)
+	# THE SLOW SIGNAL: what the task is doing, and since when. `land` pushes one
+	# per lap step; nested gates refine it through `BATTEN_TASK_PID`.
 	pid="${2:-}"
 	new="${3:-}"
 	[ -n "$pid" ] && [ -n "$new" ] || {
@@ -118,8 +171,61 @@ phase)
 	# fabricated entry: the registry records what registered, and inventing a
 	# record here would let a half-wired task look fully wired.
 	[ -f "$file" ] || exit 0
-	write_entry "$pid" "$(field "$file" task)" "$(field "$file" pgid)" \
-		"$new" "$(field "$file" started_at)"
+	load_entry "$file"
+	e_phase_since=$(stamp_for "$new" "$e_phase" "$e_phase_since")
+	e_phase="$new"
+	write_entry "$pid"
+	;;
+tick | sig)
+	# THE TWO SIGNALS A LOOP PUSHES, and they answer different questions
+	# (CLOUD-499). Both exist because one cannot cover both failures:
+	#
+	#   tick — the loop went ROUND. `ci-wait` pushes one per poll, counter and
+	#          all, so it moves on every iteration including the ones that learn
+	#          nothing. Frozen ⇒ the loop is blocked, not waiting.
+	#   sig  — the WORLD moved. `ci-wait` pushes the check-run reading, so it
+	#          moves only when a check does. Frozen while the tick keeps moving
+	#          ⇒ a poll that will never resolve, which is the livelock a hang
+	#          detector cannot see.
+	#
+	# Neither replaces `phase`: a task with no loop at all still advances its
+	# phase, which is why the heartbeat reads the LATEST of the stamps rather
+	# than any one of them.
+	pid="${2:-}"
+	token="${3:-}"
+	[ -n "$pid" ] && [ -n "$token" ] || {
+		echo "::error:: task-registry $verb: need <pid> <token>" >&2
+		exit 2
+	}
+	file=$(entry "$pid")
+	[ -f "$file" ] || exit 0
+	load_entry "$file"
+	if [ "$verb" = tick ]; then
+		e_tick_at=$(stamp_for "$token" "$e_tick" "$e_tick_at")
+		e_tick="$token"
+	else
+		e_sig_at=$(stamp_for "$token" "$e_sig" "$e_sig_at")
+		e_sig="$token"
+	fi
+	write_entry "$pid"
+	;;
+read)
+	# The single-field reader, so a prober composes rather than becoming a second
+	# parser of this layout (house-style §2). `land-lock`'s heartbeat is the
+	# caller; `alive` predates it and reads the directory as a whole.
+	#
+	# Exit 1 is "no such entry", which is a READING and not an error: a task that
+	# never registered is invisible, exactly as `alive` reports it. Exit 2 stays
+	# reserved for "could not look", which is the missing-argument case only.
+	pid="${2:-}"
+	name="${3:-}"
+	[ -n "$pid" ] && [ -n "$name" ] || {
+		echo "::error:: task-registry read: need <pid> <field>" >&2
+		exit 2
+	}
+	file=$(entry "$pid")
+	[ -f "$file" ] || exit 1
+	field "$file" "$name"
 	;;
 unregister)
 	pid="${2:-}"

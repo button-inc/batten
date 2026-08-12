@@ -788,6 +788,257 @@ wait_for_beat() { # <lease sha as it stood before the beat>
 	[ "$status" -eq 0 ]
 }
 
+# --- the stall bail: liveness is not progress (CLOUD-499) --------------------
+#
+# The tether above answers "is the land still there". These answer "is it still
+# LANDING", which liveness cannot see: a `land` blocked forever renews its lease
+# every beat, so `acquire` never reaches a steal condition and `status` reports a
+# healthy hold. Two bounds, because two failures wear the same face — a loop that
+# stopped turning (the tick freezes) and one that turns forever over a reading
+# that will never resolve (the sig and phase freeze while the tick keeps moving).
+#
+# Bounds are set in BEATS here and kept tiny, so a case costs seconds. Every row
+# below establishes its precondition through `wait_for_beat` rather than a sleep,
+# for the reason CLOUD-450 records: a `sleep` standing in for "a beat happened"
+# makes the healthy-hold rows pass vacuously on a loaded box, which is exactly
+# where a wrongly-firing bail would hide.
+
+# The registry the heartbeat reads, resolved beside the lock UNDER TEST so a
+# mutant copy and its reader stay one program (see `LAND_LOCK_UNDER_TEST`).
+registry() { # <verb> <args…>
+	(cd "$MINE" && "$(dirname "$LOCK")/task-registry" "$@")
+}
+
+# A stand-in land with a registry entry, which together are what a heartbeat
+# needs to have any opinion at all: a pid whose cmdline passes the identity check
+# and an entry whose stamps it can read. Echoes the pid.
+fake_land_registered() { # <phase>
+	local pid
+	pid=$(fake_land)
+	registry register land "$pid" "$1" >/dev/null 2>&1
+	echo "$pid"
+}
+
+# Waits for a hold to exit, bounded by an attempt count rather than a clock, and
+# reports whether it did. Callers assert on the answer, so a hold that never
+# exits fails the row it was supposed to fail rather than hanging the suite.
+hold_exited() { # <hold pid>
+	local attempt=0
+	while [ "$attempt" -lt 100 ]; do
+		kill -0 "$1" 2>/dev/null || return 0
+		attempt=$((attempt + 1))
+		sleep 0.2
+	done
+	return 1
+}
+
+@test "THE ACCEPTANCE CASE: a land that stops advancing loses its lease and is stopped" {
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	# Registered and then never touched again: the phase is frozen, no loop is
+	# ticking, and the land is perfectly alive — the state the tether above
+	# cannot distinguish from a healthy landing.
+	land_pid=$(fake_land_registered "ci-wait(lap 1)")
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_STALL_BEATS=2 \
+		LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the stall bail (CLOUD-450)"
+	hold_exited "$hold_pid"
+	grep -q "has not advanced in 2 beats" "$BATS_TEST_TMPDIR/hold.out"
+	# THE FLEET IS FREED, which is the half that always lands.
+	run lock "$RIVAL" status
+	[[ "$output" == *"released"* ]]
+	run lock "$RIVAL" acquire
+	[ "$status" -eq 0 ]
+	# AND THE LANDING IS STOPPED, which is the half that stops it spending more.
+	# Asserted separately so a failure names which of the two broke.
+	attempt=0
+	while kill -0 "$land_pid" 2>/dev/null && [ "$attempt" -lt 50 ]; do
+		attempt=$((attempt + 1))
+		sleep 0.2
+	done
+	! kill -0 "$land_pid" 2>/dev/null
+	# WHY, where the agent will look. A landing stopped without a stated reason
+	# reaches its agent as "verify and CI disagree" (CLOUD-470), and this
+	# mechanism would then have created the failure another one exists to remove.
+	[ -s "$MINE/.git/batten-land-lock/bail-reason" ]
+	kill "$land_pid" 2>/dev/null || true
+}
+
+@test "a land whose phase keeps changing is never bailed on" {
+	# The false-positive case, and the one that would break the fleet in the
+	# other direction: a bail that fires on healthy landings is worse than the
+	# wedge it replaces, because every landing hits it.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	land_pid=$(fake_land_registered "verify(lap 1)")
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_STALL_BEATS=2 \
+		LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the stall bail (CLOUD-450)"
+	# Advance the phase across more than the bound's worth of beats. Each write
+	# is a real transition, which is what a landing making progress produces.
+	for step in 1 2 3 4 5 6; do
+		registry phase "$land_pid" "verify(lap 1) step:$step" >/dev/null 2>&1
+		sleep 0.5
+	done
+	kill -0 "$hold_pid" 2>/dev/null
+	kill -0 "$land_pid" 2>/dev/null
+	run lock "$RIVAL" status
+	[[ "$output" == *"held by"* ]]
+	[[ "$output" != *"released"* ]]
+	kill "$hold_pid" "$land_pid" 2>/dev/null || true
+}
+
+@test "RE-STATING A PHASE IS NOT ADVANCING IT, or a wedged land renews forever" {
+	# The registry stamp moves only when the value does. Without that rule a
+	# caller that re-announces where it already is — a lap repeating a step, a
+	# nested gate naming the step it is on — would reset the stall clock every
+	# time, and the bail could never fire on the loop it was built for.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	land_pid=$(fake_land_registered "ci-wait(lap 1)")
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_STALL_BEATS=2 \
+		LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the stamp rule (CLOUD-450)"
+	for _ in 1 2 3 4 5 6; do
+		registry phase "$land_pid" "ci-wait(lap 1)" >/dev/null 2>&1
+		sleep 0.3
+	done
+	hold_exited "$hold_pid"
+	grep -q "has not advanced" "$BATS_TEST_TMPDIR/hold.out"
+	kill "$land_pid" 2>/dev/null || true
+}
+
+@test "a loop that stops turning is caught by the shorter hang bound" {
+	# The other failure: `ci-wait` polls every ~1.5s, so a poll loop that has
+	# produced nothing for three beats is blocked rather than waiting. The stall
+	# bound is set far away, so only the hang bound can end this row.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	land_pid=$(fake_land_registered "ci-wait(lap 1)")
+	# The tick must be STRICTLY later than the phase for a loop to count as
+	# ticking — see `holder_progress`. A second of separation is what a real poll
+	# produces within its first iteration.
+	sleep 1
+	registry tick "$land_pid" 1 >/dev/null 2>&1
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HANG_BEATS=2 LAND_LOCK_STALL_BEATS=9999 \
+		LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the hang bound (CLOUD-450)"
+	hold_exited "$hold_pid"
+	grep -q "stopped turning 2 beats ago" "$BATS_TEST_TMPDIR/hold.out"
+	kill "$land_pid" 2>/dev/null || true
+}
+
+@test "THE HANG BOUND DOES NOT REACH A PHASE WITH NO LOOP, or verify is killed for running" {
+	# `verify`'s single steps legitimately run for minutes without a tick, so the
+	# 90s hang bound may only apply while a loop is actually ticking. The tick
+	# here is OLDER than the phase — a leftover from the previous lap's CI wait —
+	# which is precisely the state a long `verify` is in, and the hang bound must
+	# not fire on it.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	land_pid=$(fake_land_registered "ci-wait(lap 1)")
+	registry tick "$land_pid" 1 >/dev/null 2>&1
+	sleep 1
+	registry phase "$land_pid" "verify(lap 2)" >/dev/null 2>&1
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_HANG_BEATS=1 LAND_LOCK_STALL_BEATS=9999 \
+		LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the hang bound (CLOUD-450)"
+	sleep 2
+	kill -0 "$hold_pid" 2>/dev/null
+	kill -0 "$land_pid" 2>/dev/null
+	[ ! -s "$BATS_TEST_TMPDIR/hold.out" ]
+	kill "$hold_pid" "$land_pid" 2>/dev/null || true
+}
+
+@test "no registry entry is no verdict — an unregistered land is not a stalled one" {
+	# Registry writes are best-effort by design, so a land whose bookkeeping never
+	# landed must not be killed for it. No entry, no evidence, no stall — and the
+	# lease it publishes carries an empty progress token, which no rival may steal
+	# on either.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	land_pid=$(fake_land)
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_STALL_BEATS=1 \
+		LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the no-entry path (CLOUD-450)"
+	sleep 2
+	kill -0 "$hold_pid" 2>/dev/null
+	kill -0 "$land_pid" 2>/dev/null
+	run git -C "$MINE" cat-file commit "$(lease_sha)"
+	[[ "$output" == *"progress: "$'\n'* ]]
+	kill "$hold_pid" "$land_pid" 2>/dev/null || true
+}
+
+@test "A RIVAL MAY REAP A LEASE THAT BEATS WITHOUT PROGRESSING" {
+	# The backstop for every wedge nobody has filed yet, and the half that works
+	# when the holder's own bail cannot — its bounds are set out of reach here, so
+	# only the rival can end this row.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	land_pid=$(fake_land_registered "ci-wait(lap 1)")
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_STALL_BEATS=9999 LAND_LOCK_HANG_BEATS=9999 \
+		LAND_LOCK_HOLDER_PID="$land_pid" \
+		"$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the steal path (CLOUD-450)"
+	# The lease is LIVE throughout — the rival is not waiting for it to lapse,
+	# which is what makes this a different steal from every other one here.
+	run lock "$RIVAL" status
+	[[ "$output" == *"held by"* ]]
+	run env LAND_LOCK_STALL_BEATS=2 LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=20 \
+		bash -c "cd '$RIVAL' && '$LOCK' acquire"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"still beating but had not progressed"* ]]
+	kill "$hold_pid" "$land_pid" 2>/dev/null || true
+}
+
+@test "a lease that carries no progress token is never stall-stealable" {
+	# Every lease minted before this change, and every holder that cannot see its
+	# own progress. The rival half fails CLOSED — no token, no steal — because a
+	# lease taken on absent evidence is the two-holders bug this file exists to
+	# prevent, where a lease RELEASED wrongly costs its holder one lap.
+	run lock "$MINE" acquire
+	[ "$status" -eq 0 ]
+	before=$(lease_sha)
+	# No holder pid, so the heartbeat publishes an empty token — the same body a
+	# pre-CLOUD-499 lease carries.
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 "$LOCK" hold >/dev/null 2>&1) >/dev/null 2>&1 3>&- &
+	hold_pid=$!
+	wait_for_beat "$before" ||
+		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the steal path (CLOUD-450)"
+	run env LAND_LOCK_STALL_BEATS=1 LAND_LOCK_HEARTBEAT=1 LAND_LOCK_WAIT=3 \
+		bash -c "cd '$RIVAL' && '$LOCK' acquire"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"still held by"* ]]
+	kill "$hold_pid" 2>/dev/null || true
+}
+
 # --- `authorises`: the verb a runner asks (CLOUD-420) ------------------------
 #
 # Every other verb answers about THIS clone, via a holder id no GitHub job can

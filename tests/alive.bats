@@ -83,6 +83,32 @@ dead_pid() {
 	[[ "$output" != *crashed* ]]
 }
 
+@test "a line says how long the task has been in its phase, not only how long it has run" {
+	# CLOUD-499. The total age cannot separate a land working from a land stuck —
+	# both grow at one second per second. The phase age is the number that can,
+	# and it is what makes a stall readable here rather than in a log.
+	pid=$(start_task faketask 30)
+	"$REG" register faketask "$pid" "ci-wait(lap 1)"
+	run "$ALIVE"
+	kill "$pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"in-phase "*"s"* ]]
+}
+
+@test "an entry written before the phase stamp existed still renders" {
+	# The rollout row: a registry entry from a running task that predates this
+	# field must not become an unrenderable record halfway through a landing.
+	pid=$(start_task faketask 30)
+	"$REG" register faketask "$pid" "ci-wait(lap 1)"
+	grep -v '^phase_since: ' "$ENTRIES/$pid" >"$ENTRIES/$pid.tmp"
+	mv "$ENTRIES/$pid.tmp" "$ENTRIES/$pid"
+	run "$ALIVE"
+	kill "$pid" 2>/dev/null || true
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"faketask ci-wait(lap 1) $pid "* ]]
+	[[ "$output" != *"in-phase"* ]]
+}
+
 @test "N running tasks report one line each" {
 	a=$(start_task faketask 30)
 	b=$(start_task othertask 30)
@@ -199,10 +225,12 @@ dead_pid() {
 	kill "$pid" 2>/dev/null || true
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"distinctive line"* ]]
-	# Structural: every line is exactly `<task> <phase> <pid> <age>s`. A shape
-	# this tight cannot carry a log line whatever the log happens to contain.
+	# Structural: every line is exactly `<task> <phase> <pid> <age>s`, with the
+	# optional `in-phase <n>s` suffix CLOUD-499 added. A shape this tight cannot
+	# carry a log line whatever the log happens to contain — the suffix is two
+	# fixed tokens and a count, so widening the grammar by it admits no prose.
 	while IFS= read -r line; do
-		[[ "$line" =~ ^[^[:space:]]+\ [^[:space:]]+\ [0-9]+\ [0-9?]+s$ ]]
+		[[ "$line" =~ ^[^[:space:]]+\ [^[:space:]]+\ [0-9]+\ [0-9?]+s(\ in-phase\ [0-9]+s)?$ ]]
 	done <<<"$output"
 }
 

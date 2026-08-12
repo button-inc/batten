@@ -28,6 +28,18 @@ a clock. A hang is fixed by an exit condition that can fire; a wall-clock cap
 reintroduces the VM-reap gap it was meant to close and lands as a false
 "refused" on a slow bot.
 
+**`LAND_LOCK_STALL_BEATS`/`LAND_LOCK_HANG_BEATS` are not the exception, and the
+difference is worth reading before "repairing" them out** (CLOUD-499). They are
+counts of beats **since the last advance**, and the count RESETS on every
+advance — a phase transition, a check-run turning, a poll going round. So they
+bound nothing about how long a legitimate landing may take: one that keeps
+producing state changes never reaches either, however slow it is. What they bound
+is how long we keep believing a holder that has stopped producing evidence, which
+is what the rolling TTL above already does one signal shallower. The TTL notices a
+holder that stopped **beating**; these notice one that stopped **landing** — the
+case liveness cannot see, where the lease renews forever and `status` reports a
+healthy hold. A deadline on the whole wait would still be the banned thing.
+
 ## The lease
 
 `land-lock` is a compare-and-swap on `refs/heads/batten-land-lock` — one

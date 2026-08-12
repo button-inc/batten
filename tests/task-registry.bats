@@ -117,6 +117,92 @@ field() { # <pid> <name>
 	[[ "$output" == *"not a git repository"* ]]
 }
 
+# --- the stamps the stall bail rests on (CLOUD-499) --------------------------
+#
+# The record gained one rule and two fields: A STAMP MOVES ONLY WHEN ITS VALUE
+# DOES. That is not hygiene. `land-lock hold` reads these stamps to decide
+# whether the landing they describe is still going anywhere, so a writer that
+# restamped on every write would report progress every beat and the bail could
+# never fire — shipping a mechanism that looks correct and detects nothing,
+# which is the "reads as coverage" defect CLOUD-418 names.
+
+@test "register stamps the phase, and leaves the loop stamps empty" {
+	run "$REG" register land 4242 starting
+	[ "$status" -eq 0 ]
+	[[ "$(field 4242 phase_since)" =~ ^[0-9]+$ ]]
+	# Empty rather than zero: a task that has never ticked has no tick, and an
+	# invented epoch would read as "stopped ticking in 1970" to any bound.
+	[ -z "$(field 4242 tick)" ]
+	[ -z "$(field 4242 tick_at)" ]
+}
+
+@test "THE RULE: re-stating the same phase does not move its stamp" {
+	"$REG" register land 4242 "ci-wait(lap 1)"
+	before="$(field 4242 phase_since)"
+	sleep 1
+	run "$REG" phase 4242 "ci-wait(lap 1)"
+	[ "$status" -eq 0 ]
+	[ "$(field 4242 phase_since)" = "$before" ]
+}
+
+@test "a phase that actually changes moves the stamp" {
+	# The discriminating pair to the row above: without it, a writer that never
+	# stamped anything at all would satisfy the rule and record nothing.
+	"$REG" register land 4242 "ci-wait(lap 1)"
+	before="$(field 4242 phase_since)"
+	sleep 1
+	"$REG" phase 4242 "verify(lap 2)"
+	[ "$(field 4242 phase_since)" != "$before" ]
+}
+
+@test "tick and sig are independent, and neither erases the other or the phase" {
+	# They answer different questions — the loop went round, versus the world
+	# moved — and the entry is rewritten whole on every update, so a writer that
+	# dropped a field it does not own would silently reset somebody else's clock.
+	"$REG" register land 4242 "ci-wait(lap 1)"
+	phase_before="$(field 4242 phase_since)"
+	"$REG" tick 4242 7
+	"$REG" sig 4242 abc123
+	[ "$(field 4242 tick)" = 7 ]
+	[ "$(field 4242 sig)" = abc123 ]
+	[ "$(field 4242 phase)" = "ci-wait(lap 1)" ]
+	[ "$(field 4242 phase_since)" = "$phase_before" ]
+	sleep 1
+	# A rising tick over an unchanged sig IS the livelock signature — the loop
+	# turning while the world stands still — so the two stamps must part here.
+	sig_at_before="$(field 4242 sig_at)"
+	"$REG" tick 4242 8
+	"$REG" sig 4242 abc123
+	[ "$(field 4242 sig_at)" = "$sig_at_before" ]
+	[ "$(field 4242 tick_at)" != "$sig_at_before" ]
+}
+
+@test "read prints one field, and says nothing about a pid that never registered" {
+	"$REG" register land 4242 "ci-wait(lap 1)"
+	run "$REG" read 4242 phase
+	[ "$status" -eq 0 ]
+	[ "$output" = "ci-wait(lap 1)" ]
+	# Exit 1 is a READING — "no such entry" — never an error. The heartbeat
+	# treats it as "no verdict" and leaves the landing alone, which is why it
+	# must not be conflated with exit 2, "could not look".
+	run "$REG" read 9999 phase
+	[ "$status" -eq 1 ]
+	[ -z "$output" ]
+}
+
+@test "a tick for a pid that never registered fabricates nothing" {
+	run "$REG" tick 9999 1
+	[ "$status" -eq 0 ]
+	[ ! -e "$ENTRIES/9999" ]
+}
+
+@test "tick and read without their argument are exit 2" {
+	run "$REG" tick 4242
+	[ "$status" -eq 2 ]
+	run "$REG" read 4242
+	[ "$status" -eq 2 ]
+}
+
 @test "this task never sends a signal" {
 	# CLOUD-425's safety property, held structurally rather than by check.
 	# SIGUSR1's default disposition is Term: a registry that signalled would

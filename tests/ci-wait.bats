@@ -187,6 +187,35 @@ green_body() {
 	[ "$(cat "$BATS_TEST_TMPDIR/calls")" -ge 2 ]
 }
 
+@test "every poll pushes a tick, so a blocked loop is distinguishable from a waiting one" {
+	# CLOUD-499. This loop is the only thing in a landing that iterates faster
+	# than the lease heartbeat, and it used to push nothing at all — `land` sets
+	# the phase `ci-wait(lap N)` once and it stays frozen for the whole matrix,
+	# so a heartbeat reading only the phase could not tell a healthy wait from a
+	# wedged `gh`. The tick is what makes "the loop went round" observable.
+	#
+	# Run inside a scratch repository: the registry is keyed to the git dir, and
+	# a suite writing entries for fake pids into the real one would leave
+	# headstones in the clone under test.
+	repo="$BATS_TEST_TMPDIR/repo"
+	git init -q "$repo"
+	stub_gh
+	response resp.1 'W/"a"' '{"check_runs":[{"status":"in_progress","conclusion":null,"name":"ci"}]}'
+	response resp.last 'W/"b"' "$(green_body)"
+	reg="$BATS_TEST_DIRNAME/../mise-tasks/task-registry"
+	(cd "$repo" && "$reg" register land 4242 "ci-wait(lap 1)")
+	run bash -c "cd '$repo' && BATTEN_TASK_PID=4242 '$WAIT'"
+	[ "$status" -eq 0 ]
+	entry="$repo/.git/batten-tasks/4242"
+	# One tick per poll, counted rather than sampled: the tick IS the poll
+	# counter, so the two must agree exactly or a poll went unrecorded.
+	[ "$(sed -n 's/^tick: //p' "$entry")" = "$(cat "$BATS_TEST_TMPDIR/calls")" ]
+	# And the world-moved signal is recorded too, which is the other half: a
+	# tick that rose while this stayed put is the livelock a hang detector
+	# cannot see.
+	[ -n "$(sed -n 's/^sig: //p' "$entry")" ]
+}
+
 @test "a required check that failed is red, and named" {
 	stub_gh
 	response resp.last 'W/"a"' '{"check_runs":[

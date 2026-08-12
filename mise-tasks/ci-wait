@@ -45,9 +45,32 @@ announced=""
 # shared with `auto-release-land.yml`, which used to carry a weaker copy.
 verdict_of="$(dirname "$0")/checks-green"
 
+# THE TWO PROGRESS SIGNALS (CLOUD-499), by path for the same reason
+# `checks-green` is: a mise process per poll would cost more than the poll.
+#
+# This loop is the one place in a landing that iterates faster than the lease
+# heartbeat, and until now it pushed nothing at all — `land` sets the phase
+# `ci-wait(lap N)` once and it stays frozen for the whole matrix, so a heartbeat
+# reading only the phase cannot tell a healthy wait from a wedged one. Two
+# pushes, because the two failures are different: the TICK moves every poll and
+# freezes when the loop stops turning, the SIG moves only when the check-runs do
+# and freezes when the loop turns forever over a reading that will never
+# resolve.
+#
+# Best-effort like every other registry write, and silent when
+# `BATTEN_TASK_PID` is unset, which is every caller but `land`.
+registry="$(dirname "$0")/task-registry"
+polls=0
+push_progress() { # <signature>
+	[ -n "${BATTEN_TASK_PID:-}" ] || return 0
+	"$registry" tick "$BATTEN_TASK_PID" "$polls" >/dev/null 2>&1 || true
+	"$registry" sig "$BATTEN_TASK_PID" "$1" >/dev/null 2>&1 || true
+}
+
 echo "ci-wait: polling check-runs for $sha (conditional, ${interval}s)"
 
 while :; do
+	polls=$((polls + 1))
 	# `?per_page=100`, because the default page is 30 and this endpoint returns a
 	# check-run PER EVENT per name, not one per name (CLOUD-436). A nine-name
 	# roster that has been readied, re-drafted and re-readied a few times, plus
@@ -78,7 +101,16 @@ while :; do
 		body=$(printf '%s' "$resp" | awk 'body {print} /^$/ {body=1}')
 		runs=$(printf '%s' "$body" |
 			jq -r '.check_runs[]? | "\(.status)\t\(.conclusion // "-")\t\(.name)\t\(.started_at // "")\t\(.id // 0)"' 2>/dev/null) || runs=""
+		# Recomputed only where the reading can have changed. A 304 is the server
+		# saying nothing moved, so re-hashing an unchanged string per poll would
+		# be a fork spent to learn what the status line already said.
+		runs_sig=$(printf '%s' "$runs" | cksum | tr -d ' ')
 	fi
+	# EVERY poll pushes, including the 304s: proving the loop turned is the tick's
+	# whole job, and a poll that learned nothing still turned. The signature is
+	# pushed on the same call and stamps itself only when it changes, so the pair
+	# distinguishes "not turning" from "turning but going nowhere".
+	push_progress "${runs_sig:-0}"
 
 	# The reading this poll already holds, handed over rather than re-fetched:
 	# `checks-green` makes no call of its own when $CHECKS_GREEN_RUNS is set, so

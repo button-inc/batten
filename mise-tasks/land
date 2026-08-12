@@ -676,6 +676,16 @@ on_exit() {
 	# that can fail on cleanup is worse than the leak it closes.
 	close_the_tap || true
 	drop_lease
+	# WHY THIS STOPPED, when what stopped it was not this process (CLOUD-499).
+	# The lease heartbeat kills a landing that has stopped progressing, and a
+	# stop with no stated reason reaches the agent as "verify and CI disagree" —
+	# CLOUD-470's failure, reintroduced by the fix for a different one. Read and
+	# removed here so it can never be reported twice or outlive its landing.
+	bail_reason="$(git rev-parse --git-dir 2>/dev/null)/batten-land-lock/bail-reason"
+	if [ -s "$bail_reason" ]; then
+		echo "land: $(cat "$bail_reason")" >&2
+		rm -f "$bail_reason" 2>/dev/null || true
+	fi
 	if [ "$singleton_held" = yes ]; then
 		mise run singleton release land >/dev/null 2>&1 || true
 	fi

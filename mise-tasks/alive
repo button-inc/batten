@@ -104,6 +104,7 @@ for file in "$state_dir"/*; do
 	pid=$(field "$file" pid)
 	phase=$(field "$file" phase)
 	started=$(field "$file" started_at)
+	phase_since=$(field "$file" phase_since)
 	# A malformed entry is skipped rather than rendered as a line of blanks: a
 	# half-written record is not a task, and inventing one would be a claim.
 	[ -n "$task" ] && [ -n "$pid" ] || continue
@@ -111,11 +112,20 @@ for file in "$state_dir"/*; do
 
 	age="?"
 	[ -n "$started" ] && age=$(($(now) - started))
+	# HOW LONG IT HAS BEEN WHERE IT IS (CLOUD-499), which is the number that
+	# separates a task working from a task stuck — the total age says only how
+	# long it has been running, and a wedged land looks identical to a busy one
+	# under it. Appended rather than substituted, and omitted entirely on an
+	# entry written before this field existed, so the line stays byte-stable for
+	# every reader that predates it. Still pointer-only: two counts and a phase
+	# word, never a line of any log.
+	in_phase=""
+	[ -n "$phase_since" ] && in_phase=" in-phase $(($(now) - phase_since))s"
 
 	if task_alive "$pid" "$task"; then
-		printf '%s %s %s %ss\n' "$task" "${phase:-unknown}" "$pid" "$age"
+		printf '%s %s %s %ss%s\n' "$task" "${phase:-unknown}" "$pid" "$age" "$in_phase"
 	else
-		printf '%s crashed(%s) %s %ss\n' "$task" "${phase:-unknown}" "$pid" "$age"
+		printf '%s crashed(%s) %s %ss%s\n' "$task" "${phase:-unknown}" "$pid" "$age" "$in_phase"
 		rm -f "$file" 2>/dev/null || true
 	fi
 done
