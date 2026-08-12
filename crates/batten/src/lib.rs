@@ -856,7 +856,21 @@ fn run_hook(
     } else {
         load_policy(overrides)?
     };
-    decide(harness, &envelope, &policy, bypass, out)
+    // The receipt facts, resolved HERE because `adjudicate` is contractually
+    // pure — no I/O, no environment, no clock — and a receipt predicate reads a
+    // file and two git refs. Same split the bypass hatch already uses: the
+    // boundary looks, the core decides.
+    //
+    // Resolved only for the names the policy actually requires, so a repository
+    // declaring no receipt row does no git work at all on the hottest path in
+    // the binary. `None` throughout means "could not look", which allows.
+    let required = policy.required_checks();
+    let receipts: hook::ReceiptFacts = if required.is_empty() {
+        None
+    } else {
+        receipt::verdicts(&required)
+    };
+    decide(harness, &envelope, &policy, bypass, &receipts, out)
 }
 
 /// Resolve the mediated-call policy for this run.
@@ -910,9 +924,10 @@ fn decide(
     envelope: &hook::Envelope,
     policy: &hook::Policy,
     bypass: bool,
+    receipts: &hook::ReceiptFacts,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match hook::adjudicate(policy, envelope, bypass) {
+    match hook::adjudicate(policy, envelope, bypass, receipts) {
         hook::Decision::Allow => Ok(ExitCode::Success),
         // One dispatch for every host, because the *shape* of the answer is the
         // adapter's business and the decision is not. A host that reads a body

@@ -155,6 +155,38 @@ reason = """
 Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. Background \
 it rather than holding a foreground poll open."""
 
+# `ready-guard`, as config (CLOUD-312, over CLOUD-203's receipt store).
+#
+# A `receipt` row is not a ban. It refuses a call whose PRECONDITION has not
+# been proved, and the same call is allowed the moment the receipt exists —
+# which is why it is a distinct kind rather than a shape row with a condition.
+#
+# Readying is the single event that starts CI, so it is the one precondition
+# whose cost is paid in CI minutes when it is skipped. Both receipts are named
+# in one row because the predicate is genuinely a conjunction: the branch must
+# have verified AND still be linear on the trunk. Two rows would let one be
+# deleted while the gate still looked whole.
+#
+# `key = "head"` is the default and is stated anyway, because it is the whole
+# expiry contract: the receipt attests to THESE BYTES, so an amend, a rebase, or
+# a moved `origin/main` must invalidate it rather than silently keep counting.
+# The engine renders a distinct cause per verdict — missing, stale-head,
+# stale-main — so the three refusals `ready-guard` wrote by hand survive the
+# move without this file restating them.
+[[rule]]
+id = "ready-needs-receipts"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["verify", "linear-check"]
+key = "head"
+reason = """
+Run `mise run verify` (background it), then `mise run linear-check`, then \
+retry — or just `mise run land`, which drives the whole loop. A red run on a \
+freshly-readied PR means that step was skipped, and the CI minutes are already \
+spent by then."""
+
 # A conflict marker reaching a source file means a botched merge landed. The
 # shape is unambiguous and no compiler catches it in every file type, which is
 # exactly the banned-shape case `forbid` exists for.

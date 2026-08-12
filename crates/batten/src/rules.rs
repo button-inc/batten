@@ -109,6 +109,20 @@ pub enum RuleKind {
     /// The price is that the finding names counts rather than locations, and
     /// `git diff` answers *where*.
     Ratchet,
+    /// A mediated call that requires a **verification receipt** to be valid
+    /// before it is allowed (CLOUD-312, over CLOUD-203's receipt store).
+    ///
+    /// Distinct from [`RuleKind::Shape`], which refuses a command outright:
+    /// this one refuses a command *whose precondition has not been proved*, and
+    /// the same command is allowed the moment the receipt exists. The predicate
+    /// is [`crate::receipt::validity`] — already total and fail-closed — so this
+    /// kind adds a trigger and a refusal, never a second opinion about what a
+    /// valid receipt is.
+    ///
+    /// The verdicts are resolved at the hook's boundary and handed to the
+    /// adjudicator as data, because adjudication is contractually pure. That is
+    /// the same split the bypass hatch already uses.
+    Receipt,
 }
 
 impl RuleKind {
@@ -122,6 +136,7 @@ impl RuleKind {
         RuleKind::Command,
         RuleKind::Shape,
         RuleKind::Ratchet,
+        RuleKind::Receipt,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -132,6 +147,7 @@ impl RuleKind {
             RuleKind::Command => "command",
             RuleKind::Shape => "shape",
             RuleKind::Ratchet => "ratchet",
+            RuleKind::Receipt => "receipt",
         }
     }
 
@@ -156,7 +172,13 @@ impl RuleKind {
             // Reading this as "no process at all" would make the kind
             // enforce-only and cost it `check`, which is the surface the gate is
             // worth having on (CLOUD-55, stated assumption 1).
-            RuleKind::Forbid | RuleKind::Shape | RuleKind::Ratchet => false,
+            // `Receipt` reads a file and two git refs, which is the same
+            // reading `Ratchet` takes above: fixed VCS queries in this crate,
+            // with only data crossing from config. It must stay `false` or it
+            // could not be scoped to the mediated call at all — `scopes` pairs
+            // every spawning kind with `Tree` alone, which is what keeps `hook`
+            // structurally unable to execute a configured command.
+            RuleKind::Forbid | RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt => false,
             RuleKind::Command => true,
         }
     }
@@ -181,6 +203,12 @@ impl RuleKind {
             // to prevent.
             RuleKind::Shape => &["pattern", "reason"],
             RuleKind::Ratchet => &["glob", "pattern", "direction", "base"],
+            // Same `reason` obligation as a shape row, for the same reason: the
+            // deny reaches a model as the whole explanation. `checks` is
+            // required because a receipt row naming none would gate its pattern
+            // on nothing and allow every call — a rule that loads, matches, and
+            // decides nothing.
+            RuleKind::Receipt => &["pattern", "checks", "reason"],
         }
     }
 
@@ -221,6 +249,17 @@ impl RuleKind {
                 "policy_url",
                 "no_fix_reason",
             ],
+            // `key` is the one optional column: it selects which git fact the
+            // receipt is keyed to, and it has a pinned default so a row that
+            // omits it is still total.
+            RuleKind::Receipt => &[
+                "pattern",
+                "checks",
+                "key",
+                "reason",
+                "contains",
+                "policy_url",
+            ],
         }
     }
 
@@ -234,7 +273,7 @@ impl RuleKind {
     pub const fn scopes(self) -> &'static [RuleScope] {
         match self {
             RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet => &[RuleScope::Tree],
-            RuleKind::Shape => &[RuleScope::MediatedCall],
+            RuleKind::Shape | RuleKind::Receipt => &[RuleScope::MediatedCall],
         }
     }
 }
@@ -459,6 +498,43 @@ pub struct Rule {
     /// this does not disturb `run_all`'s refusal of a rule that declares it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_fix_reason: Option<String>,
+    /// The receipts a [`RuleKind::Receipt`] row requires, all of which must be
+    /// valid before the matched call is allowed. Required by that kind,
+    /// rejected by every other.
+    ///
+    /// A list rather than a single name because the predicate this ports is
+    /// already a conjunction — readying a PR requires that the branch both
+    /// verified and is linear on the trunk — and expressing it as two rows
+    /// would let one be deleted while the other kept the gate looking whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Vec<String>>,
+    /// Which git fact a [`RuleKind::Receipt`] row's receipts are keyed to.
+    ///
+    /// Optional with a pinned default of [`ReceiptKey::Head`], the conservative
+    /// one: a HEAD-keyed receipt expires on an amend or a rebase, so omitting
+    /// the key can only make a gate stricter than intended, never weaker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<ReceiptKey>,
+}
+
+/// Which git fact a receipt is keyed to, and therefore what invalidates it.
+///
+/// The distinction is not a tuning knob, it is what the receipt *attests*.
+/// A `head` receipt claims something about those exact bytes, so an amend or a
+/// rebase must expire it. A `branch` receipt claims a decision about the work,
+/// which every commit on the branch continues to serve, so a SHA-keyed one
+/// would demand a re-claim per commit — the false-positive rate that gets a
+/// guard bypassed. Both spellings are carried from the shell layer that proved
+/// them (`ready-guard` keys by SHA, `claim-check` by branch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum ReceiptKey {
+    /// Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it.
+    #[default]
+    Head,
+    /// Keyed to the branch; every commit on it continues to serve the claim.
+    Branch,
 }
 
 /// Which way a ratcheted count may move.
@@ -541,7 +617,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 14] {
+    fn columns(&self) -> [(&'static str, bool); 16] {
         [
             ("no_fix_reason", self.no_fix_reason.is_some()),
             ("glob", self.glob.is_some()),
@@ -557,6 +633,8 @@ impl Rule {
             ("identity_key", self.identity_key.is_some()),
             ("direction", self.direction.is_some()),
             ("base", self.base.is_some()),
+            ("checks", self.checks.is_some()),
+            ("key", self.key.is_some()),
         ]
     }
 
@@ -569,6 +647,27 @@ impl Rule {
         if self.run.is_some() {
             return Err(UsageError::raise(format!(
                 "rule {}: `run` is now `check` (house style §9's check/fix duality); rename the key",
+                self.id
+            )));
+        }
+        // `key = "branch"` parses and has nowhere to go yet: the predicate
+        // behind this kind is HEAD-keyed (`receipt::validity` compares the
+        // subject commit against HEAD), so honouring the column would need a
+        // branch-keyed store that does not exist. Refused loudly rather than
+        // accepted-and-ignored, because a config key that reads as configured
+        // and decides nothing is the exact defect this kind was added to close
+        // — and here it would silently make a claim gate expire per commit.
+        if self.key == Some(ReceiptKey::Branch) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `key = \"branch\"` is not implemented yet — the receipt store is HEAD-keyed. Use `key = \"head\"`, or omit it; branch-keyed receipts land with the claim gate (CLOUD-312)",
+                self.id
+            )));
+        }
+        // A receipt row naming an empty `checks` list gates its trigger on
+        // nothing and allows every call, which reads as coverage from the file.
+        if self.kind == RuleKind::Receipt && self.checks.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"receipt\" requires at least one entry in `checks`; an empty list gates nothing",
                 self.id
             )));
         }
@@ -667,7 +766,9 @@ impl Rule {
                     .collect(),
             )),
             RuleKind::Forbid | RuleKind::Ratchet => Some(Check::Reevaluate),
-            RuleKind::Shape => None,
+            // Neither reaches the store: both are adjudicated per mediated call
+            // and produce a decision, not a finding.
+            RuleKind::Shape | RuleKind::Receipt => None,
         }
     }
 
@@ -741,6 +842,19 @@ impl Rule {
         if self.kind != RuleKind::Shape {
             return None;
         }
+        self.trigger()
+    }
+
+    /// The command shape this row keys on, for **any** kind that keys on one.
+    ///
+    /// Split out of [`Rule::shape`] because two kinds now match a command line
+    /// and they mean different things by it: `shape` names a command that is
+    /// banned, `receipt` names one that is gated on a precondition. `shape()`
+    /// keeps its kind check so its existing callers cannot be handed a receipt
+    /// row by accident — the failure that costs nothing to prevent here and is
+    /// invisible when it happens, since an unmatched rule simply allows.
+    #[must_use]
+    pub fn trigger(&self) -> Option<(&str, Vec<&str>)> {
         let mut words = self.pattern.as_deref()?.split_whitespace();
         let program = words.next()?;
         Some((program, words.collect()))
@@ -993,10 +1107,10 @@ fn run_rule(
             }
         }
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
-        // Unreachable: a shape rule is `mediated_call`-scoped and a ratchet
-        // returned above. Stated rather than caught by a wildcard so adding a
-        // kind that *is* tree-scoped has to come here.
-        RuleKind::Shape | RuleKind::Ratchet => {}
+        // Unreachable: shape and receipt rules are `mediated_call`-scoped and a
+        // ratchet returned above. Stated rather than caught by a wildcard so
+        // adding a kind that *is* tree-scoped has to come here.
+        RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt => {}
     }
     Ok(None)
 }
@@ -1860,6 +1974,13 @@ mod tests {
             no_fix_reason: (kind.permits().contains(&"no_fix_reason")
                 && !kind.permits().contains(&"fix"))
             .then(|| "fixture".to_owned()),
+            // Same shape as the columns above: filled only for the kind that
+            // permits it, so a fixture for another kind is not born invalid.
+            checks: kind
+                .permits()
+                .contains(&"checks")
+                .then(|| vec!["verify".to_owned()]),
+            key: None,
         }
     }
 
@@ -2253,6 +2374,7 @@ mod tests {
                         "reason" => rule.reason = Some("because".to_owned()),
                         "direction" => rule.direction = Some(Direction::NonDecreasing),
                         "base" => rule.base = Some("HEAD".to_owned()),
+                        "checks" => rule.checks = Some(vec!["verify".to_owned()]),
                         other => panic!("unclassified required column `{other}`"),
                     }
                 }
@@ -2339,12 +2461,16 @@ mod tests {
         // The match is exhaustive by the compiler; this asserts `ALL` agrees.
         for kind in RuleKind::ALL {
             match kind {
-                RuleKind::Forbid | RuleKind::Command | RuleKind::Shape | RuleKind::Ratchet => {}
+                RuleKind::Forbid
+                | RuleKind::Command
+                | RuleKind::Shape
+                | RuleKind::Ratchet
+                | RuleKind::Receipt => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            4,
+            5,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

@@ -57,6 +57,7 @@
 //!   HEAD:batten.toml`), never working-tree bytes: the statement's subject is
 //!   a commit digest, so every byte it binds must come from that commit.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
@@ -294,6 +295,39 @@ fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
     Ok(state::repo_state_dir(Path::new(repo_root))?
         .join("receipts")
         .join(format!("{}.json", fingerprint.to_hex())))
+}
+
+/// Resolve the verdict for each named check, for a caller that must not do I/O.
+///
+/// `hook::adjudicate` is contractually pure — "no I/O, no environment, no
+/// clock" — so a mediated call cannot evaluate a receipt predicate itself. This
+/// is the boundary half: the hook's entry point resolves the facts once and
+/// hands them in as data, exactly as it already does for the bypass hatch. The
+/// predicate stays [`validity`], unchanged and total, so the `hook` surface and
+/// `receipt status` cannot come to disagree about what a valid receipt is.
+///
+/// `None` means **could not look**, not "no receipts": outside a checkout, or
+/// with an `origin/main` that does not resolve, there are no git facts to judge
+/// against. A caller reads that as allow — the fail-open posture every retiring
+/// guard has, and the one CLOUD-312 §5 preserves end to end. It is deliberately
+/// distinct from `Some(Missing)`, which is a real verdict about a real
+/// repository and denies.
+pub(crate) fn verdicts(checks: &[String]) -> Option<BTreeMap<String, Validity>> {
+    let facts = repo_facts().ok()?;
+    Some(
+        checks
+            .iter()
+            .map(|check| {
+                let statement = receipt_path(&facts.repo_root, check)
+                    .ok()
+                    .and_then(|path| load_statement(&path));
+                (
+                    check.clone(),
+                    validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir),
+                )
+            })
+            .collect(),
+    )
 }
 
 /// Load a statement, failing closed: an unreadable, unparseable, or

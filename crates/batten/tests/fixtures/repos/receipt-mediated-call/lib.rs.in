@@ -1,0 +1,5 @@
+// A file carrying the gated shape as text. A receipt rule must not be mistaken
+// for a file rule: this line matches its `pattern` and must produce no finding.
+fn main() {
+    // gh pr ready
+}

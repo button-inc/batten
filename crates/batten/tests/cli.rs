@@ -1891,13 +1891,46 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
         );
     }
     // And the reads it must not refuse, from the same committed rows.
-    for command in ["gh pr view 42", "gh pr ready 42", "mise run land"] {
+    //
+    // `gh pr ready` has left this list and did not simply become a deny: since
+    // CLOUD-312 it is gated by the `ready-needs-receipts` row, so its verdict
+    // depends on whether THIS checkout carries valid receipts — a property of
+    // the world, not of the commit. Asserting either verdict here would make
+    // the suite pass or fail on the runner's git state. The case below pins
+    // what is actually a property of the commit: nothing bans it outright.
+    for command in ["gh pr view 42", "mise run land"] {
         let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
         assert_eq!(
             output.status.code(),
             Some(0),
             "the committed policy must allow {command:?}"
         );
+    }
+}
+
+/// `gh pr ready` is gated by a precondition, never banned outright.
+///
+/// The distinction is the whole point of the `receipt` kind: a shape row refuses
+/// a command permanently, a receipt row refuses it *until the work is proved*,
+/// and confusing the two would leave the branch with no way to ready a PR at
+/// all. Asserted through the refusal's identity rather than its verdict, so the
+/// case is a statement about the committed policy and not about whether this
+/// checkout happens to have run `verify`.
+#[test]
+fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = run_hook_in(&root, "exit-code", &claude_payload("gh pr ready 42"), false);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match output.status.code() {
+        // Receipts are valid in this checkout: allowed, which is the point.
+        Some(0) => {}
+        // Refused — and it must be the receipt row that did it, naming a
+        // receipt, never one of the `gh` lifecycle bans.
+        Some(2) => assert!(
+            stderr.contains("ready-needs-receipts"),
+            "a refused `gh pr ready` must come from the receipt row, got: {stderr}"
+        ),
+        other => panic!("unexpected exit {other:?}: {stderr}"),
     }
 }
 

@@ -1,0 +1,20 @@
+version = 1
+
+# A `receipt` rule is adjudicated by `batten hook` against one mediated command,
+# never by the tree engine — the same routing a `shape` row gets, and pinned here
+# for the same reason: `check` must walk past a `mediated_call` row and report
+# nothing, rather than erroring on a rule it cannot evaluate or evaluating it as
+# if it selected files.
+#
+# The kind it exercises is the one that refuses a call whose PRECONDITION has not
+# been proved, rather than one that is banned. `check` cannot tell the two apart
+# and does not need to: both are somebody else's scope.
+[[rule]]
+id = "ready-needs-receipts"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+checks = ["verify"]
+key = "head"
+reason = "run the verification task, then retry"

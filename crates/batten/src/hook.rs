@@ -44,9 +44,10 @@ use std::path::PathBuf;
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::receipt::Validity;
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
-use crate::rules::{PathSet, Rule, RuleScope};
+use crate::rules::{PathSet, Rule, RuleKind, RuleScope};
 use crate::severity::{self, ReportLevel, RuleSeverity};
 use crate::verbs::MutatingVerb;
 
@@ -744,6 +745,26 @@ impl Policy {
         })
     }
 
+    /// Every receipt name any `receipt` row requires, deduplicated.
+    ///
+    /// The boundary resolves exactly these and no more: a repository declaring
+    /// no receipt row does no git work at all, which keeps the cost off the
+    /// hottest path in the binary for every consumer that does not use them.
+    #[must_use]
+    pub fn required_checks(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .shapes
+            .iter()
+            .filter(|rule| rule.kind == RuleKind::Receipt)
+            .filter_map(|rule| rule.checks.as_ref())
+            .flatten()
+            .cloned()
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
     /// Whether this policy can deny anything at all.
     ///
     /// Both halves must be empty. The protected gate needs *both* its tables to
@@ -765,7 +786,12 @@ impl Policy {
 /// escape hatch (the boundary reads [`BYPASS_ENV`]), and the policy arrives as a
 /// value, so every verdict is a function of config plus argv and nothing else.
 #[must_use]
-pub fn adjudicate(policy: &Policy, envelope: &Envelope, bypass: bool) -> Decision {
+pub fn adjudicate(
+    policy: &Policy,
+    envelope: &Envelope,
+    bypass: bool,
+    receipts: &ReceiptFacts,
+) -> Decision {
     // Dispatch on the event FIRST, and allow every non-pre-tool one explicitly
     // (CLOUD-43). Before this the field was decoded and never read, so a
     // `PostToolUse` payload carrying a banned command in `tool_input.command`
@@ -807,9 +833,15 @@ pub fn adjudicate(policy: &Policy, envelope: &Envelope, bypass: bool) -> Decisio
     // Explicit rows first, then the derived gate: a row a reviewer wrote by hand
     // should be the one they see quoted back, and its reason is more specific
     // than the generic protected-path message.
+    //
+    // A ban outranks an unmet precondition: if a call is refused outright there
+    // is no point telling its author which receipt to go and earn.
     match shape_rules(policy, &envelope.command) {
         Decision::Deny(refusal) => Decision::Deny(refusal),
-        Decision::Allow => protected_mutation(policy, &envelope.command),
+        Decision::Allow => match receipt_rules(policy, &envelope.command, receipts) {
+            Decision::Deny(refusal) => Decision::Deny(refusal),
+            Decision::Allow => protected_mutation(policy, &envelope.command),
+        },
     }
 }
 
@@ -830,6 +862,97 @@ pub fn deny_text(refusal: &Refusal) -> String {
 /// Declaration order is the tie-break rather than "most specific wins": a
 /// reviewer reads the table top to bottom, and any cleverer precedence would be
 /// a rule about rules that the config does not state.
+/// The receipt verdicts a mediated call is judged against.
+///
+/// `None` is **could not look** — no checkout, or an `origin/main` that does
+/// not resolve — and allows, which is the fail-open posture every retiring
+/// guard has. `Some` map missing a name is treated as [`Validity::Missing`],
+/// so a boundary that resolved fewer facts than the policy needs fails closed
+/// rather than silently allowing.
+pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
+
+/// Deny a call whose declared receipts are not all valid (CLOUD-312).
+///
+/// The port of `ready-guard`, and the shape of it matters: this refuses a
+/// command whose *precondition has not been proved*, not a command that is
+/// banned. The same call is allowed the moment the receipt exists, which is why
+/// the refusal names the verdict — an operator who reads "stale-head" knows to
+/// re-run, where "missing" alone would send them looking for a file.
+fn receipt_rules(policy: &Policy, command: &str, facts: &ReceiptFacts) -> Decision {
+    // No facts means the boundary could not look. Allow: a guard that cannot
+    // read its own precondition must not become the reason work stops.
+    let Some(facts) = facts.as_ref() else {
+        return Decision::Allow;
+    };
+    for segment in segments(command) {
+        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        let Some(program_index) = effective_program(&tokens) else {
+            continue;
+        };
+        let words: Vec<&str> = tokens[program_index + 1..]
+            .iter()
+            .copied()
+            .filter(|token| !token.starts_with('-'))
+            .collect();
+        for rule in &policy.shapes {
+            if rule.kind != RuleKind::Receipt || !blocks(rule.severity, policy.fail_on_warning) {
+                continue;
+            }
+            let Some((program, wanted)) = rule.trigger() else {
+                continue;
+            };
+            if tokens[program_index] != program {
+                continue;
+            }
+            if !words
+                .windows(wanted.len().max(1))
+                .any(|w| w == wanted.as_slice())
+            {
+                continue;
+            }
+            if let Some(contains) = rule.contains.as_deref() {
+                if !segment.raw.contains(contains) {
+                    continue;
+                }
+            }
+            // Every named receipt must be valid. An unresolved name is Missing,
+            // never absent-and-therefore-fine: a boundary that answered for
+            // fewer checks than the row requires has not proved the precondition.
+            for check in rule.checks.iter().flatten() {
+                let verdict = facts.get(check).copied().unwrap_or(Validity::Missing);
+                if verdict != Validity::Valid {
+                    return Decision::Deny(receipt_refusal(rule, check, verdict));
+                }
+            }
+        }
+    }
+    Decision::Allow
+}
+
+/// Compose a receipt row's refusal, naming the check and what is wrong with it.
+///
+/// The verdict is in the cause rather than the fix because it is a *finding*
+/// about the receipt, and the remedy is the row's declared `reason` — the same
+/// contract a shape row keeps (CLOUD-122). Pointer-only: the check name and a
+/// verdict token, never the receipt's contents.
+fn receipt_refusal(rule: &Rule, check: &str, verdict: Validity) -> Refusal {
+    let cause = match verdict {
+        Validity::Missing => {
+            format!("`{check}` has recorded no receipt for this commit in this checkout")
+        }
+        Validity::StaleHead => format!(
+            "the `{check}` receipt was taken against a different commit — an amend or a rebase replaced the bytes it validated"
+        ),
+        Validity::StaleMain => format!(
+            "the `{check}` receipt was taken against an older origin/main, which has since moved"
+        ),
+        // Not reachable from the caller, which only refuses a non-valid
+        // verdict. Stated rather than unwrapped so the match stays total.
+        Validity::Valid => format!("`{check}` is valid"),
+    };
+    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+}
+
 fn shape_rules(policy: &Policy, command: &str) -> Decision {
     for segment in segments(command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
@@ -846,6 +969,13 @@ fn shape_rules(policy: &Policy, command: &str) -> Decision {
             .filter(|token| !token.starts_with('-'))
             .collect();
         for rule in &policy.shapes {
+            // Kind-filtered, not scope-filtered: `receipt` rows are
+            // `mediated_call`-scoped too and carry a `pattern`, so without this
+            // they would read as shape rows and refuse their trigger
+            // unconditionally — turning a precondition into a ban.
+            if rule.kind != RuleKind::Shape {
+                continue;
+            }
             if !blocks(rule.severity, policy.fail_on_warning) {
                 continue;
             }
@@ -1346,6 +1476,8 @@ mod tests {
             // A shape rule never reaches the findings store, so it is refused
             // the remediation column (CLOUD-81).
             no_fix_reason: None,
+            checks: None,
+            key: None,
         }
     }
 
@@ -1385,6 +1517,7 @@ mod tests {
             ]),
             &envelope(command),
             false,
+            &None,
         )
     }
 
@@ -1440,7 +1573,7 @@ mod tests {
     }
 
     fn adjudicate_command(command: &str) -> Decision {
-        adjudicate(&gh_policy(), &envelope(command), false)
+        adjudicate(&gh_policy(), &envelope(command), false, &None)
     }
 
     fn is_deny(command: &str) -> bool {
@@ -1582,7 +1715,7 @@ mod tests {
     #[test]
     fn bypass_allows_everything() {
         assert_eq!(
-            adjudicate(&gh_policy(), &envelope("gh pr merge"), true),
+            adjudicate(&gh_policy(), &envelope("gh pr merge"), true, &None),
             Decision::Allow
         );
     }
@@ -1657,7 +1790,7 @@ mod tests {
         let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
         assert_eq!(envelope.event, Event::PreTool);
         assert!(matches!(
-            adjudicate(&gh_policy(), &envelope, false),
+            adjudicate(&gh_policy(), &envelope, false, &None),
             Decision::Deny(_)
         ));
     }
@@ -1668,7 +1801,12 @@ mod tests {
         // before the call and an allow at every other event. Ranged over
         // `Event::ALL` so a new variant defaults to the safe answer or fails.
         for &event in Event::ALL {
-            let decision = adjudicate(&gh_policy(), &envelope_at(event, "gh pr merge 42"), false);
+            let decision = adjudicate(
+                &gh_policy(),
+                &envelope_at(event, "gh pr merge 42"),
+                false,
+                &None,
+            );
             if event == Event::PreTool {
                 assert!(matches!(decision, Decision::Deny(_)), "{event:?}");
             } else {
@@ -1683,7 +1821,10 @@ mod tests {
         // A payload with no command decodes to an empty command, which
         // adjudicates to Allow rather than erroring.
         let envelope = decode(Harness::ClaudeCode, "{}").expect("decodes");
-        assert_eq!(adjudicate(&gh_policy(), &envelope, false), Decision::Allow);
+        assert_eq!(
+            adjudicate(&gh_policy(), &envelope, false, &None),
+            Decision::Allow
+        );
     }
 
     #[test]
@@ -1695,7 +1836,8 @@ mod tests {
             adjudicate(
                 &Policy::declaring_nothing(),
                 &envelope("gh pr merge 42"),
-                false
+                false,
+                &None,
             ),
             Decision::Allow
         );
@@ -1753,7 +1895,7 @@ mod tests {
             protected: PathSet::empty(),
         };
         assert_eq!(
-            adjudicate(&policy, &envelope("gh pr merge 42"), false),
+            adjudicate(&policy, &envelope("gh pr merge 42"), false, &None),
             Decision::Allow
         );
     }
@@ -1771,7 +1913,7 @@ mod tests {
             protected: PathSet::empty(),
         };
         assert_eq!(
-            adjudicate(&advisory, &call, false),
+            adjudicate(&advisory, &call, false, &None),
             Decision::Allow,
             "a warn row does not block a mediated call on its own"
         );
@@ -1783,7 +1925,10 @@ mod tests {
             protected: PathSet::empty(),
         };
         assert!(
-            matches!(adjudicate(&promoted, &call, false), Decision::Deny(_)),
+            matches!(
+                adjudicate(&promoted, &call, false, &None),
+                Decision::Deny(_)
+            ),
             "promotion applies at the mediation channel too"
         );
     }
@@ -1802,7 +1947,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
         };
-        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false));
+        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false, &None));
         assert!(reason.contains("first"), "got: {reason}");
     }
 
@@ -1831,7 +1976,7 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
         };
-        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false));
+        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false, &None));
         assert!(reason.contains("example.invalid/policy"), "got: {reason}");
     }
 
@@ -1860,7 +2005,129 @@ mod tests {
             ]),
             &write_envelope(tool, path),
             false,
+            &None,
         )
+    }
+
+    /// A policy with one receipt row, as `batten.toml` declares it.
+    fn receipt_policy() -> Policy {
+        let mut rule = shape("ready-needs-receipts", "gh pr ready", None);
+        rule.kind = RuleKind::Receipt;
+        rule.reason = Some("run verify then linear-check, or just land".to_owned());
+        rule.checks = Some(vec!["verify".to_owned(), "linear-check".to_owned()]);
+        Policy {
+            shapes: vec![rule],
+            fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+        }
+    }
+
+    /// The resolved half of [`ReceiptFacts`] — what a boundary that COULD look
+    /// hands in. Wrapped in `Some` at the call site, so the distinction between
+    /// "looked and found nothing" and "could not look" stays visible in each
+    /// case rather than hiding inside a helper.
+    fn resolved(pairs: &[(&str, Validity)]) -> std::collections::BTreeMap<String, Validity> {
+        pairs
+            .iter()
+            .map(|(name, verdict)| ((*name).to_owned(), *verdict))
+            .collect()
+    }
+
+    fn adjudicate_ready(facts: &ReceiptFacts) -> Decision {
+        adjudicate(&receipt_policy(), &envelope("gh pr ready 42"), false, facts)
+    }
+
+    #[test]
+    fn a_receipt_row_fires_at_all() {
+        // The regression this test exists for, found by running the binary
+        // rather than by reading the code: `Rule::shape` returns None unless
+        // the kind is `Shape`, so a receipt row matched NOTHING and allowed
+        // every call — a rule that loads, matches nothing, and reads as
+        // coverage. It is the exact defect this whole issue is about, and it
+        // was invisible because an unmatched rule is silent.
+        assert!(matches!(
+            adjudicate_ready(&Some(resolved(&[
+                ("verify", Validity::Missing),
+                ("linear-check", Validity::Missing),
+            ]))),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn every_named_receipt_must_be_valid_not_merely_one() {
+        // The conjunction is the predicate: a branch that verified but is no
+        // longer linear on the trunk cannot fast-forward-land.
+        assert!(matches!(
+            adjudicate_ready(&Some(resolved(&[
+                ("verify", Validity::Valid),
+                ("linear-check", Validity::StaleMain),
+            ]))),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn all_receipts_valid_allows_the_call() {
+        assert_eq!(
+            adjudicate_ready(&Some(resolved(&[
+                ("verify", Validity::Valid),
+                ("linear-check", Validity::Valid),
+            ]))),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn a_receipt_the_boundary_did_not_resolve_fails_closed() {
+        // Absent from the map is not "fine", it is unproven: a boundary that
+        // answered for fewer checks than the row requires has not established
+        // the precondition.
+        assert!(matches!(
+            adjudicate_ready(&Some(resolved(&[("verify", Validity::Valid)]))),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn no_facts_at_all_allows_because_the_boundary_could_not_look() {
+        // Outside a checkout there are no git facts to judge against. Fail
+        // open, the posture every retiring guard has: a guard that cannot read
+        // its own precondition must not become the reason work stops. This is
+        // deliberately distinct from `Some(Missing)`, which denies above.
+        assert_eq!(adjudicate_ready(&None), Decision::Allow);
+    }
+
+    #[test]
+    fn a_receipt_row_gates_only_its_own_trigger() {
+        assert_eq!(
+            adjudicate(
+                &receipt_policy(),
+                &envelope("gh pr view 42"),
+                false,
+                &Some(resolved(&[("verify", Validity::Missing)])),
+            ),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn the_refusal_names_the_check_and_what_is_wrong_with_it() {
+        // Three verdicts, three causes — which is how `ready-guard`'s three
+        // hand-written deny messages survive the move into one config row.
+        let Decision::Deny(refusal) = adjudicate_ready(&Some(resolved(&[
+            ("verify", Validity::Valid),
+            ("linear-check", Validity::StaleHead),
+        ]))) else {
+            panic!("a stale receipt must deny");
+        };
+        let rendered = refusal.render();
+        assert!(rendered.contains("linear-check"), "got: {rendered}");
+        assert!(
+            rendered.contains("amend") || rendered.contains("rebase"),
+            "the cause must say what invalidated it; got: {rendered}"
+        );
     }
 
     #[test]
@@ -1924,6 +2191,7 @@ mod tests {
                 &protected_policy(vec![verb("Write", Some("use the owning surface"))]),
                 &envelope,
                 false,
+                &None,
             ),
             Decision::Allow
         );
@@ -2082,7 +2350,7 @@ mod tests {
         // no protected paths — or the reverse — has declared no gate.
         let no_verbs = protected_policy(Vec::new());
         assert_eq!(
-            adjudicate(&no_verbs, &envelope("rm batten.toml"), false),
+            adjudicate(&no_verbs, &envelope("rm batten.toml"), false, &None),
             Decision::Allow
         );
         let no_paths = Policy {
@@ -2092,7 +2360,7 @@ mod tests {
             protected: PathSet::empty(),
         };
         assert_eq!(
-            adjudicate(&no_paths, &envelope("rm batten.toml"), false),
+            adjudicate(&no_paths, &envelope("rm batten.toml"), false, &None),
             Decision::Allow
         );
     }
@@ -2107,6 +2375,7 @@ mod tests {
             &policy,
             &envelope("rm .serena/memories/core.md"),
             false,
+            &None,
         ));
         assert!(reason.contains("no-rm-memories"), "got: {reason}");
     }
@@ -2117,7 +2386,8 @@ mod tests {
             adjudicate(
                 &protected_policy(vec![verb("rm", None)]),
                 &envelope("rm batten.toml"),
-                true
+                true,
+                &None,
             ),
             Decision::Allow
         );
@@ -2165,11 +2435,14 @@ mod tests {
         };
         let call = envelope("rm guarded/thing");
         assert!(
-            matches!(adjudicate(&guarding, &call, false), Decision::Deny(_)),
+            matches!(
+                adjudicate(&guarding, &call, false, &None),
+                Decision::Deny(_)
+            ),
             "the declared set must deny"
         );
         assert_eq!(
-            adjudicate(&elsewhere, &call, false),
+            adjudicate(&elsewhere, &call, false, &None),
             Decision::Allow,
             "a different declared set must allow the same command"
         );

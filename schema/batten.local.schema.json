@@ -127,6 +127,21 @@
         "reason"
       ]
     },
+    "ReceiptKey": {
+      "description": "Which git fact a receipt is keyed to, and therefore what invalidates it.\n\nThe distinction is not a tuning knob, it is what the receipt *attests*.\nA `head` receipt claims something about those exact bytes, so an amend or a\nrebase must expire it. A `branch` receipt claims a decision about the work,\nwhich every commit on the branch continues to serve, so a SHA-keyed one\nwould demand a re-claim per commit — the false-positive rate that gets a\nguard bypassed. Both spellings are carried from the shell layer that proved\nthem (`ready-guard` keys by SHA, `claim-check` by branch).",
+      "oneOf": [
+        {
+          "description": "Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it.",
+          "type": "string",
+          "const": "head"
+        },
+        {
+          "description": "Keyed to the branch; every commit on it continues to serve the claim.",
+          "type": "string",
+          "const": "branch"
+        }
+      ]
+    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.",
       "type": "object",
@@ -144,6 +159,16 @@
             "string",
             "null"
           ]
+        },
+        "checks": {
+          "description": "The receipts a [`RuleKind::Receipt`] row requires, all of which must be\nvalid before the matched call is allowed. Required by that kind,\nrejected by every other.\n\nA list rather than a single name because the predicate this ports is\nalready a conjunction — readying a PR requires that the branch both\nverified and is linear on the trunk — and expressing it as two rows\nwould let one be deleted while the other kept the gate looking whole.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
         },
         "contains": {
           "description": "An extra literal that must appear in the mediated command **as written**\nfor a [`RuleKind::Shape`] rule to fire. Optional, that kind only.\n\nIt exists for one real case rather than as a general escape hatch: a\nlanding directive lives inside a quoted `--body`, so it is not one of the\nwords the shape matches, and without this an ordinary `gh pr comment`\nwould be denied alongside the one that carries the directive. Matched\nagainst the raw text of the same segment, quotes included.",
@@ -193,6 +218,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "key": {
+          "description": "Which git fact a [`RuleKind::Receipt`] row's receipts are keyed to.\n\nOptional with a pinned default of [`ReceiptKey::Head`], the conservative\none: a HEAD-keyed receipt expires on an amend or a rebase, so omitting\nthe key can only make a gate stricter than intended, never weaker.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReceiptKey"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "kind": {
@@ -287,6 +323,11 @@
           "description": "A **count that may only move one way** (CLOUD-55): the total occurrences\nof `pattern` across files matching `glob`, compared between a base rev\nand the working tree, must not move in the banned `direction`.\n\nThe kind exists because the property worth gating on a test suite is not\nimmutability — tests are edited every day, so a protected path would\nblock writing them — but *direction of change*. That is the same shape\n`trust.rs` already encodes for config: which way is weakening is a\nproperty of the key.\n\nCounted in **aggregate per rule**, never per file: a test moved between\ntwo files matching the glob changes nothing, so renames and\nconsolidations that preserve the suite are clean with no rename tracking.\nThe price is that the finding names counts rather than locations, and\n`git diff` answers *where*.",
           "type": "string",
           "const": "ratchet"
+        },
+        {
+          "description": "A mediated call that requires a **verification receipt** to be valid\nbefore it is allowed (CLOUD-312, over CLOUD-203's receipt store).\n\nDistinct from [`RuleKind::Shape`], which refuses a command outright:\nthis one refuses a command *whose precondition has not been proved*, and\nthe same command is allowed the moment the receipt exists. The predicate\nis [`crate::receipt::validity`] — already total and fail-closed — so this\nkind adds a trigger and a refusal, never a second opinion about what a\nvalid receipt is.\n\nThe verdicts are resolved at the hook's boundary and handed to the\nadjudicator as data, because adjudication is contractually pure. That is\nthe same split the bypass hatch already uses.",
+          "type": "string",
+          "const": "receipt"
         }
       ]
     },
