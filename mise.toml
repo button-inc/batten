@@ -40,6 +40,20 @@ hk = "1.54.0"                                                # git-hook runner (
 # Unlike cargo-msrv above, this one ships aarch64-unknown-linux-gnu, so a
 # release-asset backend locks every platform `lock-complete` requires.
 "aqua:taiki-e/cargo-llvm-cov" = "0.8.7"
+# NOTE: the fuzz driver (`mise run fuzz`, CLOUD-112) deliberately pins NO tool
+# here, for the same shape of reason cargo-msrv does not — and it is upstream's
+# constraint twice over, not a preference. cargo-fuzz 0.13.2 publishes x86_64
+# assets ONLY (darwin-x64, linux-musl-x64, windows-x64), so a release-asset
+# backend locks neither `linux-arm64` nor `macos-arm64` and `mise run
+# lock-complete` rejects it. The `cargo:` backend that would sidestep that is
+# refused by `no-source-built-tool` AND does not work regardless: mise builds a
+# `cargo:` tool with the pinned stable toolchain, and cargo-fuzz 0.13.2's own
+# dependencies require rustc 1.91 (measured — `cargo-platform@0.3.3 requires
+# rustc 1.91`), so the install fails at 1.85.0 before any policy question is
+# reached. So there is no `[tools]` entry that can express this tool, and the
+# task provisions it under the nightly libFuzzer needs anyway, pinned and only
+# when missing — off the landing path entirely, like `[tasks.coverage]`'s
+# component and `[tasks.msrv]`'s toolchain.
 # mise-tasks/ holds real bash programs, so they get the same lint+format
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
 "aqua:koalaman/shellcheck" = "0.11.0"
@@ -274,6 +288,67 @@ mkdir -p "${COVERAGE_OUT_DIR:-target/coverage}"
 # and a summary a human reads. `--workspace` matches what `test:cargo` runs.
 cargo llvm-cov --workspace --lcov --output-path "${COVERAGE_OUT_DIR:-target/coverage}/lcov.info"
 cargo llvm-cov report --summary-only
+'''
+
+[tasks.fuzz]
+description = "Report: search the hook-envelope and config parsers for inputs that break a property (CLOUD-112)"
+shell = "bash -c"
+# A SEARCH, never a gate — the same split `lock-check` draws and `coverage`
+# follows. A bounded fuzz run is a property of the WORLD: nondeterministic, and
+# green proves only that this seed found nothing this time. So it is deliberately
+# absent from `verify` and from `final`, and runs on a schedule
+# (.github/workflows/fuzz.yml).
+#
+# The property of the COMMIT is the replay: `crates/batten/tests/fuzz_corpus.rs`
+# feeds every checked-in corpus entry and every saved reproducer through the
+# same assertions, deterministically, on stable, in milliseconds. That is what
+# runs on the landing path, and it is why a crash found here becomes a
+# regression test by being committed rather than by being rewritten.
+#
+# Nightly is not a preference: libFuzzer needs `-Z sanitizer`, which stable does
+# not accept. Installed on demand and only when missing — the same "don't mutate
+# the toolchain on the common path" reasoning as `[tasks.coverage]` and
+# `[tasks.msrv]`, both of which drive rustup directly for their own documented
+# reasons.
+#
+# Body opts into `set -e`: a search that half-ran is a misleading all-clear
+# rather than a missing one.
+run = '''
+set -euo pipefail
+if ! rustup toolchain list | grep -q '^nightly'; then
+	if ! rustup toolchain install nightly --profile minimal; then
+		echo "::error:: fuzz: could not install the nightly toolchain libFuzzer requires, so nothing was searched." >&2
+		exit 1
+	fi
+fi
+# Version-pinned and only when missing. Built with +nightly deliberately:
+# cargo-fuzz 0.13.2's dependencies require rustc 1.91, so the pinned stable
+# cannot compile it — see the [tools] note on why this is not a `[tools]` entry.
+if ! cargo +nightly fuzz --version >/dev/null 2>&1; then
+	if ! cargo +nightly install cargo-fuzz --version "${CARGO_FUZZ_VERSION:-0.13.2}" --locked; then
+		echo "::error:: fuzz: could not install cargo-fuzz, so nothing was searched." >&2
+		exit 1
+	fi
+fi
+# One target and one input reproduces a saved crash; no argument searches both.
+if [ "$#" -gt 0 ]; then
+	cargo +nightly fuzz run "$@"
+	exit 0
+fi
+# TWO corpus directories, and the order is the whole point. libFuzzer writes
+# every coverage-expanding input into the FIRST directory and treats the rest as
+# read-only seeds — so the machine's working set lands in git-ignored
+# `fuzz/work/`, and the tracked `fuzz/corpus/` stays what a human curated. A
+# single directory would mean a search appending a thousand opaque blobs to the
+# tree on every run: unreviewable, and the replay gate's subject would stop being
+# anything anyone chose. A crash still lands in `fuzz/artifacts/`, which IS
+# tracked, because a reproducer is exactly the file worth reviewing.
+for target in hook_decode config_parse; do
+	mkdir -p "fuzz/work/$target"
+	echo "fuzz: searching $target for ${FUZZ_SECONDS:-60}s"
+	cargo +nightly fuzz run "$target" "fuzz/work/$target" "fuzz/corpus/$target" \
+		-- -max_total_time="${FUZZ_SECONDS:-60}"
+done
 '''
 
 [tasks.test]

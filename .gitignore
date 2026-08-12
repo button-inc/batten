@@ -48,3 +48,10 @@ batten.local.toml
 # The checksum manifest derived by `mise run checksums` — hashed from a release's
 # own assets after upload and attached to it, never committed (CLOUD-278).
 /checksums/
+
+# Fuzz build output and the machine's working corpus (CLOUD-112). The curated
+# seeds under fuzz/corpus/ and any saved reproducer under fuzz/artifacts/ ARE
+# tracked — the replay gate reads them — but the sanitizer-instrumented target
+# dir and libFuzzer's own coverage-expanding working set are build output.
+fuzz/target/
+fuzz/work/

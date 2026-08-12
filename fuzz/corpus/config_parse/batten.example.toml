@@ -1,0 +1,343 @@
+# Example batten.toml — copy to your repository root and adjust.
+#
+# Batten reads exactly one committed authority (this file) plus raise-only
+# overrides (env vars, flags, and a git-ignored batten.local.toml that may only
+# tighten policy, never weaken a gate). There is no upward directory walk and no
+# conf.d merge surface. See the Batten house style, §8.
+
+# The config schema version. Required; this build supports version 1. A file
+# declaring any other version is refused rather than half-understood.
+version = 1
+
+# The minimum Batten version permitted to read this file (semver). A binary older
+# than this refuses to run rather than reporting green over rules it does not
+# understand — exit 1, the config-error code, because "this binary is too old" is
+# a statement about the invocation and never a policy verdict (exit 2). Equal or
+# newer runs, and 0.0.0 accepts every build.
+#
+# This file is validated against the JSON Schema Batten ships
+# (schema/batten.schema.json, published as a release asset), so a mistyped key is
+# caught in your editor rather than first at `batten check` time. Bind it with a
+# .taplo.toml rule -- see this repository's own for the shape.
+min_batten_version = "0.0.0"
+
+# How strictly gates apply: "permissive", "standard" (the default), or "strict".
+# Policy-bearing, so the §8 raise-only rule governs it: an override may only
+# raise it. Overrides, highest precedence first:
+#
+#   --strictness <level>      the flag
+#   BATTEN_STRICTNESS=<level> the env var
+#   batten.local.toml         a git-ignored local file (may also *add* rules,
+#                             but never redefine one declared here)
+#
+# Anything that would lower strictness — or redefine a committed rule — is
+# refused with exit 1 rather than applied. The value committed here is also the
+# floor: an override naming a level below it (or below the "standard" default
+# when this key is absent) is refused, so "permissive" only takes effect when
+# this file itself declares it. Run `batten config show` to see the effective
+# config and which layer set each key.
+strictness = "standard"
+
+# Whether a "warn"-severity finding is promoted to a violation. Absent means
+# false: a warn finding is reported and the run still exits 0. Set it and any
+# warn finding from `batten check` / `batten enforce` exits 2, the same policy
+# verdict a "deny" finding returns — a promotion changes which findings block,
+# never which code a blocking run reports.
+#
+# One setting, resolved once, exposed three ways. Overrides, highest precedence
+# first:
+#
+#   --fail-on-warning              the flag (no negative form: it can only turn
+#                                  the setting on, never off)
+#   BATTEN_FAIL_ON_WARNING=true    the env var; "true"/"false" only, and an
+#                                  empty value means unset, not invalid
+#   batten.local.toml              the git-ignored local file
+#
+# Policy-bearing, so §8's raise-only rule governs it: once this file commits
+# `true`, no lower-precedence source can turn it back off — that is refused with
+# exit 1 rather than applied. Every consumer reads the resolved value; no verb
+# carries a promotion knob of its own, and `batten exec` is deliberately not a
+# consumer at all (an exec output match always fails, because a warn-but-pass
+# match would be invisible to an agent reading only the exit code).
+fail_on_warning = false
+
+# The three path sets policy is defined over. They overlap in practice but are
+# three independent evaluators: a path's membership in each is computed from that
+# key's list alone, and no membership is ever derived from another set's.
+#
+#   scope      the paths policy applies to, as an ordered include/exclude list.
+#              A "!" prefix marks an exclude (gitignore's spelling) and an
+#              exclude beats an overlapping include, whatever the order.
+#   protected  paths whose modification is guarded. A plain include set.
+#   unlanded   paths whose work is not yet landed. A plain include set.
+#
+# A "!" entry in protected or unlanded is refused with exit 1 rather than read as
+# a literal glob — only scope carries exclude semantics. An absent key is the
+# *empty* set, never "everything": defaulting to universal membership would widen
+# policy silently, and widening is the one direction that must never be implicit.
+scope = ["**", "!target/**"]
+protected = ["batten.toml", ".github/workflows/**"]
+unlanded = []
+
+# `protected` earns a second job when you also declare mutating verbs: crossing
+# the two is the protected-path gate (CLOUD-96), which `batten hook` applies to
+# one mediated command at a time. It is an INTERSECTION, not a rule — declaring
+# it as `[[rule]]` rows would need one row per verb × path pair.
+#
+# Each verb names the sanctioned mutation to point at when it is refused, because
+# a deny that says only "no" is a refusal a caller cannot act on (CLOUD-122).
+#
+# `>` and `>>` are not programs: a truncating redirect has no mutating program to
+# classify, since in `cat x > p` the program is `cat`. The engine surfaces the
+# operator as a pseudo-program so you can gate truncation like any other verb.
+# Those two tokens are a contract with the engine — `verb = "redirect"` would
+# simply never match.
+#
+# Bounds worth knowing before you rely on this: it is a pre-execution *textual*
+# gate, so a path arriving through `$VAR`, a glob, or `$(command)` is invisible to
+# it, and an absolute path is compared as written rather than resolved against the
+# repo root. Every such miss under-denies, which is the safe direction.
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or change it through the surface that owns it"
+
+[[verb]]
+verb = ">"
+effect = "destructive"
+redirect = "append, or write through the surface that owns the file"
+
+# Rules are the output-producing half of the config: glob-selected, kind-typed
+# predicates over the repository, evaluated by `batten check`. A `forbid` rule
+# fires on any line containing its literal pattern, reported pointer-only as
+# `path:line rule-id`. This one ships live so a copied config detects
+# something real on day one: a conflict marker that survived a botched merge.
+#
+# Two per-rule keys are deliberately separate axes (cargo-deny's model):
+#
+#   severity  what a match does — "deny" fails the run (exit 2), "warn" reports
+#             the finding without failing it (unless fail_on_warning above
+#             promotes it), "allow" switches the rule off.
+#             Required on every rule: the default is stated explicitly here,
+#             with no implicit fallback — omitting it is refused with exit 1.
+#   scope     where the rule looks — "tree" is the whole working tree (the
+#             default). Scope is never severity: a severity value in the scope
+#             key (or the reverse) is refused with exit 1, not reinterpreted.
+[[rule]]
+id = "no-conflict-markers"
+kind = "forbid"
+glob = "**/*.rs"
+pattern = "<<<<<<< "
+severity = "deny"
+scope = "tree"
+
+# Identity keys (CLOUD-164). A finding carries a fingerprint over its normalized
+# span, so a formatter reflow does not re-mint it and an inserted neighbour does
+# not move it. Two optional keys tune that, and neither is needed by an ordinary
+# rule.
+#
+# `verbatim` hashes the matched span exactly, instead of collapsing whitespace.
+# For a rule whose subject IS literal content, where a reformat genuinely changes
+# the thing being flagged. The default (collapse) follows `git patch-id`.
+#
+# `identity_key` splits one identity into several. It is split-only BY
+# CONSTRUCTION: the default identity is hashed as a field of the override, so a
+# discriminator can fragment a group and is unable to merge two. Changing it is a
+# deliberate re-mint, not a rename.
+[[rule]]
+id = "no-hardcoded-banner"
+kind = "forbid"
+glob = "**/*.txt"
+pattern = "ACME CORP"
+severity = "warn"
+scope = "tree"
+verbatim = true
+identity_key = "banner"
+
+# A shape rule refuses a banned COMMAND rather than a banned file, so it is
+# adjudicated by `batten hook` against one mediated tool call at a time and is
+# never evaluated by `check`. That is what `scope` selects: "tree" is the working
+# tree, "mediated_call" is the single command being mediated.
+#
+# `pattern` is the command line as you would say it aloud. The first word is the
+# program, matched *after* wrapper look-through — so this row also refuses
+# `mise exec -- terraform apply` and `env TF_LOG=debug terraform apply`, which is
+# the whole reason the look-through exists. The remaining words are the adjacent
+# non-flag words that must follow, so `terraform apply -auto-approve` matches and
+# `terraform plan apply-notes` does not.
+#
+# `reason` is REQUIRED here, unlike on a file rule. A file finding is a
+# `path:line` a reader can open; a mediated deny is all the caller gets back, so
+# a refusal that named only its id would leave nothing to act on.
+[[rule]]
+id = "no-unreviewed-apply"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "terraform apply"
+reason = "apply runs from the pipeline, not a workstation — open a change request"
+# Optional. Appended to the refusal so a caller can read the policy itself.
+policy_url = "https://example.invalid/handbook/infrastructure"
+
+# Output predicates over a wrapped command's streams (CLOUD-117): literals that,
+# found in `batten exec`'s output, promote a lying exit `0` to a failure.
+#
+# The case this exists for: a tool exits 0 while its own output says the work is
+# not really done, and has no severity knob of its own to make it fail. The only
+# surface an agent acts on is the exit code, so a warning that leaves the code at
+# 0 is operationally invisible.
+#
+# A match ALWAYS fails. There is deliberately no severity field and no dependence
+# on `fail_on_warning` above: a "warn-but-pass" match would reproduce the very
+# false green this predicate exists to kill. You declare a pattern here precisely
+# because the string means not-actually-done.
+#
+# `pattern` is a case-sensitive literal substring — the same predicate a `forbid`
+# rule uses, and a shape a reviewer can read without evaluating it. `stream` is
+# `stdout`, `stderr`, or `both` (the default, and the widest reading: a tool that
+# moves a warning between streams must not silently stop being gated).
+#
+# `reason` is REQUIRED. A promoted exit code is the whole of what a caller gets
+# back, so a refusal naming only its id would be un-actionable — and the report is
+# pointer-only (`stream:line <id>`), never the line that matched, because a
+# wrapped command's output is the likeliest place for a secret to appear.
+#
+# REACH FOR SOMETHING ELSE WHEN: the tool has its own severity model (configure
+# that — do not rebuild it as output-scraping); you want to gate a file's contents
+# (a `command` rule over a glob); or you want to promote an existing Batten
+# finding (`fail_on_warning`, which does not apply here).
+#
+# A git-ignored batten.local.toml may ADD a pattern — one more way to catch a
+# lying command is tightening — but may not redefine one declared here.
+[[exec_pattern]]
+id = "no-unfailed-duplicate"
+pattern = "warning[duplicate]"
+stream = "both"
+reason = "set the tool's own severity to deny; do not let a warning ride an exit 0"
+
+# The designed escape hatch: a per-rule waiver that lapses on its own.
+#
+# A gate with no override gets removed, and a gate with an unaudited override
+# becomes decoration — so this is a feature rather than a concession. A waiver
+# names the `rule` it suppresses, carries a REQUIRED `reason`, and carries a
+# REQUIRED `expires` date (`YYYY-MM-DD`, the last day it applies). Every finding
+# it suppresses writes an audit line to stderr; stdout is untouched, so a `-J`
+# document never mentions a waiver.
+#
+# EXPIRY IS THE POINT, not paperwork. A justification and a dead-waiver lint both
+# leave "the waiver persists" as what happens when nobody looks. An expiry inverts
+# that: past its date the waiver simply stops applying, the rule fires again, and
+# the run exits 2. Nobody has to notice for the suppression to lapse.
+#
+# `path` is optional and narrows the waiver to some of the rule's findings, using
+# the same glob vocabulary a rule's own `glob` uses. Absent means the whole rule —
+# the widest a waiver can be, which is why it has to be reached deliberately.
+#
+# `batten config lint` names two dead shapes: `waiver-names-no-rule` (no [[rule]]
+# declares that id) and `waiver-expired`. And `--config-from <ref>` reports an
+# added waiver as `waiver-added`: it is the one config entity whose PRESENCE
+# lowers the bar, so a branch that adds one is naming a weakening.
+#
+# A waiver is not a severity. `severity = "allow"` switches a rule off with no
+# reason and no end date; that is the undesigned hatch this table replaces.
+#
+# A git-ignored batten.local.toml may NOT waive a rule declared here — a waiver
+# lowers the bar, so the durable tier is the committed authority alone (§8).
+[[waiver]]
+rule = "no-conflict-markers"
+reason = "the vendored tree is being replaced in CLOUD-123; gating it churns the diff"
+expires = "2026-12-31"
+path = "vendor/**"
+
+# The governing config surface: the files whose bytes `batten config epoch`
+# hashes into one attributable value, so two records carrying the same epoch
+# were produced under provably the same rules.
+#
+# List the files that actually govern YOUR repository — an agent settings file,
+# a contributor guide, a hook config. Order does not matter (the set is sorted
+# before hashing) and a duplicate is ignored. Absent, or empty, means the
+# default: this file alone, which governs every consumer by definition.
+#
+# Every listed path must be readable. An unreadable one exits 1 — the config-error
+# code, because this list is config, so a tracked path that cannot be read is
+# unreadable config rather than a fault of Batten's own (which would be 3). It is
+# refused rather than skipped: a skip would compute a stable epoch over a surface
+# that changed, which looks exactly like a valid answer.
+[epoch]
+tracked = ["batten.toml"]
+
+# ---------------------------------------------------------------------------
+# Pinned tools this repository provisions (CLOUD-90).
+#
+# One entry per tool: a pinned version, where to get it, what it must hash to,
+# how to unpack it, and the binary it yields. House style §9's rule is that
+# consumer-specific behaviour is reconstructed through config rather than baked
+# into the core, and this is that surface for binaries.
+#
+# TWO VERBS, one pair. `batten provision status` is the freshness gate and is
+# read-effect; `batten provision apply` is the write that fixes it. The gate is
+# `read` for a structural reason rather than a behavioural one: the whole
+# equality test is a checksum over cached bytes, so THE PROVISIONED BINARY IS
+# NEVER EXECUTED. A freshness check that ran `--version` would be a read verb
+# executing an artifact fetched from the internet.
+#
+# `apply` fetches into memory, verifies against `sha256`, and only then writes.
+# A mismatched artifact never reaches the cache, so there is no partial install
+# and no window where a bad binary sits under a good name. The mismatch is exit
+# 2 — a verdict about the pin — while an unreachable URL is exit 3, which is a
+# different claim: the apply could not complete, rather than one it did make.
+#
+# `version` is a cache PATH SEGMENT, so two pins coexist and a version bump is a
+# cache miss rather than an overwrite. The cache lives outside the repository
+# (the OS data directory), so nothing provisioned is ever committed — a property
+# of where the path resolves, not a promise to be careful.
+#
+# `url` takes `https://` or `file://`. Plain `http://` is absent deliberately: a
+# pinned checksum makes tampering detectable, not impossible to attempt, and
+# there is no reason to fetch a pinned artifact over a rewritable channel.
+# `file://` is what makes a hermetic fixture possible.
+#
+# The https fetch runs the host's `curl`, so host CA configuration keeps working
+# behind a TLS re-terminating proxy — it IS the host's default TLS stack rather
+# than a re-implementation of one. That is also §9's posture: name a command
+# already on the operator's PATH, never a downloaded, executed binary.
+#
+# `unpack` is "none" (the artifact is the binary) or "tar_gz". A tarball entry is
+# matched on its FILE NAME, so a release that nests its binary under a versioned
+# directory needs no second statement of the version here.
+# A real, verifiable entry rather than an illustrative one: this URL and this
+# digest are the actual jq 1.7.1 linux-amd64 release binary, measured. A worked
+# example carrying a made-up checksum teaches the shape and mis-teaches the
+# discipline — the pin is the whole security property, so a fake one is the one
+# field that must not be faked.
+[[provision]]
+name = "jq"
+version = "1.7.1"
+url = "https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+sha256 = "5942c9b0934e510ee61eb3e30273f1b3fe2590df93933a93d7c58b81d19c8ff5"
+# The artifact IS the binary — no archive to open.
+unpack = "none"
+binary = "jq"
+
+# --- design-evidence audit ---------------------------------------------------
+#
+# `batten design audit` reads a JSONL stream of typed claim records on stdin and
+# nothing else — no path key here, because stdin subsumes one: a corpus that is a
+# file in your repository reaches the gate as `batten design audit < corpus.jsonl`,
+# with no config and no credential. That keeps the gate offline, byte-stable, and
+# testable with no live data.
+#
+# The gates are exact comparisons over the record's typed fields, never a reading
+# of claim prose: a duplicate id, a claim recorded `verified` whose `polarity` is
+# `absence` (no capture can attest that nothing does X), bytes that do not hash to
+# the recorded digest, a status past `claimed` with no verifier named, and a
+# declared `byte_count` that disagrees with the bytes carried. Four more are
+# advisories: no claimant recorded, a verifier who is the claimant, a `verified`
+# claim whose digest binding cannot be decided, and a capture over the ceiling
+# below. Advisories promote to violations under `--strictness strict`.
+#
+# The one key is that ceiling, in bytes, per capture. Absent means 16384. Lower it
+# to make the gate stricter; a local file may lower it further and may not raise
+# it, since for a budget "may not weaken" means "may not raise".
+[design]
+max_capture_bytes = 16384

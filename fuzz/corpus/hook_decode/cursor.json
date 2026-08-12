@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "beforeShellExecution",
+  "conversation_id": "sess-cursor-1",
+  "cwd": "/repo",
+  "command": "gh pr merge 1",
+  "sandbox": "danger-full-access"
+}

@@ -43,8 +43,17 @@ readonly BIN=batten
 OUT_DIR="${SBOM_OUT_DIR:-sbom}"
 
 # Paths the scan must not descend: a vendored submodule the release checkout does
-# not fetch, and build output that is not part of the source.
-readonly EXCLUDES=(--exclude ./tests/bats --exclude ./target)
+# not fetch, build output that is not part of the source, and the fuzz harness.
+#
+# `./fuzz` is a DETACHED workspace with its own Cargo.lock (CLOUD-112), and both
+# halves of that matter here. Nothing in it is published — it is a development
+# harness, no more part of the shipped artifact than `tests/` is — so cataloging
+# it would make the inventory overstate what a consumer receives, which is the
+# false claim this document exists not to make. It would also break the
+# `sbom-package-drift` invariant by construction: that clause compares the
+# cargo count against the ROOT `Cargo.lock`, and a second lockfile in scope adds
+# packages no root lockfile names (measured: 175 -> 281).
+readonly EXCLUDES=(--exclude ./tests/bats --exclude ./target --exclude ./fuzz)
 
 # Read with awk rather than `sed | head`, which under `pipefail` can report the
 # producer's SIGPIPE as the pipeline's status (mem:toolchain-and-hooks). `exit`

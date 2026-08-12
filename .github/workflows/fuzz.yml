@@ -1,0 +1,114 @@
+name: fuzz
+
+# A fuzz SEARCH, not a gate (CLOUD-112).
+#
+# The distinction is the same one `lock-check` drew and `coverage.yml` follows:
+# a property of the commit belongs in the gate, a property of the world belongs
+# on a clock. A bounded fuzz run is the second kind — nondeterministic, and green
+# proves only that this seed found nothing this time. Treating that as a landing
+# gate would be decoration: a check that cannot meaningfully fail.
+#
+# The property of the commit is `crates/batten/tests/fuzz_corpus.rs`, which
+# replays every checked-in corpus entry and every saved reproducer through the
+# same assertions — deterministically, on the pinned stable toolchain, in
+# milliseconds — and runs inside `mise run verify` like any other test.
+#
+# So, deliberately:
+#   * NOT triggered by `pull_request`. It also keeps `ci-local-parity` honest:
+#     that gate requires every task a PR workflow runs to be one `mise run
+#     verify` runs, and satisfying it by adding `fuzz` to `verify` would put a
+#     nightly toolchain and a wall-clock search on every local verify — the
+#     opposite of the lever `mem:workflow/agent-fanout` measured.
+#   * NOT a required status, and NOT in ci.yml's `final` fan-in.
+#   * NOT a push-to-main trigger: `main` only ever advances by fast-forward to a
+#     commit a PR already tested, so a push trigger would re-run finished work.
+#     The schedule is what samples `main`.
+#
+# WHEN THIS FAILS, the follow-through is one commit. libFuzzer writes the
+# reproducer under `fuzz/artifacts/<target>/`; the job uploads it. Commit that
+# file and the replay gate holds it forever, on every future branch, with no
+# test to write — see `fuzz/artifacts/README.md`.
+
+on:
+  schedule:
+    # Mondays, 08:00 UTC — an hour after coverage, two after lock-currency, so
+    # the scheduled jobs do not contend for runners.
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Search budget per target, in seconds"
+        required: false
+        default: "60"
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). Every
+  # workflow using mise-action must set this; `mise run lock-complete` fails if
+  # one does not.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # budget: grandfathered measured=2026-08-12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+        with:
+          # `rust` alone: it supplies cargo and the rustup that `mise run fuzz`
+          # uses to fetch the nightly libFuzzer's `-Z sanitizer` requires, and
+          # to build the pinned cargo-fuzz under it. cargo-fuzz is deliberately
+          # NOT a `[tools]` entry — see the note beside `[tools]` in mise.toml
+          # for why upstream leaves no backend that can express it.
+          install_args: rust
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Sanitizer-instrumented nightly builds share no artifacts with any
+          # other job's profile, so a shared cache entry would only thrash.
+          key: fuzz
+      # The working corpus, carried between runs rather than committed. A fuzzer
+      # that restarts from the seeds every week re-derives the same shallow
+      # coverage every week and never gets past it; accumulating it in git
+      # instead would append a thousand opaque blobs per run to a tree nobody
+      # can review. A cache is the right home for a machine's working set, and
+      # losing it costs depth, never correctness.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: fuzz/work
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      # Redirected, never piped: a pipeline hands the exit status to its LAST
+      # stage, which is the false-green shape `run-shape-guard` refuses locally
+      # and is no less wrong in a workflow.
+      - run: mise run fuzz >"$RUNNER_TEMP/fuzz.log" 2>&1
+        env:
+          FUZZ_SECONDS: ${{ inputs.seconds || '60' }}
+      - name: Publish the search summary
+        if: always()
+        run: |
+          {
+            echo '## Fuzz'
+            echo
+            echo 'A search, not a gate. A crash here is a reproducer to commit,'
+            echo 'not a branch to block — see fuzz/artifacts/README.md.'
+            echo
+            echo '```'
+            tail -n 40 "$RUNNER_TEMP/fuzz.log"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      # Only on failure, and that is the point: an empty artifact every week
+      # trains a reader to ignore the one week it is not empty.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: fuzz-reproducers
+          path: fuzz/artifacts/
+          if-no-files-found: warn

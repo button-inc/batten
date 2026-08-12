@@ -1,0 +1,53 @@
+# The fuzz crate (CLOUD-112), deliberately its OWN workspace.
+#
+# `[workspace]` with no members detaches this from the root workspace, and both
+# halves of that are load-bearing:
+#
+#   * The root sets `unsafe_code = "forbid"`. `fuzz_target!` expands to an
+#     `extern "C"` entry point, so a crate inheriting that lint cannot compile a
+#     fuzz target at all. Detaching is the sanctioned way to scope the exemption
+#     to the one tree that needs it, rather than weakening the lint for the
+#     library it exists to protect.
+#   * A root `cargo build`/`cargo test` then never sees this crate, so the
+#     stable toolchain the repo pins is never asked to build a nightly-only
+#     dependency. Only `mise run fuzz` reaches it, under nightly.
+[package]
+name = "batten-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+# The fuzzing engine. Pinned to the 0.4 line, which is what cargo-fuzz 0.13
+# generates against.
+libfuzzer-sys = "0.4"
+batten = { path = "../crates/batten" }
+# The properties read the payload back to state the decoder's contract
+# exactly — "the host's spelling, or the assumed default when it named no
+# event". Asserting that without parsing would mean substring-matching a key
+# name, which a payload can carry inside an unrelated string.
+serde_json = "1"
+
+[profile.release]
+debug = 1
+
+# Each target is a bin, and `test = false` keeps `cargo test` out of a tree whose
+# entry point is libFuzzer's rather than Rust's.
+[[bin]]
+name = "hook_decode"
+path = "fuzz_targets/hook_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_parse"
+path = "fuzz_targets/config_parse.rs"
+test = false
+doc = false
+bench = false
