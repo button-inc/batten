@@ -28,7 +28,11 @@ version = 1
 # next tag would make this file refuse the very build that has to lint it. The
 # floor is documentation-grade either way — `deny_unknown_fields` is what
 # actually refuses an older binary.
-min_batten_version = "0.0.59"
+#
+# And again for `[attribution]` (CLOUD-274), on the same reasoning: a binary that
+# predates the table cannot enforce the attribution policy, and silently ignoring
+# the key would report green over a gate that does not exist in it.
+min_batten_version = "0.0.61"
 
 # The ref work must land on (CLOUD-51) — the target `batten worktree status`
 # judges uncommitted, unpushed, and unlanded work against.
@@ -834,6 +838,75 @@ expires = "2026-09-13"
 
 [ci]
 required_checks = ["final"]
+
+# ---------------------------------------------------------------------------
+# What produced commits may carry about the tooling that made them (CLOUD-274),
+# enforcing the agent-neutral attribution decision record (CLOUD-268):
+# https://linear.app/buttoninc/document/agent-neutral-attribution-the-decision-record-e869f1cc5633
+#
+# The record separates three surfaces. AUTHORSHIP (author/committer,
+# Co-authored-by, Signed-off-by) asserts accountability, which attaches to the
+# identity that directs, reviews and adopts a change and never to a model.
+# DISCLOSURE (one trailer in tool-identity form) asserts what tooling assisted,
+# and communities diverge from disclosure-required to AI-forbidden, so it is a
+# per-repo choice. PROVENANCE RECORDS carry the full answer and are Batten's own
+# observability rather than git.
+#
+# WHY THE VENDOR LITERALS ARE HERE. This is the answer, not the mechanism:
+# `crates/batten` holds the matcher and carries no vendor string, which extends
+# non-negotiable rule 1 from consumers to vendors. A grep of `crates/` for any
+# pattern below returns nothing, and the crate's own test suite asserts it.
+#
+# WHY THIS IS A GATE AND NOT A SETTING. Measured 2026-08-09: 39 of the first 50
+# commits on `main` were authored by the injected vendor identity, 18 carried a
+# model-versioned co-authorship trailer, 20 a session URL. The injection is
+# environment-level and the host's own suppression setting does not govern every
+# path, so the invariant is only checkable on the produced commit.
+[attribution]
+# Authorship. Both fields are judged: a repair reaching only `author` leaves the
+# vendor identity on every commit's `committer`, absent from `git log`'s default
+# format and fully public regardless.
+identity_deny = [
+  '^Claude <',
+  '@noreply\.anthropic\.com>$',
+  '\bclaude-(opus|sonnet|haiku|fable)\b',
+]
+
+# Trailers, matched against the whole `Key: value` line — a co-authorship form
+# lives in the key, a session URL in the value.
+#
+# `^Assisted-by:` is here despite being the ALLOWED shape, and that is not a
+# contradiction: deny is the default and `trailer_allow` below is the carve-out,
+# so this one pair expresses every posture.
+trailer_deny = [
+  '^Co-Authored-By:.*(Claude|[Aa]nthropic)',
+  '^Claude-Session:',
+  'claude\.ai/code',
+  '^Assisted-by:',
+]
+
+# Attribution-as-advertising in the message body. Narrow on purpose: a phrase
+# whose function is a credit line, not any mention of a tool.
+body_deny = [
+  '[Gg]enerated with .*(Claude|Anthropic)',
+  '🤖 Generated with',
+]
+
+# The carve-out from `trailer_deny`. EMPTY, and the emptiness IS this repo's
+# posture — the record's §2.2 decided silent-with-records for Button repos, so
+# nothing is exempt and every disclosure trailer is refused. A consumer that
+# discloses sets the tool-identity shape here instead of touching any code:
+#   trailer_allow = ['^Assisted-by: [a-z0-9-]+:[a-z0-9.-]+$']
+# Empty means NO exemption, never "exempt everything" — an empty regex matches
+# every input, so the engine branches on emptiness rather than compiling it.
+trailer_allow = []
+
+# The accountable identity `batten attribution identity` writes into the
+# repo-local git config. Consumer-specific by nature: who answers for this
+# repository's commits is a property of this repository.
+[attribution.identity]
+name = "Alec Wenzowski"
+email = "alec@wenzowski.com"
 
 [epoch]
 tracked = [

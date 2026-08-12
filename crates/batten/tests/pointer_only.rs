@@ -515,6 +515,25 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // Both attribution verbs are the law rather than an exception, and this one
+    // has less latitude than most: everything it reads is metadata someone
+    // wanted suppressed, so a report carrying the matched text would republish
+    // exactly what the gate exists to catch. Findings are `<sha8> author` and
+    // `<sha8> trailer:<key>` (CLOUD-274).
+    Verb {
+        path: "attribution check",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // The one write on this surface. It reports which repo-local identity it
+    // set or left alone, never a commit's metadata.
+    Verb {
+        path: "attribution identity",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "worktree status",
         args: &[],

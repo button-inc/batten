@@ -9,6 +9,7 @@
 //! keeps the binary's `main` trivial.
 
 pub mod action;
+pub mod attribution;
 pub mod brief;
 pub mod budget;
 pub mod capture;
@@ -62,8 +63,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    Cli, Command, ConfigCommand, DefectsCommand, DesignCommand, GenerateCommand, LintCommand,
-    PolicyCommand, ProvisionCommand, ReceiptCommand, SpecFormat, StateCommand, WorktreeCommand,
+    AttributionCommand, Cli, Command, ConfigCommand, DefectsCommand, DesignCommand,
+    GenerateCommand, LintCommand, PolicyCommand, ProvisionCommand, ReceiptCommand, SpecFormat,
+    StateCommand, WorktreeCommand,
 };
 pub use config::Config;
 pub use effect::Effect;
@@ -167,6 +169,19 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // layer and nothing a `batten.local.toml` could weaken.
         Some(Command::Lint { command }) => match command {
             LintCommand::Brief { path, json } => run_lint_brief(path.as_deref(), json, out),
+        },
+        // Commit metadata is neither tree content nor a mediated call, so the §8
+        // config chain supplies the patterns and git supplies the object. The
+        // range is the caller's: `verify` and CI already agree on which commits a
+        // branch produced, and deriving it again here would be a second authority
+        // for that fact.
+        Some(Command::Attribution { command }) => match command {
+            AttributionCommand::Check {
+                json,
+                range,
+                message,
+            } => run_attribution_check(json, range.as_deref(), message.as_deref(), &overrides, out),
+            AttributionCommand::Identity => run_attribution_identity(&overrides, err),
         },
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
@@ -911,6 +926,87 @@ fn run_budget(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Result<
         }
     }
     Ok(ExitCode::verdict(over))
+}
+
+/// Resolve the `[attribution]` table, or say why the gate cannot decide.
+///
+/// An absent table is exit `1`, never a clean pass: "this repository declares no
+/// attribution policy" and "these commits are clean" are different answers, and
+/// collapsing them would report green over a gate that never ran.
+fn attribution_policy(overrides: &Overrides) -> Result<attribution::Attribution> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    config.attribution.clone().ok_or_else(|| {
+        UsageError::raise(format!(
+            "no [attribution] in {}; there is no attribution policy to judge by",
+            config::CONFIG_FILE
+        ))
+    })
+}
+
+fn run_attribution_check(
+    json: bool,
+    range: Option<&str>,
+    message: Option<&str>,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    // Exactly one mode. Both is ambiguous and neither is a run over nothing that
+    // would exit 0 — the vacuous pass a gate must never produce.
+    let commits = match (range, message) {
+        (Some(_), Some(_)) => {
+            return Err(UsageError::raise(
+                "attribution check: --range and --message name two different objects; pass one"
+                    .to_owned(),
+            ));
+        }
+        (None, None) => {
+            return Err(UsageError::raise(
+                "attribution check: pass --range <base>..<head> or --message <file>; with neither \
+                 there is nothing to judge"
+                    .to_owned(),
+            ));
+        }
+        (Some(range), None) => {
+            let (base, head) = range.split_once("..").ok_or_else(|| {
+                UsageError::raise(format!(
+                    "attribution check: `{range}` is not a <base>..<head> range"
+                ))
+            })?;
+            attribution::read_range(Path::new("."), base, head)?
+        }
+        (None, Some(message)) => {
+            vec![attribution::read_message(
+                Path::new("."),
+                Path::new(message),
+            )?]
+        }
+    };
+
+    let policy = attribution_policy(overrides)?;
+    let mut findings = Vec::new();
+    for commit in &commits {
+        findings.extend(policy.judge(commit)?);
+    }
+
+    if json {
+        // Emitted unconditionally, including for a clean run: JSON that is
+        // sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&findings)?)?;
+    } else {
+        // Silence is the success signal on the human channel (§6).
+        write!(out, "{}", attribution::report(&findings))?;
+    }
+    Ok(ExitCode::verdict(!findings.is_empty()))
+}
+
+fn run_attribution_identity(overrides: &Overrides, err: &mut dyn Write) -> Result<ExitCode> {
+    let policy = attribution_policy(overrides)?;
+    let outcome = attribution::set_identity(Path::new("."), &policy)?;
+    // The report goes to stderr: this is a statement about what Batten did to the
+    // clone, not a verdict about the repository, and §6 keeps those channels
+    // apart.
+    writeln!(err, "{}", outcome.line(&policy.identity))?;
+    Ok(ExitCode::Success)
 }
 
 /// What a fail-open boundary says on its way out.

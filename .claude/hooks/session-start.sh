@@ -158,6 +158,30 @@ install_git_hooks() {
 	done
 }
 step git-hooks install_git_hooks
+# The repo-local git identity, set before the session writes a line (CLOUD-274).
+#
+# It belongs in this window for the same reason `doctor` does: the vendor identity
+# is injected at the environment level, so a fresh clone is already carrying it
+# before any work starts, and the first thing that would notice is `commit-lint`
+# refusing a branch whose commits are all already written. Setting it here means
+# the gate has nothing to catch — feedforward that costs one idempotent git config
+# read, rather than a refusal an agent has to unwind with a rebase.
+#
+# After `batten-build`, because this is the engine answering: the policy is
+# `[attribution]` in batten.toml and `batten attribution identity` is what reads
+# it. A WRITE, self-declared as one (house style §5), scoped to .git/config in
+# this checkout — never --global, which covers a developer's own unrelated
+# repositories. An identity a contributor set accountably is left exactly alone.
+step attribution-identity mise run attribution-identity
+
+# `hk install` is deliberately NOT run here, though AGENTS.md lists it as a
+# per-clone step. The hook it generates is `exec hk run pre-commit`, calling
+# `hk` bare — which resolves only where mise's shims are on PATH. In this
+# environment they are not, so installing it makes every `git commit` fail with
+# `hk: not found`. Measured: adding the step here broke the very commit that
+# added it. The gate is still enforced, by `mise run ci`/`verify` and by CI;
+# a local pre-commit hook is a convenience, and a broken one is worse than
+# none. Restoring it needs the PATH question answered first (CLOUD-196).
 
 if [ "$fail" -ne 0 ]; then
 	echo "::error:: session-start: setup incomplete — expect missing tools or MCP servers" >&2

@@ -265,6 +265,20 @@ pub struct Config {
     /// drain". The type and the state machine are [`crate::drain`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drain: Option<crate::drain::DrainConfig>,
+
+    /// What produced commits may carry about the tooling that made them
+    /// (CLOUD-274), enforcing the attribution decision record (CLOUD-268).
+    /// Absent means this repository declares no attribution policy and the gate
+    /// is simply not active — not that everything is permitted, which is why an
+    /// absent table is a usage error at the gate rather than a silent pass.
+    ///
+    /// Consumer-specific by nature, and the reason it lives here: the engine
+    /// carries the matcher, this file carries the vendor literals. That extends
+    /// non-negotiable rule 1 from consumers to vendors — a grep of `crates/` for
+    /// the configured patterns returns nothing. The type and the predicate are
+    /// [`crate::attribution`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<crate::attribution::Attribution>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -482,6 +496,13 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     if let Some(defects) = &config.defects {
         defects.validate()?;
     }
+    // Same reason, plus one specific to this table: every one of its values is a
+    // regular expression, and an uncompilable pattern is a rule that silently
+    // matches nothing. Refused here, where the error names the key, rather than
+    // at the gate, where it would look like a clean commit.
+    if let Some(attribution) = &config.attribution {
+        attribution.validate()?;
+    }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
@@ -619,6 +640,12 @@ impl Config {
             // cannot be read still has a drain; it simply has no view on how
             // often it speaks.
             drain: None,
+
+            // An authority that declares no attribution policy grants no
+            // exemption from one: there is simply nothing to judge by, and the
+            // gate says so (exit 1) rather than passing over commits it never
+            // read.
+            attribution: None,
         }
     }
 }

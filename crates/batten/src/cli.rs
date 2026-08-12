@@ -96,6 +96,11 @@ pub enum Command {
         /// The chosen sub-verb.
         command: PolicyCommand,
     },
+    /// What produced commits may carry about the tooling that made them.
+    Attribution {
+        /// The chosen sub-verb.
+        command: AttributionCommand,
+    },
     /// Worktrees and the work in them.
     Worktree {
         /// The chosen sub-verb.
@@ -230,6 +235,25 @@ pub enum PolicyCommand {
         /// Emit the measurement as byte-stable JSON instead of pointer lines.
         json: bool,
     },
+}
+
+/// Subcommands of `attribution`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AttributionCommand {
+    /// Judge commit metadata against the `[attribution]` policy.
+    Check {
+        /// Emit the findings as byte-stable JSON instead of pointer lines.
+        json: bool,
+        /// The commit range to judge. Mutually exclusive with `message`;
+        /// exactly one must be given, and neither is a usage error rather than
+        /// a vacuous pass over nothing.
+        range: Option<String>,
+        /// The pending commit-message file to judge.
+        message: Option<String>,
+    },
+    /// Set this clone's repo-local git identity when it is unset or denied.
+    Identity,
 }
 
 /// Subcommands of `state`.
@@ -444,6 +468,18 @@ fn policy_of(matches: &ArgMatches) -> Option<PolicyCommand> {
     }
 }
 
+fn attribution_of(matches: &ArgMatches) -> Option<AttributionCommand> {
+    match matches.subcommand()? {
+        ("check", matches) => Some(AttributionCommand::Check {
+            json: flag(matches, "json"),
+            range: matches.get_one::<String>("range").cloned(),
+            message: matches.get_one::<String>("message").cloned(),
+        }),
+        ("identity", _) => Some(AttributionCommand::Identity),
+        _ => None,
+    }
+}
+
 fn provision_of(matches: &ArgMatches) -> Option<ProvisionCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(ProvisionCommand::Status {
@@ -563,6 +599,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),
         "defects" => defects_of(matches).map(|command| Command::Defects { command }),
         "design" => design_of(matches).map(|command| Command::Design { command }),
+        "attribution" => attribution_of(matches).map(|command| Command::Attribution { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),
         // `get_many`, not `get_one`: the tail is an `Append` action, so every

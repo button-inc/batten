@@ -112,6 +112,21 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   whole-set reading let one dead glob contribute nothing while the rest counted
   and still reported green (CLOUD-298). A config declaring no budget is exit 1
   too — a budget verb that measured nothing must not report `0`.
+- `attribution.rs` — what produced commits may carry about the tooling that made
+  them (CLOUD-274), the mechanism for the attribution decision record
+  (CLOUD-268). Judges author/committer identity, every trailer and the message
+  body against `[attribution]` patterns, over a commit range or one pending
+  message — the commit-msg seam, where a refusal means the offending commit is
+  never created. A GATE OVER THE ARTIFACT, never a setting: the vendor identity
+  is injected at the environment level and the host's own suppression setting
+  does not govern every path, so the invariant is only checkable on the produced
+  commit. Deny is the default and `trailer_allow` is the carve-out, so one pair
+  of lists expresses every posture from silent to disclosing; an EMPTY allow-set
+  exempts nothing, which is a branch rather than an empty pattern because an
+  empty regex matches everything and would invert the gate. Findings are pointers
+  (`<sha8> author`, `<sha8> trailer:<key>`) and never the matched text — this
+  module reads exactly the content someone wanted suppressed. `set_identity` is
+  the one write, repo-local only, and it leaves a compliant identity alone.
 - `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54). The HOST
   is the authority; `[ci]` in `batten.toml` is a projection a gate polices, never
   the reverse. Committed rather than fetched per run because a gate that can fail

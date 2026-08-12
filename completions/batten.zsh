@@ -773,6 +773,134 @@ esac
     ;;
 esac
 ;;
+(attribution)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+":: :_batten__subcmd__attribution_commands" \
+"*::: :->attribution" \
+&& ret=0
+
+    case $state in
+    (attribution)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-attribution-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+'--message=[Judge one pending commit message file, before the commit exists]: :_default' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'-J[Emit byte-stable JSON instead of pointer lines]' \
+'--json[Emit byte-stable JSON instead of pointer lines]' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+'::range -- Judge every non-merge commit in this range (<base>..<head>):_default' \
+&& ret=0
+;;
+(identity)
+_arguments "${_arguments_options[@]}" : \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__attribution__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-attribution-help-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(identity)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (worktree)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -1743,6 +1871,30 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(attribution)
+_arguments "${_arguments_options[@]}" : \
+":: :_batten__subcmd__help__subcmd__attribution_commands" \
+"*::: :->attribution" \
+&& ret=0
+
+    case $state in
+    (attribution)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:batten-help-attribution-command-$line[1]:"
+        case $line[1] in
+            (check)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(identity)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (worktree)
 _arguments "${_arguments_options[@]}" : \
 ":: :_batten__subcmd__help__subcmd__worktree_commands" \
@@ -1921,6 +2073,7 @@ _batten_commands() {
 'init:Write a starter batten.toml, refusing to overwrite an existing one' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
+'attribution:What produced commits may carry about the tooling that made them' \
 'worktree:Worktrees and the work in them\: what is at risk, and the hygiene verbs over them' \
 'provision:Pinned tools this repository provisions, cached out of tree' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
@@ -1931,6 +2084,49 @@ _batten_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution_commands] )) ||
+_batten__subcmd__attribution_commands() {
+    local commands; commands=(
+'check:Refuse vendor authorship, branding or session links in commit metadata' \
+'identity:Set this clone'\''s repo-local git identity when it is unset or denied' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten attribution commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution__subcmd__check_commands] )) ||
+_batten__subcmd__attribution__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten attribution check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution__subcmd__help_commands] )) ||
+_batten__subcmd__attribution__subcmd__help_commands() {
+    local commands; commands=(
+'check:Refuse vendor authorship, branding or session links in commit metadata' \
+'identity:Set this clone'\''s repo-local git identity when it is unset or denied' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'batten attribution help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution__subcmd__help__subcmd__check_commands] )) ||
+_batten__subcmd__attribution__subcmd__help__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten attribution help check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution__subcmd__help__subcmd__help_commands] )) ||
+_batten__subcmd__attribution__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten attribution help help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution__subcmd__help__subcmd__identity_commands] )) ||
+_batten__subcmd__attribution__subcmd__help__subcmd__identity_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten attribution help identity commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__attribution__subcmd__identity_commands] )) ||
+_batten__subcmd__attribution__subcmd__identity_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten attribution identity commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__check_commands] )) ||
 _batten__subcmd__check_commands() {
@@ -2161,6 +2357,7 @@ _batten__subcmd__help_commands() {
 'init:Write a starter batten.toml, refusing to overwrite an existing one' \
 'generate:Emit artifacts derived from the command spec, on stdout' \
 'policy:Inspect the thresholds and path sets this repository holds itself to' \
+'attribution:What produced commits may carry about the tooling that made them' \
 'worktree:Worktrees and the work in them\: what is at risk, and the hygiene verbs over them' \
 'provision:Pinned tools this repository provisions, cached out of tree' \
 'hook:Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)' \
@@ -2171,6 +2368,24 @@ _batten__subcmd__help_commands() {
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'batten help commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__attribution_commands] )) ||
+_batten__subcmd__help__subcmd__attribution_commands() {
+    local commands; commands=(
+'check:Refuse vendor authorship, branding or session links in commit metadata' \
+'identity:Set this clone'\''s repo-local git identity when it is unset or denied' \
+    )
+    _describe -t commands 'batten help attribution commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__attribution__subcmd__check_commands] )) ||
+_batten__subcmd__help__subcmd__attribution__subcmd__check_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help attribution check commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__attribution__subcmd__identity_commands] )) ||
+_batten__subcmd__help__subcmd__attribution__subcmd__identity_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help attribution identity commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__check_commands] )) ||
 _batten__subcmd__help__subcmd__check_commands() {

@@ -4,6 +4,17 @@
   "description": "A parsed, validated `batten.toml`.\n\n`deny_unknown_fields` makes an unrecognised key a hard error (§8): the config\nsurface stays narrow and a typo can never silently disable a gate.",
   "type": "object",
   "properties": {
+    "attribution": {
+      "description": "What produced commits may carry about the tooling that made them\n(CLOUD-274), enforcing the attribution decision record (CLOUD-268).\nAbsent means this repository declares no attribution policy and the gate\nis simply not active — not that everything is permitted, which is why an\nabsent table is a usage error at the gate rather than a silent pass.\n\nConsumer-specific by nature, and the reason it lives here: the engine\ncarries the matcher, this file carries the vendor literals. That extends\nnon-negotiable rule 1 from consumers to vendors — a grep of `crates/` for\nthe configured patterns returns nothing. The type and the predicate are\n[`crate::attribution`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Attribution"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "budget": {
       "description": "The thresholds this repository holds itself to (CLOUD-50). Today one:\n`[budget.instructions]`, the always-loaded instruction set and what it\nmay cost. Absent means no budget is declared and none is enforced — a\nthreshold nobody wrote down is not a threshold of zero. The type and the\npredicate are [`crate::budget`].",
       "anyOf": [
@@ -268,6 +279,51 @@
         }
       ]
     },
+    "Attribution": {
+      "description": "The `[attribution]` table: what produced commits may carry about the tooling.\n\nConsumer-specific by nature (non-negotiable rule 1, extended from consumers to\nvendors): the engine holds the matcher, this table holds the answer. A vendor\nname is configuration here and never a literal in the crate.",
+      "type": "object",
+      "properties": {
+        "body_deny": {
+          "description": "Patterns refused in the commit message body — attribution-as-advertising.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "identity": {
+          "description": "The accountable identity `--set-identity` writes into the repo-local git\nconfig.",
+          "$ref": "#/$defs/Identity"
+        },
+        "identity_deny": {
+          "description": "Patterns refused in the `author` and `committer` identity fields.\n\nBoth fields, because the environment sets both and a repair reaching only\n`author` leaves the vendor identity on every commit's `committer` — absent\nfrom `git log`'s default format and fully public regardless.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trailer_allow": {
+          "description": "The carve-out from [`Attribution::trailer_deny`]. Absent or empty exempts\n**nothing**, which is how a silent posture is expressed as data.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "trailer_deny": {
+          "description": "Patterns refused in any trailer, matched against the whole `Key: value`\nline: a co-authorship form lives in the key, a session URL in the value.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "identity_deny",
+        "trailer_deny",
+        "body_deny",
+        "identity"
+      ]
+    },
     "Budget": {
       "description": "The `[budget]` table: **named** file sets and what each may cost.\n\nA map, not a struct with a field per set. The set name is the *consumer's*\n— `[budget.instructions]` is this repository's name for its always-loaded\ncontext, and an engine type carrying that name would be a consumer-specific\nidentifier in `crates/batten` (non-negotiable rule 1). A second consumer\nbudgeting a different surface declares `[budget.<their-name>]` and needs no\nengine change; before this it needed a new field.",
       "type": "object",
@@ -471,6 +527,25 @@
         }
       },
       "additionalProperties": false
+    },
+    "Identity": {
+      "description": "The identity a commit is accountable to.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "description": "`user.email`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "`user.name`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "email"
+      ]
     },
     "Judge": {
       "description": "The `[judge]` table: what the judge may put in a model call.\n\nEvery field defaults to the refusing reading, so a `[judge]` table that\nmerely exists sends nothing but pointers and hashes.",

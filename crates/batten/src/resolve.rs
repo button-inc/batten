@@ -284,6 +284,14 @@ pub struct Resolved {
     /// monotone reading does not belong in a monotone layer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drain: Option<crate::drain::DrainConfig>,
+    /// The attribution policy (CLOUD-274), as the authority states it. Not
+    /// layered, for the same reason `transcript` is not: every value in it is a
+    /// deny pattern or the identity commits are accountable to, and a local file
+    /// editing either would be *loosening* the policy — the exact weakening
+    /// `trust.rs` compares committed bytes for. There is no raise-only reading of
+    /// "match fewer things".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution: Option<crate::attribution::Attribution>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -881,6 +889,7 @@ fn assemble(
         worktree: repo.worktree.clone(),
         hook: repo.hook.clone(),
         transcript: repo.transcript.clone(),
+        attribution: repo.attribution.clone(),
         judge: repo.judge.clone(),
         design: repo.design.clone(),
         ci: repo.ci.clone(),
@@ -939,6 +948,7 @@ fn attribution(
         ("worktree", authority_set(repo.worktree.is_some())),
         ("hook", authority_set(repo.hook.is_some())),
         ("transcript", authority_set(repo.transcript.is_some())),
+        ("attribution", authority_set(repo.attribution.is_some())),
         ("judge", authority_set(repo.judge.is_some())),
         ("design", authority_set(repo.design.is_some())),
         ("ci", authority_set(repo.ci.is_some())),

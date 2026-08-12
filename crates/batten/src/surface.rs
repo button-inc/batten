@@ -412,6 +412,49 @@ const FAIL_ON_WARNING: FlagDecl = FlagDecl {
 /// Global because it selects *which* config the whole run resolves from —
 /// scoping it per verb would let one verb be judged by the base and another by
 /// the working tree in the same invocation.
+/// `--range <base>..<head>` on `attribution check` (CLOUD-274).
+///
+/// The range is the caller's, never derived here: `verify` and CI's commit-lint
+/// job already agree on which commits a branch produced, and a second derivation
+/// would be a second authority for that. Absent means message mode.
+/// Positional, because the range IS the verb's object — the thing being judged,
+/// the way `lint brief <path>` names its file. A flag would read as a modifier on
+/// a verb that has some other default subject, and there is deliberately no such
+/// default: deriving one here would be a second authority for "which commits did
+/// this branch produce".
+const RANGE: FlagDecl = FlagDecl {
+    id: "range",
+    long: None,
+    short: None,
+    help: "Judge every non-merge commit in this range (<base>..<head>)",
+    env: EnvDecl::None,
+    global: false,
+    positional: true,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--message <file>` on `attribution check` (CLOUD-274).
+///
+/// The commit-time seam. The message is on disk and git already resolves the
+/// identity it will stamp, so a refusal here means the offending commit is never
+/// created rather than created and found later in a range.
+const MESSAGE: FlagDecl = FlagDecl {
+    id: "message",
+    long: Some("message"),
+    short: None,
+    help: "Judge one pending commit message file, before the commit exists",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 /// `--host-rules <path|->` on `config lint` (CLOUD-54).
 ///
 /// Data in, verdict out. The payload is the host ruleset the caller already
@@ -959,6 +1002,40 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
+    },
+    // The `attribution` noun only dispatches, and like `worktree` it cannot be
+    // `read`: its subtree carries `identity`, which writes `.git/config`. It is
+    // deliberately NOT a verb under `policy` for exactly the reason that row
+    // states — `policy` is declared `read` as a claim about its whole subtree,
+    // and hanging a mutating verb there would either falsify that claim or force
+    // `policy` off the derived read-only allowlist, taking `policy budget` with
+    // it. A separate noun keeps both claims true (CLOUD-274).
+    CommandDecl {
+        path: "attribution",
+        about: "What produced commits may carry about the tooling that made them",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // Reads commit metadata through git and matches configured patterns against
+    // it. Nothing is spawned but git's own read-only plumbing and no user-supplied
+    // code is reachable, which is what the `read` structural promise requires.
+    CommandDecl {
+        path: "attribution check",
+        about: "Refuse vendor authorship, branding or session links in commit metadata",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON, RANGE, MESSAGE],
+    },
+    // The one write this subject introduces, self-declared (§5). Repo-local only:
+    // it writes `.git/config` in this checkout and never `--global`, which covers
+    // a developer's own unrelated repositories.
+    CommandDecl {
+        path: "attribution identity",
+        about: "Set this clone's repo-local git identity when it is unset or denied",
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[],
     },
     // The `worktree` noun only dispatches, and unlike `policy` it cannot be
     // `read`: its house-style §2 subtree (new, adopt, prune, reclaim) is

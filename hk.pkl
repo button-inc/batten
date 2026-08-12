@@ -651,6 +651,14 @@ hooks {
       ["conventional-commit"] {
         check = "mise run commit-msg {{commit_msg_file}}"
       }
+      // The commit-time half of the attribution gate (CLOUD-274). Range mode runs
+      // from `commit-lint` and catches an offending commit after it exists; this
+      // catches it BEFORE — the message is on disk and `git var` already resolves
+      // the identity git is about to stamp, so refusing here means the commit is
+      // never created and there is nothing to amend or rebase away.
+      ["commit-attribution"] {
+        check = "mise run commit-attribution-msg {{commit_msg_file}}"
+      }
     }
   }
   ["pre-commit"] {

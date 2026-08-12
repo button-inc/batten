@@ -326,6 +326,27 @@ mentions this issue", which is not "work began" — a commit can continue,
 document, cite or defer. It only ever moves forward into In Progress, so it
 dragged an issue back out of In Review and left two others stranded (CLOUD-186).
 
+`batten attribution` enforces the attribution decision record (CLOUD-268) over
+produced commits (CLOUD-274): no vendor identity in `author`/`committer`, no
+co-authorship-form model identity, no vendor session URL, no marketing formula.
+Two seams, and neither adds a task name to a workflow — `mise run
+commit-attribution` is a `depends` of `commit-lint`, so it rides the
+`BASE_SHA`/`HEAD_SHA` contract `verify` and CI's commit-lint job already share
+(a second workflow entry would oblige `verify` to run it too, per
+`ci-local-parity`); `mise run commit-attribution-msg` runs from hk's `commit-msg`
+hook and refuses before the commit exists. Findings are pointers (`<sha8>
+author`, `<sha8> trailer:<key>`) and never the matched text, because everything
+it reads is content someone wanted suppressed. The policy is `[attribution]` in
+`batten.toml` — patterns, the carve-out, and the accountable identity — never a
+literal in the crate, and `tests/commit-attribution.bats` asserts both the
+wiring and that no configured pattern matches anything under `crates/`. **The
+emptiness of `trailer_allow` is this repo's posture**, not an unfinished config:
+silent-with-records, so every disclosure trailer is refused. `mise run
+attribution-identity` is the one write (`batten attribution identity`,
+self-declared per house style §5): repo-local only, it repairs an unset or denied
+identity, leaves a contributor's compliant one alone, and runs from
+`session-start.sh` so a clone is compliant before it writes a line.
+
 `mise run gh-preflight` answers "does this token carry the claims our tasks
 need?" by probing the read endpoints and reporting each 403's
 `X-Accepted-GitHub-Permissions`; write claims are declared, never exercised. Run

@@ -959,8 +959,34 @@ head -n1 "{{arg(name="file")}}" | grep -Eq "$CONVENTIONAL_RE" \
   || { echo 'commit-msg: subject must follow Conventional Commits, e.g. "feat(cli): add check subcommand"'; exit 1; }
 '''
 
+[tasks.commit-attribution]
+description = "Gate: no vendor authorship, branding or session links in BASE_SHA..HEAD_SHA (policy: [attribution] in batten.toml)"
+# `cargo run` for the same reason `batten-check` and `policy-budget` use it: the
+# gate must judge the working tree's engine and config as the pair that ships.
+run = "cargo run --quiet -p batten -- attribution check ${BASE_SHA:?}..${HEAD_SHA:?}"
+
+[tasks.commit-attribution-msg]
+description = "Gate: no vendor authorship, branding or session links in one pending commit message, before the commit exists"
+# The commit-msg-hook half. Same policy and same engine as `commit-attribution`;
+# only the object differs — a message on disk plus the identity `git var` says
+# git is about to stamp, rather than commits that already exist.
+run = 'cargo run --quiet -p batten -- attribution check --message "{{arg(name="file")}}"'
+
+[tasks.attribution-identity]
+description = "Write: set this clone's repo-local git identity when it is unset or carries a denied vendor identity"
+run = "cargo run --quiet -p batten -- attribution identity"
+
 [tasks.commit-lint]
 description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits"
+# The attribution gate rides this task's env contract rather than getting its own
+# call site in a workflow, and that is deliberate. `ci-local-parity` requires
+# every `mise run <task>` a workflow invokes to be one `verify` invokes; a second
+# name in commit-lint.yml would mean editing `verify` too. Both callers already
+# export BASE_SHA/HEAD_SHA — the exact range the gate needs — so a dependency
+# lights up the local pre-flight and the CI backstop at once, with no second
+# definition of which commits are in scope. It also fails closed for free: mise
+# stops before this body runs, so the no-`set -e` trap does not apply (CLOUD-274).
+depends = ["commit-attribution"]
 shell = "bash -c" # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
 run = '''
 fail=0

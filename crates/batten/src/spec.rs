@@ -286,6 +286,11 @@ mod tests {
         assert_eq!(
             read_only_allowlist(&spec()),
             vec![
+                // The gate half of the attribution pair. It reads commit metadata
+                // through git's read-only plumbing and matches configured patterns
+                // against it, so it is `read`; `attribution identity` writes
+                // .git/config and is deliberately absent, as is the noun above it.
+                "attribution check".to_owned(),
                 "check".to_owned(),
                 "config".to_owned(),
                 "config epoch".to_owned(),
@@ -410,6 +415,9 @@ mod tests {
         assert_eq!(
             paths,
             vec![
+                "attribution".to_owned(),
+                "attribution check".to_owned(),
+                "attribution identity".to_owned(),
                 "check".to_owned(),
                 "config".to_owned(),
                 "config epoch".to_owned(),
