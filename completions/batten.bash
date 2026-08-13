@@ -46,6 +46,9 @@ _batten() {
             batten,hook)
                 cmd="batten__subcmd__hook"
                 ;;
+            batten,init)
+                cmd="batten__subcmd__init"
+                ;;
             batten,lint)
                 cmd="batten__subcmd__lint"
                 ;;
@@ -180,6 +183,9 @@ _batten() {
                 ;;
             batten__subcmd__help,hook)
                 cmd="batten__subcmd__help__subcmd__hook"
+                ;;
+            batten__subcmd__help,init)
+                cmd="batten__subcmd__help__subcmd__init"
                 ;;
             batten__subcmd__help,lint)
                 cmd="batten__subcmd__help__subcmd__lint"
@@ -383,7 +389,7 @@ _batten() {
 
     case "${cmd}" in
         batten)
-            opts="-q -v -y -h -V --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help --version check enforce exec config lint spec doctor generate policy worktree provision hook receipt defects design state help"
+            opts="-q -v -y -h -V --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help --version check enforce exec config lint spec doctor init generate policy worktree provision hook receipt defects design state help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1149,7 +1155,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__help)
-            opts="check enforce exec config lint spec doctor generate policy worktree provision hook receipt defects design state help"
+            opts="check enforce exec config lint spec doctor init generate policy worktree provision hook receipt defects design state help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1442,6 +1448,20 @@ _batten() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        batten__subcmd__help__subcmd__init)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         batten__subcmd__help__subcmd__lint)
             opts="brief"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -1719,6 +1739,32 @@ _batten() {
                     COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
                     return 0
                     ;;
+                --strictness)
+                    COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
+                    return 0
+                    ;;
+                --config-from)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --log-level)
+                    COMPREPLY=($(compgen -W "silent quiet normal verbose debug trace" -- "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        batten__subcmd__init)
+            opts="-n -q -v -y -h --dry-run --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
                     return 0

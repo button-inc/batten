@@ -437,6 +437,9 @@ mod tests {
                 "generate markdown".to_owned(),
                 "generate schema".to_owned(),
                 "hook".to_owned(),
+                // §2 already reserved this row (`init [-n] … (write)`); CLOUD-206
+                // landed the verb behind it, so the document needed no edit.
+                "init".to_owned(),
                 // A top-level verb-with-kind, not a `brief` noun: what varies
                 // across `lint <kind>` is the artifact, and `config lint` stays
                 // where it is because it lints the one committed authority

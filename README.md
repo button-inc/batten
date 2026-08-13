@@ -115,9 +115,11 @@ defensible number reports "not measured" rather than borrowing one.
   rather than re-deriving it).
 - **Narrow configuration.** A two-layer TOML model — a repo file plus env and
   flag overrides — with no upward walk and no `conf.d` merge surface.
-- **Zero-config by default** _(planned — CLOUD-70, CLOUD-66)_: `check` on
-  built-in defaults, opt-in `init`, and a `doctor` with `--json`. Today `check`
-  requires a `batten.toml` in the working directory.
+- **Opt-in scaffolding.** `batten init` writes a starter `batten.toml` and
+  refuses to overwrite an existing one; `batten doctor --json` checks what it
+  wrote. `check` on built-in defaults is still _planned_ (CLOUD-70) — today it
+  requires a `batten.toml` in the working directory, which is what makes `init`
+  the first command a new repository runs.
 - **Gates decide, they do not estimate.** A predicate that only approximates its
   own question — a model judgement, or a match over open-ended content — may
   advise; it never blocks.

@@ -126,6 +126,19 @@ pub enum Command {
         /// The chosen sub-verb.
         command: DesignCommand,
     },
+    /// Write a starter `batten.toml` into the working directory.
+    ///
+    /// Appended rather than placed beside `generate`, where the surface groups
+    /// it: this enum carries no `repr`, so a variant inserted in the middle
+    /// shifts every later discriminant and `mise run semver` reads that as a
+    /// break the crate would have to declare. Declaration order here is not a
+    /// contract with anything — dispatch is an exhaustive match and the surface
+    /// is `surface.rs`'s — so appending is free and declaring a breaking change
+    /// for a cosmetic ordering would not be.
+    Init {
+        /// Report what would be written, writing nothing.
+        dry_run: bool,
+    },
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -542,6 +555,9 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             .map(|format| Command::Spec { format: *format }),
         "doctor" => Some(Command::Doctor {
             json: flag(matches, "json"),
+        }),
+        "init" => Some(Command::Init {
+            dry_run: flag(matches, "dry_run"),
         }),
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),
         "provision" => provision_of(matches).map(|command| Command::Provision { command }),

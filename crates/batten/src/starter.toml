@@ -1,0 +1,102 @@
+# batten.toml — the one committed authority for this repository.
+#
+# Written by `batten init`. Everything here is meant to be edited: the rows are a
+# working starting point, not a template to fill in. Batten reads exactly this
+# file plus raise-only overrides (env vars, flags, and a git-ignored
+# batten.local.toml that may only tighten policy). There is no upward directory
+# walk and no conf.d merge.
+#
+# Next: run `batten check`. Then `batten doctor` if anything looks wrong, and
+# `batten config show` to see which layer set each effective value.
+
+# Required. This build supports version 1; any other value is refused rather
+# than half-understood.
+version = 1
+
+# The oldest Batten permitted to read this file. A binary below it refuses to run
+# rather than reporting green over rules it does not understand. 0.0.0 accepts
+# every build; raise it once you depend on a key a newer release added.
+min_batten_version = "0.0.0"
+
+# How strictly gates apply: "permissive", "standard", or "strict". Policy-bearing,
+# so an override may only raise it — and the value here is the floor.
+strictness = "standard"
+
+# Whether a "warn"-severity finding fails the run. false reports it and still
+# exits 0. Policy-bearing in the same direction: an override may turn this on,
+# never off.
+fail_on_warning = false
+
+# The paths policy applies to, as an ordered include/exclude list. A "!" prefix
+# excludes, and an exclude beats an overlapping include whatever the order. Add
+# your build output and vendored trees here.
+scope = ["**", "!target/**"]
+
+# Paths whose modification is guarded. A plain include set — "!" is refused here
+# rather than read as a literal glob. This file is listed because it is the
+# authority every other gate is judged by; add your CI definitions, deploy
+# manifests, and anything else a change should have to be deliberate about.
+protected = ["batten.toml"]
+
+# `unlanded` is the third path set and is deliberately not written here: an absent
+# key is the empty set, while `unlanded = []` is a set declared and covering
+# nothing, which `batten config lint` reports as a smell. Declare it when you have
+# paths to name.
+
+# Programs that change the world, so `batten hook` can refuse one aimed at a
+# protected path. The gate is the INTERSECTION of this table and `protected`
+# above — not a rule per verb × path pair — so adding either side widens it.
+#
+# Each verb names the sanctioned mutation to point at instead: a deny that says
+# only "no" is a refusal a caller cannot act on.
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or change it through the surface that owns it"
+
+# `>` and `>>` are not programs — in `cat x > p` the program is `cat` — so the
+# engine surfaces the redirect operator as a pseudo-program you can gate like any
+# other verb. These two tokens are a contract with the engine; `verb = "redirect"`
+# would simply never match.
+[[verb]]
+verb = ">"
+effect = "destructive"
+redirect = "append, or write through the surface that owns the file"
+
+# One live rule, so the first `batten check` gates something real rather than
+# reporting on an empty rule set. A `forbid` rule fires on any line containing its
+# literal pattern and reports pointer-only, as `path:line rule-id`.
+#
+# `severity` and `scope` are two axes that never conflate, and both are required
+# with no implicit fallback:
+#
+#   severity  "deny" fails the run (exit 2), "warn" reports without failing
+#             (unless fail_on_warning above promotes it), "allow" switches the
+#             rule off — which `batten config lint` reports, since a rule that
+#             reads as a gate and is not one deserves to be named.
+#   scope     "tree" is the working tree; "mediated_call" is a single command
+#             being adjudicated by `batten hook`, never evaluated by `check`.
+#
+# The glob is every path at least one directory below the root, rather than the
+# `**/*` you might expect. A `forbid` pattern is a literal, and this one appears
+# in this very file on the line below — a repo-wide glob would report the config
+# that declares the rule. Narrow it to your source tree (`src/**`, `lib/**`) once
+# you know the layout; a glob is include-only, so `!` does not work here.
+[[rule]]
+id = "no-conflict-markers"
+kind = "forbid"
+glob = "**/*/*"
+pattern = "<<<<<<< "
+severity = "deny"
+scope = "tree"
+
+# The governing config surface: the files whose bytes `batten config epoch` hashes
+# into one attributable value, so two records carrying the same epoch were
+# produced under provably the same rules.
+#
+# List the files that actually govern YOUR repository — an agent instruction file,
+# a contributor guide, a hook config. Order does not matter and duplicates are
+# ignored. Every listed path must be readable: an unreadable one is exit 1, since
+# this list is config and a tracked path that cannot be read is unreadable config.
+[epoch]
+tracked = ["batten.toml"]

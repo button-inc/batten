@@ -107,6 +107,25 @@ fn the_schema_validates_the_committed_example_config() {
 }
 
 #[test]
+fn the_schema_validates_the_shipped_starter_config() {
+    // The same acceptance over the artifact `batten init` actually writes
+    // (CLOUD-206). Held separately from the example above rather than instead of
+    // it: one is a document a reader copies, the other is a file Batten authored,
+    // and a schema that rejected the second would break `init` itself.
+    let schema = derived_schema();
+    let validator = jsonschema::validator_for(&schema).expect("the schema compiles");
+    let instance = as_json(batten::init::STARTER);
+    let errors: Vec<String> = validator
+        .iter_errors(&instance)
+        .map(|err| format!("{}: {err}", err.instance_path()))
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "the starter config failed the schema: {errors:?}"
+    );
+}
+
+#[test]
 fn the_schema_validates_this_repositorys_own_config() {
     // Consumer #1 in practice, not just in principle: the schema Batten ships
     // is asserted against the config Batten itself is gated by.

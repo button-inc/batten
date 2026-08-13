@@ -38,7 +38,7 @@ trailing_newline = true
 # at a release would validate the working tree against the last tag, so a config
 # key added in an unreleased commit would read as invalid.
 [[rule]]
-include = ["batten.toml", "batten.example.toml"]
+include = ["batten.toml", "batten.example.toml", "crates/batten/src/starter.toml"]
 [rule.schema]
 path = "schema/batten.schema.json"
 

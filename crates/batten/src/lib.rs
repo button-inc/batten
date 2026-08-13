@@ -29,6 +29,7 @@ pub mod findings;
 pub mod git;
 pub mod hook;
 pub mod identity;
+pub mod init;
 pub mod journal;
 pub mod judge;
 pub mod lint;
@@ -132,6 +133,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
         Some(Command::Doctor { json }) => run_doctor(json, out),
+        // `init` reads no config — it is the verb that exists because there is
+        // none — so the §8 chain is deliberately not threaded through it.
+        Some(Command::Init { dry_run }) => run_init(dry_run, mode, out, err),
         Some(Command::Generate { command }) => run_generate(&command, out),
         // `exec` reads no config and renders no verdict: it runs what the caller
         // named and reports what that returned. The §8 chain is deliberately not
@@ -314,6 +318,63 @@ fn run_provision_apply(
         writeln!(err, "provision: {verb} {} {}", entry.name, entry.version)?;
     }
     Ok(ExitCode::Success)
+}
+
+/// Scaffold the committed authority (CLOUD-206).
+///
+/// The channel split is §6's: **stdout carries the pointer** — the one path this
+/// invocation is about — and stderr carries the messaging. The refusal is the
+/// exception, and deliberately so: §7 defines exit `2` as a verdict whose reason
+/// travels on stderr, so an already-present config prints nothing on stdout and
+/// the reason unprefixed on stderr. A caller reading only stdout therefore sees a
+/// path exactly when a path is what it got.
+///
+/// The `-n` preview is **not** ladder-gated, following `defects add`: a silenced
+/// preview is a `--dry-run` that did nothing. The success line is, because a
+/// caller that asked for `-q` after a write it requested wants the pointer and
+/// not the prose.
+fn run_init(
+    dry_run: bool,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match init::apply(Path::new("."), dry_run)? {
+        init::Outcome::Created => {
+            writeln!(out, "{}", config::CONFIG_FILE)?;
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("wrote {}; run `batten check` next", config::CONFIG_FILE),
+            )?;
+            Ok(ExitCode::Success)
+        }
+        init::Outcome::WouldCreate => {
+            writeln!(out, "{}", config::CONFIG_FILE)?;
+            writeln!(err, "init: would write {}", config::CONFIG_FILE)?;
+            Ok(ExitCode::Success)
+        }
+        // Unprefixed and ungated: this is the verdict, not a message about one.
+        // Built through `Refusal` rather than a `format!` of its own — this is a
+        // deny site, and CLOUD-122's contract is that every deny points to a fix
+        // structurally rather than because its author remembered to name one.
+        init::Outcome::Exists => {
+            let refusal = Refusal::new(
+                init::CONFIG_EXISTS,
+                format!(
+                    "{} already exists, and init will not overwrite the committed authority",
+                    config::CONFIG_FILE
+                ),
+                Fix::Run(format!(
+                    "edit {file} in place, or move it aside and run `batten init` again",
+                    file = config::CONFIG_FILE
+                )),
+            );
+            output::verdict(err, &refusal.render())?;
+            Ok(ExitCode::Violation)
+        }
+    }
 }
 
 /// Report work that is uncommitted, unpushed, or not landed (CLOUD-51).
