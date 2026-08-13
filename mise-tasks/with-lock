@@ -50,7 +50,7 @@ if [ -e "$lock" ] && [ ! -d "$lock" ]; then
 	rm -f "$lock"
 fi
 
-# What the kernel used to do for free — drop the flock when the holder dies — is
+# What the kernel used to do for free — drop the lock when the holder dies — is
 # explicit now. The trap covers every ordinary exit including a signal, and a
 # holder that took SIGKILL is reclaimed by the stale check in the wait loop, so
 # an abandoned lock is a delay measured in one poll rather than in the timeout.
