@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.65](https://github.com/button-inc/batten/compare/v0.0.64...v0.0.65) - 2026-08-13
+
+### Added
+
+- *(hook)* [**breaking**] refuse to end a turn whose work is not finished
+- *(generate)* derive man pages and a markdown reference from the command surface
+- *(hook)* [**breaking**] let a repository attach its own side effects to hook events
+
+### Fixed
+
+- *(man)* reset the version on the cloned node, not merely leave it unset
+- *(cli)* append the new generate variants rather than inserting them
+- *(man)* make a committed page a pure function of the surface, not of the version
+- *(tests)* stop the suites depending on GNU tools and on git's default branch
+
+### Other
+
+- *(pointer-only)* classify the two new generate verbs
+- *(spec)* admit the two new derivations to the pinned row set and allowlist
+- *(generate)* gate the man pages and the reference the way the completions are gated
+- *(cli)* run the portability rows under enforce, like every committed-config sibling
+
 ## [0.0.64](https://github.com/button-inc/batten/compare/v0.0.63...v0.0.64) - 2026-08-13
 
 ### Added
