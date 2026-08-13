@@ -18,7 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Output;
 
-use common::{at_root, batten, scratch};
+use common::{at_root, batten, git_in, scratch};
 
 /// The shells the repository commits a completion script for.
 const SHELLS: [&str; 3] = ["bash", "zsh", "fish"];
@@ -309,10 +309,18 @@ fn the_markdown_reference_is_not_committed() {
     // The whole point of CLOUD-171: a reference derived at publish time is
     // current by construction. A committed copy would be the second authority
     // this design removes, and it would need a drift gate nothing here provides.
+    //
+    // TRACKED, not PRESENT. This asserted `!exists()` when it landed with
+    // CLOUD-69, which was the wrong predicate and only looked right because
+    // nothing rendered the file yet: `mise run render:cli` writes it into a
+    // git-ignored directory on every release and on every `reference-check`
+    // run, so "present" became the ordinary state and the case failed on a
+    // tree doing exactly what it should. Committed is a question for git.
+    let root = at_root(".");
     for candidate in ["reference/batten-cli-reference.md", "docs/cli.md", "CLI.md"] {
         assert!(
-            !at_root(candidate).exists(),
-            "{candidate} is committed; the reference is rendered at publish time"
+            git_in(&root, &["ls-files", "--", candidate]).is_empty(),
+            "{candidate} is tracked; the reference is rendered at publish time"
         );
     }
 }
