@@ -209,7 +209,28 @@ jobs:
     timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
     permissions:
       contents: read
+      # Cancelling THIS run when the lease does not authorise the branch
+      # (CLOUD-420) — cancelled rather than failed, so a healthy PR is not
+      # re-drafted.
+      actions: write
     steps:
+      # CLOUD-420, and FIRST for the reason the `action` job states above: a run
+      # this branch is not authorised to make should cost the rounding rather
+      # than a runner. Body fetched from `main`, never from this head, and
+      # `|| exit 0` on both lines so a body that will not parse cannot red the
+      # first step of every job.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: action
@@ -291,7 +312,28 @@ jobs:
     timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
     permissions:
       contents: read
+      # Cancelling THIS run when the lease does not authorise the branch
+      # (CLOUD-420) — cancelled rather than failed, so a healthy PR is not
+      # re-drafted.
+      actions: write
     steps:
+      # CLOUD-420, and FIRST for the reason the `action` job states above: a run
+      # this branch is not authorised to make should cost the rounding rather
+      # than a runner. Body fetched from `main`, never from this head, and
+      # `|| exit 0` on both lines so a body that will not parse cannot red the
+      # first step of every job.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: action
@@ -388,7 +430,28 @@ jobs:
     timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
     permissions:
       contents: read
+      # Cancelling THIS run when the lease does not authorise the branch
+      # (CLOUD-420) — cancelled rather than failed, so a healthy PR is not
+      # re-drafted.
+      actions: write
     steps:
+      # CLOUD-420, and FIRST for the reason the `action` job states above: a run
+      # this branch is not authorised to make should cost the rounding rather
+      # than a runner. Body fetched from `main`, never from this head, and
+      # `|| exit 0` on both lines so a body that will not parse cannot red the
+      # first step of every job.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: action
@@ -472,7 +535,28 @@ jobs:
     timeout-minutes: 10 # budget: grandfathered measured=2026-08-12
     permissions:
       contents: read
+      # Cancelling THIS run when the lease does not authorise the branch
+      # (CLOUD-420) — cancelled rather than failed, so a healthy PR is not
+      # re-drafted.
+      actions: write
     steps:
+      # CLOUD-420, and FIRST for the reason the `action` job states above: a run
+      # this branch is not authorised to make should cost the rounding rather
+      # than a runner. Body fetched from `main`, never from this head, and
+      # `|| exit 0` on both lines so a body that will not parse cannot red the
+      # first step of every job.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: action
@@ -582,20 +666,44 @@ jobs:
 
   action-final:
     name: action-final
-    if: ${{ github.event.pull_request.draft == false }}
+    # `always()`, for the reason `ci.yml`'s `final` carries at length: an
+    # `always()` job runs when the run is cancelled and then fails its `needs:`
+    # assertion, which is a false RED — while `!cancelled()` skips it, and GitHub
+    # reports a job skipped by its own `if:` as Success. A false red costs a
+    # rebase; a false green reports a self-test that never ran as one that
+    # passed. Without `always()` at all this job is skipped whenever a leg fails,
+    # and `checks-green` reads a skip as no answer and polls forever.
+    if: ${{ always() && github.event.pull_request.draft == false }}
     needs: [action, action-violation, action-deny, action-usage, action-internal]
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-12
-    permissions: {}
+    permissions:
+      actions: write
     steps:
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
       # OVER `needs.*`, NOT A LIST OF NAMES. Branch protection points at this one
       # job so that adding a leg never needs a ruleset change — which only holds
       # if the assertion follows `needs:` by itself. A hand-enumerated set goes
       # stale the next time a variant is added, and `ci-local-parity` refuses one
-      # (CLOUD-351).
-      - name: Every variant succeeded
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
-        shell: bash
+      # (CLOUD-351). Three conclusions rather than one `= success` per job:
+      # `contains` cannot express "all", so the equivalent is "none of the
+      # not-success ones", and that set is exhaustive for a `needs` result.
+      - name: Assert every variant passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "::error::a self-test variant did not succeed — see the failing job above." >&2
-          exit 1
+          echo "$RESULTS"
+          [ "${{ contains(needs.*.result, 'failure') }}" = "false" ] &&
+            [ "${{ contains(needs.*.result, 'cancelled') }}" = "false" ] &&
+            [ "${{ contains(needs.*.result, 'skipped') }}" = "false" ]
