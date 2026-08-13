@@ -134,11 +134,16 @@ for gate in ${gates//,/ }; do
 			continue
 		fi
 
-		if ! sed -i "$script" "$work/$src"; then
+		# `-i.bak` and not the bare in-place flag (CLOUD-282): BSD sed reads the
+		# next argument as the suffix, so the no-suffix spelling consumes the
+		# script on a Mac. The backup is removed rather than kept — it exists
+		# only to satisfy the one form both seds accept.
+		if ! sed -i.bak "$script" "$work/$src"; then
 			echo "$gate/$slug unappliable-mutation"
 			failures=$((failures + 1))
 			continue
 		fi
+		rm -f "$work/$src.bak"
 		# A mutation that changed nothing proves nothing, and would otherwise be
 		# reported as caught or missed on the strength of an unrelated case.
 		if cmp -s "$src" "$work/$src"; then

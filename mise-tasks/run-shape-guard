@@ -290,9 +290,15 @@ done < <(printf '%s\n' "$list")
 # is caught rather than only a leading one.
 if [ "$(printf '%s' "$raw" | jq -r '.tool_input.run_in_background // false' 2>/dev/null)" != true ]; then
 	for element in "${elements[@]}"; do
-		# `mapfile`, not `while read`: the last stage carries no trailing newline,
-		# so a read-loop drops it — which for a one-stage element is every stage.
-		mapfile -t sleep_stages < <(printf '%s' "$element" | tr '|' '\n')
+		# A `read` loop, with the producer terminating its last line (CLOUD-282):
+		# bash 4's array-read builtin is unavailable on macOS's 3.2. The trailing
+		# newline is what makes the two equivalent — `read` returns false on an
+		# unterminated final segment, and for a one-stage element that segment is
+		# every stage, so `printf '%s'` here would empty the loop entirely.
+		sleep_stages=()
+		while IFS= read -r sleep_stage_line; do
+			sleep_stages+=("$sleep_stage_line")
+		done < <(printf '%s\n' "$element" | tr '|' '\n')
 		for stage in "${sleep_stages[@]}"; do
 			read -r prog _ _ <<<"$(resolve "$stage")"
 			[ "$prog" = sleep ] || continue
@@ -350,7 +356,11 @@ Bypass with BATTEN_RUN_SHAPE_BYPASS=1.'
 for element in "${elements[@]}"; do
 	# Per stage, like the sleep rule: `git commit` is not verdict-bearing, so the
 	# `last_verdict` early exit below would never reach it.
-	mapfile -t commit_stages < <(printf '%s' "$element" | tr '|' '\n')
+	# Same read-loop-with-terminated-producer as the sleep rule above (CLOUD-282).
+	commit_stages=()
+	while IFS= read -r commit_stage_line; do
+		commit_stages+=("$commit_stage_line")
+	done < <(printf '%s\n' "$element" | tr '|' '\n')
 	for stage in "${commit_stages[@]}"; do
 		read -r prog sub1 _ <<<"$(resolve "$stage")"
 		if [ "$prog" != git ] || [ "$sub1" != commit ]; then continue; fi

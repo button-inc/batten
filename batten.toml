@@ -441,24 +441,29 @@ no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockf
 # because the older wording made a bash task the cheapest satisfying artifact,
 # and CLOUD-202 is in flight moving the existing guards OUT of that layer.
 #
-# WHY THE GLOBS ARE `mise-tasks/*` AND `tests/*.bats`, both single-segment:
+# WHY THE GLOBS ARE `mise-tasks/**` AND `tests/**/*.bats`:
 #
 #   * two or more segments, so neither can match the root `batten.toml` and make
 #     the rule fire on its own definition — the walk is `fs::read_dir` and skips
 #     only `.git`.
-#   * `tests/*.bats` and NOT `tests/**/*.bats`, because `tests/bats` is a
-#     vendored submodule carrying 228 of its own `.bats` files written against a
-#     different portability posture. Every one of this repository's own suites
-#     sits directly in `tests/`. Same reasoning `bats-tests-not-deleted` records.
+#   * recursive, matching `no-bash4-wait-n` and `bats-tests-not-deleted` rather
+#     than inventing a third depth convention. Both were narrowed to one segment
+#     once, only to dodge the vendored `tests/bats` submodule the walker used to
+#     descend into; since CLOUD-328 the walk stops at a nested repository, so
+#     depth is free again and hk.pkl's `batten-check` glob spans it too. That
+#     coupling is not cosmetic: `batten-glob-check` subsumes a required glob only
+#     by verbatim match or a `P/**` prefix, so `tests/*.bats` would be uncovered
+#     by hk's `tests/**/*.bats` and the step would stop running for exactly the
+#     commits this rule judges.
 #
 # WHAT IS DELIBERATELY NOT HERE, and why it is a gap rather than an oversight:
-# the `tests/*.bats` half of the sed and flock rows. `tests/memory-guard.bats`
+# the `tests/**/*.bats` half of the sed and flock rows. `tests/memory-guard.bats`
 # carries the in-place form five times as FIXTURE STRINGS — it is the suite
 # proving `memory-guard` denies that shape — and `tests/target-ensure.bats` names
 # the util-linux lock in a test title. A `forbid` pattern is a literal substring
 # with no `exclude` column, so those rows cannot be written today without firing
 # on the tests that prove the guards work. That is exactly CLOUD-283. The
-# `mise-tasks/*` half — the layer that actually could not run — lands now.
+# `mise-tasks/**` half — the layer that actually could not run — lands now.
 #
 # The rationale comments in the guarded files deliberately do NOT spell the
 # literals they explain, for the same reason the agnosticism rules above do not
@@ -466,7 +471,7 @@ no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockf
 [[rule]]
 id = "no-gnu-sed-z"
 kind = "forbid"
-glob = "mise-tasks/*"
+glob = "mise-tasks/**"
 pattern = "sed -zE"
 severity = "deny"
 scope = "tree"
@@ -477,7 +482,7 @@ scope = "tree"
 [[rule]]
 id = "no-gnu-sed-in-place"
 kind = "forbid"
-glob = "mise-tasks/*"
+glob = "mise-tasks/**"
 pattern = "sed -i "
 severity = "deny"
 scope = "tree"
@@ -485,7 +490,7 @@ scope = "tree"
 [[rule]]
 id = "no-bash4-mapfile"
 kind = "forbid"
-glob = "mise-tasks/*"
+glob = "mise-tasks/**"
 pattern = "mapfile "
 severity = "deny"
 scope = "tree"
@@ -493,7 +498,7 @@ scope = "tree"
 [[rule]]
 id = "no-gnu-xargs-r"
 kind = "forbid"
-glob = "mise-tasks/*"
+glob = "mise-tasks/**"
 pattern = "xargs -r"
 severity = "deny"
 scope = "tree"
@@ -504,7 +509,7 @@ scope = "tree"
 [[rule]]
 id = "no-util-linux-flock"
 kind = "forbid"
-glob = "mise-tasks/*"
+glob = "mise-tasks/**"
 pattern = "flock "
 severity = "deny"
 scope = "tree"
@@ -524,7 +529,7 @@ scope = "tree"
 [[rule]]
 id = "no-branch-f-main"
 kind = "forbid"
-glob = "tests/*.bats"
+glob = "tests/**/*.bats"
 pattern = "branch -f main"
 severity = "deny"
 scope = "tree"
