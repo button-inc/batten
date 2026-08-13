@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.67](https://github.com/button-inc/batten/compare/v0.0.66...v0.0.67) - 2026-08-13
+
+### Fixed
+
+- *(tests)* ask git whether the reference is committed, not the filesystem
+
 ## [0.0.66](https://github.com/button-inc/batten/compare/v0.0.65...v0.0.66) - 2026-08-13
 
 ### Added
