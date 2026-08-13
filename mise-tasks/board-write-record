@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+#MISE description="PostToolUse hook body: record what this branch put on the board, with the tracker's own verdict on whether a new row was refined"
+#
+# CLOUD-514, phase 1. Every gate here prices FAILING to record something —
+# `finding-sink-check` fails a turn that cites evidence and writes nothing,
+# `deferral-check` fails a PR that defers without naming an issue. Nothing prices
+# the opposite. Filing satisfies all of them in seconds while finishing costs a
+# diff, a suite and a landing, so for an agent under pressure the punt is not a
+# temptation, it is arithmetic.
+#
+# THIS FILE GATES NOTHING. It is the sensor half, and shipping a sensor alone is
+# normally the "log without a gate" non-negotiable 2 refuses. The exception is
+# argued and measured: the gate's firing rate cannot be estimated retrospectively
+# because WHICH BRANCH PUT WHICH ROW ON THE BOARD has never been recorded
+# anywhere. The one available proxy — rows created between a PR opening and its
+# merge — was measured over 40 merged PRs and fires on 183 of 184, because a
+# window over a fleet captures every session's filings. So this record is what
+# makes the gate specifiable at all, and its enabling trigger is a number this
+# produces rather than a date.
+#
+# WHY THE LINT HAPPENS HERE, WHICH IS THE WHOLE DESIGN. The first draft had the
+# agent run `ready-lint` and mint a receipt. That is worthless: `ready-lint` reads
+# a payload the caller assembles, and it was run three times during this issue's
+# own refinement against text in a local file — once under the id `CLOUD-NEW`,
+# for a row that did not exist — green every time. A toll payable in text nobody
+# filed is not a toll. A `PostToolUse` body does not have that problem: it fires
+# on the tool RESULT, which is the tracker's response to the create.
+#
+# THE RESULT ENVELOPE IS MEASURED, NOT ASSUMED. No hook in this tree had ever
+# read a tool result, and the documented example is a `Write` whose response is a
+# flat object. An MCP tool's is not: it is the content-block list
+# `[{"type":"text","text":"<the row as JSON>"}]`, so `.tool_response.id` does not
+# exist and a body written against the documented shape would silently record
+# nothing.
+#
+# RELATIONS COME FROM THE INPUT, AND THAT IS NOT A COMPROMISE. `ready-lint`'s §8
+# rule cross-checks prose claiming `blockedBy CLOUD-N` against the payload's
+# relations, and the create response carries no relations at all — so linting the
+# response alone reports `blocker-cited-without-relation` on exactly the rows that
+# were refined most carefully. The create call's own `blockedBy` argument is the
+# entire relation set on a create (there is nothing prior to append to), so it is
+# what the tracker acted on. The BODY being judged is still the tracker's; naming
+# a blocker is what creates the relation, so this cannot claim a dependency the
+# board does not have.
+#
+# POINTER-ONLY IS LOAD-BEARING HERE (non-negotiable 4), not decorative: the text
+# this reads is the entire issue body. Four fields reach the file — kind, id,
+# updatedAt, verdict — and nothing is ever printed.
+#
+# FAILS OPEN AND SILENT on everything it cannot establish. A recorder that
+# blocked or noised a board write would cause the failure `finding-sink-check`
+# exists to catch, which is the opposite of the point.
+#
+# The mutation collapses create and update, so every edit to an existing row is
+# recorded as a filing — which inflates the very count the gate will be specified
+# against, in the direction that makes filing look normal.
+#MUTANT update-recorded-too|s/^\t\[ -n "\$existing" \] && exit 0$/\t[ -n "$existing" ] \&\& :/|updating an existing row is never recorded
+# The mutation drops the relations synthesis, so a row whose §8 claims a blocker
+# lints as blocker-cited-without-relation and records `unready` — the false
+# refusal that would fire on the best-refined rows.
+#MUTANT relations-dropped|s/relations: {blockedBy: \$blockers}/relations: {}/|claims a blocker still records a green verdict
+set -uo pipefail
+
+[ -n "${BATTEN_BOARD_WRITE_BYPASS:-}" ] && exit 0
+
+raw=$(cat) || exit 0
+
+tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
+[ -n "$tool" ] || exit 0
+
+# Suffix, never prefix. CLOUD-178 measured the same connector exposed as
+# `mcp__Linear__save_issue`, `mcp__<uuid>__save_issue` and
+# `mcp__claude_ai_Linear__save_issue` depending on the registration episode, so a
+# rule naming one matches none of the others and the miss is silent. The settings
+# matcher is anchored the same way; this is belt to its braces.
+case "$tool" in
+*save_issue) kind=issue ;;
+*save_comment) kind=comment ;;
+*) exit 0 ;;
+esac
+
+# An `id` in the INPUT means this updates a row that already exists, which is not
+# a board write this branch is answerable for. `finding-sink-check` already tells
+# the two apart this way.
+if [ "$kind" = issue ]; then
+	existing=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
+	[ -n "$existing" ] && exit 0
+fi
+
+# The content-block envelope, per the measurement in the header. `fromjson?`
+# rather than `fromjson` so a text block that is not JSON is skipped instead of
+# aborting the whole read.
+row=$(printf '%s' "$raw" | jq -c '
+	[ .tool_response[]? | select(.type == "text") | .text | fromjson? ] | first // empty
+' 2>/dev/null) || exit 0
+[ -n "$row" ] || exit 0
+
+id=$(jq -r '.id // empty' <<<"$row" 2>/dev/null) || exit 0
+[ -n "$id" ] || exit 0
+updated=$(jq -r '.updatedAt // "-"' <<<"$row" 2>/dev/null) || updated=-
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+[ -n "$git_dir" ] || exit 0
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+[ -n "$branch" ] || exit 0
+
+# A comment is sink 2 — recorded so the create-versus-comment ratio is
+# observable, never judged. Only a new row carries a refinement obligation.
+verdict=-
+if [ "$kind" = issue ]; then
+	blockers=$(printf '%s' "$raw" | jq -c '[.tool_input.blockedBy[]? | {id: .}]' 2>/dev/null) || blockers='[]'
+	payload=$(jq -c --argjson blockers "$blockers" '{
+	  id: .id,
+	  description: (.description // ""),
+	  relations: {blockedBy: $blockers}
+	}' <<<"$row" 2>/dev/null) || payload=""
+	# BY PATH, AND THE STATUS IS READ AS THREE ANSWERS RATHER THAN TWO.
+	#
+	# `mise run ready-lint` is the obvious call and is wrong here: a hook inherits
+	# the cwd of the tool call, which is not required to be inside this project,
+	# and `mise run` outside a project errors out. That failure is silent and it
+	# lands on the WRONG side — mapping any non-zero to `unready` would record a
+	# refusal for every row filed from a directory mise could not resolve, which
+	# is a verdict about the environment wearing the mask of a verdict about the
+	# row. Sibling tasks are addressed relative to this file for that reason.
+	#
+	# `ready-lint`'s contract is 0 pass / 1 the block is wrong / 2 the input was
+	# unreadable, so only 1 is a judgement. Anything else — 2, or a 127 from a
+	# missing interpreter — leaves the verdict `-`, which the gate reads as "not
+	# answered" rather than as a refusal.
+	if [ -n "$payload" ]; then
+		printf '%s' "$payload" | "$(dirname -- "${BASH_SOURCE[0]}")/ready-lint" >/dev/null 2>&1
+		case $? in
+		0) verdict=ready ;;
+		1) verdict=unready ;;
+		*) verdict=- ;;
+		esac
+	fi
+fi
+
+mkdir -p "$git_dir/batten-receipts" 2>/dev/null || exit 0
+# Slashes are the one character a filename cannot carry; the substitution matches
+# every other branch-keyed receipt here.
+record="$git_dir/batten-receipts/board-writes.${branch//\//-}"
+printf '%s %s %s %s\n' "$kind" "$id" "$updated" "$verdict" >>"$record" 2>/dev/null || exit 0
+
+exit 0
