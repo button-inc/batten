@@ -50,7 +50,12 @@
 # was removed.
 set -uo pipefail
 
-raw=$(cat 2>/dev/null) || exit 0
+# BOUNDED, never a bare `cat` (CLOUD-511). As a hook this reads a pipe the
+# harness closes immediately, so the timeout is invisible. Invoked by hand with no
+# redirect, a bare `cat` blocks on an stdin that never closes — measured at exit
+# 143 after the harness's ~2-minute kill, in a session whose container is the
+# thing this mechanism exists to protect.
+raw=$(timeout 1s cat 2>/dev/null) || raw=""
 
 tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
 case "$tool" in
@@ -67,15 +72,21 @@ check="$(dirname -- "${BASH_SOURCE[0]}")/plan-hold-check"
 dir=$("$check" dir 2>/dev/null) || exit 0
 [ -n "$dir" ] && [ -d "$dir" ] || exit 0
 
-# Release, never signal — removing the sentinel lets the sleeper finish on its
-# own terms and return 0, and that exit is the wake-up the harness delivers with
-# the human's answer already in hand. Killing it would end the process without
-# that exit, which is the "the work runs and the session loses its wake-up"
-# failure `run-shape-guard` catalogues. This file sends no signal at all, so the
-# property holds structurally rather than by review.
-for file in "$dir"/*; do
-	[ -f "$file" ] || continue
-	rm -f -- "$file" 2>/dev/null || true
-done
+# MARK, DO NOT RELEASE (CLOUD-511). This used to remove the sentinel here, which
+# is correct for the single-handoff turn and wrong for the turn the plan-mode
+# workflow actually prescribes: clarify with `AskUserQuestion`, then propose with
+# `ExitPlanMode`. Releasing on the first answer left the second handoff with no
+# hold — measured as a live `plan-hold-guard` refusal, and silently as an idle
+# turn end wherever the guard does not reach.
+#
+# So the answer is recorded and the turn boundary acts on it. `plan-hold-release`
+# (UserPromptSubmit) still releases immediately: a typed prompt is both an answer
+# AND a new turn, so the two conditions are already met there.
+#
+# Still no signal, ever: release stays "remove the sentinel and let the sleeper
+# finish on its own terms", so the exit is the wake-up rather than a kill — the
+# "work runs and the session loses its wake-up" failure `run-shape-guard`
+# catalogues. This file now sends neither a signal nor a removal.
+"$check" mark >/dev/null 2>&1 || exit 0
 
 exit 0

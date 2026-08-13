@@ -51,7 +51,21 @@
 # only `SessionStart`.
 set -uo pipefail
 
-raw=$(cat 2>/dev/null) || exit 0
+# BOUNDED, never a bare `cat` (CLOUD-511). As a hook this reads a pipe the harness
+# closes immediately, so the timeout is never reached. Invoked BY HAND with no
+# redirect — which the guard's own deny message effectively invites — a bare `cat`
+# blocks on an stdin that never closes: measured at exit 143 after the harness's
+# ~2-minute kill, in a session whose container is the thing the hold protects.
+#
+# An empty read still means "no prompt to classify", which is not an answer, so
+# the behaviour below is unchanged. What changes is that it SAYS SO on the manual
+# path rather than exiting 0 in silence, because a caller who ran this by hand
+# needs to know it released nothing.
+raw=$(timeout 1s cat 2>/dev/null) || raw=""
+if [ -z "${raw//[[:space:]]/}" ]; then
+	echo "plan-hold-release: no prompt on stdin, so nothing was classified and no hold was released. This path is a hook; to release by hand, remove the sentinel under \`$(dirname -- "${BASH_SOURCE[0]}")/plan-hold-check dir\`." >&2
+	exit 0
+fi
 
 check="$(dirname -- "${BASH_SOURCE[0]}")/plan-hold-release-check"
 [ -x "$check" ] || exit 0

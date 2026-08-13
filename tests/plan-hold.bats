@@ -291,14 +291,86 @@ human() { jq -nc --arg p "${1:-please continue}" '{prompt: $p}'; }
 # whether a person typed; this path's provenance is structural, because the event
 # fires only after a tool whose whole purpose is to ask one.
 
-@test "answering a handoff tool releases the hold" {
+# CLOUD-511 moved this one step later: answering a handoff now MARKS rather than
+# releasing, and the turn boundary acts on the mark. The property the old form
+# asserted — an answer is what starts a release — still holds; what changed is
+# that it no longer completes mid-turn, because a turn can contain a second
+# handoff and the plan-mode workflow prescribes exactly that.
+@test "answering a handoff tool marks the answer and leaves the hold standing" {
 	for tool in AskUserQuestion ExitPlanMode; do
 		mkdir -p "$(dir)"
 		printf '4242\n' >"$(dir)/4242"
+		"$CHECK" unmark
 		run bash -c "jq -nc --arg t '$tool' '{tool_name: \$t}' | '$RELEASE_TOOL'"
 		[ "$status" -eq 0 ]
-		[ ! -e "$(dir)/4242" ]
+		[ -e "$(dir)/4242" ]
+		run "$CHECK" answered
+		[ "$status" -eq 0 ]
 	done
+}
+
+# THE ACCEPTANCE CASE (CLOUD-511). Measured as a live `plan-hold-guard` refusal:
+# one turn armed a hold, answered an `AskUserQuestion`, and then had `ExitPlanMode`
+# refused because the answer had already removed the sentinel.
+@test "TWO HANDOFFS, ONE TURN: the second is still guarded after the first is answered" {
+	mkdir -p "$(dir)"
+	printf "$$\n" >"$(dir)/$$"
+	"$CHECK" unmark
+	run bash -c "jq -nc '{tool_name: \"AskUserQuestion\"}' | '$RELEASE_TOOL'"
+	[ "$status" -eq 0 ]
+	# The guard's predicate — what `ExitPlanMode` would be judged by — still holds.
+	run "$CHECK" live
+	[ "$status" -eq 0 ]
+}
+
+@test "the turn boundary releases a hold whose answer was marked" {
+	mkdir -p "$(dir)"
+	printf '4242\n' >"$(dir)/4242"
+	"$CHECK" mark
+	run "$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-turn"
+	[ "$status" -eq 0 ]
+	[ ! -e "$(dir)/4242" ]
+}
+
+# THE OTHER DIRECTION, and the one a "release at turn end" reading breaks. A plan
+# handed to a human ends its turn on purpose with nobody having answered yet; the
+# hold must outlive that, or the reclaim CLOUD-451 exists to prevent comes back
+# through this fix.
+@test "the turn boundary leaves an UNANSWERED hold standing" {
+	mkdir -p "$(dir)"
+	printf '4242\n' >"$(dir)/4242"
+	"$CHECK" unmark
+	run "$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-turn"
+	[ "$status" -eq 0 ]
+	[ -e "$(dir)/4242" ]
+}
+
+# One answer licenses one release. Without the unmark, every later turn end would
+# release whatever hold happened to be live.
+@test "a mark is spent by the release it licensed" {
+	mkdir -p "$(dir)"
+	printf '4242\n' >"$(dir)/4242"
+	"$CHECK" mark
+	"$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-turn"
+	run "$CHECK" answered
+	[ "$status" -eq 1 ]
+	# A fresh hold armed afterwards survives the next turn end.
+	printf '4343\n' >"$(dir)/4343"
+	run "$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-release-turn"
+	[ "$status" -eq 0 ]
+	[ -e "$(dir)/4343" ]
+}
+
+# The manual path hung: a bare `cat` on an stdin that never closes, measured at
+# exit 143 after the harness's ~2-minute kill. A hook reads a pipe the harness
+# closes, so the bound is invisible there and load-bearing here.
+@test "a manual release with NO stdin returns promptly and says it released nothing" {
+	mkdir -p "$(dir)"
+	printf '4242\n' >"$(dir)/4242"
+	run timeout 10s "$RELEASE" </dev/null
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"no prompt on stdin"* ]]
+	[ -e "$(dir)/4242" ]
 }
 
 # THE DIRECTION A SIMPLIFICATION WOULD BREAK, with nothing else going red. A

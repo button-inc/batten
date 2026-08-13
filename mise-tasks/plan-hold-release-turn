@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+#MISE description="Stop hook: release a hold whose human ALREADY answered, now that the turn is over (CLOUD-511)"
+#
+# CLOUD-511. Release needs two conditions, and they stopped being the same moment
+# when CLOUD-485 moved the release onto the tool path:
+#
+#   1. the human answered  — `plan-hold-release-tool` records it as a mark
+#   2. the turn is over    — this file, on `Stop`
+#
+# Releasing on (1) alone is what CLOUD-511 measured: a turn that answers an
+# `AskUserQuestion` and then proposes with `ExitPlanMode` had its hold removed
+# mid-turn, leaving the second handoff unguarded. Releasing on (2) alone is
+# CLOUD-485's anti-vacuity case and is worse — a plan left open for a human to
+# read would lose its hold the instant the turn ended, which is precisely the
+# reclaim CLOUD-451 exists to prevent. Requiring both is the whole change.
+#
+# WHY THIS IS A SECOND `Stop` ENTRY AND NOT A `PreToolUse` ONE. CLOUD-511's Ready
+# block first proposed "Stop marks, next PreToolUse releases". A `PreToolUse`
+# entry is paid on every Bash call — CLOUD-435 deleted six of them over ~150 ms of
+# task-runner startup each, and CLOUD-479 is currently removing that same class of
+# cost. `Stop` fires at most once per turn, so this costs a `test -e` per turn.
+#
+# Invoked BY PATH, never `mise run`, for the reason `plan-hold` and its siblings
+# already are: ~203 ms of task-runner startup to do microseconds of work
+# (CLOUD-479's measured table).
+#
+# Silent and always 0. A `Stop` hook has no verdict to deliver, and an agent does
+# not need telling that a sentinel it never sees was removed. Failure is silence
+# too: the worst case of not releasing is one sleeping process that caps itself,
+# which is the cheap side of the asymmetry `plan-hold-release` argues for.
+set -uo pipefail
+
+check="$(dirname -- "${BASH_SOURCE[0]}")/plan-hold-check"
+[ -x "$check" ] || exit 0
+
+# No answer recorded means the turn ended with a human still reading. Leave the
+# hold standing — this is the case that must NOT release, and it is the one a
+# "release at turn end" reading of this issue would have broken.
+"$check" answered >/dev/null 2>&1 || exit 0
+
+dir=$("$check" dir 2>/dev/null) || exit 0
+[ -n "$dir" ] && [ -d "$dir" ] || exit 0
+
+# Remove the sentinel, never signal: the sleeper notices within one poll, exits 0
+# on its own terms, and that exit is the wake-up.
+for file in "$dir"/*; do
+	[ -f "$file" ] || continue
+	rm -f -- "$file" 2>/dev/null || true
+done
+
+# Clear the mark immediately after acting on it, so one answer can license only
+# one release. Without this, every later turn end would release whatever hold
+# happened to be live — reintroducing the reclaim through the back door.
+"$check" unmark >/dev/null 2>&1 || true
+
+exit 0

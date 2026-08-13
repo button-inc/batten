@@ -117,6 +117,22 @@ heartbeat_file() {
 	printf '%s\n' "$git_dir/batten-hold-heartbeat"
 }
 
+# BESIDE the hold directory too, and for the identical reason the heartbeat is
+# (CLOUD-511). This is the "the human answered" mark: release now needs BOTH that
+# and "the turn is over", because those stopped being the same moment once the
+# release moved to the tool path. A mark filed INSIDE the hold directory would be
+# reaped by the loops that iterate `"$dir"/*`.
+#
+# It is a mark, not a timestamp: the question is whether an answer has arrived
+# since the last release, which a file's existence answers exactly. The same
+# lost-tail measurement that made CLOUD-491's record structural applies here.
+answered_file() {
+	local git_dir
+	git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
+	[ -n "$git_dir" ] || return 1
+	printf '%s\n' "$git_dir/batten-hold-answered"
+}
+
 # One line per session start, so `spanned` can tell "no hold was ever armed on
 # this disk" from "this disk is new and no local evidence can exist". The naive
 # probe — look for prior-container residue — does not work: a `batten-*`
@@ -193,6 +209,39 @@ heartbeat-path)
 	;;
 poll)
 	printf '%s\n' "${BATTEN_PLAN_HOLD_POLL:-$POLL_DEFAULT}"
+	exit 0
+	;;
+# CLOUD-511's three verbs. `mark` records that a human answered; `answered` is
+# the predicate over that mark; `unmark` clears it, and only the release path
+# calls it, immediately after acting on it — so a mark can never license a second
+# release.
+mark)
+	marked=$(answered_file) || {
+		echo "::error:: plan-hold-check: not a git repository — cannot record an answer" >&2
+		exit 2
+	}
+	: >"$marked" 2>/dev/null || {
+		echo "::error:: plan-hold-check: cannot write the answer mark at $marked" >&2
+		exit 2
+	}
+	exit 0
+	;;
+answered)
+	marked=$(answered_file) || exit 2
+	[ -e "$marked" ] || exit 1
+	exit 0
+	;;
+unmark)
+	marked=$(answered_file) || exit 2
+	rm -f -- "$marked" 2>/dev/null || true
+	exit 0
+	;;
+answered-path)
+	marked=$(answered_file) || {
+		echo "::error:: plan-hold-check: not a git repository — no answer mark" >&2
+		exit 2
+	}
+	printf '%s\n' "$marked"
 	exit 0
 	;;
 boot)
