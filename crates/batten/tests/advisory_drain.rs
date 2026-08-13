@@ -90,6 +90,7 @@ fn drained_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
          severity = \"deny\"\n\
          glob = \"**/*.rs\"\n\
          pattern = \"TODO\"\n\
+         no_fix_reason = \"delete the marker once the work behind it is done\"\n\
          {drain_table}"
     );
     let repo = Fixture::at(root.join("repo"))

@@ -376,6 +376,17 @@ pub fn cycle(
     let mut duplicates = 0;
 
     for record in records {
+        // The emittability half of CLOUD-81, read off the schema rather than
+        // re-typed here: a finding with no check cannot be settled and one with
+        // no stated remediation cannot be acted on, so emitting either spends
+        // the agent's attention on something it has no way to close. `record`
+        // refuses both at ingest, so this only ever catches a record written
+        // before schema 3 — and it is deliberately NOT counted as a
+        // drain suppression, because the engine did not choose to withhold it;
+        // there was never anything emittable to withhold.
+        if !record.is_emittable() {
+            continue;
+        }
         if !in_scope(record, changed) {
             scope_filtered.push(record.clone());
             continue;
@@ -519,7 +530,7 @@ pub fn render(drained: &Drained) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::findings::{FINDINGS_SCHEMA, Instance};
+    use crate::findings::{Check, FINDINGS_SCHEMA, Instance, Remediation};
     use crate::identity::{SpanNormalization, StoredIdentity, code_fingerprint};
     use crate::severity::{AdvisoryTier, RuleSeverity};
 
@@ -535,6 +546,11 @@ mod tests {
             tier: AdvisoryTier::Advisory,
             disposition: None,
             presentation: Presentation::Shown,
+            // Emittable by default (CLOUD-81), because that is what `record`
+            // mints today; the checkless case is built explicitly by the one
+            // test that is about it.
+            check: Some(Check::Reevaluate),
+            remediation: Some(Remediation::NoFix("test fixture".to_owned())),
             instances: vec![Instance {
                 context: Context::new("refs/heads/a"),
                 occurrences: Observation::Observed(1),
@@ -911,6 +927,47 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_record_with_no_check_or_no_remediation_is_never_emitted() {
+        // CLOUD-81's emission half, and the drain is the surface it names. A
+        // finding with no check cannot be settled and one with no stated
+        // remediation cannot be acted on, so emitting either spends attention
+        // on something the agent has no way to close.
+        let scope = changed(&["src/a.rs"]);
+        let emittable = record(FindingKind::Code, "r", "src/a.rs", "TODO");
+        assert_eq!(
+            cycle(std::slice::from_ref(&emittable), &scope, None)
+                .lines
+                .len(),
+            1,
+            "the control: this fixture is otherwise emittable"
+        );
+
+        for withheld in [
+            FindingRecord {
+                check: None,
+                ..emittable.clone()
+            },
+            FindingRecord {
+                remediation: None,
+                ..emittable.clone()
+            },
+            FindingRecord {
+                check: None,
+                remediation: None,
+                ..emittable
+            },
+        ] {
+            assert!(!withheld.is_emittable());
+            let drained = cycle(std::slice::from_ref(&withheld), &scope, None);
+            assert!(drained.lines.is_empty(), "un-actionable, so unspoken");
+            // NOT a drain suppression: the engine did not choose to withhold
+            // it, so counting it as one would put a schema gap into the
+            // per-check false-positive rate.
+            assert!(drained.scope_filtered.is_empty());
+        }
     }
 
     #[test]
