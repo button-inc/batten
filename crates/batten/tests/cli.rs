@@ -3837,13 +3837,19 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     fs::write(dirty.join("tests/seed.bats"), "\tgit branch -f main\n")
         .expect("write fixture suite");
 
+    // `enforce`, not `check`: the committed ruleset carries `no-conflict-markers`,
+    // a kind that runs a configured command, and the read-effect verb refuses the
+    // whole config rather than silently skipping that one row (exit 1, pinned by
+    // `the_committed_config_refuses_to_run_a_spawning_kind_under_check`). Every
+    // sibling test over the committed bytes takes the same verb for the same
+    // reason.
     let output = batten()
-        .arg("check")
+        .arg("enforce")
         .current_dir(&dirty)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
-        .expect("run batten check");
+        .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
         Some(2),
@@ -3884,12 +3890,12 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     fs::write(clean.join("tests/seed.bats"), "\tgit branch main\n").expect("write clean suite");
 
     let output = batten()
-        .arg("check")
+        .arg("enforce")
         .current_dir(&clean)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
-        .expect("run batten check");
+        .expect("run batten enforce");
     assert_eq!(
         output.status.code(),
         Some(0),
