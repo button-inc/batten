@@ -92,9 +92,11 @@ SURFACE=(AGENTS.md .claude/rules .claude/settings.json hk.pkl mise-tasks)
 paths=$(git ls-files -- "${SURFACE[@]}" 2>/dev/null) || exit 0
 [ -n "$paths" ] || exit 0
 
-# One `hash-object` process for the whole surface. Measured on this repo: 63
-# files, 8ms, two spawns total — which is what makes this affordable at every
-# batch boundary.
+# One `hash-object` process for the whole surface — two spawns total regardless
+# of how many files `SURFACE` resolves to, which is what makes this affordable at
+# every batch boundary. The measured cost was single-digit milliseconds; the file
+# count is deliberately not restated, because `SURFACE` above owns it and the
+# number written here had already drifted by half before anyone read it.
 #
 # `--stdin-paths` rather than an argv list so the call cannot outgrow ARG_MAX as
 # the task layer grows, and WORKING-TREE content rather than `git ls-tree HEAD`:

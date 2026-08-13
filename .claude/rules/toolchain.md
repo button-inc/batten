@@ -45,7 +45,7 @@ Every lap re-verifies and re-waits because a rebase mints a new SHA and the
 receipts keyed to the old one are gone. Expect several; a lap costs one CI run
 and that is the price of the design, not waste. **The only stop is a rebase that
 conflicts** — the one step needing a decision, and exactly the step frequent laps
-keep small. `LAND_MAX_LAPS` (8) is a runaway backstop on the lap COUNT, never a
+keep small. `LAND_MAX_LAPS` (2) is a runaway backstop on the lap COUNT, never a
 wall clock on a wait; the `verify`/`verified`/`ci-wait` calls are per-lap in the
 body rather than `#MISE depends`, because a dependency runs once and a loop needs
 them every time round.
@@ -167,7 +167,8 @@ of any hook `.claude/settings.json` added, since that wiring cannot reload
 That's a rule, so it ships with mechanisms — the hooks wired in
 `.claude/settings.json` (the settings file is the authoritative list; don't
 restate its count here), each failing open on anything it can't parse. Most are
-`PreToolUse`; the two exceptions name their event:
+`PreToolUse`; the ones that are not name their event below, and the settings
+file is what says how many that is:
 
 **`PreToolUse` is now ONE entry — the engine** (`.claude/hooks/batten-hook.sh`
 → `batten hook --harness claude-code`), reading the `mediated_call` rows of
@@ -287,17 +288,19 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   the principle — read the status from the harness — rather than naming one
   command, since complying with the narrower wording is how the second instance
   happened. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.
-- `contract-drift` is the only hook here that is not `PreToolUse`, and it cannot
+- `contract-drift` is not `PreToolUse`, and it cannot
   be: that event's model-facing channel is exit 2, which _blocks_ the call, and
   CLOUD-97 and CLOUD-219 each ruled a deny out independently. So it runs on
-  `SessionStart` (seeding the snapshot before any tool does, since an autonomous
+  `SessionStart`, seeding the snapshot before any tool does, since an autonomous
   session's first batch is routinely fetch+rebase and a snapshot written after it
-  would record the drift as the baseline) and on `PostToolBatch`, whose documented
-  `additionalContext` fires "once after every tool call in a batch has resolved,
-  before the next model request" — which is the same instant as "before the next
-  lifecycle step". It hashes the tracked surface (`AGENTS.md`, `.claude/rules`,
+  would record the drift as the baseline. The per-batch entry it was designed for
+  **stays absent**, and CLOUD-461 is why: `batten hook` has no advisory channel,
+  so there is nowhere for a once-per-batch reminder to land. Until then a
+  contract that changes mid-session is announced at the next session start and
+  not before — which is precisely what the re-read rule above exists to cover.
+  It hashes the tracked surface (`AGENTS.md`, `.claude/rules`,
   `.claude/settings.json`, `hk.pkl`, `mise-tasks`) in one `git hash-object` pass,
-  8ms over 63 files, keyed per **session** so a session that started after a change
+  keyed per **session** so a session that started after a change
   is not nudged about one it already has. Silence is the default; a change-set is
   reported once, because reporting overwrites the snapshot. Pointer-only — paths
   and a count, never a byte of the file, asserted in `tests/contract-drift.bats`,
