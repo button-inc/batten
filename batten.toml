@@ -634,6 +634,28 @@ regex = "^[ \\t]*wait -n"
 severity = "deny"
 scope = "tree"
 
+# The one legitimate reduction this ratchet has seen, taken through the hatch its
+# own `no_fix_reason` names — "restore the tests, or waive the reduction
+# deliberately; which of the two is the whole question." Restoring is not an
+# option here: CLOUD-515 deletes `plan-hold`, so `tests/plan-hold.bats`,
+# `plan-hold-check.bats` and `plan-hold-guard.bats` cover code that no longer
+# exists and there is nothing left for them to assert.
+#
+# UNNARROWED, and not for want of trying. A ratchet finding's `path` is the glob
+# PLUS THE COUNTS — `rules.rs` builds `"{glob} {base}->{working}"`, because the
+# finding is about the whole matched set rather than any one file. So there is no
+# per-file path a `path =` could select, and a waiver written against the literal
+# would embed `1600->1552` and lapse the moment either count moved. Whole-rule is
+# the honest scope, and the expiry is what bounds it.
+#
+# EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the moment this lands the
+# floor becomes the new count on its own and this row suppresses nothing. It
+# exists to get one commit past the gate, not to stand.
+[[waiver]]
+rule = "bats-tests-not-deleted"
+reason = "CLOUD-515 removes plan-hold; its three suites test deleted code, so the reduction from 1600 to 1552 is the deletion working rather than coverage lost."
+expires = "2026-09-13"
+
 [ci]
 required_checks = ["final"]
 
