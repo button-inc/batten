@@ -58,7 +58,12 @@ Refs: CLOUD-168"
 	release v0.0.2
 	run bash -c "printf '[{\"id\":\"CLOUD-168\",\"status\":\"Done\"}]' | $GATE"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"every Done issue is in a release"* ]]
+	# Exit 0 alone does not discriminate: once the tag is cut nothing is left
+	# unreleased, so an issue judged `unlanded` also passes. Pin the COUNT, which
+	# separates "a release shipped it" from "git had nothing to say about it".
+	# Found by mutation — deleting the released guard left this case green.
+	[[ "$output" == *"(0 not judged)"* ]]
+	[[ "$output" != *"unlanded"* ]]
 }
 
 @test "a Done issue landed past the last tag is reported — this is the defect" {
@@ -81,6 +86,7 @@ Refs: CLOUD-499"
 	release v0.0.2
 	run bash -c "printf '[{\"id\":\"CLOUD-499\",\"status\":\"Done\"}]' | $GATE"
 	[ "$status" -eq 0 ]
+	[[ "$output" == *"(0 not judged)"* ]]
 }
 
 @test "a Done issue no commit names is noted, not failed" {
