@@ -346,7 +346,7 @@ The task layer mirrors that reach rather than stopping at Rust: `mise run lint`
 fans out to `lint:clippy`, `lint:fmt`, `lint:toml` and `lint:actions` via
 `depends`, so each tool is runnable alone and `lint` means the whole tree.
 `mise run fix` is its symmetric partner — `clippy --fix`, then the derived
-artifacts (`completions`, `schema`), then every formatter — in that order and
+artifacts (`completions`, `man`, `schema`), then every formatter — in that order and
 sequentially, because those stages contend on the cargo target-dir lock and
 rewrite each other's bytes. `fmt` remains the formatters-only subset.
 
