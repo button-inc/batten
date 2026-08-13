@@ -46,6 +46,14 @@ MAX_CANCEL_P50="${BATTEN_DIVERGENCE_MAX_CANCEL_P50:-60}"      # seconds
 MAX_PEAK_CONCURRENCY="${BATTEN_DIVERGENCE_MAX_PEAK:-3}"
 MAX_QUEUE_P90="${BATTEN_DIVERGENCE_MAX_QUEUE_P90:-30}" # seconds
 
+# The same wait attributed PER JOB (CLOUD-501). A run's figure is its FIRST job's
+# start, so a matrix leg queueing behind its siblings is invisible in it; these
+# two disagreeing is the signal that separates a wide matrix from a saturated
+# pool, which is why the job figure gets its own budget rather than replacing the
+# run one. Same 30s, because the ideal is the same: a leg starts when it is
+# created.
+MAX_QUEUE_JOB_P90="${BATTEN_DIVERGENCE_MAX_QUEUE_JOB_P90:-30}" # seconds
+
 # The one metric that is NOT a threshold: a fast-forward refusal means the branch
 # went behind before the bot answered, which is the thundering herd the landing
 # lease removed (243:5 before, 0:5 after). Any refusal at all is a divergence, so
@@ -66,6 +74,7 @@ fi
 #
 #   pr\tnumber=<n>\tbranch=<b>\tgraded=<g>\tgreen=<s>\tred=<r>\tcancelled=<c>
 #   cancel\trun=<id>\tbranch=<b>\tlatency=<s>
+#   job\trun=<id>\tjob=<name>\tqueue=<s>
 #   window\tsince=<iso>\tlandings=<n>\t…\tunreadable=<u>
 #
 # Only DIVERGENT PRs earn a `pr` record; a single graded green run is the ideal
@@ -97,7 +106,7 @@ field() {
 # inside the loop — is invisible to shellcheck, which then reports every one of
 # these as referenced-but-not-assigned; a gate that has to be silenced to pass
 # its own linter is worse than the repetition.
-for name in landings graded red cancel_p50 peak_concurrency queue_p90 ff_refused unreadable; do
+for name in landings graded red cancel_p50 peak_concurrency queue_p90 queue_job_p90 ff_refused unreadable; do
 	value=$(field "$name")
 	if [ -z "$value" ] || [ "$value" != "${value#*[^0-9]}" ]; then
 		echo "::error:: land-divergence-assert: the \`window\` summary carries no readable \`$name\` count, so the window cannot be judged." >&2
@@ -111,6 +120,7 @@ red=$(field red)
 cancel_p50=$(field cancel_p50)
 peak_concurrency=$(field peak_concurrency)
 queue_p90=$(field queue_p90)
+queue_job_p90=$(field queue_job_p90)
 ff_refused=$(field ff_refused)
 unreadable=$(field unreadable)
 
@@ -162,11 +172,14 @@ red_ratio=$((red * 100 / landings))
 [ "$queue_p90" -le "$MAX_QUEUE_P90" ] ||
 	over "runs waited ${queue_p90}s at p90 before starting, over the budget of ${MAX_QUEUE_P90}s. That is the runner pool saturating, which is a different defect from contention and must not be read as one."
 
+[ "$queue_job_p90" -le "$MAX_QUEUE_JOB_P90" ] ||
+	over "individual JOBS waited ${queue_job_p90}s at p90 before starting, over the budget of ${MAX_QUEUE_JOB_P90}s. A run's own figure is its first job's start, so this is the one that sees a matrix leg queueing behind its siblings — the two disagreeing tells a wide matrix apart from a saturated pool."
+
 [ "$ff_refused" -le "$MAX_FF_REFUSED" ] ||
 	over "the fast-forward bot refused $ff_refused time(s). A refusal means the branch went behind before the bot answered — the thundering herd the landing lease exists to remove."
 
 if [ "$fail" = "0" ]; then
-	echo "land-divergence-assert: $landings landing(s) bought $graded graded CI run(s) ($((graded_ratio / 100)).$(printf '%02d' $((graded_ratio % 100))) each), $red red, peak concurrency $peak_concurrency, cancel p50 ${cancel_p50}s, queue p90 ${queue_p90}s, $ff_refused fast-forward refusal(s)"
+	echo "land-divergence-assert: $landings landing(s) bought $graded graded CI run(s) ($((graded_ratio / 100)).$(printf '%02d' $((graded_ratio % 100))) each), $red red, peak concurrency $peak_concurrency, cancel p50 ${cancel_p50}s, queue p90 ${queue_p90}s (${queue_job_p90}s per job), $ff_refused fast-forward refusal(s)"
 	exit 0
 fi
 

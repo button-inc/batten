@@ -12,9 +12,9 @@ setup() {
 # field and nothing else can explain the verdict.
 window() {
 	local landings="${1:-10}" graded="${2:-10}" red="${3:-0}" cancel_p50="${4:-15}" \
-		peak="${5:-1}" queue="${6:-0}" ff="${7:-0}" unreadable="${8:-0}"
-	printf 'window\tsince=2026-08-12T00:00:00Z\tlandings=%s\tgraded=%s\tgreen=%s\tred=%s\tcancelled=0\tcancel_p50=%s\tpeak_concurrency=%s\tqueue_p90=%s\tretries=0\tff_refused=%s\tff_success=5\tunreadable=%s\n' \
-		"$landings" "$graded" "$((graded - red))" "$red" "$cancel_p50" "$peak" "$queue" "$ff" "$unreadable"
+		peak="${5:-1}" queue="${6:-0}" ff="${7:-0}" unreadable="${8:-0}" job_queue="${9:-0}"
+	printf 'window\tsince=2026-08-12T00:00:00Z\tlandings=%s\tgraded=%s\tgreen=%s\tred=%s\tcancelled=0\tcancel_p50=%s\tpeak_concurrency=%s\tqueue_p90=%s\tqueue_job_p90=%s\tretries=0\tff_refused=%s\tff_success=5\tunreadable=%s\n' \
+		"$landings" "$graded" "$((graded - red))" "$red" "$cancel_p50" "$peak" "$queue" "$job_queue" "$ff" "$unreadable"
 }
 
 @test "a linear window passes: one graded run per landing, green, uncontended" {
@@ -131,6 +131,31 @@ window() {
 	[[ "$output" == *"more than one"* ]]
 }
 
+@test "A JOB QUEUE DELAY IS ITS OWN BUDGET, over a clean per-run figure" {
+	# CLOUD-501, and the case the whole per-job attribution exists for: a run's
+	# `created_at` -> `run_started_at` is its FIRST job's start, so a matrix leg
+	# queueing behind its siblings is invisible in it. Per-run 0s, per-job 300s is
+	# a wide matrix contending with itself, and a gate reading only the run figure
+	# would call that window ideal.
+	run "$ASSERT" <<<"$(window 10 10 0 15 1 0 0 0 300)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"individual JOBS waited 300s"* ]]
+}
+
+@test "a clean per-job figure passes, and the success line reports it" {
+	run "$ASSERT" <<<"$(window)"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"per job"* ]]
+}
+
+@test "a summary missing the per-job count exits 2 rather than reading it as zero" {
+	# A measurer that predates the field must not be judged as if it had reported
+	# a perfect one — that is the partial-coverage false green in miniature.
+	run "$ASSERT" <<<"$(printf 'window\tsince=x\tlandings=10\tgraded=10\tred=0\tcancel_p50=1\tpeak_concurrency=1\tqueue_p90=0\tff_refused=0\tunreadable=0\n')"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"queue_job_p90"* ]]
+}
+
 @test "a summary missing a count exits 2 rather than reading it as zero" {
 	run "$ASSERT" <<<"$(printf 'window\tsince=x\tlandings=10\tgraded=10\n')"
 	[ "$status" -eq 2 ]
@@ -138,7 +163,7 @@ window() {
 }
 
 @test "a non-numeric count exits 2" {
-	run "$ASSERT" <<<"$(printf 'window\tsince=x\tlandings=lots\tgraded=10\tred=0\tcancel_p50=1\tpeak_concurrency=1\tqueue_p90=0\tff_refused=0\tunreadable=0\n')"
+	run "$ASSERT" <<<"$(printf 'window\tsince=x\tlandings=lots\tgraded=10\tred=0\tcancel_p50=1\tpeak_concurrency=1\tqueue_p90=0\tqueue_job_p90=0\tff_refused=0\tunreadable=0\n')"
 	[ "$status" -eq 2 ]
 }
 

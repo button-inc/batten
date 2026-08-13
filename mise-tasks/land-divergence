@@ -130,14 +130,14 @@ conditional_get() {
 }
 
 summary() {
-	printf 'window\tsince=%s\tlandings=%s\tgraded=%s\tgreen=%s\tred=%s\tcancelled=%s\tcancel_p50=%s\tpeak_concurrency=%s\tqueue_p90=%s\tretries=%s\tff_refused=%s\tff_success=%s\tunreadable=%s\n' \
-		"$SINCE" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "$unreadable"
+	printf 'window\tsince=%s\tlandings=%s\tgraded=%s\tgreen=%s\tred=%s\tcancelled=%s\tcancel_p50=%s\tpeak_concurrency=%s\tqueue_p90=%s\tqueue_job_p90=%s\tretries=%s\tff_refused=%s\tff_success=%s\tunreadable=%s\n' \
+		"$SINCE" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" "${11}" "${12}" "$unreadable"
 }
 
 bail() {
 	echo "::error:: land-divergence: $1" >&2
 	unreadable=$((unreadable + 1))
-	summary 0 0 0 0 0 0 0 0 0 0 0
+	summary 0 0 0 0 0 0 0 0 0 0 0 0
 	exit 0
 }
 
@@ -206,6 +206,34 @@ count_runs() { # $1 = workflow file, $2 = status
 	n=$(printf '%s' "$body" | jq -r '.total_count // empty' 2>/dev/null) || return 1
 	[ -n "$n" ] || return 1
 	printf '%s' "$n"
+}
+
+# The per-JOB queue delay (CLOUD-501). A run's `created_at` -> `run_started_at`
+# is the FIRST job's start; a matrix leg that waited behind it is invisible in
+# it, and that is exactly the distinction the diagnosis needs — a wide matrix
+# queueing on its own legs looks nothing like a saturated pool, and the per-run
+# figure cannot tell them apart. Measured: queue p90 252s over the 13-landing
+# window and 218s over the 10-landing one, against 0s over the 25-hour window
+# whose idle stretch averaged it away.
+#
+# ONE REQUEST PER RUN, which is a real cost the header's ETag-stability argument
+# cuts against — so it is bounded rather than waved at. Only GRADED runs in the
+# window are read, which post-serialisation is ~1 per landing, and a run whose
+# jobs cannot be read increments `unreadable` rather than being dropped.
+# Dropping it would report a p90 over the legs that happened to answer, which is
+# the partial-coverage false green this whole sensor exists to refuse.
+#
+# Pointer-only per non-negotiable 4: run id, job name, seconds. Never a log body.
+job_queue() { # $1 = run id — emits `<seconds>\t<job name>`, one line per job
+	conditional_get "repos/{owner}/{repo}/actions/runs/$1/jobs?per_page=100" || return 1
+	printf '%s' "$body" | jq -r '
+		.jobs[]? | select(.created_at != null and .started_at != null)
+		| [.created_at, .started_at, (.name // "-")] | @tsv' 2>/dev/null |
+		while IFS=$'\t' read -r created started name; do
+			c=$(date -u -d "$created" +%s 2>/dev/null) || continue
+			s=$(date -u -d "$started" +%s 2>/dev/null) || continue
+			printf '%s\t%s\n' "$((s - c))" "$name"
+		done
 }
 
 ci_runs=$(walk_workflow ci.yml '
@@ -312,6 +340,35 @@ queue_p90=$(awk -F'\t' '$4 != "" && $5 != "" && $3 != "skipped" { print $4 "\t" 
 		printf '%s\n' "$((s - c))"
 	done | LC_ALL=C sort -n | pct 90)
 
+# The same delay attributed PER JOB (CLOUD-501). Read only for graded runs in
+# the window — the bound `job_queue`'s header states — and a run whose jobs are
+# unreadable is counted as such rather than silently contributing nothing.
+job_lat=""
+while IFS=$'\t' read -r id _branch; do
+	[ -n "$id" ] || continue
+	if ! out=$(job_queue "$id"); then
+		unreadable=$((unreadable + 1))
+		continue
+	fi
+	while IFS=$'\t' read -r secs name; do
+		[ -n "$secs" ] || continue
+		job_lat="${job_lat}${secs}"$'\t'"$id"$'\t'"$name"$'\n'
+	done <<<"$out"
+done <<<"$(awk -F'\t' '$3 != "skipped" && $3 != "-" { print $1 "\t" $2 }' <<<"$ci_runs")"
+
+job_lat=$(printf '%s' "$job_lat" | sed '/^[[:space:]]*$/d')
+# `pct` takes an ALREADY-SORTED stream, so this needs its own sort rather than
+# inheriting one from the walk above.
+queue_job_p90=$(cut -f1 <<<"$job_lat" | sed '/^$/d' | LC_ALL=C sort -n | pct 90)
+
+# A `job` record only where the leg actually waited: a zero-wait leg is the ideal
+# and says nothing a reader needs, which is the rule the `pr` records already use.
+while IFS=$'\t' read -r secs id name; do
+	[ -n "$secs" ] || continue
+	[ "$secs" -gt 0 ] || continue
+	records="${records}job"$'\t'"run=$id"$'\t'"job=$name"$'\t'"queue=$secs"$'\n'
+done <<<"$job_lat"
+
 # Peak concurrency: a sweep over start/end events. This is the metric that caught
 # serialisation working — 25 concurrent matrices before the lease, 3 after.
 peak=$(awk -F'\t' '$3 != "skipped" && $5 != "" && $6 != "" { print $5 "\t" $6 }' <<<"$ci_runs" |
@@ -330,4 +387,5 @@ if [ -n "$records" ]; then
 	printf '%s' "$records" | LC_ALL=C sort
 fi
 summary "$landings" "$graded" "$green" "$red" "$cancelled" \
-	"${cancel_p50:-0}" "${peak:-0}" "${queue_p90:-0}" "$retries" "$ff_refused" "$ff_success"
+	"${cancel_p50:-0}" "${peak:-0}" "${queue_p90:-0}" "${queue_job_p90:-0}" \
+	"$retries" "$ff_refused" "$ff_success"

@@ -31,6 +31,7 @@ for a in "\$@"; do
 	case "\$a" in
 	*fast-forward.yml*) kind=ff ;;
 	*/pulls*) kind=pulls ;;
+	*/jobs*) kind=jobs ;;
 	esac
 done
 n=\$(cat "$BATS_TEST_TMPDIR/n.\$kind" 2>/dev/null || echo 0)
@@ -72,11 +73,24 @@ pulls_payload() { # $1 = branch
 	printf '[{"number":1,"merged_at":"2026-08-12T02:00:00Z","head":{"ref":"%s"}}]' "$1"
 }
 
+# One job of a run, as the per-run jobs endpoint returns it. `created` is when the
+# leg was queued and `started` when a runner picked it up; the gap between them is
+# the whole measurement (CLOUD-501).
+jobs_payload() { # $1 = created, $2 = started, $3 = name
+	printf '{"total_count":1,"jobs":[{"id":7,"name":"%s","created_at":"%s","started_at":"%s","conclusion":"success"}]}' \
+		"$3" "$1" "$2"
+}
+
 prime() { # the happy path every case starts from
 	stub_gh
 	ok "$BATS_TEST_TMPDIR/resp.ci.1" 'W/"c1"' "$(ci_payload 1 success feat)"
 	ok "$BATS_TEST_TMPDIR/resp.ff.1" 'W/"f1"' '{"total_count":0,"workflow_runs":[]}'
 	ok "$BATS_TEST_TMPDIR/resp.pulls.1" 'W/"p1"' "$(pulls_payload feat)"
+	# The jobs endpoint is read once per graded run. Without a default here every
+	# existing case would fall through to the `ci` canned response, because the
+	# stub's unmatched-URL branch is `kind=ci`.
+	ok "$BATS_TEST_TMPDIR/resp.jobs.1" 'W/"j1"' \
+		"$(jobs_payload 2026-08-12T01:00:00Z 2026-08-12T01:00:00Z ci)"
 }
 
 @test "a linear window measures one graded run against one landing" {
@@ -95,7 +109,7 @@ prime() { # the happy path every case starts from
 	prime
 	run "$SCAN"
 	[ "$status" -eq 0 ]
-	rm -f "$BATS_TEST_TMPDIR/n.ci" "$BATS_TEST_TMPDIR/n.ff" "$BATS_TEST_TMPDIR/n.pulls"
+	rm -f "$BATS_TEST_TMPDIR"/n.ci "$BATS_TEST_TMPDIR"/n.ff "$BATS_TEST_TMPDIR"/n.pulls "$BATS_TEST_TMPDIR"/n.jobs
 	run "$SCAN"
 	[ "$status" -eq 0 ]
 	grep -q 'If-None-Match: W/"c1"' "$BATS_TEST_TMPDIR/args"
@@ -110,7 +124,7 @@ prime() { # the happy path every case starts from
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"graded=1"* ]]
 
-	rm -f "$BATS_TEST_TMPDIR/n.ci" "$BATS_TEST_TMPDIR/n.ff" "$BATS_TEST_TMPDIR/n.pulls"
+	rm -f "$BATS_TEST_TMPDIR"/n.ci "$BATS_TEST_TMPDIR"/n.ff "$BATS_TEST_TMPDIR"/n.pulls "$BATS_TEST_TMPDIR"/n.jobs
 	not_modified "$BATS_TEST_TMPDIR/resp.ci.1" 'W/"c1"'
 	run "$SCAN"
 	[ "$status" -eq 0 ]
@@ -203,4 +217,64 @@ prime() { # the happy path every case starts from
 	# this task ships with cannot be the one that breaks the gate it landed after.
 	run grep -c '^concurrency:' "$ROOT/.github/workflows/land-divergence.yml"
 	[ "$output" = "1" ]
+}
+
+# --- CLOUD-501: the queue delay, attributed per JOB ----------------------------
+
+@test "A JOB THAT WAITED REPORTS ITS GAP, where the run's own figure cannot" {
+	# The measured defect. A run's `created_at` -> `run_started_at` is the FIRST
+	# job's start, so a matrix leg that waited behind its siblings contributes
+	# nothing to it — and telling a wide matrix from a saturated pool is exactly
+	# what the diagnosis needs.
+	prime
+	ok "$BATS_TEST_TMPDIR/resp.jobs.1" 'W/"j1"' \
+		"$(jobs_payload 2026-08-12T01:00:00Z 2026-08-12T01:04:00Z ci-linux)"
+	run "$SCAN"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"queue_job_p90=240"* ]]
+	[[ "$output" == *"job"*"job=ci-linux"*"queue=240"* ]]
+}
+
+@test "a job that started immediately reports zero and earns no record" {
+	# The other direction, and the anti-noise rule the `pr` records already use: a
+	# zero-wait leg is the ideal and says nothing a reader needs.
+	prime
+	run "$SCAN"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"queue_job_p90=0"* ]]
+	[[ "$output" != *"job"$'\t'"run="* ]]
+}
+
+@test "A RUN WHOSE JOBS CANNOT BE READ IS UNREADABLE, NEVER A ZERO WAIT" {
+	# Dropping it would report a p90 over the legs that happened to answer, which
+	# is the partial-coverage false green this whole sensor exists to refuse — and
+	# the decider turns `unreadable` into `could not look` rather than a pass.
+	prime
+	printf 'HTTP/2.0 500 Server Error\n\n' >"$BATS_TEST_TMPDIR/resp.jobs.1"
+	run "$SCAN"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"unreadable=1"* ]]
+}
+
+@test "the per-job read is bounded to graded runs, so a skipped run costs no request" {
+	# `job_queue` is one request per run, which cuts against the ETag-stability
+	# argument in the header — so the bound is asserted rather than described.
+	prime
+	ok "$BATS_TEST_TMPDIR/resp.ci.1" 'W/"c1"' "$(ci_payload 1 skipped feat)"
+	run "$SCAN"
+	[ "$status" -eq 0 ]
+	run grep -c '/jobs' "$BATS_TEST_TMPDIR/args"
+	[ "$output" = "0" ]
+}
+
+@test "the job record is pointer-only — a run id, a job name and seconds" {
+	# Non-negotiable 4. A jobs payload carries step detail and log urls; none of it
+	# reaches the record.
+	prime
+	ok "$BATS_TEST_TMPDIR/resp.jobs.1" 'W/"j1"' \
+		"$(jobs_payload 2026-08-12T01:00:00Z 2026-08-12T01:00:30Z ci-linux)"
+	run "$SCAN"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"conclusion"* ]]
+	[[ "$output" != *"total_count"* ]]
 }
