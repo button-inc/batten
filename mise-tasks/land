@@ -92,6 +92,7 @@
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT exit-codes-collapse|s/^readonly LAND_EXIT_RUNAWAY=5$/readonly LAND_EXIT_RUNAWAY=4/|CLOUD-399: the two exhaustions are told apart by CODE
 #MUTANT declined-always|s/^\t\[ \"\$rc\" = 3 \]$/\ttrue/|red CI stops the lap without asking for the merge
+#MUTANT verdict-first-page-only|s/\[ \"\$ff_seen\" -lt 100 \] && break/break/|fell off the first page
 
 set -uo pipefail
 
@@ -1593,25 +1594,57 @@ while :; do
 		# non-empty string was a refusal and a transport error was
 		# indistinguishable from a verdict. `2>/dev/null` stays: silencing
 		# stderr was never the defect, silently trusting stdout was.
-		ff_body="$(gh api \
-			"repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=100&created=%3E%3D$SINCE" \
-			2>/dev/null)"
-		ff_rc=$?
+		# AND THE DEPTH IS DERIVED FROM THE WINDOW, NEVER FROM A PAGE SIZE
+		# (CLOUD-456's second half). The key says WHICH run is this lap's;
+		# the depth says whether this lap's run is in the page at all, and
+		# they are independent limits on the same read. A keyed filter over
+		# a window that has already rolled past the run returns empty, which
+		# this loop reads as "not answered yet" — byte-identical to a silent
+		# bot, which is the reading that cost CLOUD-399 its diagnosis. At the
+		# measured 13 runs/minute one page of 100 is ~7.7 minutes, and a lap
+		# routinely outlives that.
+		#
+		# So this pages until a page comes back short. That terminates
+		# because `created>=SINCE` bounds the SET server-side: the pages are
+		# a walk over a finite window, not over all history. The 20-page cap
+		# is a runaway backstop and nothing else — 2000 runs is ~2.5 hours
+		# at the measured rate, far outside any lap's `SINCE`, so reaching it
+		# means the `created` fence stopped being honoured, not that the
+		# window is genuinely that deep.
 		answer=""
-		if [ "$ff_rc" -ne 0 ]; then
-			answer=unreadable
-		else
+		ff_page=1
+		while [ "$ff_page" -le 20 ]; do
+			ff_body="$(gh api \
+				"repos/{owner}/{repo}/actions/workflows/$workflow/runs?event=issue_comment&per_page=100&page=$ff_page&created=%3E%3D$SINCE" \
+				2>/dev/null)"
+			ff_rc=$?
+			if [ "$ff_rc" -ne 0 ]; then
+				answer=unreadable
+				break
+			fi
 			# A body that is not a runs list can never read as an answer.
+			ff_seen="$(printf '%s' "$ff_body" | jq -r '
+				if (.workflow_runs | type) != "array" then "-"
+				else (.workflow_runs | length) end' 2>/dev/null)" || ff_seen=-
+			if [ "$ff_seen" = "-" ]; then
+				answer=unreadable
+				break
+			fi
 			answer="$(printf '%s' "$ff_body" | jq -r '
-				if (.workflow_runs | type) != "array" then "unreadable"
-				else
-					[ .workflow_runs[]
-					  | select(.created_at >= env.SINCE)
-					  | select(.display_title == env.FF_KEY)
-					  | select(.status == "completed")
-					  | .conclusion // "-" ] | first // empty
-				end' 2>/dev/null)" || answer=unreadable
-		fi
+				[ .workflow_runs[]
+				  | select(.created_at >= env.SINCE)
+				  | select(.display_title == env.FF_KEY)
+				  | select(.status == "completed")
+				  | .conclusion // "-" ] | first // empty' 2>/dev/null)" || {
+				answer=unreadable
+				break
+			}
+			[ -n "$answer" ] && break
+			# A short page is the end of the window, which is the whole
+			# termination argument — never a fixed number of pages.
+			[ "$ff_seen" -lt 100 ] && break
+			ff_page=$((ff_page + 1))
+		done
 
 		case "$answer" in
 		"")

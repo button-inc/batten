@@ -625,6 +625,16 @@ workflow_runs() {
 
 # A refusal belonging to some other PR's lap, inside our own SINCE window.
 sibling_refuses() { workflow_runs "$1" failure 2099-01-01T00:00:00Z "fast-forward #999 @4242"; }
+
+# A FULL page — 100 strangers' refusals, none of them ours. Fullness is the
+# signal, not the content: a short page means the `created>=SINCE` window ended,
+# and a full one means it did not, so this is the only fixture that makes a
+# second page be fetched at all (CLOUD-456's depth half).
+full_page_of_strangers() {
+	jq -nc '{workflow_runs: [range(100) | {
+	  created_at: "2099-01-01T00:00:00Z", status: "completed", conclusion: "failure",
+	  display_title: ("fast-forward #999 @" + (. | tostring))}]}' >"$BATS_TEST_TMPDIR/$1"
+}
 comment_fails() { : >"$BATS_TEST_TMPDIR/rc.comment"; }
 
 # CLOUD-413: what the refused response STATES about when to come back. Written as
@@ -699,6 +709,41 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"the fast-forward bot refused (failure)"* ]]
 	[ "$(comments)" -eq 2 ]
+}
+
+@test "this lap's own run is read even when it fell off the first page (CLOUD-456)" {
+	# THE DEPTH HALF, and it is a separate defect from the key. A keyed filter
+	# over a window that has already rolled past this lap's run returns empty,
+	# which the poll reads as "not answered yet" — byte-identical to a silent
+	# bot, and that is the reading CLOUD-399 recorded as "the bot is slow" while
+	# the bot was answering inside 23 seconds. At the measured 13 runs/minute one
+	# page of 100 is ~7.7 minutes and a lap routinely outlives it. Page one here
+	# is 100 strangers; ours is on page two.
+	pr_state OPEN MERGED
+	full_page_of_strangers runs.1
+	workflow_runs runs.2 failure
+	workflow_runs runs.last
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"the fast-forward bot refused (failure)"* ]]
+	[ "$(comments)" -eq 2 ]
+}
+
+@test "paging stops at the short page instead of walking history (CLOUD-456)" {
+	# The negative control for the row above, and the termination argument
+	# itself: the walk ends because `created>=SINCE` bounds the SET, so a short
+	# page IS the end of the window. A reader that kept paging would find an
+	# older lap's own run and re-read it as this lap's verdict — the livelock
+	# the SINCE stamp exists to prevent. Nothing keyed to us exists on either
+	# page, so this lap gets no verdict and does not lap.
+	pr_state OPEN OPEN MERGED
+	full_page_of_strangers runs.1
+	sibling_refuses runs.2
+	workflow_runs runs.last
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"the fast-forward bot refused"* ]]
+	[ "$(comments)" -eq 1 ]
 }
 
 @test "a /fast-forward the API refused is never reported as posted (CLOUD-408)" {
@@ -827,6 +872,14 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	run grep -c 'display_title' "$REAL_LAND"
 	[ "$output" -ge 1 ]
 	run grep -c '^run-name:' "$BATS_TEST_DIRNAME/../.github/workflows/fast-forward.yml"
+	[ "$output" -eq 1 ]
+	# AND THE MINTED KEY MUST CARRY BOTH IDS. A `run-name:` line that survives
+	# the grep above while its value is truncated to the bare workflow name is
+	# exactly how the filter stayed dead for a day: the unquoted `#` opened a
+	# YAML comment and ate both interpolations, and every reading — a passing
+	# run and a broken filter — was the same bytes (CLOUD-507).
+	run grep -cE '^run-name:.*github\.event\.issue\.number.*github\.event\.comment\.id' \
+		"$BATS_TEST_DIRNAME/../.github/workflows/fast-forward.yml"
 	[ "$output" -eq 1 ]
 }
 
