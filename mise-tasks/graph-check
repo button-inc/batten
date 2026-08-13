@@ -152,6 +152,7 @@ fi
 # status list. The consequence is real and stated rather than worked around: a
 # column no piped issue occupies is not in the vocabulary, so a claim naming it is
 # not recognised — the same way the frontier is already relative to the closure.
+# shellcheck disable=SC2016  # the $ is a regex metacharacter being escaped, not an expansion
 columns=$(jq -r '[.[].status] | unique | .[]' <<<"$issues" | sed 's/[][\.*^$(){}?+|/]/\\&/g' | paste -sd'|' -)
 
 # ANTI-VACUITY, the conjunct CLOUD-251 applied to `blockedBy`: a set whose
