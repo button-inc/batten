@@ -274,6 +274,20 @@ local gate = new Mapping<String, Step> {
     glob = List(".github/workflows/*.yml")
     check = "mise run timeout-check"
   }
+  // We pin an UNRELEASED toolchain-install commit —
+  // uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b — because it is
+  // the one that added the download retry, and that action ships its own built
+  // dist. The pin therefore no longer matches a release tag — while dependabot.yml tracks
+  // the github-actions ecosystem and auto-dependabot-land.yml lands bot bumps
+  // with no human in the loop. A bump resolving back to the pre-retry commit
+  // would be a silent downgrade, auto-landed, and the next transient would read
+  // as fresh. So the rule ships with its mechanism: this reds such a pin at check
+  // time, which is what stops that PR going green (CLOUD-404). A denylist rather
+  // than a required sha, so a real forward bump needs no edit here.
+  ["mise-action-floor"] {
+    glob = List(".github/workflows/*.yml")
+    check = "mise run mise-action-floor"
+  }
   // Every agent pays AGENTS.md on every turn, so its size is a per-turn tax
   // rather than a style question. Counted with any memory declared always-load,
   // since moving a section into one of those moves the cost without cutting it.
