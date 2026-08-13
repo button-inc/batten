@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.63](https://github.com/button-inc/batten/compare/v0.0.62...v0.0.63) - 2026-08-13
+
+### Added
+
+- *(worktree)* [**breaking**] count the dirty unreapable pileup, and give it a way down
+- *(decision)* define the guard-decision telemetry record and its append-only store
+
 ## [0.0.62](https://github.com/button-inc/batten/compare/v0.0.61...v0.0.62) - 2026-08-12
 
 ### Added
