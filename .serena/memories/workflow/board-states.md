@@ -14,7 +14,7 @@ there is no separate "tell people." Button Cloud (CLOUD) team states:
 | Backlog         | not yet Ready                                         | —                                                                                                                             |
 | **Todo**        | the **ready queue**                                   | the Definition-of-Ready predicate is validated (the issue's **Ready block** is satisfied). Issues here are available to pull. |
 | **In Progress** | checked out, being worked                             | you start work — assign yourself in the same move.                                                                            |
-| **In Review**   | landed to trunk, under post-merge review, pre-release | the change is on `main` — the merge writes this for you (CLOUD-192).                                                          |
+| **In Review**   | landed to trunk, under post-merge review, pre-release | the change is on `main` — **move it yourself; the merge does not** (CLOUD-192).                                               |
 | Done            | released                                              | the change ships **and** `graph-check` accepts the issue — see the sweep ordering below.                                      |
 
 ## The In Review → Done sweep is a CONJUNCTION, and the order is fixed
@@ -151,18 +151,32 @@ Two things this does NOT cover, both observed rather than assumed:
   `Closes CLOUD-<n>`, and #131 falsified that — a `Refs:` trailer completed the
   issue just the same.
 
-  CLOUD-192 fixed the overshoot at its source: the tracker's GitHub integration
-  maps the **merged** event to In Review, not Done. That is a workspace setting,
-  not repo config — nothing in this tree can hold it, which is why the gate
-  below exists instead of a comment. **Retracted with it: "hand-moving to In
-  Review does not stick."** It stuck only badly while merged meant Done; the
-  next PR event now writes the same column you would.
+  CLOUD-192 changed the setting — the integration's **merged** event now maps to
+  In Review rather than Done — **and the setting alone did not produce the
+  transition.** Measured on #398, the PR that landed that very change: merged
+  `06:27:05`, all checks green, and CLOUD-192 still read In Progress **8m21s
+  later**, with no In Review entry in its history. The open side fired normally
+  on the same PR (`linear-code[bot]` commented at `06:12:20` and attached it), so
+  Linear had the issue, had the link, and did nothing on merge.
 
-  So the path is `In Progress → In Review → Done`, and **Done has exactly one
-  source: a release.** Nothing automates that last leg — the integration
-  triggers on PR events, and "a tag now contains this commit" is not one, so no
-  setting reaches it. `released <tag>` names what a release promoted (the
-  `release-plz` run summary prints it), and the promotion is performed by hand.
+  **So write the board by hand on landing, and do not wait for the merge to do
+  it.** Three explanations are ruled out by measurement, not argument: the branch
+  carried `cloud-192` and the attachment resolved, so the key travelled; the
+  settings page was re-read _after_ the merge and still said In Review, so the
+  value persisted; GitHub reports `MERGED` with `mergedAt` and a `merged` event,
+  so a fast-forward landing is not invisible to it.
+
+  What is still open is whether Linear's **closing vs contributing** split is the
+  cause — #398's body carried a `Refs:` trailer and no closing keyword. The
+  earlier `Refs:`-only counter-example (#131) does not settle it, because that
+  was measured against the old `Done` mapping.
+
+  So the path is `In Progress → In Review → Done`, **both legs performed by
+  hand.** Done has exactly one source, a release, and nothing automates that leg
+  either — the integration triggers on PR events, and "a tag now contains this
+  commit" is not one, so no setting reaches it. `released <tag>` names what a
+  release promoted (the `release-plz` run summary prints it); `done-check`
+  refuses a Done that shipped in nothing.
 
 - **`done-check` is the gate on that last leg** (CLOUD-192). Pipe the Done
   closure and it refuses any Done that no `v*` tag reaches: `CLOUD-N Done -> In
