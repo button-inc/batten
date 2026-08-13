@@ -181,6 +181,33 @@ else
 	mise run container-preflight || fail=1
 fi
 
+# --- what was running when the container we replaced went down? ---------------
+#
+# CLOUD-451. The reclaim destroys a human's typed approval, and one mechanism has
+# already been built against it and removed (CLOUD-515) because nobody could say
+# whether occupancy was even the right lever. `reclaim-census` collects that
+# evidence off `land-lock hold`'s existing beat; this is where it is read back.
+#
+# RECORD BEFORE READ, and the order is load-bearing: recording this boot after
+# reading would make it part of the evidence it is being compared against.
+#
+# NEVER SETS `fail`, and deliberately not routed through `step`: a verdict about
+# a past container is not a provisioning failure, and halting a session over one
+# would be the sensor deciding something it has no business deciding. Only the
+# positive reading speaks — exit 1 (idle when replaced) and exit 2 (cannot look)
+# are silent, because a line every session start would be noise in the
+# overwhelming case where nothing happened. Pointer-only: a verdict and two
+# epochs, never a plan or a prompt body.
+# Relative, because this script has already `cd`ed to the repo root above, and
+# `CLAUDE_PROJECT_DIR` is only conditionally set, which `set -u` would fault on.
+census="mise-tasks/reclaim-census"
+if [ -x "$census" ]; then
+	"$census" record-boot >/dev/null 2>&1 || true
+	if verdict=$("$census" report 2>/dev/null); then
+		echo "$verdict"
+	fi
+fi
+
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi

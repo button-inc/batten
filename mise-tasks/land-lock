@@ -830,9 +830,20 @@ hold)
 	# are tolerated; a third means the remaining TTL is about to run out anyway,
 	# and continuing to believe we hold it past that point is the one thing this
 	# must never do.
+	# CLOUD-451's census rides this loop rather than running its own. This beat
+	# ticks for exactly as long as a `land` holds the lease — the window "active
+	# work is in flight" — so an `h` here, left in final position by a previous
+	# boot, is the evidence that a container replacement interrupted real work.
+	# By path, never `mise run`: this is a hot loop and the task runner costs
+	# ~150ms a call (CLOUD-435). The task swallows its own failures, so a census
+	# that cannot write can never end a landing.
+	census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census"
+	[ -x "$census" ] || census=
+	beat_note() { [ -n "$census" ] && "$census" note "$@" >/dev/null 2>&1 || true; }
 	misses=0
 	while :; do
 		sleep "$beat"
+		beat_note h
 		# CLOUD-432, before anything else each beat: a heartbeat whose land is
 		# gone must not renew a lease for nobody. SIGKILL, an OOM kill, and the
 		# harness's un-reaped task stop all skip land's trap, and an orphan
@@ -844,6 +855,7 @@ hold)
 			if observe && [ -n "$observed_sha" ] && mine; then
 				swap "$observed_sha" 0 || true
 			fi
+			beat_note x holder-gone
 			exit 1
 		fi
 		# CLOUD-499, the complementary case and the one liveness cannot see: the
@@ -894,6 +906,7 @@ hold)
 			if holder_alive && [ -n "${LAND_LOCK_HOLDER_PID:-}" ]; then
 				kill -TERM "$LAND_LOCK_HOLDER_PID" 2>/dev/null || true
 			fi
+			beat_note x stalled
 			exit 1
 		fi
 		if ! observe; then
@@ -902,6 +915,7 @@ hold)
 			# Unambiguous: somebody else's id is on the lease. No retry can undo
 			# that, and pretending otherwise is how two sessions both comment.
 			echo "land-lock: lease lost to $observed_holder"
+			beat_note x lease-lost
 			exit 1
 		else
 			# Carry the reservation across the beat. See `renew` for why this is
@@ -915,6 +929,7 @@ hold)
 		fi
 		[ "$misses" -lt 3 ] || {
 			echo "land-lock: could not renew for $misses beats; letting the lease lapse rather than assuming it"
+			beat_note x lease-lapsed
 			exit 1
 		}
 	done

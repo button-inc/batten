@@ -290,6 +290,21 @@ drop_lease() {
 		wait "$heartbeat_pid" 2>/dev/null
 		reap_residue "$heartbeat_pid"
 		heartbeat_pid=
+		# CLOUD-451's census, and this line is what keeps it honest. The
+		# heartbeat records a beat per 30s and an `x` on every path where IT
+		# chooses to stop — but the commonest stop is not one of those: a land
+		# that finishes normally reaches here and KILLS it, so the loop never
+		# runs another statement and its last record stays an `h`. Left that
+		# way, every successful landing would afterwards read as "the container
+		# died under active work", which is the false positive that would
+		# wrongly license the mechanism CLOUD-515 removed for want of evidence.
+		#
+		# Written HERE and never from the heartbeat's own trap, per CLOUD-491:
+		# a trap runs on the container kill too, and an `x` from one would erase
+		# the only distinction the census draws. This is `land` recording that
+		# IT chose to stop its child, which is exactly the event an `x` means.
+		census="$(dirname -- "${BASH_SOURCE[0]}")/reclaim-census"
+		[ -x "$census" ] && "$census" note x land-stopped >/dev/null 2>&1 || true
 	fi
 	mise run land-lock release >/dev/null 2>&1 || true
 }
