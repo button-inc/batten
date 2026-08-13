@@ -55,7 +55,7 @@
 //! read is a canary, crossed with a census over the whole verb surface. A wrapped
 //! command's output is the likeliest place in this engine for a secret to appear,
 //! which is why this module is one of the canary's seeded sources rather than the
-//! judge of its own compliance.
+//! judge of whether it obeys the law.
 //!
 //! ## Batten only ever ADDS failure
 //!

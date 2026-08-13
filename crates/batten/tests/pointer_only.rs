@@ -1,8 +1,8 @@
 //! Non-negotiable rule 4, made total and given an exit code (CLOUD-92).
 //!
 //! "Output is a pointer, never the payload" (house-style §6) was stated as a law
-//! and enforced nowhere. Every emitting module asserted its own compliance in its
-//! own doc comment and, at best, in one hand-written case — `outputs.rs` has
+//! and enforced nowhere. Every emitting module vouched for itself in its own doc
+//! comment and, at best, in one hand-written case — `outputs.rs` has
 //! `a_match_points_at_its_line_and_never_carries_the_bytes`,
 //! `extension_surfaces.rs` has one `!stderr.contains(…)`. Those are per-site
 //! claims. None of them can answer the question the law actually poses: *is there
