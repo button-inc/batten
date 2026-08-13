@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.69](https://github.com/button-inc/batten/compare/v0.0.68...v0.0.69) - 2026-08-13
+
+### Added
+
+- *(attribution)* [**breaking**] refuse vendor authorship, branding and session links on produced commits
+- *(action)* assert every exit code the Action can return, not just the one that means yes
+
+### Fixed
+
+- *(identity)* correct four claims the last correction got wrong
+
 ## [0.0.68](https://github.com/button-inc/batten/compare/v0.0.67...v0.0.68) - 2026-08-13
 
 ### Added
