@@ -14,7 +14,13 @@ name: fast-forward
 # injection zizmor exists to refuse. The comment id is the stronger of the two on
 # its own: it names THIS lap's request on THIS head, so it also subsumes the
 # `SINCE` fence against an earlier lap of the same PR.
-run-name: fast-forward #${{ github.event.issue.number }} @${{ github.event.comment.id }}
+# QUOTED, and the quotes are load-bearing (CLOUD-507). YAML opens a comment at an
+# unquoted ` #`, so the unquoted form of this line parsed to the bare string
+# `fast-forward` and both interpolations were discarded before GitHub ever saw
+# them — measured across 30 consecutive runs, every one reporting a
+# `display_title` equal to the workflow name, for a day after the key landed.
+# `ci-local-parity` now refuses the unquoted shape.
+run-name: "fast-forward #${{ github.event.issue.number }} @${{ github.event.comment.id }}"
 
 # GitHub's merge button cannot fast-forward: "Rebase and merge" rewrites every
 # commit under a new SHA, and "Merge" adds a merge commit. Both discard the exact

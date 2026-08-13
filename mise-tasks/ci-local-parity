@@ -154,6 +154,45 @@ for wf in "$workflows"/*.yml; do
 	grep -q '^concurrency:' "$wf" ||
 		problem "$wf declares no concurrency group, so two of its runs can race — add one, with cancel-in-progress: true if it triggers on pull_request and false otherwise."
 
+	# Property 11, above the filter for the same reason as 8 and 10: a value
+	# that never reaches GitHub is not a property of the landing path.
+	#
+	# YAML opens a comment at an unquoted ` #`, so
+	# `run-name: fast-forward #${{ github.event.issue.number }}` parses to the
+	# bare string `fast-forward` and the interpolation is discarded. Measured on
+	# this repo (CLOUD-507): `fast-forward.yml` carried exactly that line for a
+	# day, every one of 30 consecutive runs reported `display_title` equal to the
+	# workflow NAME, and `land`'s `select(.display_title == env.FF_KEY)` could
+	# therefore never match — restoring CLOUD-235's "cannot see a refusal, so it
+	# polls forever" while the success path masked it. `actionlint` and `zizmor`
+	# both pass over the line, because a comment is legal YAML, and review reads
+	# it as the thing it was meant to be.
+	#
+	# ANCHORED, NEVER COUNTED, and the difference is measured rather than
+	# asserted. The obvious predicate — compare the raw `${{` count against the
+	# count surviving a YAML parse — flags 4 of this repo's 20 workflows, and 3
+	# are `nonverdict-rate`, `release-assets` and `timeout-drift` legitimately
+	# discussing `${{ }}` inside prose comments. A gate that is 75% false
+	# positives gets switched off, which is worse than no gate. Requiring a
+	# `key:` before the `#` and an interpolation after it, with whole-line
+	# comments skipped, flags exactly the one real defect and nothing else.
+	#
+	# Two greps and a here-string rather than a pipe: `pipefail-grep-check`
+	# refuses a producer piped into an early-exiting grep, and capturing first
+	# keeps this out of that shape entirely.
+	# The first value character must not be a quote. A quoted scalar carries its
+	# `#` as data — that is the REPAIR this rule asks for, so matching it would
+	# make the gate refuse the very shape it demands. Found by the gate refusing
+	# its own fix on the first run, which is the cheapest possible way to find it.
+	swallowed_raw=$(grep -nE '^[[:space:]]*[A-Za-z0-9_.-]+:[[:space:]]*[^"'"'"'#[:space:]][^#]*[[:space:]]#.*\$\{\{' "$wf" || true)
+	swallowed=$(grep -vE '^[0-9]+:[[:space:]]*#' <<<"$swallowed_raw" || true)
+	while IFS= read -r hit; do
+		[ -n "$hit" ] || continue
+		# Pointer-only (non-negotiable 4): the path, the line, and the repair.
+		# Never the line's text — a workflow value can name a secret.
+		problem "$wf:${hit%%:*} has an unquoted '#' inside a key's value, which opens a YAML comment and swallows a \${{ }} interpolation — the value reaching GitHub is truncated. Quote it (CLOUD-507)."
+	done <<<"$swallowed"
+
 	# Property 10, also above the filter: a `workflow_run` workflow is not on the
 	# landing path, and this is about what it COSTS the run list. Keyed to the
 	# job condition rather than demanded of every `workflow_run` trigger —

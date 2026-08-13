@@ -323,6 +323,49 @@ fanin() {
 	[ "$status" -eq 0 ]
 }
 
+# --- property 11: an unquoted '#' must not swallow an interpolation ----------
+#
+# CLOUD-507. `run-name: fast-forward #${{ … }}` parses to the bare string
+# `fast-forward`, so the key never reaches GitHub and `land`'s verdict filter can
+# never match. Legal YAML, so actionlint and zizmor both pass it.
+#
+# The three passing rows are not padding. The obvious predicate — raw `${{` count
+# versus the count surviving a parse — is 75% false positives on this repo's own
+# corpus, and a gate that noisy gets switched off. Each row below is one of those
+# false positives.
+
+@test "an unquoted # that swallows an interpolation is refused, and named" {
+	workflow ci
+	printf 'run-name: build #%s\n' '${{ github.event.issue.number }}' >>"$WF/ci.yml"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"unquoted '#'"* ]]
+	[[ "$output" == *"ci.yml:"* ]]
+	# Pointer-only: the repair, never the line's text — a value can name a secret.
+	[[ "$output" != *"github.event.issue.number"* ]]
+}
+
+@test "the same value quoted passes — the repair must not be refused" {
+	workflow ci
+	printf 'run-name: "build #%s"\n' '${{ github.event.issue.number }}' >>"$WF/ci.yml"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a whole-line comment mentioning an interpolation passes" {
+	workflow ci
+	printf '# a note about %s expansion in a run block\n' '${{ }}' >>"$WF/ci.yml"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a trailing comment with no interpolation after it passes" {
+	workflow ci
+	printf 'run-name: build # an ordinary trailing comment\n' >>"$WF/ci.yml"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
 @test "this repository's real workflows pass" {
 	# The assertion that catches the gate drifting from what it guards.
 	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ
