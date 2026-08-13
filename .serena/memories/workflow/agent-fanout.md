@@ -115,6 +115,17 @@ Two distinct lap-loss shapes showed up, and only one is the documented one:
   the log as a refusal that never happened. The bot is not rejecting the
   fast-forward; it is slower than `main`.
 
+**A third shape, measured on CLOUD-206 the same evening: the bot ANSWERS, with a 403.** Across two more `land` invocations (16 further laps, every one green on
+CI) lap 7 of the second carried a real refusal body — `API rate limit exceeded
+for user ID 597920`, the _bot's_ credential, not the session's, whose own
+`rate_limit` read 4900/5000 remaining at the time. So "the bot was silent" and
+"the bot is slower than `main`" do not cover the space: under sustained fleet
+landing the fast-forward bot can exhaust its own hourly budget, and then no
+amount of lapping can win because the refusal is unconditional until its reset.
+Distinguishing them costs nothing — the refusal body is already in `land`'s log —
+and it matters because the two have opposite responses: slowness argues for
+shortening the lap, a 403 argues for waiting out the reset.
+
 That second shape is what makes the ceiling bite sooner than the N ≈ 2.9 model
 predicts: the model prices a lap at verify + CI, and the bot's silence is a third
 term nobody measured. Raising `LAND_MAX_LAPS` (the task's own documented bound)
