@@ -116,6 +116,10 @@ const CONTENT: &[Canary] = &[
         tag: "briefed",
         source: "free prose inside a delegation brief read by `lint brief`",
     },
+    Canary {
+        tag: "captured",
+        source: "the inline evidence bytes of a design-evidence capture",
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
@@ -323,6 +327,25 @@ fn delegation_brief() -> String {
     )
 }
 
+/// The claim stream `design audit` reads.
+///
+/// The sharpest content case on the surface: a `capture` carries its evidence
+/// **inline**, in `bytes`, so the audit holds real captured content in hand and
+/// its whole job is to judge that content without republishing it. `design.rs`
+/// says `source` is a pointer and never the claim text; the digest is
+/// deliberately wrong for the bytes, so the mismatch finding fires and the
+/// emitter that reports it is actually exercised.
+fn design_claims() -> String {
+    format!(
+        "{{\"id\":\"c1\",\"status\":\"verified\",\"polarity\":\"absence\",\
+         \"source\":\"batten.toml:1\",\"claimant\":\"a\",\"verifier\":\"b\",\
+         \"capture\":{{\"digest\":{{\"sha256\":\"{}\"}},\"byte_count\":1,\
+         \"bytes\":\"{}\"}}}}\n",
+        "0".repeat(64),
+        canary("captured"),
+    )
+}
+
 /// A ledger row read on stdin by `defects add -n`. The caller wrote it, so its
 /// bytes are a declaration.
 fn incoming_record() -> String {
@@ -357,6 +380,7 @@ enum Stdin {
     MediatedCall,
     DefectRecord,
     DelegationBrief,
+    DesignClaims,
 }
 
 struct Verb {
@@ -518,6 +542,12 @@ const CENSUS: &[Verb] = &[
         ),
     },
     Verb {
+        path: "design audit",
+        args: &[],
+        stdin: Stdin::DesignClaims,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
         path: "state adopt",
         args: &[],
         stdin: Stdin::Nothing,
@@ -605,6 +635,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         Stdin::MediatedCall => mediated_call(),
         Stdin::DefectRecord => incoming_record(),
         Stdin::DelegationBrief => delegation_brief(),
+        Stdin::DesignClaims => design_claims(),
     };
     child
         .stdin
