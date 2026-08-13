@@ -800,7 +800,25 @@ pub fn adjudicate(
     envelope: &Envelope,
     bypass: bool,
     receipts: &ReceiptFacts,
+    stop: &crate::stop::StopFacts,
 ) -> Decision {
+    // The end-of-turn gate (CLOUD-85), which the note below anticipated: the
+    // stop event has its own surface, and this is it. Its inputs arrive as a
+    // value for the same reason `receipts` do — this function is contractually
+    // pure, and the gate reads git and the findings store. A stop deny is exit 2
+    // exactly as a pre-tool deny is; what makes the two distinct is the event,
+    // never the code (§7 has no per-verb exception).
+    //
+    // Before the bypass check, deliberately. `BATTEN_HOOK_BYPASS` says "do not
+    // adjudicate this call", and what is adjudicated here is not a call — it is
+    // whether the turn's work is finished. A hatch for one mediated command
+    // should not also wave through unlanded work.
+    if envelope.event == Event::Stop {
+        return match stop.refusal() {
+            Some(refusal) => Decision::Deny(refusal),
+            None => Decision::Allow,
+        };
+    }
     // Dispatch on the event FIRST, and allow every non-pre-tool one explicitly
     // (CLOUD-43). Before this the field was decoded and never read, so a
     // `PostToolUse` payload carrying a banned command in `tool_input.command`
@@ -1547,6 +1565,7 @@ mod tests {
             &envelope(command),
             false,
             &None,
+            &crate::stop::StopFacts::default(),
         )
     }
 
@@ -1602,7 +1621,13 @@ mod tests {
     }
 
     fn adjudicate_command(command: &str) -> Decision {
-        adjudicate(&gh_policy(), &envelope(command), false, &None)
+        adjudicate(
+            &gh_policy(),
+            &envelope(command),
+            false,
+            &None,
+            &crate::stop::StopFacts::default(),
+        )
     }
 
     fn is_deny(command: &str) -> bool {
@@ -1744,7 +1769,13 @@ mod tests {
     #[test]
     fn bypass_allows_everything() {
         assert_eq!(
-            adjudicate(&gh_policy(), &envelope("gh pr merge"), true, &None),
+            adjudicate(
+                &gh_policy(),
+                &envelope("gh pr merge"),
+                true,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Allow
         );
     }
@@ -1819,7 +1850,13 @@ mod tests {
         let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
         assert_eq!(envelope.event, Event::PreTool);
         assert!(matches!(
-            adjudicate(&gh_policy(), &envelope, false, &None),
+            adjudicate(
+                &gh_policy(),
+                &envelope,
+                false,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Deny(_)
         ));
     }
@@ -1835,6 +1872,7 @@ mod tests {
                 &envelope_at(event, "gh pr merge 42"),
                 false,
                 &None,
+                &crate::stop::StopFacts::default(),
             );
             if event == Event::PreTool {
                 assert!(matches!(decision, Decision::Deny(_)), "{event:?}");
@@ -1851,7 +1889,13 @@ mod tests {
         // adjudicates to Allow rather than erroring.
         let envelope = decode(Harness::ClaudeCode, "{}").expect("decodes");
         assert_eq!(
-            adjudicate(&gh_policy(), &envelope, false, &None),
+            adjudicate(
+                &gh_policy(),
+                &envelope,
+                false,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Allow
         );
     }
@@ -1867,6 +1911,7 @@ mod tests {
                 &envelope("gh pr merge 42"),
                 false,
                 &None,
+                &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
         );
@@ -1924,7 +1969,13 @@ mod tests {
             protected: PathSet::empty(),
         };
         assert_eq!(
-            adjudicate(&policy, &envelope("gh pr merge 42"), false, &None),
+            adjudicate(
+                &policy,
+                &envelope("gh pr merge 42"),
+                false,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Allow
         );
     }
@@ -1942,7 +1993,13 @@ mod tests {
             protected: PathSet::empty(),
         };
         assert_eq!(
-            adjudicate(&advisory, &call, false, &None),
+            adjudicate(
+                &advisory,
+                &call,
+                false,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Allow,
             "a warn row does not block a mediated call on its own"
         );
@@ -1955,7 +2012,13 @@ mod tests {
         };
         assert!(
             matches!(
-                adjudicate(&promoted, &call, false, &None),
+                adjudicate(
+                    &promoted,
+                    &call,
+                    false,
+                    &None,
+                    &crate::stop::StopFacts::default()
+                ),
                 Decision::Deny(_)
             ),
             "promotion applies at the mediation channel too"
@@ -1976,7 +2039,13 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
         };
-        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false, &None));
+        let reason = denial_text(adjudicate(
+            &policy,
+            &envelope("gh pr merge"),
+            false,
+            &None,
+            &crate::stop::StopFacts::default(),
+        ));
         assert!(reason.contains("first"), "got: {reason}");
     }
 
@@ -2005,7 +2074,13 @@ mod tests {
             verbs: Vec::new(),
             protected: PathSet::empty(),
         };
-        let reason = denial_text(adjudicate(&policy, &envelope("gh pr merge"), false, &None));
+        let reason = denial_text(adjudicate(
+            &policy,
+            &envelope("gh pr merge"),
+            false,
+            &None,
+            &crate::stop::StopFacts::default(),
+        ));
         assert!(reason.contains("example.invalid/policy"), "got: {reason}");
     }
 
@@ -2035,6 +2110,7 @@ mod tests {
             &write_envelope(tool, path),
             false,
             &None,
+            &crate::stop::StopFacts::default(),
         )
     }
 
@@ -2064,7 +2140,13 @@ mod tests {
     }
 
     fn adjudicate_ready(facts: &ReceiptFacts) -> Decision {
-        adjudicate(&receipt_policy(), &envelope("gh pr ready 42"), false, facts)
+        adjudicate(
+            &receipt_policy(),
+            &envelope("gh pr ready 42"),
+            false,
+            facts,
+            &crate::stop::StopFacts::default(),
+        )
     }
 
     // --- what the boundary resolves (CLOUD-460) -----------------------------
@@ -2179,6 +2261,7 @@ mod tests {
                 &envelope("gh pr view 42"),
                 false,
                 &Some(resolved(&[("verify", Validity::Missing)])),
+                &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
         );
@@ -2264,6 +2347,7 @@ mod tests {
                 &envelope,
                 false,
                 &None,
+                &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
         );
@@ -2422,7 +2506,13 @@ mod tests {
         // no protected paths — or the reverse — has declared no gate.
         let no_verbs = protected_policy(Vec::new());
         assert_eq!(
-            adjudicate(&no_verbs, &envelope("rm batten.toml"), false, &None),
+            adjudicate(
+                &no_verbs,
+                &envelope("rm batten.toml"),
+                false,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Allow
         );
         let no_paths = Policy {
@@ -2432,7 +2522,13 @@ mod tests {
             protected: PathSet::empty(),
         };
         assert_eq!(
-            adjudicate(&no_paths, &envelope("rm batten.toml"), false, &None),
+            adjudicate(
+                &no_paths,
+                &envelope("rm batten.toml"),
+                false,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Allow
         );
     }
@@ -2448,6 +2544,7 @@ mod tests {
             &envelope("rm .serena/memories/core.md"),
             false,
             &None,
+            &crate::stop::StopFacts::default(),
         ));
         assert!(reason.contains("no-rm-memories"), "got: {reason}");
     }
@@ -2460,6 +2557,7 @@ mod tests {
                 &envelope("rm batten.toml"),
                 true,
                 &None,
+                &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
         );
@@ -2508,13 +2606,25 @@ mod tests {
         let call = envelope("rm guarded/thing");
         assert!(
             matches!(
-                adjudicate(&guarding, &call, false, &None),
+                adjudicate(
+                    &guarding,
+                    &call,
+                    false,
+                    &None,
+                    &crate::stop::StopFacts::default()
+                ),
                 Decision::Deny(_)
             ),
             "the declared set must deny"
         );
         assert_eq!(
-            adjudicate(&elsewhere, &call, false, &None),
+            adjudicate(
+                &elsewhere,
+                &call,
+                false,
+                &None,
+                &crate::stop::StopFacts::default()
+            ),
             Decision::Allow,
             "a different declared set must allow the same command"
         );

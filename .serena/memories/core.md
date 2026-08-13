@@ -325,6 +325,29 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   and omitting the flag costs nothing.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<repo-name>/`, CLOUD-23),
   via `etcetera`; repo-name derived at runtime, never baked in (rule 1).
+- `stop.rs` — the end-of-turn gate (CLOUD-85), house-style §10's "the stop hook is
+  the reconciliation point". `deny-stop ⇔ at-risk work ∨ an undischarged denial`,
+  and **both inputs are consumed, never re-derived**: `worktree::status` is the
+  at-risk half, a store record with `disposition == None` the other. Undischarged
+  means NO disposition — the store's own three-valued reading — so every settled
+  answer including `rejected-by-design` discharges; a gate that blocked on a
+  rejection would refuse an answer the agent already gave. Only `deny`-severity
+  findings count, or the severity axis means nothing. A finding the ENGINE
+  withheld still counts: the stop event is where a withheld finding is finally
+  due. Split like `receipts`: `facts` is the I/O half at the boundary, the verdict
+  is pure over values, which is what makes it testable without a world. It **forces
+  continuation, never vetoes completion** — `stop_vetoes_completion` is false on
+  every surveyed host — which is why the refusal names a command to run rather
+  than only reporting a state, taking the first discharging argv a pending denial
+  declares and falling back to the at-risk remedy. Distinct from a pre-tool deny
+  by EVENT, never by code: §7 has no per-verb exception, so both are exit 2, and
+  the `tests/cli.rs` event census gained a `state_decided` column rather than
+  losing its "only pre-tool denies" assertion. Dispatched from `adjudicate` BEFORE
+  the bypass check — the hook bypass says "do not adjudicate this call", and what
+  is judged here is not a call but whether the turn's work is finished. Absent is
+  never a deny: outside a repository, or with no bound store, both inputs are
+  "not asked" rather than "clean", while a store that exists and cannot be read
+  propagates (exit 3, fail loud) rather than guessing either verdict.
 - `store.rs` — _which_ store belongs to this checkout (CLOUD-164); it holds
   nothing, and CLOUD-78 extends the contents without touching identity. The id
   is MINTED at first write and seeded with a clock, so it cannot be recomputed

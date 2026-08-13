@@ -46,6 +46,7 @@ pub mod session;
 pub mod severity;
 pub mod spec;
 pub mod state;
+pub mod stop;
 pub mod store;
 pub mod surface;
 pub mod transcript;
@@ -970,7 +971,53 @@ fn run_hook(
     // lacking the capability fires nothing" structural rather than a second
     // check this call site could get wrong.
     fire_actions(&envelope, bypass, overrides, err)?;
-    decide(harness, &envelope, &policy, bypass, &receipts, out)
+    // The end-of-turn facts (CLOUD-85), resolved here for `receipts`' reason:
+    // `adjudicate` is contractually pure and this reads git and the findings
+    // store. Only on the stop event — every other event allows without
+    // consulting them, so no other call pays for the reads.
+    let stop = if envelope.event == hook::Event::Stop {
+        stop_facts(overrides)?
+    } else {
+        stop::StopFacts::default()
+    };
+    decide(harness, &envelope, &policy, bypass, &receipts, &stop, out)
+}
+
+/// Assemble the end-of-turn gate's inputs (CLOUD-85).
+///
+/// **Outside a repository, both inputs are absent rather than clean.** `batten
+/// hook` is registered once and then mediates every turn in whatever directory
+/// the agent is in; answering "nothing is at risk" for a directory Batten does
+/// not govern would be a claim nobody made, and answering "deny" would make the
+/// guard the reason a turn cannot end.
+fn stop_facts(overrides: &Overrides) -> Result<stop::StopFacts> {
+    let here = Path::new(".");
+    let Ok(repo) = git::repo_root(here) else {
+        return Ok(stop::StopFacts::default());
+    };
+    // Config is optional here, unlike for the mediated-call policy: the at-risk
+    // half is a property of the checkout and answers with or without a
+    // `batten.toml`, and the two config-supplied knobs simply go unset.
+    let (target, threshold) = if here.join(config::CONFIG_FILE).exists() {
+        let resolved = resolve::resolve(here, overrides)?;
+        let threshold = resolved
+            .worktree
+            .as_ref()
+            .and_then(|worktree| worktree.pileup_threshold);
+        (resolved.must_land_on.clone(), threshold)
+    } else {
+        (None, None)
+    };
+    // A store this checkout is not bound to yields no denials — an answer, not a
+    // gap. `resolve` reads and never writes, which is what keeps the stop gate's
+    // `read` effect honest.
+    let store_dir = store::bound_dir(&store::resolve(&repo)?);
+    stop::facts(
+        Some(&repo),
+        target.as_deref(),
+        threshold,
+        store_dir.as_deref(),
+    )
 }
 
 /// Spawn the `[[hook.action]]` rows declared for this envelope's event.
@@ -1190,9 +1237,10 @@ fn decide(
     policy: &hook::Policy,
     bypass: bool,
     receipts: &hook::ReceiptFacts,
+    stop: &stop::StopFacts,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match hook::adjudicate(policy, envelope, bypass, receipts) {
+    match hook::adjudicate(policy, envelope, bypass, receipts, stop) {
         hook::Decision::Allow => Ok(ExitCode::Success),
         // One dispatch for every host, because the *shape* of the answer is the
         // adapter's business and the decision is not. A host that reads a body

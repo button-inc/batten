@@ -1314,8 +1314,22 @@ struct EventRow {
     event: batten::hook::Event,
     /// The host's own spelling, as it appears in `hook_event_name`.
     spelling: &'static str,
-    /// Whether policy adjudicates at this event at all.
+    /// Whether the **mediated-call** policy adjudicates at this event.
+    ///
+    /// Narrower than "does anything decide here" since CLOUD-85: the stop event
+    /// is now adjudicated too, by the end-of-turn gate, whose inputs are the
+    /// checkout's state rather than the call's. This column stays about the
+    /// command matcher, so the row below keeps pinning what it always pinned —
+    /// a banned command is refused before it runs, and only there.
     adjudicated: bool,
+    /// Whether a decision at this event is a function of repository state
+    /// rather than of the payload.
+    ///
+    /// Only the stop event (CLOUD-85). Its verdict depends on whether the tree
+    /// is clean and the store empty, so a fixture cannot pin it to one answer
+    /// the way a command can — what is pinned instead is that the answer is a
+    /// legal one, and the gate's own cases assert which.
+    state_decided: bool,
 }
 
 const EVENTS: &[EventRow] = &[
@@ -1323,21 +1337,25 @@ const EVENTS: &[EventRow] = &[
         event: batten::hook::Event::PreTool,
         spelling: "PreToolUse",
         adjudicated: true,
+        state_decided: false,
     },
     EventRow {
         event: batten::hook::Event::PostTool,
         spelling: "PostToolUse",
         adjudicated: false,
+        state_decided: false,
     },
     EventRow {
         event: batten::hook::Event::Stop,
         spelling: "Stop",
         adjudicated: false,
+        state_decided: true,
     },
     EventRow {
         event: batten::hook::Event::SessionStart,
         spelling: "SessionStart",
         adjudicated: false,
+        state_decided: false,
     },
     // Claude-only (CLOUD-45). Every host is fed every row below, and the four
     // that do not declare these two allow through the capability path instead of
@@ -1349,16 +1367,19 @@ const EVENTS: &[EventRow] = &[
         event: batten::hook::Event::TaskCompleted,
         spelling: "TaskCompleted",
         adjudicated: false,
+        state_decided: false,
     },
     EventRow {
         event: batten::hook::Event::ConfigChange,
         spelling: "ConfigChange",
         adjudicated: false,
+        state_decided: false,
     },
     EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",
         adjudicated: false,
+        state_decided: false,
     },
 ];
 
@@ -1398,15 +1419,30 @@ fn every_normalized_event_resolves_to_its_golden_decision() {
                     denied,
                     "{at}: a banned command must be denied before it runs"
                 );
+            } else if row.state_decided {
+                // The end-of-turn gate (CLOUD-85). Its verdict is a function of
+                // the checkout, not of the banned command in the payload — so
+                // what is pinned here is that the answer stays inside the §7
+                // table and never leaks the command matcher's reasoning. Which
+                // way it goes for a given tree is the gate's own fixtures.
+                let code = output.status.code();
+                assert!(
+                    code == Some(0) || code == Some(2),
+                    "{at}: a stop verdict is allow or deny, never a failure code"
+                );
+                assert!(
+                    !common::stderr(&output).contains("gh pr merge"),
+                    "{at}: the stop gate answers about the turn, never about the payload's command"
+                );
             } else {
                 assert_eq!(
                     output.status.code(),
                     Some(0),
-                    "{at}: a non-pre-tool event must not deny"
+                    "{at}: an unadjudicated event must not deny"
                 );
                 assert!(
                     String::from_utf8_lossy(&output.stdout).is_empty(),
-                    "{at}: a non-pre-tool event emits no decision document"
+                    "{at}: an unadjudicated event emits no decision document"
                 );
             }
         }
@@ -6912,4 +6948,154 @@ fn a_repository_declaring_no_actions_spawns_nothing_and_is_unaffected() {
     );
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(common::stderr(&output), "");
+}
+
+// --- the end-of-turn gate (CLOUD-85) ------------------------------------------
+//
+// `deny-stop ⇔ at-risk work ∨ an undischarged denial`. Both inputs are consumed
+// rather than re-derived, so these cases exercise the composition and the
+// channel; what each input means is pinned by its own module's tests.
+
+/// A repository whose tree is clean and whose store is empty.
+fn stop_repo(name: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config("version = 1\nmust_land_on = \"main\"\n")
+        .file("README.md", "base\n")
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    dir
+}
+
+/// A Claude Code `Stop` payload — the end-of-turn event.
+fn stop_payload() -> String {
+    serde_json::json!({ "hook_event_name": "Stop", "session_id": "s-1" }).to_string()
+}
+
+#[test]
+fn a_clean_tree_and_an_empty_store_let_the_turn_end() {
+    // Acceptance (b). Allow prints nothing: a turn that may end is the ordinary
+    // case, and saying so on every one would spend context to report a non-event.
+    let dir = stop_repo("stop-clean");
+    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(common::stdout(&output), "");
+    assert_eq!(common::stderr(&output), "");
+}
+
+#[test]
+fn at_risk_work_blocks_the_turn_and_names_the_fact() {
+    // Acceptance (a), the at-risk half. The uncommitted file is work that would
+    // not survive the container, which is precisely what end-of-turn is for.
+    let dir = stop_repo("stop-at-risk");
+    common::write(&dir, "scratch.txt", "work in progress\n");
+
+    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    // Claude reads an in-band decision document on exit 0; the deny is the
+    // document, not the code (CLOUD-40).
+    assert_eq!(output.status.code(), Some(0));
+    let document = common::stdout(&output);
+    assert!(
+        document.contains("\"deny\""),
+        "the turn is refused through the host's own channel: {document:?}"
+    );
+    assert!(
+        document.contains("uncommitted: 1 paths"),
+        "the refusal names the blocking fact as a pointer: {document:?}"
+    );
+    assert!(
+        !document.contains("work in progress"),
+        "a pointer, never the content (rule 4): {document:?}"
+    );
+}
+
+#[test]
+fn the_stop_refusal_names_something_to_run() {
+    // §5, and `Refusal`'s own contract: a block that says only "no" cannot be
+    // acted on in one hop. The at-risk half has no per-finding command, so this
+    // is the case where the fallback remedy has to carry it.
+    let dir = stop_repo("stop-remedy");
+    common::write(&dir, "scratch.txt", "work in progress\n");
+
+    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    let document = common::stdout(&output);
+    assert!(
+        document.contains("Fix:"),
+        "every refusal carries a remedy clause: {document:?}"
+    );
+}
+
+#[test]
+fn the_same_state_on_a_pre_tool_event_does_not_deny() {
+    // Acceptance (c). The gate fires on the stop event only — it is distinct
+    // from a pre-tool deny by EVENT, and an unfinished turn must not start
+    // refusing the tool calls that would finish it.
+    let dir = stop_repo("stop-pre-tool");
+    common::write(&dir, "scratch.txt", "work in progress\n");
+
+    let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"), false);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !common::stdout(&output).contains("\"deny\""),
+        "at-risk work does not refuse an ordinary tool call"
+    );
+}
+
+#[test]
+fn a_host_that_does_not_emit_stop_ends_its_turn_unmediated() {
+    // Acceptance (d). Every surveyed host emits Stop, so the degradation is
+    // exercised through an event the neutral adapter genuinely lacks — the
+    // capability path answers before the gate is reached, and the answer is
+    // allow rather than an error.
+    let dir = stop_repo("stop-uncapable");
+    common::write(&dir, "scratch.txt", "work in progress\n");
+
+    let output = run_hook_in(
+        &dir,
+        "exit-code",
+        &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
+        false,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an absent capability is a fact about the host, never a refusal"
+    );
+}
+
+#[test]
+fn outside_a_repository_the_turn_ends_unmediated() {
+    // `batten hook` is registered once and mediates every turn in whatever
+    // directory the agent is in. Answering "at risk" for a directory Batten does
+    // not govern would make the guard the reason a turn cannot end.
+    // Genuinely outside the tree: `scratch` lives under `target/`, which is
+    // inside this repository, so a gate that reads the checkout would answer
+    // about Batten's own working tree rather than about nothing.
+    let dir = common::scratch_outside_tree("batten-stop", "outside");
+    let output = run_hook_in(&dir, "claude-code", &stop_payload(), false);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(common::stdout(&output), "");
+}
+
+#[test]
+fn a_stop_deny_is_the_same_exit_code_as_a_pre_tool_deny() {
+    // §7 has no per-verb exception, so the two denies are one code on a host
+    // whose only channel is the exit status. What distinguishes them is the
+    // event, which is the whole design.
+    let dir = stop_repo("stop-exit-code");
+    common::write(&dir, "scratch.txt", "work in progress\n");
+
+    let output = run_hook_in(&dir, "exit-code", &stop_payload(), false);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the policy verdict, on the channel a neutral host reads"
+    );
+    assert!(
+        common::stderr(&output).contains("uncommitted: 1 paths"),
+        "the reason travels on stderr: {:?}",
+        common::stderr(&output)
+    );
 }
