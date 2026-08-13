@@ -21,6 +21,13 @@
 #   excluded (not-ready)         its Ready block genuinely fails       -> exit 0
 #   excluded (blocked-by …)      a blocker has not landed              -> exit 0
 #
+# And one more predicate, CLOUD-234's: prose is not a second authority for a
+# column, so a status the board decides is checked against the board.
+#
+#   status-claim-disagrees       a body asserts a column that is false -> exit 1
+#   status-claim-unjudgeable     it asserts one about an unpiped id    -> exit 2
+#   unjudgeable-description      a payload carries no description key  -> exit 2
+#
 # "At least one linked PR attachment" is a deliberate approximation of "landed":
 # it is checkable from the payload alone. Commit containment and "all referenced
 # PRs merged" are release-gate questions and belong to the In Review -> Done
@@ -126,6 +133,90 @@ if [ -n "$edges" ] && ! tsort <<<"$edges" >/dev/null 2>&1; then
 	cycle=$(tsort <<<"$edges" 2>&1 >/dev/null | grep -oE 'CLOUD-[0-9]+' | by_num | sort -u | tr '\n' ' ' || true)
 	report "graph" "blockedby-cycle (${cycle% })"
 fi
+
+# --- status claims: the board is the one authority for a column (CLOUD-234) ---
+#
+# A refinement sweep groomed seven issues while other sessions were landing work,
+# and every block carried the same defect: prose restating a column the board
+# owns, already stale when saved. CLOUD-8's child inventory said "CLOUD-87 — In
+# Progress (PR #157)" two seconds AFTER CLOUD-87 completed and its PR merged. All
+# seven passed ready-lint at exit 0, and an epic's child inventory is read as the
+# frontier, so a stale column sends an implementer at finished work.
+#
+# It is the §8 relation claim in a different clause: prose asserting something the
+# board decides, with nothing checking it. It cannot live in ready-lint, which is
+# a pure function of ONE issue and structurally cannot know another's status. This
+# script already takes the set and already resolves ids across it.
+#
+# THE VOCABULARY COMES FROM THE PAYLOADS, never a second copy of the board's
+# status list. The consequence is real and stated rather than worked around: a
+# column no piped issue occupies is not in the vocabulary, so a claim naming it is
+# not recognised — the same way the frontier is already relative to the closure.
+columns=$(jq -r '[.[].status] | unique | .[]' <<<"$issues" | sed 's/[][\.*^$(){}?+|/]/\\&/g' | paste -sd'|' -)
+
+# ANTI-VACUITY, the conjunct CLOUD-251 applied to `blockedBy`: a set whose
+# descriptions were projected away has nothing to scan, and "found no claims"
+# would read as "made no false claims". Set-keyed for the same reason as
+# unjudgeable-blockedby — it is a property of the piped set, not of an issue.
+no_desc=$(jq -r '[.[] | select((.description | type) != "string") | .id] | join(" ")' <<<"$issues")
+if [ -n "$no_desc" ]; then
+	unjudged "graph" "unjudgeable-description ($(tr ' ' '\n' <<<"$no_desc" | by_num | tr '\n' ' ' | sed 's/ $//'))"
+fi
+
+# CLAIMS, NOT MENTIONS — the precision discipline ready-lint's §8 span already
+# solves, in the same order:
+#
+#   1. strip Linear's <issue …> mention markup, so the stored and rendered forms
+#      are one case (ready-lint does this before reading §8 claims);
+#   2. neutralise backticked and quoted spans, the treatment deferral-check gives
+#      a paragraph that NAMES a phrase rather than USING it. Load-bearing, not
+#      defensive: CLOUD-234's own body quotes the measured defect verbatim, so
+#      without this the gate fails the issue that ships it;
+#   3. match an id-first span whose CONNECTIVE is allowlisted, not blocklisted.
+#
+# The connective is where this was measured and rewritten. The first version
+# bounded the span by length and dropped `was`/`were`/`had been` as history —
+# and over this repo's own prose it fired three times, all wrong: "CLOUD-49 went
+# In Progress", "CLOUD-192 still read In Progress", "CLOUD-468's question), and a
+# Done". Every one is narration, and no blocklist of past-tense verbs ends: the
+# next one is `went`, `sat`, `showed`, `landed`. So the rule is inverted. Between
+# the id and the column may stand ONLY punctuation, markdown emphasis and
+# whitespace — optionally one present-tense connective, `is` / `is now` / `now`.
+# A claim is a gloss (`CLOUD-87 — **In Progress**`, `| CLOUD-3 | Done |`) or an
+# assertion (`CLOUD-2 is In Progress`); everything with a verb in it is prose
+# ABOUT an issue, which is what an epic is made of. Re-measured over the same
+# corpus: zero hits, with all four claim shapes still caught.
+#
+# Case-SENSITIVE, because the columns are proper nouns the payload spells exactly
+# and `-i` would read a `TODO` comment as a column. Id-first only: every measured
+# instance is `CLOUD-87 — **In Progress**`, and the reverse direction doubles the
+# false-positive surface with no measured shape behind it. Backslash is out of the
+# filler class, so a claim cannot bridge the `\n` @tsv leaves between two lines —
+# which is also what keeps the unbounded `*` from running away.
+#
+# The id and the column are read as the LAST of each in the span: grep -o returns
+# non-overlapping matches, so the id nearest the column word is the one the column
+# is about.
+BACKTICK='`'
+while IFS=$'\t' read -r claimer desc; do
+	[ -n "$claimer" ] || continue
+	prose=$(sed -E 's|</?issue[^>]*>||g' <<<"$desc")
+	prose=$(sed -E "s/${BACKTICK}[^${BACKTICK}]*${BACKTICK}/CODESPAN/g; s/\"[^\"]*\"/QUOTED/g" <<<"$prose")
+	while IFS= read -r claim; do
+		[ -n "$claim" ] || continue
+		cited=$(grep -oE 'CLOUD-[0-9]+' <<<"$claim" | tail -n1)
+		claimed=$(grep -oE "($columns)" <<<"$claim" | tail -n1)
+		actual=$(status_of "$cited")
+		if [ -z "$actual" ]; then
+			# An id outside the piped set is reported, never guessed — and keyed to
+			# the set, since which closure was piped is the caller's choice.
+			unjudged "graph" "status-claim-unjudgeable ($claimer claims $cited, not in the piped set)"
+		elif [ "$actual" != "$claimed" ]; then
+			# Pointer-only: the two column names and the ids, never the prose.
+			report "$claimer" "status-claim-disagrees ($cited claimed $claimed, board says $actual)"
+		fi
+	done < <(grep -oE "CLOUD-[0-9]+[^[:alnum:]\\\\]*((is|is now|now)[^[:alnum:]\\\\]*)?($columns)" <<<"$prose" || true)
+done < <(jq -r '.[] | select((.description | type) == "string") | [.id, .description] | @tsv' <<<"$issues" | by_num)
 
 # --- the frontier and WIP, on stdout ------------------------------------------
 #

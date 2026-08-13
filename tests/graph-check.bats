@@ -46,6 +46,12 @@ drop_key() {
 	jq -c "del(.$1)" "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
 }
 
+# describe <id> <text> — give one issue a body to be judged on.
+describe() {
+	jq -c --arg id "$1" --arg d "$2" \
+		'if .id == $id then .description = $d else . end' "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
+}
+
 @test "a coherent board exits 0" {
 	issue CLOUD-1 Done "" ""
 	issue CLOUD-2 Todo "" ""
@@ -288,6 +294,154 @@ graph-check: board coherent (2 issues)" ]
 	check
 	[ "$status" -eq 1 ]
 	[[ "$output" != *"$secret"* ]]
+}
+
+# --- CLOUD-234: a status gloss is not a second authority for the board -------
+#
+# The measured shape: CLOUD-8's child inventory said "CLOUD-87 — **In Progress**
+# (PR #157)" two seconds after CLOUD-87 completed and its PR merged. Every such
+# block passed ready-lint at exit 0, because nothing checked a column word.
+
+@test "a body claiming a column the board contradicts is reported" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	issue CLOUD-3 "In Progress" someone ""
+	describe CLOUD-1 "Children:
+* CLOUD-2 — **In Progress** (PR #157)"
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-1 status-claim-disagrees (CLOUD-2 claimed In Progress, board says Done)"* ]]
+}
+
+@test "the same claim, agreeing with the board, is clean" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	describe CLOUD-1 "* CLOUD-2 — **Done**"
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"status-claim"* ]]
+}
+
+@test "a mention asserting no column is not a claim" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	describe CLOUD-1 "Splits the representation CLOUD-2 introduced; see it for the rationale."
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"status-claim"* ]]
+}
+
+@test "Linear's stored mention markup is caught identically to the rendered form" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	issue CLOUD-3 "In Progress" someone ""
+	describe CLOUD-1 '* <issue id="x" href="https://linear.app/i/CLOUD-2">CLOUD-2</issue> — **In Progress**'
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-1 status-claim-disagrees (CLOUD-2 claimed In Progress, board says Done)"* ]]
+}
+
+@test "a claim about an id outside the piped set is unjudgeable, never guessed" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	describe CLOUD-1 "* CLOUD-99 — **Done**"
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"graph status-claim-unjudgeable (CLOUD-1 claims CLOUD-99, not in the piped set)"* ]]
+	# Keyed to the SET, not to the claiming issue: released's refusal_for greps
+	# this stderr for `^<id> <rule>`, and which closure was piped is the caller's
+	# choice, not that issue's dishonesty.
+	[[ "$output" != *"CLOUD-1 status-claim-unjudgeable"* ]]
+}
+
+@test "a quoted or backticked citation of a claim is not a claim" {
+	# Naming a claim is not making one — deferral-check's discipline, and the
+	# reason this gate does not fail the very issue that ships it.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	issue CLOUD-3 "In Progress" someone ""
+	describe CLOUD-1 'The inventory said "CLOUD-2 — **In Progress** (PR #157)" after it merged,
+and the same defect in a span reads `CLOUD-2 — In Progress` too.'
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"status-claim"* ]]
+}
+
+@test "narration about an issue is not a claim about its column" {
+	# MEASURED, and the reason the connective is an allowlist. Over this repo's
+	# own prose a length-bounded span with a `was|were` blocklist fired three
+	# times, all wrong — these are two of them, and the blocklist that would fix
+	# them has no end: went, sat, showed, landed.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Todo "" ""
+	issue CLOUD-3 Done "" ""
+	issue CLOUD-4 "In Progress" someone ""
+	describe CLOUD-1 "CLOUD-2 went In Progress at 04:29 and CLOUD-3 still read In Progress.
+CLOUD-2 was Done when this was written, then reopened."
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"status-claim"* ]]
+}
+
+@test "a gloss with no verb at all is a claim, in every shape the corpus uses" {
+	# The complement of the row above: punctuation, emphasis, a table cell, or a
+	# present-tense connective. Each must still be caught.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	issue CLOUD-3 Done "" ""
+	issue CLOUD-4 Done "" ""
+	issue CLOUD-5 "In Progress" someone ""
+	describe CLOUD-1 "| CLOUD-2 | In Progress |
+CLOUD-3 is In Progress
+CLOUD-4 (now In Progress)"
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2 claimed In Progress, board says Done"* ]]
+	[[ "$output" == *"CLOUD-3 claimed In Progress, board says Done"* ]]
+	[[ "$output" == *"CLOUD-4 claimed In Progress, board says Done"* ]]
+}
+
+@test "a set with no descriptions cannot be scanned for claims, and says so" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	drop_key description
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"graph unjudgeable-description (CLOUD-1 CLOUD-2)"* ]]
+	[[ "$output" != *"board coherent"* ]]
+}
+
+@test "a status claim report is pointer-only — no surrounding prose echoed" {
+	local secret="ACME Corp escalation"
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	issue CLOUD-3 "In Progress" someone ""
+	describe CLOUD-1 "$secret: CLOUD-2 — **In Progress**"
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"status-claim-disagrees"* ]]
+	[[ "$output" != *"$secret"* ]]
+}
+
+@test "a column no piped issue occupies is not in the vocabulary" {
+	# Stated rather than worked around. §1 forbids a second copy of the status
+	# list, so the vocabulary is whatever the closure spells — the same way the
+	# frontier is already relative to what was piped.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	describe CLOUD-1 "* CLOUD-2 — **In Review**"
+	check
+	[ "$status" -eq 0 ]
+}
+
+@test "ANTI-VACUITY: a set with no status claims anywhere still exits 0" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	issue CLOUD-3 "In Progress" someone ""
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"status-claim"* ]]
+	[[ "$output" == *"board coherent"* ]]
 }
 
 # --- the board-move receipt (CLOUD-512) --------------------------------------
