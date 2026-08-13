@@ -26,13 +26,33 @@ setup() {
 	CALLS="$BATS_TEST_TMPDIR/calls"
 	mkdir -p "$STUB" "$REPO" "$DATA/installs"
 
-	# `git rev-parse --show-toplevel` is the only git doctor needs before the
-	# repair; `submodule update` is the write under test, slowed so a second
-	# doctor would overlap it if the lock were absent.
+	# The git-hook half (CLOUD-476) reads this clone's hooks directory, so the
+	# fixture gets its own probe-honouring pair — the shape
+	# `.claude/hooks/git-hook` installs. Without them doctor's hook check would
+	# set `status=1` and every assertion below would fail for a reason that has
+	# nothing to do with the repairs under test. `CI` is unset for the mirror of
+	# that reason: doctor SKIPS the hook check under CI, so the runner's own
+	# `CI=true` would have these cases grading a skip.
+	unset CI
+	mkdir -p "$REPO/.git/hooks"
+	local name
+	for name in pre-commit commit-msg; do
+		cat >"$REPO/.git/hooks/$name" <<-'HOOK'
+			#!/usr/bin/env bash
+			[ -n "${BATTEN_HOOK_PROBE:-}" ] && exit 0
+			exit 0
+		HOOK
+		chmod +x "$REPO/.git/hooks/$name"
+	done
+
+	# `rev-parse --show-toplevel` and `rev-parse --git-path` are the reads doctor
+	# makes before any repair; `submodule update` is the write under test, slowed
+	# so a second doctor would overlap it if the lock were absent.
 	cat >"$STUB/git" <<EOF
 #!/usr/bin/env bash
 case "\$1 \$2" in
 "rev-parse --show-toplevel") echo "$REPO"; exit 0 ;;
+"rev-parse --git-path") echo "$REPO/.git/\$3"; exit 0 ;;
 "submodule update")
 	echo "submodule-update" >>"$CALLS"
 	sleep 0.4
