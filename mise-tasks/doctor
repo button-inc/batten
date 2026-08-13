@@ -221,16 +221,8 @@ done
 
 # --- torn mise installs (CLOUD-182) -------------------------------------------
 #
-# `mise install` trusts its own record: a version directory whose payload is
-# gone still counts as installed, `mise install` no-ops on it, and the first
-# symptom is an exec failure wearing someone else's name — measured here as
-# bin/serena a broken symlink into an absent venv while `mise ls` reported
-# 1.6.1, so the Serena MCP server silently never connected. Check the
-# ARTIFACTS, not the record: a bin entry that is a broken symlink marks that
-# tool version as torn. Repair by removing the version directory and re-running
-# `mise install`, which reprovisions whatever mise.toml says is missing — no
-# fragile mapping from a directory name back to tool syntax.
-# The scan runs here, unlocked, so an intact tree — the overwhelmingly common
+# Why the check reads artifacts rather than mise's record is written once, beside
+# `repair_installs` above. The scan runs here, unlocked, so an intact tree — the overwhelmingly common
 # case — costs no lock at all. Only a tree that looks torn queues, and the
 # re-scan inside the critical section is what stops the second doctor removing
 # and reprovisioning what the first one has already repaired.
