@@ -1699,6 +1699,46 @@ struct LintReport<'a> {
     smells: Vec<SmellView<'a>>,
 }
 
+/// Where a rule run is anchored: the process directory when it carries the
+/// authority, otherwise the repository root (CLOUD-214).
+///
+/// A run used to anchor at `.` unconditionally, so `batten check` from a
+/// subdirectory reported "no config found at ./batten.toml" and exited on a
+/// repository it was standing inside. A pre-commit hook survived that because
+/// git runs it at the root; an agent part-way through a trajectory does not, and
+/// being unable to run the gate from where you already are is an adoption
+/// blocker rather than a nicety.
+///
+/// **Exactly two candidates are consulted, in this order**, and the order is the
+/// whole design:
+///
+/// 1. **`.`, when it carries a `batten.toml`.** A directory that declares its own
+///    authority *is* the subject, whatever it happens to be nested inside. This
+///    is what keeps a fixture tree — materialized under `target/`, deep inside
+///    this repository — answering about itself rather than about its host, and
+///    it makes the common root invocation bit-for-bit what it always was.
+/// 2. **The repository root**, via the one `repo_root` primitive. This is the
+///    new capability and nothing else: a directory with no authority of its own,
+///    inside a repository that has one.
+///
+/// Absent both, the answer is `.` and `resolve` raises its own "no config"
+/// error, naming the file — the same diagnostic as before, from the same place.
+///
+/// **This is not the upward config walk §8 forbids.** That rule is about
+/// *authority*: one committed `batten.toml`, no directory-by-directory probing,
+/// no `conf.d` merge. Nothing here probes a chain of parents — it asks git once,
+/// for one answer — and nothing merges: exactly one of the two candidates is
+/// used, never both. Which is also what makes the output contract hold, since
+/// pointers are relative to the anchor and every subdirectory resolves the same
+/// one.
+fn anchor() -> PathBuf {
+    let here = PathBuf::from(".");
+    if here.join(config::CONFIG_FILE).is_file() {
+        return here;
+    }
+    git::repo_root(&here).unwrap_or(here)
+}
+
 fn run_rules(
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -1712,8 +1752,13 @@ fn run_rules(
     // actually applies rather than config the tool merely prints. The promotion
     // setting comes off the same resolution, so one §8 chain decides both.
     let base_ref = overrides.config_from.as_deref();
-    let config = resolve::resolve(Path::new("."), overrides)?;
-    let mut findings = runner(&config.rules, Path::new("."))?.findings;
+    // One anchor for the whole run, resolved once (CLOUD-214): config, the tree
+    // walk, budgets, the ledger and the transcript all answer about the same
+    // directory, so a subdirectory invocation cannot read policy from one place
+    // and files from another.
+    let root = anchor();
+    let config = resolve::resolve(&root, overrides)?;
+    let mut findings = runner(&config.rules, &root)?.findings;
 
     // Declared budgets are gates, evaluated here rather than only under `policy
     // budget` (CLOUD-50). Reading files and summing them spawns nothing, so this
@@ -1726,7 +1771,7 @@ fn run_rules(
     // have had to re-implement. An over-budget set was previously visible only
     // to whoever thought to run `policy budget`, which is a report, not a gate.
     findings.extend(
-        budget::measure_all(Path::new("."), config.budget.as_ref())?
+        budget::measure_all(&root, config.budget.as_ref())?
             .iter()
             .filter_map(budget::Report::finding),
     );
@@ -1738,9 +1783,11 @@ fn run_rules(
     //
     // Rooted at the repo, not the process directory: the ledger path is
     // repo-relative and the git bases are the repository's, so answering from a
-    // subdirectory would read a ledger that is not there.
+    // subdirectory would read a ledger that is not there. It reads `root` now
+    // rather than resolving the root a second time — the whole run shares one
+    // anchor (CLOUD-214), which is the same answer this line always wanted.
     if let Some(declared) = config.defects.as_ref() {
-        findings.extend(defects::gate(&git::repo_root(Path::new("."))?, declared)?);
+        findings.extend(defects::gate(&root, declared)?);
     }
 
     // The transcript capability (CLOUD-95), resolved BESIDE the runner rather than
@@ -1753,7 +1800,7 @@ fn run_rules(
     // A present-but-undecodable transcript propagates as a `UsageError` from
     // `resolve`, which is exit 1 — loud, and structurally not a deny (§7).
     let capability = transcript::resolve(
-        Path::new("."),
+        &root,
         config
             .transcript
             .as_ref()
@@ -1780,7 +1827,7 @@ fn run_rules(
     // so this is not a second gate on the same question, it is the surface that
     // is allowed to answer it.
     if surface == Surface::Spawning {
-        let raised = run_judges(err, mode, &config, Path::new("."))?;
+        let raised = run_judges(err, mode, &config, &root)?;
         register_advisories(&raised, err)?;
     }
 
@@ -1811,7 +1858,7 @@ fn run_rules(
     // lint`'s job (CLOUD-87), which reuses this same comparison.
     let delta = match base_ref {
         Some(reference) => {
-            let base = trust::load_base(Path::new("."), reference)?;
+            let base = trust::load_base(&root, reference)?;
             // A working authority that cannot be read is not a reason to abandon
             // the verdict. `resolve` above already took its policy from the base
             // ref, so the rules being evaluated are the trusted ones and the exit

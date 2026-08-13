@@ -1109,6 +1109,12 @@ pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<
         &format!("ratchet base {rev:?} does not resolve to a tree in this repository"),
     )?;
 
+    // The same compiled matcher the working-tree half uses, built once for the
+    // whole listing rather than re-parsed per entry (CLOUD-214). Sharing the
+    // type is what keeps the two halves' answer to "does this glob select this
+    // path" a single implementation.
+    let selector = crate::rules::Selector::new(glob)?;
+
     let mut total = 0;
     for entry in listing.lines().filter(|line| !line.is_empty()) {
         // `<mode> SP <type> SP <object> TAB <path>`. The tab is the one
@@ -1120,7 +1126,7 @@ pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<
         if meta.split_whitespace().next() == Some(GITLINK_MODE) {
             continue;
         }
-        if !crate::rules::glob_match(glob, path) {
+        if !selector.matches(path) {
             continue;
         }
         // `show <rev>:<path>`. The path comes from `ls-tree` at the same rev, so

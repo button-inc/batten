@@ -846,6 +846,14 @@ impl Rule {
                 self.id
             )));
         }
+        // Compiled at load, like `regex` and `exclude` above it (CLOUD-214): a
+        // pattern the matcher cannot parse must name the row that carries it,
+        // rather than becoming a rule that selects nothing and reads as a gate
+        // that found nothing wrong.
+        if let Some(glob) = self.glob.as_deref() {
+            Selector::new(glob)
+                .map_err(|err| UsageError::raise(format!("rule {}: {err}", self.id)))?;
+        }
         self.validate_forbid_predicate()?;
         self.validate_remediation()
     }
@@ -1243,7 +1251,10 @@ fn run_rule(
     if rule.severity() == RuleSeverity::Allow {
         return Ok(Some(NotObserved::RuleSkipped));
     }
-    let matched: Vec<&String> = files.iter().filter(|path| glob_match(glob, path)).collect();
+    // Compiled once for this rule, then matched against every path — never
+    // re-parsed per file (CLOUD-214).
+    let selector = Selector::new(glob)?;
+    let matched: Vec<&String> = files.iter().filter(|path| selector.matches(path)).collect();
 
     // A ratchet is evaluated BEFORE the empty-match skip below, and the
     // distinction is the whole gate: for every other kind an empty match set
@@ -1679,6 +1690,31 @@ pub const NESTED_REPOSITORY_MARKER: &str = ".git";
 /// answer to "what does Batten look at", which is the divergence
 /// [`crate::markers`] reuses this to avoid.
 ///
+/// # Ignored files are not policy input (CLOUD-214)
+///
+/// The walk is the [`ignore`] crate's — ripgrep's — so "which files does this
+/// repository consider its own" is answered by the `.gitignore` the contributors
+/// already maintain rather than by a second list here. Adopted, not rebuilt:
+/// nested `.gitignore` files, negations, and `.git/info/exclude` all come with
+/// it, and none of them is this crate's to re-implement.
+///
+/// The measurement that decided it, on this repository after one `cargo build`:
+/// the hand-rolled walk yielded **9221** paths, of which **8891 (96%)** were
+/// ignored build output under `target/` and only 330 were the repository's own.
+/// A `forbid` rule was one broad glob away from reporting findings against
+/// compiler artifacts, and every rule paid to walk them.
+///
+/// Two settings are load-bearing and pinned by tests rather than left to the
+/// crate's defaults:
+///
+/// * **Hidden entries are walked** (`hidden(false)`). `ignore` skips dotfiles by
+///   default, which would silently drop `.github/`, `.serena/` and `.claude/` —
+///   three directories this repository's committed rules select outright, so the
+///   default would turn live gates into dead ones with no diagnostic.
+/// * **Ignore files are honoured, `require_git` off.** A fixture that is not a
+///   git repository still reads its own `.gitignore`, so the selection does not
+///   change shape depending on whether git happens to be initialised.
+///
 /// # The selection stops at a nested repository (CLOUD-328)
 ///
 /// A directory carrying [`NESTED_REPOSITORY_MARKER`] is a repository of its
@@ -1709,37 +1745,66 @@ pub const NESTED_REPOSITORY_MARKER: &str = ".git";
 ///
 /// An I/O failure while walking propagates as an internal error (→ exit `3`).
 pub fn tree_files(root: &Path) -> anyhow::Result<Vec<String>> {
-    let mut files = Vec::new();
-    collect_files(root, root, &mut files)?;
-    files.sort();
-    Ok(files)
-}
+    let root = root.to_path_buf();
+    let mut walker = ignore::WalkBuilder::new(&root);
+    walker
+        // Dotfiles are ordinary policy input here; see the doc comment.
+        .hidden(false)
+        // A `.gitignore` means what it says whether or not `git init` has run,
+        // so the selection does not change shape under a fixture.
+        .require_git(false)
+        // The repository's own ignore surface, and only it. A developer's global
+        // excludes are a property of their machine, not of this repository, and
+        // a gate whose file set varies per workstation is not one gate.
+        .git_global(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .parents(false)
+        // One filesystem: a walk that follows a mount out of the repository is
+        // measuring somebody else's disk.
+        .same_file_system(true)
+        .follow_links(false);
+    // The CLOUD-328 boundary, restated on the adopted walker. `ignore` skips the
+    // root's own `.git` but knows nothing about a nested repository, so the rule
+    // this crate states has to be applied here or it would be silently dropped
+    // by the very change that adopts a better walk. `tests/submodule.rs` is what
+    // catches that, and it is why those assertions landed first.
+    let boundary = root.clone();
+    walker.filter_entry(move |entry| {
+        if entry.file_type().is_some_and(|kind| !kind.is_dir()) {
+            return true;
+        }
+        // The object store is never policy input, and this skip cannot be left
+        // to the walker: `ignore` excludes `.git` as a *hidden* entry, and
+        // `hidden(false)` above — which this repository's own rules require, to
+        // reach `.github/` and `.serena/` — switches that off along with it.
+        // Dropping it would put every blob, ref and hook body into the file set.
+        if entry.file_name() == std::ffi::OsStr::new(NESTED_REPOSITORY_MARKER) {
+            return false;
+        }
+        // `root` carries the marker by definition; testing it would empty every
+        // walk, so only descended directories are judged.
+        if entry.path() == boundary {
+            return true;
+        }
+        !entry.path().join(NESTED_REPOSITORY_MARKER).exists()
+    });
 
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> anyhow::Result<()> {
-    for entry in fs::read_dir(dir)? {
+    let mut files = Vec::new();
+    for entry in walker.build() {
         let entry = entry?;
-        let path = entry.path();
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            // The object store is never policy input; skip it wholesale.
-            if entry.file_name() == NESTED_REPOSITORY_MARKER {
-                continue;
-            }
-            // A directory that is its own repository is somebody else's tree.
-            // Tested on the child rather than on `dir`, which is what exempts
-            // `root` — it carries the marker by definition, and testing it
-            // would make every walk empty.
-            if path.join(NESTED_REPOSITORY_MARKER).exists() {
-                continue;
-            }
-            collect_files(root, &path, out)?;
-        } else if file_type.is_file() {
-            if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel_to_slash(rel));
-            }
+        // Directories, and the root itself, are not files; a symlink is not
+        // followed, so it never contributes a path outside the tree.
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        if let Ok(rel) = entry.path().strip_prefix(&root) {
+            files.push(rel_to_slash(rel));
         }
     }
-    Ok(())
+    // `ignore` yields in directory order; §6 byte-stability is this sort.
+    files.sort();
+    Ok(files)
 }
 
 /// Render a relative path with `/` separators, so globbing and output are
@@ -1774,8 +1839,8 @@ const EXCLUDE_PREFIX: char = '!';
 /// widening, and widening is the one direction a policy engine may never drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathSet {
-    includes: Vec<String>,
-    excludes: Vec<String>,
+    includes: Vec<Selector>,
+    excludes: Vec<Selector>,
 }
 
 impl PathSet {
@@ -1813,7 +1878,9 @@ impl PathSet {
     /// # Errors
     ///
     /// Returns a [`UsageError`] (→ exit `1`) for a `!` with no glob after it —
-    /// an exclude that excludes nothing is a typo, not an empty instruction.
+    /// an exclude that excludes nothing is a typo, not an empty instruction —
+    /// and for a glob that does not compile, which is refused here rather than
+    /// silently narrowing the set to nothing.
     pub fn scope(patterns: &[String]) -> anyhow::Result<Self> {
         let mut set = PathSet {
             includes: Vec::new(),
@@ -1826,8 +1893,8 @@ impl PathSet {
                         "scope: `!` must be followed by a glob".to_owned(),
                     ));
                 }
-                Some(rest) => set.excludes.push(rest.to_owned()),
-                None => set.includes.push(pattern.clone()),
+                Some(rest) => set.excludes.push(Selector::new(rest)?),
+                None => set.includes.push(Selector::new(pattern)?),
             }
         }
         Ok(set)
@@ -1841,8 +1908,10 @@ impl PathSet {
     /// `scope` carries exclude semantics, so a `!` here would either be read as
     /// a literal glob or silently dropped — and a pattern the author believes
     /// excludes a path while the engine treats it as an include is precisely the
-    /// silent policy change this issue exists to prevent. Refuse instead.
+    /// silent policy change this issue exists to prevent. Refuse instead. A glob
+    /// that does not compile is refused here too, for the same reason.
     pub fn includes(key: &str, patterns: &[String]) -> anyhow::Result<Self> {
+        let mut includes = Vec::with_capacity(patterns.len());
         for pattern in patterns {
             if pattern.starts_with(EXCLUDE_PREFIX) {
                 return Err(UsageError::raise(format!(
@@ -1850,9 +1919,12 @@ impl PathSet {
                      include set"
                 )));
             }
+            includes.push(
+                Selector::new(pattern).map_err(|err| UsageError::raise(format!("{key}: {err}")))?,
+            );
         }
         Ok(PathSet {
-            includes: patterns.to_vec(),
+            includes,
             excludes: Vec::new(),
         })
     }
@@ -1861,13 +1933,8 @@ impl PathSet {
     /// alone.
     #[must_use]
     pub fn contains(&self, path: &str) -> bool {
-        self.includes
-            .iter()
-            .any(|pattern| glob_match(pattern, path))
-            && !self
-                .excludes
-                .iter()
-                .any(|pattern| glob_match(pattern, path))
+        self.includes.iter().any(|selector| selector.matches(path))
+            && !self.excludes.iter().any(|selector| selector.matches(path))
     }
 }
 
@@ -1903,62 +1970,97 @@ impl Sets {
     }
 }
 
-/// Match a `/`-separated glob against a `/`-separated path.
+/// One compiled glob, matched against repo-relative `/`-separated paths
+/// (CLOUD-214).
 ///
-/// `**` matches any run of path segments (including none); within a segment `*`
-/// matches any run of non-`/` characters and `?` matches exactly one.
+/// [`globset`] rather than a hand-rolled matcher: the replaced one backtracked
+/// over every `**` split point — exponential on a pattern with several — and
+/// knew only `*`, `?` and `**`, so a consumer had no character classes, no
+/// braces and no way to say "not this". Adopting the matcher ripgrep already
+/// ships is the wrap-don't-rebuild directive applied to the one thing every rule
+/// runs through.
+///
+/// **Compiled once, matched many.** A pattern is parsed when the rule loads, not
+/// once per candidate path, which is what keeps the selection linear in the size
+/// of the tree rather than in tree × pattern-length.
+///
+/// # Semantics, pinned rather than inherited
+///
+/// `literal_separator(true)` is the one non-default setting and it is
+/// load-bearing: without it `*` crosses `/`, so `*.rs` would select every Rust
+/// file at every depth and a rule scoped to one directory would silently widen.
+/// Widening is the single direction a policy engine may never drift, and
+/// [`tests::glob_semantics_are_pinned_at_the_shipped_patterns`] is what holds it.
+#[derive(Debug, Clone)]
+pub struct Selector {
+    pattern: String,
+    matcher: globset::GlobMatcher,
+}
+
+impl Selector {
+    /// Compile `pattern`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a pattern `globset` cannot
+    /// parse — an unclosed character class, a stray `**` inside a component.
+    /// A malformed glob is bad config, and refusing it at load is what stops it
+    /// reaching a run as a rule that quietly selects nothing.
+    pub fn new(pattern: &str) -> anyhow::Result<Self> {
+        let glob = globset::GlobBuilder::new(pattern)
+            // See the type's doc comment: without this, `*` crosses `/` and
+            // every rule's scope widens.
+            .literal_separator(true)
+            .build()
+            .map_err(|err| UsageError::raise(format!("glob `{pattern}` is not valid: {err}")))?;
+        Ok(Selector {
+            pattern: pattern.to_owned(),
+            matcher: glob.compile_matcher(),
+        })
+    }
+
+    /// Whether `path` — repo-relative, `/`-separated — is selected.
+    #[must_use]
+    pub fn matches(&self, path: &str) -> bool {
+        self.matcher.is_match(path)
+    }
+
+    /// The pattern this was compiled from, as the consumer wrote it.
+    #[must_use]
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+}
+
+/// Two selectors are the same selector when they came from the same pattern.
+///
+/// Hand-written because a compiled matcher has no equality of its own, and
+/// stated over the pattern rather than derived so the compiled form stays an
+/// implementation detail: a [`PathSet`] comparison is a comparison of the
+/// config that built it.
+impl PartialEq for Selector {
+    fn eq(&self, other: &Self) -> bool {
+        self.pattern == other.pattern
+    }
+}
+
+impl Eq for Selector {}
+
+/// Match a `/`-separated glob against a `/`-separated path, compiling the
+/// pattern for this one call.
+///
+/// The convenience form, for a caller holding a single pattern and a single
+/// path. A caller testing many paths against one pattern must build a
+/// [`Selector`] instead — compiling per call is the cost this type exists to
+/// avoid.
+///
+/// A pattern that does not compile matches **nothing**, which is the safe
+/// direction: it can only ever produce fewer findings than the consumer asked
+/// for, never more. It is also unreachable for a rule, because [`Rule::validate`]
+/// refuses a malformed `glob` at load, where the diagnostic names the row.
 #[must_use]
 pub fn glob_match(pattern: &str, path: &str) -> bool {
-    let pat: Vec<&str> = pattern.split('/').collect();
-    let path: Vec<&str> = path.split('/').collect();
-    match_segments(&pat, &path)
-}
-
-fn match_segments(pat: &[&str], path: &[&str]) -> bool {
-    let Some((first, rest)) = pat.split_first() else {
-        // The pattern is exhausted; it matches only if the path is too.
-        return path.is_empty();
-    };
-    if *first == "**" {
-        // `**` consumes zero or more path segments; try each split point.
-        for split in 0..=path.len() {
-            if match_segments(rest, &path[split..]) {
-                return true;
-            }
-        }
-        return false;
-    }
-    let Some((head, tail)) = path.split_first() else {
-        return false;
-    };
-    if match_one_segment(first, head) {
-        match_segments(rest, tail)
-    } else {
-        false
-    }
-}
-
-/// Match a single glob segment (no `/`) against a single path segment, honouring
-/// `*` (any run of chars) and `?` (one char).
-fn match_one_segment(pat: &str, seg: &str) -> bool {
-    let pat: Vec<char> = pat.chars().collect();
-    let seg: Vec<char> = seg.chars().collect();
-    wildcard(&pat, &seg)
-}
-
-fn wildcard(pat: &[char], seg: &[char]) -> bool {
-    match pat.split_first() {
-        None => seg.is_empty(),
-        Some(('*', rest)) => {
-            // `*` matches zero or more characters: skip it, or consume one char.
-            wildcard(rest, seg) || (!seg.is_empty() && wildcard(pat, &seg[1..]))
-        }
-        Some(('?', rest)) => !seg.is_empty() && wildcard(rest, &seg[1..]),
-        Some((literal, rest)) => match seg.split_first() {
-            Some((first, seg_rest)) if first == literal => wildcard(rest, seg_rest),
-            _ => false,
-        },
-    }
+    Selector::new(pattern).is_ok_and(|selector| selector.matches(path))
 }
 
 #[cfg(test)]
@@ -2397,6 +2499,67 @@ mod tests {
     fn glob_question_matches_one_char() {
         assert!(glob_match("a?c.txt", "abc.txt"));
         assert!(!glob_match("a?c.txt", "ac.txt"));
+    }
+
+    #[test]
+    fn glob_semantics_are_pinned_at_the_shipped_patterns() {
+        // The parity obligation of adopting `globset` (CLOUD-214). The three
+        // cases above pin the vocabulary; these pin the patterns consumer #1
+        // actually ships, because a matcher swap that widened or narrowed one of
+        // them would change which files a live gate judges with nothing red.
+        //
+        // The load-bearing one is `**` matching ZERO intervening components:
+        // every bats suite in this repository sits directly in `tests/`, so if
+        // `tests/**/*.bats` stopped selecting `tests/land.bats` the ratchet
+        // CLOUD-328 widened would silently select nothing and read as green.
+        assert!(glob_match("tests/**/*.bats", "tests/land.bats"));
+        assert!(glob_match("tests/**/*.bats", "tests/suite/deep.bats"));
+        assert!(!glob_match("tests/**/*.bats", "crates/land.bats"));
+
+        assert!(glob_match("crates/**/*.rs", "crates/batten/src/rules.rs"));
+        assert!(glob_match("crates/**/*.rs", "crates/lib.rs"));
+        assert!(glob_match("crates/**", "crates/batten/Cargo.toml"));
+        assert!(!glob_match("crates/**", "batten.toml"));
+
+        assert!(glob_match(
+            ".github/workflows/*.yml",
+            ".github/workflows/ci.yml"
+        ));
+        // Single-segment `*` must NOT reach a nested workflow, or the row would
+        // judge files its author did not name.
+        assert!(!glob_match(
+            ".github/workflows/*.yml",
+            ".github/workflows/nested/ci.yml"
+        ));
+        assert!(glob_match(
+            ".serena/memories/**",
+            ".serena/memories/core.md"
+        ));
+        assert!(glob_match("batten.toml", "batten.toml"));
+        assert!(!glob_match("batten.toml", "crates/batten.toml"));
+    }
+
+    #[test]
+    fn a_glob_that_does_not_compile_is_refused_where_it_is_named() {
+        // `globset` can reject a pattern the hand-rolled matcher silently
+        // accepted, so the failure has to land at load, naming the row — not as
+        // a rule that quietly selects nothing and reads as a gate finding
+        // nothing wrong.
+        let malformed = Rule {
+            glob: Some("crates/[unclosed".to_owned()),
+            pattern: Some("x".to_owned()),
+            ..blank("bad-glob", RuleKind::Forbid)
+        };
+        let err = malformed.validate().unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a malformed glob is bad config, not an internal failure"
+        );
+        let text = err.to_string();
+        assert!(text.contains("bad-glob"), "names the row: {text}");
+
+        // And the convenience form cannot manufacture a match from one.
+        assert!(!glob_match("crates/[unclosed", "crates/anything"));
     }
 
     #[test]

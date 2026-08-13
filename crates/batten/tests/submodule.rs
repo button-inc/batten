@@ -110,6 +110,18 @@ fn tree_files_stops_at_a_nested_repository_boundary() {
     // decides about submodules is pinned HERE, on the walker, so no later
     // reading has to be inferred from a ratchet's arithmetic.
     let dir = repo_with_submodule("submodule-walk", SPANNING_CONFIG);
+
+    // The premise, asserted before the conclusion: the vendored files must
+    // actually be ON DISK, or "the walk yielded none of them" passes for a
+    // fixture whose submodule was never checked out. A case that cannot fail is
+    // not evidence (`.claude/rules/rust.md`).
+    for vendored in ["one.bats", "two.bats", "nested/three.bats"] {
+        assert!(
+            dir.join(SUBMODULE).join(vendored).is_file(),
+            "{vendored} must exist inside the submodule for the skip to mean anything"
+        );
+    }
+
     let files: BTreeSet<String> = tree_files(&dir)
         .expect("walk the tree")
         .into_iter()

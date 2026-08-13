@@ -72,6 +72,32 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # foreground kill would otherwise strand a lockfile and brick the store
 # repo-wide.
 fs4 = "1.1"
+# The tree walk (CLOUD-214), adopted rather than rebuilt. ripgrep's own walker,
+# so gitignore semantics are the ones every contributor already has in their
+# head — and, measured on this repository after one `cargo build`, 8891 of the
+# 9221 paths the hand-rolled walk yielded were ignored `target/` artifacts. A
+# walk that reads 96% build output is not a policy input set.
+# default-features = false drops the `walk` parallel iterator: the serial walk is
+# what keeps `tree_files` byte-stable without a merge step, and no measurement
+# yet asks for threads over a few hundred files.
+#
+# The upper bound is an MSRV pin, and it is explicit because Cargo's MSRV-aware
+# resolution cannot see this one: `ignore` 0.4.30 uses `let` chains (Rust 1.88)
+# while declaring NO `rust-version`, so the resolver picks it happily and the
+# build fails inside a vendored crate. 0.4.31+ declare 1.88 honestly and are
+# skipped on their own. Lift both bounds together when `rust-version` moves off
+# 1.85 — `mise run msrv` is the gate that will say so.
+ignore = { version = ">=0.4.23, <0.4.30", default-features = false }
+# The glob matcher the same lineage ships (CLOUD-214), replacing a hand-rolled
+# recursive matcher with exponential worst-case behaviour and no character
+# classes, braces or negation. Compiled once per pattern rather than re-parsed
+# per path, which is what makes the selection cost linear in the tree.
+#
+# Bounded below 0.4.20 for the MSRV reason stated on `ignore` above — that is
+# where this crate's line also starts declaring Rust 1.88. Unlike `ignore`'s, the
+# declaration here is honest, so the bound is belt-and-braces rather than
+# load-bearing; they move together.
+globset = { version = ">=0.4.15, <0.4.20", default-features = false }
 # `RuleKind::Forbid`'s `regex`/`exclude` columns (CLOUD-283), and deliberately
 # nowhere else. `outputs.rs` recorded the standing deferral — "adding a regex
 # engine is a decision about the whole rule vocabulary, not a detail of this
