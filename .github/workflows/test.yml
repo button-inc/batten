@@ -94,6 +94,13 @@ jobs:
       # is the whole posture: waving one matrix through costs one matrix, while
       # a predicate that cannot read itself would stop the fleet.
       - name: Landing lease precondition
+        # EXPLICIT, because this workflow is the one that runs on Windows. A
+        # `run:` step with no `shell:` takes the runner's default, which is
+        # PowerShell there — so the bash body below is handed to `pwsh`, which
+        # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
+        # step of the job. Every other caller of this block is ubuntu-only and
+        # never had to say so; `action` is a three-OS matrix and does.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -220,6 +227,13 @@ jobs:
       # `|| exit 0` on both lines so a body that will not parse cannot red the
       # first step of every job.
       - name: Landing lease precondition
+        # EXPLICIT, because this workflow is the one that runs on Windows. A
+        # `run:` step with no `shell:` takes the runner's default, which is
+        # PowerShell there — so the bash body below is handed to `pwsh`, which
+        # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
+        # step of the job. Every other caller of this block is ubuntu-only and
+        # never had to say so; `action` is a three-OS matrix and does.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -323,6 +337,13 @@ jobs:
       # `|| exit 0` on both lines so a body that will not parse cannot red the
       # first step of every job.
       - name: Landing lease precondition
+        # EXPLICIT, because this workflow is the one that runs on Windows. A
+        # `run:` step with no `shell:` takes the runner's default, which is
+        # PowerShell there — so the bash body below is handed to `pwsh`, which
+        # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
+        # step of the job. Every other caller of this block is ubuntu-only and
+        # never had to say so; `action` is a three-OS matrix and does.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -441,6 +462,13 @@ jobs:
       # `|| exit 0` on both lines so a body that will not parse cannot red the
       # first step of every job.
       - name: Landing lease precondition
+        # EXPLICIT, because this workflow is the one that runs on Windows. A
+        # `run:` step with no `shell:` takes the runner's default, which is
+        # PowerShell there — so the bash body below is handed to `pwsh`, which
+        # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
+        # step of the job. Every other caller of this block is ubuntu-only and
+        # never had to say so; `action` is a three-OS matrix and does.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -546,6 +574,13 @@ jobs:
       # `|| exit 0` on both lines so a body that will not parse cannot red the
       # first step of every job.
       - name: Landing lease precondition
+        # EXPLICIT, because this workflow is the one that runs on Windows. A
+        # `run:` step with no `shell:` takes the runner's default, which is
+        # PowerShell there — so the bash body below is handed to `pwsh`, which
+        # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
+        # step of the job. Every other caller of this block is ubuntu-only and
+        # never had to say so; `action` is a three-OS matrix and does.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -681,6 +716,13 @@ jobs:
       actions: write
     steps:
       - name: Landing lease precondition
+        # EXPLICIT, because this workflow is the one that runs on Windows. A
+        # `run:` step with no `shell:` takes the runner's default, which is
+        # PowerShell there — so the bash body below is handed to `pwsh`, which
+        # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
+        # step of the job. Every other caller of this block is ubuntu-only and
+        # never had to say so; `action` is a three-OS matrix and does.
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
