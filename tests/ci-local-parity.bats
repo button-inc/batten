@@ -37,13 +37,14 @@ workflow() {
 	local name="$1" guard="${2:-    if: \${{ github.event.pull_request.draft == false }}}" \
 		conc="${3:-cancel-in-progress: true}" task="${4:-ci}" \
 		lease="${5:-      - name: Landing lease precondition
-        run: ':'}"
+        run: ':'}" \
+		types="${6:-[opened, synchronize, reopened, ready_for_review]}"
 	cat >"$WF/$name.yml" <<-EOF
 		name: $name
 
 		on:
 		  pull_request:
-		    types: [opened, synchronize]
+		    types: $types
 
 		concurrency:
 		  group: $name-\${{ github.ref }}
@@ -90,6 +91,34 @@ scheduled() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"job 'ci' runs on a draft PR"* ]]
 	[[ "$output" == *"draft == false"* ]]
+}
+
+@test "a required check whose workflow cannot see ready_for_review is refused" {
+	# CLOUD-503. Omitting `ready_for_review` defaults the trigger to
+	# `[opened, synchronize, reopened]`. Every job is draft-gated, so the draft
+	# `opened` run is a `skipped` — and `land` readies before pushing, with
+	# nothing to push whenever HEAD is already on the remote. No event remains
+	# that could supersede the skip, `checks-green` refuses to read it as an
+	# answer, and the lease is held while the poll never ends.
+	workflow ci "    if: \${{ github.event.pull_request.draft == false }}" \
+		"cancel-in-progress: true" ci "      - name: Landing lease precondition
+        run: ':'" "[opened, synchronize, reopened]"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"omits \`ready_for_review\`"* ]]
+}
+
+@test "a workflow producing no required check may omit ready_for_review" {
+	# The other direction, and the reason the property is scoped rather than
+	# demanded of every pull_request workflow: nothing waits on `other`, so a
+	# skip nothing can supersede costs nobody a poll. A gate that asserted more
+	# than the failure needs would refuse this file for no reason.
+	printf 'CI_REQUIRED_CHECKS = "elsewhere"\n\n[tasks.ci]\nrun = "hk check --all"\n\n[tasks.verify]\ndepends = ["ci"]\n\n[tasks.elsewhere]\nrun = "true"\n' >"$MANIFEST"
+	workflow ci "    if: \${{ github.event.pull_request.draft == false }}" \
+		"cancel-in-progress: true" ci "      - name: Landing lease precondition
+        run: ':'" "[opened, synchronize, reopened]"
+	run "$GATE"
+	[[ "$output" != *"ready_for_review"* ]]
 }
 
 @test "a workflow that does not supersede its own runs is refused" {
@@ -253,7 +282,7 @@ fanin() {
 
 		on:
 		  pull_request:
-		    types: [opened, synchronize]
+		    types: [opened, synchronize, reopened, ready_for_review]
 
 		concurrency:
 		  group: final-\${{ github.ref }}

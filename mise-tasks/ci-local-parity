@@ -170,12 +170,50 @@ for wf in "$workflows"/*.yml; do
 	grep -q '^  pull_request:' <<<"$triggers" || continue
 	checked=$((checked + 1))
 
-	job_names="$job_names
-$(awk '
+	wf_job_names=$(awk '
 		/^jobs:/ { injobs = 1; next }
 		injobs && /^[a-z]/ { injobs = 0 }
 		injobs && /^    name:[[:space:]]/ { sub(/^    name:[[:space:]]*/, ""); print }
-	' "$wf")"
+	' "$wf")
+	job_names="$job_names
+$wf_job_names"
+
+	# Property 11. A REQUIRED CHECK MUST BE ABLE TO BE SUPERSEDED (CLOUD-503).
+	#
+	# Omitting `types:` defaults to `[opened, synchronize, reopened]`. Every job
+	# here is draft-gated — property 1 above makes that universal — so a PR
+	# created as a draft mints a `skipped` run on `opened`, and with no
+	# `ready_for_review` there is no event left that could replace it. `land`
+	# readies before pushing and its push moves nothing whenever HEAD is already
+	# on the remote, so the ready event is the only one that can arrive;
+	# `checks-green` correctly refuses to read a skip as an answer, and the poll
+	# never terminates while the branch holds the fleet lease.
+	#
+	# Measured as a deadlock across two PRs at once, both fully green but for one
+	# such name, with `main` frozen so neither could rebase out of it.
+	#
+	# SCOPED TO WORKFLOWS PRODUCING A REQUIRED NAME, deliberately. A workflow
+	# whose checks nothing waits on may miss the ready event with no consequence,
+	# and demanding the key of every `pull_request` workflow would be a gate
+	# asserting more than the failure needs — the reason this sits beside the
+	# job-name collection rather than in the `want_names` comparison at the end,
+	# which has the names but no longer knows which file they came from.
+	produces_required=0
+	while IFS= read -r job_name; do
+		[ -n "$job_name" ] || continue
+		if grep -qxF "$job_name" <<<"$want_names"; then
+			produces_required=1
+			break
+		fi
+	done < <(printf '%s\n' "$wf_job_names" | sed '/^$/d' | base_names)
+	if [ "$produces_required" = 1 ]; then
+		# The `pull_request:` sub-block only. A `types:` belonging to another
+		# trigger says nothing about this one, and reading the whole `on:` block
+		# would let one satisfy the other.
+		pr_block=$(awk '/^  pull_request:/{p=1;next} /^  [A-Za-z_]+:/{p=0} p' <<<"$triggers")
+		grep -q 'ready_for_review' <<<"$pr_block" ||
+			problem "$wf produces a required check but its pull_request trigger omits \`ready_for_review\` — the draft-era \`opened\` run is a skip nothing can then supersede, so \`ci-wait\` polls it forever while the lease is held. Add: types: [opened, synchronize, reopened, ready_for_review] (CLOUD-503)."
+	fi
 
 	grep -q 'cancel-in-progress: true' "$wf" ||
 		problem "$wf triggers on pull_request but never supersedes its own runs — add a concurrency group with cancel-in-progress: true, or a lap pays out the run it just made obsolete."
@@ -380,4 +418,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, and named in full by CI_REQUIRED_CHECKS; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group and no two share a cron expression"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group and no two share a cron expression"
