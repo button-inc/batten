@@ -90,10 +90,12 @@ local gate = new Mapping<String, Step> {
   // reds it, reading the plan rather than a timing, since a timing cannot tell a
   // skipped step from a cached one (CLOUD-509).
   //
-  // Globbed on hk.pkl alone: the tier is declared there and nowhere else, so
-  // that is the only file whose change can move this verdict.
+  // Globbed on both files that can move the verdict: hk.pkl declares the tier,
+  // and the hook is the one place it is switched off. A glob on hk.pkl alone
+  // would let the `--profile` flag be deleted from the hook with nothing red —
+  // the step would not even run for that commit.
   ["hook-profile-check"] {
-    glob = List("hk.pkl")
+    glob = List("hk.pkl", ".claude/hooks/git-hook")
     check = "mise run hook-profile-check"
   }
   // The checked-in memories are a graph navigated by mem: references, and the

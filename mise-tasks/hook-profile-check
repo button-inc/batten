@@ -8,7 +8,7 @@
 #
 #   slow-tier-empty            no step declares the slow profile — the tier is gone
 #   profiled-step-not-in-check a slow step does NOT run under `check`, so CI skips it
-#   slow-tier-not-excluded     the pre-commit economy is not actually taking effect
+#   hook-missing-profile-flag  the git hook stopped disabling the tier, so commits are slow
 #
 # WHAT THIS GATE DOES NOT DO, and the reasoning matters because the obvious
 # version is wrong. It does NOT hold a list of "the expensive steps" and assert
@@ -58,38 +58,63 @@ report() {
 	violations=$((violations + 1))
 }
 
-# `hk` resolves hk.pkl from the working directory, so pin it rather than
-# inheriting whatever directory a caller happened to be in.
-root=$(git rev-parse --show-toplevel 2>/dev/null || true)
-if [ -z "$root" ]; then
-	echo "::error:: hook-profile-check: not inside a git repository, so hk.pkl cannot be located." >&2
-	exit 2
-fi
-cd "$root"
-
-# Both plans, captured to files. stderr is discarded on purpose: hk writes a
-# progress line ("Fetching all files in repo") to it, and merging the streams
-# would put that line in front of the JSON. Each `hk` call is its own statement
-# so its exit status is read here rather than swallowed by a pipeline.
 scratch="$(mktemp -d)"
 cleanup() { rm -rf "$scratch"; }
 trap cleanup EXIT
 
-plan_for() { # $1 = destination, remaining args = extra hk flags
-	local dest=$1
-	shift
-	if ! hk check --all --plan --json "$@" >"$dest" 2>/dev/null; then
-		echo "::error:: hook-profile-check: \`hk check --all --plan --json $*\` failed, so the gate could not read the plan it judges." >&2
-		exit 2
-	fi
-	if ! jq -e 'has("steps") and (.steps | length) > 0' <"$dest" >/dev/null 2>&1; then
-		echo "::error:: hook-profile-check: the plan for \`$*\` carried no steps. A plan this gate cannot parse is unreadable input, not a clean tree." >&2
+# The two plans this gate judges. Everything past this block is a pure function
+# of those two JSON documents, which is what makes the decision table testable:
+# with two path arguments the suite supplies them directly and `hk` is never
+# invoked. Same fixture-mode bargain `timeout-check` makes — explicit arguments
+# win, and without them the real subject is read.
+full="$scratch/full.json"
+fast="$scratch/fast.json"
+
+readable() { # $1 = file, $2 = what it is, for the message
+	if ! jq -e 'has("steps") and (.steps | length) > 0' <"$1" >/dev/null 2>&1; then
+		echo "::error:: hook-profile-check: the $2 plan carried no parseable steps. A plan this gate cannot read is unreadable input, not a clean tree." >&2
 		exit 2
 	fi
 }
 
-plan_for "$scratch/full.json"
-plan_for "$scratch/fast.json" --profile "!$PROFILE"
+if [ "$#" -eq 2 ]; then
+	for path in "$@"; do
+		if [ ! -f "$path" ]; then
+			echo "::error:: hook-profile-check: $path not found" >&2
+			exit 2
+		fi
+	done
+	cp "$1" "$full"
+	cp "$2" "$fast"
+elif [ "$#" -eq 0 ]; then
+	# `hk` resolves hk.pkl from the working directory, so pin it rather than
+	# inheriting whatever directory a caller happened to be in.
+	root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+	if [ -z "$root" ]; then
+		echo "::error:: hook-profile-check: not inside a git repository, so hk.pkl cannot be located." >&2
+		exit 2
+	fi
+	cd "$root"
+
+	# stderr is discarded on purpose: hk writes a progress line ("Fetching all
+	# files in repo") to it, and merging the streams would put that line in front
+	# of the JSON. Each call is its own statement so its exit status is read here
+	# rather than swallowed by a pipeline.
+	if ! hk check --all --plan --json >"$full" 2>/dev/null; then
+		echo "::error:: hook-profile-check: \`hk check --all --plan --json\` failed, so the gate could not read the plan it judges." >&2
+		exit 2
+	fi
+	if ! hk check --all --plan --json --profile "!$PROFILE" >"$fast" 2>/dev/null; then
+		echo "::error:: hook-profile-check: \`hk check --all --plan --json --profile '!$PROFILE'\` failed, so the gate could not read the plan it judges." >&2
+		exit 2
+	fi
+else
+	echo "::error:: hook-profile-check: expected no arguments (judge this repo) or exactly two (a full plan and a no-$PROFILE plan, for fixtures); got $#." >&2
+	exit 2
+fi
+
+readable "$full" "full"
+readable "$fast" "no-$PROFILE"
 
 # The slow tier, DERIVED rather than declared: a step hk excludes for a missing
 # profile when the profile is off is, by construction, a step that declared it.
@@ -102,7 +127,7 @@ slow_steps=$(jq -r '
 	| select(.status == "skipped")
 	| select(any(.reasons[]?; .kind == "profile_exclude"))
 	| .name
-' <"$scratch/fast.json" | sort)
+' <"$fast" | sort)
 
 # ANTI-VACUITY. Zero slow steps means the tier evaporated — every step would be
 # running at pre-commit, and every assertion below would pass over an empty set.
@@ -122,27 +147,47 @@ total=0
 while IFS= read -r step; do
 	[ -n "$step" ] || continue
 	total=$((total + 1))
-	status=$(jq -r --arg s "$step" '.steps[] | select(.name == $s) | .status' <"$scratch/full.json")
+	status=$(jq -r --arg s "$step" '.steps[] | select(.name == $s) | .status' <"$full")
 	if [ "$status" != "included" ]; then
 		# The declaration's line, for the pointer. Absent is not fatal — the
 		# verdict is the plan's, and this only makes the message actionable.
-		where=$(grep -n "\[\"$step\"\]" hk.pkl | head -n1 | cut -d: -f1 || true)
+		# Absent in fixture mode, where there is no hk.pkl to point into.
+		where=$(grep -n "\[\"$step\"\]" hk.pkl 2>/dev/null | head -n1 | cut -d: -f1 || true)
 		report "hook-profile-check: hk.pkl:${where:-0} step \`$step\` declares the \`$PROFILE\` profile but is \`${status:-absent}\` under the \`check\` hook — so \`mise run ci\`, \`verify\` and CI all skip it. profiled-step-not-in-check"
 	fi
 done <<<"$slow_steps"
 
-# The economy half. Not a correctness failure — a slow tier that still runs at
-# pre-commit is merely slow — but if this fires, the split has quietly stopped
-# paying for itself and nothing else would say so.
-still_running=$(jq -r '
-	.steps[] | select(.status == "included") | .name
-' <"$scratch/fast.json" | sort)
-overlap=$(comm -12 <(echo "$slow_steps") <(echo "$still_running") || true)
-if [ -n "${overlap//[[:space:]]/}" ]; then
-	while IFS= read -r step; do
-		[ -n "$step" ] || continue
-		report "hook-profile-check: step \`$step\` is in the \`$PROFILE\` tier but still selected under \`--profile '!$PROFILE'\` — the pre-commit economy is not taking effect. slow-tier-not-excluded"
-	done <<<"$overlap"
+# THE ECONOMY HALF, and it cannot be asked of the plans. The tier is DERIVED
+# from the no-profile plan's exclusions, so "a tier member still included there"
+# is unrepresentable by construction — an earlier draft asserted exactly that and
+# the branch was unreachable, which its own test caught. What actually decides
+# whether a commit is fast is whether the hook still passes the flag, and that is
+# a property of a file rather than of a plan.
+#
+# Skipped in fixture mode: the suite drives plan documents, and there is no hook
+# to read. The repo-mode run is where this fires.
+if [ "$#" -eq 0 ]; then
+	hook=".claude/hooks/git-hook"
+	if [ ! -f "$hook" ]; then
+		echo "::error:: hook-profile-check: $hook is missing, so whether pre-commit disables the $PROFILE tier cannot be read." >&2
+		exit 2
+	fi
+	# THE INVOCATION LINE, not the file. Matching anywhere in the file passes on
+	# the explanatory comment that names the very flag being checked — measured:
+	# deleting the flag from the command left this green, because the comment
+	# above it still spelled it. So: non-comment lines that actually run the
+	# hook, and the flag must be on one of them.
+	#
+	# A here-string, not a pipe into grep: an early-exiting grep SIGPIPEs its
+	# producer and `pipefail` promotes 141, so a MATCH would report failure.
+	hook_body=$(grep -v '^[[:space:]]*#' "$hook" | grep 'hk run' || true)
+	if [ -z "${hook_body//[[:space:]]/}" ]; then
+		echo "::error:: hook-profile-check: $hook runs no \`hk run\` command, so which profile a commit gets cannot be read." >&2
+		exit 2
+	fi
+	if ! grep -q -- "--profile" <<<"$hook_body" || ! grep -q -- "!$PROFILE" <<<"$hook_body"; then
+		report "hook-profile-check: $hook invokes \`hk run\` without \`--profile '!$PROFILE'\`, so every commit runs the $PROFILE tier again. The tier is still correct and CI is unaffected — this is the economy, not the coverage. hook-missing-profile-flag"
+	fi
 fi
 
 if [ "$violations" -gt 0 ]; then

@@ -90,6 +90,59 @@ status_of() {
 
 # --- no-docs-tree: deliberately still unconditional ------------------------
 
+# --- the two tiers: profile-based selection (CLOUD-509) --------------------
+
+# The status hk assigns one step for a whole-tree run at a given profile. This
+# is the profile axis, where `status_of` above is the changed-files axis — a
+# step can be selected by its glob and still excluded by its profile, and the
+# split is only correct if both are asserted.
+status_at_profile() {
+	local step=$1 profile=$2
+	(cd "$REPO" && hk check --all --plan --json --profile "$profile") >"$PLAN" 2>/dev/null
+	jq -r --arg s "$step" '.steps[] | select(.name == $s) | .status' <"$PLAN"
+}
+
+status_default() {
+	local step=$1
+	(cd "$REPO" && hk check --all --plan --json) >"$PLAN" 2>/dev/null
+	jq -r --arg s "$step" '.steps[] | select(.name == $s) | .status' <"$PLAN"
+}
+
+@test "every slow-tier step is skipped when the profile is off" {
+	# The pre-commit economy. `.claude/hooks/git-hook` passes exactly this flag,
+	# so this is the selection a commit actually gets.
+	for step in cargo-clippy test test:bats batten-check token-bench-check sbom-check; do
+		[ "$(status_at_profile "$step" '!slow')" = "skipped" ]
+	done
+}
+
+@test "every slow-tier step still runs under check, which is what CI drives" {
+	# THE ONE THAT MATTERS. `mise run ci` -> `hk check --all` uses this mapping,
+	# so a step missing here is a step CI has silently stopped running — the
+	# false green the whole split has to be incapable of.
+	for step in cargo-clippy test test:bats batten-check token-bench-check sbom-check; do
+		[ "$(status_default "$step")" = "included" ]
+	done
+}
+
+@test "an unprofiled step is selected in both tiers" {
+	# The control. Without this, a run that excluded EVERYTHING would satisfy the
+	# skipped-assertion above and look like a working split.
+	[ "$(status_at_profile no-docs-tree '!slow')" = "included" ]
+	[ "$(status_default no-docs-tree)" = "included" ]
+}
+
+@test "the profile skip is reported as profile_exclude, not as a filter miss" {
+	# The two are different failures and only one is intended: `filter_match`
+	# would mean the step's glob stopped matching, which is a selection bug
+	# wearing the same status. The JSON kind is snake_case `profile_exclude` —
+	# NOT the kebab-case `profile-not-enabled` that names the same condition in
+	# hk's `display_skip_reasons` setting.
+	(cd "$REPO" && hk check --all --plan --json --profile '!slow') >"$PLAN" 2>/dev/null
+	run jq -r '.steps[] | select(.name == "test:bats") | .reasons[] | .kind' "$PLAN"
+	[[ "$output" == *"profile_exclude"* ]]
+}
+
 @test "no-docs-tree keeps no glob, so it runs on a change it does not read" {
 	# Not an oversight and not a candidate for the same treatment: its input is
 	# the whole INDEX — any tracked docs/ path, including one an earlier commit
