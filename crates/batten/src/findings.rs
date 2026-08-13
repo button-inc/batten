@@ -81,7 +81,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::identity::{CountChange, Fingerprint, StoredIdentity, compare_to_anchor};
+use crate::identity::{CountChange, FindingKind, Fingerprint, StoredIdentity, compare_to_anchor};
 use crate::rules::Finding;
 use crate::severity::{AdvisoryTier, RuleSeverity, row_for_rule};
 
@@ -732,6 +732,27 @@ pub fn record(
         if seen.contains(&existing.identity.fingerprint) {
             continue;
         }
+        // A rule scan says **nothing** about a sequence finding, so its silence
+        // is not evidence about one (CLOUD-97). These identities are produced by
+        // a detector over the session's event order, not by any `[[rule]]` row,
+        // and the pass below would otherwise resolve every one of them on the
+        // very next scan — clearing an open incident because something that
+        // never looked at it did not see it. That is the same fail-open
+        // [`Observation::NotObserved`] exists to prevent, one level up: here the
+        // honest answer is not "not observed" but "not this door's to answer",
+        // so the record is left exactly as its own detector wrote it.
+        //
+        // Skipped rather than held, and the difference matters: writing
+        // `NotObserved` here would overwrite a live `Observed(1)` with "nobody
+        // looked" on every unrelated scan, which loses the raise.
+        //
+        // An identity whose kind this binary cannot classify is **not** skipped:
+        // guessing `Sequence` for a future kind would exempt it from resolution
+        // forever, and the pre-existing behaviour is the safer default for
+        // everything that is not known to be this detector's.
+        if existing.identity.kind() == Some(FindingKind::Sequence) {
+            continue;
+        }
         let Some(previous) = existing.instance(context) else {
             continue;
         };
@@ -778,17 +799,24 @@ pub fn record(
     Ok(summary)
 }
 
-/// One judge outcome, on its way into the store (CLOUD-56).
+/// One advisory outcome, on its way into the store (CLOUD-56).
 ///
-/// **The type is the guarantee.** A judge outcome carries no [`RuleSeverity`],
-/// so it cannot be built into a [`Finding`], so [`crate::rules::any_blocking`]
-/// and `--fail-on-warning` have nothing to promote. The advisory surface is
-/// unable to block because there is no value here that the exit contract knows
-/// how to read — not because a branch declined to.
+/// **The type is the guarantee.** An advisory outcome carries no
+/// [`RuleSeverity`], so it cannot be built into a [`Finding`], so
+/// [`crate::rules::any_blocking`] and `--fail-on-warning` have nothing to
+/// promote. The advisory surface is unable to block because there is no value
+/// here that the exit contract knows how to read — not because a branch
+/// declined to.
+///
+/// Two producers, through two doors: a judge row ([`record_advisory`]) and a
+/// transcript-substrate detector ([`record_sequence`], CLOUD-97). One value
+/// type rather than two near-identical ones, because the guarantee above is
+/// exactly what both need and a second copy of it is a second thing to keep
+/// true.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Advisory {
-    /// The judge row that produced it.
+    /// The rule or detector that produced it.
     pub rule: String,
     /// The identity this outcome is keyed by.
     pub identity: StoredIdentity,
@@ -865,6 +893,87 @@ pub fn record_advisory(
     });
     write_record(store_dir, &existing)?;
     summary.updated += 1;
+    Ok(summary)
+}
+
+/// Fold one sequence detector's outcome into the store (CLOUD-97).
+///
+/// The third door, and the differences from [`record_advisory`] are exactly
+/// two — both of them about the fact that this detector answers a **three-way**
+/// question rather than only raising:
+///
+/// * The caller supplies the [`Observation`]. A judge invocation only ever
+///   raises, so its door hard-codes `Observed(1)`; a sequence detector
+///   re-evaluates one predicate and its answer may be "still there", "gone", or
+///   "could not look". Passing the observation in is what makes the finding
+///   **self-clearing**: `Observed(0)` on the next evaluation resolves it with no
+///   acknowledgement from anybody.
+/// * **It mints only on a positive observation.** A clear or a hold over an
+///   identity the store has never seen writes nothing at all, because a record
+///   whose only instance says "zero" or "not looked at" describes a finding that
+///   was never raised — and every consumer counting open findings would have to
+///   learn to ignore it.
+///
+/// Like [`record_advisory`], and unlike [`record`], it resolves nothing it did
+/// not look at: one identity in, one identity touched.
+///
+/// # Errors
+///
+/// Returns an error when the record cannot be read or written.
+pub fn record_sequence(
+    store_dir: &Path,
+    context: &Context,
+    commit: &str,
+    worktree: Option<&str>,
+    advisory: &Advisory,
+    observation: Observation,
+    schema: u32,
+) -> Result<Recorded> {
+    let mut summary = Recorded::default();
+    let path = record_path(store_dir, advisory.identity.fingerprint);
+    let existing = read_record(&path);
+    let raised = matches!(observation, Observation::Observed(count) if count > 0);
+    let mut record = match existing {
+        Some(record) => record,
+        // Nothing stored, and nothing to store: see the doc comment.
+        None if !raised => return Ok(summary),
+        None => {
+            summary.minted += 1;
+            FindingRecord {
+                schema,
+                identity: advisory.identity.clone(),
+                rule: advisory.rule.clone(),
+                // Nothing honest to put here, the same reading
+                // `record_advisory` gives it: this record's producer denies
+                // nothing, and the exit contract reads `Finding`s, which this
+                // never was.
+                severity: RuleSeverity::Allow,
+                tier: advisory.tier,
+                disposition: None,
+                presentation: Presentation::Shown,
+                check: Some(advisory.check.clone()),
+                remediation: Some(advisory.remediation.clone()),
+                instances: Vec::new(),
+            }
+        }
+    };
+    // The tier is never touched on an existing record — CLOUD-80's
+    // no-escalation law. Re-observing a finding moves its count and never its
+    // deadline, and that holds for a re-evaluation as much as for a re-scan.
+    record.upsert(Instance {
+        context: context.clone(),
+        occurrences: observation,
+        observed_at_commit: commit.to_owned(),
+        worktree_path: worktree.map(ToOwned::to_owned),
+        path: advisory.path.clone(),
+        line: advisory.line,
+    });
+    write_record(store_dir, &record)?;
+    match observation {
+        Observation::Observed(0) => summary.resolved += 1,
+        Observation::Observed(_) => summary.updated += 1,
+        Observation::NotObserved(_) => summary.held += 1,
+    }
     Ok(summary)
 }
 

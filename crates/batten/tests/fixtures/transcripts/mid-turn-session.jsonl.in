@@ -1,0 +1,3 @@
+{"type":"user","sessionId":"fixture-mid-turn","message":{"role":"user","content":"CANARY-USER-PROMPT"}}
+{"type":"assistant","sessionId":"fixture-mid-turn","message":{"role":"assistant","content":[{"type":"text","text":"CANARY-SUMMARY nearly there"}],"stop_reason":"end_turn"}}
+{"type":"assistant","sessionId":"fixture-mid-turn","message":{"role":"assistant","content":[{"type":"tool_use","id":"t9","name":"Bash","input":{"command":"CANARY-COMMAND"}}],"stop_reason":"tool_use"}}

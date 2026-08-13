@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"fixture-stop-hook","message":{"role":"user","content":"CANARY-USER-PROMPT"}}
+{"type":"assistant","sessionId":"fixture-stop-hook","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"CANARY-COMMAND"}}]}}
+{"type":"user","sessionId":"fixture-stop-hook","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"CANARY-RESULT"}]}}
+{"type":"attachment","sessionId":"fixture-stop-hook","attachment":{"type":"hook_success","hookEvent":"Stop","hookName":"Stop","exitCode":0,"stderr":"CANARY-HOOK-STDERR"}}

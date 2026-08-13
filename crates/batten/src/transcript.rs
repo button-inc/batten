@@ -129,6 +129,51 @@ pub enum Origin {
 /// `hook` are two ends of one contract.
 const DENY_EXIT: i64 = crate::ExitCode::Violation.code() as i64;
 
+/// Why a turn ended, as the host recorded it (CLOUD-97).
+///
+/// A **typed vocabulary over the host's `stop_reason` token**, not the token
+/// itself: the raw string never leaves this module, so no downstream predicate
+/// can grow a substring match on it and no wording change upstream can move a
+/// verdict. Which of these values counts as a *completion* is deliberately not
+/// decided here — that is policy, and it lives with the predicate that reads it
+/// ([`crate::completion`]). This module owns the vocabulary; the detector owns
+/// the token set.
+///
+/// [`StopReason::Other`] absorbs both truncation (`max_tokens`) and any token a
+/// later host ships. Collapsing them is right for every predicate this
+/// vocabulary serves — neither is a turn the model chose to end — and the
+/// forward-compatibility law above forbids failing on the second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum StopReason {
+    /// The model ended the turn of its own accord.
+    EndTurn,
+    /// A configured stop sequence ended it.
+    StopSequence,
+    /// It ended to make a tool call — the model is **continuing**, not finished.
+    ToolUse,
+    /// Truncation, or a token this build does not know. Never a completion.
+    Other,
+}
+
+impl StopReason {
+    /// Normalize a host's token.
+    ///
+    /// Exact membership, and total by construction: an unknown token is
+    /// [`StopReason::Other`] rather than an error, because the format is a
+    /// host's and it moves.
+    #[must_use]
+    fn normalize(raw: &str) -> StopReason {
+        match raw {
+            "end_turn" => StopReason::EndTurn,
+            "stop_sequence" => StopReason::StopSequence,
+            "tool_use" => StopReason::ToolUse,
+            _ => StopReason::Other,
+        }
+    }
+}
+
 /// One typed event in a session.
 ///
 /// Deliberately not a catch-all: a variant exists here because a named
@@ -145,6 +190,15 @@ pub enum Event {
     /// the question: a host renders tool results in the user role, so a
     /// role-only reading sees a user message where nobody spoke.
     Turn(Role, Origin),
+    /// How a turn ended, when the host recorded it (CLOUD-97).
+    ///
+    /// Its own event rather than a third field on [`Event::Turn`]: a host
+    /// records the reason on some turns and not others, and an `Option` on the
+    /// turn would make every consumer of the turn boundary handle a fact none of
+    /// them asked for. Emitted on presence of the typed field alone — the role
+    /// is not consulted, because reading a role to decide whether to trust a
+    /// typed field is exactly the inference this module refuses.
+    TurnEnd(StopReason),
     /// A tool call, with the arguments a predicate reads structurally.
     ///
     /// `input` is retained because CLOUD-98's bypass predicate is a JSON boolean
@@ -252,6 +306,12 @@ impl Stream {
         for record in &self.records {
             match &record.event {
                 Event::Turn(..) => counts.turns += 1,
+                // Counted by nothing on purpose. `Counts` is the `-J`
+                // document's shape, and a turn-end reason is an input to a
+                // predicate rather than a fact a reader of the capability
+                // report needs; adding a field would move a document four
+                // landed assertions read for no consumer's benefit.
+                Event::TurnEnd(_) => {}
                 Event::ToolCall { .. } => counts.tool_calls += 1,
                 Event::ToolResult { failed, .. } => {
                     if *failed {
@@ -360,6 +420,15 @@ fn collect(parsed: &Line, line: usize, records: &mut Vec<Record>) {
         records.push(Record {
             line,
             event: Event::Turn(role, origin_of(parsed, message, role)),
+        });
+    }
+    // After the boundary, so the stream reads in the order the turn happened:
+    // the turn opened, then it ended for this reason. A predicate scanning for
+    // the last completion marker depends on that order (CLOUD-97).
+    if let Some(reason) = message.stop_reason.as_deref() {
+        records.push(Record {
+            line,
+            event: Event::TurnEnd(StopReason::normalize(reason)),
         });
     }
     // Content is an array of blocks, or a bare string when the turn is plain
@@ -477,6 +546,10 @@ struct Line {
 struct Message {
     role: Option<String>,
     content: Option<Value>,
+    /// Why the turn ended, in the host's own token — normalized to
+    /// [`StopReason`] on the way in and never stored as text (CLOUD-97).
+    #[serde(rename = "stop_reason")]
+    stop_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -667,6 +740,75 @@ mod tests {
         assert!(validate(Some(&TranscriptConfig::default())).is_ok());
         // No table at all is the ordinary case, not a finding.
         assert!(validate(None).is_ok());
+    }
+
+    #[test]
+    fn a_turn_end_reason_is_a_typed_token_never_the_hosts_string() {
+        let body = r#"{"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}
+{"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"tool_use"}}
+{"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"max_tokens"}}
+{"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"brand_new_token"}}"#;
+        let reasons: Vec<StopReason> = parse(body, "t.jsonl")
+            .expect("parses")
+            .records
+            .iter()
+            .filter_map(|record| match record.event {
+                Event::TurnEnd(reason) => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                StopReason::EndTurn,
+                StopReason::ToolUse,
+                // Truncation and an unknown token collapse: neither is a turn
+                // the model chose to end, and failing on the second would make
+                // every host release a red gate.
+                StopReason::Other,
+                StopReason::Other,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_turn_with_no_stop_reason_yields_no_turn_end() {
+        // Absent is not `Other`: a host that records nothing has said nothing,
+        // and minting a reason here would manufacture the very field the
+        // predicate reads.
+        let stream = sample();
+        assert!(
+            !stream
+                .records
+                .iter()
+                .any(|record| matches!(record.event, Event::TurnEnd(_))),
+            "the captured sample carries no stop_reason"
+        );
+    }
+
+    #[test]
+    fn a_turn_end_follows_its_own_turn_boundary() {
+        // The order is load-bearing for CLOUD-97's "last marker with no tool
+        // call after it": a reason emitted before its boundary would sort the
+        // stream against the sequence that actually happened.
+        let stream = parse(
+            r#"{"message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
+            "t.jsonl",
+        )
+        .expect("parses");
+        assert!(matches!(
+            stream.records.as_slice(),
+            [
+                Record {
+                    event: Event::Turn(Role::Assistant, _),
+                    ..
+                },
+                Record {
+                    event: Event::TurnEnd(StopReason::EndTurn),
+                    ..
+                },
+            ]
+        ));
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub mod budget;
 pub mod capture;
 pub mod ci;
 pub mod cli;
+pub mod completion;
 pub mod config;
 pub mod decision;
 pub mod defects;
@@ -716,6 +717,16 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
         // The rules that never looked. Without this the pass below reads their
         // silence as "clean" and resolves every finding they cover (CLOUD-81).
         &scan.not_evaluated,
+    )?;
+
+    // The transcript-substrate detector (CLOUD-97), folded in beside the rule
+    // scan rather than through it: its identity is a sequence over the session's
+    // event order, which `rules::run_static` has no input for and no vocabulary
+    // to express. It runs AFTER `record` on purpose — that pass resolves what
+    // this context no longer sees, and a raise written before it would be
+    // reasoning about a store mid-update.
+    register_completion(
+        &repo, &context, &commit, &config, &bound.dir, schema, mode, err,
     )?;
 
     // Fold any dispositions this worktree journalled since the last record. A
@@ -1768,6 +1779,168 @@ fn register_advisories(raised: &[findings::Advisory], err: &mut dyn Write) -> Re
         )?;
     }
     Ok(())
+}
+
+/// Evaluate the done-but-not-landed predicate and fold its answer into the
+/// store (CLOUD-97).
+///
+/// Called from `state record` — the verb that already binds the store, owns the
+/// ref context, and is the declared write half — so this costs **no new command
+/// and no new effect-table row**. `check` is deliberately untouched: the finding
+/// never enters that verb's `findings` vec, which is how "an advisory surface is
+/// structurally unable to block" (§0.3) is satisfied here, exactly as
+/// [`register_advisories`] satisfies it for a judge.
+///
+/// Every state is an answer rather than a skip, and the three silent ones differ:
+///
+/// * **Unconfigured** — the repository does not use the transcript input, so
+///   nothing is written and nothing is said ([`transcript`]'s absent-is-not-empty
+///   law).
+/// * **Absent** — configured and unreadable, so the predicate did not run. The
+///   store is left exactly as it was, which **holds** an open finding rather
+///   than clearing it, and the notice is reported for the same reason `check`
+///   reports it: a skipped gate that exits `0` in silence is the false green.
+/// * **Not signalled** — the session declared no stopping point. Nothing is
+///   written, because resolving an open finding on that silence would let a scan
+///   of a still-running session clear an incident nobody addressed.
+///
+/// # Errors
+///
+/// Propagates a write failure, and an unresolvable declared `must_land_on` —
+/// which is a config error the caller owes exit `1`, the reading
+/// [`worktree::status`] already gives a target its author named and got wrong.
+fn register_completion(
+    repo: &Path,
+    context: &findings::Context,
+    commit: &str,
+    config: &resolve::Resolved,
+    store_dir: &Path,
+    schema: u32,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let declared = config
+        .transcript
+        .as_ref()
+        .and_then(|declared| declared.path.as_deref());
+    let capability = transcript::resolve(Path::new("."), declared)?;
+    let stream = match &capability {
+        transcript::Capability::Unconfigured => return Ok(()),
+        transcript::Capability::Absent => {
+            output::message(mode, Verbosity::Normal, err, transcript::ABSENT_NOTICE)?;
+            return Ok(());
+        }
+        transcript::Capability::Present(stream) => stream,
+    };
+
+    let signal = completion::signal(stream);
+    // The landing question is asked only once the session has declared a
+    // stopping point. Not an optimisation: an unsignalled session's outcome is
+    // already decided, and asking git anyway would let a misconfigured target
+    // fail a scan whose verdict never depended on it.
+    let landing = match signal {
+        None => None,
+        Some(_) => match resolve_landing_target(repo, config)? {
+            Some(target) => Some((
+                git::landing(repo, &target, "HEAD", git::Window::DEFAULT)?,
+                target,
+            )),
+            None => None,
+        },
+    };
+    let outcome = completion::assess(signal, landing.as_ref().map(|(landing, _)| landing));
+
+    let Some(observation) = outcome.observation() else {
+        // Not signalled: nothing to write. Reported on the top rung, because a
+        // detector that ran and answered "nothing" is a detail rather than news.
+        output::message(
+            mode,
+            Verbosity::Verbose,
+            err,
+            &format!("completion: {} {context}", outcome.as_str()),
+        )?;
+        return Ok(());
+    };
+
+    let identity = completion::identity(stream.session.as_deref());
+    let fingerprint = identity.fingerprint.to_hex();
+    let advisory = findings::Advisory {
+        rule: completion::RULE_ID.to_owned(),
+        identity,
+        // The one stored severity axis: answer soon, on a bounded deadline, but
+        // the session need not stop for it (CLOUD-80). Unlanded work at a
+        // declared stopping point is time-sensitive — the checkout it lives in
+        // is not permanent — and is still never a reason to block.
+        tier: severity::AdvisoryTier::Caution,
+        // A pointer pair: the transcript the operator declared, and the line the
+        // marker was on. Never a line of it, and never the session id, which
+        // reaches the store only inside the fingerprint above.
+        path: declared.unwrap_or_default().to_owned(),
+        line: outcome.signal().map(|signal| signal.line),
+        // The engine's own next evaluation settles it — which *is* the
+        // self-clearing mechanism, so the check names it rather than an argv a
+        // caller would have to remember to run.
+        check: findings::Check::Reevaluate,
+        remediation: findings::Remediation::NoFix(completion::no_fix_reason(
+            landing
+                .as_ref()
+                .map_or(completion::NO_TARGET, |(_, target)| target.as_str()),
+        )),
+    };
+    findings::record_sequence(
+        store_dir,
+        context,
+        commit,
+        std::env::current_dir()
+            .ok()
+            .as_deref()
+            .and_then(Path::to_str),
+        &advisory,
+        observation,
+        schema,
+    )?;
+
+    // Pointer-only (rule 4): the outcome token, the ref, the identity, and
+    // counts. Byte-stable for identical inputs — nothing here carries a clock,
+    // a path outside the two the config already names, or a SHA.
+    let detail = match &outcome {
+        completion::Outcome::Raised {
+            signal,
+            unaccounted,
+        } => format!(
+            " {}:{} {} unaccounted, marker {}",
+            advisory.path,
+            signal.line,
+            unaccounted,
+            signal.marker.as_str()
+        ),
+        _ => String::new(),
+    };
+    output::message(
+        mode,
+        Verbosity::Normal,
+        err,
+        &format!(
+            "completion: {} {context} {fingerprint}{detail}",
+            outcome.as_str()
+        ),
+    )?;
+    Ok(())
+}
+
+/// The ref landedness is judged against: the declared key, else the remote's
+/// recorded default.
+///
+/// The same ladder [`worktree::status`] walks, and deliberately the same one
+/// rather than a second: `must_land_on` is the one key that names a landing
+/// target, and a detector that resolved its own would be a second authority on
+/// where work is supposed to go. `None` is "nobody could ask", which the caller
+/// reads as not-computable and never as landed.
+fn resolve_landing_target(repo: &Path, config: &resolve::Resolved) -> Result<Option<String>> {
+    match config.must_land_on.as_deref() {
+        Some(declared) => Ok(Some(declared.to_owned())),
+        None => git::remote_default_branch(repo),
+    }
 }
 
 fn scan_self_writes(

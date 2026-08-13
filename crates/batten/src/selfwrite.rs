@@ -188,8 +188,12 @@ pub fn scan(stream: &Stream, memory_root: &str) -> Vec<Detection> {
                 });
             }
             // An assistant turn continues the exchange rather than opening one;
-            // results and hook decisions say nothing about authorship.
-            Event::Turn(..) | Event::ToolResult { .. } | Event::HookDecision { .. } => {}
+            // results, turn-end reasons and hook decisions say nothing about
+            // authorship.
+            Event::Turn(..)
+            | Event::TurnEnd(_)
+            | Event::ToolResult { .. }
+            | Event::HookDecision { .. } => {}
         }
     }
     detections

@@ -407,6 +407,21 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   the first time here because this is what counts duplicates).
   `rejected-by-design` is GC-exempt — the decision outlives the branch it was made
   on, and the unbounded retention that buys is accepted and stated.
+  CLOUD-97 added the **third door**, `record_sequence`, and one exemption inside
+  `record`. The door differs from `record_advisory` in exactly two ways, both
+  because a sequence detector RE-EVALUATES rather than only raising: the caller
+  supplies the `Observation` (which is what makes the finding self-clearing —
+  `Observed(0)` next time resolves it with no ack), and it mints ONLY on a
+  positive one, since a record whose only instance says "zero" describes a
+  finding nobody raised. The exemption is the load-bearing half: `record`'s
+  blanket-resolve pass now SKIPS `FindingKind::Sequence` records, because a rule
+  scan has no producer for one and its silence is therefore not evidence — the
+  same fail-open `Observation::NotObserved` exists to prevent, one level up.
+  Skipped rather than held, or an unrelated scan would overwrite a live raise
+  with "nobody looked"; an UNCLASSIFIABLE kind is not skipped, since guessing
+  `Sequence` for a future kind would exempt it from resolution forever. `Advisory`
+  is now the one value type for both doors, which is why its name is the general
+  one and not the judge's.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
   predicates over the repo. **`Ratchet`** (CLOUD-55) is the fourth kind: a count
   of `pattern` over `glob`, at a `base` rev vs the working tree, that may only
@@ -835,8 +850,19 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   report rides **both** channels because the stderr half is ladder-gated: `-J` has
   no `Mode` to consult, so `--silent -J` still carries it, which is what stops a
   skipped gate from exiting 0 in silence. Emits no findings itself — `FindingKind::Sequence`
-  and `findings::Observation::NotObserved` stay the reserved seam CLOUD-97/98/219
-  occupy. `session` is `Option<String>` with empty normalized to `None`, the same
+  and `findings::Observation::NotObserved` are the reserved seam CLOUD-98/219 still
+  occupy, and `completion.rs` (CLOUD-97) is the first to take it.
+  `Event::TurnEnd(StopReason)` is CLOUD-97's widening of it: the host's
+  `stop_reason` normalized to a typed vocabulary
+  (`EndTurn`/`StopSequence`/`ToolUse`/`Other`) whose raw string never leaves the
+  module, emitted on PRESENCE of the typed field and never gated on the role —
+  reading a role to decide whether to trust a typed field is the inference this
+  module refuses. Its own event rather than a third field on `Event::Turn`, so
+  the turn boundary's consumers carry no `Option` none of them asked for, and it
+  is pushed AFTER its boundary because a marker scan depends on that order.
+  `Counts` deliberately gains no field for it: a turn-end reason is a
+  predicate's input, not a fact the capability report's reader needs, and adding
+  one would move a `-J` document four landed assertions read. `session` is `Option<String>` with empty normalized to `None`, the same
   degradation `identity::sequence_fingerprint`'s signature already encodes.
   `Event::Turn` carries an **`Origin` beside its `Role`** (CLOUD-267), because the
   role alone cannot answer who spoke: a host renders tool results in the _user_
@@ -863,6 +889,35 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   target are payload, not pointers. The intent question is permanently out of
   scope (CLOUD-93), not deferred. Store/tier/drain integration waits on
   CLOUD-81/82.
+- `completion.rs` — declared done with work not landed (CLOUD-97), the second
+  detector over `transcript.rs`'s stream and the FIRST occupant of the
+  `FindingKind::Sequence` seam that module reserved. A conjunction, both halves
+  structural: **completion-signaled** is the last completion marker with no tool
+  call after it — two producers, an exact token set over `StopReason`
+  (`end_turn`/`stop_sequence`; `tool_use` is the model CONTINUING and `Other`
+  absorbs truncation and any future token) and a hook record whose event
+  normalizes through `hook::Event` to `Stop`/`TaskCompleted`, reused rather than
+  re-tabled so the two ends of that vocabulary cannot drift. The "no tool call
+  after it" half is what separates a completed session from one captured
+  mid-turn, and without it the rule fires on every session that ever paused —
+  the false-positive rate that gets a detector switched off. **¬landed** is
+  `git::landing`, so patch identity and never ancestry: the rebased-and-landed
+  acceptance case needs no code here at all, it is a property of the primitive.
+  Four outcomes, and the fourth is the point — `NotComputable` (no landing
+  target) writes `Observation::NotObserved`, which HOLDS an open finding, where
+  a pass would clear it. `NotSignaled` writes NOTHING rather than clearing: a
+  session still running has declared no stopping point, and resolving on that
+  silence would let a mid-flight scan close an incident nobody addressed.
+  `stop.rs`'s split — `signal` reads the stream, `assess` is pure over values —
+  so every branch is testable with no repository, clock or store. Registered
+  from `state record` through `findings::record_sequence`, never as a
+  `rules::Finding`: blocking is unrepresentable, not declined (§0.3), the judge
+  precedent exactly. Tier `Caution` (CLOUD-80), `Check::Reevaluate` — the
+  engine's own next evaluation IS the self-clearing mechanism — and
+  `Remediation::NoFix` naming the target ref, because the fix is "land it" and
+  the command that does that is a consumer's (rule 1). Output is a transcript
+  line, a marker token and a count; the raw session id reaches the store only
+  inside `identity::sequence_fingerprint`.
 - `session.rs` — session lineage and the durable resume point (CLOUD-83): the
   fourth question `store`/`findings`/`journal` leave open — **who is reading, and
   how far have they got**. A warm fork keeps everything that is out of process
