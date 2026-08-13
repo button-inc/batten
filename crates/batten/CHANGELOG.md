@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.64](https://github.com/button-inc/batten/compare/v0.0.63...v0.0.64) - 2026-08-13
+
+### Added
+
+- *(drain)* [**breaking**] refuse to emit a finding the agent cannot close
+- *(drain)* wake the advisory drain once per batch, not once per verifier
+- *(config)* delegate the shipped conflict-marker rule to hk's own checker
+
+### Fixed
+
+- *(pointer-only)* namespace the sweep's fixtures away from the hand-written ones
+- *(pointer-only)* drop a format! that interpolates nothing
+- *(drain)* a suppression the record already carries is not news
+
+### Other
+
+- *(pointer-only)* classify `worktree reclaim`, and run it dry
+- *(pointer-only)* say "vouched for itself" where the gate reads a consumer name
+- *(pointer-only)* classify `design audit`, the sharpest content case yet
+- *(pointer-only)* follow the command kind's `run` column to `check`
+- *(pointer-only)* classify `lint brief`, the first verb the census caught
+- *(pointer-only)* make a canary's provenance a field, not a trailing comment
+- *(pointer-only)* state the law where a consumer writes a check, and name its gate
+- *(pointer-only)* decide rule 4 over every leaf verb, not one adapter
+- *(drain)* the batch event exists on one host — say so, and name what still holds
+- *(drain)* assert the state-file key is hex, not merely the right length
+- *(drain)* state the failure posture the code actually has
+- *(drain)* apply the tree's fixers, and fold the ladder run into one helper
+
 ## [0.0.63](https://github.com/button-inc/batten/compare/v0.0.62...v0.0.63) - 2026-08-13
 
 ### Added
