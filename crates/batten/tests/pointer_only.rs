@@ -473,6 +473,25 @@ const CENSUS: &[Verb] = &[
         ),
     },
     Verb {
+        path: "generate man",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "a man page is the command surface rendered as roff; the same reasoning as \
+             `generate completions`, and it reads no repository content either",
+        ),
+    },
+    Verb {
+        path: "generate markdown",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the CLI reference is the whole command surface rendered as markdown; it echoes \
+             Batten's own declarations — including the §5 effect column — and never the \
+             caller's tree",
+        ),
+    },
+    Verb {
         path: "lint brief",
         // Reads stdin when the positional is omitted, the same `-` convention
         // `config lint --host-rules` uses.
