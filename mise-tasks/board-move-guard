@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+#MISE description="PreToolUse hook body: deny moving an issue to In Review unless graph-check has adjudicated it, so a sweep cannot label unlanded work as landed"
+#
+# CLOUD-512. `graph-check` already decides this correctly — its `in-review-no-pr`
+# rule refuses an In Review issue carrying no PR attachment, and CLOUD-309 landed
+# it as a precondition of the RELEASE SWEEP after CLOUD-228 and CLOUD-231 sat In
+# Review with `attachments: []` and `released` reported both shipped.
+#
+# Nothing bound the TRANSITION. An agent writing `save_issue(state: "In Review")`
+# passed through no gate at all, so a wrong label survived until somebody
+# independently decided to pipe a closure through the gate.
+#
+# Measured 2026-08-13. A bulk sweep after #375 moved fifteen issues to In Review.
+# CLOUD-480 was among them and nothing of it had landed: the only commit naming it
+# carries the key in a `Refs:` trailer as *the filed gap*, and that commit's own
+# body says so. The sweep had read `git log --grep` and treated a match as a
+# landing — the trap `mem:workflow/board-states` names in as many words. It sat
+# wrong for 4.5 hours, and `graph-check` refused it in one invocation the moment
+# it was finally asked. The gate was never wrong; it was never consulted.
+#
+# THIS ADDS A TRIGGER, NEVER A SECOND PREDICATE. A re-derived copy of
+# `in-review-no-pr` here would be the CLOUD-351 shape — two authorities for one
+# fact, and only the newer one deciding. A hook has no tracker credential
+# (`ci-drift`'s agents-fetch-gates-decide note), so this file CANNOT look an issue
+# up and does not try. It asks one question: was the closure adjudicated?
+#
+# THE RECEIPT IS KEYED TO THE ISSUE SET, not to the turn, and that is the whole
+# design. A bare "graph-check ran" receipt is satisfied by judging one clean issue
+# and then sweeping fifteen — precisely the sweep this exists to stop. So
+# `graph-check` records the ids it judged, and this demands the id be among them.
+#
+# AND BOUNDED IN AGE, because "for this turn" is not computable and an unbounded
+# receipt means one adjudication authorises every later sweep in the clone. Same
+# mechanism and the same default as `issue-read-guard`'s recency bound. This is a
+# recency bound, not a freshness proof: the board can change after the read, and
+# `save_issue` offers no if-match precondition to close that.
+#
+# ONLY THE MOVE TO IN REVIEW IS GATED. Every other column is a different question
+# with a different owner — In Progress is `claim-check`'s, the drain into In
+# Review is CLOUD-469's, Todo promotion is CLOUD-375's — and gating them here
+# would demand a graph-check before every edit, which is how a guard gets switched
+# off within a day (CLOUD-199).
+#
+# FAILS OPEN on everything it cannot establish, and on BATTEN_BOARD_MOVE_BYPASS=1.
+#
+# The mutation drops the id from the lookup, so any receipt of any content
+# authorises any issue — the rubber stamp the set-keying exists to prevent. Every
+# DENY row for a MISSING receipt still passes under it; only the wrong-id row can
+# catch it.
+#MUTANT any-receipt-authorises|s@^key_pattern=.*@key_pattern="^[0-9]+ "@|an adjudication that judged OTHER issues does not authorise this one
+set -uo pipefail
+
+[ -n "${BATTEN_BOARD_MOVE_BYPASS:-}" ] && exit 0
+
+raw=$(cat) || exit 0
+
+tool=$(printf '%s' "$raw" | jq -r '.tool_name // empty' 2>/dev/null) || exit 0
+[ -n "$tool" ] || exit 0
+
+# Suffix, never prefix — CLOUD-178 measured the same connector exposed as
+# `mcp__Linear__save_issue`, `mcp__<uuid>__save_issue` and
+# `mcp__claude_ai_Linear__save_issue` within one session, so a prefix anchor gates
+# one spelling and silently misses the others. The matcher in settings.json is
+# written the same way; this re-checks rather than trusting it, exactly as
+# `issue-search-guard` and `issue-read-guard` do.
+case "$tool" in
+*save_issue) ;;
+*) exit 0 ;;
+esac
+
+# The transition is the object. A call that sets no `state` is not a move, and a
+# move to any other column is somebody else's question.
+state=$(printf '%s' "$raw" | jq -r '.tool_input.state // empty' 2>/dev/null) || exit 0
+# Compared case- and space-insensitively: the parameter takes a state type, name
+# or id, and "In Review"/"in review"/"inreview" are the same move.
+normalised=$(printf '%s' "$state" | tr '[:upper:]' '[:lower:]' | tr -d ' _-')
+[ "$normalised" = inreview ] || exit 0
+
+# No `id` is a CREATE, which cannot be a move — `issue-search-guard`'s arm.
+key=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
+[ -n "$key" ] || exit 0
+
+# The receipt namespace is issue KEYS, and `id` also accepts a UUID. Resolving one
+# needs a tracker credential a hook does not have, so this is a genuine cannot-look
+# and it allows. Denying would refuse a legitimate move over a spelling the agent
+# is entitled to use, which is the false-positive rate that gets a guard bypassed.
+case "$key" in
+[A-Z]*-[0-9]*) ;;
+*) exit 0 ;;
+esac
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+[ -n "$git_dir" ] || exit 0
+
+# Must match `graph-check`'s spelling exactly; it is written in these two places
+# and nowhere else.
+receipt="$git_dir/batten-receipts/board-move"
+
+max_age=${BATTEN_BOARD_MOVE_MAX_AGE:-900}
+
+deny() {
+	jq -n --arg k "$key" --arg why "$1" '{
+  hookSpecificOutput: {
+    hookEventName: "PreToolUse",
+    permissionDecision: "deny",
+    permissionDecisionReason: (
+      "Refused: this would move " + $k + " to In Review " + $why + ".\n\nIn Review means the code is on `main`. `graph-check` decides that from the issue'"'"'s PR attachments, and it is the only thing that does — reading `git log --grep` does not, because a commit can CITE an issue without implementing it. Measured 2026-08-13: CLOUD-480 was swept to In Review on a `Refs:` trailer that named it as the still-open gap, and sat wrong for 4.5 hours.\n\nAdjudicate the closure, then move it:\n\n  get_issue for each issue (includeRelations: true, and KEEP attachments)\n  ... pipe that array to: ./mise-tasks/graph-check\n\nExit 0 records which ids it judged, and that is what authorises the move. Exit 1 means the board is signalling falsely — fix that first. Exit 2 means it could not look: re-fetch with attachments.\n\nOther columns are not gated here. Bypass with BATTEN_BOARD_MOVE_BYPASS=1."
+    )
+  }
+}'
+	exit 0
+}
+
+[ -f "$receipt" ] || deny "with no adjudication this clone has any record of"
+
+# One line per graph-check run: `<epoch> <id> <id> …`. A line is usable only if it
+# both names this issue and is recent enough, so the two tests are one grep over
+# whole lines rather than a max over the file — a stale line naming the issue and
+# a fresh line naming others must not combine into an authorisation.
+now=$(date -u +%s 2>/dev/null) || exit 0
+cutoff=$((now - max_age))
+
+# Newest line naming this key, whatever else it names. `\b` so CLOUD-48 never
+# reads as CLOUD-480.
+key_pattern="^[0-9]+ .*\b$key\b"
+stamp=$(grep -E "$key_pattern" "$receipt" 2>/dev/null | awk '{print $1}' | sort -n | tail -1)
+case "$stamp" in
+'' | *[!0-9]*) deny "on an adjudication that never judged it — the receipt names other issues" ;;
+esac
+
+# A receipt from the future is a clock that moved, not a fresh adjudication.
+# Treated as cannot-look rather than as authorisation, because the alternative is
+# that any clock skew mints an unbounded licence.
+[ "$stamp" -le "$now" ] || exit 0
+
+[ "$stamp" -ge "$cutoff" ] || deny "on an adjudication $((now - stamp))s old, past the ${max_age}s bound"
+
+exit 0

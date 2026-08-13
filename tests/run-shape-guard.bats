@@ -349,3 +349,75 @@ bg_guard() { # the same call, marked run_in_background
 	run guard 'ls -la'
 	[[ "$output" != *'"deny"'* ]]
 }
+
+# --- unsatisfiable-commit (CLOUD-488) ----------------------------------------
+#
+# `git commit` is not verdict-bearing, so these rows also pin that the rule runs
+# BEFORE the `last_verdict` early exit — a bare `git commit` reaches it at all.
+
+@test "THE MEASURED SHAPE: the heredoc binds to a later element, so git gets nothing" {
+	# `git add -A && git commit -F - … && mise run land … <<EOF` — the opener is
+	# in the command string and absent from the element that needed it. ~4
+	# minutes of gate on a commit git was always going to refuse.
+	run guard "$(printf 'git add -A && git commit -F - >log 2>&1 && mise run land >l2 2>&1 <<%s\nmsg\n%s\n' "'EOF'" EOF)"
+	denied "$output"
+}
+
+@test "a bare -F - with no redirect anywhere is denied" {
+	run guard 'git commit -F -'
+	denied "$output"
+	run guard 'git commit --file=- >log'
+	denied "$output"
+}
+
+@test "a git commit naming no message source at all is denied" {
+	# Opens $EDITOR in a non-interactive call and blocks there — after the whole
+	# gate has already run.
+	run guard 'git commit'
+	denied "$output"
+	run guard 'git commit -a'
+	denied "$output"
+}
+
+@test "the denial names -F <path>, which is the form that cannot rebind" {
+	# A message that only says "this is wrong" reproduces the error: the author
+	# writes another heredoc. The remedy has to be the heredoc-free form.
+	run guard 'git commit -F -'
+	[[ "$output" == *'-F <path>'* ]]
+	[[ "$output" == *"pre-commit"* ]]
+}
+
+@test "every form that CAN obtain a message stays allowed" {
+	local c
+	for c in 'git commit -F /tmp/msg.txt' \
+		'git commit -m "a message"' \
+		'git commit -am "a message"' \
+		'git commit --amend --no-edit' \
+		'git commit --fixup HEAD' \
+		'git commit -C HEAD@{1}'; do
+		run guard "$c"
+		[[ "$output" != *'"deny"'* ]]
+	done
+}
+
+@test "a heredoc that genuinely binds to this element is a message source" {
+	# The whole point of judging per element: the same `-F -` is correct here.
+	run guard "$(printf 'git commit -F - <<%s\nmsg\n%s\n' "'EOF'" EOF)"
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a file or a here-string redirected into it is a message source too" {
+	run guard 'git commit -F - < /tmp/msg.txt'
+	[[ "$output" != *'"deny"'* ]]
+	run guard 'git commit -F - <<< "$msg"'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a git commit written INSIDE a quoted span or a heredoc is not a call" {
+	# Same scrubbing every other rule depends on — and this file's own commit
+	# message is the most likely place to write the shape down.
+	run guard 'echo "git commit -F - hangs the gate"'
+	[[ "$output" != *'"deny"'* ]]
+	run guard "$(printf 'cat > t.bats <<%s\nrun git commit -F -\n%s\n' BATS BATS)"
+	[[ "$output" != *'"deny"'* ]]
+}

@@ -37,6 +37,11 @@
 # payloads (a stream or a JSON array) and this stays a pure function of stdin —
 # no tracker credential, no network. Pipe the closure you want judged; an edge
 # leaving the piped set is reported as dangling rather than guessed about.
+#
+# The mutation drops the ids from the receipt, leaving a bare "graph-check ran"
+# that authorises any issue — the rubber stamp CLOUD-512's §2 rules out, and the
+# shape the CLOUD-480 sweep would still have passed.
+#MUTANT receipt-carries-no-ids|s@^	receipt_ids=.*@	receipt_ids=""@|a coherent board records which ids it judged
 set -euo pipefail
 
 lint="$(dirname "$0")/ready-lint"
@@ -191,4 +196,37 @@ if [ "$unjudgeable" -ne 0 ]; then
 	exit 2
 fi
 [ "$violations" -eq 0 ] || exit 1
+
+# --- the receipt board-move-guard demands (CLOUD-512) -------------------------
+#
+# This gate already decides `in-review-no-pr` correctly, and CLOUD-309 bound it to
+# the release sweep. Nothing bound the TRANSITION, so a bulk sweep could label
+# unlanded work as landed and the gate only found out if somebody thought to run
+# it — measured on CLOUD-480, wrong for 4.5 hours.
+#
+# The trigger is a receipt rather than a second predicate: a hook has no tracker
+# credential (this file's own agents-fetch-gates-decide note), so the guard cannot
+# look an issue up. It asks only whether the closure was adjudicated, and this is
+# where that becomes a fact on the filesystem.
+#
+# MINTED ONLY HERE, ON THE SUCCESS PATH. A board carrying violations must not
+# authorise a move — that is the whole point — so this sits after both exits.
+#
+# THE IDS ARE IN THE LINE because the receipt has to be keyed to the SET. A bare
+# "graph-check ran" receipt is satisfied by judging one clean issue and then
+# sweeping fifteen, which is exactly the sweep that produced CLOUD-512.
+#
+# The epoch is per line, and the guard bounds it: one adjudication must not
+# authorise every later sweep in the clone. Same reasoning and the same default
+# as `issue-read-guard`'s recency bound.
+#
+# FAIL-SOFT. A receipt that cannot be written must not turn a coherent board into
+# a failing one — this gate's verdict is about the board, never about the store.
+if git_dir=$(git rev-parse --git-dir 2>/dev/null) && [ -n "$git_dir" ] &&
+	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
+	receipt_ids=$(tr '\n' ' ' <<<"$ids")
+	printf '%s %s\n' "$(date -u +%s)" "$receipt_ids" \
+		>>"$git_dir/batten-receipts/board-move" 2>/dev/null || true
+fi
+
 echo "graph-check: board coherent ($(wc -l <<<"$ids" | tr -d ' ') issues)"

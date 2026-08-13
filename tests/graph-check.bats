@@ -6,6 +6,16 @@
 setup() {
 	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/graph-check"
 	BOARD="$BATS_TEST_TMPDIR/board.json"
+	# EVERY CASE RUNS IN A THROWAWAY REPO, because the gate now mints the
+	# board-move receipt CLOUD-512's guard reads. Run from this checkout, the
+	# suite wrote adjudications into the real `.git/batten-receipts/` — receipts
+	# that would authorise a live session's moves to In Review over fixture ids.
+	# Measured on the first green run of the new rows.
+	REPO="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$REPO"
+	git -C "$REPO" init --quiet
+	cd "$REPO" || return 1
+	RECEIPT="$REPO/.git/batten-receipts/board-move"
 }
 
 # issue <id> <status> [assignee] [pr-url] [blocker...] — appends one payload.
@@ -278,4 +288,67 @@ graph-check: board coherent (2 issues)" ]
 	check
 	[ "$status" -eq 1 ]
 	[[ "$output" != *"$secret"* ]]
+}
+
+# --- the board-move receipt (CLOUD-512) --------------------------------------
+
+@test "a coherent board records which ids it judged" {
+	issue CLOUD-1 Done "" ""
+	issue CLOUD-2 "In Review" "" "https://github.com/o/r/pull/1"
+	check
+	[ "$status" -eq 0 ]
+	[ -f "$RECEIPT" ]
+	# The ids are the point: a bare "graph-check ran" receipt is satisfied by
+	# judging one clean issue and then sweeping fifteen.
+	[[ "$(cat "$RECEIPT")" == *"CLOUD-1"* ]]
+	[[ "$(cat "$RECEIPT")" == *"CLOUD-2"* ]]
+	# Field 1 is the epoch the guard bounds; a non-numeric one makes it deny.
+	[[ "$(awk '{print $1}' "$RECEIPT")" =~ ^[0-9]+$ ]]
+}
+
+@test "a board signalling falsely records nothing" {
+	# In Review with no PR attachment — the CLOUD-480 shape. A refusal that still
+	# minted would authorise the very move it just refused.
+	issue CLOUD-3 "In Review" "" ""
+	check
+	[ "$status" -eq 1 ]
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "a board it could not read records nothing" {
+	issue CLOUD-4 Done "" ""
+	drop_key relations
+	check
+	[ "$status" -eq 2 ]
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "runs accumulate rather than overwrite, so an earlier closure stays judged" {
+	issue CLOUD-5 Done "" ""
+	check
+	[ "$status" -eq 0 ]
+	: >"$BOARD"
+	issue CLOUD-6 Done "" ""
+	check
+	[ "$status" -eq 0 ]
+	[ "$(wc -l <"$RECEIPT")" -eq 2 ]
+	[[ "$(cat "$RECEIPT")" == *"CLOUD-5"* ]]
+}
+
+@test "the receipt is pointer-only — ids and an epoch, never issue prose" {
+	issue CLOUD-7 Done "" ""
+	check
+	[[ "$(cat "$RECEIPT")" != *"Source of truth"* ]]
+	[[ "$(cat "$RECEIPT")" != *"Refinement"* ]]
+}
+
+# A receipt that cannot be written must not turn a coherent board into a failing
+# one: this gate's verdict is about the board, never about the store.
+@test "an unwritable receipt store does not change the verdict" {
+	issue CLOUD-8 Done "" ""
+	mkdir -p "$REPO/.git/batten-receipts"
+	chmod 500 "$REPO/.git/batten-receipts"
+	check
+	chmod 700 "$REPO/.git/batten-receipts"
+	[ "$status" -eq 0 ]
 }

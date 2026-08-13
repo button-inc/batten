@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="PreToolUse hook body: deny a verdict-bearing command whose exit status is discarded — by a pager/filter pipe, by a trailing list element, or by nohup/& — and a foreground sleep, which spends the session's turn"
+#MISE description="PreToolUse hook body: deny a verdict-bearing command whose exit status is discarded — by a pager/filter pipe, by a trailing list element, or by nohup/& — a foreground sleep, which spends the session's turn, and a git commit that cannot obtain a message, which spends the whole gate first"
 #
 # Shapes that report success while destroying the thing the harness consumes.
 # All of them fail GREEN — exit 0 with plausible output — which is why noticing
@@ -29,6 +29,13 @@
 #                   one destroys the session rather than a verdict, and it is
 #                   the shape the other three's root cause produces when there
 #                   is nothing to read a status from at all.
+#   unsatisfiable-commit  `git add -A && git commit -F - && mise run land <<'EOF'`
+#                   is doomed at the instant it starts: the heredoc binds to the
+#                   LAST element, so git's stdin is the harness's /dev/null. It
+#                   fails RED, eventually — but `githooks(5)` runs `pre-commit`
+#                   before git asks for the message, so the whole gate is spent
+#                   first. Measured at ~4 minutes on a commit git was always
+#                   going to refuse.
 #
 # One root cause: treating a Bash call as a terminal that should print something
 # short, when it is a supervised process whose exit status and lifetime are the
@@ -65,6 +72,12 @@
 # bypassed.
 #
 # Fails OPEN on anything it cannot parse, and honours BATTEN_RUN_SHAPE_BYPASS=1.
+#
+# The mutation makes the message-source test unfalsifiable, which is the gate
+# that existed before this rule: every DENY row for a shape carrying no message
+# still passes under it, so only the rows below can catch it.
+#MUTANT commit-message-flag-unchecked|s@^COMMIT_MSG_FLAG=.*@COMMIT_MSG_FLAG=".*"@|a git commit naming no message source at all is denied
+#MUTANT commit-stdin-unchecked|s@^COMMIT_STDIN=.*@COMMIT_STDIN="ZZZNEVERMATCHES"@|THE MEASURED SHAPE: the heredoc binds to a later element
 set -uo pipefail
 
 [ -n "${BATTEN_RUN_SHAPE_BYPASS:-}" ] && exit 0
@@ -286,6 +299,72 @@ Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
 		done
 	done
 fi
+
+# --- unsatisfiable-commit -----------------------------------------------------
+#
+# A THIRD FAMILY, and the waste lands somewhere new: not on a verdict and not on
+# the session, but on the GATE. `githooks(5)` runs `pre-commit` BEFORE git obtains
+# the proposed message, so a `git commit` that can never get one still runs the
+# entire gate — here a full `test:bats` plus the cargo chain — and only then exits
+# with "Aborting commit due to empty commit message".
+#
+# Measured 2026-08-12, landing PR #375:
+#
+#   git add -A && git commit -F - >log 2>&1 && mise run land >log2 2>&1 <<'EOF'
+#
+# The heredoc binds to the LAST command in the `&&` list, so `mise run land` got
+# the message and `git commit -F -` got the harness's /dev/null. ~4 minutes of
+# gate, and killing it took `kill -9` on the process GROUP, because hk's children
+# carry its command line and `pkill -f` did not reach them.
+#
+# JUDGED PER ELEMENT, which is exactly what makes the measured shape decidable:
+# the opener is present in the command STRING and absent from the element that
+# needed it. A heredoc that genuinely binds here — `git commit -F - <<'EOF'` — has
+# it in the same element and is allowed, as is `< msg.txt` and `<<< "$msg"`.
+#
+# Two shapes, one cause — no message can reach git:
+#   `-F -`/`--file=-` with nothing redirected into that element;
+#   no message flag at all, which opens $EDITOR in a non-interactive call and
+#   hangs there until the harness kills it at ~2 minutes.
+#
+# `git -C <path> commit` resolves to `sub1=<path>` and is NOT caught. That is a
+# deliberate false NEGATIVE: CLOUD-199 measured that a guard with false positives
+# gets bypassed, this repo commits from its own root, and the direction to be
+# wrong in is the one that lets real work through.
+COMMIT_STDIN='(^|[[:space:]])(-[A-Za-z]*F[[:space:]]*-([[:space:]]|$)|--file[=[:space:]]-([[:space:]]|$))'
+COMMIT_MSG_FLAG='(^|[[:space:]])(--(message|file|reuse-message|reedit-message|no-edit|fixup|squash)([=[:space:]]|$)|-[A-Za-z]*[mFCc])'
+# shellcheck disable=SC2016  # the backticks are literal markdown and `$msg` is a literal example, not a subshell or an expansion
+COMMIT_REMEDY='Write the message to a file and pass `-F <path>`. It is heredoc-free, so it cannot bind to a different element, and the file is inspectable after the fact:
+
+  printf %s "$msg" >/tmp/msg.txt   # or the Write tool
+  git commit -F /tmp/msg.txt
+
+Bypass with BATTEN_RUN_SHAPE_BYPASS=1.'
+for element in "${elements[@]}"; do
+	# Per stage, like the sleep rule: `git commit` is not verdict-bearing, so the
+	# `last_verdict` early exit below would never reach it.
+	mapfile -t commit_stages < <(printf '%s' "$element" | tr '|' '\n')
+	for stage in "${commit_stages[@]}"; do
+		read -r prog sub1 _ <<<"$(resolve "$stage")"
+		if [ "$prog" != git ] || [ "$sub1" != commit ]; then continue; fi
+		# ANY redirect into this stage is a message source — `<` a file, `<<` a
+		# heredoc, `<<<` a here-string — so one test covers all three and cannot
+		# be wrong about which. Quoted spans and heredoc BODIES are already gone
+		# by here, so a `<` written inside a commit message cannot reach this.
+		if grep -qE "$COMMIT_STDIN" <<<"$stage" && ! grep -q '<' <<<"$stage"; then
+			deny "Refused: \`git commit -F -\` with nothing redirected into it reads the harness's /dev/null, so the commit is doomed at the instant it starts — but \`pre-commit\` runs BEFORE git asks for the message, so the whole gate is spent first and only then does git say \"Aborting commit due to empty commit message\".
+
+Measured 2026-08-12: ~4 minutes of gate on a doomed commit, in a chain whose heredoc bound to a LATER element (\`git commit -F - && mise run land <<EOF\` hands the message to \`land\`). Killing it took \`kill -9\` on the process group.
+
+$COMMIT_REMEDY"
+		fi
+		if ! grep -qE "$COMMIT_MSG_FLAG" <<<"$stage"; then
+			deny "Refused: this \`git commit\` names no message source — no \`-m\`, \`-F\`, \`-C\`, \`--no-edit\`, \`--fixup\` or \`--squash\` — so git opens \$EDITOR. In a non-interactive call there is nobody to close it, and the whole gate has already run by the time it blocks.
+
+$COMMIT_REMEDY"
+		fi
+	done
+done
 
 # --- piped-verdict ------------------------------------------------------------
 #
