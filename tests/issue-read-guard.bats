@@ -64,7 +64,13 @@ read_at_age() {
 	run bash -c "'$GUARD' < $(update)"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *'"permissionDecision": "deny"'* ]]
-	[[ "$output" == *"3060s old"* ]]
+	# The age is the guard's own `date` minus the fixture's stamp, and a second
+	# can tick between the two — so the exact integer is a race, measured as
+	# `3061s old` against an asserted `3060s old`. What this case is about is that
+	# the denial names an age PAST THE BOUND, which is what a reader acts on, so
+	# assert that relation rather than an equality the clock can break.
+	[[ "$output" =~ ([0-9]+)s\ old,\ past\ the\ 300s\ bound ]]
+	[ "${BASH_REMATCH[1]}" -ge 3060 ]
 }
 
 @test "the bound is configurable, and honoured in both directions" {
