@@ -29,8 +29,24 @@ setup() {
 	#
 	# The stub RECORDS every invocation, which is what makes the wiring assertion
 	# below a real observation of the hook's behaviour rather than a grep of its
-	# source. `mise install` still execs the real binary — that is what keeps the
-	# two lockfile assertions non-vacuous.
+	# source.
+	#
+	# `install` IS INTERCEPTED TOO, and opted back in per case (CLOUD-406). It
+	# used to exec the real binary unconditionally, on the argument that this is
+	# what keeps the lockfile assertions non-vacuous — half true, and the half
+	# that was false cost a red required check on a branch that changed nothing.
+	# Measured on run 31538830648: Sigstore's TUF metadata endpoint was down,
+	# `mise install` failed, and two cases whose properties are ORDER and OUTPUT
+	# went red through their `[ "$status" -eq 0 ]` line. Neither was asserting
+	# anything about the install succeeding; the hook records the call either way,
+	# because `step` sets `fail=1` and CONTINUES rather than aborting.
+	#
+	# Of the two lockfile assertions the old rationale named, only one needs a
+	# real install: the `grep` over the hook's source text does not touch a
+	# toolchain. That one, and the two other genuinely end-to-end cases, set
+	# `SESSION_START_REAL_INSTALL` and establish the precondition first — so a
+	# container that cannot provision SKIPS with a reason instead of reporting a
+	# hook defect, which is the `lock-check` split applied one layer down.
 	STUB="$BATS_TEST_TMPDIR/bin"
 	CALLS="$BATS_TEST_TMPDIR/mise-calls"
 	mkdir -p "$STUB"
@@ -39,11 +55,25 @@ setup() {
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"$CALLS"
 if [ "\$1" = run ] && { [ "\$2" = container-preflight ] || [ "\$2" = doctor ]; }; then exit 0; fi
+if [ "\$1" = install ] && [ -z "\${SESSION_START_REAL_INSTALL:-}" ]; then exit 0; fi
 exec "$REAL_MISE" "\$@"
 EOF
 	chmod +x "$STUB/mise"
 	PATH="$STUB:$PATH"
 	export PATH
+}
+
+# ESTABLISH THE PRECONDITION, NEVER RETRY THE MEASUREMENT (CLOUD-406). A case
+# that needs a real install asks for one HERE, directly, before the hook runs. A
+# failure at this line is a statement about the container's egress, not about the
+# hook — so it skips with a reason rather than reddening a branch. It is also the
+# discriminator that makes the opt-in honest: past it, the hook's own install
+# cannot fail for a provisioning reason, so a red from the case that follows is a
+# real defect. Idempotent and warm, so the second install costs milliseconds.
+real_install_or_skip() {
+	env MISE_LOCKFILE=false "$REAL_MISE" install >/dev/null 2>&1 ||
+		skip "this container cannot provision — \`mise install\` failed, which is a verdict about egress and not about the hook (CLOUD-406)"
+	export SESSION_START_REAL_INSTALL=1
 }
 
 @test "the hook is executable" {
@@ -116,6 +146,7 @@ print('registered')
 @test "the hook runs green on this checkout" {
 	# Idempotent by construction, so running it here is safe and is the only
 	# end-to-end assertion available: the steps are all already satisfied.
+	real_install_or_skip
 	run env CLAUDE_PROJECT_DIR="$BATS_TEST_DIRNAME/.." "$HOOK"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"toolchain provisioned"* ]]
@@ -133,6 +164,10 @@ print('registered')
 @test "running the hook leaves the tracked lockfile untouched" {
 	# The end-to-end version of the assertion above, and the one that would have
 	# caught the original defect: the suite itself runs this hook.
+	# The one case the real install is genuinely load-bearing for: a stubbed
+	# install writes no lockfile, so it could not observe the residue CLOUD-223
+	# was about.
+	real_install_or_skip
 	local before after
 	before=$(git -C "$BATS_TEST_DIRNAME/.." status --porcelain -- mise.lock)
 	run env CLAUDE_PROJECT_DIR="$BATS_TEST_DIRNAME/.." "$HOOK"
