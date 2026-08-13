@@ -14,7 +14,7 @@ there is no separate "tell people." Button Cloud (CLOUD) team states:
 | Backlog         | not yet Ready                                         | —                                                                                                                             |
 | **Todo**        | the **ready queue**                                   | the Definition-of-Ready predicate is validated (the issue's **Ready block** is satisfied). Issues here are available to pull. |
 | **In Progress** | checked out, being worked                             | you start work — assign yourself in the same move.                                                                            |
-| **In Review**   | landed to trunk, under post-merge review, pre-release | the change is on `main`.                                                                                                      |
+| **In Review**   | landed to trunk, under post-merge review, pre-release | the change is on `main` — the merge writes this for you (CLOUD-192).                                                          |
 | Done            | released                                              | the change ships **and** `graph-check` accepts the issue — see the sweep ordering below.                                      |
 
 ## The In Review → Done sweep is a CONJUNCTION, and the order is fixed
@@ -142,23 +142,46 @@ automation that did not run is not an excuse for a board that is wrong.
 
 Two things this does NOT cover, both observed rather than assumed:
 
-- **The merge-side transition fires now, and it lands on Done — not In Review.**
-  The older reading here (from #100 / CLOUD-178, where it did not fire at all)
-  is superseded. Measured on CLOUD-61: merging #129 moved In Progress → Done,
-  and merging #131 did it again from In Progress. **It is not keyword-gated** —
-  an earlier version of this entry blamed `Closes CLOUD-<n>`, and #131 falsified
-  that: its body said only "Follow-up to #129 (CLOUD-61)" with a `Refs:` trailer
-  and the issue still completed on merge. Opening a PR drives the other
-  direction: In Review → In Progress, measured two minutes after a hand-move.
-  So **hand-moving to In Review does not stick** — the next PR event overwrites
-  it, and re-doing the move is a fight with an automation that will win.
+- **The merge-side transition fires, and it now lands on In Review.** Two
+  readings here are superseded, in order, and the sequence is the useful part.
+  First it did not fire at all (#100 / CLOUD-178). Then it fired and **overshot
+  to Done** — measured on CLOUD-61, and again on CLOUD-499, whose history reads
+  `Todo → In Progress → Done` with Done set at merge time while `main` stood 50
+  commits past `v0.0.62`. **It is not keyword-gated**: an earlier version blamed
+  `Closes CLOUD-<n>`, and #131 falsified that — a `Refs:` trailer completed the
+  issue just the same.
 
-  What to do instead: let the automation land the issue on Done, then check
-  whether Done is _truthful_ — the [dor-dod] gate is "released", and that is a
-  computable question, not a judgement. `git tag --contains <sha>` (or `mise run
-released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
-  shipped in v0.0.19. Only a Done whose commit is in **no** tag is a board that
-  is lying, and that is the case worth a hand-move.
+  CLOUD-192 fixed the overshoot at its source: the tracker's GitHub integration
+  maps the **merged** event to In Review, not Done. That is a workspace setting,
+  not repo config — nothing in this tree can hold it, which is why the gate
+  below exists instead of a comment. **Retracted with it: "hand-moving to In
+  Review does not stick."** It stuck only badly while merged meant Done; the
+  next PR event now writes the same column you would.
+
+  So the path is `In Progress → In Review → Done`, and **Done has exactly one
+  source: a release.** Nothing automates that last leg — the integration
+  triggers on PR events, and "a tag now contains this commit" is not one, so no
+  setting reaches it. `released <tag>` names what a release promoted (the
+  `release-plz` run summary prints it), and the promotion is performed by hand.
+
+- **`done-check` is the gate on that last leg** (CLOUD-192). Pipe the Done
+  closure and it refuses any Done that no `v*` tag reaches: `CLOUD-N Done -> In
+Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
+  from opposite sides, one for a board behind git, one for a board ahead of the
+  release — and it composes with `released` running the other way.
+
+  **It only ever refutes a Done, never confirms one**, and the asymmetry is
+  deliberate: refs are resolved from commit messages, so a ref inside a tag is
+  weak evidence (a commit can cite or defer), while a ref nowhere near a tag is
+  conclusive. Two things it therefore stays quiet about — an issue whose work
+  half-landed and half-shipped (CLOUD-468's question), and a Done no commit
+  names at all, which it reports as `unlanded` and does not fail on.
+
+  Both preconditions are exit 2, and they fail in opposite directions: no
+  `origin/main` makes every Done look unlanded (false green), no tags makes
+  every Done look unreleased (false red). A default CI checkout fetches no tags,
+  so the second is the ordinary way to meet it — a board that looks entirely
+  broken there has not been judged, it has failed to be looked at.
 
 - **Prefer the tracker's own branch name.** Each issue exposes a `gitBranchName`
   (`<user>/cloud-178-<slug>`); a branch named that way carries the key from the
@@ -195,10 +218,11 @@ released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
 
 - **Landing is not Done for a commit that cuts no release, and the automation
   cannot know that.** Done means released ([dor-dod]). A commit that bumps no
-  version is in no tag, so Done would be a lie the moment the automation writes
-  it; **In Review** is the truthful column until some later release sweeps the
-  commit up. `git tag --contains <sha>` is the check, and an empty answer is the
-  hand-move case this file already names.
+  version is in no tag, so Done would be a lie the moment anything writes it;
+  **In Review** is the truthful column until some later release sweeps the
+  commit up — which is why the merged event maps there and stops. `done-check`
+  is the check, over the whole board rather than one sha at a time; `git tag
+--contains <sha>` answers the single case by hand.
 
   **The commit TYPE is not the predictor — the PATH is.** An earlier version of
   this entry said "a `ci`-typed commit releases nothing", which reads as though

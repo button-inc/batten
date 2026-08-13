@@ -84,6 +84,19 @@ jobs:
       # "a tag now contains this commit" is not one. So the list of issues a
       # release finished had no home, and the move was reliably forgotten.
       #
+      # CLOUD-192 made this the ONLY path to Done rather than a reminder
+      # competing with an automation that had already fired. The integration used
+      # to key Done on the MERGE, a whole release cycle early — measured
+      # 2026-08-13, CLOUD-499 read Done at merge time with `main` 50 commits past
+      # v0.0.62 — so this step's output was advice about issues the board had
+      # already closed. The merged event now maps to In Review, and what this
+      # prints is the promotion nothing else performs.
+      #
+      # `done-check` is the gate on the other side of that: it refuses a Done
+      # that no tag contains, so a promotion skipped here is a failing check
+      # rather than silent drift. It is not run in this job — it needs board
+      # payloads piped in, and no tracker credential exists to fetch them.
+      #
       # Read-only on purpose: this is the "what would move" form, and it needs no
       # credential. Performing the move needs a Linear token that does not exist
       # yet; printing the list needs nothing, and puts it in the run summary
@@ -105,5 +118,6 @@ jobs:
             mise run released "$tag" </dev/null
             echo '```'
             echo
-            echo "Move any of these that are still In Review to Done."
+            echo "Move any of these that are still In Review to Done — this is the only"
+            echo "transition that sets Done, and \`mise run done-check\` fails on one set early."
           } >>"$GITHUB_STEP_SUMMARY"
