@@ -294,6 +294,17 @@ pub enum GenerateCommand {
         /// The shell whose completion script to emit.
         shell: clap_complete::Shell,
     },
+    /// Emit the JSON Schema for a config surface.
+    Schema {
+        /// Which surface to describe: the committed authority, or the
+        /// raise-only override layer.
+        surface: ConfigSurface,
+    },
+    // APPENDED, never inserted (CLOUD-69). A variant's implicit discriminant is
+    // its position, so adding one above `Schema` renumbers it — which
+    // `cargo-semver-checks` reports as `enum_no_repr_variant_discriminant_changed`,
+    // a break this change has no reason to be. `#[non_exhaustive]` permits the
+    // addition; it does not permit the renumbering.
     /// Emit the roff man page for one command.
     Man {
         /// The root-relative path of the command to document (`config show`),
@@ -303,12 +314,6 @@ pub enum GenerateCommand {
     },
     /// Emit the whole surface as one markdown reference.
     Markdown,
-    /// Emit the JSON Schema for a config surface.
-    Schema {
-        /// Which surface to describe: the committed authority, or the
-        /// raise-only override layer.
-        surface: ConfigSurface,
-    },
 }
 
 /// The formats `batten spec` can emit.
