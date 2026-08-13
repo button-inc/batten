@@ -13,6 +13,12 @@ setup() {
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet
+	# The identity is set PER FIXTURE, never inherited. A CI runner carries no
+	# global one, so a bare `git commit` here is `fatal: empty ident name` — and
+	# it fails only there, which is the verify/CI mismatch `land` refuses to
+	# land through. Every other fixture suite here spells it the same way.
+	git -C "$REPO" config user.email t@example.com
+	git -C "$REPO" config user.name t
 	git -C "$REPO" commit -q --allow-empty -m init
 	cd "$REPO" || return 1
 }

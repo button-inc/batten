@@ -16,6 +16,10 @@ setup() {
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet
+	# Per fixture, never inherited — a CI runner carries no global identity, so
+	# a bare `git commit` here fails only there. See `issue-search-check.bats`.
+	git -C "$REPO" config user.email t@example.com
+	git -C "$REPO" config user.name t
 	git -C "$REPO" commit -q --allow-empty -m init
 	cd "$REPO" || return 1
 }
