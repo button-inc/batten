@@ -875,6 +875,33 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   session id is somebody else's arbitrary string and must not name this crate's
   files — with the raw key inside, where `sequence_fingerprint` needs it. Reads
   never write, so resolving a session on a `read` verb does not make it a writer.
+- `init.rs` — `batten init` (CLOUD-206), house style §12's scaffolding half: the
+  starter `batten.toml` embedded as `src/starter.toml` plus the three-valued
+  `apply` (`Created`/`WouldCreate`/`Exists`). The FIRST verb whose write target is
+  inside the repository — every other writer is out-of-tree state — so two things
+  are pinned rather than inferred. It writes the **working directory**, never
+  `git::repo_root`: §8 defines the authority with no upward walk and `resolve`/
+  `lint` read it from the working directory, so scaffolding to the repo root would
+  write a file the loader ignores; it also means `init` needs no repository, which
+  is what makes the empty-directory case honest. And an existing config is exit
+  **2**, not 1 — `batten.toml` is the committed authority §8 makes the trust
+  boundary, so declining to overwrite it is a policy answer about the repository
+  rather than a claim the invocation was malformed. Carried as a returned
+  `ExitCode::Violation` (what `check` does), never a `Denial`, whose scope is a
+  mediated call; the reason rides stderr unprefixed per §7. Existence is decided
+  BEFORE `--dry-run`, mirroring `provision::apply`: a preview of a write that
+  would never happen is not a preview. The template is deliberately NOT
+  `batten.example.toml`: that file had drifted into `unlanded = []`, a smell
+  `lint.rs` reports, and its conflict-marker rule is now a `command` kind
+  delegating to `hk` — which `check` refuses and a fresh consumer has no binary
+  for — so a repository started from it fails its own first command. A scaffold
+  must run clean under the read-effect verb with nothing else installed, so the
+  two answer different questions. Retiring the example is a follow-up, kept out of
+  the landing change because that file takes a commit from nearly every feature
+  adding config surface, and deleting it puts a hand-resolved conflict on every
+  lap. Its rule globs `**/*/*` rather
+  than `**/*` for a reason worth keeping: a `forbid` pattern is a literal, so a
+  repo-wide glob makes the rule fire on the config that declares it.
 - `identity.rs` — finding-identity fingerprints (CLOUD-123): SHA-256 over a
   normalized, kind-discriminated tuple — never raw `file:line` — so line
   insertion doesn't re-mint a finding; content changes correctly do. The module
@@ -960,5 +987,10 @@ gates) live under `tests/*.bats`, run via `mise run test:bats`.
 ## Self-consumption
 
 Root `batten.toml` is Batten's own policy config — "consumer #1" (AGENTS.md
-rule 1) — gated by `batten check` against this repo. `batten.example.toml` is
-the documented template for external consumers.
+rule 1) — gated by `batten check` against this repo. The template for external
+consumers is `crates/batten/src/starter.toml`, emitted by `batten init`; it
+lives in-crate because `crates/batten` is the published package and
+`include_str!` cannot reach outside it. `batten.example.toml` is still here and
+is a different artifact — a teaching document, gated separately — and retiring it
+in favour of the starter is CLOUD-206's follow-up. `.taplo.toml` binds all three
+to `schema/batten.schema.json`.

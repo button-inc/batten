@@ -661,7 +661,6 @@ fn read(path: &Path) -> Result<String> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use std::path::PathBuf;
 
     use super::*;
     use crate::error::UsageError;
@@ -885,8 +884,18 @@ mod tests {
     #[test]
     fn the_committed_example_loads() {
         // The shipped batten.example.toml must actually load (DoD: it round-trips).
-        let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.example.toml");
+        let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../batten.example.toml");
         let config = load(&example).expect("batten.example.toml loads");
+        assert_eq!(config.version, SUPPORTED_VERSION);
+    }
+
+    #[test]
+    fn the_shipped_starter_loads() {
+        // The same obligation for the template `batten init` writes, which is the
+        // artifact a consumer actually receives — the example above is a document
+        // a reader copies by hand, and the two are gated separately until the
+        // retirement lands (CLOUD-206's follow-up).
+        let config = parse(crate::init::STARTER, CONFIG_FILE).expect("the starter loads");
         assert_eq!(config.version, SUPPORTED_VERSION);
     }
 

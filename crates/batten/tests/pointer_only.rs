@@ -455,6 +455,16 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::PointerOnly,
     },
     Verb {
+        // `-n` so the census cannot author into the corpus. It changes nothing
+        // about what is emitted here: the corpus already carries a `batten.toml`,
+        // so this run takes the refusal path either way, and the refusal names a
+        // file name and a command — never a byte the corpus seeded.
+        path: "init",
+        args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
         path: "generate completions",
         args: &["--shell", "bash"],
         stdin: Stdin::Nothing,

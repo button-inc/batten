@@ -3986,6 +3986,60 @@ fn the_committed_example_config_loads_over_the_binary() {
     );
 }
 
+#[test]
+fn the_shipped_starter_config_loads_over_the_binary() {
+    // The same DoD obligation over the artifact `batten init` actually writes.
+    // Held alongside the example above rather than instead of it: that file is a
+    // teaching document a reader copies by hand, this is the file the binary
+    // authors, and retiring the first is CLOUD-206's follow-up.
+    let dir = repo_with_config("config-starter", batten::init::STARTER);
+    let output = batten()
+        .args(["config", "show", "--json"])
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .output()
+        .expect("run batten config show");
+    assert_eq!(output.status.code(), Some(0), "the starter must load");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON on stdout");
+    assert_eq!(value["version"]["value"], 1);
+
+    // A scaffolded config must be able to produce a finding — a template whose
+    // every rule can never fire teaches a new consumer that clean output means
+    // nothing.
+    //
+    // Written a directory down, not at the root: the starter's glob deliberately
+    // excludes root-level files, because a `forbid` pattern is a literal and a
+    // repo-wide glob would report the config that declares it.
+    let marker = format!("{} HEAD\n", "<".repeat(7));
+    fs::create_dir_all(dir.join("src")).expect("create fixture source dir");
+    fs::write(dir.join("src/main.rs"), marker).expect("write fixture source");
+    // `check`, not `enforce`, and that is the starter diverging from the example
+    // on purpose. CLOUD-229 moved the example's rule to `kind = "command"`
+    // delegating to `hk`, which teaches the verb this repository's own config
+    // needs — but a scaffold is read by someone who has just installed `batten`
+    // and nothing else. `check` REFUSES a command rule (exit 1, the §5 split) and
+    // `hk` is not on a fresh consumer's PATH, so that rule would make the first
+    // command after `init` an error. The starter ships a self-contained `forbid`
+    // instead: it runs under the read-effect verb, needs no second tool, and
+    // still gates something real on day one.
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .env_remove("BATTEN_STRICTNESS")
+        .output()
+        .expect("run batten check");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the starter's shipped rule must fire on the shape it names"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "src/main.rs:1 no-conflict-markers\n",
+        "a forbid rule points at the line, not at the batch a command condemns"
+    );
+}
+
 // --- The severity model (CLOUD-61): explicit defaults, scope ≠ severity, ---
 // --- and the exit contract consuming the deny/warn/allow vocabulary.     ---
 
@@ -4134,16 +4188,18 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
     // every committed rule states both keys in the file itself — the explicit,
     // per-field-pinned defaults — and the compiled binary accepts each file and
     // re-emits only the pinned vocabulary.
-    for (label, file) in [
-        ("batten.toml", "../../batten.toml"),
-        ("batten.example.toml", "../../batten.example.toml"),
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let own = fs::read_to_string(root.join("batten.toml")).expect("read batten.toml");
+    let example =
+        fs::read_to_string(root.join("batten.example.toml")).expect("read batten.example.toml");
+    for (label, contents) in [
+        ("batten.toml", own.as_str()),
+        ("batten.example.toml", example.as_str()),
+        ("the starter", batten::init::STARTER),
     ] {
-        let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(file);
-        let contents = fs::read_to_string(&committed).expect("read committed config");
-
         // The file text pins the keys — not merely the parsed result, which
         // would also be satisfied by a default the file never wrote down.
-        let parsed: toml::Value = toml::from_str(&contents).expect("committed config is TOML");
+        let parsed: toml::Value = toml::from_str(contents).expect("committed config is TOML");
         let rules = parsed
             .get("rule")
             .and_then(toml::Value::as_array)
@@ -4161,7 +4217,10 @@ fn committed_rules_pin_severity_and_scope_explicitly() {
 
         // And the binary agrees: the file loads, and the emitted tokens are the
         // byte-stable vocabulary — never a value outside it.
-        let dir = repo_with_config(&format!("conformance-{label}"), &contents);
+        let dir = repo_with_config(
+            &format!("conformance-{}", label.replace(' ', "-")),
+            contents,
+        );
         let output = batten()
             .args(["config", "show", "--json"])
             .current_dir(&dir)

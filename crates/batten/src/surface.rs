@@ -850,6 +850,21 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // The scaffolding half of §12's onboarding pair, and the one verb whose
+    // write target is inside the repository. `write` rather than `destructive`:
+    // it creates a file and replaces nothing — an existing config is refused
+    // (exit 2) rather than overwritten — so there is nothing to confirm and
+    // nothing whose recovery means redoing work. `-n` previews without writing,
+    // and per §5 does not lower the declared effect.
+    CommandDecl {
+        path: "init",
+        about: "Write a starter batten.toml, refusing to overwrite an existing one",
+        // The pointer it emits is one path; a JSON document of one field would
+        // be a second shape for the same answer.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[DRY_RUN],
+    },
     CommandDecl {
         path: "generate",
         about: "Emit artifacts derived from the command spec, on stdout",
