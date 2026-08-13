@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-receipt-status 1  "batten 0.0.61" 
+.TH batten-receipt-status 1  batten 
 .SH NAME
 batten\-receipt\-status \- Judge the named check\*(Aqs recorded receipt against HEAD and origin/main
 .SH SYNOPSIS
-\fBbatten receipt status\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcheck\fR> 
+\fBbatten receipt status\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcheck\fR> 
 .SH DESCRIPTION
 Judge the named check\*(Aqs recorded receipt against HEAD and origin/main
 .SH OPTIONS
@@ -15,10 +15,5 @@ Emit byte\-stable JSON instead of pointer lines
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
-.TP
 <\fIcheck\fR>
 The check whose receipt is judged
-.SH VERSION
-v0.0.61

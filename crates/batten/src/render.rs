@@ -51,22 +51,30 @@ pub fn man(root: &Command, path: Option<&str>) -> Result<String> {
     // heads its NAME section, `bin_name` is what SYNOPSIS spells, and `source`
     // (set on the builder below) is the `.TH` attribution.
     let title = page_name(root.get_name(), path);
-    // The version lives on the root only, so a subcommand page would otherwise
-    // carry no footer. Read from the same `CARGO_PKG_VERSION` the root sets
-    // rather than from `root.get_version()`, whose borrow is not `'static` and
-    // so cannot reach clap's builder — one constant, still one source.
     let page = node
         .clone()
-        .display_name(title.clone())
-        .bin_name(qualified(root.get_name(), path))
-        .version(env!("CARGO_PKG_VERSION"));
+        .display_name(title)
+        .bin_name(qualified(root.get_name(), path));
 
     let mut buffer: Vec<u8> = Vec::new();
-    // `date` is left at its empty default rather than stamped with today:
-    // a dated page would differ on every regeneration, which no byte-for-byte
-    // drift gate can hold (§6).
+    // A COMMITTED PAGE IS A PURE FUNCTION OF THE SURFACE. Two `clap_mangen`
+    // fields would break that and both are suppressed here:
+    //
+    // * `date` defaults to empty and is left there. A dated page would differ
+    //   on every regeneration, so no byte-for-byte gate could ever hold.
+    // * `source` defaults to `"<name> <version>"`, and the version is the
+    //   sharper hazard because it is not obviously time-varying. Measured: the
+    //   0.0.61 -> 0.0.62 bump rewrote all 38 pages while the surface had not
+    //   moved at all. release-plz bumps the version in its own PR, so a
+    //   version-bearing page would make `derived-check` fail EVERY release —
+    //   a gate whose ordinary state is red is a gate that gets switched off.
+    //
+    // The version is not lost, it is sourced correctly: `batten --version` and
+    // the page's own SYNOPSIS `--version` flag both answer from the binary the
+    // reader is actually running, which a page installed from a distro package
+    // could not do honestly anyway.
     clap_mangen::Man::new(page)
-        .source(format!("{} {}", root.get_name(), env!("CARGO_PKG_VERSION")))
+        .source(root.get_name().to_owned())
         .render(&mut buffer)?;
     String::from_utf8(buffer).map_err(|_| anyhow!("clap_mangen emitted invalid UTF-8"))
 }
@@ -253,6 +261,28 @@ mod tests {
         );
         let described = spec::describe(&surface::command());
         assert_eq!(markdown(&described), markdown(&described));
+    }
+
+    #[test]
+    fn a_page_carries_no_version_and_no_date() {
+        // Byte-stability across two runs is not enough: the crate version and
+        // the calendar both vary WITHOUT the surface moving, so a page carrying
+        // either is stable within a run and drifts between them. Measured on
+        // the 0.0.61 -> 0.0.62 bump, which rewrote all 38 committed pages while
+        // the surface had not changed — and release-plz bumps the version in
+        // its own PR, so that is a `derived-check` failure on every release.
+        let root = surface::command();
+        for path in ["", "check", "config show"] {
+            let page = man(&root, Some(path)).expect("a declared path renders");
+            assert!(
+                !page.contains(env!("CARGO_PKG_VERSION")),
+                "{path}'s page carries the crate version, so a bump alone drifts it"
+            );
+            assert!(
+                !page.contains(".SH VERSION"),
+                "{path}'s page carries a VERSION section; `batten --version` is the honest source"
+            );
+        }
     }
 
     #[test]

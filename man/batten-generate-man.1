@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-generate-man 1  "batten 0.0.61" 
+.TH batten-generate-man 1  batten 
 .SH NAME
 batten\-generate\-man \- Emit the roff man page for one command, on stdout
 .SH SYNOPSIS
-\fBbatten generate man\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIcommand\fR] 
+\fBbatten generate man\fR [\fB\-h\fR|\fB\-\-help\fR] [\fIcommand\fR] 
 .SH DESCRIPTION
 Emit the roff man page for one command, on stdout
 .SH OPTIONS
@@ -12,10 +12,5 @@ Emit the roff man page for one command, on stdout
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
-.TP
 [\fIcommand\fR]
 The root\-relative command path to document (\*(Aqconfig show\*(Aq); omit for the root page
-.SH VERSION
-v0.0.61

@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-lint-brief 1  "batten 0.0.61" 
+.TH batten-lint-brief 1  batten 
 .SH NAME
 batten\-lint\-brief \- Check a delegation brief against the handoff schema (any missing section is a violation)
 .SH SYNOPSIS
-\fBbatten lint brief\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIbrief\fR] 
+\fBbatten lint brief\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIbrief\fR] 
 .SH DESCRIPTION
 Check a delegation brief against the handoff schema (any missing section is a violation)
 .SH OPTIONS
@@ -15,10 +15,5 @@ Emit byte\-stable JSON instead of pointer lines
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
-.TP
 [\fIbrief\fR]
 The brief to read; omitted or `\-` reads stdin
-.SH VERSION
-v0.0.61

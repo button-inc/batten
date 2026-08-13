@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-hook 1  "batten 0.0.61" 
+.TH batten-hook 1  batten 
 .SH NAME
 batten\-hook \- Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
 .SH SYNOPSIS
-\fBbatten hook\fR <\fB\-\-harness\fR> [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] 
+\fBbatten hook\fR <\fB\-\-harness\fR> [\fB\-h\fR|\fB\-\-help\fR] 
 .SH DESCRIPTION
 Adjudicate a mediated tool call read from stdin (a deny is exit 2, the one contract)
 .SH OPTIONS
@@ -32,8 +32,3 @@ exit\-code: The neutral core contract: envelope in, decision as exit code out â€
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
-.TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
-.SH VERSION
-v0.0.61

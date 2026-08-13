@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-receipt-record 1  "batten 0.0.61" 
+.TH batten-receipt-record 1  batten 
 .SH NAME
 batten\-receipt\-record \- Record that the named check concluded pass against the current HEAD
 .SH SYNOPSIS
-\fBbatten receipt record\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcheck\fR> 
+\fBbatten receipt record\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIcheck\fR> 
 .SH DESCRIPTION
 Record that the named check concluded pass against the current HEAD
 .SH OPTIONS
@@ -12,10 +12,5 @@ Record that the named check concluded pass against the current HEAD
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
-.TP
 <\fIcheck\fR>
 The check whose conclusion is being recorded
-.SH VERSION
-v0.0.61

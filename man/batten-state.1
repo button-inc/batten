@@ -1,19 +1,16 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-state 1  "batten 0.0.61" 
+.TH batten-state 1  batten 
 .SH NAME
 batten\-state \- The out\-of\-tree findings store: which store belongs to this checkout
 .SH SYNOPSIS
-\fBbatten state\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+\fBbatten state\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
 The out\-of\-tree findings store: which store belongs to this checkout
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
-.TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
 .SH SUBCOMMANDS
 .TP
 batten\-state\-adopt(1)
@@ -30,5 +27,3 @@ List stored findings and the refs they were observed in
 .TP
 batten\-state\-help(1)
 Print this message or the help of the given subcommand(s)
-.SH VERSION
-v0.0.61

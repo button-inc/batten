@@ -1,10 +1,10 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-exec 1  "batten 0.0.61" 
+.TH batten-exec 1  batten 
 .SH NAME
 batten\-exec \- Run a command, passing its streams and its exit code through unchanged
 .SH SYNOPSIS
-\fBbatten exec\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIcommand\fR> 
+\fBbatten exec\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
 .SH DESCRIPTION
 Run a command, passing its streams and its exit code through unchanged
 .SH OPTIONS
@@ -12,10 +12,5 @@ Run a command, passing its streams and its exit code through unchanged
 \fB\-h\fR, \fB\-\-help\fR
 Print help
 .TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
-.TP
 <\fIcommand\fR>
 The command to run, after `\-\-`, with its own arguments intact
-.SH VERSION
-v0.0.61

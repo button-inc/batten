@@ -1,19 +1,16 @@
 .ie \n(.g .ds Aq \(aq
 .el .ds Aq '
-.TH batten-lint 1  "batten 0.0.61" 
+.TH batten-lint 1  batten 
 .SH NAME
 batten\-lint \- Lint an artifact against a declared schema
 .SH SYNOPSIS
-\fBbatten lint\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] <\fIsubcommands\fR>
+\fBbatten lint\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
 .SH DESCRIPTION
 Lint an artifact against a declared schema
 .SH OPTIONS
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
-.TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
 .SH SUBCOMMANDS
 .TP
 batten\-lint\-brief(1)
@@ -21,5 +18,3 @@ Check a delegation brief against the handoff schema (any missing section is a vi
 .TP
 batten\-lint\-help(1)
 Print this message or the help of the given subcommand(s)
-.SH VERSION
-v0.0.61
