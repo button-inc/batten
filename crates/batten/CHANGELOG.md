@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.68](https://github.com/button-inc/batten/compare/v0.0.67...v0.0.68) - 2026-08-13
+
+### Added
+
+- *(init)* scaffold a starter batten.toml, refusing to overwrite one
+
 ## [0.0.67](https://github.com/button-inc/batten/compare/v0.0.66...v0.0.67) - 2026-08-13
 
 ### Fixed
