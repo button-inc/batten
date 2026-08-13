@@ -384,15 +384,55 @@ $wf_job_names"
 	# people delete. So: `run:` scalars and the bodies of `run: |` blocks only.
 	# The task name only, too; trailing arguments (a matrix target, say) are the
 	# job's business, not this gate's.
+	#
+	# AND ONLY FROM A JOB THIS MACHINE COULD HAVE RUN (CLOUD-394). The property's
+	# premise is its own header's: "a free local run would have caught it". That
+	# is false for a job on an OS the agent is not — there is no local Windows —
+	# so applied there it is not a parity check but a prohibition, and it forbade
+	# any cross-OS job outright. CLOUD-113 is the instance: a Windows test job
+	# passed all five other properties and could not be committed at all.
+	#
+	# The exemption is an ALLOWLIST OF FOREIGN LABELS, not an allowlist of Linux
+	# ones, and the direction is the whole correctness of it. Exempting anything
+	# that is not `ubuntu-*` would also exempt `self-hosted`, a matrix
+	# expression, and any label nobody has classified — silently switching the
+	# property off for jobs it should judge. So: exempt only what is KNOWN to be
+	# a different OS, judge everything else. `${{ matrix.os }}` is judged, which
+	# is the honest verdict for a job that may well include a Linux leg. Same
+	# fail-closed shape as `lock-complete`'s backend exemption.
+	#
+	# Buffered per job and decided at flush, never as the lines are read: `runs-on`
+	# conventionally precedes `steps:` but nothing requires it, and a gate that
+	# depended on key order would judge a job correctly or not depending on how
+	# its author happened to type it.
 	steps=$(awk '
-		inblock && index($0, indent) != 1 && NF { inblock = 0 }
-		inblock { print; next }
-		/^[[:space:]]*-?[[:space:]]*run:[[:space:]]*[|>]/ {
+		function flush() {
+			if (job != "" && judged) printf "%s", buf
+			buf = ""
+		}
+		/^jobs:/ { injobs = 1; next }
+		injobs && /^[a-z]/ { flush(); injobs = 0 }
+		injobs && /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+			flush()
+			job = $1; sub(":", "", job)
+			judged = 1; inblock = 0
+			next
+		}
+		injobs && /^[[:space:]]+runs-on:/ {
+			runner = $0
+			sub(/^[[:space:]]*runs-on:[[:space:]]*/, "", runner)
+			gsub(/["\x27]/, "", runner)
+			if (runner ~ /^(windows|macos)-/) judged = 0
+		}
+		injobs && inblock && index($0, indent) != 1 && NF { inblock = 0 }
+		injobs && inblock { buf = buf $0 "\n"; next }
+		injobs && /^[[:space:]]*-?[[:space:]]*run:[[:space:]]*[|>]/ {
 			match($0, /^[[:space:]]*/)
 			indent = substr($0, 1, RLENGTH) "  "
 			inblock = 1; next
 		}
-		/^[[:space:]]*-?[[:space:]]*run:/ { print }
+		injobs && /^[[:space:]]*-?[[:space:]]*run:/ { buf = buf $0 "\n" }
+		END { flush() }
 	' "$wf")
 	while IFS= read -r task; do
 		[ -n "$task" ] || continue

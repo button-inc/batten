@@ -574,3 +574,83 @@ triggered() {
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
+
+# --- property 3's scope: a job on an OS this machine cannot be ---------------
+#
+# CLOUD-394. Property 3's premise is its own header's — "a free local run would
+# have caught it" — and that is false for a job running on an OS the agent is
+# not. Applied there it stops being a parity check and becomes a prohibition on
+# cross-OS CI, which is what blocked CLOUD-113's Windows test job: it satisfied
+# every other property and could not be committed at all.
+#
+# A PR workflow whose single job runs `mise run <task>` on the given runner.
+# `task` defaults to one `verify` does not run, which is the whole question.
+on_runner() {
+	local name="$1" runner="$2" task="${3:-other}"
+	{
+		printf 'name: %s\n\non:\n  pull_request:\n    types: [opened, synchronize, reopened, ready_for_review]\n' "$name"
+		printf '\nconcurrency:\n  group: %s-${{ github.ref }}\n  cancel-in-progress: true\n\njobs:\n  %s:\n    name: %s\n' "$name" "$name" "$name"
+		printf '    if: ${{ github.event.pull_request.draft == false }}\n'
+		if [ -n "$runner" ]; then
+			printf '    runs-on: %s\n' "$runner"
+		fi
+		printf '    steps:\n      - name: Landing lease precondition\n        run: %s\n      - run: mise run %s\n' "':'" "$task"
+	} >"$WF/$name.yml"
+}
+
+@test "a Windows job may run a task verify does not — there is no local Windows to have caught it" {
+	on_runner ci windows-latest
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a macOS job is exempt on the same reasoning" {
+	on_runner ci macos-latest
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the identical step on a Linux runner is still refused" {
+	# The case that would regress silently: exempting too broadly switches the
+	# property off for the jobs it exists to judge, and nothing goes red.
+	on_runner ci ubuntu-latest
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"which \`mise run verify\` does not"* ]]
+}
+
+@test "a job declaring no runs-on is judged, not exempted" {
+	on_runner ci ""
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"which \`mise run verify\` does not"* ]]
+}
+
+@test "an unclassified runner label is judged — the exemption is foreign labels, not non-Linux ones" {
+	# The direction that makes this fail closed. An allowlist of `ubuntu-*` would
+	# exempt `self-hosted` and a matrix expression too, silently.
+	on_runner ci self-hosted
+	run "$GATE"
+	[ "$status" -eq 1 ]
+
+	on_runner ci '${{ matrix.os }}'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+}
+
+@test "a Windows job running a task verify DOES run is still fine" {
+	# The exemption removes a refusal; it must not invent an acceptance rule of
+	# its own, nor stop the other five properties applying to the same job.
+	on_runner ci windows-latest ci
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the exemption is per job, so a Linux job beside a Windows one is still judged" {
+	on_runner win windows-latest
+	on_runner ci ubuntu-latest
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ci.yml"* ]]
+	[[ "$output" != *"win.yml runs"* ]]
+}
