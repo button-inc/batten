@@ -295,6 +295,30 @@ that cannot read it will violate it — scoped to "these tasks", so it never
 generalised to `verify` or `ci`. Prose, in a file only one agent reads, about one
 task. Three reasons it failed, and rule 2 predicted all three.
 
+### A backtick in `git commit -m "…"` is a subshell, and it fails green
+
+Same family, different verb. `git commit -m "… \`bench\` uses …"`is a
+double-quoted string, so bash runs`bench`as command substitution and splices
+its output — usually empty, plus a`command not found` line that scrolls past in
+the hook's output. The commit succeeds. The message lands with the word deleted.
+
+Measured 2026-08-13 on CLOUD-509: two of five messages lost a backticked term
+(`` `bench` ``, `` `hk run` ``), leaving "Deliberately not hyperfine, which
+uses:" and "It reads the line now." The tell is a **double space** where the
+span was; nothing else marks it, and the `command not found` line looks like it
+came from the gate rather than from the message. House style backticks every
+identifier, so the exposure is every commit message this repo wants written.
+
+**Write the message to a file and use `git commit -F <file>`.** Backticks are
+literal there. `-m` with single quotes also works but forfeits apostrophes,
+which the prose uses constantly. Escaping (`` \` ``) works and is the shape that
+rots: it survives exactly as long as whoever edits the message next remembers.
+
+Repairing an unpushed range is `git filter-branch --msg-filter 'sed -f <script>'
+
+<base>..HEAD` with the substitutions in a **file** — a `sed` expression written
+inline on the command line re-opens the same hole.
+
 ## The shell tasks' exit convention is the inverse of batten's
 
 Read before porting a `mise-tasks/*-check` program into the engine, or before
