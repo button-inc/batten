@@ -1,0 +1,59 @@
+name: hook-latency-drift
+
+# "Does the fast pre-commit tier still cost what its budget claims?" — a question
+# about the world, not about any branch, so it runs on a clock rather than on the
+# landing path. Same split as lock-currency.yml, timeout-drift.yml and
+# release-assets.yml.
+#
+# The commit half is `mise run hook-profile-check`, in the hk gate: the slow tier
+# is skipped at pre-commit and still run by `check`, so CI cannot silently stop
+# running it. That gate cannot ask whether the fast tier is still FAST, because
+# the answer is a wall clock rather than a property of the committed bytes
+# (CLOUD-509).
+#
+# Failure here is informational: it means a number needs re-deriving, not that
+# anything is broken and not that whichever branch is in flight is at fault. It
+# reports in both directions on purpose — a budget gone slack because the tier
+# got faster bounds nothing, and a report that only complained about slowness
+# would let every number rot upward.
+#
+# Re-baselining the budget is a deliberate commit, prompted by this report.
+# Nothing here writes to the tree: a bot silently re-deriving the number it is
+# supposed to defend is exactly the failure a hand-authored budget prevents.
+
+on:
+  schedule:
+    # Mondays, 08:30 UTC — the next free rung of the weekly 15-minute ladder,
+    # after nonverdict-rate (08:15). `ci-local-parity` refuses two workflows
+    # sharing a cron expression, so this comment cannot drift into a claim.
+    - cron: "30 8 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: hook-latency-drift
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). A runner
+  # should install locked, and its checkout is disposable, so a write here
+  # costs nothing; the clone being protected is a developer's.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  hook-latency-drift:
+    name: hook-latency-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # budget: grandfathered measured=2026-08-13
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+      - name: Report a fast tier that no longer matches its budget
+        shell: bash
+        run: mise run hook-latency-drift

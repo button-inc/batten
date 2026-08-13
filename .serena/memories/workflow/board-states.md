@@ -164,7 +164,7 @@ released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
   (`<user>/cloud-178-<slug>`); a branch named that way carries the key from the
   first push, before any commit message does.
 
-- **The branch name is not one key source among three — it BEATS the others.**
+- **A branch naming a DIFFERENT issue beats the other key sources.**
   Re-measured 2026-08-09 (CLOUD-270). A branch named `claude/groom-cloud-35-*`
   carried a commit trailed `Refs: CLOUD-270` and a PR body naming CLOUD-270. On
   merge the integration moved **CLOUD-35** and left CLOUD-270 untouched, and
@@ -172,6 +172,20 @@ released`) answers it. On CLOUD-61 the answer made Done correct: cbe5228
   message" reads as a precedence order, not a union: keying the commit and the
   body does NOT redirect the automation off a branch name that names something
   else. Rename the branch, or expect to hand-correct.
+
+  **Scope it to what was measured: a branch naming a different key. A branch
+  naming NO key is not that case** — precedence has nothing to rank, so the
+  commit trailer carries it and the automation lands on the right issue.
+  `issue-guard` already accepts the key in the branch, a commit, **or** the
+  command, so the mechanism never required the branch to carry it.
+
+  This is worth stating because the unconditional wording cost a session a
+  blocking question (CLOUD-509): its harness pinned it to a keyless branch,
+  which this entry appeared to forbid, and it stopped to ask about a conflict
+  that did not exist. A rule generalised past its measurement reads as a
+  prohibition, and the reader cannot tell which part was observed. When a
+  measured precedence is written down, write the condition it was measured
+  under.
 
 - **It does not guard on the source column, so it can resurrect a dead issue.**
   CLOUD-35 was **Canceled** when that merge landed, and the automation moved it
