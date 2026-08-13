@@ -15,10 +15,20 @@ name: test
 # Path-filtered, on the same economy as zizmor.yml: it costs nothing on a PR that
 # touches neither the action, this file, nor the corpus it runs. `ci-wait` reads
 # an absent path-filtered check as absent rather than pending, so a required
-# check that produces no run here does not hang a landing.
+# check that produces no run here does not hang a landing — but ABSENT is the
+# only safe state, and `present-and-skipped` is not it (CLOUD-503). A PR created
+# as a draft that DOES touch these paths mints a `skipped` run, which is a
+# non-answer `ci-wait` waits on forever unless something can supersede it.
 
 on:
   pull_request:
+    # CLOUD-503, and the reason the paragraph above needed correcting. Omitting
+    # `types` defaults to `[opened, synchronize, reopened]`, so this workflow
+    # would never see the ready event — and `land` readies before pushing, with
+    # nothing to push whenever HEAD is already on the remote. `action` is in
+    # `$CI_REQUIRED_CHECKS`, so that non-answer wedges the landing. No extra
+    # runner: the draft guard below still skips every draft event.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "action.yml"
       - ".github/workflows/test.yml"

@@ -13,6 +13,17 @@ name: zizmor
 
 on:
   pull_request:
+    # CLOUD-503. WITHOUT THIS THE CHECK CAN NEVER BE SUPERSEDED. Omitting `types`
+    # defaults to `[opened, synchronize, reopened]`, and the job below is
+    # draft-gated — so a PR created as a draft mints a `skipped` run on `opened`
+    # and then has no event left that could replace it. `land` readies before
+    # pushing, and its push moves nothing whenever HEAD is already on the remote,
+    # so `ready_for_review` is the only event left; `checks-green` correctly
+    # refuses to read a skip as an answer, and the poll never terminates.
+    # Measured as a deadlock across #382 and #385 simultaneously, both fully
+    # green but for this name, with `main` frozen so neither could rebase out.
+    # It costs no runner: the draft guard still skips every draft event.
+    types: [opened, synchronize, reopened, ready_for_review]
     # `action.yml` too: `mise run zizmor` audits the shipped Action alongside the
     # workflows (CLOUD-68), and a filter that named only the workflows would let
     # a PR touching just the Action skip the audit that now covers it.
