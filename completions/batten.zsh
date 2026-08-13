@@ -544,6 +544,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 '::command -- The root-relative command path to document ('\''config show'\''); omit for the root page:_default' \
@@ -571,6 +573,8 @@ trace\:"Add everything"))' \
 '*--trace[Add everything]' \
 '--no-color[Never colour stderr, whatever it is attached to]' \
 '--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0

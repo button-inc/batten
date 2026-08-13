@@ -4,7 +4,7 @@
 .SH NAME
 batten \- Repo\-agnostic policy engine that keeps "done" aligned with landed\-and\-verified work.
 .SH SYNOPSIS
-\fBbatten\fR [\fB\-\-strictness\fR] [\fB\-\-fail\-on\-warning\fR] [\fB\-\-config\-from\fR] [\fB\-\-silent\fR]... [\fB\-q\fR|\fB\-\-quiet\fR]... [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-no\-color\fR] [\fB\-\-no\-input\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIsubcommands\fR]
+\fBbatten\fR [\fB\-\-strictness\fR] [\fB\-\-fail\-on\-warning\fR] [\fB\-\-config\-from\fR] [\fB\-\-silent\fR]... [\fB\-q\fR|\fB\-\-quiet\fR]... [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-no\-color\fR] [\fB\-\-no\-input\fR] [\fB\-y\fR|\fB\-\-yes\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
 Repo\-agnostic policy engine that keeps "done" aligned with landed\-and\-verified work.
 .SH OPTIONS
@@ -47,6 +47,9 @@ Never colour stderr, whatever it is attached to
 .TP
 \fB\-\-no\-input\fR
 Never prompt; treat the run as unattended
+.TP
+\fB\-y\fR, \fB\-\-yes\fR
+Confirm a destructive operation that would otherwise refuse
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
