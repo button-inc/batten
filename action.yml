@@ -264,7 +264,21 @@ runs:
         STDIN: ${{ inputs.stdin }}
         FAIL: ${{ inputs.fail }}
       run: |
-        set -uo pipefail
+        # `+e` EXPLICITLY, and it is the whole reason `fail: false` works at all.
+        # The runner invokes this body as `bash --noprofile --norc -e -o pipefail`,
+        # so `-e` is ON before the first line runs, and `set -uo pipefail` does not
+        # clear it. Without the `+e` a non-zero exit from the binary kills the step
+        # AT the invocation below — before `code=$?`, before the output is written,
+        # and regardless of what `fail` says.
+        #
+        # MEASURED, and it is why this line exists rather than being tidy: the
+        # first CI run of the negative jobs produced exactly the right codes
+        # (2 violation, 2 deny, 1 usage, 3 internal) and every one of those jobs
+        # still went red, because the assertion each code was meant to feed never
+        # ran. `fail: false` had never been exercised since CLOUD-68 shipped it,
+        # so a documented output that could not be produced looked like a working
+        # one — which is the exact class CLOUD-110 exists to close.
+        set +e -uo pipefail
 
         # Whitespace-split, deliberately and documented as such: `read -ra`
         # rather than an eval, so `args` can never become a second command.
