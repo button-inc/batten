@@ -41,7 +41,7 @@ clap_complete = "4"
 # with real escaping rules, and a hand-rolled emitter would be a second place
 # for the surface to be described. Same license family as clap itself
 # (MIT OR Apache-2.0), so `deny.toml`'s allow-list already covers it.
-clap_mangen = "0.2"
+clap_mangen = "0.3"
 # Per-OS base directories: XDG on Linux/macOS (honours XDG_DATA_HOME), the
 # roaming known folder on Windows — the CLOUD-23 state-path rule, one crate.
 etcetera = "0.10"
@@ -51,7 +51,7 @@ etcetera = "0.10"
 # not 0.13, deliberately: 0.12 requires `digest ^0.10.3`, which is the `digest`
 # the vendored `sha2 = "0.10"` already resolves to, while 0.13 wants `digest 0.11`
 # and would put two majors of the same hashing substrate in the tree.
-hmac = "0.12"
+hmac = "0.13"
 # The JSON Schema for `batten.toml`, derived from the config types themselves
 # (CLOUD-33) — never hand-authored, so the schema cannot describe a config the
 # binary does not accept.
@@ -87,7 +87,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Finding-identity fingerprints (CLOUD-123): SHA-256 preimages, and NFC
 # canonicalization so macOS NFD checkouts fingerprint identically to Linux.
-sha2 = "0.10"
+sha2 = "0.11"
 toml = "1.1"
 unicode-normalization = "0.1"
 # YAML, for the `[[budget.<name>.embedded]]` entries that count a string carried
