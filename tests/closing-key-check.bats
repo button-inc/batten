@@ -81,6 +81,21 @@ setup() {
 	[[ "$output" == *"DO-NOT-CLOSE"* ]]
 }
 
+@test "a body that both closes and opts out is reported as closing" {
+	# A contradictory body, and the verdict is not a preference: the marker is
+	# OURS and the closing keyword is the tracker's, so Linear will move the
+	# board on the keyword whatever our opt-out says. Reporting the opt-out would
+	# tell the author the board stays put when it will not.
+	#
+	# This is what makes the close-first ordering load-bearing rather than
+	# decorative — found by mutation, which reddened nothing when the two blocks
+	# were swapped.
+	run bash -c "printf 'DO-NOT-CLOSE\n\nCloses CLOUD-192\n' | $GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"closes CLOUD-192"* ]]
+	[[ "$output" != *"declines to complete"* ]]
+}
+
 @test "an indented marker still opts out — leading whitespace is not a mention" {
 	run bash -c "printf 'Part 1 of 3.\n\n  DO-NOT-CLOSE\n\nRefs: CLOUD-192\n' | $GATE"
 	[ "$status" -eq 0 ]
