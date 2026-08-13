@@ -132,7 +132,7 @@ read_at_age() {
 }
 
 # A half-written receipt is a cannot-look, not authorisation and not a verdict —
-# the distinction `plan-hold-check` draws over a half-written sentinel.
+# the distinction `alive` draws between a corpse and a free lock.
 @test "a malformed receipt fails open rather than denying" {
 	mkdir -p "$RECEIPTS"
 	printf 'CLOUD-1 x not-a-number\n' >"$RECEIPTS/issue-read.CLOUD-1"

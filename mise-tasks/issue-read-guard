@@ -81,7 +81,7 @@ deny() {
 
 # Field 3 is the local epoch `issue-read-check` stamped. An unreadable or
 # non-numeric receipt is a cannot-look, not a verdict — the same distinction
-# `plan-hold-check` draws over a half-written sentinel.
+# `alive` draws between a corpse and a free lock.
 read_at=$(awk 'NR==1{print $3}' "$receipt" 2>/dev/null) || exit 0
 case "$read_at" in
 '' | *[!0-9]*) exit 0 ;;

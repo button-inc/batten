@@ -22,10 +22,6 @@
           {
             "type": "command",
             "command": "mise run -q mcp-attach-check"
-          },
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/plan-hold-release"
           }
         ]
       }
@@ -36,10 +32,6 @@
           {
             "type": "command",
             "command": "mise run -q stop-guard"
-          },
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/plan-hold-release-turn"
           }
         ]
       }
@@ -51,15 +43,6 @@
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "ExitPlanMode|AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/plan-hold-guard"
           }
         ]
       },
@@ -77,17 +60,6 @@
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/mise-tasks/board-move-guard"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "ExitPlanMode|AskUserQuestion",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/plan-hold-release-tool"
           }
         ]
       }

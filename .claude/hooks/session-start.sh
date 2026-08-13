@@ -181,36 +181,6 @@ else
 	mise run container-preflight || fail=1
 fi
 
-# --- did a hold span the container replacement that brought us here? ----------
-#
-# CLOUD-491. `plan-hold` occupies the container while a human reads a plan, and
-# left no record of having done so — so when a container was replaced nobody
-# could say whether a hold was live at the time, had already exited, or was never
-# armed. All three produce the same observation from inside (a fresh container),
-# which is why CLOUD-451's acceptance could be asserted but never checked.
-#
-# Two calls, in this order, and the order is load-bearing: RECORD this boot
-# first, so that a later session can tell a preserved disk from a fresh one, then
-# READ the verdict about the boot we just replaced. Recording after reading would
-# make the current boot part of the evidence it is being compared against.
-#
-# NEVER SETS `fail`, and deliberately not routed through `step`: a verdict about
-# a past container is not a provisioning failure, and halting a session over it
-# would be the sensor deciding something it has no business deciding. Exit 1 (no
-# hold spanned) and exit 2 (cannot look) are both silent — a line every session
-# start would be noise in the overwhelming case where nothing happened.
-# Pointer-only, per non-negotiable 4: the task emits a verdict and timestamps,
-# never a plan or a prompt body.
-# Relative, because this script has already `cd`ed to the repo root above — and
-# `CLAUDE_PROJECT_DIR` is only conditionally set, which `set -u` would fault on.
-hold_check="mise-tasks/plan-hold-check"
-if [ -x "$hold_check" ]; then
-	"$hold_check" record-boot >/dev/null 2>&1 || true
-	if spanned=$("$hold_check" spanned 2>/dev/null); then
-		echo "$spanned"
-	fi
-fi
-
 if [ "$fail" -ne 0 ]; then
 	exit 1
 fi

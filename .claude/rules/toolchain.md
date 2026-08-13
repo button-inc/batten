@@ -191,14 +191,6 @@ answer, not this list's.
 `::error::` line every call and a `systemMessage` once per session. Silence
 means it is mediating.
 
-**One `PreToolUse` entry is not the engine**, and it names its reason:
-`plan-hold-guard` on `ExitPlanMode|AskUserQuestion` (CLOUD-451). The predicate is
-"a named background process is live", which no rule kind expresses — a linked
-capability gap, like the others above — and CLOUD-435's cost argument does not
-reach it: those two tools fire at most once per turn, the frequency class of the
-`Stop` and `UserPromptSubmit` entries it kept, so no Bash call pays for it. It is
-invoked by path for the same reason the launcher is.
-
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision
   table in `mise-tasks/gh-guard-check`, gated by `mise run test:bats`. Reads
@@ -315,33 +307,17 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   Readying is the single event that starts CI, so this is the one precondition
   whose cost is paid in CI minutes when it is skipped. Bypass:
   `BATTEN_READY_GUARD_BYPASS=1`.
-- `plan-hold-guard` denies `ExitPlanMode` and `AskUserQuestion` while no
-  background hold is live, because handing control to a human is the one turn
-  end that is correctly idle — and an idle container is reclaimed, destroying
-  whatever the human had already typed into the approval box (CLOUD-451). The
-  remedy the deny names is `mise run plan-hold`, launched with
-  `run_in_background`: a sleeper that prints nothing until it is released, so it
-  costs no tokens while someone reads. Two events release it, because a human
-  can answer in two ways: `plan-hold-release` on `UserPromptSubmit` for a typed
-  reply, and `plan-hold-release-tool` on `PostToolUse` over the same two tools
-  the guard gates, because answering `AskUserQuestion` or approving
-  `ExitPlanMode` produces a **tool result and not a prompt** — so the prompt path
-  could never see the case the mechanism exists for (CLOUD-485). Either way the
-  sentinel is removed and the hold **exits** rather than being killed; that exit
-  is the wake-up. Only the answer releases: a turn merely ending must leave the
-  hold standing, or the reclaim comes back through the fix. The tool path runs no
-  classifier — provenance is structural there, where a prompt's is not. The predicate is a sentinel naming a
-  pid that still answers `kill -0`, in `mise-tasks/plan-hold-check`, which is
-  where the hold directory is spelled; a corpse is reaped on sight, the way
-  `alive` treats a dead `batten-tasks` entry. **The hold also grades itself**
-  (CLOUD-491): it records each poll and, separately, an intentional exit, so
-  `session-start` can say whether a hold was live when the last container
-  replacement happened — the question CLOUD-451's acceptance is written in and
-  nothing could previously answer. The record is structural rather than
-  timestamped because the last ~3 minutes of writes before a replacement were
-  measured not to survive; that measurement, and why an `x` is never written from
-  the exit trap, are in `plan-hold-check`'s own header. Bypass:
-  `BATTEN_PLAN_HOLD_BYPASS=1`, for deliberately ending a turn idle.
+
+**`ExitPlanMode` and `AskUserQuestion` are ungated, and that is a decision rather
+than a gap** (CLOUD-515). `plan-hold` gated them for one day: a deny until a
+backgrounded sleeper occupied the container, on the premise that occupancy defers
+the reclaim that destroys a human's typed approval. The premise was measured twice
+and failed twice (CLOUD-491), its own sensor never returned a single reading, and
+the cost — a refused call plus a four-hour sleeper on every path to a person — was
+paid unconditionally. Removed until one `plan-hold-check spanned` = `0` reading
+exists; the code is a `git revert` away. **The problem is still real** — CLOUD-451
+is open, and an idle handoff turn still risks the reclaim. What is gone is one
+unvalidated remedy for it.
 
 `mise run landed-check` is a board gate on the same stdin pattern: an
 issue In Progress whose ref appears on `main` has landed, and landed is In
