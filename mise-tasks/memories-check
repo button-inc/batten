@@ -16,6 +16,17 @@ set -euo pipefail
 
 cd "${MEMCHECK_ROOT:-$(git rev-parse --show-toplevel)}"
 memories=".serena/memories"
+# The always-loaded surface, whose memory table is the routing table this gate
+# joins against. `batten.toml`'s `[budget.instructions]` names the same file as
+# the counted always-loaded set; naming it here too is deliberate rather than a
+# second authority — parsing TOML in shell to learn a constant would buy a
+# dependency and no accuracy.
+index="AGENTS.md"
+# The upstream convention template, exempt from BOTH the referrer scan below and
+# the index join above it, on the same ground: it is shipped by the tooling, and
+# its examples describe memories that deliberately do not exist here. Written
+# once so the two exemptions cannot come to disagree.
+template="$memories/memory_maintenance.md"
 
 violations=0
 report() { # pointer-only: file:line rule-id (name)
@@ -28,6 +39,37 @@ report() { # pointer-only: file:line rule-id (name)
 # The reference model makes mem:core the discovery entry point; a graph with no
 # root is only findable by directory listing.
 [ -f "$memories/core.md" ] || report "$memories/core.md:0" "memory-root-missing"
+
+# --- routing-table membership (CLOUD-291) --------------------------------------
+#
+# The index names each memory and the trigger to read it, and a memory states no
+# trigger of its own by design — that is the referring document's job. So a memory
+# with no row has no trigger ANYWHERE and is reachable only by listing the
+# directory: `workflow/agent-fanout`, the repo's only concurrency cap, sat in
+# exactly that state while a fan-out ran with no bound.
+#
+# The other conjuncts check references OUT of documents. An orphan is not a broken
+# link, so none of them fires on this, and a referencedness check written against
+# `mem:` mentions could not work either — the graph root carries zero outgoing
+# references and would fail the tree it governs.
+#
+# So the predicate is a SET DIFFERENCE, evaluated in the bijection loop below
+# rather than in a second walk that could drift from it: tracked memory names,
+# minus the index rows read here, minus the template.
+#
+# A row is a table row whose first cell is a backticked name in the reference
+# charset. The `.claude/rules/` table in the same file matches nothing (its cells
+# carry a `.`), and would be harmless if it did: a surplus name subtracts nothing
+# from the memory set.
+#
+# An absent index is REPORTED, never a silent skip — the same shape as the missing
+# graph root above. A gate that goes quiet when its input disappears is a false
+# green, and this predicate is one that goes quiet exactly when it is satisfied.
+[ -f "$index" ] || report "$index:0" "memory-index-missing"
+# `[:blank:]` and not `[:space:]`: the latter deletes the newlines too, folding
+# every row into one blob that matches no name.
+# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+indexed=$(grep -oE '^\|[[:blank:]]*`[A-Za-z0-9_/-]+`' "$index" 2>/dev/null | tr -d '|`[:blank:]' || true)
 
 # --- name bijection -----------------------------------------------------------
 #
@@ -42,8 +84,15 @@ while IFS= read -r f; do
 	case "$name" in
 	*.md) report "$f:0" "memory-name-shadowed (strips to ${name%.md})" ;;
 	esac
+	# The index join is an `elif`: a name that cannot be referenced cannot appear
+	# in the index either, so reporting it unindexed as well would say the same
+	# thing twice. The name is compared AS THE INDEX WRITES IT — `workflow/x`, not
+	# a basename — which is what keeps a memory in a subdirectory from being
+	# reported for its path shape.
 	if ! grep -qE '^[A-Za-z0-9_/-]+$' <<<"$name"; then
 		report "$f:0" "memory-name-unreferencable"
+	elif [ "$f" != "$template" ] && ! grep -qxF "$name" <<<"$indexed"; then
+		report "$f:0" "memory-unindexed ($name)"
 	fi
 done < <(git ls-files "$memories/*.md" "$memories/**/*.md" | sort -u)
 
@@ -69,7 +118,7 @@ while IFS=: read -r file line ref; do
 	# `no-gnu-xargs-r` in batten.toml keeps it out; the literal is not spelled
 	# here because that row is a substring rule over this directory.
 done < <(git ls-files '*.md' ':!:tests/bats' ':!:CHANGELOG.md' |
-	grep -vxF "$memories/memory_maintenance.md" |
+	grep -vxF "$template" |
 	xargs grep -noE 'mem:[A-Za-z0-9_/-]+' /dev/null 2>/dev/null | sort -u)
 
 if [ "$violations" -ne 0 ]; then
