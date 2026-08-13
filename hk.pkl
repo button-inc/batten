@@ -127,7 +127,7 @@ local gate = new Mapping<String, Step> {
   // never one that is absent: the file's own rule is to defer, and a gate
   // pushing toward completeness would invert it.
   ["rules-drift"] {
-    glob = List(".claude/rules/*.md", ".claude/settings.json", "mise-tasks/*")
+    glob = List(".claude/rules/*.md", ".claude/settings.json", "mise-tasks/**")
     check = "mise run rules-drift"
   }
   // House style §11 makes completions AND man pages derivations of the command
@@ -152,6 +152,30 @@ local gate = new Mapping<String, Step> {
         "man/*",
       )
     check = "mise run derived-check"
+  }
+  // The reference is the one surface derivation with NO committed copy — it is
+  // rendered at publish time, so it is current by construction and there is
+  // nothing for `derived-check` above to diff (CLOUD-171). That removes the
+  // drift question and leaves a different one: coverage. `render::markdown`
+  // walks the spec, so a node the walk skips, or a future renderer that
+  // summarises rather than enumerates, yields a reference that is well-formed,
+  // non-empty, byte-stable and quietly missing a flag — green on every other
+  // check this repository has over that file.
+  //
+  // Both directions, because they catch opposite failures: a flag the surface
+  // declares and the reference omits tells a reader it does not exist, and a
+  // flag the reference names and the surface lacks tells them to type something
+  // that will not parse.
+  ["reference-check"] {
+    glob =
+      List(
+        "crates/batten/src/surface.rs",
+        "crates/batten/src/cli.rs",
+        "crates/batten/src/render.rs",
+        "crates/batten/src/spec.rs",
+        "mise-tasks/render/cli",
+      )
+    check = "mise run reference-check"
   }
   // The adoption claim is token economics, and a benchmark nobody else can
   // reproduce is a marketing artifact rather than a proof (CLOUD-119). This is
@@ -275,7 +299,7 @@ local gate = new Mapping<String, Step> {
   // so the clause went back to passing silently and took three older tests with
   // it. A gate that cannot match its own label does not fail, it passes.
   ["awk-regex-check"] {
-    glob = List("mise-tasks/*", "*.sh")
+    glob = List("mise-tasks/**", "*.sh")
     check = "mise run awk-regex-check"
   }
   // `producer | grep -q P` under pipefail can report FAILURE on a match: grep
@@ -285,7 +309,7 @@ local gate = new Mapping<String, Step> {
   // over three landed issues that way; issue-guard denied `gh pr ready` on a
   // branch whose every commit carried Refs: CLOUD-186 — it blocked its own PR.
   ["pipefail-grep-check"] {
-    glob = List("mise-tasks/*", "*.sh")
+    glob = List("mise-tasks/**", "*.sh")
     check = "mise run pipefail-grep-check"
   }
   // Completeness of mise.lock, asked of the committed bytes. The old lock-check
@@ -427,7 +451,7 @@ local gate = new Mapping<String, Step> {
     // nproc=4 (mise.toml). See the `profiles` note at the foot of this file.
     profiles = List("slow")
     depends = List("shellcheck")
-    glob = List("mise-tasks/*", "tests/*.bats")
+    glob = List("mise-tasks/**", "tests/*.bats")
     check = "mise run test:bats"
   }
 

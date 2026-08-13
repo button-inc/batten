@@ -91,7 +91,8 @@ complete() {
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.schema.json \
 		batten.spdx.json \
-		batten.cdx.json
+		batten.cdx.json \
+		batten-cli-reference.md
 	add_manifest
 }
 
@@ -137,7 +138,7 @@ complete() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.spdx.json"* ]]
 	[[ "$output" == *"batten.cdx.json"* ]]
-	[[ "$output" == *"2 of 3 non-target assets"* ]]
+	[[ "$output" == *"3 of 4 non-target assets"* ]]
 	# The per-target half must stay clean — the two failures are independent.
 	[[ "$output" != *"targets have no asset"* ]]
 }
@@ -152,7 +153,8 @@ complete() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.schema.json"* ]]
 	[[ "$output" == *"batten.spdx.json"* ]]
-	[[ "$output" == *"3 of 3 non-target assets"* ]]
+	[[ "$output" == *"batten-cli-reference.md"* ]]
+	[[ "$output" == *"4 of 4 non-target assets"* ]]
 }
 
 @test "an upload line the parser cannot read exits 2 rather than covering nothing" {
@@ -173,7 +175,8 @@ complete() {
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.schema.json \
 		batten.spdx.json.sig \
-		batten.cdx.json
+		batten.cdx.json \
+		batten-cli-reference.md
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.spdx.json"* ]]
@@ -228,7 +231,7 @@ complete() {
 	complete
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"manifest covering all 5 asset(s) (sha256 verified)"* ]]
+	[[ "$output" == *"manifest covering all 6 asset(s) (sha256 verified)"* ]]
 }
 
 @test "THE CLOUD-278 GAP: every asset present but no manifest fails" {
@@ -239,7 +242,8 @@ complete() {
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.schema.json \
 		batten.spdx.json \
-		batten.cdx.json
+		batten.cdx.json \
+		batten-cli-reference.md
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"SHA256SUMS checksums-missing"* ]]
@@ -255,7 +259,8 @@ complete() {
 	add_manifest batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.spdx.json \
-		batten.cdx.json
+		batten.cdx.json \
+		batten-cli-reference.md
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.schema.json checksums-omits"* ]]

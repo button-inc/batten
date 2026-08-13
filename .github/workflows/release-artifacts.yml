@@ -234,6 +234,19 @@ jobs:
         id: sbom
         shell: bash
         run: mise run sbom >>"$GITHUB_OUTPUT"
+      # The CLI reference rides this job for the reason the SBOM does (CLOUD-171):
+      # one platform-independent file, and this job already checks out the tag,
+      # runs mise, holds `contents: write` and uploads exactly this shape of
+      # asset. It is also the ONLY place the reference is ever produced — it is
+      # not committed, so a release rendering it from the tagged source is what
+      # makes it current by construction rather than by a drift gate.
+      #
+      # `render:cli` emits a reference= KEY=VALUE line, so the asset path is
+      # decided in that one file and never re-derived in YAML.
+      - name: Render the CLI reference from the tagged surface
+        id: reference
+        shell: bash
+        run: mise run render:cli >>"$GITHUB_OUTPUT"
       - name: Upload to the release
         shell: bash
         env:
@@ -241,7 +254,8 @@ jobs:
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
           SPDX: ${{ steps.sbom.outputs.spdx }}
           CDX: ${{ steps.sbom.outputs.cdx }}
-        run: gh release upload "$TAG" schema/batten.schema.json "$SPDX" "$CDX" --clobber
+          REFERENCE: ${{ steps.reference.outputs.reference }}
+        run: gh release upload "$TAG" schema/batten.schema.json "$SPDX" "$CDX" "$REFERENCE" --clobber
 
   # The checksum manifest (CLOUD-278), the value every packaging channel consumes:
   # a Homebrew formula pins it, an aqua/mise registry entry carries it, and

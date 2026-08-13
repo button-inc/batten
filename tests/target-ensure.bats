@@ -210,7 +210,11 @@ hold_lock() { # <seconds>
 	# The standing half of CLOUD-286: the dependency cannot come back by way of
 	# a new call site. Comments are excluded on the same reasoning as the sweep
 	# below — prose naming the binary is how the rule is explained.
-	run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise-tasks/'* | grep -c 'flock'"
+	# `grep -r`, not a shell glob: `mise-tasks/` gained a nested task with
+	# CLOUD-171 (`render/cli`), and `mise-tasks/*` stops at the directory — grep
+	# warns and the file is never read. A sweep that silently skips a subtree is
+	# the coverage claim mem:toolchain-and-hooks says to measure, not infer.
+	run bash -c "grep -rhv '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise-tasks/' | grep -c 'flock'"
 	[ "$output" = "0" ]
 	run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise.toml' | grep -c 'flock'"
 	[ "$output" = "0" ]
@@ -223,7 +227,7 @@ hold_lock() { # <seconds>
 	# are `<target>`-placeholder lines: a placeholder cannot execute, it is
 	# usage text (dist's help), the same exemption shape attribution-check
 	# gives coordinate lines.
-	run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise-tasks/'* | grep -v '<target>' | grep -c 'rustup target add'"
+	run bash -c "grep -rhv '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise-tasks/' | grep -v '<target>' | grep -c 'rustup target add'"
 	[ "$output" = "1" ]
 	run bash -c "grep -v '^[[:space:]]*#' '$BATS_TEST_DIRNAME/../mise.toml' | grep -c 'rustup target add'"
 	[ "$output" = "0" ]

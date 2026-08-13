@@ -49,6 +49,13 @@ batten.local.toml
 # own assets after upload and attached to it, never committed (CLOUD-278).
 /checksums/
 
+# The CLI reference rendered by `mise run render:cli` — derived from the command
+# surface at publish time and attached to the release, never committed
+# (CLOUD-171). This entry is what makes "never committed" structural rather than
+# a promise: a reference derived at publish time is current by construction, and
+# a committed copy would be the second authority the whole design removes.
+/reference/
+
 # Fuzz build output and the machine's working corpus (CLOUD-112). The curated
 # seeds under fuzz/corpus/ and any saved reproducer under fuzz/artifacts/ ARE
 # tracked — the replay gate reads them — but the sanitizer-instrumented target
