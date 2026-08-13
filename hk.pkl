@@ -80,6 +80,22 @@ local gate = new Mapping<String, Step> {
   ["license-table-check"] {
     check = "mise run license-table-check"
   }
+  // The two-tier gate ships with its mechanism (non-negotiable 2). The steps
+  // below marked `profiles = List("slow")` are skipped at pre-commit and run by
+  // `check`, and the dangerous direction is not the obvious one: a tier that
+  // stops being SKIPPED merely makes commits slow, while a tier that stops being
+  // RUN by `check` removes clippy, the test suite and `batten-check` from
+  // `mise run ci`, `verify` and CI at once — green everywhere, nothing tested.
+  // Deleting the config-level `profiles` line does exactly that, silently. This
+  // reds it, reading the plan rather than a timing, since a timing cannot tell a
+  // skipped step from a cached one (CLOUD-509).
+  //
+  // Globbed on hk.pkl alone: the tier is declared there and nowhere else, so
+  // that is the only file whose change can move this verdict.
+  ["hook-profile-check"] {
+    glob = List("hk.pkl")
+    check = "mise run hook-profile-check"
+  }
   // The checked-in memories are a graph navigated by mem: references, and the
   // reference tooling's own check is advisory (always exits 0) — so a memory
   // renamed without reference propagation, however it was renamed, dangles
