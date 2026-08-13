@@ -58,6 +58,15 @@
             "command": "$CLAUDE_PROJECT_DIR/mise-tasks/plan-hold-guard"
           }
         ]
+      },
+      {
+        "matcher": ".*save_issue",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/issue-search-guard"
+          }
+        ]
       }
     ],
     "PostToolUse": [
