@@ -117,7 +117,7 @@ jobs:
           cache: false
       - name: Install cross
         if: matrix.build-tool == 'cross'
-        uses: taiki-e/install-action@51cd0b8c0499559d9a4d75c0f5c67bec3a894ec8 # v2
+        uses: taiki-e/install-action@91ddec75689c4c78665b598d188dc821c5a43e5c # v2
         with:
           tool: cross
       # NO install step for zig or cargo-zigbuild: mise pins both in [tools], the
