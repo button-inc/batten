@@ -67,13 +67,22 @@ setup() {
 	[[ "$output" == *"issue-guard owns that case"* ]]
 }
 
-@test "a prefix does not match a longer id" {
+@test "one closed key is enough, even beside a named-but-unclosed one" {
 	run bash -c "printf 'Closes CLOUD-179\n\nRefs: CLOUD-17\n' | $GATE"
 	[ "$status" -eq 0 ]
-	# CLOUD-17 is named and unclosed, but CLOUD-179 IS closed, so the PR moves
-	# the board and the gate passes — what must not happen is CLOUD-17 being
-	# reported as closed.
+	# What must not happen is CLOUD-17 being reported as the closed one.
 	[[ "$output" != *"closes CLOUD-17 "* ]]
+}
+
+@test "a key embedded in a longer token is not a key" {
+	# The bounded match, and the case that actually discriminates it: the inner
+	# extraction is greedy, so `CLOUD-1792` never yields `CLOUD-179` either way
+	# and a digit-suffix fixture tests nothing. A LETTER prefix is what the
+	# boundary rules out. Found by mutation — the digit case was green with the
+	# boundary deleted.
+	run bash -c "printf 'SUBCLOUD-17 is a different system.\n' | $GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"issue-guard owns that case"* ]]
 }
 
 @test "several named keys are each reported, in stable numeric order" {

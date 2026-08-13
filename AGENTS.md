@@ -100,10 +100,10 @@ lockstep: **Todo** = the ready queue ("Ready" is the issue's Ready block, not a
 status); **In Progress** = pulled — claim it **by hand, before writing code**
 (`mise run claim-check`) and assign yourself: the automation fires on the PR
 event, the _end_ of the work, so waiting for it reserves nothing; **In Review**
-= landed on `main`, and **you move it: the merge does not** — [trunk-based
-development][tbd] reviews after merge, unreviewed paths stay behind feature
-flags, never a withheld merge; **Done** = [dor-dod]'s Done holds — **released**,
-never the merge (`done-check`). Detail: `mem:workflow/board-states`.
+= landed on `main`, written by the merge **iff the PR body closes the key**
+(`closing-key-check`) — [trunk-based development][tbd] reviews after merge,
+flagged not withheld; **Done** = [dor-dod]'s Done holds — **released**, yours to
+set, never the merge (`done-check`). Detail: `mem:workflow/board-states`.
 
 [tbd]: https://trunkbaseddevelopment.com/
 

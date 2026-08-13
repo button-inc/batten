@@ -407,6 +407,9 @@ case "\$2" in
   # CLOUD-323's stop. Passes by default; a case that wants the refusal
   # writes rc.mise.deferral-check, the same lever every other task uses.
   deferral-check) exit 0 ;;
+  # CLOUD-192's stop, and the same lever. Passes by default so the cases that
+  # care about anything else do not each have to write a closing body.
+  closing-key-check) exit 0 ;;
   ci-wait)
     # Every watcher records itself, so the trap-reap case can ask "who did a
     # lap spawn" and assert each one is gone (CLOUD-434's trap gap).
@@ -997,6 +1000,25 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	run "$LAND"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"defers a decision with no ticket"* ]]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "a body that names its issue but never closes it stops before review is asked for" {
+	# CLOUD-192's stop, and it sits beside the deferral one for the same reason:
+	# readying is the commitment to review, and the board move is what tells
+	# anyone review is open. A PR that only MENTIONS its issue links, attaches
+	# and moves nothing — measured as #398 (`Refs:`, never moved) against #400
+	# (`Closes`, moved in two seconds).
+	#
+	# Asserted before the comment count, like the two stops above: stopping after
+	# asking for the merge would have already spent what the stop withholds.
+	pr_body "Some work here.
+
+Refs: CLOUD-192"
+	task_fails closing-key-check
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"names its issue but never closes it"* ]]
 	[ "$(comments)" -eq 0 ]
 }
 
@@ -1699,12 +1721,14 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# the API refused, and the retry budget exhausted. Both exercised below; the
 	# budget one is a COUNT, so the no-wall-clock row above still holds.
 	# 26 since CLOUD-383: a race rendezvous that cannot be created, once per race.
+	# 27 since CLOUD-192: a PR body that names its issue but never closes it, so
+	# the merge would leave the board a column behind. Exercised below.
 	# TWO stops rather than one on purpose — the helper RETURNS the failure and
 	# each caller dies at top level, because a `die` inside the `$( )` every
 	# caller wraps it in would exit only the subshell (CLOUD-467, measured again
 	# here). Both are exercised below.
-	[ "$stops" -eq 26 ] || {
-		echo "land has $stops stopping conditions; this suite covers 26."
+	[ "$stops" -eq 27 ] || {
+		echo "land has $stops stopping conditions; this suite covers 27."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}

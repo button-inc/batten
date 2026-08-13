@@ -14,7 +14,7 @@ there is no separate "tell people." Button Cloud (CLOUD) team states:
 | Backlog         | not yet Ready                                         | —                                                                                                                             |
 | **Todo**        | the **ready queue**                                   | the Definition-of-Ready predicate is validated (the issue's **Ready block** is satisfied). Issues here are available to pull. |
 | **In Progress** | checked out, being worked                             | you start work — assign yourself in the same move.                                                                            |
-| **In Review**   | landed to trunk, under post-merge review, pre-release | the change is on `main` — **move it yourself; the merge does not** (CLOUD-192).                                               |
+| **In Review**   | landed to trunk, under post-merge review, pre-release | the change is on `main` — the merge writes it **iff the PR body closes the key** (CLOUD-192).                                 |
 | Done            | released                                              | the change ships **and** `graph-check` accepts the issue — see the sweep ordering below.                                      |
 
 ## The In Review → Done sweep is a CONJUNCTION, and the order is fixed
@@ -152,27 +152,38 @@ Two things this does NOT cover, both observed rather than assumed:
   issue just the same.
 
   CLOUD-192 changed the setting — the integration's **merged** event now maps to
-  In Review rather than Done — **and the setting alone did not produce the
-  transition.** Measured on #398, the PR that landed that very change: merged
-  `06:27:05`, all checks green, and CLOUD-192 still read In Progress **8m21s
-  later**, with no In Review entry in its history. The open side fired normally
-  on the same PR (`linear-code[bot]` commented at `06:12:20` and attached it), so
-  Linear had the issue, had the link, and did nothing on merge.
+  In Review rather than Done — and then measured what that setting alone buys.
+  **The answer is nothing, unless the PR CLOSES its issue.** A controlled pair on
+  one issue, same repo, same branch name, same fast-forward landing, one
+  variable:
 
-  **So write the board by hand on landing, and do not wait for the merge to do
-  it.** Three explanations are ruled out by measurement, not argument: the branch
-  carried `cloud-192` and the attachment resolved, so the key travelled; the
-  settings page was re-read _after_ the merge and still said In Review, so the
-  value persisted; GitHub reports `MERGED` with `mergedAt` and a `merged` event,
-  so a fast-forward landing is not invisible to it.
+  | PR   | body says          | merged     | In Review at    |
+  | ---- | ------------------ | ---------- | --------------- |
+  | #398 | `Refs: CLOUD-192`  | `06:27:05` | never           |
+  | #400 | `Closes CLOUD-192` | `06:59:39` | `06:59:41` (2s) |
 
-  What is still open is whether Linear's **closing vs contributing** split is the
-  cause — #398's body carried a `Refs:` trailer and no closing keyword. The
-  earlier `Refs:`-only counter-example (#131) does not settle it, because that
-  was measured against the old `Done` mapping.
+  So Linear's **closing vs contributing** split is what decides it: a
+  contributing PR links and attaches and drives no status. Three other
+  explanations were ruled out by measurement rather than argument — the key
+  travelled (the attachment resolved to the issue), the setting persisted (the
+  page was re-read _after_ the merge), and GitHub reports `MERGED` with
+  `mergedAt`, so a fast-forward landing is not invisible.
 
-  So the path is `In Progress → In Review → Done`, **both legs performed by
-  hand.** Done has exactly one source, a release, and nothing automates that leg
+  **This also retires the `#131` counter-example** that stood here — a
+  `Refs:`-only PR completing on merge does not reproduce, and it was measured
+  against the old `Done` mapping.
+
+  **Write `Closes <key>` in the PR body**, and `closing-key-check` refuses a body
+  that names its issue without it. Every PR here named its issue and none closed
+  it, because `issue-guard` requires the key and nothing required the form — the
+  convention was satisfied and the outcome still wrong. Use `DO-NOT-CLOSE` when a
+  PR deliberately does not complete its issue, which under trunk-based
+  development is the several-PRs-per-issue case (CLOUD-186); closing on the first
+  landing is CLOUD-468's defect.
+
+  So the path is `In Progress → In Review → Done`: the first leg is the merge's,
+  once the body closes the key, and **the last leg is yours.** Done has exactly
+  one source, a release, and nothing automates that leg
   either — the integration triggers on PR events, and "a tag now contains this
   commit" is not one, so no setting reaches it. `released <tag>` names what a
   release promoted (the `release-plz` run summary prints it); `done-check`

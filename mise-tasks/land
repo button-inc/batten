@@ -1129,6 +1129,20 @@ while :; do
 		die "#$pr defers a decision with no ticket. File it and name the issue in that paragraph, then run land again."
 	fi
 
+	# --- and the merge must actually move the board -------------------------
+	#
+	# CLOUD-192, the FIFTH stop. The tracker's merged-event automation fires only
+	# for a CLOSING pull request; one that merely mentions its issue links,
+	# attaches, and moves nothing. Measured as a pair on one issue with one
+	# variable: #398 (`Refs:`) never moved, #400 (`Closes`) moved in two seconds.
+	#
+	# Same body, fetched once above, and the same fail-open reasoning: a body this
+	# never saw is not evidence that the PR closes nothing.
+	note_phase "closing-key-check(lap $lap)"
+	if [ -n "$body" ] && ! printf '%s' "$body" | mise run closing-key-check; then
+		die "#$pr names its issue but never closes it, so merging it would leave the board a column behind. Write \"Closes <key>\" in the body (or DO-NOT-CLOSE if this PR is not meant to complete it), then run land again."
+	fi
+
 	# --- take the lease before anything can start a run -----------------------
 	#
 	# Here, and not later: the push below is what starts CI, so acquiring first
