@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#MISE description="Gate: record how fresh your read of an issue was (reads a get_issue payload on stdin, mints the receipt issue-read-guard demands)"
+#
+# CLOUD-508. CLOUD-505 gated the path that CREATES rows and said, correctly, that
+# "an update must never be denied, or every edit to an issue needs a search
+# first". That leaves the update path with a different hazard it does not claim
+# to cover: an update is written against a snapshot the agent read at some
+# earlier, unbounded time, and nothing anywhere bounds that gap.
+#
+# Measured 2026-08-13. A session read CLOUD-504 at 01:16:08, planned against it,
+# and wrote at 02:07:36 — appending a Ready block and moving it Backlog -> Todo.
+# In between, another session marked it a duplicate. ~51 minutes between the read
+# the plan was built on and the write it authorised, and a known duplicate landed
+# in the ready queue where `graph-check`'s frontier offers pullable work. It was
+# caught by reading the response, which is not a gate.
+#
+# A RECENCY BOUND, NOT A FRESHNESS PROOF — and the difference is the whole
+# design, so it is stated here rather than discovered later. A true
+# compare-and-swap is NOT available: `save_issue` takes no if-match parameter, so
+# nothing can make the write itself conditional, and an update always wins over
+# whatever landed since the read. What IS computable locally is how old the read
+# was: two clock readings, no network. That bounds the window a concurrent edit
+# can hide in; it does not close it. Anything stronger needs the tracker to offer
+# a precondition on write, which is a capability gap (CLOUD-312's line), not
+# something to simulate here.
+#
+# This is `claim-check`'s inversion, borrowed wholesale for the reason that file
+# gives: no tracker credential exists in a hook, so the read cannot happen there.
+# The agent already did it. This records that it happened AND WHEN, and the guard
+# demands the record be recent.
+#
+# KEYED BY ISSUE, not by branch — the one place this departs from
+# `claim-check` and `issue-search-check`, and it departs deliberately. A claim and
+# a search each attest to a decision about what to WORK ON, which every commit on
+# that branch continues to serve. This attests to a fact about one ROW at one
+# moment, and a single branch legitimately updates several issues; a branch key
+# would let a fresh read of one issue authorise a stale write to another.
+#
+# Usage: mise run issue-read-check   (a get_issue payload on stdin)
+#
+# Exit 0 receipt minted / 1 the payload is not a usable read / 2 unreadable
+# stdin — matching `claim-check` and `issue-search-check` so all three compose.
+#
+# The mutation drops the timestamp from the receipt, so every receipt reads as
+# age zero and the guard can only ever test existence — which is the gate this
+# replaces, and every DENY row for a missing receipt still passes.
+#MUTANT receipt-carries-no-time|s/read_at=\$(date -u +%s)/read_at=0/|a receipt with no read time cannot age
+set -uo pipefail
+
+if ! payload=$(jq -sc 'if length == 1 and (.[0] | type == "array") and (.[0] | length == 1) then .[0][0] elif length == 1 then .[0] else . end' 2>/dev/null); then
+	echo "::error:: issue-read-check: stdin is not JSON — pipe a get_issue payload" >&2
+	exit 2
+fi
+
+# One issue, not a set. `claim-check` and `graph-check` take a set because they
+# decide over a frontier; this records a single read, and accepting an array
+# would make "which row did you actually look at" ambiguous at the receipt.
+if ! jq -e 'type == "object" and has("id")' <<<"$payload" >/dev/null 2>&1; then
+	echo "::error:: issue-read-check: stdin is not a get_issue payload (want one object carrying an id)" >&2
+	exit 2
+fi
+
+key=$(jq -r '.id' <<<"$payload")
+
+# The receipt namespace is issue KEYS. A payload identifying the row some other
+# way cannot be filed against one, and inventing a name for it would mint a
+# receipt the guard can never match — a silent hole rather than a refusal.
+case "$key" in
+[A-Z]*-[0-9]*) ;;
+*)
+	echo "::error:: issue-read-check: \"$key\" is not an issue key (want CLOUD-123) — nothing to key a receipt to" >&2
+	exit 1
+	;;
+esac
+
+# `updatedAt` is what the read SAW; `read_at` is when it saw it. Both are
+# recorded because they answer different questions: the guard compares `read_at`
+# against now, and a human debugging a refusal wants to know which revision the
+# author had in front of them. Absent `updatedAt` is not fatal — a caller may
+# have projected fields away — but it is recorded as `-` rather than invented.
+seen=$(jq -r '.updatedAt // "-"' <<<"$payload")
+read_at=$(date -u +%s)
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
+	echo "::error:: issue-read-check: not a git repository — cannot record the read" >&2
+	exit 2
+}
+
+mkdir -p "$git_dir/batten-receipts" 2>/dev/null || {
+	echo "::error:: issue-read-check: cannot create the receipt store" >&2
+	exit 2
+}
+
+# No branch in the key, and no slashes possible in an issue key, so no
+# substitution is needed here — but the spelling must match `issue-read-guard`'s
+# exactly, which is why both files name it in one place each and nowhere else.
+receipt="$git_dir/batten-receipts/issue-read.$key"
+
+# TRUNCATED, never appended, unlike `issue-search-check`'s. A search receipt
+# accumulates what the author has seen; this one answers "how old is the newest
+# read", and an append would leave the guard reading whichever line it happened
+# to parse first — the freshest read must overwrite the stalest.
+printf '%s %s %s\n' "$key" "$seen" "$read_at" >"$receipt" 2>/dev/null || {
+	echo "::error:: issue-read-check: cannot write $receipt" >&2
+	exit 2
+}
+
+# Pointer-only (non-negotiable 4): the key and the revision it was read at, never
+# a title and never a line of the body.
+echo "issue-read-check: $key read at $seen — an update is authorised for the next ${BATTEN_ISSUE_READ_MAX_AGE:-300}s"
