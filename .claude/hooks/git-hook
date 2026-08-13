@@ -57,4 +57,21 @@ if [ -n "${BATTEN_GATE_PID:-}" ] && kill -0 "$BATTEN_GATE_PID" 2>/dev/null; then
 fi
 
 export BATTEN_GATE_PID=$$
-mise exec -- hk run "$hook" "$@"
+
+# --- the two-tier gate -------------------------------------------------------
+#
+# `--profile '!slow'` is the ONE place the expensive tier is switched off
+# (CLOUD-509). hk.pkl enables `slow` at the config layer, so every other entry
+# point — `hk check --all` via `mise run ci`, `hk fix --all`, CI — runs the full
+# gate by default; this line is the single deliberate exception, on the one path
+# that is paid per commit.
+#
+# It is a CLI flag rather than `Hook.env` in hk.pkl because hook env cannot do
+# this: `Hook` has no `profiles` field, and hook env is merged into each step's
+# CHILD process environment, never into hk's own settings. Profiles resolve once
+# at startup, and CLI is the top of that ladder with replace semantics — so this
+# value wholly supplants hk.pkl's for this process and nothing else.
+#
+# `commit-msg` gets it too and is unaffected: its only step is a grep, which
+# declares no profile and therefore always runs.
+mise exec -- hk run "$hook" --profile '!slow' "$@"

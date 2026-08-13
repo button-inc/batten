@@ -136,6 +136,9 @@ local gate = new Mapping<String, Step> {
   // INVOCATION COST and landed under that name first. Two benchmarks with two
   // subjects need two names, and the more specific one moves.
   ["token-bench-check"] {
+    // `slow` tier: re-executes `token-bench`, which builds the engine and then
+    // runs N workloads x N runs. See the `profiles` note at the foot of this file.
+    profiles = List("slow")
     glob =
       List(
         "bench/tokens/*",
@@ -180,6 +183,8 @@ local gate = new Mapping<String, Step> {
   // inputs that can move it — the lockfile it must agree with, and the workflows
   // whose pinned actions the scan catalogs (CLOUD-262).
   ["sbom-check"] {
+    // `slow` tier: two whole-tree `syft scan dir:.` passes.
+    profiles = List("slow")
     glob = List("Cargo.lock", ".github/workflows/*")
     check = "mise run sbom-check"
   }
@@ -387,6 +392,9 @@ local gate = new Mapping<String, Step> {
   // The gh guard ships with its gate this way: the policy table must block
   // exactly the hand-rolled shapes and nothing else (non-negotiable 2).
   ["test:bats"] {
+    // `slow` tier, and the pole of the whole gate: 100.3s of a 111.1s run at
+    // nproc=4 (mise.toml). See the `profiles` note at the foot of this file.
+    profiles = List("slow")
     depends = List("shellcheck")
     glob = List("mise-tasks/*", "tests/*.bats")
     check = "mise run test:bats"
@@ -448,6 +456,8 @@ local gate = new Mapping<String, Step> {
     check = "mise run lint:fmt"
   }
   ["cargo-clippy"] = (Builtins.cargo_clippy) {
+    // `slow` tier: a whole-workspace compile at --all-targets --all-features.
+    profiles = List("slow")
     depends = List("cargo-fmt")
     // Upstream lints the default target set at default severity. The
     // workspace lints are only meaningful if every target is checked and a
@@ -456,6 +466,8 @@ local gate = new Mapping<String, Step> {
   }
   // Tests the whole workspace because a change in one crate can break another.
   ["test"] {
+    // `slow` tier: a whole-workspace test build and run.
+    profiles = List("slow")
     depends = List("cargo-clippy")
     // The fixture corpus is committed data the suite reads, so a fixture-only
     // commit must run the tests too (CLOUD-63). Without this entry the corpus
@@ -498,6 +510,9 @@ local gate = new Mapping<String, Step> {
   // over it, which narrows silently the next time a rule adds a glob — half a
   // change by non-negotiable 2. `batten-glob-check` below is the other half.
   ["batten-check"] {
+    // `slow` tier: `cargo run`, so it pays a debug build — 9.47s cold, 133-141ms
+    // warm (CLOUD-212 run 1, D8).
+    profiles = List("slow")
     depends = List("test")
     glob =
       List(
@@ -528,6 +543,39 @@ local gate = new Mapping<String, Step> {
 // Report every failing step in one pass rather than stopping at the first —
 // one `mise run ci` should surface the whole list, not one failure at a time.
 fail_fast = false
+
+// THE TWO TIERS, AND WHY THE POLARITY IS THIS WAY ROUND (CLOUD-509).
+//
+// The steps above marked `profiles = List("slow")` are the six that dominate the
+// gate: 111.1s total, 100.3s of it `test:bats` at nproc=4. They are not cheaper
+// than they look and they are not optional — they simply do not belong on the
+// path a developer pays on every `git commit`, because `hk check --all` (which
+// `mise run ci`, and therefore `verify` and CI, drive over this same mapping)
+// runs them regardless of glob, and `ready-guard` refuses to ready a PR with no
+// `verify` receipt for that exact HEAD. The split moves WHEN the cost is paid,
+// never WHETHER the check runs.
+//
+// Enabling `slow` HERE, at the config layer, rather than passing `--slow` at the
+// call sites, is the fail-safe direction and the whole design decision. hk
+// resolves profiles once at startup over `defaults < pkl < git < env < cli`, and
+// the merge strategy is REPLACE, not union (`hk config explain profiles`). So:
+//
+//   * every hk entry point — `hk check --all`, `hk fix --all`, CI, and any bare
+//     `hk` a human types — is slow-enabled by default, including one added in
+//     future by someone who never reads this comment;
+//   * `.claude/hooks/git-hook` passes `--profile '!slow'`, whose CLI value wholly
+//     supplants this list for that one process, so the six skip at pre-commit.
+//
+// Inverted — steps opting IN and the call sites enabling — a forgotten flag on
+// any new hk call site would silently drop clippy, the test suite and
+// `batten-check` with no error: a false green in the one place that must not
+// have one. This way round, the same mistake only makes a commit slow.
+//
+// `warnings` carries "missing-profiles" so hk prints its "N steps were skipped
+// due to missing profiles" summary. Without it the pre-commit skip is silent,
+// and a silent skip is indistinguishable from a gate that ran and passed.
+profiles = List("slow")
+warnings = List("missing-profiles")
 
 hooks {
   // Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
