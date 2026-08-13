@@ -54,7 +54,14 @@ pub fn man(root: &Command, path: Option<&str>) -> Result<String> {
     let page = node
         .clone()
         .display_name(title)
-        .bin_name(qualified(root.get_name(), path));
+        .bin_name(qualified(root.get_name(), path))
+        // Reset, not merely "never set". The ROOT node carries a version —
+        // `surface::command()` sets it from `CARGO_PKG_VERSION` so `--version`
+        // works — and a clone of it inherits one, so the root page grew a
+        // VERSION section while every subcommand page had none. An asymmetry
+        // that only bites one page out of 38 is exactly the kind a smoke test
+        // over a sampled path misses.
+        .version(None::<&'static str>);
 
     let mut buffer: Vec<u8> = Vec::new();
     // A COMMITTED PAGE IS A PURE FUNCTION OF THE SURFACE. Two `clap_mangen`

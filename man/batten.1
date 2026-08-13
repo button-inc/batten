@@ -4,7 +4,7 @@
 .SH NAME
 batten \- Repo\-agnostic policy engine that keeps "done" aligned with landed\-and\-verified work.
 .SH SYNOPSIS
-\fBbatten\fR [\fB\-\-strictness\fR] [\fB\-\-fail\-on\-warning\fR] [\fB\-\-config\-from\fR] [\fB\-\-silent\fR]... [\fB\-q\fR|\fB\-\-quiet\fR]... [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-no\-color\fR] [\fB\-\-no\-input\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIsubcommands\fR]
+\fBbatten\fR [\fB\-\-strictness\fR] [\fB\-\-fail\-on\-warning\fR] [\fB\-\-config\-from\fR] [\fB\-\-silent\fR]... [\fB\-q\fR|\fB\-\-quiet\fR]... [\fB\-v\fR|\fB\-\-verbose\fR]... [\fB\-\-no\-color\fR] [\fB\-\-no\-input\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
 Repo\-agnostic policy engine that keeps "done" aligned with landed\-and\-verified work.
 .SH OPTIONS
@@ -50,9 +50,6 @@ Never prompt; treat the run as unattended
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help (see a summary with \*(Aq\-h\*(Aq)
-.TP
-\fB\-V\fR, \fB\-\-version\fR
-Print version
 .SH SUBCOMMANDS
 .TP
 batten\-check(1)
@@ -111,5 +108,3 @@ Exit codes:
   1  config or usage error — fail loud, do not block
   2  policy verdict — a violation, or a mediated call denied
   3  internal error — fail loud, do not block
-.SH VERSION
-v0.0.62
