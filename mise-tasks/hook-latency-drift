@@ -41,7 +41,13 @@ PROFILE="slow"
 # moves several seconds run to run, and a report that cries wolf is a report
 # nobody reads. LOOSE_FACTOR is the other end — the tier has to be dramatically
 # under budget before re-deriving is worth a commit.
-BUDGET_SECONDS="${BATTEN_HOOK_BUDGET_SECONDS:-25}"
+# Measured 2026-08-13 on a session container: 8s, 7s, 8s over three runs of
+# `hk check --all --profile '!slow'`, against 275s for the same gate with the
+# tier enabled. 15s is that median with room for a slower runner, chosen from
+# the measurement rather than in advance — and deliberately not so tight that
+# the LOOSE_FACTOR floor (15/3 = 5s) sits above the measured 7s, which would
+# make the report fire on its own baseline.
+BUDGET_SECONDS="${BATTEN_HOOK_BUDGET_SECONDS:-15}"
 SLACK_SECONDS="${BATTEN_HOOK_BUDGET_SLACK:-10}"
 LOOSE_FACTOR="${BATTEN_HOOK_BUDGET_LOOSE_FACTOR:-3}"
 RUNS="${BATTEN_HOOK_BUDGET_RUNS:-3}"

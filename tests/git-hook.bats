@@ -92,7 +92,22 @@ dead_pid() { bash -c 'echo $$'; }
 	ln -s "$BATS_TEST_DIRNAME/../.claude/hooks/git-hook" "$BATS_TEST_TMPDIR/commit-msg"
 	run "$BATS_TEST_TMPDIR/commit-msg" .git/COMMIT_EDITMSG
 	[ "$status" -eq 0 ]
-	grep -q 'hk run commit-msg .git/COMMIT_EDITMSG' "$CALLS"
+	# The hook's own arguments still reach hk, after the profile flag the two-tier
+	# gate adds (CLOUD-509). Asserted as two facts rather than one literal argv,
+	# so adding a flag does not red a case about dispatch.
+	grep -q 'hk run commit-msg' "$CALLS"
+	grep -q '\.git/COMMIT_EDITMSG' "$CALLS"
+}
+
+@test "the hook disables the slow profile, which is what makes a commit fast" {
+	# The other half of CLOUD-509's split, at its only switch-off point. hk.pkl
+	# enables `slow` at the config layer so every other entry point runs the full
+	# gate; if this flag stops being passed, every commit pays the whole 275s
+	# again. `hook-profile-check` gates the same property from the other side.
+	run "$HOOK"
+	[ "$status" -eq 0 ]
+	grep -q -- "--profile" "$CALLS"
+	grep -q -- '!slow' "$CALLS"
 }
 
 @test "the gate's exit status is the hook's" {
