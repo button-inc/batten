@@ -35,13 +35,17 @@ set -euo pipefail
 # thing it buys is bounded lateness on the wake-up — the human's reply is already
 # delivered by the harness, so this only decides how promptly the sleeper notices
 # it is done.
-POLL=${BATTEN_PLAN_HOLD_POLL:-5}
 MAX=${BATTEN_PLAN_HOLD_MAX:-14400}
 
 # By path, not `mise run`: this task is launched at every handoff, and CLOUD-435
 # measured ~150 ms of task-runner startup per nested launch to do milliseconds of
 # work. `stop-guard` calls `stop-posture-check` the same way, for the same reason.
 check="$(dirname -- "${BASH_SOURCE[0]}")/plan-hold-check"
+
+# Asked for, never spelled here. The interval is also what the reader reasons
+# about, and two literals that must agree drift silently — the sleeper polling at
+# one rate while `spanned` assumes another. Same discipline as the hold directory.
+POLL=$("$check" poll) || POLL=5
 
 dir=$("$check" dir) || {
 	echo "::error:: plan-hold: no git dir — cannot arm a hold here" >&2
@@ -108,12 +112,62 @@ trap 'rm -f -- "$sentinel" 2>/dev/null || true' EXIT INT TERM
 started=$(date -u +%s)
 elapsed() { echo $(($(date -u +%s) - started)); }
 
+# THE SENSOR (CLOUD-491). A mechanism that occupies the container left no record
+# of having done so, so no session could say afterwards whether a hold was live
+# when the container was replaced, had already exited, or was never armed — and
+# CLOUD-451's acceptance is written entirely in those terms.
+#
+# Two kinds of record, and the DIFFERENCE between them is the whole predicate:
+# `h` on every poll, `x` only where this file CHOOSES to stop. A hold killed by
+# the container going down never reaches an `x`, so an `h` in final position is
+# the evidence, with no clock involved. That matters because the clock is not
+# available: the last 182 s of writes before a replacement were measured not to
+# survive, so any "how recent is the last beat" reading is three minutes stale
+# exactly when it is asked. `plan-hold-check` carries that measurement in full.
+#
+# NEVER IN THE TRAP, therefore. The trap runs on the kill too, and an `x` written
+# there would erase the one distinction this exists to draw — it would report
+# every reclaimed hold as one that stopped on purpose, which is the false
+# negative that licenses the idle handoff. The two calls below are deliberately
+# on the two terminal paths themselves rather than factored into the trap.
+#
+# `|| true` throughout, and `sync -d` after: a sensor must never be able to kill
+# the mechanism it observes (this file runs under `set -euo pipefail`), and an
+# unflushed record is exactly the one the boundary above eats. The flush cannot
+# defeat a snapshot, but the two causes are indistinguishable from in here and it
+# closes the one it can, for one syscall per poll.
+#
+# Two mutations, each aimed at the row it can actually turn red. Silencing the
+# poll leaves a killed hold with no record at all — the evidence gone rather than
+# misread. Collapsing the released record into a poll makes an intentional exit
+# indistinguishable from a reclaimed one, which is the false negative the whole
+# mechanism is built to refuse.
+#MUTANT heartbeat-silenced|s/^	note h$/	:/|a killed hold leaves an h as its last record
+#MUTANT terminal-record-collapses|s/^note x released$/note h/|a hold that stops on purpose records which way it stopped
+beat="$("$check" heartbeat-path 2>/dev/null)" || beat=""
+boot="$("$check" boot 2>/dev/null)" || boot=0
+note() { # note <kind> [reason]
+	[ -n "$beat" ] || return 0
+	# The reason field is omitted rather than emitted empty: a trailing space is
+	# a byte difference between two records that mean the same thing, and
+	# non-negotiable 5 asks output to be stable rather than nearly so.
+	if [ -n "${2:-}" ]; then
+		printf '%s %s %s %s\n' "$1" "$(date -u +%s)" "$boot" "$2" >>"$beat" 2>/dev/null || true
+	else
+		printf '%s %s %s\n' "$1" "$(date -u +%s)" "$boot" >>"$beat" 2>/dev/null || true
+	fi
+	sync -d "$beat" 2>/dev/null || true
+}
+
 while [ -e "$sentinel" ]; do
 	if [ "$(elapsed)" -ge "$MAX" ]; then
+		note x capped
 		echo "plan-hold: capped after $(elapsed)s — nobody answered"
 		exit 0
 	fi
+	note h
 	sleep "$POLL"
 done
 
+note x released
 echo "plan-hold: released after $(elapsed)s"

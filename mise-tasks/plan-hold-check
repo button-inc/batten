@@ -37,13 +37,55 @@
 # no identity plumbing at all, and "is anything holding this clone open" is the
 # question the guard actually asks.
 #
+# **The hold also records WHY IT STOPPED, and that is a second predicate**
+# (CLOUD-491). `live` answers about now; `spanned` answers about the last
+# container replacement, which is the question CLOUD-451's acceptance is written
+# in and which nothing could previously check after the fact.
+#
+# The obvious sensor — a per-poll timestamp, compared against boot time — was
+# built and measured, and it cannot work here. Every write that survived the
+# 2026-08-12 23:45 replacement stops at 23:42:15 (four MCP servers' logs,
+# Serena's log, `target/.rustc_info.json`, `batten-holds`) while the container
+# kept serving tool calls until ~23:45: **the last 182 s of writes did not
+# survive.** Snapshot boundary or unflushed page cache cannot be told apart from
+# inside, and it does not matter — the tail of a heartbeat is lost exactly when
+# the sensor needs it, so any `epoch >= btime - poll` reads three minutes stale
+# and answers "did not span" for the event it exists to catch. Widening the
+# tolerance to 182 s swallows a hold that legitimately exited minutes earlier,
+# which collapses the case the whole thing exists to distinguish.
+#
+# So the record is STRUCTURAL, not temporal: `h` per poll, `x` on an intentional
+# exit, and the verdict is the LAST LINE's kind. A hold killed by the container
+# going down cannot write an `x`, so an `h` in final position IS the evidence —
+# and absence of a record is the one reading a lost tail cannot forge. The
+# residual error is bounded and points the safe way: a hold released inside the
+# lost-write window reads as "was live".
+#
 # Usage: plan-hold-check live      — exit 0 live / 1 not live / 2 cannot look
 #        plan-hold-check dir       — print the hold directory (for plan-hold and
 #                                    plan-hold-release, so the path has one home)
+#        plan-hold-check spanned   — exit 0 a hold was live when this container
+#                                    replaced the last one / 1 it was not / 2
+#                                    cannot look
+#        plan-hold-check heartbeat-path — print the heartbeat file (for plan-hold,
+#                                    so this path also has one home)
+#        plan-hold-check poll      — print the poll interval, so the sleeper and
+#                                    this reader cannot disagree about it
+#        plan-hold-check boot      — print this container's boot time
+#        plan-hold-check record-boot — note this boot, so a later `spanned` can
+#                                    tell a preserved disk from a fresh one
 #
 # Exit codes are §7's: 0 the predicate holds, 1 it does not, 2 the question could
 # not be asked. There is deliberately no exit code for "reaped something" — that
 # is bookkeeping, not a verdict.
+#
+# The mutation collapses the two record kinds into one, which is exactly the
+# reading the 182 s measurement rules out: with `h` and `x` indistinguishable the
+# only thing left to reason from is the clock, and the clock is stale by minutes
+# at the moment it is asked. Declared at column 0 because that is what `mutant`'s
+# `sed -n 's/^#MUTANT //p'` reads, and because shfmt re-indents a comment placed
+# beside the code inside a `case` arm.
+#MUTANT kind-discrimination-collapses|s/if \[ "$kind" = "x" \]; then/if false; then/|an x means the hold ended on purpose
 set -uo pipefail
 
 # The one authoritative spelling of the hold location. Under `$GIT_DIR` rather
@@ -63,6 +105,73 @@ hold_dir() {
 	printf '%s\n' "$git_dir/batten-holds"
 }
 
+# BESIDE the hold directory, never inside it. Both `plan-hold`'s
+# incumbent-release loop and the reaping loop below iterate `"$dir"/*` and delete
+# every file whose first line is not a pid — so a heartbeat filed under the hold
+# directory would be reaped by the very check that reads it. Measured on the
+# first draft of CLOUD-491, before a line of it was written.
+heartbeat_file() {
+	local git_dir
+	git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
+	[ -n "$git_dir" ] || return 1
+	printf '%s\n' "$git_dir/batten-hold-heartbeat"
+}
+
+# One line per session start, so `spanned` can tell "no hold was ever armed on
+# this disk" from "this disk is new and no local evidence can exist". The naive
+# probe — look for prior-container residue — does not work: a `batten-*`
+# directory's mtime updates on every add and remove, so all of them read as
+# post-boot on a demonstrably preserved disk, and `target/` is rebuilt at boot on
+# a fresh one. A btime we wrote ourselves is a reading rather than an inference.
+boots_file() {
+	local git_dir
+	git_dir=$(git rev-parse --absolute-git-dir 2>/dev/null) || return 1
+	[ -n "$git_dir" ] || return 1
+	printf '%s\n' "$git_dir/batten-boots"
+}
+
+# The poll interval's one home. `plan-hold` asks for it rather than spelling its
+# own default, for the reason the hold directory has one spelling: two literals
+# that must agree are a drift waiting to happen, and here the disagreement would
+# be silent — the sleeper polling at one rate while the reader reasons about
+# another.
+POLL_DEFAULT=5
+
+# `/proc/stat`'s btime is the container's boot time in epoch seconds. Injectable
+# because it CANNOT BE FAKED otherwise, and a suite that cannot vary the boot
+# time cannot exercise a single row of the table below — it would ship as
+# coverage while discriminating nothing (CLOUD-418).
+boot_time() {
+	local bt
+	# Set at all, not merely non-empty: an override that is present is
+	# AUTHORITATIVE, so a malformed one is "cannot look" rather than a silent
+	# fall-through to /proc/stat. Falling through would make the override look
+	# honoured while the reading came from somewhere else — the shape of a test
+	# that passes without exercising anything.
+	if [ -n "${BATTEN_BOOT_TIME+set}" ]; then
+		case "$BATTEN_BOOT_TIME" in
+		'' | *[!0-9]*) return 1 ;;
+		esac
+		printf '%s\n' "$BATTEN_BOOT_TIME"
+		return 0
+	fi
+	bt=$(awk '$1 == "btime" { print $2; exit }' /proc/stat 2>/dev/null)
+	case "$bt" in
+	'' | *[!0-9]*) ;;
+	*)
+		printf '%s\n' "$bt"
+		return 0
+		;;
+	esac
+	# `uptime -s` answers a wall-clock string rather than an epoch; converting it
+	# is what makes it a fallback rather than a second format to reason about.
+	bt=$(date -u -d "$(uptime -s 2>/dev/null)" +%s 2>/dev/null)
+	case "$bt" in
+	'' | *[!0-9]*) return 1 ;;
+	esac
+	printf '%s\n' "$bt"
+}
+
 mode="${1:-live}"
 
 case "$mode" in
@@ -74,9 +183,112 @@ dir)
 	printf '%s\n' "$dir"
 	exit 0
 	;;
+heartbeat-path)
+	beat=$(heartbeat_file) || {
+		echo "::error:: plan-hold-check: not a git repository — no heartbeat file" >&2
+		exit 2
+	}
+	printf '%s\n' "$beat"
+	exit 0
+	;;
+poll)
+	printf '%s\n' "${BATTEN_PLAN_HOLD_POLL:-$POLL_DEFAULT}"
+	exit 0
+	;;
+boot)
+	boot=$(boot_time) || {
+		echo "::error:: plan-hold-check: cannot read this container's boot time" >&2
+		exit 2
+	}
+	printf '%s\n' "$boot"
+	exit 0
+	;;
+record-boot)
+	boot=$(boot_time) || {
+		echo "::error:: plan-hold-check: cannot read this container's boot time — not recording it" >&2
+		exit 2
+	}
+	boots=$(boots_file) || {
+		echo "::error:: plan-hold-check: not a git repository — cannot record this boot" >&2
+		exit 2
+	}
+	# Idempotent by the LAST line, not by a search: a session that restarts
+	# within one container must not add a second record, and a genuinely earlier
+	# boot recurring is not a case that can arise — btime only moves forward.
+	last=$(tail -n 1 -- "$boots" 2>/dev/null)
+	[ "$last" = "$boot" ] || printf '%s\n' "$boot" >>"$boots" 2>/dev/null || true
+	exit 0
+	;;
+spanned)
+	boot=$(boot_time) || {
+		echo "::error:: plan-hold-check: cannot read this container's boot time — cannot say whether a hold spanned the restart" >&2
+		exit 2
+	}
+	beat=$(heartbeat_file) || {
+		echo "::error:: plan-hold-check: not a git repository — cannot say whether a hold spanned the restart" >&2
+		exit 2
+	}
+	# `-s`, so an empty file reads as absence rather than as a corrupt record.
+	# A hold that armed and died before its first poll leaves exactly that.
+	if [ ! -s "$beat" ]; then
+		boots=$(boots_file) || boots=""
+		prior=""
+		if [ -n "$boots" ] && [ -r "$boots" ]; then
+			while IFS= read -r recorded; do
+				case "$recorded" in
+				'' | *[!0-9]*) continue ;;
+				esac
+				[ "$recorded" = "$boot" ] || prior="$recorded"
+			done <"$boots"
+		fi
+		if [ -n "$prior" ]; then
+			echo "plan-hold-check: no hold has ever been armed in this clone (boot $boot, disk carries boot $prior)"
+			exit 1
+		fi
+		# No heartbeat AND no boot but this one: nothing that ran here left a
+		# trace, which is what a fresh disk looks like. Reporting "no hold was
+		# live" would be a claim the evidence cannot support, and it is the
+		# claim that would license the idle handoff.
+		echo "::error:: plan-hold-check: no record predates boot $boot — this container's disk carries no evidence either way" >&2
+		exit 2
+	fi
+
+	last=$(tail -n 1 -- "$beat" 2>/dev/null) || last=""
+	# Fields, never a regex: `read` splits on IFS and the shapes below are a
+	# fixed arity, so there is nothing for a pattern to get subtly wrong.
+	read -r kind epoch recorded _rest <<<"$last"
+	case "$kind" in
+	h | x) ;;
+	*)
+		echo "::error:: plan-hold-check: the last heartbeat record is unreadable — cannot say whether a hold spanned the restart" >&2
+		exit 2
+		;;
+	esac
+	case "$epoch$recorded" in
+	'' | *[!0-9]*)
+		echo "::error:: plan-hold-check: the last heartbeat record carries no usable timestamps — cannot say whether a hold spanned the restart" >&2
+		exit 2
+		;;
+	esac
+
+	# THE WHOLE PREDICATE, in three lines. An `x` is written only where the hold
+	# CHOSE to stop, so its presence in final position settles the question; a
+	# record from this boot never spanned anything; and an `h` left in final
+	# position by a previous boot is a hold that never got to write its `x`.
+	if [ "$kind" = "x" ]; then
+		echo "plan-hold-check: the last hold ended on purpose at $epoch — it did not span a restart"
+		exit 1
+	fi
+	if [ "$recorded" = "$boot" ]; then
+		echo "plan-hold-check: the last heartbeat is from this boot ($boot) — nothing spanned a restart"
+		exit 1
+	fi
+	echo "plan-hold-check: a hold was live when this container replaced the last one (last beat $epoch under boot $recorded, now $boot)"
+	exit 0
+	;;
 live) ;;
 *)
-	echo "::error:: plan-hold-check: unknown mode \"$mode\" (want: live | dir)" >&2
+	echo "::error:: plan-hold-check: unknown mode \"$mode\" (want: live | dir | spanned | heartbeat-path | poll | boot | record-boot)" >&2
 	exit 2
 	;;
 esac

@@ -32,64 +32,11 @@ teardown() {
 
 dir() { printf '%s\n' "$(git -C "$REPO" rev-parse --absolute-git-dir)/batten-holds"; }
 
-# --- the predicate ------------------------------------------------------------
-
-@test "check reports not-live before anything has ever held this clone" {
-	run "$CHECK" live
-	[ "$status" -eq 1 ]
-	# A refusal must carry its fix, and the fix must be the command, not advice.
-	[[ "$output" == *"mise run plan-hold"* ]]
-}
-
-@test "check reports live for a sentinel naming a running pid" {
-	mkdir -p "$(dir)"
-	sleep 30 &
-	local pid=$!
-	printf '%s\n' "$pid" >"$(dir)/$pid"
-	run "$CHECK" live
-	kill "$pid" 2>/dev/null || true
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"1 hold(s) live"* ]]
-}
-
-@test "a stale sentinel is not-live, and reporting it reaps it" {
-	mkdir -p "$(dir)"
-	# A pid that has certainly exited: spawn and reap one, then reuse its number.
-	sleep 0 &
-	local pid=$!
-	wait "$pid" 2>/dev/null || true
-	printf '%s\n' "$pid" >"$(dir)/$pid"
-	run "$CHECK" live
-	[ "$status" -eq 1 ]
-	[ ! -e "$(dir)/$pid" ]
-}
-
-@test "a malformed sentinel is a corpse, never a hold" {
-	mkdir -p "$(dir)"
-	printf 'not-a-pid\n' >"$(dir)/garbage"
-	: >"$(dir)/empty"
-	run "$CHECK" live
-	[ "$status" -eq 1 ]
-	[ ! -e "$(dir)/garbage" ]
-	[ ! -e "$(dir)/empty" ]
-}
-
-@test "outside a git repository the check cannot look, and says so rather than deciding" {
-	cd "$BATS_TEST_TMPDIR" || return 1
-	run env GIT_CEILING_DIRECTORIES="$BATS_TEST_TMPDIR" "$CHECK" live
-	[ "$status" -eq 2 ]
-}
-
-@test "the hold directory is spelled in exactly one place" {
-	run "$CHECK" dir
-	[ "$status" -eq 0 ]
-	[ "$output" = "$(dir)" ]
-	# The other three files must ask for it rather than re-deriving it, or the
-	# single spelling is a comment instead of a property.
-	for f in "$HOLD" "$RELEASE" "$BATS_TEST_DIRNAME/../mise-tasks/plan-hold-guard"; do
-		! grep -q 'batten-holds' "$f"
-	done
-}
+# The predicate's own rows moved to `tests/plan-hold-check.bats` (CLOUD-491) —
+# the check earned its own decision table, the way `claim-check` and
+# `land-lock-check` have one, and `mutant` can only reach a gate whose suite is
+# named after it. What stays here is the sleeper and the release: this file's
+# subject is the PROCESS, that one's is the pure function.
 
 # --- the hold -----------------------------------------------------------------
 
@@ -180,6 +127,75 @@ dir() { printf '%s\n' "$(git -C "$REPO" rev-parse --absolute-git-dir)/batten-hol
 	# Within a second of the truth, in both directions.
 	[ "$reported" -le $((actual + 1)) ]
 	[ "$reported" -ge $((actual - 1)) ]
+}
+
+# --- what the hold RECORDS about how it stopped (CLOUD-491) --------------------
+#
+# These two rows are the mechanism's whole claim, and they are deliberately not
+# fixtures: the distinction they assert is a property of where the writes sit in
+# this file, which only a real process can demonstrate.
+
+# THE ROW THE SENSOR EXISTS FOR. A killed hold is what a container replacement
+# looks like from in here, and the evidence is that it never reached its `x`.
+# This goes red the moment the `x` write is moved into the trap — which runs on
+# the kill too, and would report every reclaimed hold as one that stopped on
+# purpose.
+@test "a killed hold leaves an h as its last record, never an x" {
+	local beat
+	beat=$("$CHECK" heartbeat-path)
+	BATTEN_PLAN_HOLD_MAX=60 "$HOLD" >/dev/null 2>&1 &
+	local runner=$!
+	local waited=0
+	while ! [ -s "$beat" ]; do
+		sleep 0.2
+		waited=$((waited + 1))
+		[ "$waited" -lt 50 ] || {
+			kill "$runner" 2>/dev/null
+			return 1
+		}
+	done
+	kill -9 "$runner" 2>/dev/null
+	wait "$runner" 2>/dev/null || true
+	run bash -c "tail -n 1 -- '$beat' | cut -d' ' -f1"
+	[ "$output" = "h" ]
+}
+
+@test "a hold that stops on purpose records which way it stopped" {
+	local beat
+	beat=$("$CHECK" heartbeat-path)
+
+	run env BATTEN_PLAN_HOLD_MAX=1 BATTEN_PLAN_HOLD_POLL=1 "$HOLD"
+	[ "$status" -eq 0 ]
+	run bash -c "tail -n 1 -- '$beat'"
+	[[ "$output" == "x "*" capped" ]]
+
+	rm -f "$beat"
+	BATTEN_PLAN_HOLD_MAX=60 "$HOLD" >/dev/null 2>&1 &
+	local runner=$!
+	local waited=0
+	while ! "$CHECK" live >/dev/null 2>&1; do
+		sleep 0.2
+		waited=$((waited + 1))
+		[ "$waited" -lt 50 ] || {
+			kill "$runner" 2>/dev/null
+			return 1
+		}
+	done
+	jq -nc '{prompt: "ok, go ahead"}' | "$RELEASE"
+	wait "$runner"
+	run bash -c "tail -n 1 -- '$beat'"
+	[[ "$output" == "x "*" released" ]]
+}
+
+@test "every heartbeat record carries the boot it was written under" {
+	local beat
+	beat=$("$CHECK" heartbeat-path)
+	run env BATTEN_PLAN_HOLD_MAX=1 BATTEN_PLAN_HOLD_POLL=1 BATTEN_BOOT_TIME=4242 "$HOLD"
+	[ "$status" -eq 0 ]
+	# Without the boot on each line, a heartbeat from THIS container cannot be
+	# told from one that survived a replacement — which is the whole reading.
+	run bash -c "grep -cv ' 4242' -- '$beat'"
+	[ "$output" -eq 0 ]
 }
 
 @test "the hold prints nothing until it exits" {

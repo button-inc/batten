@@ -330,7 +330,14 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   classifier — provenance is structural there, where a prompt's is not. The predicate is a sentinel naming a
   pid that still answers `kill -0`, in `mise-tasks/plan-hold-check`, which is
   where the hold directory is spelled; a corpse is reaped on sight, the way
-  `alive` treats a dead `batten-tasks` entry. Bypass:
+  `alive` treats a dead `batten-tasks` entry. **The hold also grades itself**
+  (CLOUD-491): it records each poll and, separately, an intentional exit, so
+  `session-start` can say whether a hold was live when the last container
+  replacement happened — the question CLOUD-451's acceptance is written in and
+  nothing could previously answer. The record is structural rather than
+  timestamped because the last ~3 minutes of writes before a replacement were
+  measured not to survive; that measurement, and why an `x` is never written from
+  the exit trap, are in `plan-hold-check`'s own header. Bypass:
   `BATTEN_PLAN_HOLD_BYPASS=1`, for deliberately ending a turn idle.
 
 `mise run landed-check` is a board gate on the same stdin pattern: an
