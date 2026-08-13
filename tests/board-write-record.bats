@@ -76,6 +76,30 @@ event() {
 	printf '%s\n' "$BATS_TEST_TMPDIR/event.json"
 }
 
+# A `save_comment` event. The response is the COMMENT object — a uuid `id`, and no
+# reference to the row it landed on — which is exactly why the id must come from
+# the input's parent reference instead.
+#
+# `target` empty with `other_parent` set models a reply (`parentId`) or a comment
+# on a project/document; both carry no `issueId`.
+comment_event() {
+	# `${2-…}` and not `${2:-…}`: an explicitly EMPTY target is the reply case and
+	# must stay empty, where `:-` would substitute the default over it.
+	local tool="${1:-mcp__Linear__save_comment}" target="${2-CLOUD-42}" other_parent="${3:-}"
+	jq -nc --arg t "$tool" --arg target "$target" --arg other "$other_parent" '
+		{
+		  tool_name: $t,
+		  tool_input: ((if $target == "" then {} else {issueId: $target} end)
+		               + (if $other == "" then {} else {($other): "abc-123"} end)
+		               + {body: "a finding"}),
+		  tool_response: [{type: "text", text: ({
+		      id: "4d16245a-43ea-49ae-b67d-c2ee0b64b96e",
+		      body: "a finding", updatedAt: "2026-08-13T00:00:00.000Z"
+		    } | tojson)}]
+		}' >"$BATS_TEST_TMPDIR/event.json"
+	printf '%s\n' "$BATS_TEST_TMPDIR/event.json"
+}
+
 # --- what gets recorded --------------------------------------------------------
 
 @test "a created row is recorded with its id, updatedAt and a green verdict" {
@@ -118,11 +142,43 @@ event() {
 }
 
 # Sink 2: recorded so the create-versus-comment ratio is observable, never judged.
-@test "a comment is recorded as a comment and carries no verdict" {
-	run bash -c "'$REC' < $(event mcp__Linear__save_comment)"
+#
+# THE ID IS THE ISSUE KEY, FROM THE INPUT. A `save_comment` response is the
+# comment object — its `.id` is the comment's own uuid and it names no row at all
+# — so reading the response here fills an issue-key column with uuids. Measured
+# on this recorder's first five live rows, which did exactly that.
+@test "a comment records the issue key its input names, not the comment uuid" {
+	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment CLOUD-42)"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == "comment CLOUD-999 2026-08-13T00:00:00.000Z -" ]]
+	[[ "$output" == "comment CLOUD-42 2026-08-13T00:00:00.000Z -" ]]
+}
+
+# The regression case, stated as a shape rather than a value: whatever a comment
+# row carries, it is never a uuid. A uuid in an issue-key column reads as data
+# rather than as a gap, which is worse than the gap — nothing downstream can tell
+# them apart.
+@test "REGRESSION: a comment row never records a uuid" {
+	local target field
+	for target in CLOUD-42 ""; do
+		rm -f "$(record)"
+		run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment "$target")"
+		[ "$status" -eq 0 ]
+		# The id COLUMN, not the whole line: a key like CLOUD-42 contains `-4`, so
+		# a uuid-shaped match over the line flags a correct row.
+		field=$(awk '{print $2}' "$(record)")
+		[[ "$field" == "-" || "$field" =~ ^CLOUD-[0-9]+$ ]]
+	done
+}
+
+# A reply names only its parent thread, and a comment on a project or document is
+# not a board row at all. Both are "could not look", which is the same distinction
+# this recorder already draws for a verdict.
+@test "a reply, or a comment on a non-issue parent, records a dash rather than a guess" {
+	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment '' parentId)"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == "comment - 2026-08-13T00:00:00.000Z -" ]]
 }
 
 # CLOUD-178 measured the same connector under three names depending on the

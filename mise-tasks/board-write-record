@@ -59,6 +59,10 @@
 # lints as blocker-cited-without-relation and records `unready` — the false
 # refusal that would fire on the best-refined rows.
 #MUTANT relations-dropped|s/relations: {blockedBy: \$blockers}/relations: {}/|claims a blocker still records a green verdict
+# The mutation restores the shipped defect: take the id from the response for a
+# comment too, so an issue-key column fills with comment uuids and sink 2 becomes
+# unobservable while every count still looks right.
+#MUTANT comment-id-from-response|s/^if \[ "\$kind" = comment \]; then$/if false; then/|records the issue key its input names
 set -uo pipefail
 
 [ -n "${BATTEN_BOARD_WRITE_BYPASS:-}" ] && exit 0
@@ -95,8 +99,32 @@ row=$(printf '%s' "$raw" | jq -c '
 ' 2>/dev/null) || exit 0
 [ -n "$row" ] || exit 0
 
-id=$(jq -r '.id // empty' <<<"$row" 2>/dev/null) || exit 0
-[ -n "$id" ] || exit 0
+# THE ID COLUMN IS AN ISSUE KEY, AND FOR A COMMENT THE RESPONSE CANNOT SUPPLY
+# ONE. Measured on this recorder's own first five live rows, which came out as
+# `comment 4d16245a-43ea-49ae-b67d-c2ee0b64b96e …` — the comment's own uuid. A
+# `save_comment` response is the COMMENT object: its `.id` is the comment, and it
+# carries no reference to the row the comment landed on. Taking `.id` for both
+# kinds therefore silently fills an issue-key column with uuids, and sink 2's
+# whole definition — a comment on the row that already owns the finding — becomes
+# unobservable.
+#
+# The key is in the INPUT instead, as the parent reference. `issueId` is the only
+# parent that is a board row; a reply carries `parentId` and no `issueId` (the
+# thread determines the issue, which this hook cannot see), and a comment on a
+# project, document or milestone is not a row at all. Both record `-`, the same
+# "could not look" this file already draws for a verdict.
+#
+# NEVER FALL BACK TO THE COMMENT UUID. A uuid in an issue-key column is a wrong
+# answer wearing a right answer's shape, and it reads as data rather than as a
+# gap — which is strictly worse than the gap, because nothing downstream can tell
+# the two apart.
+if [ "$kind" = comment ]; then
+	id=$(printf '%s' "$raw" | jq -r '.tool_input.issueId // "-"' 2>/dev/null) || id=-
+else
+	id=$(jq -r '.id // empty' <<<"$row" 2>/dev/null) || exit 0
+	[ -n "$id" ] || exit 0
+fi
+[ -n "$id" ] || id=-
 updated=$(jq -r '.updatedAt // "-"' <<<"$row" 2>/dev/null) || updated=-
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
