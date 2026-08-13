@@ -1179,3 +1179,49 @@ receipt() {
 	LAND_LOCK_WAIT=2 LAND_LOCK_AGE=banana run lock "$MINE" acquire
 	[ "$status" -eq 1 ]
 }
+
+# --- PRESSURE: the lease under three-party contention -------------------------
+#
+# Every reading of the landing loop so far came from an idle fleet: #372 took the
+# lease 10647s after the prior holder let go, which measures nothing about
+# contention. The two-party rows above prove a rival is refused; this proves the
+# property the fleet actually depends on — that N waiters produce exactly one
+# holder, and the losers WAIT rather than steal.
+
+@test "PRESSURE: two waiters against one holder produce exactly ONE winner" {
+	THIRD="$BATS_TEST_TMPDIR/third"
+	git init -q "$THIRD"
+	git -C "$THIRD" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed
+	git -C "$THIRD" remote add origin "$BARE"
+	git -C "$THIRD" checkout -q -b claude/work
+
+	lock "$MINE" acquire
+	held=$(lease_sha)
+
+	# Both waiters see a live lease. Neither may take it, and neither may leave
+	# the ref changed — a steal is indistinguishable from a win to whoever holds.
+	run lock "$RIVAL" acquire
+	[ "$status" -eq 1 ]
+	run lock "$THIRD" acquire
+	[ "$status" -eq 1 ]
+	[ "$(lease_sha)" = "$held" ]
+}
+
+@test "PRESSURE: the lease passes to exactly one waiter after release, not both" {
+	THIRD="$BATS_TEST_TMPDIR/third"
+	git init -q "$THIRD"
+	git -C "$THIRD" -c user.email=t@t -c user.name=t commit -q --allow-empty -m seed
+	git -C "$THIRD" remote add origin "$BARE"
+	git -C "$THIRD" checkout -q -b claude/work
+
+	lock "$MINE" acquire
+	lock "$MINE" release
+
+	# The queue drains one at a time: the first waiter wins the freed lease, and
+	# the second is refused by the winner exactly as it was by the original
+	# holder. A fleet that let both through would put two landers on `main`.
+	run lock "$RIVAL" acquire
+	[ "$status" -eq 0 ]
+	run lock "$THIRD" acquire
+	[ "$status" -eq 1 ]
+}

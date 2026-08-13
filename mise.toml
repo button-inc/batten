@@ -287,9 +287,9 @@ description = "Clippy with warnings denied"
 # Receipt-gated (CLOUD-424): unchanged sources under an unchanged clippy are a
 # verdict already held.
 run = '''
-if mise run step-receipt check lint:clippy; then exit 0; fi
+if ./mise-tasks/step-receipt check lint:clippy; then exit 0; fi
 if ! cargo clippy --all-targets --all-features -- -D warnings; then exit 1; fi
-mise run step-receipt record lint:clippy || true
+./mise-tasks/step-receipt record lint:clippy || true
 '''
 
 [tasks."lint:fmt"]
@@ -299,9 +299,9 @@ description = "rustfmt in check mode"
 # so routing it here costs no scoping.
 # Receipt-gated (CLOUD-424), same shape as lint:clippy.
 run = '''
-if mise run step-receipt check lint:fmt; then exit 0; fi
+if ./mise-tasks/step-receipt check lint:fmt; then exit 0; fi
 if ! cargo fmt --all --check; then exit 1; fi
-mise run step-receipt record lint:fmt || true
+./mise-tasks/step-receipt record lint:fmt || true
 '''
 
 [tasks."lint:toml"]
@@ -446,9 +446,9 @@ description = "Run the Rust workspace test suite"
 # suite — and the record is an economy whose failure must never fail a suite
 # that passed.
 run = '''
-if mise run step-receipt check test:cargo; then exit 0; fi
+if ./mise-tasks/step-receipt check test:cargo; then exit 0; fi
 if ! cargo test --workspace; then exit 1; fi
-mise run step-receipt record test:cargo || true
+./mise-tasks/step-receipt record test:cargo || true
 '''
 
 [tasks.msrv]
@@ -478,7 +478,7 @@ run = '''
 set -euo pipefail
 # Receipt-gated (CLOUD-424): the declared floor lives in Cargo.toml and the
 # host toolchain is in the key, so a bump to either re-derives.
-if mise run step-receipt check msrv; then exit 0; fi
+if ./mise-tasks/step-receipt check msrv; then exit 0; fi
 msrv=$(cargo metadata --format-version 1 --no-deps |
 	jq -r '[.packages[].rust_version | select(. != null)] | unique | .[]' |
 	sort -V | tail -n1)
@@ -500,7 +500,7 @@ fi
 # consumer on the floor compiles our crate, not our test harness. `--all-targets`
 # would drag dev-dependencies' own floors into a claim we do not make about them.
 cargo "+$msrv" check --workspace
-mise run step-receipt record msrv || true
+./mise-tasks/step-receipt record msrv || true
 echo "msrv: the workspace builds on its declared rust-version ($msrv)"
 '''
 
@@ -511,9 +511,9 @@ description = "cargo-deny: licenses, advisories, sources"
 # on this branch: CI still runs the full check on every PR, which is the same
 # split lock-currency already made.
 run = '''
-if mise run step-receipt check deny; then exit 0; fi
+if ./mise-tasks/step-receipt check deny; then exit 0; fi
 if ! cargo deny check; then exit 1; fi
-mise run step-receipt record deny || true
+./mise-tasks/step-receipt record deny || true
 '''
 
 [tasks."build:release"]
@@ -536,9 +536,9 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # Receipt-gated (CLOUD-424); the key's specs mirror the hk step's glob, which
 # is the union of what `batten check` actually reads.
 run = '''
-if mise run step-receipt check batten-check; then exit 0; fi
+if ./mise-tasks/step-receipt check batten-check; then exit 0; fi
 if ! cargo run --quiet -p batten -- check; then exit 1; fi
-mise run step-receipt record batten-check || true
+./mise-tasks/step-receipt record batten-check || true
 '''
 
 [tasks.policy-budget]
@@ -602,9 +602,9 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # the world, it changes with no diff, and it belongs on a clock — which is
 # `.github/workflows/zizmor-advisories.yml`, beside lock-currency and ci-drift.
 run = '''
-if mise run step-receipt check zizmor; then exit 0; fi
+if ./mise-tasks/step-receipt check zizmor; then exit 0; fi
 if ! zizmor --offline --min-severity high .github/ action.yml; then exit 1; fi
-mise run step-receipt record zizmor || true
+./mise-tasks/step-receipt record zizmor || true
 '''
 
 [tasks.zizmor-advisories]
@@ -667,7 +667,7 @@ depends = ["doctor"]
 run = '''
 # Receipt-gated (CLOUD-424): a hit skips the target install too — the verdict
 # is about the sources, and the toolchain half lives in the key.
-if mise run step-receipt check cross-check; then exit 0; fi
+if ./mise-tasks/step-receipt check cross-check; then exit 0; fi
 for t in x86_64-pc-windows-gnu; do
   # Guarded because task bodies do not run under `set -e`: with more than one
   # triple in the list, a failed target install would otherwise be masked by a
@@ -696,7 +696,7 @@ for t in x86_64-pc-windows-gnu; do
     exit 1
   fi
 done
-mise run step-receipt record cross-check || true
+./mise-tasks/step-receipt record cross-check || true
 '''
 
 [tasks.hk-version]
@@ -791,7 +791,7 @@ depends = ["doctor --no-targets"]
 # repo, so the honest input set is the whole tracked tree — a rebase that
 # changed no bytes still skips, and any content change anywhere re-runs.
 run = '''
-if mise run step-receipt check test:bats; then exit 0; fi
+if ./mise-tasks/step-receipt check test:bats; then exit 0; fi
 expected=$(git grep -c '^@test ' -- 'tests/*.bats' | awk -F: '{s+=$2} END{print s+0}')
 if [ "$expected" -lt 1 ]; then
   echo "::error:: test:bats: counted $expected @test declarations under tests/ — the count this run is judged against could not be computed, so the run cannot be trusted to have covered the suite." >&2
@@ -807,7 +807,7 @@ if [ "$ran" != "$expected" ]; then
   exit 1
 fi
 echo "test:bats: $ran/$expected cases, $workers workers"
-mise run step-receipt record test:bats || true
+./mise-tasks/step-receipt record test:bats || true
 '''
 
 [tasks.hooks]

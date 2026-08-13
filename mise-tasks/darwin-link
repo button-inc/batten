@@ -31,7 +31,7 @@ esac
 
 # Receipt-gated (CLOUD-424). The target is key material — this task takes an
 # argument, so a receipt for one triple must not answer for another.
-if mise run step-receipt check darwin-link --arg "$target"; then
+if "$(dirname -- "${BASH_SOURCE[0]}")/step-receipt" check darwin-link --arg "$target"; then
 	exit 0
 fi
 
@@ -43,5 +43,5 @@ fi
 # zig supplies the Darwin linker; no Apple SDK is present, which is precisely the
 # condition this gate asserts the tree still builds under.
 cargo zigbuild --workspace --target "$target"
-mise run step-receipt record darwin-link --arg "$target" || true
+"$(dirname -- "${BASH_SOURCE[0]}")/step-receipt" record darwin-link --arg "$target" || true
 echo "darwin-link: ${target} links with no macOS SDK"

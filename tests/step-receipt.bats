@@ -210,3 +210,39 @@ pass_once() {
 	run bash -c 'cat .git/batten-receipts/step.mystep.* | wc -l'
 	[ "$output" -eq 1 ]
 }
+
+# --- CLOUD-498: the miss is a verdict, and must not read as a failure ---------
+#
+# The exit code is the predicate and does not change here: `1` still means "no
+# receipt, run the step". What changed is the CALL SITE — `mise run step-receipt`
+# wrapped that `1` in the runner's stock `ERROR task failed` line, so every green
+# `verify` and every green CI job carried ~10 failure-shaped lines that meant
+# success. A reader who scans a passing log for ERROR cannot tell those from a
+# real one without already knowing the receipt protocol, and a channel that cries
+# wolf is a channel that gets skipped (CLOUD-200).
+
+@test "CLOUD-498: a miss is exit 1 and says so in words, with no failure-shaped line" {
+	printf 'v1\n' >"$BATS_TEST_TMPDIR/repo/input.txt"
+	cd "$BATS_TEST_TMPDIR/repo" && git init -q . && git add -A
+	run "$SR" check some-step
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"running the step"* ]]
+	# The property: the task itself never emits a failure-shaped line for the
+	# ordinary path. The wrapper that did is gone from the call sites.
+	[[ "$output" != *"ERROR"* ]]
+	[[ "$output" != *"::error::"* ]]
+}
+
+@test "CLOUD-498: every receipt-gated call site invokes the task BY PATH" {
+	# The structural half, and the one that fails if a future call site is added
+	# with `mise run` — which is what put the ERROR line in a green log. Anchored
+	# on the runner spelling, so it says what is wrong rather than that something is.
+	run grep -c 'mise run step-receipt' "$BATS_TEST_DIRNAME/../mise.toml"
+	[ "$output" -eq 0 ]
+	run grep -c 'mise run step-receipt' "$BATS_TEST_DIRNAME/../mise-tasks/darwin-link"
+	[ "$output" -eq 0 ]
+	# Anti-vacuity: the call sites still exist. A file that stopped gating its
+	# steps entirely would pass the two rows above and buy nothing.
+	run grep -c 'mise-tasks/step-receipt check' "$BATS_TEST_DIRNAME/../mise.toml"
+	[ "$output" -ge 8 ]
+}
