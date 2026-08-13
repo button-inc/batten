@@ -74,11 +74,6 @@ if [ -z "$named" ]; then
 	exit 0
 fi
 
-if grep -qF "$HOLD_MARKER" <<<"$body"; then
-	echo "closing-key-check: $HOLD_MARKER — this PR declines to complete its issue, so the board is not expected to move"
-	exit 0
-fi
-
 # The keyword and the key must be adjacent, which is what the integration
 # actually parses: `Closes CLOUD-192`, optionally through a `:` or `#`. A body
 # with the word "fixes" in one paragraph and a key in another does not close
@@ -86,8 +81,28 @@ fi
 closing=$(grep -oiE "($CLOSING_VERBS)[[:space:]]*:?[[:space:]]*#?CLOUD-[0-9]+" <<<"$body" |
 	grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | sort -u | sort -t- -k2,2n || true)
 
+# CLOSING IS TESTED FIRST, and the order is a fix rather than a preference. An
+# explicit `Closes <key>` is the strongest statement a body can make about the
+# board, so nothing else in it should be able to override that — and with the
+# opt-out tested first, a body that merely DISCUSSED the marker was excused from
+# a check it passed on the merits.
 if [ -n "$closing" ]; then
 	echo "closing-key-check: closes $(tr '\n' ' ' <<<"$closing" | sed 's/ $//') — the merge will move the board"
+	exit 0
+fi
+
+# ANCHORED TO THE START OF A LINE, because a body that TALKS ABOUT the marker is
+# not using it — the same distinction the adjacency rule above draws for the
+# closing verb, and the same substring hazard `memory-guard`'s decision table
+# documents (a rule over a directory that would otherwise fire on its own
+# explanation).
+#
+# Found by this gate's own first live outing: PR #404 carries `Closes CLOUD-192`
+# AND documents `DO-NOT-CLOSE` in its prose, and the unanchored form excused it
+# as an opt-out. Both halves of that are now fixed — the close is read first, and
+# a mention no longer counts as a use.
+if grep -qE "^[[:space:]]*$HOLD_MARKER" <<<"$body"; then
+	echo "closing-key-check: $HOLD_MARKER — this PR declines to complete its issue, so the board is not expected to move"
 	exit 0
 fi
 

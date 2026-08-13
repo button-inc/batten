@@ -50,13 +50,40 @@ setup() {
 	[ "$status" -eq 1 ]
 }
 
+@test "a body that MENTIONS the marker has not used it" {
+	# The bug this gate found in itself on its first live outing. PR #404 carried
+	# `Closes CLOUD-192` and also documented `DO-NOT-CLOSE` in its prose; the
+	# unanchored substring excused it as an opt-out, so the gate passed a body for
+	# the wrong reason. Same distinction the adjacency rule draws for the verb:
+	# talking about a token is not using it.
+	run bash -c "printf -- '- **DO-NOT-CLOSE** opts out, reusing the token.\n\nRefs: CLOUD-192\n' | $GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-192  named, not closed"* ]]
+}
+
+@test "a closing key wins over a marker the body merely discusses" {
+	# The other half of #404: the close must be read FIRST, so an explicit
+	# statement about the board cannot be overridden by prose elsewhere.
+	run bash -c "printf 'Adds the DO-NOT-CLOSE opt-out.\n\nCloses CLOUD-192\n' | $GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"closes CLOUD-192"* ]]
+	[[ "$output" != *"declines to complete"* ]]
+}
+
 @test "DO-NOT-CLOSE opts out — a PR that does not complete its issue" {
 	# Trunk-based work lands several PRs per issue (CLOUD-186); marking each
 	# closing would move the issue on the first landing with the work half in,
 	# which is CLOUD-468's defect. Declining is explicit, not silent.
-	run bash -c "printf 'Part 1 of 3. DO-NOT-CLOSE\n\nRefs: CLOUD-192\n' | $GATE"
+	# On its own line, which is what using the marker looks like as against
+	# mentioning it — the case above.
+	run bash -c "printf 'Part 1 of 3.\n\nDO-NOT-CLOSE — the third PR completes it.\n\nRefs: CLOUD-192\n' | $GATE"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"DO-NOT-CLOSE"* ]]
+}
+
+@test "an indented marker still opts out — leading whitespace is not a mention" {
+	run bash -c "printf 'Part 1 of 3.\n\n  DO-NOT-CLOSE\n\nRefs: CLOUD-192\n' | $GATE"
+	[ "$status" -eq 0 ]
 }
 
 @test "a body naming no key at all is issue-guard's case, not this one" {
