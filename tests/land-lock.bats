@@ -872,22 +872,45 @@ hold_exited() { # <hold pid>
 	# The false-positive case, and the one that would break the fleet in the
 	# other direction: a bail that fires on healthy landings is worse than the
 	# wedge it replaces, because every landing hits it.
+	#
+	# THE PRECONDITION IS THE PHASE ACTUALLY MOVING, AND IT IS CHECKED RATHER
+	# THAN ASSUMED (CLOUD-448/CLOUD-450). A first cut advanced the phase from an
+	# inline `sleep 0.5` loop and asserted the hold survived: under `--jobs` that
+	# loop is itself descheduled, the phase then genuinely goes unchanged past
+	# the bound, and the bail fires CORRECTLY while the row reports a defect.
+	# That is grading the scheduler. So the updater runs in the background at a
+	# fraction of the bound, and the row reads the registry's own stamp to decide
+	# which of the two happened — a stall the mechanism found, or a starved
+	# updater, which is a statement about the runner and skips.
 	run lock "$MINE" acquire
 	[ "$status" -eq 0 ]
 	before=$(lease_sha)
 	land_pid=$(fake_land_registered "verify(lap 1)")
-	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_STALL_BEATS=2 \
+	(cd "$MINE" && LAND_LOCK_HEARTBEAT=1 LAND_LOCK_STALL_BEATS=5 \
 		LAND_LOCK_HOLDER_PID="$land_pid" \
 		"$LOCK" hold >"$BATS_TEST_TMPDIR/hold.out" 2>&1) >/dev/null 2>&1 3>&- &
 	hold_pid=$!
-	wait_for_beat "$before" ||
-		skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the stall bail (CLOUD-450)"
-	# Advance the phase across more than the bound's worth of beats. Each write
-	# is a real transition, which is what a landing making progress produces.
-	for step in 1 2 3 4 5 6; do
-		registry phase "$land_pid" "verify(lap 1) step:$step" >/dev/null 2>&1
-		sleep 0.5
+	(
+		step=0
+		while :; do
+			step=$((step + 1))
+			registry phase "$land_pid" "verify(lap 1) step:$step" >/dev/null 2>&1
+			sleep 0.2
+		done
+	) >/dev/null 2>&1 3>&- &
+	updater_pid=$!
+	# Three beats of a healthy, advancing landing — counted through the lease sha
+	# the heartbeat moves every beat, never through a wall clock.
+	for _ in 1 2 3; do
+		before=$(lease_sha)
+		wait_for_beat "$before" ||
+			skip "no beat ever reached the remote: the hold was never scheduled, which is a statement about the runner rather than about the stall bail (CLOUD-450)"
 	done
+	entry="$MINE/.git/batten-tasks/$land_pid"
+	since=$(sed -n 's/^phase_since: //p' "$entry" 2>/dev/null)
+	kill "$updater_pid" 2>/dev/null || true
+	[ -n "$since" ] && [ "$(($(date -u +%s) - since))" -lt 5 ] ||
+		skip "the phase updater was starved past the bound, so a bail here would be CORRECT — a statement about the runner rather than about the mechanism (CLOUD-448)"
 	kill -0 "$hold_pid" 2>/dev/null
 	kill -0 "$land_pid" 2>/dev/null
 	run lock "$RIVAL" status

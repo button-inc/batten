@@ -1003,13 +1003,24 @@ status)
 	# cared to watch. A count of seconds this token has not moved, never what the
 	# holder is doing — the phase belongs to `alive`, and the payload belongs
 	# nowhere (non-negotiable 4).
+	# READ FROM THE TOKEN, NOT FROM THE SIGHTING FILE, and that is a correctness
+	# choice rather than a shortcut. `progress_held_for` RECORDS what it sees —
+	# it is the corroboration `acquire` steals on — so calling it from a reader
+	# would let a `status` run move the instant a rival's steal becomes due, and
+	# would report nothing on a first call anyway, since a first sighting is 0 by
+	# construction. The token's own first field is the holder's last advance, and
+	# reading it here costs nothing and changes nothing.
+	#
+	# It is the holder's clock, which is exactly why no PREDICATE may use it. A
+	# diagnostic line may: the worst a skewed reading does here is print a number
+	# a human squints at, where the steal path stealing on one would put two
+	# holders on the same trunk.
 	stalled=
 	if [ -n "$observed_progress" ]; then
-		stalled=$(progress_held_for)
-		if [ "$stalled" -ge "$((stall_beats * beat))" ]; then
-			stalled=", stalled ${stalled}s"
-		else
-			stalled=
+		advance=${observed_progress%%.*}
+		if [ "${advance:-0}" -gt 0 ] 2>/dev/null &&
+			[ "$(($(now) - advance))" -ge "$((stall_beats * beat))" ]; then
+			stalled=", stalled $(($(now) - advance))s"
 		fi
 	fi
 	if [ -n "$observed_next" ]; then
