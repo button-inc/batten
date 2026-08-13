@@ -352,6 +352,54 @@ tracked = ["batten.toml"]
 pileup_threshold = 3
 
 # ---------------------------------------------------------------------------
+# Side effects attached to hook events (CLOUD-91) — house style §9's extension
+# surface, so repo-specific cleanup or keepalive is reconstructed here instead of
+# being carried by the engine.
+#
+# Each row names an event and a command already on your PATH. `run` is argv, not
+# a shell string: there is no quoting layer between what you write and what runs,
+# so no word splitting, no glob expansion, no $(...).
+#
+# `on` takes a NORMALIZED event token, never a host's own spelling — declare it
+# once and it fires on every host that offers the moment:
+#
+#   post-tool       after a tool ran
+#   stop            end of turn
+#   session-start   start of a session
+#   task-completed  a task was marked complete (Claude-only; nothing fires on
+#                   hosts that do not emit it)
+#   config-change   a settings file is being edited (Claude-only)
+#
+# `pre-tool` is deliberately NOT declarable. It is the event policy adjudicates,
+# so a side effect there would run before a deny that may be about to refuse the
+# very call — and it is the hottest path in the binary, which stays config-free
+# when there is nothing to judge.
+#
+# Three properties worth relying on:
+#
+#   * An action can never change the answer. The decision and exit code follow
+#     the hook contract whatever the command does; a failure is reported as
+#     `hook.action <id>: exit N` on stderr and the command's own output is
+#     discarded, never forwarded.
+#   * A host that does not emit the event fires nothing. There is no degrading
+#     to a stand-in event: observing a moment approximately is reasonable,
+#     *doing something* at a moment you did not name is not.
+#   * These rows may only be declared in this committed file. A batten.local.toml
+#     that could add one would be able to run anything under your agent's hook.
+#
+# argv words may carry {event}, {tool}, {path} and {session}; a fact the event
+# does not carry expands to nothing. An unknown placeholder is left as written
+# rather than emptied, so a typo fails loudly instead of silently shortening argv.
+#
+# The worked example: report at-risk work and worktree pileup when a task is
+# marked complete — the completion signal is exactly where "done" and "landed"
+# drift apart, which is what this engine exists to catch.
+[[hook.action]]
+id = "worktree-hygiene"
+on = "task-completed"
+run = ["batten", "worktree", "status"]
+
+# ---------------------------------------------------------------------------
 # Pinned tools this repository provisions (CLOUD-90).
 #
 # One entry per tool: a pinned version, where to get it, what it must hash to,

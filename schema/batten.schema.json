@@ -84,6 +84,17 @@
         "null"
       ]
     },
+    "hook": {
+      "description": "Side effects this repository attaches to hook events (CLOUD-91), the\nhouse-style §9 extension surface: `[[hook.action]]` names an event and a\ncommand already on the operator's PATH, so repo-specific cleanup or\nkeepalive is reconstructed here rather than carried by the engine\n(non-negotiable rule 1). Absent means the repository attaches nothing.\nThe type, its validator and the spawn are [`crate::action`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HookConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "judge": {
       "description": "The optional LLM judge's payload-privacy boundary (CLOUD-135): what may\ncross into a model call. Absent means no judge is configured; present and\nempty means pointers and hashes only, which is also what every field\ndefaults to. The type and the pure builder are [`crate::judge`].\n\nThis table lands **before** the judge that reads it, deliberately: a\nboundary written after the code it bounds is a boundary that code has\nalready crossed.",
       "anyOf": [
@@ -210,6 +221,33 @@
     "version"
   ],
   "$defs": {
+    "Action": {
+      "description": "One declared side effect.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "The stable identifier a failure is reported under.\n\nSeparate from the command for [`crate::markers::Marker`]'s reason: the\nargv is free to change without the thing it is called in reports changing\nwith it.",
+          "type": "string"
+        },
+        "on": {
+          "description": "The event this action fires on, as [`Event::as_str`] spells it.\n\nA **normalized** token, never a host's own word: an action declared once\nshould fire on every host that offers the moment, and keying it on\nClaude's spelling would silently not fire on Gemini's.",
+          "type": "string"
+        },
+        "run": {
+          "description": "The command, as argv. Never a shell string.\n\nargv rather than a command line because there is then no quoting layer\nbetween what an operator wrote and what runs — no word splitting, no\nglob expansion, no `$(…)`. §9's rule is that an extension surface names\na command already on the operator's PATH; this is that, with the\narguments spelled out rather than parsed back out of a string.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "on",
+        "run"
+      ]
+    },
     "AdvisoryTier": {
       "description": "Advisory severity as **required response latency** — *how fast it must be\nanswered* (CLOUD-80).\n\nThis is the one severity field the findings store persists (CLOUD-78);\n[`RuleSeverity`] and [`ReportLevel`] are derived from it through [`TABLE`].\nDeclared weakest-first (longest permitted latency first): derived [`Ord`] is\nthe severity rank.\n\n`JsonSchema` because CLOUD-56 made it a *config* vocabulary as well as a\nstored one: a `judge` row declares `tier` where every other kind declares\n`severity`, so the published schema has to describe it or an editor would\nflag the one column that kind cannot do without.",
       "oneOf": [
@@ -415,6 +453,20 @@
           "type": "array",
           "items": {
             "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "HookConfig": {
+      "description": "The `[hook]` table: what this repository attaches to hook events.\n\nA table rather than a bare `[[hook.action]]` array at the top level, so the\nnoun has somewhere to grow — and so the config surface reads the way the\nhouse style names it (§9).",
+      "type": "object",
+      "properties": {
+        "action": {
+          "description": "The declared actions, in declaration order. Order is the firing order:\na reader should be able to predict it from the file without a rule.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
           }
         }
       },

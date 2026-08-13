@@ -6600,3 +6600,196 @@ fn lint_brief_declares_itself_read_in_the_spec() {
         .expect("lint brief is in the spec");
     assert_eq!(brief["effect"], "read");
 }
+
+// --- `[[hook.action]]`: declared side effects on hook events (CLOUD-91) -------
+//
+// House style §9's extension surface. The load-bearing property is that an
+// action cannot reach the decision — `action::fire` returns nothing — so every
+// case below asserts the hook's own answer is untouched alongside whatever the
+// action did.
+
+/// A repo whose config declares one action, firing `run` on `on`.
+fn action_repo(name: &str, on: &str, run: &str) -> PathBuf {
+    repo_with_config(
+        name,
+        &format!("version = 1\n\n[[hook.action]]\nid = \"probe\"\non = \"{on}\"\nrun = {run}\n"),
+    )
+}
+
+/// A Claude Code payload for an arbitrary event, carrying no tool input.
+fn claude_event_payload(event: &str) -> String {
+    serde_json::json!({ "hook_event_name": event, "session_id": "s-1" }).to_string()
+}
+
+#[test]
+fn a_declared_action_fires_on_its_event_with_the_substituted_argv() {
+    // Acceptance (a). Observed through the command's own side effect in a temp
+    // dir, because `fire` returns nothing there is no return value to inspect —
+    // which is the design, not a limitation of the test.
+    let dir = action_repo(
+        "action-fires",
+        "task-completed",
+        r#"["sh", "-c", "printf %s \"$1\" > fired.txt", "sh", "{event}"]"#,
+    );
+    let output = run_hook_in(&dir, "claude-code", &claude_event_payload("Stop"), false);
+
+    // Claude's `Stop` normalizes to the stop event, so the task-completed row
+    // must NOT fire: an action runs at the moment it named, never a stand-in.
+    assert!(!dir.join("fired.txt").exists(), "no action fires on stop");
+    assert_eq!(output.status.code(), Some(0));
+
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &serde_json::json!({ "hook_event_name": "TaskCompleted", "session_id": "s-1" }).to_string(),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(0), "the answer is unchanged");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("fired.txt")).expect("the action ran"),
+        "task-completed",
+        "the child saw the expanded placeholder"
+    );
+}
+
+#[test]
+fn a_host_without_the_capability_fires_nothing_and_still_answers() {
+    // Acceptance (b). `task-completed` is Claude-only, so the neutral exit-code
+    // adapter must spawn nothing — and must still answer its contract, because
+    // an absent capability is a fact about the host, never an error.
+    let dir = action_repo(
+        "action-uncapable",
+        "task-completed",
+        r#"["sh", "-c", "touch fired.txt"]"#,
+    );
+    let output = run_hook_in(
+        &dir,
+        "exit-code",
+        &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(0), "allow, never an error");
+    assert!(
+        !dir.join("fired.txt").exists(),
+        "a host that does not emit the event fires nothing"
+    );
+}
+
+#[test]
+fn a_failing_action_leaves_the_hooks_answer_alone_and_reports_a_pointer() {
+    // Acceptance (c). The whole safety argument: an action is user-supplied
+    // code, and no exit code it produces may become Batten's.
+    let dir = action_repo("action-fails", "task-completed", r#"["false"]"#);
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
+        false,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the hook contract is untouched by the action's failure"
+    );
+    let text = common::stderr(&output);
+    assert!(
+        text.contains("hook.action probe: exit 1"),
+        "the failure is a pointer naming the row: {text:?}"
+    );
+}
+
+#[test]
+fn an_actions_output_never_reaches_either_channel() {
+    // Rule 4, at the surface most likely to breach it: the command's streams are
+    // discarded rather than forwarded — to stdout because two hosts parse a
+    // decision document there, and to stderr because two others read a deny
+    // reason from it.
+    let dir = action_repo(
+        "action-quiet",
+        "task-completed",
+        r#"["sh", "-c", "echo SECRET-ON-STDOUT; echo SECRET-ON-STDERR >&2"]"#,
+    );
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let both = format!("{}{}", common::stdout(&output), common::stderr(&output));
+    assert!(
+        !both.contains("SECRET-ON"),
+        "an action's own output is never forwarded: {both:?}"
+    );
+}
+
+#[test]
+fn an_action_on_the_adjudicated_event_is_a_config_error() {
+    // Acceptance (d)'s shape, and the surface's one real restriction: a side
+    // effect at pre-tool would run before a deny that may be about to refuse
+    // the very call. Exit 1, the config-error code — never 2, which would read
+    // to a host as a policy verdict about the mediated call.
+    let dir = action_repo("action-pre-tool", "pre-tool", r#"["true"]"#);
+    let output = run_hook_in(&dir, "claude-code", &claude_payload("echo hi"), false);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        common::stderr(&output).contains("before a possible deny"),
+        "the refusal says why: {:?}",
+        common::stderr(&output)
+    );
+}
+
+#[test]
+fn an_unknown_key_in_an_action_row_stays_a_hard_config_error() {
+    // Acceptance (d). `deny_unknown_fields` on the row, so a mistyped key is
+    // refused rather than silently dropped — an action nobody notices is
+    // half-declared is a side effect that never fires.
+    let dir = repo_with_config(
+        "action-unknown-key",
+        "version = 1\n\n[[hook.action]]\nid = \"probe\"\non = \"stop\"\nrun = [\"true\"]\nwhen = \"always\"\n",
+    );
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &serde_json::json!({ "hook_event_name": "Stop" }).to_string(),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(1), "a usage error, never a deny");
+}
+
+#[test]
+fn a_bypassed_call_fires_no_action() {
+    // The bypass says "do not mediate this call"; spawning the operator's
+    // command while claiming not to mediate would be the surprising reading.
+    let dir = action_repo(
+        "action-bypassed",
+        "task-completed",
+        r#"["sh", "-c", "touch fired.txt"]"#,
+    );
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
+        true,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        !dir.join("fired.txt").exists(),
+        "a bypassed run fires nothing"
+    );
+}
+
+#[test]
+fn a_repository_declaring_no_actions_spawns_nothing_and_is_unaffected() {
+    // Absent is not empty, and it is certainly not an error: the overwhelming
+    // majority of directories a registered hook runs in declare no actions.
+    let dir = repo_with_config("action-absent", "version = 1\n");
+    let output = run_hook_in(
+        &dir,
+        "claude-code",
+        &serde_json::json!({ "hook_event_name": "TaskCompleted" }).to_string(),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(common::stderr(&output), "");
+}

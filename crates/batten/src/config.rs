@@ -201,6 +201,14 @@ pub struct Config {
     /// committed config for a tidier table of contents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<crate::worktree::WorktreeConfig>,
+    /// Side effects this repository attaches to hook events (CLOUD-91), the
+    /// house-style §9 extension surface: `[[hook.action]]` names an event and a
+    /// command already on the operator's PATH, so repo-specific cleanup or
+    /// keepalive is reconstructed here rather than carried by the engine
+    /// (non-negotiable rule 1). Absent means the repository attaches nothing.
+    /// The type, its validator and the spawn are [`crate::action`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook: Option<crate::action::HookConfig>,
     /// The optional LLM judge's payload-privacy boundary (CLOUD-135): what may
     /// cross into a model call. Absent means no judge is configured; present and
     /// empty means pointers and hashes only, which is also what every field
@@ -308,7 +316,10 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// refusal list would be a second authority, and would drift the moment a field
 /// is added to [`Config`]. `worktree` is authority-only for `budget`'s reason
 /// (CLOUD-46): a threshold is a bar a repository sets for itself, and two
-/// thresholds in one config with opposite layering rules is drift.
+/// thresholds in one config with opposite layering rules is drift. `hook` is
+/// authority-only for a sharper one (CLOUD-91): an action *runs a command*, and
+/// there is no reading of §8's raise-only rule under which an uncommitted file
+/// adding one is a tightening.
 ///
 /// Every key here is **raise-only**; [`crate::resolve`] holds that invariant,
 /// and the per-field docs say which direction "raise" means.
@@ -437,6 +448,14 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // matches every line of every file — still loaded clean. The completeness
     // test below is what stops the next table arriving orphaned the same way.
     crate::markers::validate(&config.markers)?;
+    // And the action table, where "validated only by the runner" would be worst
+    // of all: an action is a command, and a row that loads clean but names no
+    // event is a side effect the operator believes is attached and which fires
+    // at no moment. Refused at load, so the failure lands on the config rather
+    // than as silence at the event.
+    if let Some(hook) = &config.hook {
+        crate::action::validate(&hook.actions)?;
+    }
     // And the rule table, which used to be validated only by the runner that
     // happened to evaluate it (CLOUD-48). That was defensible while the tree
     // engine was the only runner; `batten hook` is now a second one, and a
@@ -574,6 +593,11 @@ impl Config {
             // declared is not a threshold of zero, and an unreadable authority
             // declares none.
             worktree: None,
+            // An authority that cannot be read attaches no side effects. The
+            // safe direction is unambiguous here: firing a command an
+            // unreadable config might have declared is the one outcome nobody
+            // could justify.
+            hook: None,
             judge: None,
             // Declaring no ceiling is not declaring a ceiling of zero: the audit
             // falls back to the engine default, so an unreadable authority

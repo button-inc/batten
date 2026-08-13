@@ -57,6 +57,32 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   output is the likeliest place in the engine for a secret to appear. Batten only
   ever **adds** failure: a non-zero child passes its code through untouched.
   Raise-only from a local file (add yes, redefine no).
+- `action.rs` — the `[[hook.action]]` plugin surface (CLOUD-91), house-style §9's
+  "repo-specific cleanup or keepalive is reconstructed here, not hardcoded". A row
+  names an event and argv already on the operator's PATH. **`fire` returns
+  NOTHING**, which is how "an action cannot change the answer" is structural
+  rather than promised: there is no value a decision path could branch on, so the
+  §7 table and CLOUD-40's per-harness channel hold whatever the command does. The
+  child's streams are DISCARDED, never forwarded — stdout because two hosts parse
+  a decision document there, stderr because two others read a deny reason from it,
+  and an action is the likeliest place in the surface for a secret to appear (rule
+  4); a failure is the pointer `hook.action <id>: exit N`, with could-not-spawn
+  kept distinguishable from ran-and-failed. `on` takes a NORMALIZED token, so one
+  row fires on every host offering the moment. **`pre-tool` and `unrecognized` are
+  refused at load**, for different reasons: a side effect at the adjudicated event
+  would run before a deny that may be about to refuse the very call (and would put
+  a config load back on the hottest path in the binary, which `fire_actions`
+  returns early to protect), while `unrecognized` names no moment at all — only
+  that the host said something this build cannot normalize. Firing is EXACT, never
+  degraded: `Capabilities::degrade` is right for a policy that merely _observes_ a
+  moment, and wrong for one that _does_ something at a moment nobody named. argv,
+  not a shell string, so no quoting layer sits between what an operator wrote and
+  what runs; `{event}/{tool}/{path}/{session}` expand, an absent fact collapses to
+  empty, and an UNKNOWN placeholder is left verbatim rather than emptied — a
+  typo'd `{pathh}` silently shortening argv is unbounded in a way failing on the
+  literal is not. Authority-only, and here that is a security property rather than
+  a consistency one: a `batten.local.toml` able to add a row could run anything
+  under the agent's own hook.
 - `budget.rs` — declared file-set token budgets (CLOUD-50), surfaced as `policy
 budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct with
   a field per set: the set name is the consumer's, and an engine field called

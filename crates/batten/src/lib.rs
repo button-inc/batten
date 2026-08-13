@@ -8,6 +8,7 @@
 //! thin wrapper around. Keeping the logic in the library keeps it testable and
 //! keeps the binary's `main` trivial.
 
+pub mod action;
 pub mod brief;
 pub mod budget;
 pub mod capture;
@@ -958,7 +959,61 @@ fn run_hook(
     } else {
         receipt::verdicts(&required)
     };
+    // The declared side effects (CLOUD-91), fired BEFORE the decision is written
+    // and structurally unable to reach it: `action::fire` returns nothing, so
+    // there is no value here to branch on even by mistake.
+    //
+    // Ordering matters twice. Before `decide`, because `decide` owns stdout and
+    // an action's report must not interleave with a decision document a host is
+    // parsing. And after the capability check above, which is what makes "a host
+    // lacking the capability fires nothing" structural rather than a second
+    // check this call site could get wrong.
+    fire_actions(&envelope, bypass, overrides, err)?;
     decide(harness, &envelope, &policy, bypass, &receipts, out)
+}
+
+/// Spawn the `[[hook.action]]` rows declared for this envelope's event.
+///
+/// Reads config on its **own** path rather than reusing [`load_policy`]'s
+/// result, because the two answer different questions: the policy is the
+/// mediated-call rule set and is deliberately not loaded for a bypassed or
+/// nothing-to-judge call, while the action table is keyed on the event alone.
+///
+/// The hot path is preserved all the same, and structurally: `action::validate`
+/// refuses an action on `pre-tool`, so this returns before touching config for
+/// the one event that runs on every mediated tool call.
+///
+/// A bypassed run fires nothing. `BATTEN_HOOK_BYPASS` means "do not mediate this
+/// call", and spawning the operator's cleanup command while claiming not to be
+/// mediating would be the surprising reading.
+fn fire_actions(
+    envelope: &hook::Envelope,
+    bypass: bool,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<()> {
+    if bypass || envelope.event == hook::Event::PreTool {
+        return Ok(());
+    }
+    let here = Path::new(".");
+    if !here.join(config::CONFIG_FILE).exists() {
+        return Ok(());
+    }
+    let Some(hook_config) = resolve::resolve(here, overrides)?.hook else {
+        return Ok(());
+    };
+    action::fire(
+        &hook_config.actions,
+        envelope.event,
+        action::Facts {
+            event: envelope.event.as_str(),
+            tool: &envelope.tool,
+            path: envelope.writes.as_deref().unwrap_or_default(),
+            session: envelope.session.as_deref().unwrap_or_default(),
+        },
+        err,
+    );
+    Ok(())
 }
 
 /// Wake the advisory drain for this batch boundary (CLOUD-79).
