@@ -1,0 +1,89 @@
+name: land-divergence
+
+# "How far did the landing loop diverge from linear yesterday?" — a question
+# about the fleet's behaviour over a period, not about any branch, so it runs on
+# a clock rather than on the landing path. Same split as lock-currency.yml,
+# timeout-drift.yml, nonverdict-rate.yml and release-assets.yml.
+#
+# The loop is serialised behind a lease (CLOUD-393) and an unauthorised matrix is
+# stopped server-side (CLOUD-420). The claim those make is that a PR buys ONE CI
+# matrix, runs it to green, and lands. That claim was established once by hand —
+# ~50 paginated API calls and throwaway jq — which is exactly why nothing could
+# see a step change BETWEEN two assessments. This is the assessment as a number.
+#
+# DAILY, not weekly like the Monday property-of-the-world block. The window is
+# the point: a divergence is diagnosable against yesterday and cold after a week,
+# and the runs endpoint caps pagination at 1000 items, so a wider window is
+# truncated rather than merely stale.
+#
+# THIS MUST NOT RUN IN THE GATE OR IN `verify`. It is a property of the world,
+# and a property of the world must not red a branch — `tests/land-divergence.bats`
+# asserts its absence from both.
+
+on:
+  schedule:
+    # Daily, 04:00 UTC — an hour before bench.yml (05:00), which is the only
+    # other daily job, and clear of the Monday 06:00-08:15 weekly ladder.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "ISO-8601 instant to measure from (defaults to 24 hours ago)"
+        required: false
+        type: string
+
+concurrency:
+  group: land-divergence
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off along
+  # with the install-time write it exists to deny (CLOUD-223).
+  MISE_LOCKFILE: "true"
+
+jobs:
+  land-divergence:
+    name: land-divergence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-12
+    permissions:
+      actions: read # list the CI and fast-forward run windows
+      pull-requests: read # the merged PRs that are the denominator
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      # Measure to a FILE, then read it back — never `measure | assert`. A
+      # pipeline hands the step's exit status to its last stage, so a measurement
+      # that died would be judged as a clean empty window rather than reported
+      # (bench.yml:84-92, and `run-shape-guard` refuses the shape locally).
+      #
+      # GH_TOKEN through env, never interpolated into the run block: a `${{ }}`
+      # expansion is textual substitution into the shell script, which zizmor
+      # gates at high severity.
+      - name: Measure the landing loop's divergence from linear
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BATTEN_DIVERGENCE_SINCE: ${{ inputs.since }}
+        run: mise run land-divergence > "$RUNNER_TEMP/divergence.txt"
+      - name: Publish the records
+        shell: bash
+        run: |
+          {
+            echo '### land-divergence'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/divergence.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      # Always, so the records above are published even when a budget is broken —
+      # the number is the point, and a summary that only appears on green is a
+      # report nobody reads at the moment it matters.
+      - name: Judge the divergence against its budgets
+        if: always()
+        shell: bash
+        run: mise run land-divergence-assert < "$RUNNER_TEMP/divergence.txt"

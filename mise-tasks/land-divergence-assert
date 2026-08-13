@@ -1,0 +1,177 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the landing loop's divergence from linear is under budget (reads `land-divergence` records on stdin)"
+#
+# CLOUD-492. THIS DECIDES; IT DOES NOT MEASURE. `mise run land-divergence` reads
+# the API and emits records; this is a pure function of them — the
+# `bench`/`bench-assert` split, for the reason that split exists: a measurement
+# needs the network and a token, a decision needs neither, so keeping them apart
+# is what lets `tests/land-divergence-assert.bats` run in the hk gate on every
+# commit while the measurement runs on a clock.
+#
+# WHY A GATE AND NOT A REPORT. Non-negotiable rule 2: a log without a gate is
+# sensor only. The landing loop's cost was established once by hand and could not
+# be re-established without repeating the whole exercise, so a step change — a
+# lease that stops being honoured, a workflow that starts firing twice, a rebase
+# storm — was invisible between assessments. A number that rises has to fail
+# something or it becomes another artifact nobody opens.
+#
+# EXIT 0 under budget / 1 over / 2 could not look. The house style's `0/1/2/3`
+# table governs `batten` VERBS, where `2` is the policy verdict; this is a `mise`
+# task, and it takes the decider convention `bench-assert`, `checks-green` and
+# `nonverdict-assert` already share. The two contracts genuinely disagree about
+# what `2` means, so which one is in force is stated rather than left to be
+# inferred. `2` here is "the gate could not read what it was asked to judge",
+# deliberately distinct from a violation: a gate reporting green over input it
+# failed to parse is the failure that gets a gate switched off.
+set -euo pipefail
+
+# The budgets, as data with raise-only env overrides — the placement
+# `bench-assert`'s BUDGETS, `branch-age-check`'s BRANCH_MAX_AGE_DAYS and
+# `timeout-drift`'s multipliers all use. NOT `batten.toml [ci]`: that table is a
+# projection of a host ruleset `ci-drift` diffs against, and none of these has a
+# host counterpart, so a key there would make `ci-drift` police something nothing
+# declares. NOT `mise.toml [env]`: that is for values two or more programs share.
+#
+# Seeded from the measurement taken 2026-08-12 after landing serialisation, so
+# the gate starts at the observed state rather than at an aspiration. The ideal
+# is 1.0 graded runs per landing; the budget is 2.0, because the second run is
+# the ~20s lease-precondition cancellation that the same measurement showed is
+# the mechanism WORKING.
+#
+# Ratios are held in HUNDREDTHS, because bash has no floats and a gate that
+# rounds is a gate that disagrees with the number it printed.
+MAX_GRADED_PER_LANDING="${BATTEN_DIVERGENCE_MAX_GRADED:-200}" # 2.00
+MAX_RED_PER_LANDING="${BATTEN_DIVERGENCE_MAX_RED:-20}"        # 0.20
+MAX_CANCEL_P50="${BATTEN_DIVERGENCE_MAX_CANCEL_P50:-60}"      # seconds
+MAX_PEAK_CONCURRENCY="${BATTEN_DIVERGENCE_MAX_PEAK:-3}"
+MAX_QUEUE_P90="${BATTEN_DIVERGENCE_MAX_QUEUE_P90:-30}" # seconds
+
+# The one metric that is NOT a threshold: a fast-forward refusal means the branch
+# went behind before the bot answered, which is the thundering herd the landing
+# lease removed (243:5 before, 0:5 after). Any refusal at all is a divergence, so
+# the budget is zero and stating it as a tunable would invite raising it.
+MAX_FF_REFUSED="${BATTEN_DIVERGENCE_MAX_FF_REFUSED:-0}"
+
+records=$(cat)
+
+report() { echo "  $1" >&2; }
+
+if [ -z "${records//[[:space:]]/}" ]; then
+	echo "::error:: land-divergence-assert: stdin is empty — run \`mise run land-divergence\` redirected to a file, then read it back (a pipeline would hand this gate's exit status to its last stage)." >&2
+	exit 2
+fi
+
+# Records are TAB-separated, because branch names are unconstrained. One kind per
+# line:
+#
+#   pr\tnumber=<n>\tbranch=<b>\tgraded=<g>\tgreen=<s>\tred=<r>\tcancelled=<c>
+#   cancel\trun=<id>\tbranch=<b>\tlatency=<s>
+#   window\tsince=<iso>\tlandings=<n>\t…\tunreadable=<u>
+#
+# Only DIVERGENT PRs earn a `pr` record; a single graded green run is the ideal
+# and says nothing a reader needs. The summary carries the totals regardless, so
+# a window with no records is distinguishable from one that was never read.
+summary=$(awk -F'\t' '$1 == "window" { print; found = 1 } END { exit !found }' <<<"$records") || summary=""
+if [ -z "$summary" ]; then
+	echo "::error:: land-divergence-assert: the records carry no \`window\` summary line, so there is no window to judge — did \`land-divergence\` complete?" >&2
+	exit 2
+fi
+
+if [ "$(awk -F'\t' '$1 == "window"' <<<"$records" | grep -c .)" != "1" ]; then
+	echo "::error:: land-divergence-assert: stdin carries more than one \`window\` summary — two measurements were concatenated, and a count over both describes neither." >&2
+	exit 2
+fi
+
+field() {
+	awk -F'\t' -v key="$1" '
+		$1 == "window" {
+			for (i = 2; i <= NF; i++) {
+				n = index($i, "=")
+				if (n > 0 && substr($i, 1, n - 1) == key) { print substr($i, n + 1); exit }
+			}
+		}
+	' <<<"$records"
+}
+
+# Validated first, then assigned by name. The compact form — `printf -v "$name"`
+# inside the loop — is invisible to shellcheck, which then reports every one of
+# these as referenced-but-not-assigned; a gate that has to be silenced to pass
+# its own linter is worse than the repetition.
+for name in landings graded red cancel_p50 peak_concurrency queue_p90 ff_refused unreadable; do
+	value=$(field "$name")
+	if [ -z "$value" ] || [ "$value" != "${value#*[^0-9]}" ]; then
+		echo "::error:: land-divergence-assert: the \`window\` summary carries no readable \`$name\` count, so the window cannot be judged." >&2
+		exit 2
+	fi
+done
+
+landings=$(field landings)
+graded=$(field graded)
+red=$(field red)
+cancel_p50=$(field cancel_p50)
+peak_concurrency=$(field peak_concurrency)
+queue_p90=$(field queue_p90)
+ff_refused=$(field ff_refused)
+unreadable=$(field unreadable)
+
+# A measurement that could not read part of its window judged less than it
+# claims. `bench-assert`'s partial-coverage rule: a run that measured two of
+# three paths and reported green over the two is exactly the partial-coverage
+# false green. The measurer's own truncation guard is what sets this.
+if [ "$unreadable" != "0" ]; then
+	echo "::error:: land-divergence-assert: the measurement could not read $unreadable part(s) of its window, so a green verdict here would cover less than it claims." >&2
+	report "narrow BATTEN_DIVERGENCE_SINCE — the runs endpoint caps pagination at 1000 items while still reporting the true total"
+	exit 2
+fi
+
+# ANTI-VACUITY. A window with no landings cannot fire, and a gate that cannot
+# fire must not be indistinguishable from one that found nothing — this repo has
+# been bitten by that twice (`finding-sink-check`, `bench-assert`). It is also
+# the honest reading of a quiet day: nothing landed, so nothing diverged.
+if [ "$landings" = "0" ]; then
+	echo "land-divergence-assert: no landings in the window — nothing to judge" >&2
+	exit 0
+fi
+
+fail=0
+over() {
+	echo "::error:: land-divergence-assert: $1" >&2
+	fail=1
+}
+
+graded_ratio=$((graded * 100 / landings))
+red_ratio=$((red * 100 / landings))
+
+[ "$graded_ratio" -le "$MAX_GRADED_PER_LANDING" ] ||
+	over "$graded graded CI run(s) over $landings landing(s) is $((graded_ratio / 100)).$(printf '%02d' $((graded_ratio % 100))) per landing, over the budget of $((MAX_GRADED_PER_LANDING / 100)).$(printf '%02d' $((MAX_GRADED_PER_LANDING % 100))). The ideal is 1.00 — one matrix, run to green, landed."
+
+[ "$red_ratio" -le "$MAX_RED_PER_LANDING" ] ||
+	over "$red red CI run(s) over $landings landing(s) is $((red_ratio / 100)).$(printf '%02d' $((red_ratio % 100))) per landing, over the budget of $((MAX_RED_PER_LANDING / 100)).$(printf '%02d' $((MAX_RED_PER_LANDING % 100))). A red run means \`verify\` was skipped or disagreed with CI; each one spent a full matrix."
+
+# LATENCY, NEVER COUNT. A cancellation at ~20s is `ci-lease-precondition`
+# stopping an unauthorised matrix for ~20 runner-seconds instead of billing ~500
+# — the mechanism working, and a gate counting cancellations would score it as a
+# defect and argue for its removal. What is worth failing on is a cancellation
+# that arrives LATE, because by then the matrix has been paid for.
+[ "$cancel_p50" -le "$MAX_CANCEL_P50" ] ||
+	over "cancelled runs have a median lifetime of ${cancel_p50}s, over the budget of ${MAX_CANCEL_P50}s. An early cancellation is the lease precondition working; a late one is a matrix billed for a verdict nobody reads."
+
+[ "$peak_concurrency" -le "$MAX_PEAK_CONCURRENCY" ] ||
+	over "$peak_concurrency CI matrices ran concurrently at peak, over the budget of $MAX_PEAK_CONCURRENCY. Landing is serialised behind a lease, so concurrency above the admitted-successor bound means something is spending CI without holding it."
+
+[ "$queue_p90" -le "$MAX_QUEUE_P90" ] ||
+	over "runs waited ${queue_p90}s at p90 before starting, over the budget of ${MAX_QUEUE_P90}s. That is the runner pool saturating, which is a different defect from contention and must not be read as one."
+
+[ "$ff_refused" -le "$MAX_FF_REFUSED" ] ||
+	over "the fast-forward bot refused $ff_refused time(s). A refusal means the branch went behind before the bot answered — the thundering herd the landing lease exists to remove."
+
+if [ "$fail" = "0" ]; then
+	echo "land-divergence-assert: $landings landing(s) bought $graded graded CI run(s) ($((graded_ratio / 100)).$(printf '%02d' $((graded_ratio % 100))) each), $red red, peak concurrency $peak_concurrency, cancel p50 ${cancel_p50}s, queue p90 ${queue_p90}s, $ff_refused fast-forward refusal(s)"
+	exit 0
+fi
+
+while IFS= read -r line; do
+	[ -n "$line" ] || continue
+	report "$(awk -F'\t' '{ sub(/^pr\t/, ""); print }' <<<"$line")"
+done <<<"$(awk -F'\t' '$1 == "pr"' <<<"$records")"
+exit 1

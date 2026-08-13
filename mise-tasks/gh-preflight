@@ -28,6 +28,7 @@ ENDPOINTS=(
 	"repos/{owner}/{repo}/pulls?per_page=1|pull_requests=read|land (PR state, merged/closed)|yes"
 	"repos/{owner}/{repo}/actions/runs?per_page=1|actions=read|land (the bot's refusal, read as a workflow-run conclusion — NOT a check-run on the PR head, which is where it never appears; CLOUD-235), and reading a failing job's logs after a red ci-wait|yes"
 	"repos/{owner}/{repo}/actions/runs/1/jobs|actions=read|nonverdict-scan (per-STEP conclusions, to tell a job that died in provisioning from one that rendered a verdict — the only reader of jobs[].steps[]; timeout-drift reads the same endpoint for durations)|no"
+	"repos/{owner}/{repo}/actions/workflows/ci.yml/runs?per_page=1|actions=read|land-divergence (a window of runs PER WORKFLOW — the global run list is not stably paginable at this repo's insertion rate, and this endpoint reports a total_count the walk checks itself against, because pagination hard-caps at 1000 items)|yes"
 	"repos/{owner}/{repo}/issues/1/comments|pull_requests=write|land (posting /fast-forward)|no"
 	"repos/{owner}/{repo}/pulls/1|pull_requests=write|gh pr ready — marking a draft ready is what starts CI here|no"
 )
