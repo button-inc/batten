@@ -114,7 +114,7 @@ jobs:
       # full clone `fetch-depth: 0` would pull on every run.
       - name: Fetch the ratchet base
         run: git fetch --depth=1 origin main:refs/remotes/origin/main
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # Install only what this job's gates actually invoke, not the whole
           # 18-tool dev set. Every job used to install everything, and `zig`
@@ -257,7 +257,7 @@ jobs:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
           # has no bats to run.
           submodules: true
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # cross-check is `rustup target add` + `cargo check`; rust is the only
           # tool it touches. See the ci job for why these lists are narrow.
@@ -335,7 +335,7 @@ jobs:
           bash -c "$body" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # zig supplies the Darwin linker and cargo-zigbuild drives cargo
           # through it; rust is the compiler. Nothing else is invoked here —
@@ -407,7 +407,7 @@ jobs:
           bash -c "$body" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # rust supplies the cargo, the rustup that fetches the declared
           # toolchain, and the compiler itself; jq reads `rust-version` out of
@@ -480,7 +480,7 @@ jobs:
           # task passes `--baseline-rev origin/main`, and a shallow clone has no
           # such ref to build the baseline rustdoc from.
           fetch-depth: 0
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # cargo-semver-checks does the comparison; rust supplies the cargo and
           # the rustup that fetches the newer toolchain the tool requires — see
@@ -572,7 +572,7 @@ jobs:
       # red leg of ours is the cheaper, more actionable answer, and there is no
       # reason to spend a checkout and an install to add a second one to it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # `gh` reads the check-runs; `jq` is what `gh --jq` needs. Nothing
           # else — this job compiles nothing. See the `ci` job for why these

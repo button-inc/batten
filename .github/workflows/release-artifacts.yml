@@ -112,7 +112,7 @@ jobs:
       # flags cache-poisoning as high severity precisely on artifact-publishing
       # workflows: a poisoned cache entry would end up inside a signed binary,
       # and the attestation would faithfully attest to the compromised build.
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           cache: false
       - name: Install cross
@@ -214,7 +214,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.event.release.tag_name }}
           persist-credentials: false
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           cache: false
       - name: Derive the schema from the tagged config types
@@ -274,7 +274,7 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.event.release.tag_name }}
           persist-credentials: false
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           cache: false
       # `checksums` emits a sums= KEY=VALUE line, so the asset path is decided in

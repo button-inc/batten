@@ -66,7 +66,7 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-      - uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
       # release-plz clones the repo into a temp dir; `git fetch origin main` there
       # has no credentials (actions/checkout's auth lives only on the main clone),
       # so it cannot rebase the release branch onto main — the PR is then re-opened
