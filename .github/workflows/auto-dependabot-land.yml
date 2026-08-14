@@ -1,11 +1,10 @@
 name: auto-dependabot-land
 
 # Land Dependabot PRs with no human in the loop, on the same green-and-linear gate
-# a maintainer's manual `/fast-forward` uses. Once every check on a Dependabot PR's
-# head SHA is green this posts `/fast-forward` on that PR, so the existing
-# fast-forward workflow lands it — a true fast-forward, the PR's exact tested SHA
-# preserved. This is the sibling of auto-release-land.yml; see it for the token and
-# trigger rationale, which are identical.
+# a maintainer's manual `/fast-forward` uses. Once every required check on a
+# Dependabot PR's head SHA is green this advances `main` to that exact SHA — a true
+# fast-forward, the tested objects preserved. This is the sibling of
+# auto-release-land.yml; see it for the trigger rationale, which is identical.
 #
 # WHY FLAT (no major/minor carve-out). The compiler is our reviewer. A dependency
 # break that matters reaches us as one of: a compile error (API removed/renamed/
@@ -22,26 +21,54 @@ name: auto-dependabot-land
 # Triggered by `workflow_run` on the PR-gating workflows completing — NOT
 # `check_suite`, which GitHub does not fire for its own Actions-created suites.
 # Both gating workflows are listed so whichever finishes last re-checks and lands;
-# the step below re-verifies that *every* check on the SHA is green, so an
-# early-finishing workflow can't land ahead of a still-running one. Scoped to
-# `dependabot/*` branches, so ordinary PRs still land on an explicit human
-# `/fast-forward`.
+# the green step below re-verifies the whole required set, so an early-finishing
+# workflow can't land ahead of a still-running one. Scoped to `dependabot/*`
+# branches, so ordinary PRs still land on an explicit human `/fast-forward`.
+#
+# THE GREEN PREDICATE IS `checks-green`, NOT A COPY OF IT (CLOUD-391). This job
+# decided green with a hand-rolled `select(.conclusion != "skipped")`, which counts
+# a wholly skipped set as zero outstanding — i.e. green. That is CLOUD-327's false
+# green with a second author, and #261 landed on precisely that set. The predicate
+# has one home, `mise-tasks/checks-green`, and it is scoped to $CI_REQUIRED_CHECKS
+# rather than to "every check-run on the SHA": a third party's check gets neither a
+# vote nor a veto, which is what branch protection enforces too. Dispatching it
+# through `mise run` is why this job checks out and installs the toolchain at all —
+# the roster, the tolerated-absent set and the answered-conclusion set are declared
+# once in `mise.toml [env]` and reach the task no other way.
+#
+# AND IT LANDS ITSELF RATHER THAN ASKING (CLOUD-391). This used to post
+# `/fast-forward`, which scheduled fast-forward.yml on `issue_comment` — a second
+# webhook hop and a second runner acquisition (~35–75s) to reach a push this job
+# could make itself. That hop is load-bearing for a HUMAN lap, where the comment is
+# a person with write access typing a string on one PR at one moment and
+# fast-forward.yml's `author_association` gate is what reads that intent. There is
+# no human intent on this path. fast-forward.yml is untouched and remains the human
+# route; `mise run land` still comments.
+#
+# THE REF IS MOVED THROUGH THE API, NOT BY A LOCAL PUSH, and that is a deliberate
+# reading of "assert the fast-forward before pushing". `PATCH git/refs/heads/main`
+# with `force=false` IS the assertion, made server-side and atomically with the
+# update — a local `git merge-base --is-ancestor` can go stale between the check and
+# the push, this cannot. It also means the head SHA is never fetched, checked out or
+# executed here, which is what keeps the `dangerous-triggers` ignore below honest,
+# and it needs no push credential persisted into the checkout.
 #
 # Token split: check status is read with the Actions GITHUB_TOKEN (which carries
-# checks:read — a fine-grained PAT does not), but the `/fast-forward` comment is
-# posted with RELEASE_PLZ_TOKEN, a real identity (repo owner) that both satisfies
-# fast-forward.yml's author_association gate and triggers it (a GITHUB_TOKEN
-# comment would do neither).
+# checks:read — a fine-grained PAT does not), but the ref update is made with
+# RELEASE_PLZ_TOKEN, a real identity: a ref moved by GITHUB_TOKEN triggers no
+# further workflows, so release-plz (on: push to main) would never fire and no
+# release would be cut.
 
 on:
   # workflow_run runs privileged; zizmor flags it as dangerous because it is
   # usually paired with checking out and executing PR-controlled content. This
-  # workflow does neither: it never checks out the repo or runs any PR content —
-  # it only reads check status and posts a fixed `/fast-forward` string to a
-  # dependabot-owned branch. head_sha/head_branch are used only in API queries and
-  # a startsWith filter, never interpolated into a run script, so the
-  # injection/exfiltration this audit guards against cannot occur here.
-  workflow_run:  # zizmor: ignore[dangerous-triggers]
+  # workflow does neither. It checks out a fixed ref — the default branch, never
+  # the PR head — to get the green predicate committed to trunk, and it reaches the
+  # head SHA only as an opaque argument to API calls: nothing from that head is
+  # fetched, written to disk, sourced or run. head_sha/head_branch are used only in
+  # API queries and a startsWith filter, never interpolated into a run script, so
+  # the injection/exfiltration this audit guards against cannot occur here.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI, commit-lint]
     types: [completed]
     # The branch scope, at the trigger rather than only in the job's `if:`. A
@@ -55,13 +82,20 @@ on:
     branches: ["dependabot/**"]
 
 permissions:
-  contents: read
+  contents: write
   checks: read
   pull-requests: write
 
 concurrency:
   group: auto-dependabot-land-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). A runner
+  # should install locked, and its checkout is disposable, so a write here
+  # costs nothing; the clone being protected is a developer's.
+  MISE_LOCKFILE: "true"
 
 jobs:
   fast-forward-dependabot-pr:
@@ -73,46 +107,83 @@ jobs:
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     env:
       REPO: ${{ github.repository }}
-      SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
-      # This fires per gating workflow; require that *every* non-skipped check-run
-      # on the SHA is completed and successful before landing, so the first
-      # workflow to finish can't land while another is still running or has failed.
-      # Read with GITHUB_TOKEN — it carries checks:read; the release PAT does not.
-      - name: Confirm every check on the head SHA is green
+      # Resolution first, so everything expensive after it is gated on there being
+      # something to land. A fire whose SHA has no open PR — a closed and superseded
+      # Dependabot batch is the ordinary case — stops here, before the checkout, and
+      # costs a few seconds of runner and nothing else.
+      #
+      # The SHA judged below is the PR's own `head.sha`, not `workflow_run.head_sha`:
+      # they are the same on the fire that scheduled this run, and the PR's is the
+      # one that is actually about to land.
+      - name: Resolve the Dependabot PR and the SHA to judge
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr=$(gh api "repos/$REPO/commits/$RUN_SHA/pulls" \
+            --jq 'map(select(.state == "open")) | .[0] // {}')
+          num=$(jq -r '.number // empty' <<<"$pr")
+          sha=$(jq -r '.head.sha // empty' <<<"$pr")
+          [ -n "$num" ] || echo "no open PR for $RUN_SHA; nothing to land"
+          {
+            echo "num=$num"
+            echo "sha=$sha"
+          } >> "$GITHUB_OUTPUT"
+      # The default ref, never the PR head — the predicate must be the one committed
+      # to trunk, and no credential outlives the step.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.target.outputs.num != ''
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        if: steps.target.outputs.num != ''
+      # The same predicate `ci-wait` blocks on, asked once: at least one required
+      # check graded, none skipped, none pending, each name judged by its latest run.
+      # Exit 3 "no answer yet" and exit 1 "red" are both ordinary here and must not
+      # fail the run — another gating workflow is still going, or the batch is broken
+      # and the PR waits for its next push. Only exit 2, "could not look", is a
+      # failure. Read with GITHUB_TOKEN: it carries checks:read and the PAT does not.
+      - name: Is every required check green on the head SHA?
+        if: steps.target.outputs.num != ''
         id: checks
         env:
           GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
         run: |
-          set -euo pipefail
-          outstanding=$(gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-            --jq '[.check_runs[]
-                   | select(.conclusion != "skipped")
-                   | select(.status != "completed" or .conclusion != "success")]
-                  | length')
-          if [ "$outstanding" != "0" ]; then
-            echo "not all checks green yet ($outstanding outstanding); skipping"
-            echo "green=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "green=true" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Find the open Dependabot PR for this SHA
+          set +e
+          mise run checks-green
+          verdict=$?
+          case "$verdict" in
+            0) echo "green=true" >> "$GITHUB_OUTPUT" ;;
+            1 | 3) echo "green=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$verdict" ;;
+          esac
+      # `force=false` is the fast-forward assertion: the API refuses the update
+      # unless `main` is an ancestor of this SHA, and branch protection independently
+      # refuses it unless `final` is green on it. So the two things that must hold are
+      # both enforced by the server, atomically with the write.
+      #
+      # A REFUSAL IS AN ORDINARY OUTCOME, NOT A RED RUN. `main` moving between the
+      # green read and this update is the landing loop working, not a fault — the PR
+      # simply waits for its next push. Retrying in-job would only race the same
+      # window again, so it logs and stops.
+      - name: Fast-forward main to the tested SHA
         if: steps.checks.outputs.green == 'true'
-        id: pr
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          num=$(gh api "repos/$REPO/commits/$SHA/pulls" \
-            --jq 'map(select(.state == "open")) | .[0].number // empty')
-          [ -n "$num" ] || echo "no open PR for $SHA; skipping"
-          echo "num=$num" >> "$GITHUB_OUTPUT"
-      # Post with the release PAT (repo owner): fast-forward.yml only acts on a
-      # comment from OWNER/MEMBER/COLLABORATOR, and a GITHUB_TOKEN comment would
-      # not trigger that workflow at all.
-      - name: Comment /fast-forward to land the Dependabot PR
-        if: steps.checks.outputs.green == 'true' && steps.pr.outputs.num != ''
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-          PR_NUM: ${{ steps.pr.outputs.num }}
-        run: gh pr comment "$PR_NUM" --repo "$REPO" --body '/fast-forward'
+          PR_NUM: ${{ steps.target.outputs.num }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -uo pipefail
+          err=$(mktemp)
+          if gh api -X PATCH "repos/$REPO/git/refs/heads/main" \
+            -f sha="$SHA" -F force=false >/dev/null 2>"$err"; then
+            echo "landed #$PR_NUM: main is now $SHA"
+          else
+            echo "could not fast-forward main to $SHA for #$PR_NUM: $(tr '\n' ' ' <"$err")"
+            echo "main moved, or the ruleset refused this SHA; #$PR_NUM waits for its next push"
+          fi
+          rm -f "$err"

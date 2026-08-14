@@ -578,6 +578,64 @@ triggered() {
 	[ "$status" -eq 0 ]
 }
 
+# --- property 11: reading check status means deciding through checks-green ----
+
+# A workflow that lands a SHA. `endpoint=no` drops the check-runs read, which is
+# what the property is keyed to; `predicate=no` drops the `checks-green` call.
+lander() {
+	local name="$1" endpoint="${2:-yes}" predicate="${3:-yes}"
+	{
+		printf 'name: %s\n\non:\n  workflow_run:\n    workflows: [CI]\n    types: [completed]\n' "$name"
+		printf '\nconcurrency:\n  group: %s\n  cancel-in-progress: false\n\njobs:\n  %s:\n    name: %s\n' "$name" "$name" "$name"
+		printf '    runs-on: ubuntu-latest\n    steps:\n'
+		if [ "$endpoint" = yes ]; then
+			printf '      - run: gh api "repos/$REPO/commits/$SHA/check-runs?per_page=100"\n'
+		fi
+		if [ "$predicate" = yes ]; then
+			printf '      - run: mise run checks-green\n'
+		fi
+		printf '      - run: mise run ci\n'
+	} >"$WF/$name.yml"
+}
+
+@test "a workflow reading check-runs without checks-green is refused" {
+	# CLOUD-391. The hand-rolled copy counts a wholly skipped set as green, which
+	# is CLOUD-327's false green with a second author.
+	workflow ci
+	lander autoland yes no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"autoland.yml reads the check-runs endpoint"* ]]
+	[[ "$output" == *"checks-green"* ]]
+}
+
+@test "the same workflow deciding through checks-green passes" {
+	workflow ci
+	lander autoland yes yes
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a workflow that never reads check status is not asked for the predicate" {
+	# Keyed to the endpoint, so a workflow with no verdict to reach is not asked
+	# to call a gate that would have nothing to judge.
+	workflow ci
+	lander autoland no no
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the endpoint named only in a comment does not demand the predicate" {
+	# Both auto-landers explain this very property in prose, quoting the jq they
+	# replaced. A gate firing on its own explanation is unfixable except by
+	# deleting the explanation.
+	workflow ci
+	lander autoland no no
+	printf '# the old copy read repos/x/commits/y/check-runs and called it green\n' >>"$WF/autoland.yml"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
 # --- property 3's scope: a job on an OS this machine cannot be ---------------
 #
 # CLOUD-394. Property 3's premise is its own header's — "a free local run would

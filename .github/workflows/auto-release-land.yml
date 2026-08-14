@@ -43,20 +43,38 @@ name: auto-release-land
 # an event already paid for, and lands immediately whenever the max-wait has
 # already elapsed.
 #
+# AND IT LANDS ITSELF RATHER THAN ASKING (CLOUD-391). This used to post
+# `/fast-forward`, which scheduled fast-forward.yml on `issue_comment` — a second
+# webhook hop and a second runner acquisition (~35–75s) to reach a push this job
+# could make itself. That hop is load-bearing for a HUMAN lap, where the comment is
+# a person with write access typing a string on one PR at one moment and
+# fast-forward.yml's `author_association` gate is what reads that intent. There is
+# no human intent on this path. fast-forward.yml is untouched and remains the human
+# route; `mise run land` still comments.
+#
+# THE REF IS MOVED THROUGH THE API, NOT BY A LOCAL PUSH, and that is a deliberate
+# reading of "assert the fast-forward before pushing". `PATCH git/refs/heads/main`
+# with `force=false` IS the assertion, made server-side and atomically with the
+# update — a local `git merge-base --is-ancestor` can go stale between the check and
+# the push, this cannot. It also needs no push credential persisted into the
+# checkout, which is what lets the checkout below stay `persist-credentials: false`.
+#
 # Token split: check status is read with the Actions GITHUB_TOKEN (which carries
-# checks:read — a fine-grained PAT does not), but the `/fast-forward` comment is
-# posted with RELEASE_PLZ_TOKEN, a real identity (repo owner) that both satisfies
-# fast-forward.yml's author_association gate and triggers it (a GITHUB_TOKEN
-# comment would do neither).
+# checks:read — a fine-grained PAT does not), but the ref update is made with
+# RELEASE_PLZ_TOKEN, a real identity: a ref moved by GITHUB_TOKEN triggers no
+# further workflows, so release-plz's own `release` job (on: push to main) would
+# never fire and no tag would be cut. Readying the PR uses it for the sibling
+# reason, stated at the four-state table below.
 
 on:
   # zizmor flags workflow_run as dangerous because it runs privileged and is
   # usually paired with checking out and executing PR-controlled content. This
   # workflow checks out the repo at a fixed ref — `main`, never the PR head — to
-  # get the `release-due` task, and runs no PR content. head_sha/head_branch are
-  # used only in API queries and a startsWith filter, never interpolated into a
-  # run script, so the injection/exfiltration this audit guards against cannot
-  # occur here.
+  # get the `release-due` task, and runs no PR content; the head SHA reaches it
+  # only as an opaque argument to API calls, never as objects fetched or executed.
+  # head_sha/head_branch are used only in API queries and a startsWith filter,
+  # never interpolated into a run script, so the injection/exfiltration this audit
+  # guards against cannot occur here.
   workflow_run: # zizmor: ignore[dangerous-triggers]
     workflows: [CI, commit-lint]
     types: [completed]
@@ -75,7 +93,7 @@ on:
     - cron: "*/30 * * * *"
 
 permissions:
-  contents: read
+  contents: write
   checks: read
   pull-requests: write
 
@@ -225,12 +243,29 @@ jobs:
             1 | 3) echo "green=false" >> "$GITHUB_OUTPUT" ;;
             *) exit "$verdict" ;;
           esac
-      # Post with the release PAT (repo owner): fast-forward.yml only acts on a
-      # comment from OWNER/MEMBER/COLLABORATOR, and a GITHUB_TOKEN comment would
-      # not trigger that workflow at all.
-      - name: Comment /fast-forward to land the release PR
+      # `force=false` is the fast-forward assertion: the API refuses the update
+      # unless `main` is an ancestor of this SHA, and branch protection independently
+      # refuses it unless `final` is green on it. Both things that must hold are
+      # enforced by the server, atomically with the write.
+      #
+      # A REFUSAL IS AN ORDINARY OUTCOME, NOT A RED RUN. `main` moving between the
+      # green read and this update is the landing loop working, not a fault —
+      # release-plz rewrites the branch on the next push and the debounce readies it
+      # again. Retrying in-job would only race the same window, so it logs and stops.
+      - name: Fast-forward main to the tested SHA
         if: steps.checks.outputs.green == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}
-        run: gh pr comment "$PR_NUM" --repo "$REPO" --body '/fast-forward'
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -uo pipefail
+          err=$(mktemp)
+          if gh api -X PATCH "repos/$REPO/git/refs/heads/main" \
+            -f sha="$SHA" -F force=false >/dev/null 2>"$err"; then
+            echo "landed #$PR_NUM: main is now $SHA"
+          else
+            echo "could not fast-forward main to $SHA for #$PR_NUM: $(tr '\n' ' ' <"$err")"
+            echo "main moved, or the ruleset refused this SHA; #$PR_NUM waits for its next refresh"
+          fi
+          rm -f "$err"
