@@ -122,7 +122,12 @@ fi
 # tests/step-receipt.bats drives the decision table with. A step neither the
 # table nor the override declares has no input set, therefore no key,
 # therefore always runs.
-rust_specs="crates Cargo.toml Cargo.lock"
+# `batten.toml` is in here for the reason hk's `test` step globs it (CLOUD-59):
+# `tests/cli.rs`'s `the_committed_*` cases read the committed config at runtime,
+# so it steers their verdict as surely as a source file does. A receipt keyed
+# without it stays valid across a config-only change and the step is skipped —
+# green over tests whose subject moved. Measured, not hypothesised.
+rust_specs="crates Cargo.toml Cargo.lock batten.toml"
 rust_tools="rustc --version && cargo --version"
 specs=""
 tools=""

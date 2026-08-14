@@ -173,10 +173,47 @@ fn committed_budget_surfaces(dir: &Path) {
         .expect("write fixture project config");
 }
 
-fn committed_config_fixture_git(dir: &std::path::Path) {
+/// Also seeds the scanner the committed `no-secrets` row resolves, and returns
+/// the `HOME` every invocation against this fixture must run under.
+///
+/// Same argument as the `origin/main` ref above, one precondition further out:
+/// the committed config carries a `secrets` row (CLOUD-59) whose kind resolves a
+/// PINNED binary from the provision cache, and an absent one is exit 1 naming
+/// `batten provision apply`. Without this the cases fail on that refusal rather
+/// than on the rule each is about — and worse, they would read whichever cache
+/// the ambient `XDG_DATA_HOME` points at, which is the "fixture that reads the
+/// environment it runs inside" defect this helper's own history is about.
+///
+/// SEEDED, never fetched: `provision apply` would reach github for a real
+/// artifact, and a suite about the exit-code contract must not depend on the
+/// network. The adapter asks only whether the binary is there, so a stub answers
+/// the same question offline — and it exits 0 with no output, which is what the
+/// real scanner does on these fixtures anyway, since none carries a credential.
+fn committed_config_fixture_git(dir: &std::path::Path) -> PathBuf {
     git_in(dir, &["init", "-q"]);
     git_in(dir, &["commit", "-q", "--allow-empty", "-m", "base"]);
     git_in(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+
+    let home = dir.join(".batten-test-home");
+    let name = dir
+        .canonicalize()
+        .ok()
+        .and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "fixture".to_owned());
+    let bin = home
+        .join("data/batten")
+        .join(name)
+        .join("provision/ripsecrets/0.1.11/bin");
+    fs::create_dir_all(&bin).expect("create the fixture provision cache");
+    let scanner = bin.join("ripsecrets");
+    fs::write(&scanner, "#!/bin/sh\nexit 0\n").expect("write the stub scanner");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&scanner, fs::Permissions::from_mode(0o755))
+            .expect("mark the stub scanner executable");
+    }
+    home
 }
 
 /// The exit-code contract (§7), asserted as one table over the compiled binary.
@@ -3805,7 +3842,7 @@ fn the_committed_repo_config_gates_a_repository() {
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
 
     let dir = repo_with_config("config-committed", &contents);
-    committed_config_fixture_git(&dir);
+    let home = committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
     // A file the committed no-conflict-markers rule must flag. The marker is
     // still assembled at runtime, but for a narrower reason than before
@@ -3828,6 +3865,8 @@ fn the_committed_repo_config_gates_a_repository() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .output()
         .expect("run batten enforce");
@@ -3853,12 +3892,14 @@ fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
     let dir = repo_with_config("config-committed-read-refusal", &contents);
-    committed_config_fixture_git(&dir);
+    let home = committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
 
     let output = batten()
         .arg("check")
         .current_dir(&dir)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .output()
         .expect("run batten check");
@@ -3888,7 +3929,7 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     let committed = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
     let contents = fs::read_to_string(&committed).expect("read batten.toml");
     let dir = repo_with_config("config-committed-glob-miss", &contents);
-    committed_config_fixture_git(&dir);
+    let home = committed_config_fixture_git(&dir);
     committed_budget_surfaces(&dir);
     let marker = format!("{} HEAD\n", "<".repeat(7));
     fs::write(dir.join("notes.txt"), marker).expect("write out-of-glob source");
@@ -3896,6 +3937,8 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -3957,7 +4000,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     // Same reason as the sibling test above: the committed budget names
     // `AGENTS.md`, and `check` now refuses a budget entry that matches nothing.
     committed_budget_surfaces(&dirty);
-    committed_config_fixture_git(&dirty);
+    let home = committed_config_fixture_git(&dirty);
     let src = dirty.join("crates/demo/src");
     fs::create_dir_all(&src).expect("create fixture source tree");
     fs::write(src.join("lib.rs"), &payload).expect("write fixture source");
@@ -3971,6 +4014,8 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dirty)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -3999,7 +4044,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     );
     let clean = repo_with_config("config-agnostic-clean", &contents);
     committed_budget_surfaces(&clean);
-    committed_config_fixture_git(&clean);
+    let home = committed_config_fixture_git(&clean);
     let ordinary = clean.join("crates/demo/src");
     fs::create_dir_all(&ordinary).expect("create clean source tree");
     fs::write(ordinary.join("lib.rs"), "pub fn ok() {}\n").expect("write clean source");
@@ -4007,6 +4052,8 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&clean)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4051,7 +4098,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     );
     let dirty = repo_with_config("config-portability-dirty", &contents);
     committed_budget_surfaces(&dirty);
-    committed_config_fixture_git(&dirty);
+    let home = committed_config_fixture_git(&dirty);
 
     // One file per glob, each carrying every literal its rules ban, so a rule
     // scoped to the wrong directory shows up as a missing line rather than as a
@@ -4081,6 +4128,8 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dirty)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4111,7 +4160,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     );
     let clean = repo_with_config("config-portability-clean", &contents);
     committed_budget_surfaces(&clean);
-    committed_config_fixture_git(&clean);
+    let home = committed_config_fixture_git(&clean);
     fs::create_dir_all(clean.join("mise-tasks")).expect("create clean task dir");
     fs::write(
         clean.join("mise-tasks/seed"),
@@ -4127,6 +4176,8 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&clean)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()

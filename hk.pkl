@@ -550,7 +550,22 @@ local gate = new Mapping<String, Step> {
     // commit must run the tests too (CLOUD-63). Without this entry the corpus
     // is exercised in CI (`hk check --all` ignores globs) but skipped at
     // pre-commit, which is the half that gives feedback while it is cheap.
-    glob = List("**/*.rs", "**/Cargo.toml", "Cargo.lock", "crates/batten/tests/fixtures/**")
+    //
+    // `batten.toml` is the same argument, one file further out, and it was
+    // missing until CLOUD-59: `tests/cli.rs`'s `the_committed_*` cases read the
+    // COMMITTED config at runtime and assert what it gates, so a config-only
+    // commit changes what those tests measure while leaving this step's inputs
+    // untouched. Measured — a `[[rule]]` added to batten.toml left the receipt
+    // valid, `verify` reported `✔ test` without running it, and five of those
+    // cases were red on the very next CI run.
+    glob =
+      List(
+        "**/*.rs",
+        "**/Cargo.toml",
+        "Cargo.lock",
+        "crates/batten/tests/fixtures/**",
+        "batten.toml",
+      )
     check = "mise run test:cargo"
   }
   // Consumer #1 in practice: the committed batten.toml, evaluated by the engine
