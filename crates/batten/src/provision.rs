@@ -51,6 +51,7 @@
 //! binary. The debt this creates is tracked, not absorbed: see the shell-out
 //! inventory issue referenced from `mem:core`.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -79,8 +80,22 @@ const BIN_DIR: &str = "bin";
 const FETCHER: &str = "curl";
 
 /// One provisioned tool.
+///
+/// The `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived
+/// schema, the same way [`crate::rules::Rule`] mirrors its severity conditional:
+/// an author editing `batten.toml` against the published schema gets the refusal
+/// in their editor rather than on the next run. It is a **second expression of
+/// one rule, never a second authority** — the loader's check is what decides, and
+/// it is what the error message comes from.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[schemars(extend("oneOf" = serde_json::json!([
+    { "required": ["url", "sha256"], "not": { "required": ["platforms"] } },
+    { "required": ["platforms"], "not": { "anyOf": [
+        { "required": ["url"] },
+        { "required": ["sha256"] }
+    ] } }
+])))]
 pub struct Provision {
     /// The entry's name, unique within the manifest. Also the first cache path
     /// segment, so two tools never share a directory.
@@ -88,16 +103,110 @@ pub struct Provision {
     /// The pinned version. Encoded in the cache path, so two pinned versions
     /// coexist and a version change is a cache miss rather than an overwrite.
     pub version: String,
-    /// Where the artifact comes from. `https://` or `file://` — see the module
-    /// docs for why those two and no others.
-    pub url: String,
+    /// Where the artifact comes from, when one artifact serves every platform.
+    /// `https://` or `file://` — see the module docs for why those two and no
+    /// others.
+    ///
+    /// Mutually exclusive with [`Provision::platforms`]; see that field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
     /// The SHA-256 of the artifact, lowercase hex. The whole equality test.
-    pub sha256: String,
+    ///
+    /// Paired with [`Provision::url`], and refused without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    /// Per-platform artifacts, keyed `<os>-<arch>` — `linux-x86_64`,
+    /// `macos-aarch64`, `windows-x86_64`.
+    ///
+    /// **Exactly one of this and the `url`/`sha256` pair**, refused at load
+    /// rather than at fetch. Two spellings exist because two genuinely different
+    /// things get pinned: a platform-independent artifact (a script, a jar, a
+    /// test fixture) has one URL and gains nothing from a table, while a
+    /// compiled tool ships one artifact per target and cannot be expressed
+    /// without one. Collapsing them would force every entry to name a platform
+    /// it does not have, and the xor is the same shape `RuleKind::Forbid`'s
+    /// `pattern`/`regex` predicate already uses.
+    ///
+    /// The key is `{os}-{arch}` read straight off [`std::env::consts`] rather
+    /// than a Rust target triple. That is what the running binary can actually
+    /// observe about itself; a triple would need a mapping table, and the arm
+    /// that guesses `-gnu` versus `-musl` from `os = "linux"` is a guess that
+    /// installs a binary the host cannot run. The granularity is the same one
+    /// `mise.lock` uses, and it inherits the same limitation, stated rather than
+    /// hidden: glibc and musl share the `linux` key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub platforms: BTreeMap<String, Artifact>,
     /// What the artifact is, and therefore how to get the binary out of it.
     #[serde(default)]
     pub unpack: Unpack,
     /// The binary's name inside the artifact, and the name it is cached under.
     pub binary: String,
+}
+
+/// One platform's artifact: where it comes from, and what it must hash to.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Artifact {
+    /// Where the artifact comes from. `https://` or `file://`.
+    pub url: String,
+    /// The SHA-256 of the artifact, lowercase hex.
+    pub sha256: String,
+}
+
+impl Provision {
+    /// The artifact this host should install.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) when the entry declares a platform
+    /// table with no row for this host. **Never a silent skip**: an entry that
+    /// cannot be installed here is a manifest this host cannot satisfy, and
+    /// reporting it as fresh would let a gate depending on the tool pass without
+    /// the tool.
+    pub fn artifact(&self) -> Result<Artifact> {
+        self.artifact_for(platform_key().as_str())
+    }
+
+    /// [`Provision::artifact`] for a named platform, so the suite can drive a
+    /// platform the test host is not.
+    ///
+    /// # Errors
+    ///
+    /// As [`Provision::artifact`].
+    pub fn artifact_for(&self, platform: &str) -> Result<Artifact> {
+        if let (Some(url), Some(sha256)) = (self.url.as_ref(), self.sha256.as_ref()) {
+            return Ok(Artifact {
+                url: url.clone(),
+                sha256: sha256.clone(),
+            });
+        }
+        self.platforms.get(platform).cloned().ok_or_else(|| {
+            // Pointer-only: the platform this host is and the ones the entry
+            // names, never a URL and never a byte.
+            UsageError::raise(format!(
+                "provision {}: no artifact for {platform}; the entry pins {}",
+                self.name,
+                if self.platforms.is_empty() {
+                    "nothing".to_owned()
+                } else {
+                    self.platforms
+                        .keys()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            ))
+        })
+    }
+}
+
+/// This host's platform key: `<os>-<arch>`, e.g. `linux-x86_64`.
+///
+/// Read off [`std::env::consts`], which is what the compiled binary knows about
+/// itself. See [`Provision::platforms`] for why this rather than a target triple.
+#[must_use]
+pub fn platform_key() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
 /// How to get the binary out of the fetched artifact.
@@ -256,14 +365,20 @@ fn freshness_of(entry: &Provision, cache_root: &Path) -> Result<Freshness> {
     if !binary.is_file() {
         return Ok(Freshness::Missing);
     }
-    let artifact = match fs::read(dir.join(ARTIFACT)) {
+    let cached = match fs::read(dir.join(ARTIFACT)) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Freshness::Missing),
         Err(err) => return Err(err).context("read the cached artifact"),
     };
+    // The pin is THIS host's artifact, not the entry's whole table: a cache
+    // holding the linux tarball is fresh on linux and says nothing about macOS.
+    // An entry with no row for this platform is a usage error rather than a
+    // freshness verdict, and it propagates — reporting `fresh` for a tool that
+    // cannot be installed here would let a gate depending on it pass without it.
+    let artifact = entry.artifact()?;
     // Case-insensitive on the hex, so a manifest written in uppercase is not a
     // permanent mismatch nobody can explain.
-    Ok(if digest(&artifact).eq_ignore_ascii_case(&entry.sha256) {
+    Ok(if digest(&cached).eq_ignore_ascii_case(&artifact.sha256) {
         Freshness::Fresh
     } else {
         Freshness::Mismatch
@@ -306,15 +421,16 @@ pub fn apply(entry: &Provision, cache_root: &Path, dry_run: bool) -> Result<Appl
         return Ok(Applied::Previewed);
     }
 
-    let bytes = fetch(&entry.url)?;
+    let artifact = entry.artifact()?;
+    let bytes = fetch(&artifact.url)?;
     let found = digest(&bytes);
-    if !found.eq_ignore_ascii_case(&entry.sha256) {
+    if !found.eq_ignore_ascii_case(&artifact.sha256) {
         // Pointer-only: the two digests, never a byte of what was fetched. A
         // mismatched artifact is exactly the thing least safe to echo.
         return Err(crate::Denial::raise(format!(
             "provision {}: artifact does not match the pinned checksum (pinned {}, fetched {}); \
              nothing was installed",
-            entry.name, entry.sha256, found
+            entry.name, artifact.sha256, found
         )));
     }
 
@@ -462,7 +578,6 @@ pub fn validate(entries: &[Provision]) -> Result<()> {
         for (key, value) in [
             ("name", &entry.name),
             ("version", &entry.version),
-            ("url", &entry.url),
             ("binary", &entry.binary),
         ] {
             if value.trim().is_empty() {
@@ -479,14 +594,104 @@ pub fn validate(entries: &[Provision]) -> Result<()> {
         }
         seen.push(&entry.name);
 
-        if entry.sha256.len() != 64 || !entry.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        validate_artifact_spelling(entry)?;
+    }
+    Ok(())
+}
+
+/// The `url`/`sha256`-versus-`platforms` xor, plus every checksum's shape.
+///
+/// Refused at load for the same reason a malformed checksum is: an entry
+/// spelling both, or neither, can never install anything, so every apply would
+/// fail with a message about the artifact rather than about the config.
+fn validate_artifact_spelling(entry: &Provision) -> Result<()> {
+    // `url` and `sha256` are one spelling in two fields, so a half-written pair
+    // is its own error — reporting it as "no artifact" would send the author
+    // looking for a platform table they never meant to write.
+    match (entry.url.as_ref(), entry.sha256.as_ref()) {
+        (Some(_), None) | (None, Some(_)) => {
             return Err(UsageError::raise(format!(
-                "provision {}: `sha256` must be 64 hex characters",
+                "provision {}: `url` and `sha256` are a pair; declare both or neither",
                 entry.name
             )));
         }
+        _ => {}
+    }
+
+    let single = entry.url.is_some();
+    let table = !entry.platforms.is_empty();
+    if single && table {
+        return Err(UsageError::raise(format!(
+            "provision {}: declares both a single `url` and a `[provision.platforms]` table; \
+             exactly one, or two pins could disagree about what this host installs",
+            entry.name
+        )));
+    }
+    if !single && !table {
+        return Err(UsageError::raise(format!(
+            "provision {}: declares no artifact; give it a `url` + `sha256`, or a \
+             `[provision.platforms]` table keyed `<os>-<arch>` (this host is {})",
+            entry.name,
+            platform_key()
+        )));
+    }
+
+    if let (Some(url), Some(sha256)) = (entry.url.as_ref(), entry.sha256.as_ref()) {
+        check_url(&entry.name, "url", url)?;
+        check_sha256(&entry.name, "sha256", sha256)?;
+    }
+    for (platform, artifact) in &entry.platforms {
+        if platform.trim().is_empty() {
+            return Err(UsageError::raise(format!(
+                "provision {}: a platform key must not be empty",
+                entry.name
+            )));
+        }
+        check_url(&entry.name, platform, &artifact.url)?;
+        check_sha256(&entry.name, platform, &artifact.sha256)?;
     }
     Ok(())
+}
+
+fn check_url(name: &str, where_: &str, url: &str) -> Result<()> {
+    if url.trim().is_empty() {
+        return Err(UsageError::raise(format!(
+            "provision {name}: `{where_}` has an empty url"
+        )));
+    }
+    Ok(())
+}
+
+fn check_sha256(name: &str, where_: &str, sha256: &str) -> Result<()> {
+    if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(UsageError::raise(format!(
+            "provision {name}: `{where_}` sha256 must be 64 hex characters"
+        )));
+    }
+    Ok(())
+}
+
+/// Where the provisioned binary for `entry` lives, given the repository root.
+///
+/// The resolver the manifest shipped without: [`entry_dir`] and [`cache_root`]
+/// were public and had no caller outside this module, so nothing could turn a
+/// `[[provision]]` row into a path something else could run. A consumer that
+/// needs the tool asks here rather than reconstructing the layout, which is what
+/// keeps `<name>/<version>/bin/<binary>` a fact of this module.
+///
+/// **Existence is not checked**, deliberately. This answers "where would it be";
+/// whether it is there is [`status`]'s question, and a caller that conflated the
+/// two would report a missing tool as a resolution failure. The caller's own
+/// missing-binary message is what names `batten provision apply`.
+///
+/// # Errors
+///
+/// Propagates [`cache_root`]'s failure to resolve the out-of-tree state
+/// directory.
+pub fn binary_path(repo_root: &Path, entry: &Provision) -> Result<PathBuf> {
+    Ok(entry_dir(&cache_root(repo_root)?, entry)
+        .join(BIN_DIR)
+        .join(&entry.binary))
 }
 
 #[cfg(test)]
@@ -498,11 +703,32 @@ mod tests {
         Provision {
             name: name.to_owned(),
             version: "1.2.3".to_owned(),
-            url: "file:///dev/null".to_owned(),
-            sha256: sha.to_owned(),
+            url: Some("file:///dev/null".to_owned()),
+            sha256: Some(sha.to_owned()),
+            platforms: BTreeMap::new(),
             unpack: Unpack::None,
             binary: "tool".to_owned(),
         }
+    }
+
+    /// The same entry spelled as a platform table instead of a single url.
+    fn platform_entry(name: &str, rows: &[(&str, &str)]) -> Provision {
+        let mut entry = entry(name, &"a".repeat(64));
+        entry.url = None;
+        entry.sha256 = None;
+        entry.platforms = rows
+            .iter()
+            .map(|(platform, sha)| {
+                (
+                    (*platform).to_owned(),
+                    Artifact {
+                        url: format!("file:///dev/null/{platform}"),
+                        sha256: (*sha).to_owned(),
+                    },
+                )
+            })
+            .collect();
+        entry
     }
 
     #[test]
@@ -526,6 +752,115 @@ mod tests {
             validate(&[entry("t", &"A".repeat(64))]).is_ok(),
             "case is not the test"
         );
+    }
+
+    #[test]
+    fn exactly_one_artifact_spelling_is_accepted() {
+        // Both is refused because two pins could disagree about what this host
+        // installs; neither is refused because it can never install anything.
+        let mut both = entry("t", &"a".repeat(64));
+        both.platforms = platform_entry("t", &[("linux-x86_64", &"b".repeat(64))]).platforms;
+        assert!(validate(&[both]).is_err(), "both spellings must be refused");
+
+        let mut neither = entry("t", &"a".repeat(64));
+        neither.url = None;
+        neither.sha256 = None;
+        assert!(
+            validate(&[neither]).is_err(),
+            "an entry with no artifact must be refused"
+        );
+
+        assert!(validate(&[entry("t", &"a".repeat(64))]).is_ok());
+        assert!(validate(&[platform_entry("t", &[("linux-x86_64", &"a".repeat(64))])]).is_ok());
+    }
+
+    #[test]
+    fn a_half_written_pair_names_the_pair_rather_than_the_missing_table() {
+        // `url` without `sha256` is a half-finished single artifact, not an
+        // author who meant to write a platform table. Reporting "no artifact"
+        // would send them looking for the wrong thing.
+        let mut no_sha = entry("t", &"a".repeat(64));
+        no_sha.sha256 = None;
+        let err = validate(&[no_sha]).unwrap_err().to_string();
+        assert!(err.contains("are a pair"), "{err}");
+
+        let mut no_url = entry("t", &"a".repeat(64));
+        no_url.url = None;
+        assert!(validate(&[no_url]).is_err());
+    }
+
+    #[test]
+    fn a_per_platform_checksum_is_validated_like_the_single_one() {
+        // The xor must not create a hole: a malformed pin is refused at load in
+        // both spellings, or the table becomes the way to smuggle a typo past
+        // the gate that exists to catch it.
+        assert!(validate(&[platform_entry("t", &[("linux-x86_64", "not-hex")])]).is_err());
+        assert!(validate(&[platform_entry("t", &[("linux-x86_64", &"a".repeat(63))])]).is_err());
+
+        let mut empty_key = platform_entry("t", &[("linux-x86_64", &"a".repeat(64))]);
+        let artifact = empty_key.platforms.remove("linux-x86_64").unwrap();
+        empty_key.platforms.insert(String::new(), artifact);
+        assert!(validate(&[empty_key]).is_err(), "an empty platform key");
+    }
+
+    #[test]
+    fn the_artifact_is_selected_by_platform_and_a_missing_row_is_a_usage_error() {
+        let entry = platform_entry(
+            "t",
+            &[
+                ("linux-x86_64", &"a".repeat(64)),
+                ("macos-aarch64", &"b".repeat(64)),
+            ],
+        );
+        assert_eq!(
+            entry.artifact_for("linux-x86_64").unwrap().sha256,
+            "a".repeat(64)
+        );
+        assert_eq!(
+            entry.artifact_for("macos-aarch64").unwrap().sha256,
+            "b".repeat(64)
+        );
+
+        // Never a silent skip: reporting an uninstallable entry as fresh would
+        // let a gate depending on the tool pass without the tool.
+        let err = entry.artifact_for("windows-x86_64").unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        let text = err.to_string();
+        assert!(text.contains("windows-x86_64"), "{text}");
+        assert!(
+            text.contains("linux-x86_64") && text.contains("macos-aarch64"),
+            "the refusal names what the entry does pin: {text}"
+        );
+    }
+
+    #[test]
+    fn a_single_url_entry_serves_every_platform() {
+        // The whole reason the second spelling survives: a platform-independent
+        // artifact must not have to name a platform it does not have.
+        let entry = entry("t", &"a".repeat(64));
+        for platform in ["linux-x86_64", "macos-aarch64", "windows-x86_64"] {
+            assert_eq!(entry.artifact_for(platform).unwrap().sha256, "a".repeat(64));
+        }
+    }
+
+    #[test]
+    fn the_platform_key_is_os_dash_arch() {
+        let key = platform_key();
+        assert_eq!(
+            key,
+            format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+        );
+        assert!(key.contains('-'), "the key is two fields: {key}");
+    }
+
+    #[test]
+    fn the_binary_path_is_the_cache_layout_and_checks_nothing() {
+        // A resolver, not a probe: it answers "where would it be", and whether
+        // it is there is `status`'s question.
+        let entry = entry("tool", &"a".repeat(64));
+        let path = binary_path(Path::new("/nowhere/repo"), &entry).unwrap();
+        assert!(path.ends_with("provision/tool/1.2.3/bin/tool"), "{path:?}");
+        assert!(!path.exists(), "resolution must not depend on existence");
     }
 
     #[test]

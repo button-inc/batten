@@ -279,6 +279,25 @@
         }
       ]
     },
+    "Artifact": {
+      "description": "One platform's artifact: where it comes from, and what it must hash to.",
+      "type": "object",
+      "properties": {
+        "sha256": {
+          "description": "The SHA-256 of the artifact, lowercase hex.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Where the artifact comes from. `https://` or `file://`.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "url",
+        "sha256"
+      ]
+    },
     "Attribution": {
       "description": "The `[attribution]` table: what produced commits may carry about the tooling.\n\nConsumer-specific by nature (non-negotiable rule 1, extended from consumers to\nvendors): the engine holds the matcher, this table holds the answer. A vendor\nname is configuration here and never a literal in the crate.",
       "type": "object",
@@ -681,7 +700,7 @@
       ]
     },
     "Provision": {
-      "description": "One provisioned tool.",
+      "description": "One provisioned tool.\n\nThe `oneOf` mirrors [`validate_artifact_spelling`]'s xor into the derived\nschema, the same way [`crate::rules::Rule`] mirrors its severity conditional:\nan author editing `batten.toml` against the published schema gets the refusal\nin their editor rather than on the next run. It is a **second expression of\none rule, never a second authority** — the loader's check is what decides, and\nit is what the error message comes from.",
       "type": "object",
       "properties": {
         "binary": {
@@ -692,9 +711,19 @@
           "description": "The entry's name, unique within the manifest. Also the first cache path\nsegment, so two tools never share a directory.",
           "type": "string"
         },
+        "platforms": {
+          "description": "Per-platform artifacts, keyed `<os>-<arch>` — `linux-x86_64`,\n`macos-aarch64`, `windows-x86_64`.\n\n**Exactly one of this and the `url`/`sha256` pair**, refused at load\nrather than at fetch. Two spellings exist because two genuinely different\nthings get pinned: a platform-independent artifact (a script, a jar, a\ntest fixture) has one URL and gains nothing from a table, while a\ncompiled tool ships one artifact per target and cannot be expressed\nwithout one. Collapsing them would force every entry to name a platform\nit does not have, and the xor is the same shape `RuleKind::Forbid`'s\n`pattern`/`regex` predicate already uses.\n\nThe key is `{os}-{arch}` read straight off [`std::env::consts`] rather\nthan a Rust target triple. That is what the running binary can actually\nobserve about itself; a triple would need a mapping table, and the arm\nthat guesses `-gnu` versus `-musl` from `os = \"linux\"` is a guess that\ninstalls a binary the host cannot run. The granularity is the same one\n`mise.lock` uses, and it inherits the same limitation, stated rather than\nhidden: glibc and musl share the `linux` key.",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Artifact"
+          }
+        },
         "sha256": {
-          "description": "The SHA-256 of the artifact, lowercase hex. The whole equality test.",
-          "type": "string"
+          "description": "The SHA-256 of the artifact, lowercase hex. The whole equality test.\n\nPaired with [`Provision::url`], and refused without it.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "unpack": {
           "description": "What the artifact is, and therefore how to get the binary out of it.",
@@ -702,8 +731,11 @@
           "default": "none"
         },
         "url": {
-          "description": "Where the artifact comes from. `https://` or `file://` — see the module\ndocs for why those two and no others.",
-          "type": "string"
+          "description": "Where the artifact comes from, when one artifact serves every platform.\n`https://` or `file://` — see the module docs for why those two and no\nothers.\n\nMutually exclusive with [`Provision::platforms`]; see that field.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "version": {
           "description": "The pinned version. Encoded in the cache path, so two pinned versions\ncoexist and a version change is a cache miss rather than an overwrite.",
@@ -711,11 +743,41 @@
         }
       },
       "additionalProperties": false,
+      "oneOf": [
+        {
+          "not": {
+            "required": [
+              "platforms"
+            ]
+          },
+          "required": [
+            "url",
+            "sha256"
+          ]
+        },
+        {
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "url"
+                ]
+              },
+              {
+                "required": [
+                  "sha256"
+                ]
+              }
+            ]
+          },
+          "required": [
+            "platforms"
+          ]
+        }
+      ],
       "required": [
         "name",
         "version",
-        "url",
-        "sha256",
         "binary"
       ]
     },

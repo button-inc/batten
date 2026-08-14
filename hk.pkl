@@ -222,12 +222,20 @@ local gate = new Mapping<String, Step> {
     glob = List("batten.toml", "crates/batten/src/lint.rs", "crates/batten/src/trust.rs")
     check = "mise run config-lint"
   }
+  // Every module the derived schema is reachable from, or the step does not fire
+  // on the commit that moved it. `provision.rs` and `waiver.rs` were absent while
+  // both were already reachable from `Config` (CLOUD-59): a commit touching only
+  // one of them changed `schema/batten.schema.json` and skipped the gate that
+  // exists to notice, so the drift arrived on `main` and waited for whichever
+  // later commit happened to touch `config.rs`.
   ["schema-check"] {
     glob =
       List(
         "crates/batten/src/config.rs",
+        "crates/batten/src/provision.rs",
         "crates/batten/src/rules.rs",
         "crates/batten/src/severity.rs",
+        "crates/batten/src/waiver.rs",
         "schema/*",
       )
     check = "mise run schema-check"
