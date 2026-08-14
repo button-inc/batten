@@ -31,16 +31,29 @@ runs() { printf '%s\n' "$@"; }
 # case supplies for the same name is NEWER and supersedes it under CLOUD-436's
 # latest-per-name rule. That is what lets the supersession cases below compose
 # with this helper without their own subject being decided here.
+# DERIVED FROM THE ROSTER, never hand-listed. The set above was written out by
+# name, which made it a SECOND copy of `$CI_REQUIRED_CHECKS` — and the header
+# says as much, describing it as the roster minus the absent-ok names. Adding
+# `perf` (CLOUD-172) proved the copy drifts: six cases here failed at once, and
+# the same hand-listing in `tests/ci-wait.bats` did worse, hanging that suite
+# instead of failing it, because a poll cannot tell a missing name from a run
+# still going. Derived, the fixture is correct for whatever the roster says
+# today, and the count in the comment above can never be wrong either.
 mandatory_green() {
-	runs \
-		"completed	success	ci	2026-08-12T00:00:00Z	1" \
-		"completed	success	cross	2026-08-12T00:00:00Z	2" \
-		"completed	success	commit-lint	2026-08-12T00:00:00Z	3" \
-		"completed	success	darwin-link (aarch64-apple-darwin)	2026-08-12T00:00:00Z	4" \
-		"completed	success	msrv	2026-08-12T00:00:00Z	5" \
-		"completed	success	semver	2026-08-12T00:00:00Z	6" \
-		"completed	success	final	2026-08-12T00:00:00Z	7" \
-		"$@"
+	local rows=() name i=0
+	while IFS= read -r name; do
+		[ -n "$name" ] || continue
+		i=$((i + 1))
+		rows+=("completed	success	$name	2026-08-12T00:00:00Z	$i")
+	done < <(tr ',' '\n' <<<"${CI_REQUIRED_CHECKS:?the suite runs under mise, which supplies the roster}" |
+		grep -vxF -f <(tr ',' '\n' <<<"${CI_ABSENT_OK_CHECKS:-}") || true)
+	# Anti-vacuity: an empty derived set would make every case that composes with
+	# this helper pass while asserting nothing.
+	[ "${#rows[@]}" -gt 0 ] || {
+		echo "mandatory_green derived an empty set from CI_REQUIRED_CHECKS" >&2
+		return 1
+	}
+	runs "${rows[@]}" "$@"
 }
 
 @test "a graded, all-success required set is green" {
@@ -69,10 +82,17 @@ mandatory_green() {
 	# still listing the other six as expected — the bot was rejected (#280).
 	CHECKS_GREEN_RUNS="$(runs "completed	success	commit-lint")" run "$GREEN"
 	[ "$status" -eq 3 ]
-	# Roster order, and the two tolerated names elided from it — the output is a
+	# Roster order, and the tolerated names elided from it — the output is a
 	# contract (house style §6), so the list is asserted as a whole rather than
 	# name by name.
-	[[ "$output" == *"with no run at all: ci, cross, darwin-link (aarch64-apple-darwin), msrv, semver, final"* ]]
+	#
+	# LITERAL ON PURPOSE, unlike `mandatory_green` above. Deriving this expectation
+	# would compare the roster against itself and assert nothing about the message;
+	# what is under test here is the ORDER and the elision, which only a written-out
+	# list can pin. So a roster change must edit this line — and that is the sensor
+	# working, not drift: it fails with a diff naming the missing entry, where a
+	# derived fixture that silently went short is what hung `ci-wait`.
+	[[ "$output" == *"with no run at all: ci, cross, darwin-link (aarch64-apple-darwin), msrv, semver, perf, final"* ]]
 	[[ "$output" != *"zizmor"* ]]
 }
 
