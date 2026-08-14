@@ -16,6 +16,15 @@ setup() {
 	git -C "$REPO" init --quiet
 	cd "$REPO" || return 1
 	RECEIPT="$REPO/.git/batten-receipts/board-move"
+	# ONE PASSING READY BLOCK, shared by `issue` and `describe`. Since CLOUD-375 a
+	# Todo issue whose block fails ready-lint is a violation, so a fixture body is
+	# never neutral: a bare-prose description makes every Todo case a
+	# `todo-not-ready` run, whatever rule it meant to exercise. Lifting the block
+	# out is what lets a case choose — carry it and be judged on something else,
+	# or omit it deliberately, as the CLOUD-375 rows below do.
+	READY="**Refinement — Ready (t)**
+
+* **Source of truth (§1).** One artifact."
 }
 
 # issue <id> <status> [assignee] [pr-url] [blocker...] — appends one payload.
@@ -29,10 +38,11 @@ issue() {
 	local att="[]"
 	[ -n "$pr" ] && att=$(jq -nc --arg u "$pr" '[{url: $u}]')
 	jq -nc --arg id "$id" --arg st "$status" --arg a "$assignee" \
+		--arg ready "$READY" \
 		--argjson att "$att" --argjson rel "$rel" '{
 		id: $id, status: $st, attachments: $att,
 		relations: {blockedBy: $rel},
-		description: "**Why**\nx.\n\n**Refinement — Ready (t)**\n\n* **Source of truth (§1).** One artifact."
+		description: ("**Why**\nx.\n\n" + $ready)
 	} + (if $a == "" then {} else {assigneeId: $a} end)' >>"$BOARD"
 }
 
@@ -46,10 +56,14 @@ drop_key() {
 	jq -c "del(.$1)" "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
 }
 
-# describe <id> <text> — give one issue a body to be judged on.
+# describe <id> <text> — give one issue a body to be judged on. The Ready block
+# rides along: these fixtures are about what the PROSE claims, and a claim written
+# as bare prose would be refused as `todo-not-ready` before its own rule was ever
+# reached — the case would then pass or fail on the wrong verdict.
 describe() {
-	jq -c --arg id "$1" --arg d "$2" \
-		'if .id == $id then .description = $d else . end' "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
+	jq -c --arg id "$1" --arg d "$2
+
+$READY" 'if .id == $id then .description = $d else . end' "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
 }
 
 @test "a coherent board exits 0" {
@@ -129,13 +143,45 @@ describe() {
 	[[ "$output" == *"frontier CLOUD-2"* ]]
 }
 
-@test "a Todo issue failing ready-lint is off the frontier" {
+# --- CLOUD-375: Todo is a column claim, and an unready queue entry falsifies it -
+#
+# The measured shape: three issues promoted Backlog -> Todo in one pass, two of
+# them failing ready-lint, and this gate reporting `board coherent` over the
+# closure that held them. Both were caught by a session running ready-lint by
+# hand, which is discipline rather than a mechanism.
+
+@test "a Todo issue with no Ready block is refused" {
 	issue CLOUD-1 Todo "" ""
 	# Overwrite its description with one carrying no Ready block at all.
 	jq -c '.description = "just prose"' "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
 	check
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-1 todo-not-ready"* ]]
+	# Still off the frontier: the refusal is added to the exclusion, not swapped
+	# for it — a caller reading the frontier must not be offered it either.
 	[[ "$output" != *"frontier CLOUD-1"* ]]
+}
+
+@test "a Todo issue whose Ready block satisfies the clauses is not" {
+	# ANTI-VACUITY, and the load-bearing half: a rule that fired on every Todo
+	# issue would pass the deny case above while making the gate unusable.
+	issue CLOUD-1 Todo "" ""
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"frontier CLOUD-1"* ]]
+	[[ "$output" != *"todo-not-ready"* ]]
+}
+
+@test "a Backlog issue with no Ready block is not refused" {
+	# Backlog makes no claim, so there is nothing to falsify — the non-goal
+	# asserted rather than assumed. A gate failing every ungroomed issue anywhere
+	# in a piped closure would stop being piped.
+	issue CLOUD-1 Backlog "" ""
+	jq -c '.description = "just prose"' "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"todo-not-ready"* ]]
+	[[ "$output" == *"board coherent"* ]]
 }
 
 @test "wip counts In Progress only" {
@@ -200,20 +246,26 @@ describe() {
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"CLOUD-1 excluded (unjudgeable-ready-block)"* ]]
 	[[ "$output" != *"board coherent"* ]]
+	# "I could not read what you piped" is never collapsed into CLOUD-375's
+	# violation: exit 2 asks for a re-fetch, exit 1 asks for the board to be fixed,
+	# and answering the second over an unread payload sends the caller to the wrong
+	# repair.
+	[[ "$output" != *"todo-not-ready"* ]]
 }
 
-@test "a genuinely failing Ready block is attributed and leaves the exit code alone" {
+@test "a genuinely failing Ready block is attributed and refused" {
 	local secret="ACME Corp escalation"
 	issue CLOUD-1 Todo "" ""
 	jq -c --arg s "$secret" '.description = $s' "$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
 	check
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"CLOUD-1 excluded (not-ready)"* ]]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-1 todo-not-ready"* ]]
 	# ready-lint's own rule id, forwarded rather than re-derived — and still
 	# pointer-only, so the body it judged never reaches the log.
 	[[ "$output" == *"CLOUD-1:0 no-ready-block"* ]]
 	[[ "$output" != *"$secret"* ]]
-	# Its ::error:: summary is dropped: an annotation at exit 0 is a false signal.
+	# Its ::error:: summary is still dropped: one verdict gets one summary, and
+	# this gate prints its own violation count.
 	[[ "$output" != *"not Ready"* ]]
 }
 

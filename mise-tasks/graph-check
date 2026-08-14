@@ -10,15 +10,24 @@
 #
 #   in-progress-unassigned   In Progress => assignee != null
 #   in-review-no-pr          In Review   => at least one linked GitHub PR
+#   todo-not-ready           Todo        => ready-lint over it exits 0
 #   blockedby-cycle          the blockedBy relation is acyclic
 #   dangling-blocker         every blocker is present in the piped set
+#
+# The third is CLOUD-375's, and it is a peer of the first two rather than a
+# frontier note because `Todo` is a column CLAIM of the same kind: the board model
+# defines it as the queue of issues whose Ready block is satisfied, so an unready
+# issue sitting in it is the column signalling falsely. Measured: three issues
+# were promoted Backlog -> Todo in one pass, two of them failing `ready-lint`, and
+# this gate reported `board coherent (4 issues)` over the closure that held them.
+# It emitted no frontier line either — an absence, which is what a queue is read
+# THROUGH rather than something a reader notices.
 #
 # Two more vocabularies sit BESIDE those, at their own exit codes (CLOUD-251),
 # because "the board is lying" is not the only thing this can find:
 #
 #   unjudgeable-blockedby        a payload carries no blockedBy key    -> exit 2
 #   excluded (unjudgeable-ready-block)  ready-lint could not read it   -> exit 2
-#   excluded (not-ready)         its Ready block genuinely fails       -> exit 0
 #   excluded (blocked-by …)      a blocker has not landed              -> exit 0
 #
 # And one more predicate, CLOUD-234's: prose is not a second authority for a
@@ -49,6 +58,12 @@
 # that authorises any issue — the rubber stamp CLOUD-512's §2 rules out, and the
 # shape the CLOUD-480 sweep would still have passed.
 #MUTANT receipt-carries-no-ids|s@^	receipt_ids=.*@	receipt_ids=""@|a coherent board records which ids it judged
+#
+# The mutation demotes the Todo refusal back to a frontier note, which is exactly
+# the state CLOUD-375 found: the id and the reason still printed, the exit code
+# untouched, so the ready queue is judged by whoever reads the log. A case
+# asserting the string but not the status would survive it.
+#MUTANT todo-refusal-is-a-note|s@^		report "\$id" "todo-not-ready"@		note "$id" "todo-not-ready"@|a Todo issue with no Ready block is refused
 set -euo pipefail
 
 lint="$(dirname "$0")/ready-lint"
@@ -231,9 +246,20 @@ done < <(jq -r '.[] | select((.description | type) == "string") | [.id, .descrip
 # ready-lint already separates exit 1 ("this block is wrong", with pointer-only
 # rule ids) from exit 2 ("stdin is not a payload with a .description field"), and
 # both arrived here as an identical silent absence. Its rule ids are FORWARDED,
-# never re-derived — the one definition of Ready keeps its own vocabulary — while
-# its `::error::` summary is dropped, because annotating a failure at an exit
-# code that denies one is the false signal this repo exists to catch.
+# never re-derived — the one definition of Ready keeps its own vocabulary.
+#
+# AND THE THREE ARMS END IN THREE DIFFERENT PLACES, which is the whole of
+# CLOUD-375's change: ready-lint's exit 1 is `todo-not-ready`, a violation,
+# because a Todo issue whose block fails is the ready queue lying; its exit 2
+# stays exit 2, because "the caller piped a shape I cannot read" is not a failing
+# issue — the same split `released` makes for a payload assembled without
+# `attachments`, and collapsing it into the violation would send a caller to fix a
+# board over a question that was never asked. An unlanded blocker stays a note at
+# exit 0 below: that is scheduling, and the issue is not claiming otherwise.
+#
+# ready-lint's `::error::` summary is still dropped on every arm. At exit 2 it
+# would annotate a failure at a code that denies one; at exit 1 it is a second
+# summary for one verdict, and this gate prints its own count at the bottom.
 frontier=()
 while read -r id; do
 	[ -n "$id" ] || continue
@@ -243,7 +269,7 @@ while read -r id; do
 	case "$lint_rc" in
 	0) ;;
 	1)
-		note "$id" "excluded (not-ready)"
+		report "$id" "todo-not-ready"
 		grep -v '^::error::' <<<"$lint_err" >&2 || true
 		continue
 		;;

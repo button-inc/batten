@@ -73,10 +73,13 @@ view.
 
 The computable version of this discipline ships as `mise run graph-check`
 (CLOUD-175): pipe the active columns' `get_issue(includeRelations: true)`
-payloads and it enforces `In Progress ⇒ assignee != null` and `In Review ⇒ at
+payloads and it enforces `In Progress ⇒ assignee != null`, `In Review ⇒ at
 least one linked GitHub PR attachment` (the checkable approximation of "a
 landed PR exists" — commit containment belongs to the In Review → Done release
-transition), plus acyclic and non-dangling `blockedBy`, emitting the ready
+transition) and `Todo ⇒ ready-lint exits 0` (`todo-not-ready`, CLOUD-375 — the
+ready queue is a column claim of the same kind, and an unready issue sitting in
+it was a `board coherent` verdict until that landed), plus acyclic and
+non-dangling `blockedBy`, emitting the ready
 frontier and WIP count as a by-product. What remains manual is only the
 _fetch_: no tracker credential exists, so an agent pipes the board in; the
 verdict is the gate's alone. Attach every landed PR to its issue — the

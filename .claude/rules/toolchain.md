@@ -112,7 +112,9 @@ pull and it exits non-zero on `not-todo`, `assigned`, or `has-pr` (a PR already
 attached — someone published before the column moved). The automation will not
 claim for you; it fires on the PR event, which is the end of the work. `mise run
 graph-check` enforces the board discipline (`In Progress ⇒ assignee`,
-`In Review ⇒ a linked PR attachment`, acyclic and non-dangling `blockedBy`) and
+`In Review ⇒ a linked PR attachment`, `Todo ⇒ ready-lint exits 0` — the queue is
+a column claim like the other two, CLOUD-375 — acyclic and non-dangling
+`blockedBy`) and
 emits the ready frontier + WIP count on stdout — the same command gates and
 schedules, so every session computes the same frontier. Fan-out protocol:
 `mem:workflow/agent-fanout`.
