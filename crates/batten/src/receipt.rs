@@ -84,6 +84,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::UsageError;
 use crate::exit::ExitCode;
+use crate::rules::ReceiptKey;
 use crate::{git, identity, state};
 
 /// The in-toto Statement v1 type identifier (CLOUD-132: adopt the format).
@@ -453,22 +454,156 @@ fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
 /// guard has, and the one CLOUD-312 §5 preserves end to end. It is deliberately
 /// distinct from `Some(Missing)`, which is a real verdict about a real
 /// repository and denies.
-pub(crate) fn verdicts(checks: &[String]) -> Option<BTreeMap<String, Validity>> {
+pub(crate) fn verdicts(
+    checks: &BTreeMap<String, ReceiptKey>,
+) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
+    // The branch, resolved once and only when a branch-keyed row asked for it.
+    // A detached HEAD has no branch to key a claim on, and that resolves the
+    // whole call to "could not look" rather than to a missing receipt: denying
+    // there would refuse every edit during a rebase conflict resolution, which
+    // is the one moment the workflow contract says a human decision is required.
+    let branch = if checks.values().any(|key| *key == ReceiptKey::Branch) {
+        Some(crate::git::current_branch(Path::new(".")).ok()??)
+    } else {
+        None
+    };
     Some(
         checks
             .iter()
-            .map(|check| {
-                let statement = receipt_path(&facts.repo_root, check)
-                    .ok()
-                    .and_then(|path| load_statement(&path));
-                (
-                    check.clone(),
-                    validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir),
-                )
+            .map(|(check, key)| {
+                let verdict = match key {
+                    ReceiptKey::Head => {
+                        let statement = receipt_path(&facts.repo_root, check)
+                            .ok()
+                            .and_then(|path| load_statement(&path));
+                        validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir)
+                    }
+                    ReceiptKey::Branch => branch.as_deref().map_or(Validity::Missing, |branch| {
+                        branch_validity(&facts.git_dir, check, branch)
+                    }),
+                };
+                (check.clone(), verdict)
             })
             .collect(),
     )
+}
+
+/// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
+/// path separator replaced.
+///
+/// **A crate↔task contract, not an internal detail.** `mise-tasks/claim-check`
+/// mints this file and this reads it, so the two spellings must agree exactly or
+/// the gate silently reports a missing receipt for one that exists — a deny on a
+/// claim that was made. A slash is the one character a filename cannot carry and
+/// a branch name routinely does; nothing else in a branch name needs escaping
+/// here. `tests::the_branch_receipt_filename_matches_the_minting_task` is what
+/// stops the two halves drifting.
+fn branch_receipt_name(check: &str, branch: &str) -> String {
+    format!("{check}.{}", branch.replace('/', "-"))
+}
+
+/// Whether a branch-keyed receipt exists for `check` on `branch`.
+///
+/// Existence **is** the verdict, and only two of the four [`Validity`] states are
+/// reachable: a branch-keyed receipt attests to a decision about the work rather
+/// than to a set of bytes, so neither a new commit ([`Validity::StaleHead`]) nor a
+/// moved trunk ([`Validity::StaleMain`]) can invalidate it. That asymmetry is the
+/// whole reason the second keying exists — a SHA-keyed claim would demand a
+/// re-claim per commit, which is the false-positive rate that gets a guard
+/// bypassed.
+///
+/// Read from `--git-dir`, so it resolves per worktree and one worktree's claim
+/// cannot vouch for another's.
+fn branch_validity(git_dir: &str, check: &str, branch: &str) -> Validity {
+    let path = Path::new(git_dir)
+        .join("batten-receipts")
+        .join(branch_receipt_name(check, branch));
+    if path.is_file() {
+        Validity::Valid
+    } else {
+        Validity::Missing
+    }
+}
+
+/// Resolve `.` and `..` without touching the filesystem.
+///
+/// The lexical half of what `realpath -m` did for the bash guard this ports: the
+/// target need not exist, so nothing here may require it to. A `..` above the
+/// root is dropped rather than escaping into a prefix, which keeps the result a
+/// path this containment test can compare.
+fn lexically_normal(path: std::path::PathBuf) -> std::path::PathBuf {
+    let mut normalised = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalised.pop();
+            }
+            other => normalised.push(other),
+        }
+    }
+    normalised
+}
+
+/// Whether a written path is one policy may judge at all (CLOUD-444).
+///
+/// The write-triggered receipt row's exclusion set, ported from
+/// the bash guard this retires, where each exclusion is what keeps the guard's
+/// false-positive rate survivable *structurally* rather than by tuning:
+///
+/// * **outside the repository** — not this repository's policy to enforce;
+/// * **git-ignored** — the scratch-work half, closed honestly by asking git
+///   rather than by guessing which paths are scratch;
+/// * **inside `.git`** — receipts, hooks and index state are the machinery, not
+///   the work.
+///
+/// An untracked-but-not-ignored path is deliberately **judged**: opening a new
+/// feature file is the first edit the gate exists to catch, and exempting
+/// untracked paths would leave the hole open in its commonest form.
+///
+/// **Every answer it cannot establish is `false`, which allows.** A path that is
+/// not valid UTF-8 after canonicalisation, a repository root that does not
+/// resolve, a git that will not answer — each resolves to "not judgeable", the
+/// fail-open posture CLOUD-312 §5 preserves end to end.
+pub(crate) fn judgeable(path: &str) -> bool {
+    let Ok(root) = crate::git::repo_root(Path::new(".")) else {
+        return false;
+    };
+    // `absolute` rather than `canonicalize`: the file need not exist yet, which
+    // is exactly the new-feature-file case, and canonicalising a missing path
+    // fails. Symlink resolution is deliberately not attempted — a link out of the
+    // tree reads as inside it, which over-judges, and the direction that matters
+    // is that nothing inside the tree escapes.
+    //
+    // The `..` components are then resolved LEXICALLY, and that is not
+    // housekeeping. `absolute` only prepends the working directory, so
+    // `../sibling.md` becomes `<root>/../sibling.md` — a path that begins with the
+    // root and is therefore judged as inside it. Measured on this suite's own
+    // outside-the-repository case, which failed before the normalisation existed.
+    //
+    // **Note the direction is opposite to `hook::normalise`'s**, which
+    // deliberately leaves `..` alone: there, an unresolved traversal misses a
+    // protected path and UNDER-denies, the sanctioned direction. Here it
+    // OVER-denies — it refuses a write to a path outside the repository — and an
+    // over-denying claim gate is the false-positive rate that gets a guard
+    // switched off.
+    let Ok(absolute) = std::path::absolute(Path::new(path)).map(lexically_normal) else {
+        return false;
+    };
+    if !absolute.starts_with(&root) {
+        return false;
+    }
+    if absolute
+        .strip_prefix(&root)
+        .is_ok_and(|relative| relative.starts_with(".git"))
+    {
+        return false;
+    }
+    let Some(target) = absolute.to_str() else {
+        return false;
+    };
+    !crate::git::check_ignore(Path::new("."), target).unwrap_or(true)
 }
 
 /// Load a statement, failing closed: an unreadable, unparseable, or
@@ -956,6 +1091,110 @@ mod tests {
         assert_eq!(rfc3339_utc(1_709_251_200), "2024-03-01T00:00:00Z");
         // A century boundary that is not a leap year.
         assert_eq!(rfc3339_utc(4_102_444_800), "2100-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn the_branch_receipt_filename_matches_the_minting_task() {
+        // The crate↔task contract (CLOUD-444), pinned as a grep in the
+        // `hook::tests::the_redirect_pseudo_program_token_is_declared_not_implied`
+        // idiom. `mise-tasks/claim-check` writes this file and this module reads
+        // it; if the two spellings drift, the gate reports a missing receipt for
+        // one that exists — a deny on a claim that was actually made, which no
+        // in-crate test could catch on its own.
+        //
+        // The task interpolates the branch with bash's own substitution, so the
+        // literal to look for is the prefix plus that substitution.
+        let task = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../mise-tasks/claim-check"
+        ))
+        .expect("read the minting task");
+        assert!(
+            task.contains("batten-receipts/claim.${branch//\\//-}"),
+            "claim-check no longer writes the filename this module reads"
+        );
+        assert_eq!(
+            branch_receipt_name("claim", "user/cloud-444-slug"),
+            "claim.user-cloud-444-slug"
+        );
+        // Every separator, not merely the first: a branch name may carry several.
+        assert_eq!(branch_receipt_name("claim", "a/b/c"), "claim.a-b-c");
+        // A name needing no substitution is unchanged.
+        assert_eq!(branch_receipt_name("claim", "main"), "claim.main");
+    }
+
+    #[test]
+    fn a_traversal_is_resolved_before_the_containment_test() {
+        // The defect this closes, found by the end-to-end suite rather than by
+        // reading the code: `absolute` only prepends the working directory, so
+        // `../sibling.md` began with the repository root and was judged as inside
+        // it — a deny on a write OUTSIDE the repository, which is the
+        // over-denying direction a claim gate cannot afford.
+        assert_eq!(
+            lexically_normal(std::path::PathBuf::from("/repo/../sibling.md")),
+            std::path::PathBuf::from("/sibling.md")
+        );
+        assert_eq!(
+            lexically_normal(std::path::PathBuf::from("/repo/./src/../src/x.rs")),
+            std::path::PathBuf::from("/repo/src/x.rs")
+        );
+        // A traversal above the root stays a path rather than escaping upward.
+        assert_eq!(
+            lexically_normal(std::path::PathBuf::from("/../../x")),
+            std::path::PathBuf::from("/x")
+        );
+        // A path needing no resolution is unchanged.
+        assert_eq!(
+            lexically_normal(std::path::PathBuf::from("/repo/src/x.rs")),
+            std::path::PathBuf::from("/repo/src/x.rs")
+        );
+    }
+
+    #[test]
+    fn a_branch_keyed_verdict_is_existence_and_nothing_else() {
+        // Only two of the four states are reachable under a branch key: a claim
+        // attests to a decision about the work, so neither a new commit nor a
+        // moved trunk can invalidate it. That is the whole reason for the second
+        // keying — a SHA-keyed claim would demand a re-claim per commit.
+        let dir = tempdir();
+        let git_dir = dir.to_str().expect("utf-8 scratch path");
+        assert_eq!(
+            branch_validity(git_dir, "claim", "feature"),
+            Validity::Missing
+        );
+        let receipts = dir.join("batten-receipts");
+        std::fs::create_dir_all(&receipts).expect("create the store");
+        std::fs::write(receipts.join("claim.feature"), "CLOUD-444\n").expect("mint");
+        assert_eq!(
+            branch_validity(git_dir, "claim", "feature"),
+            Validity::Valid
+        );
+        // A receipt for another branch does not vouch for this one.
+        assert_eq!(
+            branch_validity(git_dir, "claim", "other"),
+            Validity::Missing
+        );
+        // Nor does another check's receipt on the same branch.
+        assert_eq!(
+            branch_validity(git_dir, "verify", "feature"),
+            Validity::Missing
+        );
+        // A directory at the path is not a receipt: `is_file` is what makes the
+        // store's own parent directory unable to answer for a check called
+        // nothing.
+        std::fs::create_dir_all(receipts.join("claim.dir")).expect("create a directory");
+        assert_eq!(branch_validity(git_dir, "claim", "dir"), Validity::Missing);
+    }
+
+    /// A per-process scratch directory, in this crate's unit-test idiom
+    /// (`drain`, `findings`): `CARGO_TARGET_TMPDIR` is integration-only, and a
+    /// pid-suffixed name keeps concurrent test binaries from sharing one.
+    fn tempdir() -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("batten-branch-receipt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the scratch dir");
+        dir
     }
 
     #[test]

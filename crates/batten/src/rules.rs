@@ -265,10 +265,17 @@ impl RuleKind {
             RuleKind::Ratchet => &["glob", "pattern", "direction", "base", "severity"],
             // Same `reason` obligation as a shape row, for the same reason: the
             // deny reaches a model as the whole explanation. `checks` is
-            // required because a receipt row naming none would gate its pattern
+            // required because a receipt row naming none would gate its trigger
             // on nothing and allow every call — a rule that loads, matches, and
             // decides nothing.
-            RuleKind::Receipt => &["pattern", "checks", "reason", "severity"],
+            //
+            // `pattern` is NOT here since CLOUD-444, and its absence is a
+            // conditional requirement rather than a relaxation: a
+            // command-triggered row still cannot load without one, refused in
+            // [`Rule::validate`] where the trigger is in scope. A write-triggered
+            // row has no command line to match, so requiring the column
+            // unconditionally would make the new trigger unusable.
+            RuleKind::Receipt => &["checks", "reason", "severity"],
             // `criteria` is what the model is asked, and a judge row without one
             // sends a payload with no question attached. `no_fix_reason` is
             // required rather than merely permitted because a judge finding
@@ -327,13 +334,14 @@ impl RuleKind {
                 "no_fix_reason",
                 "severity",
             ],
-            // `key` is the one optional column: it selects which git fact the
-            // receipt is keyed to, and it has a pinned default so a row that
-            // omits it is still total.
+            // Two optional columns, both with pinned defaults so a row omitting
+            // either is still total: `key` selects which git fact the receipt is
+            // keyed to, `trigger` what makes the row fire.
             RuleKind::Receipt => &[
                 "pattern",
                 "checks",
                 "key",
+                "trigger",
                 "reason",
                 "contains",
                 "policy_url",
@@ -652,6 +660,15 @@ pub struct Rule {
     /// the key can only make a gate stricter than intended, never weaker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<ReceiptKey>,
+    /// What makes a [`RuleKind::Receipt`] row fire — a command shape, or the fact
+    /// that the call writes (CLOUD-444).
+    ///
+    /// Optional with a pinned default of [`ReceiptTrigger::Command`], which is
+    /// what every row written before this column meant. The axis is orthogonal to
+    /// `key`: a trigger says *when* the precondition is due, a key says *what
+    /// invalidates* the proof of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<ReceiptTrigger>,
     /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
     /// instruction handed to the judge command (CLOUD-56).
     ///
@@ -698,6 +715,30 @@ pub enum ReceiptKey {
     Head,
     /// Keyed to the branch; every commit on it continues to serve the claim.
     Branch,
+}
+
+/// What makes a receipt row fire (CLOUD-444).
+///
+/// The two triggers answer different questions and neither subsumes the other. A
+/// [`ReceiptTrigger::Command`] row says "before you run *this*, prove *that*" —
+/// the precondition is due at one recognisable invocation, and the row names it
+/// with a `pattern`. A [`ReceiptTrigger::Write`] row says the precondition is due
+/// before the work is *touched at all*, which no command shape can express:
+/// the claim gate fires on every write precisely because the edit it exists to
+/// catch is the first one, whatever tool makes it.
+///
+/// A write-triggered row therefore carries no `pattern` and no `contains` — both
+/// name a command line a write does not have — and its exclusions (git-ignored,
+/// outside the repository, inside `.git`) are boundary facts rather than config,
+/// because they are questions about a checkout and this table is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ReceiptTrigger {
+    /// Fires on a mediated command matching the row's `pattern`.
+    #[default]
+    Command,
+    /// Fires on any mediated call that writes a judgeable path.
+    Write,
 }
 
 /// Which way a ratcheted count may move.
@@ -798,7 +839,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 19] {
+    fn columns(&self) -> [(&'static str, bool); 20] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -822,7 +863,21 @@ impl Rule {
             ("base", self.base.is_some()),
             ("checks", self.checks.is_some()),
             ("key", self.key.is_some()),
+            ("trigger", self.trigger.is_some()),
         ]
+    }
+
+    /// What makes this row fire, with the pinned default applied — the one place
+    /// absence is resolved, so no call site reads it a second way.
+    #[must_use]
+    pub fn receipt_trigger(&self) -> ReceiptTrigger {
+        self.trigger.unwrap_or_default()
+    }
+
+    /// Which git fact this row's receipts are keyed to, default applied.
+    #[must_use]
+    pub fn receipt_key(&self) -> ReceiptKey {
+        self.key.unwrap_or_default()
     }
 
     fn validate(&self) -> anyhow::Result<()> {
@@ -837,18 +892,33 @@ impl Rule {
                 self.id
             )));
         }
-        // `key = "branch"` parses and has nowhere to go yet: the predicate
-        // behind this kind is HEAD-keyed (`receipt::validity` compares the
-        // subject commit against HEAD), so honouring the column would need a
-        // branch-keyed store that does not exist. Refused loudly rather than
-        // accepted-and-ignored, because a config key that reads as configured
-        // and decides nothing is the exact defect this kind was added to close
-        // — and here it would silently make a claim gate expire per commit.
-        if self.key == Some(ReceiptKey::Branch) {
-            return Err(UsageError::raise(format!(
-                "rule {}: `key = \"branch\"` is not implemented yet — the receipt store is HEAD-keyed. Use `key = \"head\"`, or omit it; branch-keyed receipts land with the claim gate (CLOUD-312)",
-                self.id
-            )));
+        // The two trigger-dependent obligations (CLOUD-444). They live here
+        // rather than in the column census because the census is a per-kind
+        // const, and which columns a receipt row owes depends on a value inside
+        // it. `key = "branch"` was refused from this same spot until the
+        // branch-keyed store existed; both refusals below have that one's
+        // reasoning — a column that reads as configured and decides nothing is
+        // the defect this kind was added to close.
+        if self.kind == RuleKind::Receipt {
+            match self.receipt_trigger() {
+                // A command-triggered row with no pattern matches every mediated
+                // call, turning a precondition into a universal gate.
+                ReceiptTrigger::Command if self.pattern.is_none() => {
+                    return Err(UsageError::raise(format!(
+                        "rule {}: kind \"receipt\" with `trigger = \"command\"` (the default) requires `pattern` — the command whose precondition this is",
+                        self.id
+                    )));
+                }
+                // A write carries no command line, so either column would sit
+                // there matching nothing while reading as a narrowing.
+                ReceiptTrigger::Write if self.pattern.is_some() || self.contains.is_some() => {
+                    return Err(UsageError::raise(format!(
+                        "rule {}: kind \"receipt\" with `trigger = \"write\"` takes neither `pattern` nor `contains` — a write has no command line for either to match",
+                        self.id
+                    )));
+                }
+                _ => {}
+            }
         }
         // A receipt row naming an empty `checks` list gates its trigger on
         // nothing and allows every call, which reads as coverage from the file.
@@ -1110,6 +1180,26 @@ pub fn validate(rules: &[Rule]) -> anyhow::Result<()> {
                 "rule {}: declared twice; a rule has one definition",
                 rule.id
             )));
+        }
+        // One check name, one keying (CLOUD-444). The boundary resolves each
+        // required name to a single verdict, so two rows disagreeing about what
+        // invalidates the same receipt would silently resolve it one row's way —
+        // a branch-keyed claim expiring per commit, or a HEAD-keyed verification
+        // outliving the bytes it validated. Both are false greens, and the
+        // per-row `validate` cannot see the collision, so it is refused here.
+        for prior in &rules[..index] {
+            let (Some(mine), Some(theirs)) = (rule.checks.as_ref(), prior.checks.as_ref()) else {
+                continue;
+            };
+            if rule.receipt_key() == prior.receipt_key() {
+                continue;
+            }
+            if let Some(shared) = mine.iter().find(|check| theirs.contains(check)) {
+                return Err(UsageError::raise(format!(
+                    "rules {} and {}: both require the receipt `{shared}` under different `key` values; one check name has one keying",
+                    prior.id, rule.id
+                )));
+            }
         }
     }
     Ok(())
@@ -2332,6 +2422,7 @@ mod tests {
                 .contains(&"checks")
                 .then(|| vec!["verify".to_owned()]),
             key: None,
+            trigger: None,
         }
     }
 
@@ -2805,6 +2896,14 @@ mod tests {
                 if *kind == RuleKind::Forbid {
                     rule.pattern = Some("x".to_owned());
                 }
+                // The same shape, for the same reason: a receipt row's `pattern`
+                // is required only under the default `command` trigger
+                // (CLOUD-444), which a flat column list cannot express either, so
+                // it does not appear in `requires()`. Supplied here so the only
+                // possible complaint stays the pairing.
+                if *kind == RuleKind::Receipt {
+                    rule.pattern = Some("x".to_owned());
+                }
                 let result = rule.validate();
                 if kind.scopes().contains(scope) {
                     assert!(result.is_ok(), "{kind:?}/{scope:?} must load");
@@ -2814,6 +2913,85 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A loadable receipt row with the trigger under test.
+    fn receipt_row(trigger: Option<ReceiptTrigger>) -> Rule {
+        let mut rule = blank("r", RuleKind::Receipt);
+        rule.scope = RuleScope::MediatedCall;
+        rule.reason = Some("earn it".to_owned());
+        rule.checks = Some(vec!["claim".to_owned()]);
+        rule.trigger = trigger;
+        rule
+    }
+
+    #[test]
+    fn a_command_triggered_receipt_row_still_requires_its_pattern() {
+        // `pattern` left `requires()` so a write trigger could exist; the
+        // requirement did not go away, it became conditional. A command row
+        // without one would match every mediated call, turning a precondition
+        // into a universal gate.
+        for trigger in [None, Some(ReceiptTrigger::Command)] {
+            let row = receipt_row(trigger);
+            let err = row.validate().unwrap_err();
+            assert!(
+                err.downcast_ref::<UsageError>().is_some(),
+                "a command-triggered row needs a pattern: {trigger:?}"
+            );
+            let mut with_pattern = receipt_row(trigger);
+            with_pattern.pattern = Some("gh pr ready".to_owned());
+            assert!(with_pattern.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn a_write_triggered_receipt_row_refuses_a_command_shape_column() {
+        // Both columns name a command line, and a write has none — so either
+        // would sit there matching nothing while reading as a narrowing.
+        assert!(receipt_row(Some(ReceiptTrigger::Write)).validate().is_ok());
+        let mut with_pattern = receipt_row(Some(ReceiptTrigger::Write));
+        with_pattern.pattern = Some("gh pr ready".to_owned());
+        assert!(with_pattern.validate().is_err());
+        let mut with_contains = receipt_row(Some(ReceiptTrigger::Write));
+        with_contains.contains = Some("fast-forward".to_owned());
+        assert!(with_contains.validate().is_err());
+    }
+
+    #[test]
+    fn a_branch_keyed_receipt_row_loads_now_that_the_store_exists() {
+        // This column was refused at load until CLOUD-444, naming that issue.
+        // The refusal going away IS the change, so it is asserted rather than
+        // left to the absence of a test.
+        let mut row = receipt_row(Some(ReceiptTrigger::Write));
+        row.key = Some(ReceiptKey::Branch);
+        assert!(row.validate().is_ok());
+        assert_eq!(row.receipt_key(), ReceiptKey::Branch);
+        // And the defaults still resolve one way each.
+        assert_eq!(receipt_row(None).receipt_key(), ReceiptKey::Head);
+        assert_eq!(receipt_row(None).receipt_trigger(), ReceiptTrigger::Command);
+    }
+
+    #[test]
+    fn one_check_name_cannot_be_required_under_two_keys() {
+        // The false green this refuses: whichever row the boundary resolved
+        // first would decide what invalidates the other's receipt — a
+        // branch-keyed claim expiring per commit, or a HEAD-keyed verification
+        // outliving the bytes it validated.
+        let mut branch = receipt_row(Some(ReceiptTrigger::Write));
+        branch.id = "claim-needs-receipt".to_owned();
+        branch.key = Some(ReceiptKey::Branch);
+        let mut head = receipt_row(None);
+        head.id = "other".to_owned();
+        head.pattern = Some("gh pr ready".to_owned());
+        head.checks = Some(vec!["claim".to_owned()]);
+        let err = validate(&[branch.clone(), head.clone()]).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        // The same name under the SAME key is not a collision: two rows may
+        // legitimately depend on one receipt.
+        head.key = Some(ReceiptKey::Branch);
+        head.trigger = Some(ReceiptTrigger::Write);
+        head.pattern = None;
+        assert!(validate(&[branch, head]).is_ok());
     }
 
     #[test]

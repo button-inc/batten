@@ -1390,8 +1390,20 @@ fn run_hook(
     // Resolved only for the names the policy actually requires, so a repository
     // declaring no receipt row does no git work at all on the hottest path in
     // the binary. `None` throughout means "could not look", which allows.
-    let required = policy.required_checks_for(&envelope.command);
-    let receipts: hook::ReceiptFacts = if required.is_empty() {
+    //
+    // A write-triggered row (CLOUD-444) adds one more boundary question before
+    // the store is consulted: is the written path one policy judges at all? The
+    // exclusions — git-ignored, outside the repository, inside `.git` — are
+    // properties of a checkout, so they resolve here and reach `adjudicate` as
+    // the same "nothing to answer" absence a failed lookup produces. The
+    // `check-ignore` behind it runs only when a write-triggered row actually
+    // selected, so a repository declaring none pays nothing for it.
+    let required = policy.required_checks_for(&envelope);
+    let judgeable = envelope
+        .writes
+        .as_deref()
+        .is_none_or(|path| receipt::judgeable(path));
+    let receipts: hook::ReceiptFacts = if required.is_empty() || !judgeable {
         None
     } else {
         receipt::verdicts(&required)

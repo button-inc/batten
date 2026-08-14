@@ -874,6 +874,21 @@
         }
       ]
     },
+    "ReceiptTrigger": {
+      "description": "What makes a receipt row fire (CLOUD-444).\n\nThe two triggers answer different questions and neither subsumes the other. A\n[`ReceiptTrigger::Command`] row says \"before you run *this*, prove *that*\" —\nthe precondition is due at one recognisable invocation, and the row names it\nwith a `pattern`. A [`ReceiptTrigger::Write`] row says the precondition is due\nbefore the work is *touched at all*, which no command shape can express:\nthe claim gate fires on every write precisely because the edit it exists to\ncatch is the first one, whatever tool makes it.\n\nA write-triggered row therefore carries no `pattern` and no `contains` — both\nname a command line a write does not have — and its exclusions (git-ignored,\noutside the repository, inside `.git`) are boundary facts rather than config,\nbecause they are questions about a checkout and this table is not.",
+      "oneOf": [
+        {
+          "description": "Fires on a mediated command matching the row's `pattern`.",
+          "type": "string",
+          "const": "command"
+        },
+        {
+          "description": "Fires on any mediated call that writes a judgeable path.",
+          "type": "string",
+          "const": "write"
+        }
+      ]
+    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.\n`severity` is required by every kind but `judge`, which is refused it\n(CLOUD-445). The field is an `Option` so a judge row can omit it, so the\nderived `required` list cannot carry it — and a schema that merely dropped it\nwould stop flagging the missing key on the four kinds that must have one,\nmoving a check out of the editor with nothing taking its place.\n\nThis conditional puts it back, stated once here and derived into both\npublished schemas. It mirrors [`RuleKind::requires`] and\n[`RuleKind::permits`]; `tests::the_schema_conditional_matches_the_column_census`\nis what keeps the two from drifting.",
       "type": "object",
@@ -1037,6 +1052,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/AdvisoryTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "What makes a [`RuleKind::Receipt`] row fire — a command shape, or the fact\nthat the call writes (CLOUD-444).\n\nOptional with a pinned default of [`ReceiptTrigger::Command`], which is\nwhat every row written before this column meant. The axis is orthogonal to\n`key`: a trigger says *when* the precondition is due, a key says *what\ninvalidates* the proof of it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReceiptTrigger"
             },
             {
               "type": "null"

@@ -989,6 +989,31 @@ pub fn current_branch(dir: &Path) -> Result<Option<String>> {
     Ok((name != "HEAD").then_some(name))
 }
 
+/// Whether git ignores `path` — the scratch-work question (CLOUD-444).
+///
+/// `check-ignore` rather than a reimplementation of the ignore rules: the
+/// precedence between a repository's `.gitignore`, its excludes file and its
+/// global config is git's own, and a second implementation of it would disagree
+/// on exactly the layered cases a consumer relies on.
+///
+/// Built on [`query_optional`], whose contract this fits exactly: `check-ignore`
+/// spells "not ignored" as **exit 1**, an answer rather than a failure. The
+/// direction of the absent case is the one to read carefully — here a `false` is
+/// "not ignored", which makes the path *judgeable*, so a git that cannot answer
+/// must not silently produce `false`; that is why a failure to run git at all
+/// still raises rather than returning `Ok(false)`.
+///
+/// `--` separates the pathspec from the flags, so a path beginning with a dash is
+/// asked about rather than parsed as one.
+///
+/// # Errors
+///
+/// Raises when `git` cannot be run at all, or its output is not UTF-8 — only the
+/// verdict is optional, never the mechanism.
+pub fn check_ignore(dir: &Path, path: &str) -> Result<bool> {
+    Ok(query_optional(dir, &["check-ignore", "--quiet", "--", path])?.is_some())
+}
+
 /// The commit `HEAD` points at, as a full SHA.
 ///
 /// Recorded beside every observation so a stored count says *which tree* it

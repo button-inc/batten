@@ -47,7 +47,7 @@ use serde_json::Value;
 use crate::receipt::Validity;
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
-use crate::rules::{PathSet, Rule, RuleKind, RuleScope};
+use crate::rules::{PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope};
 use crate::severity::{self, ReportLevel, RuleSeverity};
 use crate::verbs::{MutatingVerb, OperandScope};
 
@@ -1465,17 +1465,27 @@ impl Policy {
     /// The row selection is [`matching_receipt_rows`] — the same function
     /// [`receipt_rules`] adjudicates with, so what the boundary resolves and
     /// what the core then judges cannot disagree about which rows fire.
+    ///
+    /// Each name carries **its row's keying** (CLOUD-444), because that is what
+    /// the boundary needs in order to look in the right place: a HEAD-keyed
+    /// receipt lives in the content store under a fingerprint, a branch-keyed one
+    /// beside the branch. `rules::validate` refuses one name required under two
+    /// keys, so collapsing to a map cannot lose a distinction a config drew.
     #[must_use]
-    pub fn required_checks_for(&self, command: &str) -> Vec<String> {
-        let mut names: Vec<String> = matching_receipt_rows(self, command)
+    pub fn required_checks_for(
+        &self,
+        envelope: &Envelope,
+    ) -> std::collections::BTreeMap<String, ReceiptKey> {
+        matching_receipt_rows(self, envelope)
             .into_iter()
-            .filter_map(|rule| rule.checks.as_ref())
-            .flatten()
-            .cloned()
-            .collect();
-        names.sort();
-        names.dedup();
-        names
+            .flat_map(|rule| {
+                let key = rule.receipt_key();
+                rule.checks
+                    .iter()
+                    .flatten()
+                    .map(move |check| (check.clone(), key))
+            })
+            .collect()
     }
 
     /// Whether this policy can deny anything at all.
@@ -1569,6 +1579,21 @@ pub fn adjudicate(
             }
         }
     }
+    // The write-triggered receipt gate (CLOUD-444), reached whether or not this
+    // call also carries a command — a write tool carries none, and the early
+    // return below is what made every write unjudgeable by anything but the
+    // protected gate above.
+    //
+    // AFTER the protected gate and before everything else, which is the same
+    // precedence the command paths keep: a ban outranks an unmet precondition,
+    // because there is no point telling the author of a refused call which
+    // receipt to go and earn.
+    if envelope.writes.is_some() {
+        match receipt_rules(policy, envelope, receipts) {
+            decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+            Decision::Allow => {}
+        }
+    }
     if envelope.command.is_empty() {
         return Decision::Allow;
     }
@@ -1584,7 +1609,7 @@ pub fn adjudicate(
     // order is supposed to decide.
     match shape_rules(policy, &envelope.command) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-        Decision::Allow => match receipt_rules(policy, &envelope.command, receipts) {
+        Decision::Allow => match receipt_rules(policy, envelope, receipts) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
             Decision::Allow => protected_mutation(policy, &envelope.command),
         },
@@ -1610,11 +1635,19 @@ pub fn deny_text(refusal: &Refusal) -> String {
 /// a rule about rules that the config does not state.
 /// The receipt verdicts a mediated call is judged against.
 ///
-/// `None` is **could not look** — no checkout, or an `origin/main` that does
-/// not resolve — and allows, which is the fail-open posture every retiring
-/// guard has. `Some` map missing a name is treated as [`Validity::Missing`],
-/// so a boundary that resolved fewer facts than the policy needs fails closed
-/// rather than silently allowing.
+/// `None` is **no receipt question to answer here**, and allows — the fail-open
+/// posture every retiring guard has. Two things resolve to it, and both are the
+/// boundary's to decide because both are questions about a checkout:
+///
+/// * **could not look** — no checkout, an `origin/main` that does not resolve, or
+///   a detached HEAD where a branch-keyed row needs a branch;
+/// * **nothing judgeable** — the call writes a path policy does not judge
+///   (git-ignored, outside the repository, inside `.git`), which is
+///   [`crate::receipt::judgeable`]'s answer and CLOUD-444's exclusion set.
+///
+/// `Some` map missing a name is treated as [`Validity::Missing`], so a boundary
+/// that resolved fewer facts than the policy needs fails closed rather than
+/// silently allowing.
 pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
 
 /// Deny a call whose declared receipts are not all valid (CLOUD-312).
@@ -1630,9 +1663,26 @@ pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
 /// which receipts to resolve and the adjudicator that judges them. Split out
 /// because those two answering separately is how a call comes to pay for a
 /// receipt no rule would have consulted (CLOUD-460).
-fn matching_receipt_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
+fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a Rule> {
     let mut matched: Vec<&Rule> = Vec::new();
-    for segment in segments(command) {
+    // The write-triggered rows first, and they are selected without looking at a
+    // command at all (CLOUD-444): the precondition is due before the work is
+    // touched, so what fires the row is that this call writes. Which writes are
+    // JUDGEABLE — not ignored, inside the repository, outside `.git` — is a
+    // question about a checkout and therefore the boundary's
+    // (`receipt::judgeable`), never this table's.
+    if envelope.writes.is_some() {
+        for rule in &policy.shapes {
+            if rule.kind != RuleKind::Receipt
+                || rule.receipt_trigger() != ReceiptTrigger::Write
+                || !blocks(rule.severity(), policy.fail_on_warning)
+            {
+                continue;
+            }
+            matched.push(rule);
+        }
+    }
+    for segment in segments(&envelope.command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
             continue;
@@ -1643,7 +1693,10 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule>
             .filter(|token| !token.starts_with('-'))
             .collect();
         for rule in &policy.shapes {
-            if rule.kind != RuleKind::Receipt || !blocks(rule.severity(), policy.fail_on_warning) {
+            if rule.kind != RuleKind::Receipt
+                || rule.receipt_trigger() != ReceiptTrigger::Command
+                || !blocks(rule.severity(), policy.fail_on_warning)
+            {
                 continue;
             }
             let Some((program, wanted)) = rule.trigger() else {
@@ -1673,13 +1726,14 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule>
     matched
 }
 
-fn receipt_rules(policy: &Policy, command: &str, facts: &ReceiptFacts) -> Decision {
-    // No facts means the boundary could not look. Allow: a guard that cannot
-    // read its own precondition must not become the reason work stops.
+fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> Decision {
+    // No facts means there is no receipt question to answer here. Allow: a guard
+    // that cannot read its own precondition must not become the reason work
+    // stops.
     let Some(facts) = facts.as_ref() else {
         return Decision::Allow;
     };
-    for rule in matching_receipt_rows(policy, command) {
+    for rule in matching_receipt_rows(policy, envelope) {
         // Every named receipt must be valid. An unresolved name is Missing,
         // never absent-and-therefore-fine: a boundary that answered for
         // fewer checks than the row requires has not proved the precondition.
@@ -1701,6 +1755,14 @@ fn receipt_rules(policy: &Policy, command: &str, facts: &ReceiptFacts) -> Decisi
 /// verdict token, never the receipt's contents.
 fn receipt_refusal(rule: &Rule, check: &str, verdict: Validity) -> Refusal {
     let cause = match verdict {
+        // The cause names what the receipt is keyed to (CLOUD-444), because that
+        // is what the reader has to act on: "no receipt for this commit" sends
+        // someone looking for a per-commit step when what is missing is a claim
+        // the whole branch shares, and a wrong pointer is CLOUD-122's failure in
+        // its most confusing form.
+        Validity::Missing if rule.receipt_key() == ReceiptKey::Branch => {
+            format!("this branch carries no `{check}` receipt")
+        }
         Validity::Missing => {
             format!("`{check}` has recorded no receipt for this commit in this checkout")
         }
@@ -2371,6 +2433,7 @@ mod tests {
             no_fix_reason: None,
             checks: None,
             key: None,
+            trigger: None,
         }
     }
 
@@ -3033,6 +3096,117 @@ mod tests {
         )
     }
 
+    /// The claim row: a write-triggered, branch-keyed receipt (CLOUD-444).
+    fn claim_policy() -> Policy {
+        let mut rule = shape("claim-needs-receipt", "unused", None);
+        rule.kind = RuleKind::Receipt;
+        rule.pattern = None;
+        rule.trigger = Some(ReceiptTrigger::Write);
+        rule.key = Some(ReceiptKey::Branch);
+        rule.reason = Some("pipe the issue payload to `mise run claim-check`".to_owned());
+        rule.checks = Some(vec!["claim".to_owned()]);
+        Policy {
+            shapes: vec![rule],
+            fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+        }
+    }
+
+    fn adjudicate_write(facts: &ReceiptFacts) -> Decision {
+        adjudicate(
+            &claim_policy(),
+            &write_envelope("Write", "crates/batten/src/new.rs"),
+            false,
+            facts,
+            &crate::stop::StopFacts::default(),
+        )
+    }
+
+    #[test]
+    fn a_write_triggered_row_fires_on_a_write_that_carries_no_command() {
+        // The gap this closes: every write returned Allow before the command
+        // gate ran, so a receipt row could never be a precondition for editing.
+        assert!(matches!(
+            adjudicate_write(&Some(resolved(&[("claim", Validity::Missing)]))),
+            Decision::Deny(_)
+        ));
+        assert_eq!(
+            adjudicate_write(&Some(resolved(&[("claim", Validity::Valid)]))),
+            Decision::Allow
+        );
+    }
+
+    #[test]
+    fn a_write_triggered_row_ignores_a_command_and_a_command_row_ignores_a_write() {
+        // The two triggers select disjointly, which is what keeps adding one from
+        // charging the other's calls.
+        assert_eq!(
+            adjudicate(
+                &claim_policy(),
+                &envelope("gh pr ready 42"),
+                false,
+                &Some(resolved(&[("claim", Validity::Missing)])),
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Allow,
+            "a write-triggered row must not judge a command"
+        );
+        assert_eq!(
+            adjudicate(
+                &receipt_policy(),
+                &write_envelope("Write", "notes.md"),
+                false,
+                &Some(resolved(&[("verify", Validity::Missing)])),
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Allow,
+            "a command-triggered row must not judge a write"
+        );
+    }
+
+    #[test]
+    fn a_write_the_boundary_did_not_judge_is_allowed() {
+        // `None` is the boundary saying there is no receipt question here — a
+        // git-ignored path, one outside the repository, one inside `.git`, or a
+        // detached HEAD. Every one of them allows, and they are the load-bearing
+        // half: a gate that refused them would refuse every write in the
+        // container and be switched off within the hour.
+        assert_eq!(adjudicate_write(&None), Decision::Allow);
+    }
+
+    #[test]
+    fn a_branch_keyed_refusal_says_branch_rather_than_commit() {
+        // The wrong pointer this avoids: "no receipt for this commit" sends the
+        // reader looking for a per-commit step, when what is missing is a claim
+        // the whole branch shares.
+        let reason = denial_text(adjudicate_write(&Some(resolved(&[(
+            "claim",
+            Validity::Missing,
+        )]))));
+        assert!(reason.contains("branch"), "names the keying: {reason}");
+        assert!(
+            !reason.contains("this commit"),
+            "must not name a commit: {reason}"
+        );
+        assert!(reason.contains("claim-check"), "names the route: {reason}");
+    }
+
+    #[test]
+    fn a_write_row_resolves_its_checks_with_its_own_keying() {
+        // What the boundary needs in order to look in the right place at all: a
+        // HEAD-keyed receipt lives in the content store, a branch-keyed one
+        // beside the branch.
+        let required = claim_policy().required_checks_for(&write_envelope("Write", "crates/x.rs"));
+        assert_eq!(required.get("claim"), Some(&ReceiptKey::Branch));
+        assert_eq!(
+            receipt_policy()
+                .required_checks_for(&envelope("gh pr ready 42"))
+                .get("verify"),
+            Some(&ReceiptKey::Head)
+        );
+    }
+
     // --- what the boundary resolves (CLOUD-460) -----------------------------
 
     #[test]
@@ -3045,23 +3219,32 @@ mod tests {
         // nothing.
         assert!(
             receipt_policy()
-                .required_checks_for("gh pr view 42")
+                .required_checks_for(&envelope("gh pr view 42"))
                 .is_empty(),
             "a command no receipt row matches must resolve nothing"
         );
     }
 
     #[test]
-    fn a_write_resolves_no_checks_because_it_carries_no_command() {
-        // The write matcher pays the same toll otherwise, and no receipt row
-        // has a write trigger today.
-        assert!(receipt_policy().required_checks_for("").is_empty());
+    fn a_write_resolves_no_checks_unless_a_row_asked_for_writes() {
+        // The write matcher pays the same toll otherwise. Since CLOUD-444 a row
+        // CAN ask for writes, so the assertion is about this policy's rows —
+        // command-triggered, therefore silent on a write — rather than about the
+        // trigger being unreachable.
+        assert!(
+            receipt_policy()
+                .required_checks_for(&write_envelope("Write", "notes.md"))
+                .is_empty()
+        );
     }
 
     #[test]
     fn a_matching_command_resolves_exactly_the_rows_checks() {
         assert_eq!(
-            receipt_policy().required_checks_for("gh pr ready 42"),
+            receipt_policy()
+                .required_checks_for(&envelope("gh pr ready 42"))
+                .into_keys()
+                .collect::<Vec<String>>(),
             vec!["linear-check".to_owned(), "verify".to_owned()],
         );
     }
@@ -3071,7 +3254,10 @@ mod tests {
         // Deduplicated by row, not by name, so a command naming the same
         // trigger twice does not resolve the same receipt twice.
         assert_eq!(
-            receipt_policy().required_checks_for("gh pr ready 1 && gh pr ready 2"),
+            receipt_policy()
+                .required_checks_for(&envelope("gh pr ready 1 && gh pr ready 2"))
+                .into_keys()
+                .collect::<Vec<String>>(),
             vec!["linear-check".to_owned(), "verify".to_owned()],
         );
     }
