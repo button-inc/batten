@@ -56,6 +56,7 @@
 //!   about. Exit `1` and not `2`: §7 spends `2` on the policy verdict alone, so a
 //!   parse failure must never reach a mediating harness as a deny.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -253,6 +254,51 @@ pub struct Stream {
     pub session: Option<String>,
     /// Every event, in file order.
     pub records: Vec<Record>,
+    /// What the harness reported about itself and about what it reached
+    /// (CLOUD-579).
+    pub agent: AgentContext,
+}
+
+/// The agent's own composition, as far as a transcript states it.
+///
+/// # Sets, and why every field is plural
+///
+/// None of these is a single fact about a session. A fork continues under a new
+/// model, a harness updates mid-run, and a session reaches several MCP servers —
+/// so a scalar would have to pick one occurrence and would be false whenever
+/// there were two. Sets are the honest shape, and [`std::collections::BTreeSet`]
+/// makes them byte-stable however the file was ordered (§6).
+///
+/// # `exercised`, never `permitted`
+///
+/// A transcript records what a session **used**. Nothing in it enumerates what
+/// the session was **allowed** to use, and CLOUD-279 measured how wide that gap
+/// is: `.mcp.json` declared one server while the session reached three, the rest
+/// injected by the harness at runtime and written to no file. The field names say
+/// `exercised` so a reader cannot mistake the smaller set for the larger one —
+/// the direction that flatters, and therefore the one to close off by name.
+///
+/// # What is deliberately absent
+///
+/// `permissionMode` is not here. It is recorded per event and changes mid-session
+/// (measured: `plan`, then not), so any single value is a claim about a
+/// trajectory, and a record that stated one would be false in the ordinary case.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct AgentContext {
+    /// Every distinct `message.model` the session recorded.
+    pub models: BTreeSet<String>,
+    /// Every distinct harness version.
+    pub harness_versions: BTreeSet<String>,
+    /// Every distinct entrypoint (`remote`, `cli`, …).
+    pub entrypoints: BTreeSet<String>,
+    /// Every distinct MCP server a call was attributed to, as the host's own
+    /// opaque identifier. No name mapping is published, so resolving one would
+    /// be Batten asserting a fact it cannot verify.
+    pub exercised_mcp_servers: BTreeSet<String>,
+    /// Every distinct working directory.
+    pub working_dirs: BTreeSet<String>,
+    /// Every distinct git branch.
+    pub git_branches: BTreeSet<String>,
 }
 
 /// Pointer-only counts over a stream — the whole of what may be rendered.
@@ -364,6 +410,7 @@ pub fn resolve(root: &Path, configured: Option<&str>) -> Result<Capability> {
 pub fn parse(body: &str, label: &str) -> Result<Stream> {
     let mut session = None;
     let mut records = Vec::new();
+    let mut agent = AgentContext::default();
     for (index, text) in body.lines().enumerate() {
         let line = index + 1;
         if text.trim().is_empty() {
@@ -384,9 +431,38 @@ pub fn parse(body: &str, label: &str) -> Result<Stream> {
                 .filter(|id| !id.is_empty())
                 .map(ToOwned::to_owned);
         }
+        gather(&parsed, &mut agent);
         collect(&parsed, line, &mut records);
     }
-    Ok(Stream { session, records })
+    Ok(Stream {
+        session,
+        records,
+        agent,
+    })
+}
+
+/// Accumulate one line's agent-context facts.
+///
+/// Empty strings are dropped rather than recorded: a host that emits `""` for a
+/// field it has no value for would otherwise mint a set member meaning "the
+/// model was the empty string", which is worse than the field being absent.
+fn gather(parsed: &Line, agent: &mut AgentContext) {
+    let add = |set: &mut BTreeSet<String>, value: &Option<String>| {
+        if let Some(text) = value.as_deref().filter(|text| !text.is_empty()) {
+            set.insert(text.to_owned());
+        }
+    };
+    add(&mut agent.harness_versions, &parsed.version);
+    add(&mut agent.entrypoints, &parsed.entrypoint);
+    add(&mut agent.working_dirs, &parsed.cwd);
+    add(&mut agent.git_branches, &parsed.git_branch);
+    add(
+        &mut agent.exercised_mcp_servers,
+        &parsed.attribution_mcp_server,
+    );
+    if let Some(message) = &parsed.message {
+        add(&mut agent.models, &message.model);
+    }
 }
 
 /// Turn one decoded line into zero or more events.
@@ -529,6 +605,19 @@ fn origin_of(parsed: &Line, message: &Message, role: Role) -> Origin {
 struct Line {
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
+    /// The harness's own version string.
+    version: Option<String>,
+    /// How the session was started (`remote`, `cli`, …).
+    entrypoint: Option<String>,
+    /// The working directory the session ran in.
+    cwd: Option<String>,
+    #[serde(rename = "gitBranch")]
+    git_branch: Option<String>,
+    /// The MCP server a tool call was attributed to — an opaque host
+    /// identifier, recorded as given (CLOUD-579: no name mapping is published,
+    /// and inventing one would be Batten asserting a fact it cannot verify).
+    #[serde(rename = "attributionMcpServer")]
+    attribution_mcp_server: Option<String>,
     message: Option<Message>,
     attachment: Option<Attachment>,
     /// The host marking a record as its own rather than the operator's.
@@ -546,6 +635,9 @@ struct Line {
 struct Message {
     role: Option<String>,
     content: Option<Value>,
+    /// The model that produced this message — the one agent-context fact that
+    /// lives on the message rather than the line (CLOUD-579).
+    model: Option<String>,
     /// Why the turn ended, in the host's own token — normalized to
     /// [`StopReason`] on the way in and never stored as text (CLOUD-97).
     #[serde(rename = "stop_reason")]
@@ -648,6 +740,58 @@ mod tests {
 
     fn sample() -> Stream {
         parse(SAMPLE, "t.jsonl").expect("parses")
+    }
+
+    /// The agent-context fields in the shape a real session writes them
+    /// (measured 2026-08-13): they sit at the top level beside `sessionId`,
+    /// except `model`, which sits on the message. Two lines, differing in
+    /// model and server, so the sets have something to be sets of.
+    const CONTEXT: &str = r#"{"type":"assistant","sessionId":"s-1","version":"2.1.232","entrypoint":"remote","cwd":"/home/user/batten","gitBranch":"main","message":{"role":"assistant","model":"model-alpha-1","content":[]}}
+{"type":"assistant","sessionId":"s-1","version":"2.1.232","entrypoint":"remote","cwd":"/home/user/batten","gitBranch":"main","attributionMcpServer":"serena","message":{"role":"assistant","model":"model-beta-2","content":[]}}
+{"type":"assistant","sessionId":"s-1","attributionMcpServer":"github","message":{"role":"assistant","model":"","content":[]}}"#;
+
+    #[test]
+    fn the_agent_context_is_gathered_as_sets() {
+        let agent = parse(CONTEXT, "t.jsonl").expect("parses").agent;
+        // Distinct values accumulate; a repeated one does not double.
+        assert_eq!(
+            agent.models,
+            ["model-alpha-1", "model-beta-2"]
+                .map(ToOwned::to_owned)
+                .into()
+        );
+        assert_eq!(
+            agent.harness_versions,
+            ["2.1.232"].map(ToOwned::to_owned).into()
+        );
+        assert_eq!(agent.entrypoints, ["remote"].map(ToOwned::to_owned).into());
+        assert_eq!(
+            agent.exercised_mcp_servers,
+            ["github", "serena"].map(ToOwned::to_owned).into()
+        );
+        assert_eq!(
+            agent.working_dirs,
+            ["/home/user/batten"].map(ToOwned::to_owned).into()
+        );
+        assert_eq!(agent.git_branches, ["main"].map(ToOwned::to_owned).into());
+    }
+
+    /// An empty string is a field the host had no value for, not a member. The
+    /// third sample line carries `"model":""`, and recording it would mint a set
+    /// member meaning "the model was the empty string".
+    #[test]
+    fn an_empty_agent_field_is_absent_not_a_member() {
+        let agent = parse(CONTEXT, "t.jsonl").expect("parses").agent;
+        assert!(!agent.models.contains(""), "no empty member");
+        assert_eq!(agent.models.len(), 2, "only the two real models");
+    }
+
+    /// A transcript from a host that reports none of this is not an error and
+    /// not a partial record — it is an empty context, which reads as "nothing
+    /// was stated" rather than "nothing was in effect".
+    #[test]
+    fn a_transcript_without_agent_fields_yields_an_empty_context() {
+        assert_eq!(sample().agent, AgentContext::default());
     }
 
     #[test]
