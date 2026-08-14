@@ -925,7 +925,13 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   issue. Three things beyond the plain fingerprints: `secret_code_fingerprint`
   HMAC-keys the span for secret-class findings, because an unkeyed digest of a
   low-entropy secret is an offline-guessing oracle a journal cannot expunge —
-  the key comes from the caller, custody is the store's; `override_fingerprint`
+  the key comes from the caller and custody is `secrets.rs`'s, and since
+  CLOUD-59 WHICH span is keyed is a type rather than recall: it takes an opaque
+  `SecretSpan` with no route back to `&str`, so the mis-route to
+  `code_fingerprint` is a compile error. The secret class carries its own
+  date-styled version (`StoredIdentity::secret`) and deliberately no
+  `FindingKind` variant — that enum's one consumer is the changed-scope filter,
+  whose honest answer here is `None`/cannot-classify; `override_fingerprint`
   hashes the default identity as a field, which makes a per-rule override
   split-only _by construction_ rather than by validation; and the key-id sits
   inside the preimage while an `identity_version` stays outside it, which looks
@@ -934,6 +940,27 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   dual-HMAC). Behavioural churn fixtures live in
   `crates/batten/tests/identity_churn.rs` (CLOUD-169); they compose the matcher
   with this module because a `Finding` carries no fingerprint yet (CLOUD-164).
+- `secrets.rs` — secret-class scanning: key custody and the scanner adapter
+  (CLOUD-59). Detection is adopted (a pinned ripsecrets, run as a child); the
+  module exists for CONTAINMENT, because the scanner prints the byte it matched
+  and Batten copies what it sees into channels that retain it. Two controls,
+  neither a rule anyone remembers: each match is wrapped into
+  `identity::SecretSpan` at the parse boundary, and that type has no route back
+  to `&str`, so handing one to the unkeyed `code_fingerprint` does not compile;
+  and `rules::Finding` has no field a span could occupy, so pointer-only is
+  structural in text and `-J` alike rather than a property of the renderer.
+  Wave-one custody: 32 bytes from the OS CSPRNG under `state::repo_state_dir`,
+  mode 0600 set AT CREATION (a chmod afterwards leaves a world-readable window,
+  and the key is what gets written into it), `create_new` so the loser of a mint
+  race READS the winner rather than overwriting — a truncating write there
+  silently re-identifies everything already emitted under the replaced key, which
+  is also why a malformed key file is refused rather than repaired. The key is
+  machine-scoped, the stated trade absent a secret channel. `today` and the key
+  path are both injected: the key id is a hash input (so a self-read clock would
+  bound §6 byte-stability to a day), and the path is ambient env-selected state
+  that only `set_var` could move, which `unsafe_code = "forbid"` rules out
+  entirely. Rotation and the loud key-loss orphan event are CLOUD-529's — nothing
+  secret-class reaches the store yet, since `state record` runs `run_static`.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
   and cached out of tree. §9's check/fix pair — `provision status` (read) is
   freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary

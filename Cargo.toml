@@ -52,6 +52,17 @@ etcetera = "0.10"
 # the vendored `sha2 = "0.10"` already resolves to, while 0.13 wants `digest 0.11`
 # and would put two majors of the same hashing substrate in the tree.
 hmac = "0.12"
+# The 32 bytes behind that HMAC key (CLOUD-59). A dependency rather than a
+# `/dev/urandom` read because the workspace forbids `unsafe` and supports
+# Windows, so the alternative is two hand-written platform paths for the one
+# thing that must not be got subtly wrong — and because this crate is already in
+# the tree transitively, so adopting it directly adds no vendored code at all.
+# `getrandom::fill` is the OS CSPRNG (`getrandom(2)`, `arc4random_buf`,
+# `ProcessPrng`) and never a userspace PRNG: a key derived from a seeded
+# generator is a key an attacker can re-derive. `rand` was the alternative and is
+# strictly more surface for the same 32 bytes — distributions, generators and a
+# reseeding policy this needs none of.
+getrandom = "0.3"
 # The JSON Schema for `batten.toml`, derived from the config types themselves
 # (CLOUD-33) — never hand-authored, so the schema cannot describe a config the
 # binary does not accept.

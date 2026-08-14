@@ -54,6 +54,7 @@ clap_complete.workspace = true
 clap_mangen.workspace = true
 etcetera.workspace = true
 fs4.workspace = true
+getrandom.workspace = true
 globset.workspace = true
 hmac.workspace = true
 ignore.workspace = true

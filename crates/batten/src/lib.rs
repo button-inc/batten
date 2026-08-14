@@ -43,6 +43,7 @@ pub mod refusal;
 pub mod render;
 pub mod resolve;
 pub mod rules;
+pub mod secrets;
 pub mod selfwrite;
 pub mod session;
 pub mod severity;

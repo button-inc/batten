@@ -116,6 +116,7 @@ dependencies = [
  "etcetera",
  "flate2",
  "fs4",
+ "getrandom",
  "globset",
  "hmac",
  "ignore",

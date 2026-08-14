@@ -64,11 +64,18 @@
 //! HMAC carries no work factor, so this buys separation and not difficulty: it
 //! holds only while the key is unreachable from the journal it protects.
 //! The key is supplied by the caller: this module mints and stores nothing, and
-//! custody (minting at store init, rotation, the loud orphan event on key loss)
-//! belongs to the store and to the scanner adapter that classifies a span as
-//! secret-bearing. The protection is exactly as good as that classification:
-//! an unclassified secret span still reaches [`code_fingerprint`] and gets an
-//! unkeyed digest, so recall is the control keying does not supply.
+//! custody (minting on first need, rotation, the loud orphan event on key loss)
+//! belongs to [`crate::secrets`] and to the store. Wave one is mint plus keyed
+//! emission (CLOUD-59); rotation and orphan custody are CLOUD-529's.
+//!
+//! **Which span is keyed is settled by a type, not by recall.**
+//! [`secret_code_fingerprint`] takes a [`SecretSpan`] — an opaque wrapper minted
+//! at a scanner adapter's parse boundary with no route back to `&str` — so
+//! handing a secret span to the unkeyed [`code_fingerprint`] does not compile.
+//! An earlier reading here said recall was "the control keying does not supply";
+//! that was true while both functions took `&str`, and it is what CLOUD-59
+//! replaced. Recall still decides whether a secret is **reported**; it no longer
+//! decides whether a reported one is **keyed**.
 //!
 //! # Per-rule overrides are split-only, by construction
 //!
@@ -292,6 +299,22 @@ impl StoredIdentity {
         }
     }
 
+    /// Pair a freshly minted **secret-class** fingerprint with its version.
+    ///
+    /// Separate from [`StoredIdentity::new`] because the secret class has no
+    /// [`FindingKind`] to read a version off — see [`SECRET_IDENTITY_VERSION`]
+    /// for why that absence is the design and not a gap. Taking the fingerprint
+    /// by value keeps this a pairing rather than a mint: the only thing that can
+    /// produce the fingerprint is [`secret_code_fingerprint`], which cannot run
+    /// without a key.
+    #[must_use]
+    pub fn secret(fingerprint: Fingerprint) -> Self {
+        StoredIdentity {
+            fingerprint,
+            version: SECRET_IDENTITY_VERSION.to_owned(),
+        }
+    }
+
     /// The kind that minted this identity, recovered from the version's tag.
     ///
     /// [`FindingKind::identity_version`] is `<tag>:<date>`, so the tag is
@@ -416,6 +439,24 @@ const CONTEXT_TAG: &str = "context";
 /// unkeyed one must not collide even when every other field agrees.
 const SECRET_TAG: &str = "secret";
 
+/// The identity-function version recorded beside a **secret-class** fingerprint
+/// (CLOUD-59), date-styled for the reason [`FindingKind::identity_version`]'s
+/// arms are: a bump reads as an event rather than a counter.
+///
+/// **It is a version, not a [`FindingKind`] variant**, and the distinction is
+/// deliberate rather than incidental. A fifth kind would be an assertion about
+/// the *changed-scope filter* — [`StoredIdentity::kind`] exists to answer that
+/// one question — and the honest answer for a secret-class record is that this
+/// binary cannot classify it: the filter is a control over code-anchored
+/// findings, and a secret-class identity is a code anchor whose replayability
+/// depends on key custody rather than on the tree (see
+/// [`secret_code_fingerprint`]). `kind()` therefore answers `None` here, which
+/// its own contract already defines as "cannot classify, do not default" — the
+/// fail-open-in-reporting direction [`crate::drain`] documents. The kind
+/// variant lands with the store journaling that gives it something to decide
+/// (CLOUD-529).
+const SECRET_IDENTITY_VERSION: &str = "secret:2026-08-13";
+
 /// The domain tag for a per-rule identity **override**.
 const OVERRIDE_TAG: &str = "override";
 
@@ -528,6 +569,75 @@ impl fmt::Debug for IdentityKey {
     }
 }
 
+/// The opaque span type, in its own module so its field has exactly one reader.
+///
+/// Rust has no friend declaration, so "only the keyed path may see these bytes"
+/// is expressed as a visibility boundary: the tuple field is private to this
+/// module, and the one accessor is `pub(super)` — visible to [`crate::identity`]
+/// and to nothing else in the crate, let alone outside it. A module rather than
+/// a bare newtype beside the rest is what buys that; declared alongside its
+/// siblings the field would be readable by every function in this file,
+/// including the unkeyed one it exists to keep away from.
+mod secret_span {
+    /// A span a classifier has judged secret-bearing.
+    ///
+    /// **This type is the routing control** (CLOUD-59). The hazard it closes is
+    /// not a mistyped argument list but a call to the wrong function: a secret
+    /// span reaching [`super::code_fingerprint`] becomes an unkeyed digest of
+    /// low-entropy content in a journal that cannot be expunged. That function
+    /// takes `&str`, this type is not a `&str` and offers no route to one, so
+    /// the mis-route is a type error rather than a recall obligation.
+    ///
+    /// What it deliberately does **not** have, each absence load-bearing:
+    ///
+    /// - no `Debug`, `Display`, or `Serialize` — a rendering is how the bytes
+    ///   reach a log line, an error, or a `-J` document;
+    /// - no `Deref`, `AsRef<str>`, `Into<String>`, or public accessor — any of
+    ///   them would hand the span back as a `&str` and re-open the mis-route the
+    ///   type exists to close;
+    /// - no `Clone` — nothing needs a second copy, and each one is a byte of
+    ///   secret material with a longer life.
+    ///
+    /// `missing_debug_implementations` is allowed here for exactly that reason:
+    /// the lint asks for a rendering, and the refusal to have one is the point.
+    #[allow(missing_debug_implementations)]
+    pub struct SecretSpan(String);
+
+    impl SecretSpan {
+        /// Wrap a span at the parse boundary.
+        ///
+        /// **Public, and it has to be**: [`super::secret_code_fingerprint`] is
+        /// public and takes one of these, so a crate-private mint would leave
+        /// that function uncallable by any consumer — an API taking a type
+        /// nobody outside can construct is not an API. An earlier draft made it
+        /// `pub(crate)` on the intuition that minting should belong to the
+        /// adapter; the compiler disagreed twice over (the function became
+        /// unreachable, and `mint` itself read as dead code).
+        ///
+        /// Nothing is lost by opening it, because **the guarantee this type
+        /// carries is about routing, not about minting**. Whoever wraps a span
+        /// still cannot unwrap it, and still cannot spend it anywhere but the
+        /// keyed path. Restricting who may mint one would protect nothing that
+        /// the absent conversions do not already protect.
+        #[must_use]
+        pub fn mint(span: &str) -> SecretSpan {
+            SecretSpan(span.to_owned())
+        }
+
+        /// The bytes, for the one function permitted to read them.
+        ///
+        /// `pub(super)` is the whole enforcement: [`super::secret_code_fingerprint`]
+        /// can call this and no other module can. `tests/primitives.rs` pins that
+        /// the unkeyed path does not, since a same-file caller is the one thing
+        /// visibility cannot rule out.
+        pub(super) fn keying_input(&self) -> &str {
+            &self.0
+        }
+    }
+}
+
+pub use secret_span::SecretSpan;
+
 /// The identity of a **secret-class** code-anchored finding:
 /// `(secret, rule_id, canonical_path, key_id, hmac(key, normalized_span))`.
 ///
@@ -558,11 +668,16 @@ impl fmt::Debug for IdentityKey {
 /// rotation is meant to re-mint.
 ///
 /// **The version coordinate a store records beside this is
-/// [`FindingKind::Code`]'s**, because a secret-class finding is the code kind with
-/// its span keyed and the key id appended — not a fifth kind.
-/// [`override_fingerprint`] likewise inherits the version of whichever kind
-/// produced the default it wraps. Neither mints a version of its own, and a store
-/// must not invent one.
+/// [`SECRET_IDENTITY_VERSION`]**, paired by [`StoredIdentity::secret`]. An
+/// earlier reading here said it was [`FindingKind::Code`]'s, on the ground that a
+/// secret-class finding is the code kind with its span keyed; that is right about
+/// the *tuple* and wrong about the *version*, because the two evolve
+/// independently — a change to the keying construction must be able to bump this
+/// without re-versioning every unkeyed code identity, and the paragraph below on
+/// replayability is precisely a law that holds for one and not the other.
+/// [`override_fingerprint`] still inherits the version of whichever kind produced
+/// the default it wraps. Neither mints a version of its own, and a store must not
+/// invent one.
 ///
 /// **But the version does not settle replayability, and for this kind that is a
 /// separate question.** The migration law above partitions on whether a scan can
@@ -572,22 +687,23 @@ impl fmt::Debug for IdentityKey {
 /// comes back from the re-scan, the old HMAC does not come back without the old
 /// key. So an orphaned key moves those identities into the non-replayable half,
 /// where a version bump must never close, GC, or re-mint them — the loud orphan
-/// event, not a silent migration. A store reading the code version off a
-/// secret-class record must therefore check key custody before treating a bump as
+/// event, not a silent migration. A store reading [`SECRET_IDENTITY_VERSION`] off
+/// a record must therefore check key custody before treating a bump as
 /// replayable.
 ///
-/// A **secret-tagged** identity cannot be minted without a key: that much is
-/// structural, and it is all this signature buys. The **routing** is not. A span
-/// is keyed only if a classifier sends it here, and [`code_fingerprint`] is public
-/// and hashes the same `(rule_id, repo_path, span)` unkeyed — so any span the
-/// classifier does not route here gets an unkeyed digest in the same journal that
-/// cannot be expunged. The hazard is a call to the wrong function, not a mistyped
-/// argument list: dropping `key` from this call no longer compiles, because the
-/// two signatures differ by a key *and* a `mode` in opposite directions.
-/// Classifier recall is therefore the load-bearing control, and the residual risk
-/// is a missed classification rather than a forgotten key. Making the routing
-/// structural takes a span type only a classifier can mint, which belongs with
-/// the classifier rather than here (CLOUD-59).
+/// **The routing is structural now, and that is what changed here (CLOUD-59).**
+/// A secret-tagged identity could never be minted without a key — that much the
+/// signature always bought — but a span was keyed only if a classifier chose to
+/// send it here, while [`code_fingerprint`] sat public and hashed the same
+/// `(rule_id, repo_path, span)` unkeyed. The hazard was never a mistyped argument
+/// list; it was a call to the wrong function, which no signature could catch
+/// while both took `&str`. [`SecretSpan`] catches it: the span this takes is a
+/// type with no route back to `&str`, so handing it to the unkeyed function does
+/// not compile, and the adapter holds no raw span after its parse. Classifier
+/// recall is still what decides whether a secret is *reported*, but a recall miss
+/// is now a missed finding rather than an unkeyed digest of a secret in a journal
+/// — which is the whole point of moving the control from discipline to the type
+/// system.
 ///
 /// # Errors
 ///
@@ -600,7 +716,7 @@ pub fn secret_code_fingerprint(
     key: &IdentityKey,
     rule_id: &str,
     repo_path: &str,
-    span: &str,
+    span: &SecretSpan,
 ) -> anyhow::Result<Fingerprint> {
     let path = canonical_repo_path(repo_path)?;
     // Verbatim, and not the caller's choice: a secret *is* literal content, so
@@ -609,7 +725,7 @@ pub fn secret_code_fingerprint(
     // secrets differing only in whitespace into one identity, and for this kind a
     // false merge hides the second secret behind the first — strictly worse than
     // the false split a collapse is meant to avoid.
-    let content = normalize_span(span, SpanNormalization::Verbatim);
+    let content = normalize_span(span.keying_input(), SpanNormalization::Verbatim);
     let keyed = keyed_span(key, &content)?;
     Ok(tagged_fingerprint(
         SECRET_TAG,
@@ -1065,15 +1181,20 @@ mod tests {
 
     const SECRET_SPAN: &str = "token = \"hunter2\"";
 
+    /// The span as the keyed path now takes it. A helper rather than a constant
+    /// because [`SecretSpan`] is deliberately not `Clone` — each call mints its
+    /// own, which is also what a real parse does per match.
+    fn span() -> SecretSpan {
+        SecretSpan::mint(SECRET_SPAN)
+    }
+
     #[test]
     fn the_same_span_under_two_keys_is_two_identities() {
         // Two holders of the same secret mint different identities, so a digest
         // taken from one store confirms nothing about a guess made against
-        // another. That holds for spans routed here; an unclassified span still
-        // reaches the unkeyed path, which is why the fn's doc names recall as the
-        // control rather than this signature.
-        let one = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
-        let two = secret_code_fingerprint(&key("k2", 2), "r", "src/a.rs", SECRET_SPAN).unwrap();
+        // another.
+        let one = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", &span()).unwrap();
+        let two = secret_code_fingerprint(&key("k2", 2), "r", "src/a.rs", &span()).unwrap();
         assert_ne!(one, two);
     }
 
@@ -1081,7 +1202,13 @@ mod tests {
     fn a_keyed_identity_never_collides_with_an_unkeyed_one() {
         // Distinct domain tags, so total agreement on every other field still
         // cannot make a secret-class identity equal a plain code one.
-        let keyed = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
+        //
+        // The unkeyed side is spelled with the raw `&str` on purpose: that call
+        // is the mis-route this module now makes unrepresentable for a
+        // `SecretSpan`, and writing it out is what shows the two paths are
+        // distinguishable at all. Passing `&span()` there is a compile error, and
+        // `a_secret_span_offers_no_route_back_to_a_str` below is that claim's gate.
+        let keyed = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", &span()).unwrap();
         let plain =
             code_fingerprint("r", "src/a.rs", SECRET_SPAN, SpanNormalization::Verbatim).unwrap();
         assert_ne!(keyed, plain);
@@ -1091,8 +1218,96 @@ mod tests {
     fn the_same_key_and_span_is_one_stable_identity() {
         // Keying must not cost stability: a re-observation of the same secret in
         // the same place is the same finding, or every scan would re-raise it.
-        let mint = || secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
+        let mint = || secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", &span()).unwrap();
         assert_eq!(mint(), mint());
+    }
+
+    #[test]
+    fn a_secret_class_identity_carries_its_own_version_and_no_kind() {
+        // Two claims in one, because they are the same decision: the secret class
+        // versions independently of the code kind, and it deliberately answers
+        // `None` to `kind()` rather than impersonating `Code` — which the
+        // changed-scope filter reads as "cannot classify" and bypasses, the
+        // fail-open-in-reporting direction.
+        let stored = StoredIdentity::secret(
+            secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", &span()).unwrap(),
+        );
+        assert_eq!(stored.version, SECRET_IDENTITY_VERSION);
+        assert_ne!(stored.version, FindingKind::Code.identity_version());
+        assert_eq!(stored.kind(), None);
+    }
+
+    #[test]
+    fn a_secret_span_offers_no_route_back_to_a_str() {
+        // The routing control, asserted over the source rather than the value:
+        // the guarantee is the ABSENCE of a conversion, and an absence has no
+        // runtime witness. `keying_input` is `pub(super)`, so the compiler already
+        // refuses every module but this one; what it cannot refuse is a
+        // same-file caller, and the unkeyed function is in this file.
+        //
+        // Same idiom as `tests/primitives.rs`'s body greps. `\n}\n` is the
+        // column-zero close, so the slice is exactly one function body.
+        //
+        // Comments are stripped first, and that is not tidiness: the wrapper's
+        // own doc comment *lists* the conversions it refuses, so a scan over raw
+        // source matches the prose describing the absence and reports it as the
+        // presence. Measured — this test failed on its own documentation before
+        // the strip went in. A gate that reads its own prose is measuring the
+        // wrong text.
+        let code = |text: &str| -> String {
+            text.lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let source = include_str!("identity.rs");
+        for name in [
+            "pub fn code_fingerprint",
+            "pub fn log_fingerprint",
+            "pub fn scope_fingerprint",
+        ] {
+            let body = code(
+                source
+                    .split(name)
+                    .nth(1)
+                    .unwrap_or_else(|| panic!("{name} is declared in this module"))
+                    .split("\n}\n")
+                    .next()
+                    .unwrap_or_default(),
+            );
+            assert!(
+                !body.contains("keying_input"),
+                "{name} reads a secret span's bytes; only the keyed path may"
+            );
+            assert!(
+                !body.contains("SecretSpan"),
+                "{name} names the secret span type; the unkeyed path must not"
+            );
+        }
+
+        // And the escapes a derive would have added, checked where they would be
+        // written rather than inferred from their absence in the impl block.
+        let wrapper = code(
+            source
+                .split("mod secret_span {")
+                .nth(1)
+                .unwrap_or_default()
+                .split("\n}\n")
+                .next()
+                .unwrap_or_default(),
+        );
+        for escape in [
+            "impl Deref",
+            "AsRef<str>",
+            "derive(",
+            "fn as_str",
+            "Display",
+        ] {
+            assert!(
+                !wrapper.contains(escape),
+                "a secret span must offer no `{escape}` route back to its bytes"
+            );
+        }
     }
 
     #[test]
@@ -1116,7 +1331,7 @@ mod tests {
         }
         let expected: [u8; 32] = hasher.finalize().into();
 
-        let got = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", SECRET_SPAN).unwrap();
+        let got = secret_code_fingerprint(&key("k1", 1), "r", "src/a.rs", &span()).unwrap();
         assert_eq!(got.to_hex(), Fingerprint(expected).to_hex());
     }
 
