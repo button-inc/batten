@@ -301,6 +301,247 @@ pub struct Capabilities {
     /// Allow and is treated as a `systemMessage`. Batten must keep stdout clean
     /// or exit 2 there.
     pub stdout_must_stay_clean: bool,
+    /// What this host does to commit metadata, and what it exposes about its
+    /// caller (CLOUD-276).
+    ///
+    /// A row group in the same table rather than a second per-host registry
+    /// beside [`crate::attribution`]: the question "what can this host tell us"
+    /// is the same kind of question as "what events does it emit", and two
+    /// registries is how the answers come to disagree.
+    pub attribution: AttributionCapabilities,
+}
+
+/// What one host declares for one capability.
+///
+/// Four values, and the fourth pair is the whole point (CLOUD-276): **an absent
+/// capability and an undeclared one must not be the same value.**
+/// [`Declaration::No`] is a measured "this host does not have it";
+/// [`Declaration::Unknown`] is "it may, but not through a surface Batten reads
+/// at record time, and the survey cannot answer". Collapsing them would make a
+/// gap in the evidence indistinguishable from a fact about the host.
+///
+/// The common projection every row has, whatever its own type: it is what makes
+/// table totality checkable over `Harness::ALL × Capability::ALL` rather than as
+/// a hand-kept list of per-field assertions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Declaration {
+    /// The host has it, measured.
+    Yes,
+    /// The host does not have it, measured.
+    No,
+    /// A setting or surface exists but does not govern every path it would have
+    /// to. Weaker than [`Declaration::Yes`] and not the same claim as
+    /// [`Declaration::No`] — something is there and it is not enough.
+    Partial,
+    /// Undeclared: the evidence does not answer for this host. Never a silent
+    /// `No`.
+    Unknown,
+}
+
+impl Declaration {
+    /// The stable lowercase token, for byte-stable output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Declaration::Yes => "yes",
+            Declaration::No => "no",
+            Declaration::Partial => "partial",
+            Declaration::Unknown => "unknown",
+        }
+    }
+
+    /// Whether this declaration lets a value be captured from the host.
+    ///
+    /// Only [`Declaration::Yes`] does. `Partial` deliberately does not: a
+    /// surface that does not govern every path cannot be trusted to have
+    /// governed this one, and a half-true capture is worse than an honest
+    /// `unknown`.
+    #[must_use]
+    pub const fn is_capturable(self) -> bool {
+        matches!(self, Declaration::Yes)
+    }
+}
+
+/// What a host does to commit metadata, and what it exposes about its caller.
+///
+/// CLOUD-276's five row groups. **What the evidence actually answers, stated
+/// once here rather than repeated per host:** the M1 harness capability matrix
+/// surveys hook surfaces, and it carries exactly one of these five — the session
+/// id, present natively on all five hosts. It has no row for git identity, for
+/// injected trailers, or for an attribution config surface, so those are
+/// [`Declaration::Unknown`] on every surveyed host except where this repository
+/// measured its own commits (see [`crate::attribution`]'s module docs, measured
+/// 2026-08-09). Declaring them `No` from memory is exactly what that survey
+/// records as unsafe: it measured model recall of this space as "badly stale",
+/// with four remembered URLs 404ing.
+///
+/// Filling the four unanswered groups needs an attribution-shaped survey pass,
+/// which is a research issue rather than a value this module may guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AttributionCapabilities {
+    /// Whether the host itself writes a git identity for the commits it
+    /// produces.
+    ///
+    /// `Unknown` on every named host, and the reason is a measurement rather
+    /// than a gap: this repository found 39 of its first 50 `main` commits
+    /// carrying an environment-injected vendor identity, and traced the
+    /// injection to *container git config plus harness prompt*. That evidence
+    /// cannot separate the host from the container it runs in, so attributing it
+    /// to the host would be a claim the measurement does not support.
+    pub sets_git_identity: Declaration,
+    /// Whether the host adds a co-authorship trailer naming a model identity.
+    ///
+    /// The **shape**, never the spelling. `attribution.rs` extends non-negotiable
+    /// rule 1 from consumers to vendors — "a vendor name is configuration here
+    /// and never a literal in the crate" — so the engine declares that a
+    /// coauthorship trailer is expected and `batten.toml`'s `trailer_deny` names
+    /// it. A trailer key here would put a vendor's spelling in the core.
+    pub injects_coauthorship_trailer: Declaration,
+    /// Whether the host adds a trailer linking the session.
+    pub injects_session_link_trailer: Declaration,
+    /// Whether the host puts a model identity on the payload Batten reads.
+    ///
+    /// `Unknown` on every named host, and this is the case CLOUD-276's stated
+    /// assumption anticipated. M1's field inventory is explicit and there is no
+    /// model id in it on any host: Claude Code and Gemini CLI carry
+    /// `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `tool_name`,
+    /// `tool_input` and `tool_use_id`; Codex adds `turn_id`. Each host plainly
+    /// runs a model whose identity exists somewhere — it is not on the surface
+    /// read at record time, which is `Unknown` and not `No`.
+    pub exposes_model_id: Declaration,
+    /// Whether the host puts a session id on the payload Batten reads.
+    ///
+    /// The one row M1 answers for every host: `session_id` (Claude, Gemini,
+    /// Codex), `sessionId` (Copilot), `conversation_id` (Cursor). [`decode`]
+    /// already reads all three spellings.
+    pub exposes_session_id: Declaration,
+    /// Whether the host offers a setting that suppresses its own attribution
+    /// injection, and whether that setting governs every path.
+    ///
+    /// `Partial` on Claude Code is a measurement, not a hedge: this repository
+    /// found one trailer added by a path that ignores the off-switch, which is
+    /// the whole reason `attribution.rs` is a gate over the produced commit
+    /// rather than a settings check. Trusting configuration there would be
+    /// trusting the thing that already lied.
+    pub config_surface: Declaration,
+}
+
+/// One column of the host × capability table.
+///
+/// A vocabulary enum with a `const ALL`, the shape [`Harness`], [`Event`] and
+/// [`crate::rules::RuleKind`] already use — so CLOUD-45 §7's totality obligation
+/// is a test over `Harness::ALL × Capability::ALL` rather than a hand-kept list
+/// of per-field assertions that a new row joins only if someone remembers.
+///
+/// The scalar columns only. [`Capabilities::events`] is a *set* rather than one
+/// value, and its totality is the other axis —
+/// `tests::every_host_declares_a_row_for_every_event_the_core_normalizes` ranges
+/// over [`Event::ALL`]. Projecting a set into one [`Declaration`] would answer a
+/// question nobody asked and hide the per-event answer that matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Capability {
+    /// [`Capabilities::ask`].
+    Ask,
+    /// [`Capabilities::stop_vetoes_completion`].
+    StopVetoesCompletion,
+    /// [`Capabilities::timeout_fails_open`].
+    TimeoutFailsOpen,
+    /// [`Capabilities::needs_fail_closed_config`].
+    NeedsFailClosedConfig,
+    /// [`Capabilities::stdout_must_stay_clean`].
+    StdoutMustStayClean,
+    /// [`AttributionCapabilities::sets_git_identity`].
+    SetsGitIdentity,
+    /// [`AttributionCapabilities::injects_coauthorship_trailer`].
+    InjectsCoauthorshipTrailer,
+    /// [`AttributionCapabilities::injects_session_link_trailer`].
+    InjectsSessionLinkTrailer,
+    /// [`AttributionCapabilities::exposes_model_id`].
+    ExposesModelId,
+    /// [`AttributionCapabilities::exposes_session_id`].
+    ExposesSessionId,
+    /// [`AttributionCapabilities::config_surface`].
+    AttributionConfigSurface,
+}
+
+impl Capability {
+    /// Every scalar capability, so a census is derived rather than hand-kept.
+    pub const ALL: &'static [Capability] = &[
+        Capability::Ask,
+        Capability::StopVetoesCompletion,
+        Capability::TimeoutFailsOpen,
+        Capability::NeedsFailClosedConfig,
+        Capability::StdoutMustStayClean,
+        Capability::SetsGitIdentity,
+        Capability::InjectsCoauthorshipTrailer,
+        Capability::InjectsSessionLinkTrailer,
+        Capability::ExposesModelId,
+        Capability::ExposesSessionId,
+        Capability::AttributionConfigSurface,
+    ];
+
+    /// The rows the mediation dispatch keys on: what a host can decide, and how
+    /// it fails.
+    pub const DISPATCH: &'static [Capability] = &[
+        Capability::Ask,
+        Capability::StopVetoesCompletion,
+        Capability::TimeoutFailsOpen,
+        Capability::NeedsFailClosedConfig,
+        Capability::StdoutMustStayClean,
+    ];
+
+    /// The rows [`crate::attribution`] consults: what a host does to commit
+    /// metadata, and what it can be asked about its caller (CLOUD-276).
+    ///
+    /// Named as a subset so the capture and expectation documents are *derived*
+    /// from the table rather than re-listing it — a new attribution row joins
+    /// them by being declared here.
+    ///
+    /// [`Capability::DISPATCH`] and this one **partition**
+    /// [`Capability::ALL`], which is what makes the split checkable:
+    /// `tests::the_two_capability_subsets_partition_the_whole_table` fails if a
+    /// new capability joins neither, so it cannot land belonging to nothing.
+    pub const ATTRIBUTION: &'static [Capability] = &[
+        Capability::SetsGitIdentity,
+        Capability::InjectsCoauthorshipTrailer,
+        Capability::InjectsSessionLinkTrailer,
+        Capability::ExposesModelId,
+        Capability::ExposesSessionId,
+        Capability::AttributionConfigSurface,
+    ];
+
+    /// The stable token, for byte-stable output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Capability::Ask => "ask",
+            Capability::StopVetoesCompletion => "stop-vetoes-completion",
+            Capability::TimeoutFailsOpen => "timeout-fails-open",
+            Capability::NeedsFailClosedConfig => "needs-fail-closed-config",
+            Capability::StdoutMustStayClean => "stdout-must-stay-clean",
+            Capability::SetsGitIdentity => "sets-git-identity",
+            Capability::InjectsCoauthorshipTrailer => "injects-coauthorship-trailer",
+            Capability::InjectsSessionLinkTrailer => "injects-session-link-trailer",
+            Capability::ExposesModelId => "exposes-model-id",
+            Capability::ExposesSessionId => "exposes-session-id",
+            Capability::AttributionConfigSurface => "attribution-config-surface",
+        }
+    }
+}
+
+/// A `bool` row's [`Declaration`] — a measured yes-or-no, never `Unknown`.
+///
+/// Free rather than a closure inside [`Capabilities::declares`] so that function
+/// can stay `const`.
+const fn measured(yes: bool) -> Declaration {
+    if yes {
+        Declaration::Yes
+    } else {
+        Declaration::No
+    }
 }
 
 impl Capabilities {
@@ -308,6 +549,30 @@ impl Capabilities {
     #[must_use]
     pub fn emits(&self, event: Event) -> bool {
         self.events.contains(&event)
+    }
+
+    /// What this host declares for one scalar capability.
+    ///
+    /// The projection that makes the table's second axis rangeable. The `bool`
+    /// rows map to [`Declaration::Yes`]/[`Declaration::No`] because a `bool`
+    /// *is* a measured yes-or-no — a row whose evidence does not answer must be
+    /// declared as a [`Declaration`] rather than guessed into a `bool`, which is
+    /// why the attribution rows are not booleans.
+    #[must_use]
+    pub const fn declares(&self, capability: Capability) -> Declaration {
+        match capability {
+            Capability::Ask => measured(self.ask),
+            Capability::StopVetoesCompletion => measured(self.stop_vetoes_completion),
+            Capability::TimeoutFailsOpen => measured(self.timeout_fails_open),
+            Capability::NeedsFailClosedConfig => measured(self.needs_fail_closed_config),
+            Capability::StdoutMustStayClean => measured(self.stdout_must_stay_clean),
+            Capability::SetsGitIdentity => self.attribution.sets_git_identity,
+            Capability::InjectsCoauthorshipTrailer => self.attribution.injects_coauthorship_trailer,
+            Capability::InjectsSessionLinkTrailer => self.attribution.injects_session_link_trailer,
+            Capability::ExposesModelId => self.attribution.exposes_model_id,
+            Capability::ExposesSessionId => self.attribution.exposes_session_id,
+            Capability::AttributionConfigSurface => self.attribution.config_surface,
+        }
     }
 
     /// The event a policy keyed on `event` should actually watch on this host.
@@ -493,6 +758,23 @@ const CONVERGED_EVENTS: &[Event] = &[
     Event::SessionStart,
 ];
 
+/// The attribution row group every named host shares: nothing the evidence
+/// answers except the session id (CLOUD-276).
+///
+/// Shared rather than copied five times, because five identical copies of
+/// "the survey does not say" would read as five independent findings. The one
+/// host that diverges — Claude Code, where this repository measured its own
+/// commits — states its own row group in full rather than spreading this one.
+const UNSURVEYED_ATTRIBUTION: AttributionCapabilities = AttributionCapabilities {
+    sets_git_identity: Declaration::Unknown,
+    injects_coauthorship_trailer: Declaration::Unknown,
+    injects_session_link_trailer: Declaration::Unknown,
+    exposes_model_id: Declaration::Unknown,
+    // The one row M1 answers for every host.
+    exposes_session_id: Declaration::Yes,
+    config_surface: Declaration::Unknown,
+};
+
 /// Claude Code's set: the converged core plus the two it alone offers.
 const CLAUDE_EVENTS: &[Event] = &[
     Event::PreTool,
@@ -528,6 +810,26 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                // The one host whose attribution rows are not the shared
+                // "unsurveyed" group, because this repository measured its own
+                // history under it (2026-08-09, recorded in
+                // [`crate::attribution`]'s module docs): 18 of the first 50
+                // `main` commits carried a model-versioned co-authorship
+                // trailer and 20 a session URL, and one trailer survived the
+                // host's own off-switch.
+                attribution: AttributionCapabilities {
+                    // Measured as environment-injected — container git config
+                    // plus harness prompt — which cannot separate the host from
+                    // the container, so the host is not credited with it.
+                    sets_git_identity: Declaration::Unknown,
+                    injects_coauthorship_trailer: Declaration::Yes,
+                    injects_session_link_trailer: Declaration::Yes,
+                    exposes_model_id: Declaration::Unknown,
+                    exposes_session_id: Declaration::Yes,
+                    // A setting exists and demonstrably does not govern every
+                    // injection path. Neither `Yes` nor `No` is true of it.
+                    config_surface: Declaration::Partial,
+                },
             },
             Harness::Cursor => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -538,6 +840,7 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: true,
                 stdout_must_stay_clean: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
             },
             Harness::CopilotCli => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -546,6 +849,7 @@ impl Harness {
                 timeout_fails_open: true,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
             },
             Harness::GeminiCli => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -554,6 +858,7 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: true,
+                attribution: UNSURVEYED_ATTRIBUTION,
             },
             Harness::CodexCli => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -564,6 +869,7 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                attribution: UNSURVEYED_ATTRIBUTION,
             },
             Harness::ExitCode => Capabilities {
                 events: CONVERGED_EVENTS,
@@ -572,6 +878,21 @@ impl Harness {
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
                 stdout_must_stay_clean: false,
+                // The one column that is `No` rather than `Unknown`, and it is a
+                // measurement rather than a guess: this is not a third party. It
+                // is the normalized envelope Batten itself defines, and that
+                // shape carries a session and nothing else on this list — no
+                // identity, no trailers, no model id, no config surface. A
+                // caller composing it by hand states the shape, so the shape is
+                // the answer.
+                attribution: AttributionCapabilities {
+                    sets_git_identity: Declaration::No,
+                    injects_coauthorship_trailer: Declaration::No,
+                    injects_session_link_trailer: Declaration::No,
+                    exposes_model_id: Declaration::No,
+                    exposes_session_id: Declaration::Yes,
+                    config_surface: Declaration::No,
+                },
             },
         }
     }
@@ -844,6 +1165,29 @@ pub enum Decision {
     Allow,
     /// Block the mediated call, with an actionable refusal.
     Deny(Refusal),
+    /// Escalate to a human rather than deciding (CLOUD-45).
+    ///
+    /// Carries a [`Refusal`] for the same reason [`Decision::Deny`] does: the
+    /// person being asked needs to know what is being asked and what the
+    /// sanctioned path is, and an escalation with nothing but an id is the
+    /// un-actionable shape CLOUD-122 exists to prevent. It is also what makes
+    /// the degradation lossless — where escalation is unreachable this value
+    /// becomes a deny, and the deny already has everything it needs.
+    ///
+    /// **Not a third exit code.** §7's table has no room for one and needs none:
+    /// an answered escalation is exit `0` with a body, and an unanswerable one is
+    /// the policy verdict `2`. The variant exists so the *degradation* is decided
+    /// once, at the boundary that consults the capability table, rather than
+    /// guessed at each deny site.
+    ///
+    /// **Nothing in `batten.toml` produces this yet, deliberately.** CLOUD-45 owns
+    /// the degradation — this value, [`encode_ask`], and the capability row they
+    /// consult — and CLOUD-340 owns the *vocabulary* a consumer reaches it with,
+    /// which its refinement records as an `ask` severity accepted only for
+    /// `mediated_call` scope. Inventing a second column here would give one
+    /// question two config surfaces and contradict a decision already taken
+    /// (non-negotiable rule 6).
+    Ask(Refusal),
 }
 
 /// Decode a harness payload into the normalized envelope.
@@ -1223,10 +1567,14 @@ pub fn adjudicate(
     //
     // A ban outranks an unmet precondition: if a call is refused outright there
     // is no point telling its author which receipt to go and earn.
+    // An `Ask` short-circuits exactly as a `Deny` does: the row matched, and what
+    // it asked for is the answer. Falling through to the receipt gate would let a
+    // second row overrule an escalation the first one wanted, which declaration
+    // order is supposed to decide.
     match shape_rules(policy, &envelope.command) {
-        Decision::Deny(refusal) => Decision::Deny(refusal),
+        decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
         Decision::Allow => match receipt_rules(policy, &envelope.command, receipts) {
-            Decision::Deny(refusal) => Decision::Deny(refusal),
+            decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
             Decision::Allow => protected_mutation(policy, &envelope.command),
         },
     }
@@ -1765,23 +2113,39 @@ fn is_env_assignment(token: &str) -> bool {
         && token.contains('=')
 }
 
-/// Claude Code's deny payload: the `hookSpecificOutput.permissionDecision`
+/// Claude Code's verdict payload: the `hookSpecificOutput.permissionDecision`
 /// object the host reads from stdout. Field order is struct order, so the
 /// emission is byte-stable.
 #[derive(Serialize)]
-struct ClaudeDeny<'a> {
+struct ClaudeVerdict<'a> {
     #[serde(rename = "hookSpecificOutput")]
-    hook_specific_output: ClaudeDenyInner<'a>,
+    hook_specific_output: ClaudeVerdictInner<'a>,
 }
 
 #[derive(Serialize)]
-struct ClaudeDenyInner<'a> {
+struct ClaudeVerdictInner<'a> {
     #[serde(rename = "hookEventName")]
     hook_event_name: &'a str,
     #[serde(rename = "permissionDecision")]
     permission_decision: &'a str,
     #[serde(rename = "permissionDecisionReason")]
     permission_decision_reason: &'a str,
+}
+
+/// Encode one Claude Code verdict body, whatever the verdict word.
+///
+/// One function for `deny` and `ask` rather than two, because the envelope is the
+/// same object and two copies of it are two things to keep in step. The verdict
+/// word is the only difference, and it is the caller's — [`encode_ask`] reaches
+/// this only after the capability table said the host has `ask`.
+fn encode_claude_verdict(event: &str, verdict: &str, reason: &str) -> serde_json::Result<String> {
+    serde_json::to_string(&ClaudeVerdict {
+        hook_specific_output: ClaudeVerdictInner {
+            hook_event_name: event,
+            permission_decision: verdict,
+            permission_decision_reason: reason,
+        },
+    })
 }
 
 /// Encode a deny for the Claude Code adapter.
@@ -1791,13 +2155,7 @@ struct ClaudeDenyInner<'a> {
 /// Serialization of this fixed shape cannot practically fail; the `Result` is
 /// the honest signature for a serde boundary.
 pub fn encode_claude_deny(event: &str, reason: &str) -> serde_json::Result<String> {
-    serde_json::to_string(&ClaudeDeny {
-        hook_specific_output: ClaudeDenyInner {
-            hook_event_name: event,
-            permission_decision: "deny",
-            permission_decision_reason: reason,
-        },
-    })
+    encode_claude_verdict(event, "deny", reason)
 }
 
 /// Cursor's deny body.
@@ -1850,6 +2208,70 @@ pub fn encode_deny(
         Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
             Ok(None)
         }
+    }
+}
+
+/// Encode an **escalation** body for `harness`, or `None` where escalation is not
+/// reachable on the surface Batten registers (CLOUD-45 §7(b)).
+///
+/// `None` is the caller's instruction to hard-deny. It is never an allow, and
+/// that asymmetry is the whole clause: degrading "ask a human" to "go ahead"
+/// would turn a policy into its opposite, where degrading it to a refusal costs
+/// only a false positive an operator can see and bypass.
+///
+/// This is the half CLOUD-45 owes: before it, `Capabilities::ask` was a column
+/// declared by every host and consulted by nothing, because nothing could express
+/// wanting an escalation. **The capability table is consulted first**, so no
+/// behaviour here keys on escalation without asking whether the host has it. Then the body shape, which
+/// is a second and narrower question — a host can have the verdict while Batten
+/// has no verified wire shape for it, and inventing one is exactly what the M1
+/// survey records as unsafe.
+///
+/// Two hosts declare `ask` and still answer `None`, each for its own measured
+/// reason, and both reasons are about the surface Batten actually registers:
+///
+/// * **Cursor** — the verdict vocabulary is *event-dependent*. `ask` is honoured
+///   on `beforeShellExecution` and `beforeMCPExecution`, but on the generic
+///   `preToolUse` — the one [`Harness::wiring`] registers, because it is the only
+///   one covering all tools — it "parses but is not enforced". An unenforced ask
+///   proceeds, which is the silent allow this clause forbids.
+/// * **Copilot CLI** — M1 confirms the verdict exists and names the output
+///   *fields* (`permissionDecision`/`permissionDecisionReason`), but not the
+///   object they sit in. Emitting Claude's `hookSpecificOutput` envelope on the
+///   strength of the field names would be a guess, and a guessed envelope that
+///   fails to parse is read as no decision at all — an allow.
+///
+/// # Errors
+///
+/// Serialization of these fixed shapes cannot practically fail; the `Result` is
+/// the honest signature for a serde boundary.
+// `match_same_arms` would collapse Cursor, Copilot and the three hosts with no
+// `ask` row into one arm. Refused for the reason `capabilities` refuses it: the
+// arms agree on the ANSWER and disagree on the REASON, and each reason is a
+// measured fact about a different host. Collapsing them would delete the
+// citations and make a future divergence a structural edit.
+#[allow(clippy::match_same_arms)]
+pub fn encode_ask(
+    harness: Harness,
+    event: &str,
+    reason: &str,
+) -> serde_json::Result<Option<String>> {
+    // The table, consulted before the shape. A host that does not have the
+    // verdict cannot be sent one whatever its wire format looks like.
+    if !harness.capabilities().ask {
+        return Ok(None);
+    }
+    match harness {
+        // Documented, and merged most-restrictive-first by the host itself
+        // (`deny > defer > ask > allow`), so an ask here cannot override another
+        // hook's deny.
+        Harness::ClaudeCode => encode_claude_verdict(event, "ask", reason).map(Some),
+        // See the two measured exceptions above.
+        Harness::Cursor | Harness::CopilotCli => Ok(None),
+        // No `ask` row; unreachable through the guard above, and stated rather
+        // than wildcarded so a row that ever flips to `true` has to come back
+        // here and answer for its wire shape.
+        Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => Ok(None),
     }
 }
 
@@ -2012,7 +2434,10 @@ mod tests {
     fn denial_text(decision: Decision) -> String {
         match decision {
             Decision::Deny(refusal) => deny_text(&refusal),
-            Decision::Allow => panic!("expected a deny"),
+            // An `Ask` is not a deny, and collapsing the two here would let a
+            // row that silently started escalating keep passing every assertion
+            // below about what a refusal says.
+            Decision::Ask(_) | Decision::Allow => panic!("expected a deny"),
         }
     }
 
@@ -2021,7 +2446,7 @@ mod tests {
     fn denial(decision: Decision) -> Refusal {
         match decision {
             Decision::Deny(refusal) => refusal,
-            Decision::Allow => panic!("expected a deny"),
+            Decision::Ask(_) | Decision::Allow => panic!("expected a deny"),
         }
     }
 
@@ -3198,6 +3623,203 @@ mod tests {
                 harness.as_str()
             );
         }
+    }
+
+    #[test]
+    fn every_host_declares_a_row_for_every_scalar_capability() {
+        // Table totality on the OTHER axis (CLOUD-45 §7(d)). The event axis is
+        // pinned above; this is the (host, capability) pair the issue's clause
+        // names, and it is a test rather than a compiler guarantee for a reason
+        // the compiler cannot cover: the exhaustive `match` in `capabilities`
+        // forces every host to fill every FIELD, and `#[non_exhaustive]` plus
+        // struct-literal construction forces a new field into all six arms — but
+        // neither notices a field that exists, is filled, and is reachable
+        // through no `Capability`. That is a row nothing can range over, which is
+        // how a capability comes to be declared and consulted by nothing.
+        for harness in Harness::ALL {
+            let capabilities = harness.capabilities();
+            for capability in Capability::ALL {
+                let declared = capabilities.declares(*capability);
+                // Answering at all is the property. Every value is a decision,
+                // including `Unknown` — which is why `Unknown` had to be a
+                // value rather than an absent row.
+                assert!(
+                    !declared.as_str().is_empty(),
+                    "{} declares nothing for {}",
+                    harness.as_str(),
+                    capability.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_capability_subsets_partition_the_whole_table() {
+        // What keeps `Capability::ATTRIBUTION` honest as a derivation source. The
+        // attribution document is built from that subset, so a new attribution
+        // row omitted from it would be declared, consulted by the totality test
+        // above, and silently missing from every document a consumer reads —
+        // present in the table and absent from the answer.
+        for capability in Capability::ALL {
+            let dispatch = Capability::DISPATCH.contains(capability);
+            let attribution = Capability::ATTRIBUTION.contains(capability);
+            assert!(
+                dispatch ^ attribution,
+                "{} belongs to {} of the two subsets; every capability belongs to \
+                 exactly one",
+                capability.as_str(),
+                if dispatch { "both" } else { "neither" }
+            );
+        }
+        assert_eq!(
+            Capability::DISPATCH.len() + Capability::ATTRIBUTION.len(),
+            Capability::ALL.len(),
+            "a subset lists a capability twice, or one that is not in ALL"
+        );
+    }
+
+    #[test]
+    fn every_capability_token_is_distinct() {
+        // The tokens reach a byte-stable document (§6), where two rows sharing
+        // one name would make the document ambiguous rather than merely ugly.
+        let mut tokens: Vec<&str> = Capability::ALL
+            .iter()
+            .map(|capability| capability.as_str())
+            .collect();
+        tokens.sort_unstable();
+        let count = tokens.len();
+        tokens.dedup();
+        assert_eq!(tokens.len(), count, "two capabilities share a token");
+    }
+
+    #[test]
+    fn an_absent_capability_is_a_different_value_from_an_undeclared_one() {
+        // CLOUD-276's stated assumption, as a predicate. The neutral contract is
+        // the one column that can honestly say `No` — it is the envelope Batten
+        // itself defines, not a third party — and every named host says `Unknown`
+        // for the same row. Collapsing the two would make a gap in the evidence
+        // read as a fact about the host.
+        assert_eq!(
+            Harness::ExitCode
+                .capabilities()
+                .declares(Capability::ExposesModelId),
+            Declaration::No,
+        );
+        for harness in Harness::ALL {
+            if *harness == Harness::ExitCode {
+                continue;
+            }
+            assert_eq!(
+                harness.capabilities().declares(Capability::ExposesModelId),
+                Declaration::Unknown,
+                "{}: no surveyed host puts a model id on the payload Batten reads, and \
+                 each plainly runs a model — that is unknown, not absent",
+                harness.as_str()
+            );
+        }
+        // And neither reads as capturable, which is the only thing the capture
+        // path asks of them.
+        assert!(!Declaration::No.is_capturable());
+        assert!(!Declaration::Unknown.is_capturable());
+        assert!(!Declaration::Partial.is_capturable());
+        assert!(Declaration::Yes.is_capturable());
+    }
+
+    #[test]
+    fn the_session_id_is_the_one_attribution_row_the_survey_answers() {
+        // M1's field inventory covers it on all five hosts (`session_id`,
+        // `sessionId`, `conversation_id`) and `decode` already reads all three,
+        // so this is the row that is `Yes` rather than a gap.
+        for harness in Harness::ALL {
+            assert_eq!(
+                harness
+                    .capabilities()
+                    .declares(Capability::ExposesSessionId),
+                Declaration::Yes,
+                "{}: the session id is present natively",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn a_host_setting_that_does_not_govern_every_path_is_partial_not_yes() {
+        // Measured on this repository (2026-08-09): one trailer is added by a
+        // path that ignores the host's own off-switch. `Yes` would say the
+        // setting can be trusted, which is what the attribution gate exists
+        // because it cannot; `No` would say there is no setting at all.
+        assert_eq!(
+            Harness::ClaudeCode
+                .capabilities()
+                .declares(Capability::AttributionConfigSurface),
+            Declaration::Partial,
+        );
+        // And the injection rows this repo measured are the one host's, not a
+        // shared assumption about all of them.
+        assert_eq!(
+            Harness::ClaudeCode
+                .capabilities()
+                .declares(Capability::InjectsCoauthorshipTrailer),
+            Declaration::Yes,
+        );
+        assert_eq!(
+            Harness::GeminiCli
+                .capabilities()
+                .declares(Capability::InjectsCoauthorshipTrailer),
+            Declaration::Unknown,
+            "nothing measured this host; unknown is the honest row"
+        );
+    }
+
+    #[test]
+    fn an_escalation_is_encodable_only_where_the_table_says_ask_is_reachable() {
+        // §7(b) at the encoder. `None` is the caller's instruction to hard-deny,
+        // so what this pins is that `Some` never appears where the row says the
+        // host has no `ask` — the direction that would emit a verdict the host
+        // does not understand, which Gemini reads as an allow.
+        for harness in Harness::ALL {
+            let body = encode_ask(*harness, "PreToolUse", "reason").expect("serializes");
+            if body.is_some() {
+                assert!(
+                    harness.capabilities().ask,
+                    "{}: an ask body was encoded for a host declaring no ask row",
+                    harness.as_str()
+                );
+            }
+        }
+        // Claude Code is the one host where escalation is both declared and
+        // reachable on the event Batten registers.
+        let claude = encode_ask(Harness::ClaudeCode, "PreToolUse", "reason")
+            .expect("serializes")
+            .expect("claude code can escalate");
+        assert!(claude.contains("\"permissionDecision\":\"ask\""));
+        assert!(claude.contains("\"permissionDecisionReason\":\"reason\""));
+
+        // Cursor and Copilot declare `ask` and still answer `None`, each for a
+        // measured reason about the surface Batten registers: on Cursor the
+        // verdict parses unenforced on the generic `preToolUse`, and an
+        // unenforced ask proceeds; on Copilot no verified body envelope exists.
+        // Both therefore hard-deny, which is the safe direction.
+        for harness in [Harness::Cursor, Harness::CopilotCli] {
+            assert!(harness.capabilities().ask);
+            assert_eq!(
+                encode_ask(harness, "PreToolUse", "reason").expect("serializes"),
+                None,
+                "{}: declared, and not reachable on the event Batten registers",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn the_ask_and_deny_bodies_share_one_envelope() {
+        // Two shapes for one object is two things to keep in step; this is what
+        // says they are one. The verdict word is the only difference.
+        let deny = encode_claude_deny("PreToolUse", "reason").expect("serializes");
+        let ask = encode_ask(Harness::ClaudeCode, "PreToolUse", "reason")
+            .expect("serializes")
+            .expect("claude code can escalate");
+        assert_eq!(deny.replace("\"deny\"", "\"ask\""), ask);
     }
 
     #[test]

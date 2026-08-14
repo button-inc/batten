@@ -501,7 +501,7 @@ _batten() {
             return 0
             ;;
         batten__subcmd__attribution__subcmd__check)
-            opts="-J -q -v -y -h --json --message --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-J -q -v -y -h --json --message --harness --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -509,6 +509,10 @@ _batten() {
             case "${prev}" in
                 --message)
                     COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --harness)
+                    COMPREPLY=($(compgen -W "claude-code cursor copilot-cli gemini-cli codex-cli exit-code" -- "${cur}"))
                     return 0
                     ;;
                 --strictness)

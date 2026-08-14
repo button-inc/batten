@@ -7524,3 +7524,221 @@ fn generate_hooks_refuses_the_contract_only_harness() {
         "the refusal names the harness and why: {stderr:?}"
     );
 }
+
+// --- per-host attribution adapters (CLOUD-276) -------------------------------
+//
+// The invariant these pin is an asymmetry, and it is the issue's whole point:
+// **capture fidelity varies by host; enforcement never does.** Enforcement seams
+// are git-native — a commit hook and CI over the produced object — and a commit
+// carries no record of which host made it, so a `--harness` that changed a
+// verdict would be a bug rather than a feature.
+//
+// `--message` rather than `--range` on purpose: the finding then comes from the
+// message file this fixture writes, so it is deterministic. A range case would
+// judge the identity the sandbox's git happens to resolve, which is asserting a
+// premise the fixture never created (`.claude/rules/rust.md`, CLOUD-249).
+
+/// The six harness tokens, as the binary accepts them.
+///
+/// Spelled here rather than read off `Harness::ALL` at runtime **and** checked
+/// against it below, so a new host cannot join the enum without joining this
+/// matrix — the failure a hand-kept list otherwise hides.
+const ATTRIBUTION_HOSTS: &[&str] = &[
+    "claude-code",
+    "cursor",
+    "copilot-cli",
+    "gemini-cli",
+    "codex-cli",
+    "exit-code",
+];
+
+/// A repo whose attribution policy refuses one thing the fixture message says.
+fn attribution_fixture(name: &str) -> PathBuf {
+    Fixture::at(scratch(name))
+        .config(concat!(
+            "version = 1\n",
+            "[attribution]\n",
+            "identity_deny = [\"^Nobody <\"]\n",
+            "trailer_deny = [\"^Nobody-Session:\"]\n",
+            // The one the fixture message trips, deterministically.
+            "body_deny = [\"^Generated with\"]\n",
+            "[attribution.identity]\n",
+            "name = \"Accountable Human\"\n",
+            "email = \"human@example.test\"\n",
+        ))
+        .file("pending-message", "Generated with SomeTool\n")
+        .git()
+        .base_commit()
+        .build()
+}
+
+/// `attribution check -J` over the fixture message, optionally naming a host.
+fn attribution_document(dir: &Path, harness: Option<&str>) -> Output {
+    let mut args = vec!["attribution", "check", "--message", "pending-message", "-J"];
+    if let Some(harness) = harness {
+        args.extend(["--harness", harness]);
+    }
+    batten_with(dir, &args, &[])
+}
+
+#[test]
+fn every_harness_the_enum_declares_is_in_the_attribution_matrix() {
+    // The guard on the list above. `Harness::ALL` is the authority; this asserts
+    // the matrix ranges over all of it, so a seventh host fails here rather than
+    // silently going uncovered by every case below.
+    let declared: Vec<&str> = batten::hook::Harness::ALL
+        .iter()
+        .map(|harness| harness.as_str())
+        .collect();
+    assert_eq!(declared, ATTRIBUTION_HOSTS);
+}
+
+#[test]
+fn enforcement_is_identical_across_every_host() {
+    // §7(a) and the enforcement half of §7(c). One fixture, six hosts, plus the
+    // run that names no host at all: the findings and the exit code are the same
+    // every time. A `--harness` that could move a verdict would make the gate's
+    // answer depend on which agent happened to be running, which is the opposite
+    // of what a git-native seam means.
+    let dir = attribution_fixture("attribution-host-enforcement");
+
+    let unnamed = attribution_document(&dir, None);
+    assert_eq!(
+        unnamed.status.code(),
+        Some(2),
+        "the fixture message trips `body_deny`, so this is the policy verdict"
+    );
+    let baseline: serde_json::Value = serde_json::from_slice(&unnamed.stdout).expect("-J is JSON");
+    assert_eq!(
+        baseline["findings"],
+        serde_json::json!([{ "label": "pending", "field": "body" }]),
+    );
+
+    for harness in ATTRIBUTION_HOSTS {
+        let output = attribution_document(&dir, Some(harness));
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{harness}: naming a host must not move the verdict"
+        );
+        let document: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("-J is JSON");
+        assert_eq!(
+            document["findings"], baseline["findings"],
+            "{harness}: the findings are the gate's, and the gate is host-blind"
+        );
+    }
+}
+
+#[test]
+fn the_document_reports_exactly_the_rows_the_named_host_declares() {
+    // §7(b). The declarations are what varies, and they are observable rather
+    // than merely typed: one host measured on this repository, four the survey
+    // does not answer for, and the neutral contract that can honestly say `no`.
+    let dir = attribution_fixture("attribution-host-rows");
+
+    let claude = attribution_document(&dir, Some("claude-code"));
+    let document: serde_json::Value = serde_json::from_slice(&claude.stdout).expect("-J is JSON");
+    let rows = document["expects"].as_array().expect("expects is an array");
+    assert_eq!(
+        rows.len(),
+        batten::hook::Capability::ATTRIBUTION.len(),
+        "the document is derived from the table, so every attribution row appears"
+    );
+    let declared = |capability: &str| -> String {
+        rows.iter()
+            .find(|row| row["capability"] == capability)
+            .unwrap_or_else(|| panic!("{capability} is missing from the document"))["declares"]
+            .as_str()
+            .expect("a declaration token")
+            .to_owned()
+    };
+    assert_eq!(declared("injects-coauthorship-trailer"), "yes");
+    assert_eq!(declared("exposes-session-id"), "yes");
+    // Neither `yes` nor `no`: a setting exists and does not govern every path.
+    assert_eq!(declared("attribution-config-surface"), "partial");
+    // Measured as environment-injected, which cannot separate host from
+    // container — so the host is not credited with it.
+    assert_eq!(declared("sets-git-identity"), "unknown");
+
+    // The distinction CLOUD-276's stated assumption turns on, visible in the
+    // document a consumer reads and not only in the type: `no` is measured
+    // absence, `unknown` is evidence that does not answer.
+    let exit_code = attribution_document(&dir, Some("exit-code"));
+    let neutral: serde_json::Value = serde_json::from_slice(&exit_code.stdout).expect("-J is JSON");
+    let row = |document: &serde_json::Value, capability: &str| -> String {
+        document["expects"]
+            .as_array()
+            .expect("expects is an array")
+            .iter()
+            .find(|row| row["capability"] == capability)
+            .expect("the row")["declares"]
+            .as_str()
+            .expect("a declaration token")
+            .to_owned()
+    };
+    assert_eq!(row(&neutral, "exposes-model-id"), "no");
+    assert_eq!(declared("exposes-model-id"), "unknown");
+}
+
+#[test]
+fn a_row_the_host_does_not_declare_captures_unknown() {
+    // §7(c), over the binary. No surveyed host puts a model id on the payload
+    // Batten reads, so the captured value is the token and not an empty string, a
+    // missing key, or a guess. The enforcement half is asserted above.
+    let dir = attribution_fixture("attribution-host-capture");
+    for harness in ATTRIBUTION_HOSTS {
+        let output = attribution_document(&dir, Some(harness));
+        let document: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("-J is JSON");
+        assert_eq!(
+            document["caller"]["modelId"], "unknown",
+            "{harness}: an undeclared row degrades to the token"
+        );
+        // The harness is known by construction — the caller named it.
+        assert_eq!(document["caller"]["harness"], *harness);
+        // Present on every record whatever the value, which is the shape
+        // contract `decision::Caller` keeps (CLOUD-275).
+        for field in ["modelId", "harness", "session"] {
+            assert!(
+                document["caller"][field].is_string(),
+                "{harness}: {field} must be present, got {}",
+                document["caller"]
+            );
+        }
+    }
+}
+
+#[test]
+fn naming_no_host_declares_nothing_rather_than_borrowing_a_default() {
+    // The flag has no default, and this is why: an absent `--harness` is its own
+    // answer. Three degraded provenance values and no declarations — never some
+    // host's rows attributed to a caller who named none.
+    let dir = attribution_fixture("attribution-no-host");
+    let document: serde_json::Value =
+        serde_json::from_slice(&attribution_document(&dir, None).stdout).expect("-J is JSON");
+    assert_eq!(document["caller"]["harness"], "unknown");
+    assert_eq!(document["caller"]["modelId"], "unknown");
+    assert_eq!(document["caller"]["session"], "unknown");
+    assert_eq!(
+        document["expects"],
+        serde_json::json!([]),
+        "no host was named, so there are no declarations to report"
+    );
+}
+
+#[test]
+fn the_document_is_byte_identical_across_two_runs() {
+    // §7(d), and §6 generally. The keys are struct order and the rows are
+    // `Capability::ATTRIBUTION` order, so neither a map's hashing nor a set's
+    // iteration can reorder them between runs.
+    let dir = attribution_fixture("attribution-host-stable");
+    for harness in ATTRIBUTION_HOSTS {
+        let first = attribution_document(&dir, Some(harness));
+        let second = attribution_document(&dir, Some(harness));
+        assert_eq!(
+            first.stdout, second.stdout,
+            "{harness}: the document is not byte-stable"
+        );
+    }
+}

@@ -255,6 +255,37 @@ impl FlagDecl {
         }
     }
 
+    /// An optional flag taking one token of a `ValueEnum`, with **no** default.
+    ///
+    /// Distinct from [`FlagDecl::defaulted_enum`] on purpose: a default would
+    /// make "the caller named no host" indistinguishable from "the caller named
+    /// this one", and that distinction is the whole contract of
+    /// `attribution check --harness` — an unnamed host declares nothing, which is
+    /// not the same claim as any host's row (CLOUD-276).
+    const fn optional_enum(
+        id: &'static str,
+        long: &'static str,
+        help: &'static str,
+        parser: fn() -> ValueParser,
+    ) -> Self {
+        FlagDecl {
+            id,
+            long: Some(long),
+            short: None,
+            help,
+            env: EnvDecl::None,
+            global: false,
+            positional: false,
+            required: false,
+            hidden: false,
+            rung: Rung::None,
+            value: ValueDecl::Enum {
+                parser,
+                default: None,
+            },
+        }
+    }
+
     /// An optional flag taking one token of a `ValueEnum`, with a default.
     const fn defaulted_enum(
         id: &'static str,
@@ -454,6 +485,25 @@ const MESSAGE: FlagDecl = FlagDecl {
     rung: Rung::None,
     value: ValueDecl::Str,
 };
+
+/// `--harness <host>` on `attribution check` (CLOUD-276).
+///
+/// Optional, and it changes **no verdict**. The findings and the exit code are
+/// identical with it and without it, on every host — that is the invariant the
+/// row set exists to protect: enforcement seams are git-native and cannot vary by
+/// host, because a produced commit carries no record of which host made it. What
+/// the flag selects is the *capture* half: which declarations the emitted document
+/// reports, and at what fidelity a caller field may be recorded.
+///
+/// Absent means no host was named, which is its own answer — three degraded
+/// provenance values and no declarations — and not a stand-in for some default
+/// host.
+const ATTRIBUTION_HARNESS: FlagDecl = FlagDecl::optional_enum(
+    "harness",
+    "harness",
+    "Report the attribution capabilities this host declares, and capture at that fidelity",
+    harness_parser,
+);
 
 /// `--host-rules <path|->` on `config lint` (CLOUD-54).
 ///
@@ -1052,7 +1102,7 @@ pub const SURFACE: &[CommandDecl] = &[
         about: "Refuse vendor authorship, branding or session links in commit metadata",
         data_channel: true,
         effect: Effect::Read,
-        flags: &[JSON, RANGE, MESSAGE],
+        flags: &[JSON, RANGE, MESSAGE, ATTRIBUTION_HARNESS],
     },
     // The one write this subject introduces, self-declared (§5). Repo-local only:
     // it writes `.git/config` in this checkout and never `--global`, which covers

@@ -392,8 +392,14 @@ fn an_unreadable_message_file_is_one() {
 
 #[test]
 fn json_is_emitted_for_a_clean_run_too() {
-    // JSON that is sometimes absent is unparseable, so the empty array is the
-    // clean answer rather than silence.
+    // JSON that is sometimes absent is unparseable, so an empty `findings` list
+    // is the clean answer rather than silence.
+    //
+    // The document became an object when the attribution rows landed (CLOUD-276):
+    // `caller` and `expects` join `findings` under stable keys, and every key is
+    // present on every run — including this clean one and a run naming no host.
+    // A shape that varied with the flags would be the same unparseable problem
+    // the empty list exists to avoid, one level up.
     let dir = fixture("attribution-json-clean");
     let base = base_of(&dir);
     let head = commit_clean(&dir, "fix(x): a change");
@@ -403,7 +409,13 @@ fn json_is_emitted_for_a_clean_run_too() {
         .output()
         .expect("run batten");
     assert_eq!(out.status.code(), Some(0));
-    assert_eq!(stdout(&out).trim(), "[]");
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("--json is one JSON document");
+    assert_eq!(document["findings"], serde_json::json!([]));
+    // Named no host, so it declares nothing and captures nothing — which is a
+    // different answer from any host's row, not a stand-in for one.
+    assert_eq!(document["expects"], serde_json::json!([]));
+    assert_eq!(document["caller"]["harness"], "unknown");
 }
 
 #[test]

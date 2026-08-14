@@ -258,6 +258,15 @@ pub enum AttributionCommand {
         range: Option<String>,
         /// The pending commit-message file to judge.
         message: Option<String>,
+        /// The host whose attribution capabilities the emitted document reports,
+        /// and at whose declared fidelity a caller field may be captured
+        /// (CLOUD-276).
+        ///
+        /// `None` is "no host was named" and stays distinguishable from every
+        /// host's row: it declares nothing rather than borrowing a default's
+        /// declarations. It changes no verdict either way — enforcement is
+        /// git-native and host-independent.
+        harness: Option<Harness>,
     },
     /// Set this clone's repo-local git identity when it is unset or denied.
     Identity,
@@ -486,6 +495,7 @@ fn attribution_of(matches: &ArgMatches) -> Option<AttributionCommand> {
             json: flag(matches, "json"),
             range: matches.get_one::<String>("range").cloned(),
             message: matches.get_one::<String>("message").cloned(),
+            harness: matches.get_one::<Harness>("harness").copied(),
         }),
         ("identity", _) => Some(AttributionCommand::Identity),
         _ => None,

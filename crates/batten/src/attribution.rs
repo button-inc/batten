@@ -63,8 +63,10 @@ use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::decision::{Caller, Provenance};
 use crate::error::UsageError;
 use crate::git;
+use crate::hook::{Capability, Harness};
 
 /// The `[attribution]` table: what produced commits may carry about the tooling.
 ///
@@ -428,6 +430,76 @@ impl Outcome {
     }
 }
 
+/// Capture the caller's provenance at the fidelity this host **declares**
+/// (CLOUD-276).
+///
+/// # The declaration governs, not the payload
+///
+/// A row that is not [`crate::hook::Declaration::Yes`] yields [`Provenance::Unknown`] *even
+/// when the host reported a value*. That is the whole point rather than an
+/// oversight: capture fidelity is a property of what the host is known to
+/// expose, and a value arriving from a surface the table does not vouch for is a
+/// value nobody can say is a model identity. Trusting it would make the table
+/// decorative — the defect non-negotiable rule 3 names, a claim resting on
+/// something no predicate decided.
+///
+/// The reverse case is covered too: a row declaring `Yes` and a payload carrying
+/// nothing still degrades, through [`Provenance::from_host`], because a host that
+/// should have filled a field and did not has not told us anything.
+///
+/// # Enforcement is untouched
+///
+/// Nothing here reaches [`Attribution::judge`], [`read_range`], [`read_message`]
+/// or [`set_identity`]. Those take no harness and cannot: the enforcement seams
+/// are git-native — a commit hook and CI over the produced object — and a commit
+/// carries no record of which host made it. **Only capture fidelity varies by
+/// host**; that asymmetry is the invariant, not a convenience.
+///
+/// The `harness` field is always [`Provenance::Declared`]. It is known by
+/// construction: the caller selected the adapter with `--harness`, so there is no
+/// host to ask and nothing to degrade.
+#[must_use]
+pub fn capture(harness: Harness, model_id: Option<&str>, session: Option<&str>) -> Caller {
+    let declares = |capability| harness.capabilities().declares(capability).is_capturable();
+    Caller {
+        model_id: if declares(Capability::ExposesModelId) {
+            Provenance::from_host(model_id)
+        } else {
+            Provenance::Unknown
+        },
+        harness: Provenance::Declared(harness.as_str().to_owned()),
+        session: if declares(Capability::ExposesSessionId) {
+            Provenance::from_host(session)
+        } else {
+            Provenance::Unknown
+        },
+    }
+}
+
+/// What this host is expected to do to a produced commit, and what it can be
+/// asked about its caller — the declared rows, in [`Capability::ATTRIBUTION`]
+/// order.
+///
+/// Derived from the table rather than re-listed, so a new attribution row appears
+/// here by being declared. The order is the const's and not a map's, which is
+/// what makes a document built from this byte-stable (§6).
+///
+/// Pointer-only by construction: every value is a capability token and a
+/// declaration token. There is no field here that could carry a commit's content.
+#[must_use]
+pub fn expectations(harness: Harness) -> Vec<(&'static str, &'static str)> {
+    let capabilities = harness.capabilities();
+    Capability::ATTRIBUTION
+        .iter()
+        .map(|capability| {
+            (
+                capability.as_str(),
+                capabilities.declares(*capability).as_str(),
+            )
+        })
+        .collect()
+}
+
 /// Render a run's findings as pointer lines, one per line.
 #[must_use]
 pub fn report(findings: &[Finding]) -> String {
@@ -650,6 +722,108 @@ mod tests {
                 .line(&identity)
                 .contains("left as configured")
         );
+    }
+
+    #[test]
+    fn a_declared_row_captures_and_an_undeclared_one_degrades() {
+        // CLOUD-276 §5, and the load-bearing half is the SECOND assertion: a
+        // value is offered for the model id and the capture is still `unknown`,
+        // because no surveyed host declares that row. The declaration governs, not
+        // the payload — otherwise the table is decorative and the capture rests on
+        // whatever a host happened to put on the wire.
+        let captured = capture(Harness::ClaudeCode, Some("some-model"), Some("session-1"));
+        assert_eq!(captured.session.as_str(), "session-1");
+        assert_eq!(
+            captured.model_id.as_str(),
+            crate::decision::UNKNOWN,
+            "a value offered for a row the host does not declare is not captured"
+        );
+        // The harness is known by construction: the caller selected the adapter,
+        // so there is no host to ask and nothing to degrade.
+        assert_eq!(captured.harness.as_str(), "claude-code");
+    }
+
+    #[test]
+    fn a_declared_row_with_nothing_offered_degrades_too() {
+        // The reverse direction. A host that should have filled a field and did
+        // not has told us nothing, so `Yes` is permission to record a value and
+        // never a promise that one exists.
+        let captured = capture(Harness::ClaudeCode, None, None);
+        assert_eq!(captured.session.as_str(), crate::decision::UNKNOWN);
+        assert_eq!(captured.model_id.as_str(), crate::decision::UNKNOWN);
+    }
+
+    #[test]
+    fn no_host_captures_a_model_id_and_the_neutral_contract_captures_no_more() {
+        // Every host, so the invariant is a property rather than one example: the
+        // same offered pair, and the only field that survives is the one the
+        // survey answers.
+        for harness in Harness::ALL {
+            let captured = capture(*harness, Some("some-model"), Some("session-1"));
+            assert_eq!(
+                captured.model_id.as_str(),
+                crate::decision::UNKNOWN,
+                "{}: no surveyed host exposes a model id at record time",
+                harness.as_str()
+            );
+            assert_eq!(
+                captured.session.as_str(),
+                "session-1",
+                "{}: the session id is the one row every host declares",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn every_provenance_field_is_present_whatever_the_declarations_say() {
+        // The shape contract `decision::Caller` already keeps (CLOUD-275), asserted
+        // from this side too: the fields degrade in their VALUE, never by
+        // disappearing, so a consumer can tell "this host declares nothing" from
+        // "this record predates the field".
+        let rendered = serde_json::to_value(capture(Harness::ExitCode, None, None)).unwrap();
+        for field in ["modelId", "harness", "session"] {
+            assert!(
+                rendered[field].is_string(),
+                "{field} must be present, got {rendered}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_expectation_document_is_derived_and_byte_stable() {
+        // Derived from `Capability::ATTRIBUTION`, so a new row joins it by being
+        // declared rather than by someone remembering this list. Byte-stability is
+        // the const's ordering (§6), not a map's.
+        let rows = expectations(Harness::ClaudeCode);
+        assert_eq!(rows, expectations(Harness::ClaudeCode));
+        assert_eq!(rows.len(), Capability::ATTRIBUTION.len());
+        assert!(rows.contains(&("injects-coauthorship-trailer", "yes")));
+        assert!(rows.contains(&("attribution-config-surface", "partial")));
+        assert!(rows.contains(&("exposes-model-id", "unknown")));
+
+        // And the two non-capturable answers stay distinguishable in the
+        // document, which is where CLOUD-276's stated assumption becomes visible
+        // to a reader rather than only to the type system.
+        assert!(expectations(Harness::ExitCode).contains(&("exposes-model-id", "no")));
+        assert!(expectations(Harness::GeminiCli).contains(&("exposes-model-id", "unknown")));
+    }
+
+    #[test]
+    fn capture_reads_the_table_and_never_a_host_name() {
+        // Non-negotiable rule 1, extended to vendors as this module's docs state:
+        // the engine holds the matcher and the table holds the answer, so no
+        // vendor's trailer spelling appears in what capture produces. The harness
+        // TOKEN is Batten's own vocabulary (`--harness claude-code`), not a
+        // vendor's product string in a commit.
+        for harness in Harness::ALL {
+            let rendered = serde_json::to_string(&capture(*harness, Some("m"), Some("s"))).unwrap();
+            assert!(
+                !rendered.contains("Co-Authored-By") && !rendered.contains("Assisted-by"),
+                "{}: a trailer spelling reached the capture",
+                harness.as_str()
+            );
+        }
     }
 
     #[test]

@@ -183,14 +183,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // range is the caller's: `verify` and CI already agree on which commits a
         // branch produced, and deriving it again here would be a second authority
         // for that fact.
-        Some(Command::Attribution { command }) => match command {
-            AttributionCommand::Check {
-                json,
-                range,
-                message,
-            } => run_attribution_check(json, range.as_deref(), message.as_deref(), &overrides, out),
-            AttributionCommand::Identity => run_attribution_identity(&overrides, err),
-        },
+        Some(Command::Attribution { command }) => run_attribution(command, &overrides, out, err),
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
             WorktreeCommand::Reclaim { dry_run } => {
@@ -970,10 +963,73 @@ fn attribution_policy(overrides: &Overrides) -> Result<attribution::Attribution>
     })
 }
 
+/// The `attribution check -J` document (CLOUD-274, CLOUD-276).
+///
+/// **One shape, always.** Every key is present on every run, including a clean
+/// one and one that named no host — a document whose keys come and go is
+/// unparseable, and this is the same rule `decision::Caller` keeps for its own
+/// three fields: degrade the VALUE, never the shape.
+///
+/// Field order is struct order rather than a map's, so the emission is
+/// byte-stable (§6).
+///
+/// Pointer-only (rule 4): `findings` carries a label and a field name,
+/// `expects` two vocabulary tokens, and `caller` a harness token plus whatever
+/// the declared fidelity allowed — never a line of commit content.
+#[derive(serde::Serialize)]
+struct AttributionDocument<'a> {
+    /// Who made the call, captured at the fidelity the named host declares.
+    caller: decision::Caller,
+    /// What that host is declared to do to a produced commit.
+    expects: Vec<Expectation>,
+    /// The verdict half, and the only half that reaches the exit code.
+    findings: &'a [attribution::Finding],
+}
+
+/// One declared attribution row, as the document renders it.
+#[derive(serde::Serialize)]
+struct Expectation {
+    /// The capability's stable token.
+    capability: &'static str,
+    /// What this host declares for it: `yes`, `no`, `partial` or `unknown`.
+    declares: &'static str,
+}
+
+/// Dispatch the `attribution` subtree.
+///
+/// Split out of [`run`] rather than matched inline: the gate half now threads a
+/// harness through (CLOUD-276), and `run` is at its line ceiling — a dispatcher
+/// that grows every time one verb gains an argument is the shape that ceiling
+/// exists to catch.
+fn run_attribution(
+    command: AttributionCommand,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    match command {
+        AttributionCommand::Check {
+            json,
+            range,
+            message,
+            harness,
+        } => run_attribution_check(
+            json,
+            range.as_deref(),
+            message.as_deref(),
+            harness,
+            overrides,
+            out,
+        ),
+        AttributionCommand::Identity => run_attribution_identity(overrides, err),
+    }
+}
+
 fn run_attribution_check(
     json: bool,
     range: Option<&str>,
     message: Option<&str>,
+    harness: Option<hook::Harness>,
     overrides: &Overrides,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -1018,7 +1074,35 @@ fn run_attribution_check(
     if json {
         // Emitted unconditionally, including for a clean run: JSON that is
         // sometimes absent is unparseable.
-        writeln!(out, "{}", serde_json::to_string_pretty(&findings)?)?;
+        //
+        // `None` for both candidate values, and stated rather than left to be
+        // inferred: this verb's input is a commit range or a message file, and
+        // neither carries a model identity or a session. The offered-value arms of
+        // `attribution::capture` — where a declaration REFUSES a value the host
+        // did supply — belong to a surface that reads a host payload, which is the
+        // provenance record CLOUD-275 owns. They are pinned at the library surface
+        // instead, not left unpinned.
+        let document = AttributionDocument {
+            caller: match harness {
+                Some(harness) => attribution::capture(harness, None, None),
+                // No host named: three degraded values, which is a different
+                // claim from any host's row and must not read as one.
+                None => decision::Caller::undeclared(),
+            },
+            expects: harness
+                .map(|harness| {
+                    attribution::expectations(harness)
+                        .into_iter()
+                        .map(|(capability, declares)| Expectation {
+                            capability,
+                            declares,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            findings: &findings,
+        };
+        writeln!(out, "{}", serde_json::to_string_pretty(&document)?)?;
     } else {
         // Silence is the success signal on the human channel (§6).
         write!(out, "{}", attribution::report(&findings))?;
@@ -1513,6 +1597,25 @@ fn decide(
         hook::Decision::Deny(refusal) => {
             let reason = hook::deny_text(&refusal);
             match hook::encode_deny(harness, &envelope.raw_event, &reason)? {
+                Some(body) => {
+                    writeln!(out, "{body}")?;
+                    Ok(ExitCode::Success)
+                }
+                None => Err(Denial::raise(reason)),
+            }
+        }
+        // The escalation degradation (CLOUD-45 §7(b)), decided in exactly one
+        // place. Unreachable until CLOUD-340 lands the `ask` severity that lets a
+        // consumer ask for one — stated rather than left to be discovered, and
+        // written now so that issue adds a config token and not a decision. Where the host can ask a human, the ask travels on its channel
+        // and the call is neither allowed nor refused. Where it cannot, this
+        // falls through to the deny arm's contract — the SAME refusal text, the
+        // §7 `2`. What it never becomes is an allow: "check with a human"
+        // degrading to "go ahead" is the one direction that inverts the policy,
+        // and it is why `encode_ask`'s `None` means refuse rather than proceed.
+        hook::Decision::Ask(refusal) => {
+            let reason = hook::deny_text(&refusal);
+            match hook::encode_ask(harness, &envelope.raw_event, &reason)? {
                 Some(body) => {
                     writeln!(out, "{body}")?;
                     Ok(ExitCode::Success)

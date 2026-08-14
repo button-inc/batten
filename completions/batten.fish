@@ -542,6 +542,12 @@ complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fis
 complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fish_seen_subcommand_from check identity help" -f -a "identity" -d 'Set this clone\'s repo-local git identity when it is unset or denied'
 complete -c batten -n "__fish_batten_using_subcommand attribution; and not __fish_seen_subcommand_from check identity help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l message -d 'Judge one pending commit message file, before the commit exists' -r
+complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l harness -d 'Report the attribution capabilities this host declares, and capture at that fidelity' -r -f -a "claude-code\t'Claude Code\'s `PreToolUse` payload; a deny is returned as the `hookSpecificOutput.permissionDecision` JSON object on stdout with exit `0` — the channel the production shell guards already use'
+cursor\t'Cursor. Two payload families under one host: a generic `preToolUse` that looks like Claude\'s, and specialized events (`beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution`) that carry the operand at top level and **no** `tool_name` at all. Session is `conversation_id`'
+copilot-cli\t'GitHub Copilot CLI, registered in its **`PascalCase`** dialect — which yields `hook_event_name` natively. The camelCase dialect omits the event name entirely, so Batten does not speak it'
+gemini-cli\t'Gemini CLI. Claude-identical payload fields, different event names (`BeforeTool` rather than `PreToolUse`)'
+codex-cli\t'Codex CLI, whose wire format is a near-verbatim clone of Claude Code\'s — its own repo says so. No payload shim is needed; the adapter exists so the host is nameable and its fixture is pinned against drift'
+exit-code\t'The neutral core contract: envelope in, decision as exit code out — `0` allow, `2` deny (reason on stderr), for any host whose only decision channel is an exit status. Both codes are the §7 table\'s, unmodified'"
 complete -c batten -n "__fish_batten_using_subcommand attribution; and __fish_seen_subcommand_from check" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
