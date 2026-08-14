@@ -24,10 +24,11 @@
 # answers a question about THIS COMMIT; whether a published release is attested
 # today is a question about the WORLD, and it changes with no diff):
 #
-#   --precondition   OFFLINE. The verifier resolves and carries a credential.
-#                    This is what the `release-attestation-precondition` row in
+#   --precondition   OFFLINE, and narrow on purpose: the verifier resolves. This
+#                    is what the `release-attestation-precondition` row in
 #                    batten.toml runs on every gate invocation, so the landing
-#                    path makes no network call at all.
+#                    path makes no network call at all — see its own note below
+#                    for why the credential is NOT part of it.
 #   [<tag>]          The world question, on the `release-assets-check` model:
 #                    probe the platform, then verify the release's binaries.
 #                    Defaults to the latest release.
@@ -63,7 +64,7 @@ usage() {
 		       mise run attestation-check --precondition
 
 		  <tag>            release tag to verify (defaults to the latest release)
-		  --precondition   offline: the verifier resolves and carries a credential
+		  --precondition   offline: the verifier resolves
 	EOF
 }
 
@@ -81,23 +82,21 @@ repo_slug() {
 
 # --- the offline half ---------------------------------------------------------
 #
-# Deliberately NOT a verdict about any artifact: it asserts only that a later
-# verdict could be taken at all. That is what makes it safe to enforce at `deny`
-# on the landing path while the platform gap is still open.
+# ONE FACT, and the narrowness is the design. It asserts that the verifier
+# resolves — nothing about the repository, the credential, or the platform —
+# because this is what the `deny` row runs on every gate invocation, and a gate
+# that blocks on ambient environment is a gate that blocks everything the moment
+# an environment differs. Measured: an earlier version also required GH_TOKEN and
+# a github.com remote, and it reported a violation inside
+# `tests/prebuilt-lint.bats`' fixture repositories, which carry neither. A
+# credential is "cannot look", and cannot-look is reported by the world half
+# below rather than enforced here (the landing loop's fail-open rule).
 precondition() {
 	if ! command -v "$GH_BIN" >/dev/null 2>&1; then
 		echo "::error:: attestation-check: no verifier at '$GH_BIN' (\$ATTESTATION_GH overrides), so no attestation could ever be checked. Run: mise install aqua:cli/cli" >&2
 		return 2
 	fi
-	if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
-		echo "::error:: attestation-check: no GH_TOKEN/GITHUB_TOKEN, so the attestations endpoint cannot be read and a 404 could not be told from a denial." >&2
-		return 2
-	fi
-	if ! slug=$(repo_slug); then
-		echo "::error:: attestation-check: no github.com origin remote, so there is no repository to ask about." >&2
-		return 2
-	fi
-	echo "attestation-check: precondition holds — verifier resolves, credential present, repository $slug"
+	echo "attestation-check: precondition holds — the verifier resolves"
 	return 0
 }
 
@@ -114,10 +113,20 @@ esac
 
 # --- the world half -----------------------------------------------------------
 
+# The world half needs everything the precondition deliberately does not: a
+# credential to read the endpoint with, and a repository to read it for. Each
+# absent is "could not look" (exit 2), never a verdict about an artifact.
 if ! precondition >/dev/null; then
-	precondition >/dev/null || exit 2
+	exit 2
 fi
-slug=$(repo_slug)
+if [ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]; then
+	echo "::error:: attestation-check: no GH_TOKEN/GITHUB_TOKEN, so the attestations endpoint cannot be read and a 404 could not be told from a denial." >&2
+	exit 2
+fi
+if ! slug=$(repo_slug); then
+	echo "::error:: attestation-check: no github.com origin remote, so there is no repository to ask about." >&2
+	exit 2
+fi
 
 # The status code IS the object this decides over — a protocol answer, not a
 # report to interpret (rule 3). `-i` prints the status line; nothing else in the

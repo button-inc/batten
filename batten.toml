@@ -1147,17 +1147,22 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 # anything unverified. `blockedBy CLOUD-585` was removed from the issue on that
 # measurement: a public repository is what makes the verdict INTERESTING, never
 # what makes this gate runnable.
-# The glob is the WORKFLOW SET rather than `release-artifacts.yml` alone, and that
-# is `batten-glob-check`'s containment rule rather than a widening: it proves
-# coverage by verbatim match or by a `P/**` prefix, so a lone literal path would
-# have to be added to hk.pkl's `batten-check` glob to be provable, while
-# `.github/workflows/*.yml` is already there. The check self-discovers its inputs
-# either way — it takes no `{{files}}` — so the row runs exactly once per
-# invocation under both spellings.
+# THE GLOB IS `mise-tasks/**`, AND BOTH REASONS ARE MEASURED. It has to be a path
+# `batten-glob-check` can prove covered — that gate accepts a verbatim match or a
+# `P/**` prefix against hk.pkl's `batten-check` list, and `.github/workflows/*.yml`
+# and `mise-tasks/**` are both in it, while a lone literal `release-artifacts.yml`
+# is not. And it must not match inside a FIXTURE tree: a `check` spelled `mise run`
+# only resolves where a mise.toml is findable, so any row whose glob matches a
+# fixture repository reports a violation there for a reason that has nothing to do
+# with policy. `tests/prebuilt-lint.bats` copies `mise.toml` and the workflows into
+# its fixture and asserts this repository's own config is clean over it, which is
+# what caught the workflow-set spelling (CLOUD-614 carries the general defect).
+# `mise-tasks/**` is also where this row's own mechanism lives, so the trigger and
+# the thing triggered are the same file set.
 [[rule]]
 id = "release-attestation-precondition"
 kind = "command"
-glob = ".github/workflows/*.yml"
+glob = "mise-tasks/**"
 check = "mise run attestation-check --precondition"
 severity = "deny"
 scope = "tree"

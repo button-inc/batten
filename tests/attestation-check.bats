@@ -159,7 +159,7 @@ EOF
 	[[ "$output" != *"attestations\":"* ]]
 }
 
-@test "the precondition holds when the verifier resolves and a credential exists" {
+@test "the precondition holds when the verifier resolves" {
 	run "$CHECK" --precondition
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"precondition holds"* ]]
@@ -195,10 +195,30 @@ EOF
 	[[ "$output" == *"no verifier"* ]]
 }
 
-@test "a missing credential is exit 2 — a 404 could not be told from a denial" {
+@test "a missing credential does NOT fail the precondition — cannot-look is not a deny" {
+	# The row this mode backs is `deny`, so anything ambient in it blocks every
+	# environment that differs. Measured: an earlier version required GH_TOKEN here
+	# and reported a violation inside `tests/prebuilt-lint.bats`' fixture repos,
+	# which carry no credential and no remote.
 	unset GH_TOKEN
 	unset GITHUB_TOKEN || true
 	run "$CHECK" --precondition
+	[ "$status" -eq 0 ]
+}
+
+@test "a missing credential IS exit 2 in the world half — a 404 could not be told from a denial" {
+	unset GH_TOKEN
+	unset GITHUB_TOKEN || true
+	run "$CHECK"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"GH_TOKEN"* ]]
+}
+
+@test "no github.com remote is exit 2 in the world half, and irrelevant to the precondition" {
+	git -C "$ROOT" remote remove origin
+	run "$CHECK" --precondition
+	[ "$status" -eq 0 ]
+	run "$CHECK"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"no github.com origin remote"* ]]
 }
