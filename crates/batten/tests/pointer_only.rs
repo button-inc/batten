@@ -474,6 +474,17 @@ const CENSUS: &[Verb] = &[
         ),
     },
     Verb {
+        path: "generate hooks",
+        args: &["--harness", "claude-code"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Echoes(
+            "the wiring is derived from the `Harness` enum — a host's config path, its event \
+             spellings, and Batten's own command — so every byte is Batten's own declaration. \
+             It reads no repository content at all: not the tree, not `batten.toml`, not the \
+             committed wiring it is diffed against, which is `hooks-wiring-check`'s to read",
+        ),
+    },
+    Verb {
         path: "generate schema",
         args: &[],
         stdin: Stdin::Nothing,

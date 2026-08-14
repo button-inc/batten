@@ -174,6 +174,23 @@ local gate = new Mapping<String, Step> {
       )
     check = "mise run derived-check"
   }
+  // The third surface derivation, and separate from `derived-check` above for
+  // the reason `schema-check` is: that gate's rows are <whole committed
+  // artifact> x <generate argv>, compared with `cmp`. The hook wiring lives as
+  // SELECTED ENTRIES INSIDE a file the host shares with configuration the engine
+  // does not own, so it is compared entry-wise after canonicalization — not that
+  // shape (CLOUD-62). Its glob is the wiring rows, the surface row that emits
+  // them, and the committed wiring itself.
+  ["hooks-wiring-check"] {
+    glob =
+      List(
+        "crates/batten/src/hook.rs",
+        "crates/batten/src/surface.rs",
+        ".claude/settings.json",
+        "mise-tasks/hooks-wiring-check",
+      )
+    check = "mise run hooks-wiring-check"
+  }
   // The reference is the one surface derivation with NO committed copy — it is
   // rendered at publish time, so it is current by construction and there is
   // nothing for `derived-check` above to diff (CLOUD-171). That removes the

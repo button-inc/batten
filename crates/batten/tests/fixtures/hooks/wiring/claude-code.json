@@ -1,0 +1,62 @@
+{
+  "PreToolUse": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten hook --harness claude-code"
+        }
+      ]
+    }
+  ],
+  "PostToolUse": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten hook --harness claude-code"
+        }
+      ]
+    }
+  ],
+  "Stop": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten hook --harness claude-code"
+        }
+      ]
+    }
+  ],
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten hook --harness claude-code"
+        }
+      ]
+    }
+  ],
+  "TaskCompleted": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten hook --harness claude-code"
+        }
+      ]
+    }
+  ],
+  "ConfigChange": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten hook --harness claude-code"
+        }
+      ]
+    }
+  ]
+}

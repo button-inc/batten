@@ -358,6 +358,11 @@ pub enum GenerateCommand {
     },
     /// Emit the whole surface as one markdown reference.
     Markdown,
+    /// Emit one harness's hook registrations (CLOUD-62).
+    Hooks {
+        /// The harness whose wiring to emit.
+        harness: crate::hook::Harness,
+    },
 }
 
 /// The formats `batten spec` can emit.
@@ -544,6 +549,9 @@ fn generate_of(matches: &ArgMatches) -> Option<GenerateCommand> {
             command: matches.get_one::<String>("command").cloned(),
         }),
         ("markdown", _) => Some(GenerateCommand::Markdown),
+        ("hooks", matches) => matches
+            .get_one::<crate::hook::Harness>("harness")
+            .map(|harness| GenerateCommand::Hooks { harness: *harness }),
         ("schema", matches) => Some(GenerateCommand::Schema {
             surface: matches
                 .get_one::<ConfigSurface>("surface")

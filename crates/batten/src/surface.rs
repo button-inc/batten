@@ -941,6 +941,25 @@ pub const SURFACE: &[CommandDecl] = &[
     // already named them derivations of the spec; until now only the shell one
     // existed, so the claim was prose. Both stay stdout-only and `read` for the
     // reason the `generate` header states: the redirect belongs to the caller.
+    // CLOUD-62. The wiring a host needs is a derivation of the same `Harness`
+    // data the adapters are built from, so it is emitted here rather than
+    // hand-kept in each host's config — the failure `derived-check` already
+    // covers for completions and man pages.
+    CommandDecl {
+        path: "generate hooks",
+        about: "Emit one harness's hook registrations, on stdout",
+        // The registrations ARE the output, and they are JSON because the hosts'
+        // config files are — not because this is a batten document with a human
+        // rendering to switch away from.
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[FlagDecl::required_enum(
+            "harness",
+            "harness",
+            "The harness whose hook registrations to emit",
+            harness_parser,
+        )],
+    },
     CommandDecl {
         path: "generate man",
         about: "Emit the roff man page for one command, on stdout",

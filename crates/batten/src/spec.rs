@@ -306,6 +306,13 @@ mod tests {
                 "doctor".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
+                // §11's third derivation (CLOUD-62): the hook wiring a host
+                // needs, derived from the same `Harness` data the adapters are
+                // built from. On the list for the structural reason the others
+                // are — it returns bytes and writes nothing. Emphatically NOT
+                // the verb that installs them: `generate` stays stdout-only,
+                // and the install surface is `init`'s.
+                "generate hooks".to_owned(),
                 // The two human renderings (CLOUD-69) are on the list for the
                 // same structural reason the shell one is: they return bytes
                 // and write nothing.
@@ -393,6 +400,7 @@ mod tests {
         for path in [
             "generate",
             "generate completions",
+            "generate hooks",
             "generate man",
             "generate markdown",
             "generate schema",
@@ -443,6 +451,8 @@ mod tests {
                 // derivation the one emitter (CLOUD-244).
                 "generate".to_owned(),
                 "generate completions".to_owned(),
+                // §11's third derivation, the hook wiring (CLOUD-62).
+                "generate hooks".to_owned(),
                 // §11's other two derivations, landed together (CLOUD-69): the
                 // document has named man pages and markdown as derivations of
                 // this spec since the spine, and until now only the shell one

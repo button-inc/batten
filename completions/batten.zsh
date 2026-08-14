@@ -552,6 +552,40 @@ trace\:"Add everything"))' \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(hooks)
+_arguments "${_arguments_options[@]}" : \
+'--harness=[The harness whose hook registrations to emit]: :((claude-code\:"Claude Code'\''s \`PreToolUse\` payload; a deny is returned as the \`hookSpecificOutput.permissionDecision\` JSON object on stdout with exit \`0\` — the channel the production shell guards already use"
+cursor\:"Cursor. Two payload families under one host\: a generic \`preToolUse\` that looks like Claude'\''s, and specialized events (\`beforeShellExecution\`, \`beforeReadFile\`, \`beforeMCPExecution\`) that carry the operand at top level and **no** \`tool_name\` at all. Session is \`conversation_id\`"
+copilot-cli\:"GitHub Copilot CLI, registered in its **\`PascalCase\`** dialect — which yields \`hook_event_name\` natively. The camelCase dialect omits the event name entirely, so Batten does not speak it"
+gemini-cli\:"Gemini CLI. Claude-identical payload fields, different event names (\`BeforeTool\` rather than \`PreToolUse\`)"
+codex-cli\:"Codex CLI, whose wire format is a near-verbatim clone of Claude Code'\''s — its own repo says so. No payload shim is needed; the adapter exists so the host is nameable and its fixture is pinned against drift"
+exit-code\:"The neutral core contract\: envelope in, decision as exit code out — \`0\` allow, \`2\` deny (reason on stderr), for any host whose only decision channel is an exit status. Both codes are the §7 table'\''s, unmodified"))' \
+'--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
+standard\:"The default\: a finding is a violation"
+strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
+'--config-from=[Read the committed config from a git ref (e.g. origin/main) instead of the working tree]: :_default' \
+'--log-level=[Set the verbosity rung by name]: :((silent\:"Say nothing but a verdict or a usage error"
+quiet\:"Suppress ordinary progress; keep warnings"
+normal\:"The default"
+verbose\:"Explain what is being checked"
+debug\:"Add resolution detail"
+trace\:"Add everything"))' \
+'--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
+'*--silent[Say nothing but a verdict or a usage error]' \
+'*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*--quiet[Suppress ordinary progress (repeatable\: -qq is silent)]' \
+'*-v[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--verbose[Explain what is being checked (repeatable\: -vv is debug)]' \
+'*--debug[Add resolution detail]' \
+'*--trace[Add everything]' \
+'--no-color[Never colour stderr, whatever it is attached to]' \
+'--no-input[Never prompt; treat the run as unattended]' \
+'-y[Confirm a destructive operation that would otherwise refuse]' \
+'--yes[Confirm a destructive operation that would otherwise refuse]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
+&& ret=0
+;;
 (man)
 _arguments "${_arguments_options[@]}" : \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
@@ -652,6 +686,10 @@ _arguments "${_arguments_options[@]}" : \
         curcontext="${curcontext%:*:*}:batten-generate-help-command-$line[1]:"
         case $line[1] in
             (completions)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(hooks)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -1941,6 +1979,10 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(hooks)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (man)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -2408,6 +2450,7 @@ _batten__subcmd__exec_commands() {
 _batten__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'hooks:Emit one harness'\''s hook registrations, on stdout' \
 'man:Emit the roff man page for one command, on stdout' \
 'markdown:Emit the whole command surface as one markdown reference, on stdout' \
 'schema:Emit the JSON Schema for a config surface, derived from the config types' \
@@ -2424,6 +2467,7 @@ _batten__subcmd__generate__subcmd__completions_commands() {
 _batten__subcmd__generate__subcmd__help_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'hooks:Emit one harness'\''s hook registrations, on stdout' \
 'man:Emit the roff man page for one command, on stdout' \
 'markdown:Emit the whole command surface as one markdown reference, on stdout' \
 'schema:Emit the JSON Schema for a config surface, derived from the config types' \
@@ -2441,6 +2485,11 @@ _batten__subcmd__generate__subcmd__help__subcmd__help_commands() {
     local commands; commands=()
     _describe -t commands 'batten generate help help commands' commands "$@"
 }
+(( $+functions[_batten__subcmd__generate__subcmd__help__subcmd__hooks_commands] )) ||
+_batten__subcmd__generate__subcmd__help__subcmd__hooks_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate help hooks commands' commands "$@"
+}
 (( $+functions[_batten__subcmd__generate__subcmd__help__subcmd__man_commands] )) ||
 _batten__subcmd__generate__subcmd__help__subcmd__man_commands() {
     local commands; commands=()
@@ -2455,6 +2504,11 @@ _batten__subcmd__generate__subcmd__help__subcmd__markdown_commands() {
 _batten__subcmd__generate__subcmd__help__subcmd__schema_commands() {
     local commands; commands=()
     _describe -t commands 'batten generate help schema commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__generate__subcmd__hooks_commands] )) ||
+_batten__subcmd__generate__subcmd__hooks_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten generate hooks commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__generate__subcmd__man_commands] )) ||
 _batten__subcmd__generate__subcmd__man_commands() {
@@ -2593,6 +2647,7 @@ _batten__subcmd__help__subcmd__exec_commands() {
 _batten__subcmd__help__subcmd__generate_commands() {
     local commands; commands=(
 'completions:Emit the shell completion script for one shell' \
+'hooks:Emit one harness'\''s hook registrations, on stdout' \
 'man:Emit the roff man page for one command, on stdout' \
 'markdown:Emit the whole command surface as one markdown reference, on stdout' \
 'schema:Emit the JSON Schema for a config surface, derived from the config types' \
@@ -2603,6 +2658,11 @@ _batten__subcmd__help__subcmd__generate_commands() {
 _batten__subcmd__help__subcmd__generate__subcmd__completions_commands() {
     local commands; commands=()
     _describe -t commands 'batten help generate completions commands' commands "$@"
+}
+(( $+functions[_batten__subcmd__help__subcmd__generate__subcmd__hooks_commands] )) ||
+_batten__subcmd__help__subcmd__generate__subcmd__hooks_commands() {
+    local commands; commands=()
+    _describe -t commands 'batten help generate hooks commands' commands "$@"
 }
 (( $+functions[_batten__subcmd__help__subcmd__generate__subcmd__man_commands] )) ||
 _batten__subcmd__help__subcmd__generate__subcmd__man_commands() {

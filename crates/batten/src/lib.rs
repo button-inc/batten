@@ -2766,6 +2766,21 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
             cli::ConfigSurface::Authority => writeln!(out, "{}", config::schema()?)?,
             cli::ConfigSurface::Override => writeln!(out, "{}", config::override_schema()?)?,
         },
+        // A refusal rather than empty output for a harness that is a contract
+        // and not a host: emitting `{}` would answer "this host registers
+        // nothing", which is a different claim from "there is nothing to
+        // register with". `UsageError` is exit 1 — the caller named something
+        // that cannot be asked for, which is a statement about the invocation.
+        GenerateCommand::Hooks { harness } => {
+            let wiring = harness.wiring().ok_or_else(|| {
+                UsageError::raise(format!(
+                    "generate hooks: {} is the neutral contract, not a host — it has no \
+                     hook-config surface to register in",
+                    harness.as_str()
+                ))
+            })?;
+            writeln!(out, "{}", hook::render_wiring(*harness, &wiring))?;
+        }
     }
     Ok(ExitCode::Success)
 }

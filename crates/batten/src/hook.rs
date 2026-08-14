@@ -112,6 +112,96 @@ impl Harness {
         }
     }
 
+    /// Where this host reads its hook registrations, and which events to
+    /// register under — or `None` for a variant that is a contract, not a host.
+    ///
+    /// CLOUD-62. The wiring is a derivation of the spec (§11) in exactly the
+    /// sense completions and man pages are: which harnesses the binary speaks
+    /// and which events each adapter dispatches are already data here, so the
+    /// registrations they imply should be emitted rather than hand-kept. They
+    /// were hand-kept, and every host adapter added would have needed another
+    /// hand-written copy.
+    ///
+    /// **The match is exhaustive on purpose.** A new `Harness` variant does not
+    /// compile until someone decides whether it is installable, which is the
+    /// question a table of rows silently answers "no" to.
+    ///
+    /// Every row's facts — the config file and this host's event spellings —
+    /// come from the CLOUD-209 harness capability matrix (M1), not from memory;
+    /// that survey records measuring model recall of this space as "badly
+    /// stale", with four of its own remembered URLs 404ing.
+    ///
+    /// The event *set* is not re-typed here: it is what this harness's
+    /// [`Harness::capabilities`] already declares it emits, paired with the one
+    /// spelling to register under. That pairing cannot be read off
+    /// [`normalize_event`], which runs the other way and is many-to-one —
+    /// Cursor's four pre-tool events all normalize to [`Event::PreTool`], so
+    /// reversing it would have to invent which of the four to register.
+    #[must_use]
+    pub fn wiring(self) -> Option<Wiring> {
+        match self {
+            // The host merges hooks across its settings files and defines no
+            // hooks-only project file, so batten owns a KEY here, never the
+            // file: `.claude/settings.json` also carries configuration the
+            // engine does not own.
+            Harness::ClaudeCode => Some(Wiring {
+                file: WiringFile::Key {
+                    path: ".claude/settings.json",
+                    key: "hooks",
+                },
+                spellings: CLAUDE_SPELLINGS,
+            }),
+            // "A near-verbatim clone of Claude Code's wire format, and the repo
+            // says so out loud" (M1) — including the event names, so the
+            // spellings are shared rather than copied.
+            Harness::CodexCli => Some(Wiring {
+                file: WiringFile::Whole(".codex/hooks.json"),
+                spellings: CLAUDE_SPELLINGS,
+            }),
+            // Registered in the PascalCase dialect deliberately: M1 records that
+            // the camelCase one omits `hook_event_name` entirely, and the casing
+            // of the config key is what selects the dialect. So this row is not
+            // merely a spelling — it is the reason the adapter can read an event
+            // name at all.
+            Harness::CopilotCli => Some(Wiring {
+                file: WiringFile::Whole(".github/hooks/batten.json"),
+                spellings: CLAUDE_SPELLINGS,
+            }),
+            // The one host whose names are a structural gap in an otherwise
+            // Claude-identical payload (M1). `AfterAgent` is its end-of-turn —
+            // the Stop family's member here even though the word differs.
+            Harness::GeminiCli => Some(Wiring {
+                file: WiringFile::Key {
+                    path: ".gemini/settings.json",
+                    key: "hooks",
+                },
+                spellings: &[
+                    (Event::PreTool, "BeforeTool"),
+                    (Event::PostTool, "AfterTool"),
+                    (Event::Stop, "AfterAgent"),
+                    (Event::SessionStart, "BeforeAgent"),
+                ],
+            }),
+            // The generic `preToolUse` rather than one of the three specialized
+            // events: it covers all tools, where each specialized event covers
+            // one and carries no `tool_name` at all.
+            Harness::Cursor => Some(Wiring {
+                file: WiringFile::Whole(".cursor/hooks.json"),
+                spellings: &[
+                    (Event::PreTool, "preToolUse"),
+                    (Event::PostTool, "afterFileEdit"),
+                    (Event::Stop, "stop"),
+                    (Event::SessionStart, "sessionStart"),
+                ],
+            }),
+            // Not a host. `exit-code` is the neutral contract — envelope in,
+            // decision as exit status out — for any host whose only channel is
+            // an exit code. There is no file to register in, and inventing one
+            // would be claiming something about a host nobody named.
+            Harness::ExitCode => None,
+        }
+    }
+
     /// Whether a deny on this host must carry its reason **in the JSON body**
     /// rather than on stderr.
     ///
@@ -239,6 +329,160 @@ impl Capabilities {
             _ => None,
         }
     }
+}
+
+/// Where a host reads its hook registrations, and how batten's rows sit in it.
+///
+/// The distinction is load-bearing rather than cosmetic (CLOUD-62): a file
+/// batten owns can be emitted whole, and a file it shares must be emitted as
+/// just the key it owns, because the rest is configuration the engine has no
+/// business rewriting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WiringFile {
+    /// A hooks-only file, owned whole.
+    Whole(&'static str),
+    /// One key inside a file the host shares with other configuration.
+    Key {
+        /// The file, repo-root-relative.
+        path: &'static str,
+        /// The key batten's registrations live under.
+        key: &'static str,
+    },
+}
+
+/// One host's hook wiring: where it lives, and what it calls each event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Wiring {
+    /// The host's hook-config surface.
+    pub file: WiringFile,
+    /// This host's name for each event it can name — a naming TABLE, not the
+    /// set to register.
+    ///
+    /// The distinction is the whole point of CLOUD-62 and a row got it wrong
+    /// first: three hosts share Claude's spellings, but only Claude emits
+    /// `TaskCompleted` and `ConfigChange`, so a shared list registered Copilot
+    /// under events it does not have — a hook that reads as installed and can
+    /// never fire. [`Wiring::registrations`] intersects this with what the
+    /// harness declares it emits, so the SET is derived and only the NAMES are
+    /// declared.
+    pub spellings: &'static [(Event, &'static str)],
+}
+
+impl Wiring {
+    /// The events to register, with this host's name for each.
+    ///
+    /// Ordered by [`Event::ALL`] rather than by the table, so emission is
+    /// byte-stable (§6) whatever order a row happens to list its names in.
+    #[must_use]
+    pub fn registrations(&self, harness: Harness) -> Vec<(Event, &'static str)> {
+        let capabilities = harness.capabilities();
+        Event::ALL
+            .iter()
+            .filter(|event| capabilities.emits(**event))
+            .filter_map(|event| {
+                self.spellings
+                    .iter()
+                    .find(|(named, _)| named == event)
+                    .map(|(_, spelling)| (*event, *spelling))
+            })
+            .collect()
+    }
+}
+
+/// Claude Code's event spellings, which Codex CLI and Copilot's `PascalCase`
+/// dialect ship verbatim (M1) — so three wiring rows share this rather than
+/// carrying three copies that could drift apart.
+const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
+    (Event::PreTool, "PreToolUse"),
+    (Event::PostTool, "PostToolUse"),
+    (Event::Stop, "Stop"),
+    (Event::SessionStart, "SessionStart"),
+    (Event::TaskCompleted, "TaskCompleted"),
+    (Event::ConfigChange, "ConfigChange"),
+];
+
+/// The command a host's registration invokes.
+///
+/// Neutral on purpose, and this is where non-negotiable rule 1 bites (CLOUD-62):
+/// this repository's own wiring runs `.claude/hooks/batten-hook.sh`, a launcher
+/// that `cd`s so `load_policy` finds the authority, resolves a binary that is not
+/// on PATH, and fails open — all things `settings.json` cannot express. That
+/// launcher is a CONSUMER's fact, and naming its path here would put a specific
+/// consumer's file layout in the repo-agnostic core. So the emitter names the
+/// binary and the harness, and a consumer's own gate is where the indirection is
+/// resolved.
+fn wiring_command(harness: Harness) -> String {
+    format!("batten hook --harness {}", harness.as_str())
+}
+
+/// Render one harness's registrations as the JSON its host reads.
+///
+/// Byte-stable (§6): the events come back from [`Wiring::registrations`] in
+/// [`Event::ALL`] order, and the object is built by hand rather than through a
+/// map type, so key order is the code's and not a hash's.
+///
+/// **No matcher.** Which tool calls are actually mediated is `batten.toml`'s
+/// `mediated_call` rows — the engine's own filter, and a consumer's policy. A
+/// matcher emitted here would be the core asserting something about a consumer's
+/// tool vocabulary, and a wrong one narrows enforcement silently. The host's
+/// absent-matcher default is "every tool", which lets the engine's own filter be
+/// the only narrowing.
+#[must_use]
+pub fn render_wiring(harness: Harness, wiring: &Wiring) -> String {
+    // The values go through `serde_json` rather than being interpolated raw:
+    // they are ASCII identifiers today, and a row that ever carries a quote or a
+    // backslash would otherwise emit JSON that does not parse.
+    let command = json_string(&wiring_command(harness));
+    let registrations = wiring.registrations(harness);
+
+    // Built as lines with an explicit indent rather than through a map type:
+    // key order is the contract here (§6 byte-stability), and a map would sort
+    // or hash it. The indent is a parameter so the same body serves a whole file
+    // and a key's value, which differ only by one level.
+    let entry = |spelling: &str, indent: &str| {
+        [
+            format!("{indent}{}: [", json_string(spelling)),
+            format!("{indent}  {{"),
+            format!("{indent}    \"hooks\": ["),
+            format!("{indent}      {{"),
+            format!("{indent}        \"type\": \"command\","),
+            format!("{indent}        \"command\": {command}"),
+            format!("{indent}      }}"),
+            format!("{indent}    ]"),
+            format!("{indent}  }}"),
+            format!("{indent}]"),
+        ]
+        .join("\n")
+    };
+
+    match wiring.file {
+        // The key's VALUE alone: the file carries configuration the engine does
+        // not own, so emitting the file would be claiming the rest of it.
+        WiringFile::Key { .. } => {
+            let body: Vec<String> = registrations
+                .iter()
+                .map(|(_, spelling)| entry(spelling, "  "))
+                .collect();
+            format!("{{\n{}\n}}", body.join(",\n"))
+        }
+        // A hooks-only file, so the registrations are the whole document.
+        WiringFile::Whole(_) => {
+            let body: Vec<String> = registrations
+                .iter()
+                .map(|(_, spelling)| entry(spelling, "    "))
+                .collect();
+            format!("{{\n  \"hooks\": {{\n{}\n  }}\n}}", body.join(",\n"))
+        }
+    }
+}
+
+/// One JSON string literal, quoted and escaped.
+///
+/// Falls back to a bare quoting only if serialization somehow fails, which it
+/// cannot for a `&str` — the library forbids `unwrap`, and a panic here would be
+/// a panic in a read-only emitter.
+fn json_string(raw: &str) -> String {
+    serde_json::to_string(raw).unwrap_or_else(|_| format!("\"{raw}\""))
 }
 
 /// The events every surveyed host emits — the converged core.
@@ -3060,6 +3304,68 @@ mod tests {
         // forgetting them.
         assert!(!Harness::ClaudeCode.capabilities().timeout_fails_open);
         assert!(!Harness::ClaudeCode.capabilities().stdout_must_stay_clean);
+    }
+
+    #[test]
+    fn every_harness_declares_a_wiring_row_or_declares_itself_not_a_host() {
+        // CLOUD-62's totality obligation. The `match` in `wiring()` already
+        // makes a new variant a COMPILE error, which is the strong half. This
+        // is the half a compiler cannot give: a variant added as `None` to make
+        // the build pass, with nobody deciding whether it is installable.
+        //
+        // So the non-installable set is named here, once. Adding a variant to it
+        // is a deliberate edit in a test that says what the claim means; adding
+        // one silently is a failure.
+        const NOT_A_HOST: &[Harness] = &[Harness::ExitCode];
+
+        for &harness in Harness::ALL {
+            let wiring = harness.wiring();
+            if NOT_A_HOST.contains(&harness) {
+                assert!(
+                    wiring.is_none(),
+                    "{} is declared a contract rather than a host, so it must have no \
+                     wiring row",
+                    harness.as_str()
+                );
+                continue;
+            }
+            let wiring = wiring.unwrap_or_else(|| {
+                panic!(
+                    "{} has no wiring row and is not in NOT_A_HOST — decide which it is \
+                     rather than leaving it unregisterable",
+                    harness.as_str()
+                )
+            });
+            let registrations = wiring.registrations(harness);
+            assert!(
+                !registrations.is_empty(),
+                "{}'s wiring registers no event, so installing it would wire nothing",
+                harness.as_str()
+            );
+
+            // Every event the adapter dispatches must have a name here, or it
+            // silently goes unregistered — the adapter would be ready to handle
+            // an event nothing ever sends it. This is the direction
+            // `registrations` cannot police for itself: it drops an unnamed
+            // event rather than failing, which is right at runtime and wrong to
+            // leave unnoticed.
+            let capabilities = harness.capabilities();
+            for event in Event::ALL.iter().filter(|e| capabilities.emits(**e)) {
+                assert!(
+                    registrations.iter().any(|(named, _)| named == event),
+                    "{} emits {event:?} but its wiring names no spelling for it, so the \
+                     registration would be silently dropped",
+                    harness.as_str()
+                );
+            }
+            for (event, spelling) in &registrations {
+                assert!(
+                    !spelling.is_empty(),
+                    "{} registers {event:?} under an empty spelling",
+                    harness.as_str()
+                );
+            }
+        }
     }
 
     #[test]

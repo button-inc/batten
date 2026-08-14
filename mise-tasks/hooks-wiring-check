@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every `batten hook` registration in the committed claude-code wiring matches what `generate hooks` derives (CLOUD-62)"
+#
+# House style §11: the hook wiring is a derivation of the spec, the same way
+# completions and man pages are. `derived-check` gates those. This gates the
+# wiring, and it is a separate program rather than another `derived-check` row
+# for the reason `schema-check` is also separate: that gate's rows are <whole
+# committed artifact> x <generate argv>, compared with `cmp`. This compares
+# SELECTED ENTRIES INSIDE A SHARED FILE, canonicalized — not that shape.
+#
+# WHY THE FILE IS SHARED, AND WHY THAT IS NOT A WORKAROUND. Claude Code merges
+# hooks across its settings files and defines no hooks-only project file, so
+# `.claude/settings.json` carries configuration the engine does not own —
+# `enabledMcpjsonServers`, permissions, everything a consumer puts there. The
+# derivation target is batten's registrations inside the file, never the file.
+#
+# THE LAUNCHER INDIRECTION LIVES HERE, DELIBERATELY (CLOUD-62). The committed
+# wiring does not run `batten hook` directly; it runs
+# `.claude/hooks/batten-hook.sh`, a launcher that `cd`s so `load_policy` finds
+# the authority (there is no upward walk), resolves a binary that is not on
+# PATH, and fails open — none of which `settings.json` can express. That
+# launcher is THIS consumer's fact. Emitting its path from `crates/batten` would
+# put a specific consumer's file layout in the repo-agnostic core, which
+# non-negotiable rule 1 forbids: "a grep for a specific consumer's names must
+# return zero hits." So the binary emits the neutral `batten hook --harness <h>`
+# and the resolution happens here, in the consumer's own gate, where the fact
+# belongs.
+#
+# THE MATCHER IS NOT COMPARED, and that is a decision rather than an omission.
+# `.claude/settings.json`'s `Bash|Write|Edit|MultiEdit|NotebookEdit` says which
+# tool calls reach the hook at all; which of them are actually adjudicated is
+# `batten.toml`'s `mediated_call` rows — the engine's own filter, and consumer
+# policy either way. The `Harness` enum knows nothing about a consumer's tool
+# vocabulary, so a matcher derived from it would be the core asserting something
+# it cannot know, and a wrong one narrows enforcement silently. The gate compares
+# the two fields the derivation actually owns: the EVENT and the COMMAND.
+#
+# WHAT IS NOT A FAILURE: an event the derivation emits that the wiring does not
+# yet register. Installing the full set is CLOUD-312's cutover obligation, not
+# this gate's — before that cutover this compares the one registration that
+# exists. Reporting the rest as drift would make the gate red for work another
+# issue owns, and a gate that is red for someone else's reason gets bypassed.
+set -euo pipefail
+
+cd "${HOOKS_WIRING_ROOT:-$(git rev-parse --show-toplevel)}"
+
+WIRING="${HOOKS_WIRING_FILE:-.claude/settings.json}"
+HARNESS=claude-code
+# The launcher that stands in for `batten hook` in this consumer's wiring. A
+# command is judged as reaching the engine if it names either this or the verb
+# itself, so a consumer that drops the launcher is still checked.
+LAUNCHER="batten-hook.sh"
+
+if [ ! -f "$WIRING" ]; then
+	echo "::error:: hooks-wiring-check: $WIRING does not exist, so there is no wiring to judge. A gate that checks nothing must not report green." >&2
+	exit 2
+fi
+
+violations=0
+report() { # pointer-only (rule 4): the file, the event, the rule id
+	echo "$1 $2" >&2
+	violations=$((violations + 1))
+}
+
+# The derivation, canonicalized. `jq -cS` on both sides is what makes this a
+# comparison of MEANING rather than of whitespace: the emitter's indentation is
+# its own business, and a consumer's file is formatted by whatever wrote it.
+if ! derived=$(cargo run --quiet -p batten -- generate hooks --harness "$HARNESS"); then
+	echo "::error:: hooks-wiring-check: the binary could not emit the $HARNESS wiring, so the committed one cannot be judged" >&2
+	exit 2
+fi
+if ! derived_events=$(jq -r 'keys_unsorted[]' <<<"$derived" 2>/dev/null); then
+	echo "::error:: hooks-wiring-check: the emitted wiring is not a JSON object" >&2
+	exit 2
+fi
+
+# Every committed entry that CLAIMS to be batten's, as `<event>\t<command>`.
+#
+# SELECTED BROADLY, JUDGED NARROWLY, and the difference is a false green this
+# gate had while it was being written. Selecting on "does this command reach the
+# engine" made the selector and the check the same predicate: renaming the
+# launcher to `batten-hook-typo.sh` did not fail the gate, it made the entry
+# INVISIBLE, and the gate reported "0 registrations agree" and exited 0. A gate
+# that silently clears what it cannot see is the false green this repository
+# keeps re-meeting.
+#
+# So the selector asks only whether an entry mentions batten at all — the other
+# hooks in this file are `mise-tasks/*` and `.claude/hooks/session-start.sh`,
+# none of which does — and whether it actually reaches the engine is decided
+# below, where a wrong answer is a violation rather than a silence.
+if ! committed=$(jq -r '
+    (.hooks // {}) | to_entries[] as $event
+    | $event.value[]? | .hooks[]?
+    | select(.command // "" | contains("batten"))
+    | "\($event.key)\t\(.command)"
+  ' "$WIRING" 2>/dev/null); then
+	echo "::error:: hooks-wiring-check: could not read $WIRING as JSON" >&2
+	exit 2
+fi
+
+while IFS=$'\t' read -r event command; do
+	[ -n "$event" ] || continue
+
+	# The event must be one the derivation registers. An entry under an event
+	# the harness does not emit is a hook that can never fire — installed,
+	# green to every other check, enforcing nothing.
+	if ! grep -qxF "$event" <<<"$derived_events"; then
+		report "$WIRING:$event" "wiring-event-underived"
+		continue
+	fi
+
+	# The command must reach the engine for THIS harness. The launcher is
+	# accepted as standing in for the derived command — that is the whole
+	# indirection this gate resolves — and anything else is drift.
+	derived_command=$(jq -r --arg e "$event" '.[$e][0].hooks[0].command' <<<"$derived")
+	case "$command" in
+	*"$LAUNCHER"*) ;;
+	*"$derived_command"*) ;;
+	*) report "$WIRING:$event" "wiring-command-drift" ;;
+	esac
+done <<<"$committed"
+
+if [ "$violations" -ne 0 ]; then
+	echo "::error:: hooks-wiring-check: $violations registration(s) disagree with \`batten generate hooks --harness $HARNESS\`. The derivation is the authority; edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong." >&2
+	exit 1
+fi
+
+count=$(grep -c . <<<"$committed" || true)
+echo "hooks-wiring-check: $count committed \`batten hook\` registration(s) agree with the derivation"
