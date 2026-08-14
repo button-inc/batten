@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.76](https://github.com/button-inc/batten/compare/v0.0.75...v0.0.76) - 2026-08-14
+
+### Added
+
+- *(baseline)* record the findings that already exist, so only new ones fail
+- *(policy)* declare the five unported write shapes, and delete memory-guard
+- *(verbs)* [**breaking**] let a row narrow to a destination, a flag, or a subcommand
+
+### Other
+
+- *(baseline)* keep the store resolution off check's hot path
+- *(baseline)* stop the module header naming the tokens its own gate forbids
+- *(baseline)* lift the check-time filter out of run_rules
+
 ## [0.0.75](https://github.com/button-inc/batten/compare/v0.0.74...v0.0.75) - 2026-08-14
 
 ### Added
