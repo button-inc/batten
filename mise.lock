@@ -674,6 +674,10 @@ url = "https://nodejs.org/dist/v24.19.0/node-v24.19.0-win-x64.zip"
 version = "3.6.2"
 backend = "npm:prettier"
 
+[[tools."pipx:ntia-conformance-checker"]]
+version = "5.0.3"
+backend = "pipx:ntia-conformance-checker"
+
 [[tools."pipx:serena-agent"]]
 version = "1.6.1"
 backend = "pipx:serena-agent"

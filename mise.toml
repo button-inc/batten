@@ -130,6 +130,15 @@ uv = "0.8"                                  # fast Rust installer the pipx: back
 # source build is not the fallback either: it is a Python package, and
 # `no-source-built-tool` refuses that shape regardless of language.
 #
+# EXEMPT FROM URL LOCKING IS NOT EXEMPT FROM THE LOCKFILE, and the difference
+# costs a whole CI run to learn: `mise lock pipx:ntia-conformance-checker` writes
+# "0 platform entries (7 skipped)" and still adds a version row to `mise.lock`,
+# which is what CI's `mise install --locked` demands. Without that row EVERY job
+# using mise-action dies on `pipx:ntia-conformance-checker@5.0.3 is not in the
+# lockfile` — not just the job that installs it — because the check is over the
+# whole file. `lock-complete` passes either way, so nothing local catches it
+# (CLOUD-611).
+#
 # WHAT THAT COSTS, stated because it is strictly weaker than every other pin
 # here: `mise-tasks/lock-complete` exempts the `pipx:` backend by design (those
 # backends "resolve through their own package manager and lock no URLs at all"),
