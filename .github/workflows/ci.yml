@@ -585,6 +585,108 @@ jobs:
           key: perf
       - run: mise run perf-gate
 
+  # THE OS MATRIX, and the only job here that EXECUTES rather than type-checks
+  # on a foreign platform (CLOUD-113). `cross` runs `cargo check` against
+  # `x86_64-pc-windows-gnu` and has never run a single test there; CLOUD-23 put
+  # Windows in v0 scope with a genuinely divergent state-path rule
+  # (`%APPDATA%`/`%LOCALAPPDATA%` against XDG on Linux and macOS), so the
+  # behaviour this asserts is real and shipped rather than hypothetical.
+  #
+  # NO macOS LEG, on CLOUD-113's own condition ("plus macOS if state-path
+  # behavior diverges"). CLOUD-23's rule is XDG-style on Linux *and* macOS, so
+  # macOS diverges from Linux in nothing this suite asserts, and `darwin-link`
+  # already covers the one Darwin-specific risk.
+  #
+  # `test:cargo`, NOT `test`. The bats suites need bash, shellcheck and the
+  # tests/bats submodule; shell-task behaviour is not what this leg is for.
+  #
+  # A PLAIN JOB, not a one-entry `strategy.matrix`. `darwin-link` carries one so
+  # a dropped second leg is a one-word restore; there is no dropped leg here,
+  # and a matrix would put a suffix in the check-run name that
+  # `CI_REQUIRED_CHECKS` would then have to carry.
+  #
+  # This job is exempt from `ci-local-parity` property 3 — "every task CI runs
+  # is one `verify` runs" — because its `runs-on` is a known-foreign label
+  # (CLOUD-394). That is not a loophole: the property buys "CI confirms what you
+  # already proved locally", and there is no local Windows to have proved it on.
+  # Which is also why the first run of this job is a MEASUREMENT rather than a
+  # confirmation, and why a failure here is the job working.
+  windows:
+    name: windows
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: windows-latest
+    timeout-minutes: 20 # budget: grandfathered measured=2026-08-14
+    # `actions: write` is here for one call and one only: cancelling THIS run
+    # when the landing lease does not authorise this branch (CLOUD-420). A job
+    # that could not cancel itself would have to fail instead, and a failed job
+    # makes the run conclude `failure` rather than `cancelled` — which reds
+    # `final` and makes `land` re-draft a healthy PR.
+    permissions:
+      contents: read
+      actions: write
+    env:
+      # mise runs an inline task body through its own shell, which is NOT the
+      # step's. Read from the pinned binary rather than assumed:
+      # `windows_default_inline_shell_args` is "cmd /c", against
+      # "sh -c -o errexit" on unix. `[tasks."test:cargo"]` declares no `shell`
+      # and its body is bash — `if ./mise-tasks/step-receipt check …; then`
+      # — so under cmd the task dies before cargo is ever reached.
+      #
+      # Set here rather than in mise.toml because this is the only job in the
+      # repository that runs a mise task on Windows, so the narrower placement
+      # covers the whole exposure. The one-authority alternative, if a second
+      # Windows caller ever appears, is `shell = "bash -c"` on the task itself.
+      MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS: bash -c
+    steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
+      # First step, before any checkout or toolchain install, because a run this
+      # branch is not authorised to make should cost the rounding rather than a
+      # matrix. Body fetched from `main`, never from this head, and `|| exit 0`
+      # on both lines so a body that will not parse cannot red the first step of
+      # every job. Every justification lives in `mise-tasks/ci-lease-precondition`.
+      - name: Landing lease precondition
+        # EXPLICIT, for the reason test.yml states at its own Windows legs: a
+        # `run:` step with no `shell:` takes the runner's default, which is
+        # PowerShell here — so this bash body would be handed to `pwsh`, which
+        # reports `body=$(gh api …)` is not a cmdlet and exits 1 in the FIRST
+        # step of the job. Every ubuntu-only caller of this block never had to
+        # say so.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          # The HEAD sha, never `github.sha`: on a pull_request event that is the
+          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # head did not touch it — and the staleness row reads exactly that file.
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The `ci` job runs this same task with the submodule present, and the
+          # whole point of this leg is that the OS is the only variable. A
+          # missing tests/bats would be a second one — `crates/batten/tests`
+          # carries a suite about that path — and it would read as a Windows
+          # finding, which is the misattribution this job exists to avoid.
+          submodules: true
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # `cargo test` is all this job invokes; rust is the only tool it
+          # touches. See the ci job for why these lists are narrow.
+          install_args: rust
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # A distinct key: this job's target dir is built by a different host
+          # toolchain than every other job's, so sharing an entry would thrash
+          # it — the same reason msrv, semver and perf carry their own.
+          key: windows
+      - run: mise run test:cargo
+
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
   #
@@ -626,7 +728,7 @@ jobs:
     # carries the reason it cannot change, so the next reader who notices that a
     # stopped run reds `final` does not re-derive the skip and ship it.
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [ci, cross, darwin-link, msrv, semver, perf]
+    needs: [ci, cross, darwin-link, msrv, semver, perf, windows]
     runs-on: ubuntu-latest
     # `checks: read` is the whole reason this job now needs a permission at all:
     # the analyzer's verdict is a check-run on the head commit.

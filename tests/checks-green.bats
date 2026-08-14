@@ -92,7 +92,7 @@ mandatory_green() {
 	# list can pin. So a roster change must edit this line — and that is the sensor
 	# working, not drift: it fails with a diff naming the missing entry, where a
 	# derived fixture that silently went short is what hung `ci-wait`.
-	[[ "$output" == *"with no run at all: ci, cross, darwin-link (aarch64-apple-darwin), msrv, semver, perf, final"* ]]
+	[[ "$output" == *"with no run at all: ci, cross, darwin-link (aarch64-apple-darwin), msrv, semver, perf, windows, final"* ]]
 	[[ "$output" != *"zizmor"* ]]
 }
 
