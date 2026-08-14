@@ -1126,6 +1126,43 @@ severity = "warn"
 scope = "tree"
 no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
 
+# Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
+# verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
+# `cosign` has no signing identity here). `mise-tasks/attestation-check` carries
+# the design; what belongs here is why this is ONE row and which half it runs.
+#
+# THE OFFLINE HALF, and that is the whole of the wiring decision. Whether a
+# published release is attested changes with no diff, so it is a property of the
+# WORLD and belongs on a clock — it runs weekly in `release-assets.yml`, beside
+# the sibling question about the archives themselves. Putting it here instead
+# would make every `batten enforce` reach api.github.com, which is precisely the
+# coupling CLOUD-410 removed from `zizmor`. So the row runs `--precondition`: the
+# verifier resolves and carries a credential, decided from local facts, with a
+# bats case asserting it makes no API call at all.
+#
+# `deny` is safe BECAUSE of that split. The precondition holds today (measured
+# 2026-08-14) while the platform gap is wide open — this repository's attestations
+# endpoint answers 404, which is the feature being absent rather than an artifact
+# being unattested, and the task reports that gap at exit 0 without calling
+# anything unverified. `blockedBy CLOUD-585` was removed from the issue on that
+# measurement: a public repository is what makes the verdict INTERESTING, never
+# what makes this gate runnable.
+# The glob is the WORKFLOW SET rather than `release-artifacts.yml` alone, and that
+# is `batten-glob-check`'s containment rule rather than a widening: it proves
+# coverage by verbatim match or by a `P/**` prefix, so a lone literal path would
+# have to be added to hk.pkl's `batten-check` glob to be provable, while
+# `.github/workflows/*.yml` is already there. The check self-discovers its inputs
+# either way — it takes no `{{files}}` — so the row runs exactly once per
+# invocation under both spellings.
+[[rule]]
+id = "release-attestation-precondition"
+kind = "command"
+glob = ".github/workflows/*.yml"
+check = "mise run attestation-check --precondition"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
+
 # The one legitimate reduction this ratchet has seen, taken through the hatch its
 # own `no_fix_reason` names — "restore the tests, or waive the reduction
 # deliberately; which of the two is the whole question." Restoring is not an

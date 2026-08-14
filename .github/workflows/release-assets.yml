@@ -62,3 +62,20 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag }}
         run: mise run release-assets-check "$TAG"
+      # The provenance half of the same question (CLOUD-583), on this clock for
+      # the same reason the step above is: whether a published release is attested
+      # changes with no diff, so it is a property of the WORLD and belongs nowhere
+      # near the landing path. The landing path runs the OFFLINE half instead —
+      # `release-attestation-precondition` in batten.toml.
+      #
+      # Green today by reporting a gap rather than by verifying anything: this
+      # repository's attestations endpoint answers 404, which is the platform not
+      # offering the feature at all, and the task exits 0 having judged no
+      # artifact. It starts verifying on its own the moment CLOUD-585 makes the
+      # repository public, with no edit here.
+      - name: Check the release's binaries carry build provenance
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: mise run attestation-check "$TAG"
