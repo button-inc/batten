@@ -88,7 +88,10 @@
       "mcp__claude_ai_Linear__*",
       "mcp__serena__*",
       "mcp__Claude_Code_Remote__get_session",
-      "mcp__Claude_Code_Remote__list_sessions"
+      "mcp__Claude_Code_Remote__list_sessions",
+      "mcp__Claude_Code_Remote__create_session",
+      "mcp__Claude_Code_Remote__set_session_title",
+      "mcp__Claude_Code_Remote__set_session_tags"
     ],
     "deny": [
       "mcp__Claude_Code_Remote__send_later",
