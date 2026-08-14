@@ -406,8 +406,12 @@ local gate = new Mapping<String, Step> {
   // landing lease's permission, every task CI runs is one `verify` runs, and
   // more. The list is the task's header; a count restated here goes stale. zizmor.yml violated the first two for its whole life,
   // which also meant re-drafting a red PR did not stop the spend (CLOUD-240).
+  // The glob names every file the gate JUDGES, not only the workflows: editing
+  // dependabot.yml must re-run the gate that holds its two re-proposal bounds
+  // (CLOUD-596), for the reason the timeout budget below states — a gate that does
+  // not re-run when its subject changes enforces nothing at the moment it matters.
   ["ci-local-parity"] {
-    glob = List(".github/workflows/*.yml", "mise.toml")
+    glob = List(".github/workflows/*.yml", ".github/dependabot.yml", "mise.toml")
     check = "mise run ci-local-parity"
   }
   // Every job already declared a timeout, so the absence of a limit was never

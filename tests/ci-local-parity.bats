@@ -14,9 +14,15 @@ setup() {
 	WF="$BATS_TEST_TMPDIR/workflows"
 	MANIFEST="$BATS_TEST_TMPDIR/mise.toml"
 	RELEASE_PLZ="$BATS_TEST_TMPDIR/release-plz.toml"
+	DEPENDABOT="$BATS_TEST_TMPDIR/dependabot.yml"
 	mkdir -p "$WF"
-	export PARITY_WORKFLOWS="$WF" PARITY_MANIFEST="$MANIFEST" PARITY_RELEASE_PLZ="$RELEASE_PLZ"
+	export PARITY_WORKFLOWS="$WF" PARITY_MANIFEST="$MANIFEST" PARITY_RELEASE_PLZ="$RELEASE_PLZ" \
+		PARITY_DEPENDABOT="$DEPENDABOT"
 	printf '[workspace]\npr_draft = true\n' >"$RELEASE_PLZ"
+	# The passing fixture, written by default for the same reason `pr_draft = true`
+	# is: every case unrelated to property 12 must satisfy it, so only its own cases
+	# overwrite this.
+	dependabot cargo yes yes
 	cat >"$MANIFEST" <<-'EOF'
 		CI_REQUIRED_CHECKS = "ci"
 
@@ -371,7 +377,7 @@ fanin() {
 
 @test "this repository's real workflows pass" {
 	# The assertion that catches the gate drifting from what it guards.
-	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ
+	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ PARITY_DEPENDABOT
 	cd "$BATS_TEST_DIRNAME/.."
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -574,6 +580,79 @@ triggered() {
 	# of a workflow that legitimately wants every completion.
 	workflow ci
 	triggered autoland no no
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+# --- property 12: every dependabot ecosystem bounds its re-proposals ----------
+
+# Two `updates` entries, because the property is per-entry and a whole-file grep
+# passes a file where one carries both keys and the other carries none. Each
+# argument toggles the keys on the entry of that name: `yes`/`no`, or `wrong` for
+# the key present with a value that is not the fix.
+dependabot() {
+	local first="${1:-cargo}" rebase="${2:-yes}" limit="${3:-yes}"
+	local second_rebase="${4:-yes}" second_limit="${5:-yes}"
+	{
+		printf 'version: 2\nupdates:\n'
+		printf '  - package-ecosystem: %s\n    directory: "/"\n' "$first"
+		case "$rebase" in
+		yes) printf '    rebase-strategy: disabled\n' ;;
+		wrong) printf '    rebase-strategy: auto\n' ;;
+		esac
+		[ "$limit" = yes ] && printf '    open-pull-requests-limit: 1\n'
+		printf '    # a comment inside the entry, as the real file carries\n'
+		printf '    ignore:\n      - dependency-name: ignore\n        versions: [">= 0.4.30"]\n'
+		printf '\n  - package-ecosystem: github-actions\n    directory: "/"\n'
+		case "$second_rebase" in
+		yes) printf '    rebase-strategy: disabled\n' ;;
+		wrong) printf '    rebase-strategy: auto\n' ;;
+		esac
+		[ "$second_limit" = yes ] && printf '    open-pull-requests-limit: 1\n'
+		printf '    schedule:\n      interval: weekly\n'
+	} >"$DEPENDABOT"
+	return 0
+}
+
+@test "a dependabot entry declaring neither key is refused, and named" {
+	workflow ci
+	dependabot cargo no no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"cargo entry does not declare \`rebase-strategy: disabled\`"* ]]
+	[[ "$output" == *"cargo entry does not declare \`open-pull-requests-limit"* ]]
+}
+
+@test "rebase-strategy present with a value that is not disabled is the same defect" {
+	# Property 4's reasoning: the key set to anything but the fix is the key absent.
+	workflow ci
+	dependabot cargo wrong yes
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"cargo entry does not declare \`rebase-strategy: disabled\`"* ]]
+}
+
+@test "one compliant entry does not cover a second that is not" {
+	# The case a whole-file grep passes: the keys exist in the file, on one entry.
+	workflow ci
+	dependabot cargo yes yes no no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"github-actions entry does not declare"* ]]
+	[[ "$output" != *"cargo entry does not declare"* ]]
+}
+
+@test "a missing dependabot config is a failure, not a pass" {
+	workflow ci
+	rm -f "$DEPENDABOT"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"nothing bounds how often the bot re-proposes a head"* ]]
+}
+
+@test "both entries declaring both keys pass" {
+	workflow ci
+	dependabot cargo yes yes yes yes
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }

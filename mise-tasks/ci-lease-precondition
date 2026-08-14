@@ -86,18 +86,25 @@ from_ref() {
 # THE BRANCHES THAT LAND WITHOUT `land`, AND WHY STOPPING THEM WOULD COST MORE
 # THAN LETTING THEM RUN.
 #
-# `dependabot/*` and `release-plz-*` land through a `/fast-forward` comment posted
-# by `auto-dependabot-land.yml` / `auto-release-land.yml`, which fire on
-# `workflow_run: types: [completed]` and then re-check that every check on the sha
-# is green. A CANCELLED run is `completed`, so those workflows do fire — find the
-# checks not green, and stop. Nothing retries. The PR then waits for its next
-# rebase to mint a fresh run, which is another whole matrix: cancelling here would
-# not save a matrix, it would DEFER one and add a stall.
+# `dependabot/*` and `release-plz-*` are landed by `auto-dependabot-land.yml` /
+# `auto-release-land.yml`, which fire on `workflow_run: types: [completed]` and
+# then re-check that the required set is green on the sha. A CANCELLED run is
+# `completed`, so those workflows do fire — find the checks not green, and stop.
+# Nothing retries. The head then waits for its next push to mint a fresh run,
+# which is another whole matrix: cancelling here would not save a matrix, it would
+# DEFER one and add a stall. That is the ground this carve-out rests on, and it is
+# unchanged.
 #
-# They are also the population least worth stopping. The release PR is a draft
-# until the debounce readies it, and the debounce fires on 30 minutes of quiet
-# `main` — precisely when nobody holds the lease — while Dependabot PRs are rare.
-# So the overlap this would catch is small and the stall it would cause is not.
+# WHAT IS NO LONGER TRUE IS "DEPENDABOT PRs ARE RARE" (CLOUD-596). This paragraph
+# used to claim the overlap was small on that basis. Measured over `dependabot/*`
+# since 2026-08-06: 13 `ci.yml` runs and not one skip, five of them on a single
+# cargo group in seventeen hours as the bot re-proposed the batch on every base
+# move. `rebase-strategy: disabled` in dependabot.yml is what makes the claim
+# approximately true going forward — one head per proposal rather than one per base
+# move — so the carve-out is now affordable for a reason that is measured rather
+# than assumed. The release PR is a draft until the debounce readies it, and that
+# debounce fires on 30 minutes of quiet `main`, which is precisely when nobody
+# holds the lease.
 #
 # This is NOT the stale-tooling exemption in disguise: these branches are cut from
 # current `main`, so their `mise-tasks/land` is current; they simply never call it.

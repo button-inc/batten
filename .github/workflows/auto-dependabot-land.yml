@@ -161,17 +161,54 @@ jobs:
             1 | 3) echo "green=false" >> "$GITHUB_OUTPUT" ;;
             *) exit "$verdict" ;;
           esac
+      # IS THIS HEAD STILL LANDABLE? `rebase-strategy: disabled` in dependabot.yml
+      # is what makes this question worth asking (CLOUD-596): Dependabot no longer
+      # force-pushes a rebase whenever `main` moves, because on a Ready PR every one
+      # of those was a `synchronize` and another full matrix. The cost of that
+      # economy is that a green head can simply go stale, and nothing would ever
+      # retry it.
+      #
+      # `compare/main...SHA` answers in one read: `ahead` means `main` is an ancestor
+      # and the fast-forward is available; `identical` means it already landed;
+      # `behind` or `diverged` means the branch needs the one rebase this asks for
+      # below. Read with GITHUB_TOKEN — this is repository contents, not checks.
+      - name: Is the tested SHA still a fast-forward of main?
+        if: steps.checks.outputs.green == 'true'
+        id: linear
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          status=$(gh api "repos/$REPO/compare/main...$SHA" --jq '.status // "unknown"')
+          echo "compare main...$SHA is $status"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+      # ONE DELIBERATE REBASE, NOT N SPECULATIVE ONES. This is the whole trade
+      # CLOUD-596 makes: Dependabot rebased on every base move whether or not the
+      # result would ever land, and each one bought a matrix; it now rebases when a
+      # green head is asked to, which is when a matrix is worth buying. `identical`
+      # is excluded because the SHA is already on `main` and a rebase comment there
+      # would be noise. The comment needs the PAT: Dependabot ignores a command
+      # comment from GITHUB_TOKEN.
+      - name: Ask Dependabot to rebase a green head that can no longer land
+        if: steps.checks.outputs.green == 'true' && steps.linear.outputs.status != 'ahead' && steps.linear.outputs.status != 'identical'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          PR_NUM: ${{ steps.target.outputs.num }}
+        run: gh pr comment "$PR_NUM" --repo "$REPO" --body '@dependabot rebase'
       # `force=false` is the fast-forward assertion: the API refuses the update
       # unless `main` is an ancestor of this SHA, and branch protection independently
       # refuses it unless `final` is green on it. So the two things that must hold are
-      # both enforced by the server, atomically with the write.
+      # both enforced by the server, atomically with the write. The compare above is
+      # not a second opinion on that — it is what routes a stale head to a rebase
+      # rather than to a refusal nothing acts on.
       #
       # A REFUSAL IS AN ORDINARY OUTCOME, NOT A RED RUN. `main` moving between the
-      # green read and this update is the landing loop working, not a fault — the PR
-      # simply waits for its next push. Retrying in-job would only race the same
-      # window again, so it logs and stops.
+      # compare and this update is the landing loop working, not a fault — the next
+      # fire on this SHA reads the new answer and asks for the rebase. Retrying
+      # in-job would only race the same window again, so it logs and stops.
       - name: Fast-forward main to the tested SHA
-        if: steps.checks.outputs.green == 'true'
+        if: steps.checks.outputs.green == 'true' && steps.linear.outputs.status == 'ahead'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}

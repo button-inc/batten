@@ -11,9 +11,33 @@ version: 2
 # gate — so a bot PR could never land. The commit-message.prefix settings below
 # make Dependabot emit "ci(deps): ..." / "build(deps): ..." so its PRs pass
 # commit-lint and are fast-forwardable like any other.
+#
+# AND NOTHING HERE CAN OPEN A DRAFT, WHICH IS WHY THE TWO KEYS BELOW EXIST
+# (CLOUD-596). Every `pull_request` workflow gates on `draft == false`, so every
+# other lane iterates free until it is deliberately readied; release-plz has
+# `pr_draft` and `ci-local-parity` property 4 senses it. Dependabot's schema has no
+# equivalent, so every head it proposes opens Ready and buys a full matrix on
+# arrival — measured over `dependabot/*` since 2026-08-06: 13 `ci.yml` runs, 13
+# `commit-lint`, 3 `zizmor`, and not one skip among them.
+#
+# The cost is the churn, not the schedule. On this weekly interval the cargo group
+# PR was superseded five times in seventeen hours — each recreation a fresh Ready
+# head buying a fresh full matrix, each earlier one closed unlanded, and one of
+# them taking three `ci.yml` runs by itself. `rebase-strategy: disabled` is the
+# lever: the default force-pushes a rebase whenever the base moves, and on a Ready
+# PR each force-push is a `synchronize` and another matrix. With rebasing off a
+# stale PR could instead be joined by a sibling proposing the same group, doubling
+# the floor, so `open-pull-requests-limit: 1` bounds the lane to one open PR per
+# ecosystem. `auto-dependabot-land.yml` asks for the one rebase deliberately, when
+# a green head is no longer a fast-forward.
+#
+# What this does NOT buy: the floor is one full matrix per SHA Dependabot proposes.
+# It removes the repeated ones, not the first.
 updates:
   - package-ecosystem: cargo
     directory: "/"
+    rebase-strategy: disabled
+    open-pull-requests-limit: 1
     schedule:
       interval: weekly
     cooldown:
@@ -40,6 +64,8 @@ updates:
 
   - package-ecosystem: github-actions
     directory: "/"
+    rebase-strategy: disabled
+    open-pull-requests-limit: 1
     schedule:
       interval: weekly
     cooldown:

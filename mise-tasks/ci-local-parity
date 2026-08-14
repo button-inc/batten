@@ -104,9 +104,23 @@
 #      spelling is what a rewrite changes and the fetch is what it cannot avoid;
 #      the copy is only reachable by reading that endpoint yourself.
 #
+#  12. EVERY DEPENDABOT ECOSYSTEM BOUNDS HOW OFTEN IT RE-PROPOSES A HEAD. This is
+#      property 4's problem on the one lane property 4 cannot reach: release-plz
+#      has `pr_draft` and Dependabot's schema has no draft knob at all, so every
+#      head it proposes opens Ready and buys a full matrix on arrival. Measured
+#      over `dependabot/*` since 2026-08-06: 13 `ci.yml` runs, 13 `commit-lint`,
+#      3 `zizmor`, not one skip — against an ordinary branch's mostly-skipped set
+#      over the same window. The churn is the cost rather than the schedule: on a
+#      weekly interval the cargo group PR was superseded five times in seventeen
+#      hours, each recreation a fresh Ready head and a fresh matrix the next one
+#      threw away (CLOUD-596). `rebase-strategy: disabled` stops the force-push
+#      on every base move; `open-pull-requests-limit` stops a stale PR being
+#      joined by a sibling proposing the same group. Both keys or neither works:
+#      the second is what keeps the first from doubling the floor it lowers.
+#
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
 # release workflow is not on the landing path and they do not apply to it. 8, 9,
-# 10 and 11 are the exceptions — a workflow racing itself, colliding with its
+# 10, 11 and 12 are the exceptions — a workflow racing itself, colliding with its
 # neighbour, buying a run it will only skip, or landing a SHA on a predicate of
 # its own are none of them properties of the landing path — so they judge every
 # workflow, and 8 and 10 sit before the `pull_request` filter for that reason.
@@ -115,6 +129,7 @@ set -uo pipefail
 workflows="${PARITY_WORKFLOWS:-.github/workflows}"
 manifest="${PARITY_MANIFEST:-mise.toml}"
 release_plz="${PARITY_RELEASE_PLZ:-release-plz.toml}"
+dependabot="${PARITY_DEPENDABOT:-.github/dependabot.yml}"
 fail=0
 
 problem() {
@@ -511,6 +526,41 @@ elif ! grep -Eq '^[[:space:]]*pr_draft[[:space:]]*=[[:space:]]*true[[:space:]]*$
 	problem "$release_plz does not set \`pr_draft = true\` — release-plz would open the release PR ready, and every push to main would spend a matrix on it before the debounce is ever consulted (CLOUD-346)."
 fi
 
+# Property 12. Per ENTRY, never over the whole file: a `grep -c` would pass a file
+# where one ecosystem carries both keys and the other carries none, which is the
+# same absence-by-counting mistake the fan-in check above is written around. The
+# record delimiter is the 2-space `- package-ecosystem:`; `ignore:`'s items sit at
+# six spaces and cannot be mistaken for one, and comment lines are dropped first
+# because a comment block lives inside the first entry.
+if [ ! -f "$dependabot" ]; then
+	problem "no $dependabot, so nothing bounds how often the bot re-proposes a head — and every head it proposes opens Ready, because its schema has no draft knob (CLOUD-596)."
+else
+	unbounded=$(awk '
+		function flush() {
+			if (!inentry) return
+			if (!rebase) print eco "\trebase-strategy: disabled"
+			if (!limit) print eco "\topen-pull-requests-limit: <n>"
+		}
+		/^[[:space:]]*#/ { next }
+		/^  - package-ecosystem:/ {
+			flush()
+			eco = $0
+			sub(/^[^:]*:[[:space:]]*/, "", eco)
+			gsub(/["]/, "", eco)
+			sub(/[[:space:]]+$/, "", eco)
+			inentry = 1; rebase = 0; limit = 0
+			next
+		}
+		inentry && /^    rebase-strategy:[[:space:]]*disabled[[:space:]]*$/ { rebase = 1 }
+		inentry && /^    open-pull-requests-limit:[[:space:]]*[0-9]+[[:space:]]*$/ { limit = 1 }
+		END { flush() }
+	' "$dependabot")
+	while IFS=$'\t' read -r eco key; do
+		[ -n "$eco" ] || continue
+		problem "$dependabot's $eco entry does not declare \`$key\` — the bot re-proposes a head on every base move, and each one opens Ready and buys a full matrix (five superseded PRs in seventeen hours, measured; CLOUD-596)."
+	done <<<"$unbounded"
+fi
+
 # Property 11. Judged over the whole workflow set rather than the landing path,
 # because a workflow that lands a SHA is not itself on `pull_request`. Comment
 # lines are stripped first: this file's own remedy is described in prose in both
@@ -537,4 +587,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; every dependabot ecosystem bounds its re-proposals"
