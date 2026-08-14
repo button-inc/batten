@@ -605,3 +605,229 @@ fn a_directory_that_is_not_a_batten_repository_drains_nothing() {
     assert_eq!(output.status.code(), Some(0));
     assert!(payload(&output).is_empty());
 }
+
+// --- the emission policy: flap detection on this plane only (CLOUD-165) -------
+
+/// A fixture whose forbid finding can be raised and cleared at will, driven
+/// through the surface that journals evaluations.
+///
+/// `enforce` rather than `state record`, and the choice is the mechanism: the
+/// evaluation journal the ratio is computed over is written by the enforce surface
+/// (CLOUD-529), which is why these two issues land together. A `forbid` rule runs
+/// on both surfaces, so nothing here needs a spawning kind.
+fn flapping_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let config = format!(
+        "version = 1\n\n\
+         [[rule]]\n\
+         id = \"no-todo\"\n\
+         kind = \"forbid\"\n\
+         severity = \"deny\"\n\
+         glob = \"**/*.rs\"\n\
+         pattern = \"TODO\"\n\
+         no_fix_reason = \"delete the marker once the work behind it is done\"\n\
+         {drain_table}"
+    );
+    let repo = Fixture::at(root.join("repo"))
+        .config(&config)
+        .file("src/a.rs", "fn main() {}\n// TODO fix me\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "state record: {}",
+        common::stderr(&recorded)
+    );
+    (repo, home)
+}
+
+/// Raise or clear the finding, then evaluate — one evaluation boundary.
+///
+/// The file is rewritten either way, so its path stays inside the changed scope
+/// whichever state this leaves the finding in: a clear that also left the scope
+/// would be asserting the scope filter rather than the policy.
+fn evaluate(repo: &Path, home: &Path, raised: bool) {
+    let body = if raised {
+        "fn main() {}\n// TODO fix me\n"
+    } else {
+        "fn main() {}\n// fixed\n"
+    };
+    common::write(repo, "src/a.rs", body);
+    let enforced = state_cmd(repo, home, &["enforce"]);
+    assert_eq!(
+        enforced.status.code(),
+        Some(if raised { 2 } else { 0 }),
+        "the verdict tracks the tree every evaluation: {}",
+        common::stderr(&enforced)
+    );
+}
+
+/// The one stored record, as `state list -J` reads it back.
+fn stored(repo: &Path, home: &Path) -> serde_json::Value {
+    let listed = state_cmd(repo, home, &["state", "list", "-J"]);
+    assert_eq!(
+        listed.status.code(),
+        Some(0),
+        "state list: {}",
+        common::stderr(&listed)
+    );
+    let records: Vec<serde_json::Value> =
+        serde_json::from_str(&common::stdout(&listed)).expect("state list -J is a document");
+    assert_eq!(records.len(), 1, "{records:?}");
+    records.into_iter().next().expect("one record")
+}
+
+/// The occurrence count the store holds for this ref, or `None` when the
+/// observation is not a count at all.
+fn occurrences(record: &serde_json::Value) -> Option<u64> {
+    record["instances"][0]["occurrences"]["Observed"].as_u64()
+}
+
+// Acceptance (a), all four clauses over one alternating fixture.
+#[test]
+fn an_alternating_rule_tracks_state_truthfully_while_its_emissions_stop_at_the_cap() {
+    // A window that a handful of evaluations fills, a threshold the alternation
+    // clears, and a cap of one so the second emission is the suppressed one.
+    let (repo, home) = flapping_fixture(
+        "drain-flap",
+        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
+    );
+
+    let mut emissions = 0;
+    let mut suppressed = false;
+    for round in 0..6 {
+        let raised = round % 2 == 0;
+        evaluate(&repo, &home, raised);
+
+        // THE STATE PLANE, asserted every single evaluation rather than at the end:
+        // this is CLOUD-81's law, and the whole point of the plane split is that no
+        // amount of emission policy may touch it.
+        let record = stored(&repo, &home);
+        assert_eq!(
+            occurrences(&record),
+            Some(u64::from(raised)),
+            "round {round}: the store says what the last scan saw"
+        );
+
+        let woken = hook(&repo, &home, &post_tool("flap"));
+        assert_eq!(woken.status.code(), Some(0), "the drain never denies");
+        let lines = payload(&woken);
+        if lines.iter().any(|line| line.contains("no-todo")) {
+            emissions += 1;
+        }
+        if stored(&repo, &home)["presentation"]["not-shown"] == "flap-suppressed" {
+            suppressed = true;
+        }
+    }
+
+    assert!(
+        suppressed,
+        "the identity is annotated as withheld by the signal policy, journalled \
+         under its own reason so the false-positive rate excludes it"
+    );
+    assert!(
+        emissions <= 2,
+        "emissions stop at the cap; got {emissions} over six evaluations"
+    );
+
+    // The rule-health counter, on the operator's channel: a rule id and a count,
+    // never a finding's content.
+    let told = common::stderr(&hook_at(&repo, &home, &post_tool("flap-verbose"), &["-v"]));
+    assert!(
+        told.contains("1 rule(s) with a flapping identity"),
+        "the annotation feeds per-rule health: {told}"
+    );
+    assert!(!told.contains("TODO"), "pointer-only: {told}");
+
+    // And the state plane is still truthful at the end: the last evaluation
+    // cleared, and the finding cleared with it, cap or no cap.
+    evaluate(&repo, &home, false);
+    assert_eq!(occurrences(&stored(&repo, &home)), Some(0));
+}
+
+// Acceptance (b). The load-bearing case for the (identity × context) key: two
+// worktrees at two refs, each monotone, interleaved in one shared journal.
+#[test]
+fn a_worktree_pair_at_different_refs_is_not_annotated_flapping() {
+    let (repo, home) = flapping_fixture(
+        "drain-flap-worktrees",
+        "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 1\n",
+    );
+    // A second checkout at its own ref. It shares the store — `git::repo_root`
+    // routes a linked worktree to the main checkout — which is exactly why the
+    // journal has to separate them by context rather than by store.
+    let other = repo.parent().expect("a parent").join("other");
+    common::git_in(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "other",
+            other.to_str().expect("a utf-8 path"),
+        ],
+    );
+
+    // Each ref holds one state and keeps it. Interleaved, the log alternates.
+    for _ in 0..3 {
+        evaluate(&repo, &home, true);
+        evaluate(&other, &home, false);
+    }
+
+    let woken = hook(&repo, &home, &post_tool("pair"));
+    assert_eq!(woken.status.code(), Some(0));
+    assert_ne!(
+        stored(&repo, &home)["presentation"]["not-shown"],
+        "flap-suppressed",
+        "neither ref ever changed state; only the interleaving did"
+    );
+    let told = common::stderr(&hook_at(&repo, &home, &post_tool("pair-verbose"), &["-v"]));
+    assert!(
+        told.contains("0 rule(s) with a flapping identity"),
+        "and nothing is annotated: {told}"
+    );
+}
+
+// Acceptance (c). Clearing latency is a property of the state plane, so it must be
+// identical with the policy on and off — the same fixture, two `[drain]` tables,
+// one variable.
+#[test]
+fn clearing_latency_is_identical_with_the_policy_on_and_off() {
+    let mut cleared_at = Vec::new();
+    for (name, table) in [
+        (
+            "drain-flap-latency-on",
+            "\n[drain]\ninterval_ms = 0\nflap_window = 6\nflap_percent = 50\nemit_cap = 0\n",
+        ),
+        (
+            "drain-flap-latency-off",
+            "\n[drain]\ninterval_ms = 0\nflap_window = 0\n",
+        ),
+    ] {
+        let (repo, home) = flapping_fixture(name, table);
+        // Flap it hard enough that the policy is certainly engaged in the first
+        // column, then clear it and count the evaluations to zero.
+        for round in 0..4 {
+            evaluate(&repo, &home, round % 2 == 0);
+            hook(&repo, &home, &post_tool("latency"));
+        }
+        evaluate(&repo, &home, false);
+        let mut rounds = 0;
+        while occurrences(&stored(&repo, &home)) != Some(0) {
+            rounds += 1;
+            assert!(rounds < 5, "{name}: the finding never cleared");
+            evaluate(&repo, &home, false);
+        }
+        cleared_at.push(rounds);
+    }
+    assert_eq!(
+        cleared_at[0], cleared_at[1],
+        "hysteresis governs the emission channel and nothing else, so a suppressed \
+         identity clears on exactly the evaluation an emitted one does"
+    );
+    assert_eq!(cleared_at[0], 0, "and it clears on the evaluation itself");
+}

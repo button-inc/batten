@@ -761,6 +761,26 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   store carries no count anchor — and only for emitted identities, so a capped
   rule anchors nothing. A count that fell renders plainly: a ratchet is not a
   re-raise, because re-raising on incremental fixing punishes the fix.
+  CLOUD-165 adds a **fourth** withholding reason, and the four now measure four
+  different things: the scope filter is about the TREE, the cap about the RULE, the
+  budget about THIS PAYLOAD, and `FlapSuppressed` about the identity's own SIGNAL.
+  The filter sits inside `select`, after `in_scope` and before the instance pick —
+  the last point a withheld identity is still a record that can be journalled,
+  since `cap` folds it into a summary and `state_lines` has already digested it. Its
+  count joins `result_fingerprint`'s withheld tuple, and the omission would have
+  been the worse bug: a flap suppression is invisible in the lines, so a cycle
+  withholding a newly-flapping identity would digest identically to the last one and
+  `resultId` would report `unchanged` about a payload that changed. The drain also
+  journals its EMISSIONS now (`record_emissions`, `Origin::Drain` + `Shown`): only
+  suppressions were ever recorded, because `Shown` is a record's default — so the
+  log carried a suppression history and no emission history, and a cap counted in
+  evaluation boundaries had nothing to count. Written only when the payload actually
+  reaches the agent, since an `unchanged` boundary showed nothing and must not spend
+  the cap. It also repairs a smaller asymmetry: a record suppressed once kept the
+  `NotShown` reason forever, because only a suppression ever wrote the field.
+  `[drain]` gains `flap_window`/`flap_percent`/`emit_cap`, engine pacing like the
+  rest of the table; `flap_window` under 2 turns the policy off for both halves,
+  which is why there is no separate `enabled` key to disagree with it.
 - `emission.rs` — the emission policy (CLOUD-165): hysteresis and a re-emit cap on
   the notification channel, and NOTHING on the state plane. The plane split is the
   whole issue — hysteresis on finding _state_ would contradict CLOUD-81's law, since

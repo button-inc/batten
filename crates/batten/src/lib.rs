@@ -2095,7 +2095,11 @@ fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write
     // protects, and this seam holds the store and never sees a key's bytes.
     reconcile_secret_custody(&repo, &dir, err)?;
 
-    let appended = journal_evaluations(&dir, &context)?;
+    // The worktree actually scanned, not the repository root: `shard_id` is per
+    // WORKTREE, and a relative `.` would fingerprint identically from every one of
+    // them — collapsing the per-writer shards into one shared file, which is the
+    // lock-free concurrency the journal is built on.
+    let appended = journal_evaluations(&dir, here.as_deref().unwrap_or(&repo), &context)?;
     if appended > 0 && journal::merge(&dir)? == journal::Merge::Busy {
         writeln!(
             err,
@@ -2213,10 +2217,24 @@ fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) 
 
     // The window closes when nothing is keyed under the retired generation any
     // more — which only this side can see, since it is a fact about records.
+    //
+    // **The test is over the RECORDS, not over the joins**, and the difference is a
+    // window that closes too early. A run whose secrets rule matched nothing
+    // journals no pair at all, so "no outstanding joins" is true on the first
+    // evaluation after a rotation — and retiring there would drop the old key while
+    // records were still keyed under it, which is the orphan this whole branch
+    // exists to avoid, reached by the code meant to finish the rotation cleanly.
+    // So a secret-class record that is not the new half of a join holds the window
+    // open. A cleared-but-still-present record holds it open too, and that is the
+    // safe direction: it costs a rotation that cannot start until ref-death GC
+    // collects the record, where the other way costs a key.
     if secrets::custody(repo, today)?.retired().is_some() {
-        let outstanding = joined
-            .iter()
-            .any(|(old, _)| findings::load_one(store_dir, *old).ok().flatten().is_some());
+        let joined_new: std::collections::BTreeSet<String> =
+            joined.iter().map(|(_, new)| new.to_hex()).collect();
+        let outstanding = findings::load_all(store_dir)?.into_iter().any(|record| {
+            record.identity.is_secret()
+                && !joined_new.contains(&record.identity.fingerprint.to_hex())
+        });
         if !outstanding {
             if let Some(key_id) = secrets::retire(&key_file)? {
                 writeln!(
@@ -2282,8 +2300,12 @@ fn apply_join(
 /// # Errors
 ///
 /// Returns an error when the store cannot be read or a shard cannot be appended.
-fn journal_evaluations(store_dir: &Path, context: &findings::Context) -> Result<usize> {
-    let shard = journal::shard_id(Path::new("."));
+fn journal_evaluations(
+    store_dir: &Path,
+    worktree: &Path,
+    context: &findings::Context,
+) -> Result<usize> {
+    let shard = journal::shard_id(worktree);
     let mut appended = 0;
     for record in findings::load_all(store_dir)? {
         let Some(instance) = record.instance(context) else {
