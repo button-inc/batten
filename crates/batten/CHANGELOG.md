@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.77](https://github.com/button-inc/batten/compare/v0.0.76...v0.0.77) - 2026-08-14
+
+### Added
+
+- *(policy)* declare the verdict shapes, and shrink run-shape-guard to two
+- *(hook)* [**breaking**] a pipeline kind — deny a verdict the structure throws away
+- *(waiver)* resolve a waiver's liveness at the mediation boundary
+- *(config)* [**breaking**] an absent batten.toml is the default layer, not an error
+- *(receipt)* [**breaking**] honour a branch-keyed receipt, and let a row fire on a write
+
+### Fixed
+
+- *(hook)* add the pipeline kind's corpus fixture, and drop the banned word
+- *(config)* give the default rule the pipeline kind's two columns
+
+### Other
+
+- *(lint)* borrow the path, forward the method, and allow expect in tests
+
 ## [0.0.76](https://github.com/button-inc/batten/compare/v0.0.75...v0.0.76) - 2026-08-14
 
 ### Added
