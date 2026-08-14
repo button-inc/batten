@@ -185,6 +185,19 @@ pair() {
 	fi
 }
 
-pair noop "$PWD" "--help"
+# EVERY ARM RUNS IN THE FIXTURE REPO, never in this checkout — and that is a
+# correctness requirement, not tidiness. The two arms are different binaries: the
+# base one predates whatever this branch changed, and a `batten.toml` key added
+# by HEAD is a key the BASE binary rejects at load. Measured here: with the arms
+# run from the repo root, a head that added `[worktree]` to the committed config
+# made the base binary exit 1 on "unknown field `worktree`", hyperfine abort on
+# its first warmup, and the whole gate answer 2 — a could-not-look produced by
+# the gate's own setup, on exactly the class of change it exists to judge.
+#
+# The fixture's config is pinned and minimal, so both binaries can load it and
+# the comparison is between the BINARIES rather than between two configs. It
+# also makes the number reproducible: measuring against this repository's live
+# config would move the baseline every time the config changed.
+pair noop "$check_repo" "--help"
 pair check "$check_repo" "check"
-pair hook "$PWD" "hook --harness claude-code"
+pair hook "$check_repo" "hook --harness claude-code"
