@@ -678,10 +678,7 @@ mod tests {
         ));
         let found = smells(&text, "test", None, today()).unwrap();
         assert_eq!(
-            found
-                .iter()
-                .map(|smell| smell.line_text())
-                .collect::<Vec<_>>(),
+            found.iter().map(Smell::line_text).collect::<Vec<_>>(),
             vec![
                 "batten.toml:waiver[no-merge] shape waiver-unreachable-kind",
                 "batten.toml:waiver[no-merge][vendor/**] shape waiver-unreachable-kind",
