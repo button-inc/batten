@@ -521,7 +521,16 @@ jobs:
     name: perf
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20 # budget: measured=2026-08-13 two release builds plus 2x110 samples
+    # DERIVED, not guessed, and stated because a single sample is not a p95.
+    # `mise run perf-gate` forced down its full path — both release binaries built
+    # and both arms sampled, in a worktree with a crate-source change so the skip
+    # could not fire — measured 109s wall on a warm cache. The declared 200s adds
+    # the job's own preamble (checkout, mise install, cache restore) and headroom
+    # for a colder, busier runner; x3 on top of that is the multiplier every job
+    # here carries. Re-measure from real runs once this job has a history: an
+    # over-declared budget is a weaker backstop, which is the safe direction to be
+    # wrong in but still the wrong number.
+    timeout-minutes: 10 # budget: p95=200s x3 measured=2026-08-14
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
     # that could not cancel itself would have to fail instead, and a failed job
