@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.73](https://github.com/button-inc/batten/compare/v0.0.72...v0.0.73) - 2026-08-14
+
+### Added
+
+- *(hook)* [**breaking**] make the host capability axis data, and declare per-host attribution rows
+
+### Fixed
+
+- *(test)* write the fixture's git identity into the repo, not through `-c`
+
 ## [0.0.72](https://github.com/button-inc/batten/compare/v0.0.71...v0.0.72) - 2026-08-14
 
 ### Added
