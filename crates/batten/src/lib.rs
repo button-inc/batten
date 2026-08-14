@@ -726,7 +726,16 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
     // this context no longer sees, and a raise written before it would be
     // reasoning about a store mid-update.
     register_completion(
-        &repo, &context, &commit, &config, &bound.dir, schema, mode, err,
+        &repo,
+        &Recording {
+            context: &context,
+            commit: &commit,
+            store_dir: &bound.dir,
+            schema,
+        },
+        &config,
+        mode,
+        err,
     )?;
 
     // Fold any dispositions this worktree journalled since the last record. A
@@ -1781,6 +1790,29 @@ fn register_advisories(raised: &[findings::Advisory], err: &mut dyn Write) -> Re
     Ok(())
 }
 
+/// Where one observation is being written: the ref it belongs to, the commit
+/// that ref was at, and the store that will hold it.
+///
+/// Grouped rather than passed as four parameters because they travel together
+/// and only together — an instance is keyed by context and stamped with the
+/// commit, and the schema is the store's own version rather than this binary's
+/// (`journal`'s write-old rule). Naming the tuple also keeps
+/// [`register_completion`] inside the workspace's argument-count lint without
+/// the lint being silenced, which is the honest way past it.
+#[derive(Debug, Clone, Copy)]
+struct Recording<'a> {
+    /// The ref this observation belongs to.
+    context: &'a findings::Context,
+    /// The commit that ref was at when the scan ran.
+    commit: &'a str,
+    /// The bound store's directory.
+    store_dir: &'a Path,
+    /// The record schema **the store is written in**, never [`FINDINGS_SCHEMA`].
+    ///
+    /// [`FINDINGS_SCHEMA`]: findings::FINDINGS_SCHEMA
+    schema: u32,
+}
+
 /// Evaluate the done-but-not-landed predicate and fold its answer into the
 /// store (CLOUD-97).
 ///
@@ -1811,14 +1843,17 @@ fn register_advisories(raised: &[findings::Advisory], err: &mut dyn Write) -> Re
 /// [`worktree::status`] already gives a target its author named and got wrong.
 fn register_completion(
     repo: &Path,
-    context: &findings::Context,
-    commit: &str,
+    recording: &Recording<'_>,
     config: &resolve::Resolved,
-    store_dir: &Path,
-    schema: u32,
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<()> {
+    let &Recording {
+        context,
+        commit,
+        store_dir,
+        schema,
+    } = recording;
     let declared = config
         .transcript
         .as_ref()

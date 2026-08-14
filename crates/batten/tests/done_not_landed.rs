@@ -194,12 +194,31 @@ fn a_rebased_then_landed_branch_does_not_raise() {
     // repositories actually produce.
     let (repo, home) = unlanded_repo("cloud97-rebased", Some(&transcript("completed-session")));
     git_in(&repo, &["checkout", "-q", "main"]);
+    // `main` moves first, and it has to. A cherry-pick onto the branch's own
+    // parent replays the identical tree under the identical parent, and git is
+    // deterministic — so it reproduces the **same SHA**, and the fixture would
+    // assert the rebased shape while exercising the trivial one. Landing behind
+    // somebody else's commit is also what actually happens on a busy trunk.
+    common::write(&repo, "src/other.rs", "pub fn elsewhere() {}\n");
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-q", "-m", "somebody else landed first"]);
     git_in(&repo, &["cherry-pick", "work"]);
     git_in(&repo, &["checkout", "-q", "work"]);
 
     let head = git_in(&repo, &["rev-parse", "HEAD"]);
     let landed = git_in(&repo, &["rev-parse", "main"]);
     assert_ne!(head, landed, "the fixture must land it under a new SHA");
+    // The keystone, asserted rather than assumed: ancestry says this branch did
+    // NOT land, and it is wrong. A detector built on `--is-ancestor` would flag
+    // work that is already on the trunk — which is the false positive that
+    // makes a self-clearing finding fail to clear.
+    assert!(
+        !common::git_command(&repo, &["merge-base", "--is-ancestor", "HEAD", "main"])
+            .status()
+            .expect("run git merge-base")
+            .success(),
+        "the landed branch must not be an ancestor, or the case proves nothing"
+    );
 
     let reported = stderr(&record(&repo, &home));
     assert!(
