@@ -1,0 +1,25 @@
+version = 1
+
+# A `pipeline` rule is adjudicated by `batten hook` against the STRUCTURE one
+# mediated command sits in — what its exit status is handed to, what replaces it,
+# whether it was detached — never by the tree engine. This fixture pins the
+# routing half, exactly as the `shape` and `receipt` fixtures beside it do:
+# `check` walks past a `mediated_call` row and reports nothing, rather than
+# erroring on a rule it cannot evaluate or evaluating it as if it selected files.
+#
+# Both tables are carried so the row is a real one rather than a shell: a
+# pipeline row with no `verdict` entry judges no command, and one with no
+# `filters` entry cannot recognise the substitution it exists to refuse. The
+# loader refuses either, so a fixture omitting them would be testing the refusal
+# instead of the routing.
+[[rule]]
+id = "verdict-not-discarded"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+filters = ["tail", "head"]
+reason = "read the exit status from the harness, not from the output"
+
+[[rule.verdict]]
+program = "make"
+subcommands = ["test"]

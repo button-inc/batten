@@ -1,0 +1,6 @@
+// A file carrying the gated shape as text. A pipeline rule must not be mistaken
+// for a file rule: this line spells the refused structure and must produce no
+// finding, because what the kind judges is a mediated call rather than a tree.
+fn main() {
+    // make test | tail -5
+}

@@ -92,7 +92,7 @@ fn a_pager_over_a_file_is_fine_it_is_a_pager_over_a_live_task_that_is_not() {
 
 #[test]
 fn a_trailing_list_element_replaces_the_status() {
-    // The laundered shape: it looks compliant, and the guard this ports used to
+    // The laundered shape: it reads as correct, and the guard this ports used to
     // recommend it. Backgrounded it is worse than a misread — the completion
     // notification then carries the compound's status, so a failed task arrives
     // as `completed (exit code 0)`.
@@ -122,9 +122,9 @@ fn detaching_a_verdict_orphans_it_from_the_tool_call() {
 }
 
 #[test]
-fn the_compliant_form_is_allowed_including_its_redirection() {
+fn the_prescribed_form_is_allowed_including_its_redirection() {
     // THE regression test for the parser change. `2>&1` carries a literal `&`,
-    // and the compliant form this engine prescribes contains one — so an `&` test
+    // and the form this engine prescribes contains one — so an `&` test
     // that did not exempt redirections would refuse the exact idiom the refusal
     // recommends, which is the worst failure this gate could have.
     assert_allowed("mise run verify >/tmp/verify.log 2>&1");
@@ -137,7 +137,7 @@ fn the_compliant_form_is_allowed_including_its_redirection() {
 }
 
 #[test]
-fn a_verdict_alone_in_the_call_is_the_compliant_form() {
+fn a_verdict_alone_in_the_call_is_the_prescribed_form() {
     assert_allowed("mise run verify");
     assert_allowed("cargo test -p batten");
     assert_allowed("git push origin branch");

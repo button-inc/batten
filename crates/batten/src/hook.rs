@@ -1904,7 +1904,7 @@ fn pipeline_refusal(rule: &Rule, discard: Discard) -> Refusal {
         Discard::Trailing => {
             "a verdict-bearing command followed by `;` or `||` has its exit \
              status replaced — only the last element's survives. This is the laundered shape: it \
-             looks compliant, and backgrounded it is worse than a misread, because the completion \
+             reads as correct, and backgrounded it is worse than a misread, because the completion \
              notification then carries the compound's status. (`&&` is fine: it short-circuits, \
              so a failure still propagates.)"
         }
@@ -2312,7 +2312,7 @@ fn segments(command: &str) -> Vec<Segment> {
             // An `&` belonging to a REDIRECTION is not a separator (CLOUD-443).
             //
             // `2>&1`, `>&2` and `&>log` all carry a literal `&` that says nothing
-            // about backgrounding, and the compliant form this engine prescribes
+            // about backgrounding, and the form this engine prescribes
             // — `mise run <task> >log 2>&1` — contains one. Splitting there both
             // mangles the segment and, once a background `&` became a verdict,
             // would refuse the exact idiom the refusal recommends.
@@ -2373,7 +2373,7 @@ fn segments(command: &str) -> Vec<Segment> {
             words,
             raw: raw.trim().to_owned(),
             // The command ended here, so nothing follows to take this segment's
-            // status. `None` is what makes "alone in the call" — the compliant
+            // status. `None` is what makes "alone in the call" — the prescribed
             // form — distinguishable from every shape that substitutes.
             terminator: None,
         });
