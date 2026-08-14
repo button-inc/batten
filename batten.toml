@@ -296,6 +296,112 @@ will not, since it fires on the PR event. Scratch work is not gated: anything \
 git-ignored, anything outside the repository, and anything under `.git` is never \
 judged."""
 
+# `run-shape-guard`'s three verdict shapes, as config (CLOUD-443).
+#
+# Every shape below FAILS GREEN — exit 0 with plausible output — which is why
+# noticing them repeatedly did not stop them. The measured record: two confident
+# "green" reports over a failed `verify`, a `git push` that had returned `stale
+# info` at exit 1 re-run alone and reported as compliance, and a `cargo clippy`
+# whose ANSI-coloured output no `^error` anchor could ever match.
+#
+# WHY THIS IS ITS OWN KIND rather than a `shape` row. A shape row matches a
+# program and its adjacent words; these three are about the STRUCTURE the command
+# sits in — what its status is handed to, what replaces it, whether it was
+# detached. The engine's parser used to split on exactly those operators and throw
+# them away, so no amount of word matching could see them.
+#
+# `&&` IS NOT DENIED, deliberately. It short-circuits, so a failure still
+# propagates and there is no false green to stop; denying it would be a pure false
+# positive, and a guard with false positives gets bypassed.
+#
+# The two tables are the consumer's, and they hang off the rule rather than the
+# config root because they are what this rule is DEFINED OVER — a global table
+# would be a second authority with no other reader.
+[[rule]]
+id = "verdict-not-discarded"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+# Pagers and filters alike: each substitutes output for status. `jq` is
+# deliberately absent — it is composition rather than a verdict substitute, and
+# widening to every pipe would deny ordinary work.
+filters = [
+  "tail",
+  "head",
+  "less",
+  "more",
+  "grep",
+  "rg",
+  "egrep",
+  "fgrep",
+  "awk",
+  "sed",
+  "wc",
+]
+reason = """
+The compliant form is the command alone in the call, redirected to a file:
+
+  mise run <task> >/tmp/<task>.log 2>&1
+
+The tool result IS the verdict — read the log in a SEPARATE call. Pass \
+run_in_background on the tool call itself for anything that can exceed ~2 \
+minutes. A pager over a FILE is fine; a pager over a live task is not."""
+
+# A task runner: `run` names a task and its exit status is that task's verdict.
+# `mise exec`/`mise x` are not here — they run another program, and the engine's
+# wrapper lookthrough judges the wrapped one instead.
+[[rule.verdict]]
+program = "mise"
+subcommands = ["run"]
+
+# The mutating VCS verbs. The read-only ones (`log`, `show`, `diff`, `status`)
+# carry no verdict and compose freely, which is why this is an allow-list.
+[[rule.verdict]]
+program = "git"
+subcommands = ["push", "fetch", "rebase"]
+
+# A build tool has far more verdict subcommands than query ones, so this is the
+# inverse reading: everything except the queries. A bare `cargo` names no action
+# and is therefore not a verdict either.
+[[rule.verdict]]
+program = "cargo"
+except = [
+  "metadata",
+  "tree",
+  "locate-project",
+  "pkgid",
+  "search",
+  "login",
+  "logout",
+  "version",
+]
+
+# The forge CLI dispatches twice, so the verdict is in the second word: `gh pr
+# view` is a query, `gh pr merge` is not.
+[[rule.verdict]]
+program = "gh"
+subcommands = ["pr"]
+nested = [
+  "create",
+  "ready",
+  "ready-for-review",
+  "merge",
+  "edit",
+  "close",
+  "reopen",
+  "comment",
+]
+
+# A test runner (CLOUD-473). The argument is what makes the run a verdict: bare
+# `bats`, `bats --version` and `bats --help` print usage and answer nothing.
+# Added after this issue was written, and omitting it would retire a predicate:
+# one suite was guarded through `mise run test:bats` and open through both
+# `mise exec -- bats …` and a path-invoked runner, and a run piped to `tail`
+# reported green over three failures, one of them a hang.
+[[rule.verdict]]
+program = "bats"
+any_argument = true
+
 # A conflict marker reaching a source file means a botched merge landed — and
 # this row DELEGATES that check rather than re-implementing it (CLOUD-229).
 #

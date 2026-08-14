@@ -480,7 +480,7 @@ pub fn live(waivers: &[Waiver], today: Date) -> BTreeSet<String> {
 pub const fn reaches(kind: RuleKind) -> bool {
     match kind {
         RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet | RuleKind::Secrets => true,
-        RuleKind::Shape | RuleKind::Receipt | RuleKind::Judge => false,
+        RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline | RuleKind::Judge => false,
     }
 }
 
@@ -856,13 +856,16 @@ mod tests {
     }
 
     #[test]
-    fn the_unreachable_set_is_exactly_the_three_kinds_that_mint_no_finding() {
+    fn the_unreachable_set_is_exactly_the_kinds_that_mint_no_finding() {
         let unreachable: Vec<&str> = RuleKind::ALL
             .iter()
             .filter(|&&kind| !reaches(kind))
             .map(|kind| kind.as_str())
             .collect();
-        assert_eq!(unreachable, ["shape", "receipt", "judge"]);
+        // `pipeline` joins the mediated-call kinds with CLOUD-443, for their
+        // reason exactly: it returns a `Decision`, never a `Finding`, so there is
+        // nothing for a waiver to suppress.
+        assert_eq!(unreachable, ["shape", "receipt", "pipeline", "judge"]);
         // And the other direction, so the predicate cannot degenerate into
         // "false everywhere" and take the smell down to noise with it.
         assert!(

@@ -123,6 +123,27 @@ pub enum RuleKind {
     /// adjudicator as data, because adjudication is contractually pure. That is
     /// the same split the bypass hatch already uses.
     Receipt,
+    /// A mediated call whose **exit status is discarded by the structure it sits
+    /// in** (CLOUD-443).
+    ///
+    /// Distinct from [`RuleKind::Shape`] by what it reads, not by severity. A
+    /// shape row matches a program and its adjacent words; this one is about what
+    /// SURROUNDS the command — what its status is handed to (a pipe), what
+    /// replaces it (a following `;` or `||` element), and whether it was detached
+    /// (`nohup`, a trailing `&`). Those are properties of the operators between
+    /// segments, which the parser used to discard, so no amount of word matching
+    /// could express them.
+    ///
+    /// Every shape it denies **fails green** — exit 0 with plausible output —
+    /// which is why noticing them repeatedly did not stop them. `&&` is
+    /// deliberately not among them: it short-circuits, so a failure still
+    /// propagates and there is no false green to refuse.
+    ///
+    /// The row carries the two tables the predicate is defined over: which
+    /// programs are verdict-bearing (`verdict`) and which stages substitute
+    /// output for status (`filters`). Both are the consumer's — one repository's
+    /// build command is another's irrelevance — so the crate names neither.
+    Pipeline,
     /// A **model-validated** rule (CLOUD-56): hand the row's `criteria` and the
     /// admitted classes of its matched files to the command in `[judge].run`,
     /// and read that command's exit code.
@@ -179,6 +200,7 @@ impl RuleKind {
         RuleKind::Shape,
         RuleKind::Ratchet,
         RuleKind::Receipt,
+        RuleKind::Pipeline,
         RuleKind::Judge,
         RuleKind::Secrets,
     ];
@@ -192,6 +214,7 @@ impl RuleKind {
             RuleKind::Shape => "shape",
             RuleKind::Ratchet => "ratchet",
             RuleKind::Receipt => "receipt",
+            RuleKind::Pipeline => "pipeline",
             RuleKind::Judge => "judge",
             RuleKind::Secrets => "secrets",
         }
@@ -224,7 +247,16 @@ impl RuleKind {
             // could not be scoped to the mediated call at all — `scopes` pairs
             // every spawning kind with `Tree` alone, which is what keeps `hook`
             // structurally unable to execute a configured command.
-            RuleKind::Forbid | RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt => false,
+            // `Pipeline` reads the operators between a command's segments and
+            // nothing else — no file, no git, no process. It joins this arm for
+            // the same structural reason `Receipt` does: `scopes` pairs every
+            // spawning kind with `Tree` alone, so a `true` here would make the
+            // kind unscopable to the mediated call.
+            RuleKind::Forbid
+            | RuleKind::Shape
+            | RuleKind::Ratchet
+            | RuleKind::Receipt
+            | RuleKind::Pipeline => false,
             // All three run a program a `batten.toml` named, which is the
             // whole predicate — that a judge's consults a model, a command's
             // decides a gate, and a secrets rule's scans for credentials makes
@@ -276,6 +308,13 @@ impl RuleKind {
             // row has no command line to match, so requiring the column
             // unconditionally would make the new trigger unusable.
             RuleKind::Receipt => &["checks", "reason", "severity"],
+            // Both tables are required: a pipeline row with no verdict-bearing
+            // programs judges nothing, and one with no filters cannot recognise
+            // the substitution it exists to refuse. Either way the row loads,
+            // matches, and decides nothing — the present-and-inert gate this
+            // file is written against. `reason` carries the shared remedy, since
+            // the engine renders the per-shape cause itself.
+            RuleKind::Pipeline => &["verdict", "filters", "reason", "severity"],
             // `criteria` is what the model is asked, and a judge row without one
             // sends a payload with no question attached. `no_fix_reason` is
             // required rather than merely permitted because a judge finding
@@ -347,6 +386,10 @@ impl RuleKind {
                 "policy_url",
                 "severity",
             ],
+            // No `pattern` and no `glob`: this kind is defined over the operators
+            // between segments, so a column selecting a command or a file would
+            // narrow nothing it reads.
+            RuleKind::Pipeline => &["verdict", "filters", "reason", "policy_url", "severity"],
             // No `fix`: a judge finding is advisory, and a mutating repair
             // attached to a model's opinion is the shortest path from "may
             // inform" to "acted on the repository". No `severity` either — that
@@ -391,7 +434,7 @@ impl RuleKind {
             | RuleKind::Ratchet
             | RuleKind::Judge
             | RuleKind::Secrets => &[RuleScope::Tree],
-            RuleKind::Shape | RuleKind::Receipt => &[RuleScope::MediatedCall],
+            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => &[RuleScope::MediatedCall],
         }
     }
 }
@@ -669,6 +712,21 @@ pub struct Rule {
     /// invalidates* the proof of it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<ReceiptTrigger>,
+    /// The programs whose exit status IS the answer, for a
+    /// [`RuleKind::Pipeline`] row (CLOUD-443).
+    ///
+    /// Declared on the rule rather than as a config-root table because it is what
+    /// this rule is *defined over*: a global table would be a second authority
+    /// with no other consumer, and the set would outlive the row that reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Vec<VerdictProgram>>,
+    /// The pipeline stages that substitute output for status — pagers and
+    /// filters alike, since each replaces the verdict with its own.
+    ///
+    /// A plain name list, not a `VerdictProgram`: a filter's identity is the
+    /// program, and no subcommand makes `tail` more or less of one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<String>>,
     /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
     /// instruction handed to the judge command (CLOUD-56).
     ///
@@ -715,6 +773,131 @@ pub enum ReceiptKey {
     Head,
     /// Keyed to the branch; every commit on it continues to serve the claim.
     Branch,
+}
+
+/// One program family whose **exit status is the answer** (CLOUD-443).
+///
+/// Enumerable on purpose. "Is this command's status the thing the caller wants"
+/// is not decidable in general, and an open predicate would be a judgement
+/// (non-negotiable rule 3) — so the set is a closed list the consumer declares,
+/// and the read-only member of each family is excluded by name, because a query's
+/// output *is* its answer and piping it is ordinary composition.
+///
+/// The four optional columns are not four ideas: each is the shape one real
+/// family needs, and no row may carry two that contradict.
+///
+/// | column | matches | the family it exists for |
+/// | --- | --- | --- |
+/// | `subcommands` | first non-flag word is one of these | a task runner's `run`, a VCS's mutating verbs |
+/// | `nested` | second non-flag word is one of these | a forge CLI's `<noun> <verb>` |
+/// | `except` | a first word exists and is NOT listed | a build tool with far more verdict subcommands than query ones |
+/// | `any_argument` | a first word merely exists | a test runner, where a bare invocation prints usage and answers nothing |
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerdictProgram {
+    /// The program name as it appears on a command line. Matched exactly, on the
+    /// EFFECTIVE program — wrapper lookthrough is the hook parser's, not a second
+    /// implementation here.
+    pub program: String,
+    /// The first non-flag words that make this program verdict-bearing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subcommands: Option<Vec<String>>,
+    /// The second non-flag words, for a program that dispatches twice. Requires
+    /// `subcommands`, since a nested word with nothing above it names no action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nested: Option<Vec<String>>,
+    /// The first non-flag words that are **queries** — everything else is a
+    /// verdict. The inverse of `subcommands` and refused alongside it: a row
+    /// cannot both allow-list and deny-list the same position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub except: Option<Vec<String>>,
+    /// Whether any first non-flag word at all makes this a verdict, for a program
+    /// whose bare form answers nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub any_argument: Option<bool>,
+}
+
+impl VerdictProgram {
+    /// Whether `program` and `words` — the effective program and the non-flag
+    /// words after it — make this invocation verdict-bearing.
+    ///
+    /// The program is compared FIRST and exactly. Leaving it out was a real
+    /// defect for the length of one differential run: an `except` row is a
+    /// deny-list over subcommands, so with no program test it matched every
+    /// command carrying any argument, and `git log … | head` — a read-only query,
+    /// the exact false positive this kind must not produce — was refused.
+    #[must_use]
+    pub(crate) fn matches(&self, program: &str, words: &[&str]) -> bool {
+        if self.program != program {
+            return false;
+        }
+        let first = words.first().copied();
+        if let Some(allowed) = self.subcommands.as_deref() {
+            let Some(first) = first else { return false };
+            if !allowed.iter().any(|candidate| candidate == first) {
+                return false;
+            }
+            let Some(nested) = self.nested.as_deref() else {
+                return true;
+            };
+            return words
+                .get(1)
+                .is_some_and(|second| nested.iter().any(|candidate| candidate == second));
+        }
+        if let Some(queries) = self.except.as_deref() {
+            return first.is_some_and(|first| !queries.iter().any(|query| query == first));
+        }
+        self.any_argument.unwrap_or_default() && first.is_some()
+    }
+
+    /// Reject a row that cannot mean anything.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for an empty `program`, an empty
+    /// list in any column, a `nested` with no `subcommands`, a row carrying both
+    /// `subcommands` and `except`, an `any_argument` beside either of them, and a
+    /// row declaring no column at all. Every one of those either matches nothing
+    /// or contradicts itself, and both read as coverage from the file.
+    fn validate(&self, rule: &str) -> anyhow::Result<()> {
+        let refuse = |detail: &str| {
+            Err(UsageError::raise(format!(
+                "rule {rule}: verdict {}: {detail}",
+                self.program
+            )))
+        };
+        if self.program.trim().is_empty() || self.program.split_whitespace().count() != 1 {
+            return Err(UsageError::raise(format!(
+                "rule {rule}: a verdict entry names one program, not {:?}",
+                self.program
+            )));
+        }
+        for (name, list) in [
+            ("subcommands", self.subcommands.as_deref()),
+            ("nested", self.nested.as_deref()),
+            ("except", self.except.as_deref()),
+        ] {
+            if list.is_some_and(<[String]>::is_empty) {
+                return refuse(&format!("`{name}` is empty, so it narrows nothing"));
+            }
+        }
+        if self.subcommands.is_some() && self.except.is_some() {
+            return refuse("`subcommands` and `except` are opposite readings of the same position");
+        }
+        if self.nested.is_some() && self.subcommands.is_none() {
+            return refuse(
+                "`nested` needs `subcommands` — a second word with no first names nothing",
+            );
+        }
+        let any = self.any_argument.unwrap_or_default();
+        if any && (self.subcommands.is_some() || self.except.is_some()) {
+            return refuse("`any_argument` already admits every word, so it cannot be narrowed");
+        }
+        if !any && self.subcommands.is_none() && self.except.is_none() {
+            return refuse("declares no condition, so it never matches");
+        }
+        Ok(())
+    }
 }
 
 /// What makes a receipt row fire (CLOUD-444).
@@ -839,7 +1022,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 20] {
+    fn columns(&self) -> [(&'static str, bool); 22] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -864,6 +1047,8 @@ impl Rule {
             ("checks", self.checks.is_some()),
             ("key", self.key.is_some()),
             ("trigger", self.trigger.is_some()),
+            ("verdict", self.verdict.is_some()),
+            ("filters", self.filters.is_some()),
         ]
     }
 
@@ -891,6 +1076,26 @@ impl Rule {
                 "rule {}: `run` is now `check` (house style §9's check/fix duality); rename the key",
                 self.id
             )));
+        }
+        // The pipeline row's own tables (CLOUD-443), refused here for the same
+        // reason as everything else in this block: a list that narrows nothing,
+        // or a row whose conditions contradict, loads clean and decides nothing.
+        if self.kind == RuleKind::Pipeline {
+            for entry in self.verdict.iter().flatten() {
+                entry.validate(&self.id)?;
+            }
+            if self.verdict.as_ref().is_some_and(Vec::is_empty) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"pipeline\" requires at least one `verdict` entry; with none it judges no command",
+                    self.id
+                )));
+            }
+            if self.filters.as_ref().is_some_and(Vec::is_empty) {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"pipeline\" requires at least one `filters` entry; with none it cannot recognise the substitution it refuses",
+                    self.id
+                )));
+            }
         }
         // The two trigger-dependent obligations (CLOUD-444). They live here
         // rather than in the column census because the census is a per-kind
@@ -1037,9 +1242,9 @@ impl Rule {
             // honest answer — unlike a judge's verdict, the engine can re-decide
             // a secret finding by scanning again.
             RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Secrets => Some(Check::Reevaluate),
-            // Neither reaches the store: both are adjudicated per mediated call
-            // and produce a decision, not a finding.
-            RuleKind::Shape | RuleKind::Receipt => None,
+            // None of the three reaches the store: each is adjudicated per
+            // mediated call and produces a decision, not a finding.
+            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => None,
             // Neither of the other two answers is true for a judge.
             // `Reevaluate` would claim the engine can re-decide the finding, and
             // it cannot — a model reached that verdict and only the model can
@@ -1440,8 +1645,8 @@ fn run_rule(
         }
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
         RuleKind::Secrets => crate::secrets::scan(rule, provisions, root, &matched, findings)?,
-        // Unreachable: shape and receipt rules are `mediated_call`-scoped
-        // and a ratchet
+        // Unreachable: the shape, receipt and pipeline kinds are
+        // `mediated_call`-scoped and a ratchet
         // returned above. Stated rather than caught by a wildcard so adding a
         // kind that *is* tree-scoped has to come here.
         //
@@ -1452,7 +1657,11 @@ fn run_rule(
         // what makes "a judge outcome is never a `Finding`" a property of the
         // walker rather than a convention. The judge runs in its own pass, over
         // in `lib.rs`, beside `findings` and never into it.
-        RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt | RuleKind::Judge => {}
+        RuleKind::Shape
+        | RuleKind::Ratchet
+        | RuleKind::Receipt
+        | RuleKind::Pipeline
+        | RuleKind::Judge => {}
     }
     Ok(None)
 }
@@ -2423,6 +2632,8 @@ mod tests {
                 .then(|| vec!["verify".to_owned()]),
             key: None,
             trigger: None,
+            verdict: None,
+            filters: None,
         }
     }
 
@@ -2882,6 +3093,16 @@ mod tests {
                         // `blank` already sets one; naming it here keeps the
                         // census total now that it is a per-kind column.
                         "severity" => rule.severity = Some(RuleSeverity::Deny),
+                        "verdict" => {
+                            rule.verdict = Some(vec![VerdictProgram {
+                                program: "p".to_owned(),
+                                subcommands: Some(vec!["run".to_owned()]),
+                                nested: None,
+                                except: None,
+                                any_argument: None,
+                            }]);
+                        }
+                        "filters" => rule.filters = Some(vec!["tail".to_owned()]),
                         "criteria" => rule.criteria = Some("intentional?".to_owned()),
                         "no_fix_reason" => rule.no_fix_reason = Some("answered by hand".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
@@ -3124,13 +3345,14 @@ mod tests {
                 | RuleKind::Shape
                 | RuleKind::Ratchet
                 | RuleKind::Receipt
+                | RuleKind::Pipeline
                 | RuleKind::Judge
                 | RuleKind::Secrets => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            7,
+            8,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

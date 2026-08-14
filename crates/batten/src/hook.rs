@@ -1609,9 +1609,17 @@ pub fn adjudicate(
     // order is supposed to decide.
     match shape_rules(policy, &envelope.command) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-        Decision::Allow => match receipt_rules(policy, envelope, receipts) {
+        // The pipeline gate before the receipt one, and the ordering is the same
+        // ban-outranks-precondition rule the rest of this chain follows: a call
+        // whose verdict is thrown away is refused outright, so telling its author
+        // which receipt to earn first would be advice about a call that is not
+        // going to run (CLOUD-443).
+        Decision::Allow => match pipeline_rules(policy, &envelope.command) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-            Decision::Allow => protected_mutation(policy, &envelope.command),
+            Decision::Allow => match receipt_rules(policy, envelope, receipts) {
+                decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
+                Decision::Allow => protected_mutation(policy, &envelope.command),
+            },
         },
     }
 }
@@ -1775,6 +1783,136 @@ fn receipt_refusal(rule: &Rule, check: &str, verdict: Validity) -> Refusal {
         // Not reachable from the caller, which only refuses a non-valid
         // verdict. Stated rather than unwrapped so the match stays total.
         Validity::Valid => format!("`{check}` is valid"),
+    };
+    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+}
+
+/// The id-free half of the pipeline verdict: which shape a command commits.
+///
+/// Three causes rather than three rules, on [`receipt_refusal`]'s precedent — the
+/// row declares one obligation and the engine says which way it was broken. A
+/// per-shape column would only ever be used to switch part of a rule off, which
+/// is what `severity = "allow"` already does wrongly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Discard {
+    /// Piped into a pager or filter: the pipeline exits with the filter's status.
+    Piped,
+    /// Followed by `;` or `||`: only the last element's status survives.
+    Trailing,
+    /// Detached by `nohup` or a trailing `&`: the call returns before the work.
+    Orphaned,
+}
+
+/// Deny a verdict-bearing command whose exit status the surrounding structure
+/// throws away (CLOUD-443).
+///
+/// Judged per SEGMENT against the operators the parser now retains. Every shape
+/// here fails green — exit 0 over a failure — which is what makes them worth a
+/// gate rather than a convention: nothing downstream can notice them.
+///
+/// `&&` is absent by construction rather than by exclusion: it is the one
+/// separator that preserves a non-zero status, so there is no false green to
+/// refuse and denying it would be a pure false positive.
+fn pipeline_rules(policy: &Policy, command: &str) -> Decision {
+    let rows: Vec<&Rule> = policy
+        .shapes
+        .iter()
+        .filter(|rule| {
+            rule.kind == RuleKind::Pipeline && blocks(rule.severity(), policy.fail_on_warning)
+        })
+        .collect();
+    if rows.is_empty() {
+        return Decision::Allow;
+    }
+    let parsed = segments(command);
+    for rule in rows {
+        let verdicts = rule.verdict.as_deref().unwrap_or_default();
+        let filters = rule.filters.as_deref().unwrap_or_default();
+        for (index, segment) in parsed.iter().enumerate() {
+            let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+            let Some(program_index) = effective_program(&tokens) else {
+                continue;
+            };
+            // A `nohup` wrapper is looked THROUGH by `effective_program`, so the
+            // detach it performs has to be read off the raw span rather than off
+            // the resolved program — otherwise the wrapper that orphans the run
+            // is the one token the parser hides.
+            let detached_here = tokens.iter().any(|token| *token == "nohup");
+            let words: Vec<&str> = tokens[program_index + 1..]
+                .iter()
+                .copied()
+                .filter(|token| !token.starts_with('-'))
+                .collect();
+            if !verdicts
+                .iter()
+                .any(|entry| entry.matches(tokens[program_index], &words))
+            {
+                continue;
+            }
+            // Orphaned first: it discards the verdict AND the supervision, so it
+            // is the more complete failure of the two a detached pipeline commits.
+            if detached_here || segment.terminator == Some(Separator::Background) {
+                return Decision::Deny(pipeline_refusal(rule, Discard::Orphaned));
+            }
+            if segment.terminator == Some(Separator::Pipe) {
+                // Every stage downstream of the verdict, not merely the next: a
+                // pager two stages along substitutes just as completely.
+                let piped_into_filter = parsed[index + 1..]
+                    .iter()
+                    .take_while(|stage| {
+                        // Stop at the end of THIS pipeline — a later list element
+                        // is a different command's business.
+                        stage
+                            .terminator
+                            .is_none_or(|separator| separator == Separator::Pipe)
+                    })
+                    .chain(parsed.get(index + 1))
+                    .any(|stage| {
+                        let stage_tokens: Vec<&str> =
+                            stage.words.iter().map(String::as_str).collect();
+                        effective_program(&stage_tokens).is_some_and(|at| {
+                            filters.iter().any(|filter| filter == stage_tokens[at])
+                        })
+                    });
+                if piped_into_filter {
+                    return Decision::Deny(pipeline_refusal(rule, Discard::Piped));
+                }
+            }
+            if matches!(segment.terminator, Some(Separator::Semi | Separator::Or))
+                && parsed.get(index + 1).is_some()
+            {
+                return Decision::Deny(pipeline_refusal(rule, Discard::Trailing));
+            }
+        }
+    }
+    Decision::Allow
+}
+
+/// Compose a pipeline refusal: which shape, and the row's declared remedy.
+///
+/// The cause states the **PRINCIPLE** rather than naming one command, and that is
+/// CLOUD-199's measured lesson rather than a style choice: the predecessor guard
+/// was worded around one command string, an agent complied with it exactly, and
+/// made the identical error on the next command in the same session.
+fn pipeline_refusal(rule: &Rule, discard: Discard) -> Refusal {
+    let cause = match discard {
+        Discard::Piped => {
+            "piping a verdict-bearing command into a pager or filter discards its \
+             exit status — the pipeline exits with the filter's, which is 0 whether the command \
+             passed or failed. A verdict is read from the harness, never inferred from output"
+        }
+        Discard::Trailing => {
+            "a verdict-bearing command followed by `;` or `||` has its exit \
+             status replaced — only the last element's survives. This is the laundered shape: it \
+             looks compliant, and backgrounded it is worse than a misread, because the completion \
+             notification then carries the compound's status. (`&&` is fine: it short-circuits, \
+             so a failure still propagates.)"
+        }
+        Discard::Orphaned => {
+            "detaching a verdict-bearing command with `nohup` or a trailing `&` \
+             orphans it from the tool call: the call returns at once, the harness records it \
+             complete, and the session loses the wake-up it would get when the work exits"
+        }
     };
     Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
 }
@@ -2070,6 +2208,36 @@ struct Segment {
     words: Vec<String>,
     /// The span exactly as written, quotes and all.
     raw: String,
+    /// The operator that FOLLOWED this span, or `None` where the command ended.
+    ///
+    /// Retained since CLOUD-443, and the reason is that three predicates are
+    /// about the structure a command sits in rather than about its words: what
+    /// its status is handed to, what replaces it, whether it was detached. The
+    /// parser used to split on exactly these operators and discard them, so the
+    /// structure was destroyed before any rule could see it.
+    terminator: Option<Separator>,
+}
+
+/// The shell operator between two segments — what happens to the first one's
+/// exit status.
+///
+/// A vocabulary rather than a boolean because the four answers differ in the one
+/// way that matters here. [`Separator::And`] is the only one that **preserves** a
+/// failure: it short-circuits, so a non-zero status propagates and there is no
+/// false green to stop. The other three each substitute something — the next
+/// stage's status, the next element's, or nothing at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Separator {
+    /// `|` — the pipeline exits with the LAST stage's status.
+    Pipe,
+    /// `;` — the list exits with the last element's status.
+    Semi,
+    /// `||` — the list exits with the last element that ran.
+    Or,
+    /// `&&` — short-circuits, so a failure still propagates. Not a defect.
+    And,
+    /// `&` — detaches; the call returns before the work does.
+    Background,
 }
 
 /// Split a command into shell-separated segments, resolving quotes as we go.
@@ -2141,11 +2309,35 @@ fn segments(command: &str) -> Vec<Segment> {
                     has_word = true;
                 }
             }
+            // An `&` belonging to a REDIRECTION is not a separator (CLOUD-443).
+            //
+            // `2>&1`, `>&2` and `&>log` all carry a literal `&` that says nothing
+            // about backgrounding, and the compliant form this engine prescribes
+            // — `mise run <task> >log 2>&1` — contains one. Splitting there both
+            // mangles the segment and, once a background `&` became a verdict,
+            // would refuse the exact idiom the refusal recommends.
+            //
+            // The test is positional and needs no lookbehind buffer: a
+            // redirection's `&` is either directly after a `>` or directly before
+            // one. Anything else unquoted is a real operator.
+            '&' if raw.trim_end().ends_with('>') || chars.peek() == Some(&'>') => {
+                raw.push(c);
+                word.push(c);
+                has_word = true;
+            }
             '&' | '|' | ';' => {
                 // `&&` and `||` are one separator, not two.
-                if (c == '&' || c == '|') && chars.peek() == Some(&c) {
+                let doubled = (c == '&' || c == '|') && chars.peek() == Some(&c);
+                if doubled {
                     chars.next();
                 }
+                let separator = match (c, doubled) {
+                    ('|', false) => Separator::Pipe,
+                    ('|', true) => Separator::Or,
+                    ('&', false) => Separator::Background,
+                    ('&', true) => Separator::And,
+                    _ => Separator::Semi,
+                };
                 if has_word {
                     words.push(std::mem::take(&mut word));
                     has_word = false;
@@ -2154,6 +2346,7 @@ fn segments(command: &str) -> Vec<Segment> {
                     out.push(Segment {
                         words: std::mem::take(&mut words),
                         raw: raw.trim().to_owned(),
+                        terminator: Some(separator),
                     });
                 }
                 raw.clear();
@@ -2179,6 +2372,10 @@ fn segments(command: &str) -> Vec<Segment> {
         out.push(Segment {
             words,
             raw: raw.trim().to_owned(),
+            // The command ended here, so nothing follows to take this segment's
+            // status. `None` is what makes "alone in the call" — the compliant
+            // form — distinguishable from every shape that substitutes.
+            terminator: None,
         });
     }
     out
@@ -2195,7 +2392,15 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
     }
     loop {
         match *tokens.get(i)? {
-            "env" | "command" | "nice" | "stdbuf" | "timeout" | "xargs" | "sudo" | "doas" => {
+            // `nohup` joins the list with CLOUD-443, and it was a gap in every
+            // gate rather than only the new one: with the wrapper unresolved,
+            // `nohup rm <protected>` presented `nohup` as its program and the
+            // protected-path gate saw nothing to classify. Looking through a
+            // wrapper can only ever find MORE real programs, which is the safe
+            // direction. The detach it performs is read off the raw tokens by
+            // `pipeline_rules`, precisely because this function hides it.
+            "env" | "command" | "nice" | "stdbuf" | "timeout" | "xargs" | "sudo" | "doas"
+            | "nohup" => {
                 i += 1;
                 // The wrapper's own flags, env assignments, and bare numeric
                 // arguments (timeout's duration) precede the wrapped program.
@@ -2434,6 +2639,8 @@ mod tests {
             checks: None,
             key: None,
             trigger: None,
+            verdict: None,
+            filters: None,
         }
     }
 
