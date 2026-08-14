@@ -41,7 +41,7 @@ clap_complete = "4"
 # with real escaping rules, and a hand-rolled emitter would be a second place
 # for the surface to be described. Same license family as clap itself
 # (MIT OR Apache-2.0), so `deny.toml`'s allow-list already covers it.
-clap_mangen = "0.2"
+clap_mangen = "0.3"
 # Per-OS base directories: XDG on Linux/macOS (honours XDG_DATA_HOME), the
 # roaming known folder on Windows — the CLOUD-23 state-path rule, one crate.
 etcetera = "0.10"
@@ -62,7 +62,7 @@ hmac = "0.12"
 # generator is a key an attacker can re-derive. `rand` was the alternative and is
 # strictly more surface for the same 32 bytes — distributions, generators and a
 # reseeding policy this needs none of.
-getrandom = "0.3"
+getrandom = "0.4"
 # The JSON Schema for `batten.toml`, derived from the config types themselves
 # (CLOUD-33) — never hand-authored, so the schema cannot describe a config the
 # binary does not accept.
