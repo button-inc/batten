@@ -7,7 +7,8 @@
 # Every discipline in this repo that agents reliably follow has a gate that
 # fires on a tool call they cannot avoid. `verify` is never skipped because
 # `ready-guard` denies `gh pr ready` without its receipt. Memories go through
-# the Serena tools because `memory-guard` denies the direct write. Commit
+# the Serena tools because the engine's protected-path gate denies the direct
+# write. Commit
 # subjects conform because `commit-msg` rejects them.
 #
 # Every discipline agents reliably SKIP is prose in AGENTS.md with no gate on

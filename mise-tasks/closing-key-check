@@ -93,8 +93,8 @@ fi
 
 # ANCHORED TO THE START OF A LINE, because a body that TALKS ABOUT the marker is
 # not using it — the same distinction the adjacency rule above draws for the
-# closing verb, and the same substring hazard `memory-guard`'s decision table
-# documents (a rule over a directory that would otherwise fire on its own
+# closing verb, and the same substring hazard the `forbid` rows in `batten.toml`
+# document (a rule over a directory that would otherwise fire on its own
 # explanation).
 #
 # Found by this gate's own first live outing: PR #404 carries `Closes CLOUD-192`

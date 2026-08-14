@@ -32,7 +32,7 @@ version = 1
 # And again for `[attribution]` (CLOUD-274), on the same reasoning: a binary that
 # predates the table cannot enforce the attribution policy, and silently ignoring
 # the key would report green over a gate that does not exist in it.
-min_batten_version = "0.0.61"
+min_batten_version = "0.0.74"
 
 # The ref work must land on (CLOUD-51) — the target `batten worktree status`
 # judges uncommitted, unpushed, and unlanded work against.
@@ -517,13 +517,16 @@ no_fix_reason = "pin the tool in mise.toml so CI installs exactly what the lockf
 #     commits this rule judges.
 #
 # WHAT IS DELIBERATELY NOT HERE, and why it is a gap rather than an oversight:
-# the `tests/**/*.bats` half of the sed and flock rows. `tests/memory-guard.bats`
-# carries the in-place form five times as FIXTURE STRINGS — it is the suite
-# proving `memory-guard` denies that shape — and `tests/target-ensure.bats` names
-# the util-linux lock in a test title. A `forbid` pattern is a literal substring
-# with no `exclude` column, so those rows cannot be written today without firing
-# on the tests that prove the guards work. That is exactly CLOUD-283. The
+# the `tests/**/*.bats` half of the sed and flock rows. `tests/target-ensure.bats`
+# names the util-linux lock in a test title, and a `forbid` pattern is a literal
+# substring with no `exclude` column, so that row cannot be written today without
+# firing on the test that proves the guard works. That is exactly CLOUD-283. The
 # `mise-tasks/**` half — the layer that actually could not run — lands now.
+#
+# The in-place spelling used to be blocked here too, by `tests/memory-guard.bats`
+# carrying it five times as fixture strings. That suite retired with its guard
+# (CLOUD-442) and the fixtures moved to `crates/**`, which these rows do not
+# glob — so the sed half of this exclusion is now about `flock` alone.
 #
 # The rationale comments in the guarded files deliberately do NOT spell the
 # literals they explain, for the same reason the agnosticism rules above do not
@@ -634,23 +637,23 @@ redirect = "write through the surface that owns the file"
 # `Write|Edit|MultiEdit|NotebookEdit` matcher was adjudicated by nothing: a write
 # carries no command, and every path in `adjudicate` returned Allow for it.
 #
-# The redirect is the one `memory-guard-check` renders, kept verbatim so the
-# refusal survives the move out of bash unchanged — which is what CLOUD-312's
-# differential suite asserts. It is per-verb rather than per-path, exactly as
-# `rm`'s is, so it names the general remedy and leaves the specific one to the
-# path in the message.
+# The redirect started as the one `memory-guard-check` rendered, kept verbatim so
+# the refusal survived the move out of bash unchanged — which is what CLOUD-312's
+# differential suite asserted. With that guard retired (CLOUD-442) this text is no
+# longer a copy of anything: it is the authority, and
+# `crates/batten/tests/mediated_verbs.rs` is what holds it to the corpus the guard
+# used to prove. It is per-verb rather than per-path, exactly as `rm`'s is, so it
+# names the general remedy and leaves the specific one to the path in the message.
 # The write-shaped programs whose EVERY operand is a target, ported from
-# `memory-guard-check`'s table (CLOUD-312). Its own comments are the authority
+# `memory-guard-check`'s table (CLOUD-312). Its own comments were the authority
 # for which those are: "every operand is a destination" for tee/sponge, and
 # rm/shred/truncate grouped together.
 #
-# Deliberately NOT ported here: `cp` and `install`, because that table says
-# "only the destination is a write; copying a memory OUT is a read" — and the
-# engine's gate treats every operand as a candidate, so a row for `cp` would
-# refuse `cp batten.toml /tmp/backup.toml`. That is a false positive the bash
-# guard does not have, and a guard that refuses reads is one people switch off.
-# `sed -i`, `git mv` and `git rm` are out for the same class of reason: they
-# need a flag- or subcommand-qualified verb. Both gaps are their own issue.
+# The five that could not be expressed then are declared below with CLOUD-442's
+# qualifier columns, and the guard is deleted rather than left beside the engine
+# as a second authority. Each column NARROWS — an absent one leaves a row meaning
+# what it always meant — so the every-operand reading above is untouched and
+# stays the default, because it is the one that fails toward refusing.
 [[verb]]
 verb = "tee"
 effect = "write"
@@ -670,6 +673,60 @@ redirect = "change the file through the surface that owns it, rather than emptyi
 verb = "shred"
 effect = "destructive"
 redirect = "restore it with `git checkout --`, or remove it through the surface that owns it"
+
+# Destination-only: `operands = "last"`. The bash table's own words — "only the
+# destination is a write; copying a memory OUT is a read" — are what the column
+# now says, and the ALLOW is the load-bearing half: with the default every-operand
+# reading, a row here would refuse `cp batten.toml /tmp/backup.toml`, and a guard
+# that refuses reads is one people switch off.
+#
+# The stated limit, inherited from the guard this replaces rather than introduced:
+# a target-directory flag (`-t <dir>`) puts the destination somewhere other than
+# last, so the row does not see it. That under-denies, which is the sanctioned
+# direction (house style §5).
+[[verb]]
+verb = "cp"
+effect = "write"
+operands = "last"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+[[verb]]
+verb = "install"
+effect = "write"
+operands = "last"
+redirect = "write through the surface that owns the file — for a memory that is the Serena tool `write_memory`"
+
+# Flag-qualified: the stream editor writes only in place. Every other invocation
+# of it is a read, so a row without `requires_flag` would refuse every read-only
+# stream edit in the repository — which is why this one waited for the column.
+# The suffix form is the same switch carrying a backup suffix; the engine matches
+# a declared flag's `.suffix` and `=value` forms for that reason.
+[[verb]]
+verb = "sed"
+effect = "write"
+requires_flag = ["-i", "--in-place"]
+redirect = "change the file through the surface that owns it — for a memory that is the Serena tool `edit_memory`"
+
+# Subcommand-qualified: two rows for one front-end, because they are two actions
+# with two remedies. The effective program is the same word whether it mutates or
+# reads, so a row keyed on the program alone would refuse `git log`.
+#
+# The rename is the shape worth the most, and the reason this pair is not
+# cosmetic: `rename_memory` is the only thing that rewrites `mem:` referrers, so
+# moving a memory with version control orphans every reference to it in one
+# silent step. `memories-check` catches the damage at commit time; this catches
+# it at the moment of action.
+[[verb]]
+verb = "git"
+subcommand = "mv"
+effect = "destructive"
+redirect = "copy instead of moving, or change the file in place — for a memory that is the Serena tool `rename_memory`, which rewrites every `mem:` referrer a raw move orphans"
+
+[[verb]]
+verb = "git"
+subcommand = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`, or remove it through the surface that owns it — for a memory that is the Serena tool `delete_memory`"
 
 [[verb]]
 verb = "Write"
@@ -905,7 +962,7 @@ expires = "2026-11-14"
 
 [[waiver]]
 rule = "bats-tests-not-deleted"
-reason = "CLOUD-515 removes plan-hold; its three suites test deleted code, so the reduction from 1600 to 1552 is the deletion working rather than coverage lost."
+reason = "Two retirements, both deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), and CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, taking `tests/memory-guard.bats` with it — the corpus moves to `crates/batten/tests/mediated_verbs.rs`, so what falls is the bats count, not the coverage."
 expires = "2026-09-13"
 
 [ci]

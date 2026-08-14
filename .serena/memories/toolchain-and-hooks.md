@@ -135,12 +135,19 @@ so raising either is a diff in two files.
 `.serena/memories/*.md` are ordinary files on disk, which makes editing them with
 Write/Edit easy and wrong: `write_memory` enforces a size ceiling and
 `rename_memory` rewrites `mem:` cross-references in the other memories, and a
-direct file write silently skips both. `mise run memory-guard` is a `PreToolUse`
-hook (wired in `.claude/settings.json`) that denies such a write and names the
-memory to pass to the Serena tool instead. It fails open on anything unparseable
-and honours `BATTEN_MEMORY_GUARD_BYPASS=1` — needed when the Serena MCP server is
-down, since otherwise a disconnected server would make memories unwritable by any
-means.
+direct file write silently skips both. **`batten hook` is what denies such a
+write** — `.serena/memories/**` sits in `batten.toml`'s `protected` set, crossed
+with the `[[verb]]` table — and each row's `redirect` names the Serena tool to use
+instead, so a move still points at `rename_memory` rather than at "some other
+surface". It covers the Write/Edit tools and the shell shapes alike: a redirect,
+`tee`, `mv`/`cp`/`rm`, an in-place stream edit, a version-control move or remove.
+
+`mise run memory-guard` was the bash version of this and is **deleted**
+(CLOUD-442, once `[[verb]]` could express the destination-only, flag-qualified and
+subcommand-qualified shapes it was holding). There is no
+`BATTEN_MEMORY_GUARD_BYPASS`: a mediated deny takes the engine's own hatch, and
+the engine fails open on everything it cannot read — an absent binary included, so
+a disconnected Serena server never makes memories unwritable by every means.
 
 ## MCP allow rules: gate only what the repo can verify
 
@@ -341,10 +348,10 @@ Two consequences:
   it **passes**, which is the same failure shape as the `-v` regex and the
   `pipefail | grep` entries below: a gate green on the wrong claim. Translate
   the number, never copy it.
-- **The five `PreToolUse` guards are already aligned** (`gh-guard`,
-  `ready-guard`, `issue-guard`, `run-shape-guard`, `memory-guard` exit 2 to
-  deny), because they always spoke the harness convention. Only the `-check`
-  halves are inverted.
+- **The `PreToolUse` guards are already aligned** (`gh-guard`, `ready-guard`,
+  `issue-guard`, `run-shape-guard` exit 2 to deny), because they always spoke the
+  harness convention. Only the `-check` halves are inverted. There were five;
+  `memory-guard` retired into the engine with CLOUD-442.
 
 The tasks were deliberately not renumbered with CLOUD-226: they are independent
 programs the engine will replace, and churning their contract now would rewrite

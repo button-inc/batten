@@ -180,11 +180,14 @@ policy, ~93% of it task-runner startup (CLOUD-435).
 
 **What that leaves unenforced, so you self-enforce it rather than assume
 coverage.** The engine carries the `gh` lifecycle, the protected-path gate over
-both shell verbs and write tools, and `ready-guard`'s receipt predicate. It does
-**not** yet carry `run-shape-guard`, `issue-guard`, `claim-guard`,
-`memory-guard`'s `cp`/`sed -i`/`git mv`/`git rm` shapes, or `contract-drift` —
-each is a linked capability gap on CLOUD-312, and each guard still runs by hand
-(`mise run <guard>`, payload on stdin). The bullets below describe every
+both shell verbs and write tools, and `ready-guard`'s receipt predicate. It also carries the whole
+of `memory-guard`, whose last five write shapes — a destination-only copy, an
+in-place stream edit, and a version-control move or remove — became expressible
+as `[[verb]]` qualifiers in CLOUD-442, so that guard is **deleted** rather than
+still runnable. It does **not** yet carry `run-shape-guard`, `issue-guard`,
+`claim-guard`, or `contract-drift` — each is a linked capability gap on
+CLOUD-312, and each of those guards still runs by hand (`mise run <guard>`,
+payload on stdin). The bullets below describe every
 guard's predicate; which of them a hook actually fires is the settings file's
 answer, not this list's.
 
@@ -198,18 +201,16 @@ means it is mediating.
   table in `mise-tasks/gh-guard-check`, gated by `mise run test:bats`. Reads
   (`gh pr view`/`list`/`create`, `gh pr ready`, `gh api`, `gh run view`) are not
   blocked. Bypass: `BATTEN_GH_GUARD_BYPASS=1`.
-- `memory-guard` denies a write to `.serena/memories/`; they go through the
-  Serena tools, which enforce the size ceiling and rewrite `mem:` references on
-  rename. It is wired to **both** matchers, because matching the tool wrapper
-  rather than the effective action is what let a Bash heredoc write memories
-  while the guard was installed (CLOUD-185): the Write/Edit branch judges
-  `file_path`, the Bash branch judges a command's write-shaped segments —
-  redirects, `tee`, `sed -i`, `mv`/`cp`/`rm`, `git mv`/`git rm`. Reads stay
-  allowed, and a `mv` inside the tree names `rename_memory` specifically, since
-  that is the only route that rewrites referrers. Decision table in
-  `mise-tasks/memory-guard-check` — the guarded path is written once there, so
-  the two branches cannot disagree — gated by `mise run test:bats`. Bypass:
-  `BATTEN_MEMORY_GUARD_BYPASS=1`.
+- **`memory-guard` is retired** (CLOUD-442), and what it denied is now the
+  engine's protected-path gate: `.serena/memories/**` in `protected` crossed with
+  the `[[verb]]` table, which covers the Write/Edit tools and a command's
+  write-shaped segments alike — redirects, `tee`, `mv`/`cp`/`rm`, an in-place
+  stream edit, a version-control move or remove. Reads stay allowed, and the
+  Serena tool to use instead travels as each row's `redirect`, so a move still
+  names `rename_memory` — the only route that rewrites `mem:` referrers. The
+  table in `batten.toml` is the one authority; the corpus that used to live in
+  `tests/memory-guard.bats` is `crates/batten/tests/mediated_verbs.rs`. There is
+  no `BATTEN_MEMORY_GUARD_BYPASS`: a mediated deny takes the engine's own hatch.
 - `policy-budget` gates AGENTS.md plus anything always-loaded against a token
   budget — what every agent pays every turn. It is `batten policy budget`, not a
   shell task: the counted set and both thresholds are `[budget.instructions]` in

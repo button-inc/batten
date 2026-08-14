@@ -53,8 +53,8 @@
 set -euo pipefail
 
 # The budgets, in milliseconds, written once here as data — the same placement
-# `run-shape-guard`'s verdict-bearing list and `memory-guard-check`'s guarded
-# path use. A path named here must appear in the records; a path in the records
+# `run-shape-guard`'s verdict-bearing list and `batten.toml`'s own `protected`
+# set use. A path named here must appear in the records; a path in the records
 # that is not named here is measured and not gated, which is `check`.
 #
 # One field per line: <path-id> <p95-budget-ms>.
