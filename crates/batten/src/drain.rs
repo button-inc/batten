@@ -124,6 +124,7 @@ use anyhow::{Context as _, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::emission;
 use crate::findings::{Context, FindingRecord, Instance, NotShown, Observation, Presentation};
 use crate::identity::{FindingKind, drain_result_fingerprint};
 use crate::journal;
@@ -184,6 +185,36 @@ pub const DEFAULT_CARDINALITY_CAP: usize = 10;
 /// long session stays a rounding error against the context it is protecting.
 pub const DEFAULT_TOKEN_BUDGET: usize = 1_024;
 
+/// How many of a subject's evaluations the flap ratio is computed over, when the
+/// config declares none (CLOUD-165).
+///
+/// Eight because the window has to be long enough that an ordinary raise-then-fix
+/// — one transition — stays far under any useful threshold, and short enough that
+/// an identity which has *stopped* oscillating is believed again within a few
+/// evaluations. Nagios ships twenty-one state slots for a check evaluated on a
+/// timer; a window counted in evaluation boundaries needs fewer, because every
+/// entry in it is a real scan rather than a poll.
+pub const DEFAULT_FLAP_WINDOW: usize = 8;
+
+/// The flap threshold as state changes per hundred adjacent evaluations, when the
+/// config declares none.
+///
+/// Fifty: half the transitions the window could possibly hold. A raise, a fix and
+/// a regression inside eight evaluations scores well under it; a check alternating
+/// on every scan scores one hundred. Nagios's defaults bracket the same region
+/// from either side, and the integer spelling is what keeps the comparison behind
+/// a suppression exact.
+pub const DEFAULT_FLAP_PERCENT: u32 = 50;
+
+/// How many times a **flapping** identity may be emitted inside its window,
+/// before the drain stops repeating it.
+///
+/// Three, and the number matters less than what it bounds: an oscillation says
+/// everything it has to say in the first couple of emissions, and the rest is the
+/// flood this policy exists to stop. A steady identity is never capped by it, so
+/// this is not a rate limit on the drain (see [`crate::emission::Assessment::decide`]).
+pub const DEFAULT_EMIT_CAP: usize = 3;
+
 /// The `[drain]` table: how often the advisory drain may wake, when it stops
 /// asking, and how much it may say when it does.
 ///
@@ -227,6 +258,28 @@ pub struct DrainConfig {
     /// findings some other way and not a disabled feature.
     #[serde(default = "default_token_budget")]
     pub token_budget: usize,
+    /// How many of a subject's evaluations the flap ratio is computed over
+    /// (CLOUD-165), counted in evaluation boundaries and never in wall-clock time.
+    ///
+    /// `0` and `1` both mean no window can hold a transition, so nothing is ever
+    /// annotated flapping and nothing is ever flap-suppressed — the honest bottom
+    /// of the range, and the setting a consumer uses to turn the policy off
+    /// without a second key that could disagree with this one.
+    #[serde(default = "default_flap_window")]
+    pub flap_window: usize,
+    /// The flap threshold, as state changes per hundred adjacent evaluations.
+    ///
+    /// `0` annotates every identity with two evaluations in its window, and `101`
+    /// or above annotates none, both of which are the range's honest ends rather
+    /// than special cases.
+    #[serde(default = "default_flap_percent")]
+    pub flap_percent: u32,
+    /// How many times a flapping identity may be emitted inside its window.
+    ///
+    /// `0` withholds a flapping identity outright. A steady one is unaffected at
+    /// any value, because the cap and the annotation are read as a conjunction.
+    #[serde(default = "default_emit_cap")]
+    pub emit_cap: usize,
 }
 
 fn default_interval_ms() -> u64 {
@@ -245,6 +298,18 @@ fn default_token_budget() -> usize {
     DEFAULT_TOKEN_BUDGET
 }
 
+fn default_flap_window() -> usize {
+    DEFAULT_FLAP_WINDOW
+}
+
+fn default_flap_percent() -> u32 {
+    DEFAULT_FLAP_PERCENT
+}
+
+fn default_emit_cap() -> usize {
+    DEFAULT_EMIT_CAP
+}
+
 impl Default for DrainConfig {
     fn default() -> Self {
         DrainConfig {
@@ -252,6 +317,9 @@ impl Default for DrainConfig {
             empty_poll_giveup: DEFAULT_EMPTY_POLL_GIVEUP,
             cardinality_cap: DEFAULT_CARDINALITY_CAP,
             token_budget: DEFAULT_TOKEN_BUDGET,
+            flap_window: DEFAULT_FLAP_WINDOW,
+            flap_percent: DEFAULT_FLAP_PERCENT,
+            emit_cap: DEFAULT_EMIT_CAP,
         }
     }
 }
@@ -437,6 +505,15 @@ pub struct Drained {
     /// Identities withheld because the payload had no room for them **this
     /// boundary**. A property of the payload, and so retried on the next drain.
     pub over_budget: Vec<FindingRecord>,
+    /// Identities withheld because they are flapping and have spent their
+    /// re-emit budget for the window (CLOUD-165). A property of the SIGNAL, which
+    /// is a third thing again: the scope filter is about the tree, the cap about
+    /// the rule, the budget about this payload, and this about whether the
+    /// identity's own history makes another line informative.
+    pub flap_suppressed: Vec<FindingRecord>,
+    /// Flapping identities per rule, for the rule-health annotation. Pointer-only:
+    /// a rule id and a count, never a finding's content.
+    pub flapping: BTreeMap<String, usize>,
     /// Re-raises of an identity already carried by this payload, suppressed and
     /// counted rather than emitted twice.
     pub duplicates: usize,
@@ -587,8 +664,10 @@ pub fn cycle(
     context: Option<&Context>,
     config: &DrainConfig,
     previous: &BTreeMap<String, u64>,
+    log: &[journal::Entry],
 ) -> Drained {
-    let selected = select(records, changed, context);
+    let assessment = emission::assess(log, config.flap_window, config.flap_percent);
+    let selected = select(records, changed, context, &assessment, config.emit_cap);
     // The state lines are taken BEFORE the cap consumes the surfaced set, so the
     // digest covers every identity this cycle looked at rather than only the ones
     // that got a line. See [`state_lines`] for why that is the difference between
@@ -596,16 +675,48 @@ pub fn cycle(
     let state = state_lines(&selected.shown);
     let (items, capped) = cap(selected.shown, config.cardinality_cap);
     let clamped = clamp(&items, config, previous);
-    let result_id = result_fingerprint(&clamped, &state, &capped, &selected.scope_filtered);
+    let result_id = result_fingerprint(
+        &clamped,
+        &state,
+        &capped,
+        &selected.scope_filtered,
+        &selected.flap_suppressed,
+    );
     Drained {
         lines: clamped.lines,
         scope_filtered: selected.scope_filtered,
         capped,
         over_budget: clamped.over_budget,
+        flapping: flapping_by_rule(records, &assessment),
+        flap_suppressed: selected.flap_suppressed,
         duplicates: selected.duplicates,
         counts: clamped.counts,
         result_id,
     }
+}
+
+/// How many of each rule's identities the journal reports as flapping.
+///
+/// Over **every** record, not only the ones this cycle surfaced: a flapping
+/// identity outside the changed scope is still a fact about its rule's health, and
+/// counting only the surfaced ones would make the number a function of what the
+/// agent happened to be editing. Keyed by rule because that is what a health
+/// counter is read by — one flapping identity is a finding, a rule whose
+/// identities all flap is a rule to fix.
+fn flapping_by_rule(
+    records: &[FindingRecord],
+    assessment: &emission::Assessment,
+) -> BTreeMap<String, usize> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for record in records {
+        if assessment
+            .health(&record.identity.fingerprint.to_hex())
+            .is_flapping()
+        {
+            *counts.entry(record.rule.clone()).or_insert(0) += 1;
+        }
+    }
+    counts
 }
 
 /// The state-bearing facts about the surfaced set, one pointer-only line per
@@ -649,14 +760,21 @@ fn result_fingerprint(
     state: &[String],
     capped: &[FindingRecord],
     scope_filtered: &[FindingRecord],
+    flap_suppressed: &[FindingRecord],
 ) -> String {
     let mut input = clamped.lines.clone();
     input.extend(state.iter().cloned());
+    // The flap count joins the tuple for the same reason the other three are in
+    // it, and the omission would have been the worse bug: a flap suppression is
+    // invisible in the lines, so a cycle that withheld a newly-flapping identity
+    // would digest identically to the one before it and the `resultId`
+    // short-circuit would report `unchanged` about a payload that had changed.
     input.push(format!(
-        "withheld {} {} {}",
+        "withheld {} {} {} {}",
         scope_filtered.len(),
         capped.len(),
-        clamped.over_budget.len()
+        clamped.over_budget.len(),
+        flap_suppressed.len()
     ));
     drain_result_fingerprint(&input).to_hex()
 }
@@ -666,16 +784,27 @@ fn result_fingerprint(
 struct Selected<'a> {
     shown: BTreeMap<String, Surfaced<'a>>,
     scope_filtered: Vec<FindingRecord>,
+    flap_suppressed: Vec<FindingRecord>,
     duplicates: usize,
 }
 
 /// Stage one: the one instance per identity worth pointing at.
+///
+/// The emission policy is applied **here**, after the scope filter and before the
+/// instance pick, and the position is chosen rather than convenient. This is the
+/// last point at which a withheld identity can still be carried out as a record
+/// for journalling — after `cap` it has been folded into a summary line and after
+/// `state_lines` it is already inside the digest, so a filter downstream of either
+/// would be a suppression the store never learns about.
 fn select<'a>(
     records: &'a [FindingRecord],
     changed: &BTreeSet<String>,
     context: Option<&Context>,
+    assessment: &emission::Assessment,
+    emit_cap: usize,
 ) -> Selected<'a> {
     let mut scope_filtered = Vec::new();
+    let mut flap_suppressed = Vec::new();
     // Keyed by identity, which is what makes "suppressed and counted" the
     // structure rather than a rule applied afterwards: a second record for one
     // identity cannot occupy a second entry.
@@ -698,6 +827,16 @@ fn select<'a>(
             scope_filtered.push(record.clone());
             continue;
         }
+        // The signal filter (CLOUD-165). It reads the identity's own history off
+        // the journal and decides nothing about the finding's state: the record
+        // below is unchanged, its instances still say what the last scan saw, and
+        // its disposition is whatever the agent gave it.
+        if let emission::Emission::Withhold(_) =
+            assessment.decide(&record.identity.fingerprint.to_hex(), emit_cap)
+        {
+            flap_suppressed.push(record.clone());
+            continue;
+        }
         let Some(instance) = context
             .and_then(|context| record.instance(context))
             .or_else(|| record.instances.first())
@@ -715,6 +854,7 @@ fn select<'a>(
     Selected {
         shown,
         scope_filtered,
+        flap_suppressed,
         duplicates,
     }
 }
@@ -938,6 +1078,14 @@ pub fn record_suppressions(
             &journal::Entry {
                 identity: record.identity.fingerprint.to_hex(),
                 rule: record.rule.clone(),
+                // The emission channel's own statement, which is what makes it
+                // authoritative over `presentation` (CLOUD-529's `Origin`).
+                origin: journal::Origin::Drain,
+                // A suppression is a fact about this boundary, not about a scan,
+                // so it records no ref and no occurrence count: the evaluation
+                // that produced the record already journalled both.
+                context: None,
+                observation: None,
                 disposition: None,
                 presentation: Presentation::NotShown(why),
             },
@@ -983,6 +1131,62 @@ pub fn journal_suppressions(store_dir: &Path, shard: &str, cycle: &Drained) -> R
         &cycle.over_budget,
         NotShown::DrainSuppressed,
     )?;
+    appended += record_suppressions(
+        store_dir,
+        shard,
+        &cycle.flap_suppressed,
+        NotShown::FlapSuppressed,
+    )?;
+    Ok(appended)
+}
+
+/// Journal every identity this payload actually emitted.
+///
+/// # Why the emission needs a record and the suppression already had one
+///
+/// The withheld sets were journalled from the start, because a finding the engine
+/// withheld must be excluded from the false-positive rate. The *shown* case needed
+/// nothing, since `Shown` is what a record already defaults to — so the log grew a
+/// suppression history and no emission history, and an emission cap counted in
+/// evaluation boundaries has nothing to count (CLOUD-165). This is that half.
+///
+/// It also repairs a smaller asymmetry: an identity suppressed at one boundary and
+/// emitted at the next kept the `NotShown` reason on its record forever, because
+/// only a suppression ever wrote the field. Now the boundary that emits says so.
+///
+/// **Called only when the payload reaches the agent.** A cycle short-circuited as
+/// `unchanged` emitted nothing, and recording an emission there would spend the
+/// cap on a boundary the agent never saw.
+///
+/// # Errors
+///
+/// Returns an error when a shard cannot be appended to.
+pub fn record_emissions(
+    store_dir: &Path,
+    shard: &str,
+    records: &[FindingRecord],
+    emitted: &BTreeMap<String, u64>,
+) -> Result<usize> {
+    let mut appended = 0;
+    for record in records
+        .iter()
+        .filter(|record| emitted.contains_key(&record.identity.fingerprint.to_hex()))
+    {
+        journal::append(
+            store_dir,
+            shard,
+            &journal::Entry {
+                identity: record.identity.fingerprint.to_hex(),
+                rule: record.rule.clone(),
+                origin: journal::Origin::Drain,
+                context: None,
+                observation: None,
+                disposition: None,
+                presentation: Presentation::Shown,
+            },
+        )?;
+        appended += 1;
+    }
     Ok(appended)
 }
 
@@ -1050,6 +1254,7 @@ mod tests {
             context,
             &DrainConfig::default(),
             &BTreeMap::new(),
+            &[],
         )
     }
 
@@ -1061,6 +1266,8 @@ mod tests {
             scope_filtered: Vec::new(),
             capped: Vec::new(),
             over_budget: Vec::new(),
+            flap_suppressed: Vec::new(),
+            flapping: BTreeMap::new(),
             duplicates: 0,
             counts: BTreeMap::new(),
             result_id: result_id.to_owned(),
@@ -1602,11 +1809,25 @@ mod tests {
         };
         let scope = changed(&["src/a.rs"]);
 
-        let under = cycle(&spread("r", 3), &scope, None, &config, &BTreeMap::new());
+        let under = cycle(
+            &spread("r", 3),
+            &scope,
+            None,
+            &config,
+            &BTreeMap::new(),
+            &[],
+        );
         assert_eq!(under.lines.len(), 3, "at the cap, every identity speaks");
         assert!(under.capped.is_empty());
 
-        let over = cycle(&spread("r", 4), &scope, None, &config, &BTreeMap::new());
+        let over = cycle(
+            &spread("r", 4),
+            &scope,
+            None,
+            &config,
+            &BTreeMap::new(),
+            &[],
+        );
         assert_eq!(
             over.lines,
             vec!["rule r: 3+ findings".to_owned()],
@@ -1636,6 +1857,7 @@ mod tests {
             None,
             &config,
             &BTreeMap::new(),
+            &[],
         );
         assert_eq!(drained.lines.len(), 2);
         assert!(
@@ -1659,7 +1881,7 @@ mod tests {
         let records = spread("r", 40);
         let scope = changed(&["src/a.rs"]);
 
-        let unclamped = cycle(&records, &scope, None, &generous(), &BTreeMap::new());
+        let unclamped = cycle(&records, &scope, None, &generous(), &BTreeMap::new(), &[]);
         assert!(
             crate::budget::estimate_tokens(&render(&unclamped)) > BUDGET,
             "the fixture must actually overflow, or the clamp is untested"
@@ -1674,6 +1896,7 @@ mod tests {
                 ..generous()
             },
             &BTreeMap::new(),
+            &[],
         );
         assert!(
             crate::budget::estimate_tokens(&render(&clamped)) <= BUDGET,
@@ -1708,6 +1931,7 @@ mod tests {
                 ..generous()
             },
             &BTreeMap::new(),
+            &[],
         );
         assert!(drained.lines.is_empty());
         assert_eq!(drained.over_budget.len(), 3);
@@ -1731,6 +1955,7 @@ mod tests {
             None,
             &generous(),
             &previous,
+            &[],
         );
         assert_eq!(drained.lines, vec![format!("{key} r src/a.rs:1 500->501")]);
         assert_eq!(
@@ -1756,6 +1981,7 @@ mod tests {
             None,
             &generous(),
             &previous,
+            &[],
         );
         assert_eq!(drained.lines, vec![format!("{key} r src/a.rs:1 10")]);
     }
@@ -1783,6 +2009,7 @@ mod tests {
             None,
             &generous(),
             &BTreeMap::new(),
+            &[],
         );
         assert!(
             quiet.lines[0].contains(" warning-rule "),
@@ -1793,7 +2020,7 @@ mod tests {
         let mut escalating = loud.clone();
         escalating.instances[0].occurrences = Observation::Observed(9_000);
         let before = vec![escalating.clone(), urgent.clone()];
-        let shouted = cycle(&before, &scope, None, &generous(), &BTreeMap::new());
+        let shouted = cycle(&before, &scope, None, &generous(), &BTreeMap::new(), &[]);
         assert!(
             shouted.lines[0].contains(" warning-rule "),
             "nine thousand occurrences buy no position: {:?}",
@@ -1823,6 +2050,7 @@ mod tests {
             None,
             &config,
             &BTreeMap::new(),
+            &[],
         );
         assert_eq!(drained.lines, vec!["rule r: 1+ findings".to_owned()]);
         assert!(drained.counts.is_empty());
@@ -1878,6 +2106,7 @@ mod tests {
                 ..DrainConfig::default()
             },
             &BTreeMap::new(),
+            &[],
         );
         assert_eq!(drained.capped.len(), 4, "the noisy rule, by the cap");
         assert_eq!(drained.scope_filtered.len(), 1, "the one outside the diff");
@@ -1949,6 +2178,7 @@ mod tests {
                 ..generous()
             },
             &BTreeMap::new(),
+            &[],
         );
         let clamped = cycle(
             &records,
@@ -1959,6 +2189,7 @@ mod tests {
                 ..generous()
             },
             &BTreeMap::new(),
+            &[],
         );
         assert_ne!(capped.result_id, clamped.result_id);
     }

@@ -761,6 +761,33 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   store carries no count anchor — and only for emitted identities, so a capped
   rule anchors nothing. A count that fell renders plainly: a ratchet is not a
   re-raise, because re-raising on incremental fixing punishes the fix.
+- `emission.rs` — the emission policy (CLOUD-165): hysteresis and a re-emit cap on
+  the notification channel, and NOTHING on the state plane. The plane split is the
+  whole issue — hysteresis on finding _state_ would contradict CLOUD-81's law, since
+  an open finding whose own check exits 0 is a broken invariant, not a debounced
+  one — and it is **structural rather than remembered**: the module takes the
+  journal by reference and returns values, so it holds no store handle to write
+  through. Flapping is an ANNOTATION feeding per-rule health, never a gate on
+  clearing and never an exit code. The window is counted in **evaluation
+  boundaries** (the last N entries for one subject), never wall-clock, because a
+  clock makes the same oscillation read as flapping on a busy box and steady on an
+  idle one, and makes the verdict unreproducible from the log — where `drain.rs`'s
+  coalescing interval genuinely IS a clock, pacing being a question about time. The
+  subject is **(identity × context)**, `findings.rs`'s comparison law applied to the
+  journal: read per identity alone, two worktrees at two refs are indistinguishable
+  from one identity oscillating. An entry naming no context is its OWN subject, not
+  a member of a default ref — the "cannot classify, do not default" reading, which
+  is also how a secret-class record (whose `kind()` is `None`) travels through
+  unclassified rather than guessed. Emissions are per IDENTITY, since a drain entry
+  carries no ref. The cap biting only a FLAPPING identity is the hysteresis: a steady
+  finding re-raised repeatedly is working output, so capping it unconditionally
+  would make this a rate limiter on the drain — a different feature with a different
+  failure mode. Too few evaluations is `Steady`, never `Flapping` (cost of believing
+  a steady identity is one emission; of disbelieving a real one, a finding nobody
+  sees), and the threshold divides by adjacent PAIRS rather than evaluations, or a
+  perfectly alternating window could never reach 100. Only observations that LOOKED
+  count on either side: reading `NotObserved` as a clear manufactures a transition
+  out of a rule that never ran.
 - `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent
   to a model. Config types plus one pure function; **no command, no effect-table
   row, no egress** — enforcement of the config half rides `config lint`'s landed
@@ -1077,8 +1104,39 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   path are both injected: the key id is a hash input (so a self-read clock would
   bound §6 byte-stability to a day), and the path is ambient env-selected state
   that only `set_var` could move, which `unsafe_code = "forbid"` rules out
-  entirely. Rotation and the loud key-loss orphan event are CLOUD-529's — nothing
-  secret-class reaches the store yet, since `state record` runs `run_static`.
+  entirely.
+  CLOUD-529 landed the custody remainder, and the shape is a **split, not a new
+  module**: this side owns the keys and the append-only ledger beside them
+  (`identity/custody.jsonl`, ids + fingerprints + counts, never bytes) and reads NO
+  store — the whole keyed-identity invariant is that the key is unreachable from
+  the digests it protects, and a module that opened the store would be one edit
+  from breaking it. `lib.rs`'s `reconcile_secret_custody` owns the store and never
+  sees a key byte. The ledger exists because the key id lives INSIDE the HMAC
+  preimage: self-describing is not readable, so no stored fingerprint can be asked
+  which generation minted it, which is the exact question rotation and loss turn
+  on. Rotation holds **two** generations in the key file (never three: a third
+  needs a rule for which pair a join names, and rotating twice would orphan the
+  middle one, so `rotate` refuses while a window is open) and is an operation with
+  a WINDOW rather than a write — the new fingerprint is an HMAC over a span, no
+  span is stored anywhere, so the dual-HMAC pair is computable only inside a scan
+  while both keys are held, and each pair is written to the ledger as it is
+  computed. Applying a pair MOVES the record (disposition, tier and instances
+  travel; `findings::forget` drops the old file) rather than re-minting one — a
+  rotation that dropped a `rejected-by-design` would resurrect every dismissal.
+  Key loss is the other branch and never a degraded rotation: the predicate is
+  ledger-against-file (a generation that once existed and is no longer held), NOT
+  "the key file is missing", which is indistinguishable from a repo that never
+  scanned; the affected findings are re-opened through `findings::reopen` — the one
+  deliberate bypass of the disposition join, since an orphan is not a new
+  observation the `max` join could absorb but the loss of the ability to compare —
+  and the event is loud, unladdered, and recorded once per lost generation.
+  Rewrites go through the key file's own TEXT (`generation_lines`), because
+  `IdentityKey` exposes no byte accessor and widening it for a file rewrite is the
+  containment claim's own property being spent. One bug surfaced by journaling:
+  `scan` hardcoded `remediation: None` where every other kind reads
+  `rule.remediation()`, invisible while nothing secret-class could reach a store
+  that refuses a remediation-less finding, and silently fatal to §7(a) the moment
+  it could.
 - `provision.rs` — the `[[provision]]` manifest (CLOUD-90): pinned tools fetched
   and cached out of tree. §9's check/fix pair — `provision status` (read) is
   freshness, `provision apply [-n]` (write) is the fix. **The provisioned binary

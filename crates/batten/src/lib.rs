@@ -24,6 +24,7 @@ pub mod design;
 pub mod doctor;
 pub mod drain;
 pub mod effect;
+pub mod emission;
 pub mod epoch;
 pub mod error;
 pub mod exec;
@@ -1439,12 +1440,18 @@ fn drain_advisories(
     // a deterministic instance rather than to silence.
     let context = git::current_branch(here)?
         .map(|branch| findings::Context::new(format!("refs/heads/{branch}")));
+    let records = findings::load_all(&dir)?;
     let drained = drain::cycle(
-        &findings::load_all(&dir)?,
+        &records,
         &git::changed_paths(here)?,
         context.as_ref(),
         &config,
         &state.counts,
+        // The emission policy's whole input (CLOUD-165). Read with `all` rather
+        // than `since`, because a ratio is computed over a window of the history
+        // and a cursor read would hand back a delta and take a position this
+        // process has no business holding — the drain's cursor is the lineage's.
+        &journal::all(&dir),
     );
 
     // Persist before emit. A degraded store cannot record the suppression, and
@@ -1493,6 +1500,17 @@ fn drain_advisories(
     // rather than silence, because silence is indistinguishable from a drain that
     // never ran. Nothing found still says nothing — that is a different claim.
     let emitted = !drained.lines.is_empty() && !repeat;
+    // Persist before emit, on the emitting side too (CLOUD-165): an emission the
+    // agent saw and the log did not record is an emission the re-emit cap cannot
+    // count, so the flood the cap exists to stop would be invisible to it. Written
+    // only when the payload actually reaches the agent — an `unchanged` boundary
+    // showed nothing and must not spend the cap.
+    if emitted
+        && access.is_writable()
+        && drain::record_emissions(&dir, &journal::shard_id(here), &records, &drained.counts)? > 0
+    {
+        let _ = journal::merge(&dir)?;
+    }
     if emitted {
         output::verdict(err, &drain::render(&drained))?;
     } else if repeat && !drained.lines.is_empty() {
@@ -1511,11 +1529,13 @@ fn drain_advisories(
         err,
         &format!(
             "hook: drained {} line(s); withheld {} out of scope, {} over the cardinality cap, {} \
-             over the token budget",
+             over the token budget, {} flapping; {} rule(s) with a flapping identity",
             drained.lines.len(),
             drained.scope_filtered.len(),
             drained.capped.len(),
             drained.over_budget.len(),
+            drained.flap_suppressed.len(),
+            drained.flapping.len(),
         ),
     )?;
 
@@ -1970,6 +1990,326 @@ fn register_advisories(raised: &[findings::Advisory], err: &mut dyn Write) -> Re
     Ok(())
 }
 
+/// Put an enforce-surface scan in the findings store, and journal each evaluation
+/// it performed (CLOUD-529).
+///
+/// # Why the call moved and the scan did not
+///
+/// `batten state record` scans with [`rules::run_static`], so no finding from an
+/// enforce-only kind — `command`, and the `secrets` kind — could ever reach the
+/// store, and everything downstream of the store (the drain, self-clearing, key
+/// custody) was blind to that whole half of the engine. The obvious repair is to
+/// widen the recording verb's scan, and it is the wrong one: that verb's own
+/// rustdoc refuses it, because a recording verb that could execute a configured
+/// command would put user-supplied code behind a store write. So the *journaling*
+/// moved to the surface that already spawns instead. `enforce` is already
+/// classified `unclassified` for exactly that reason, so this adds no
+/// effect-table row and re-classifies nothing, and [`run_state_record`] is
+/// untouched.
+///
+/// # It never mints a store, and that is the drain's posture rather than a
+/// recorder's
+///
+/// [`store::bound_dir`], not [`store::commit`]. `state record` is the declared
+/// write half and may mint; a verb whose job is a verdict may not turn a
+/// first-ever run into a store creation as a side effect. An unbound store is
+/// "not asked", reported at [`Verbosity::Verbose`] and nothing more — the same
+/// answer `drain_advisories` gives, for the same reason.
+///
+/// # No failure path here reaches the exit code
+///
+/// A detached `HEAD`, an unbound store, a busy merge, a degraded read-only store
+/// and a finding the store refuses all report and return. Journaling is a side
+/// record of a verdict already reached, so letting any of it move the exit code
+/// would make bookkeeping into policy — §5's clause, and the same posture
+/// [`register_advisories`] takes one function above.
+///
+/// # Errors
+///
+/// Propagates a write failure on the error channel, and a store or journal I/O
+/// failure (exit 3, fail loud — never a deny).
+fn register_enforce_findings(scan: &rules::Scan, mode: Mode, err: &mut dyn Write) -> Result<()> {
+    let repo = git::repo_root(Path::new("."))?;
+    let opened = store::resolve(&repo)?;
+    let Some(dir) = store::bound_dir(&opened) else {
+        output::message(
+            mode,
+            Verbosity::Verbose,
+            err,
+            "no bound findings store, so this scan is not journalled",
+        )?;
+        return Ok(());
+    };
+    // The ref comes from the process directory, never from `repo`: `repo_root`
+    // answers with the MAIN worktree's root, so asking it for the branch would
+    // pile every linked worktree's observations onto one context.
+    let Some(branch) = git::current_branch(Path::new("."))? else {
+        writeln!(
+            err,
+            "batten: HEAD is detached, so this scan belongs to no ref: persisted:false"
+        )?;
+        return Ok(());
+    };
+    let context = findings::Context::new(format!("refs/heads/{branch}"));
+    let commit = git::head_commit(Path::new("."))?;
+
+    let access = journal::open(&dir)?;
+    if let journal::Access::DegradedReadOnly { reason, .. } = &access {
+        writeln!(err, "batten: degraded read-only: {reason}")?;
+        writeln!(err, "batten: enforce {context}: persisted:false")?;
+        return Ok(());
+    }
+    let schema = access.format().findings_schema;
+
+    // `record` refuses a finding with no remediation as a usage error, which is
+    // the right answer for a recording verb and the wrong one here: it would let
+    // one unfixable rule row turn a policy verdict into exit 1. `Rule::validate`
+    // already refuses such a row, so this partition should never fire — which is
+    // exactly why it reports a count instead of being an `expect`.
+    let (recordable, unrecordable): (Vec<_>, Vec<_>) = scan
+        .findings
+        .iter()
+        .cloned()
+        .partition(|finding| finding.remediation.is_some());
+    if !unrecordable.is_empty() {
+        writeln!(
+            err,
+            "batten: {} finding(s) carry no remediation: persisted:false",
+            unrecordable.len()
+        )?;
+    }
+
+    let here = std::env::current_dir().ok();
+    findings::record(
+        &dir,
+        &context,
+        &commit,
+        here.as_deref().and_then(Path::to_str),
+        &recordable,
+        schema,
+        &scan.not_evaluated,
+    )?;
+
+    // Custody acts on stored records, which is why it lands here and not in
+    // `secrets.rs`: that module holds the keys and must never read the store it
+    // protects, and this seam holds the store and never sees a key's bytes.
+    reconcile_secret_custody(&repo, &dir, err)?;
+
+    let appended = journal_evaluations(&dir, &context)?;
+    if appended > 0 && journal::merge(&dir)? == journal::Merge::Busy {
+        writeln!(
+            err,
+            "batten: shard-merge busy; this scan's evaluations stay queued in this worktree's shard"
+        )?;
+    }
+    output::message(
+        mode,
+        Verbosity::Verbose,
+        err,
+        &format!("enforce {context}: {appended} evaluation(s) journalled"),
+    )?;
+    Ok(())
+}
+
+/// Apply what the custody ledger says to the records it is about: move a rotated
+/// identity onto its new key, re-open an orphaned one, and close a finished
+/// rotation window (CLOUD-529).
+///
+/// # The split this function is one half of
+///
+/// `secrets.rs` owns the keys and the ledger and reads **no** store — the
+/// invariant the keyed identity rests on is that the key is not reachable from the
+/// digests it protects, and a module that opened the store would be one edit away
+/// from breaking it. This seam owns the store and never sees a key's bytes. So the
+/// span-dependent half (a dual-HMAC pair, computable only while both keys are held)
+/// is written to the ledger by the scan, and the record-dependent half is applied
+/// from here.
+///
+/// # Rotation moves a record, it does not re-mint one
+///
+/// A join names (old fingerprint, new fingerprint) for one span under two
+/// generations. Applying it copies the record onto the new identity **carrying its
+/// disposition, tier and instances**, and removes the old one. That is the whole
+/// point of joining rather than re-scanning into a fresh record: a
+/// `rejected-by-design` decision outlives the key it was made under, and a
+/// rotation that dropped it would silently resurrect every finding a reviewer had
+/// already dismissed.
+///
+/// # Key loss is the other branch, and it is loud
+///
+/// A generation the ledger names that the key file no longer holds makes every
+/// identity minted under it unreproducible: the span comes back from a re-scan, the
+/// old HMAC does not come back without the old key. Those findings are re-opened —
+/// returned to unsettled, so the operator re-triages them — and the count is
+/// reported. **Never a silent re-mint**: `secrets::read` already refuses to re-mint
+/// over a malformed key file, and this is that same refusal at the store boundary,
+/// which is where the consequence actually lands.
+///
+/// # Errors
+///
+/// Propagates a ledger read, a store read or a record write failure.
+fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) -> Result<()> {
+    let today = waiver::today()?;
+    let key_file = secrets::key_path(repo)?;
+    let ledger = secrets::ledger_path(repo)?;
+    // Nothing has ever scanned for a secret here, so there is no custody to
+    // reconcile and — this is the load-bearing half — no key to mint either. A
+    // reconciliation that minted a key would give every repository a key file for
+    // running `enforce` once, and the orphan check's whole premise is that a key
+    // file appearing is not the same as a generation existing.
+    if !ledger.exists() {
+        return Ok(());
+    }
+
+    let joined = secrets::joins(&ledger)?;
+    let mut moved = 0;
+    for (old, new) in &joined {
+        if apply_join(store_dir, *old, *new)? {
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        writeln!(
+            err,
+            "batten: secret-identity rotation: {moved} finding(s) re-keyed"
+        )?;
+    }
+
+    let lost = secrets::orphaned_key_ids(repo, today)?;
+    if !lost.is_empty() {
+        // Every secret-class record EXCEPT the ones a join has already moved onto a
+        // held generation. The exclusion is what keeps the event proportionate, and
+        // the breadth of what remains is not a shortcut: the key id lives inside the
+        // preimage, so with the key gone there is no way to ask a record which
+        // generation minted it. Guessing would be the silent path, and the honest
+        // answer to "cannot tell" is to re-triage.
+        let reproducible: std::collections::BTreeSet<String> =
+            joined.iter().map(|(_, new)| new.to_hex()).collect();
+        let mut reopened = 0;
+        for mut record in findings::load_all(store_dir)? {
+            if !record.identity.is_secret()
+                || reproducible.contains(&record.identity.fingerprint.to_hex())
+            {
+                continue;
+            }
+            if record.reopen() {
+                findings::save_one(store_dir, &record)?;
+                reopened += 1;
+            }
+        }
+        for key_id in &lost {
+            secrets::record_orphan(&key_file, key_id, reopened)?;
+        }
+        // On the error channel unconditionally, never ladder-gated: this is the
+        // loud event §7(d) asks for, and a custody loss an operator has to opt in
+        // to hearing about is one they will not hear about.
+        writeln!(
+            err,
+            "batten: secret-identity key(s) {} are gone: {reopened} finding(s) re-opened for \
+             re-triage. Their identities cannot be re-derived, so nothing has been re-minted.",
+            lost.join(", ")
+        )?;
+    }
+
+    // The window closes when nothing is keyed under the retired generation any
+    // more — which only this side can see, since it is a fact about records.
+    if secrets::custody(repo, today)?.retired().is_some() {
+        let outstanding = joined
+            .iter()
+            .any(|(old, _)| findings::load_one(store_dir, *old).ok().flatten().is_some());
+        if !outstanding {
+            if let Some(key_id) = secrets::retire(&key_file)? {
+                writeln!(
+                    err,
+                    "batten: secret-identity rotation complete: key {key_id} retired"
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Move one record from its pre-rotation identity to its post-rotation one.
+///
+/// Returns whether anything moved: an already-applied join finds no old record and
+/// is a no-op, which is what makes reading the whole ledger every run cheap and
+/// safe rather than needing an "applied" marker that could itself be lost.
+fn apply_join(
+    store_dir: &Path,
+    old: identity::Fingerprint,
+    new: identity::Fingerprint,
+) -> Result<bool> {
+    let Some(mut record) = findings::load_one(store_dir, old)? else {
+        return Ok(false);
+    };
+    // The new identity, with everything the old record knew. `tier` travels
+    // untouched for CLOUD-80's no-escalation law, and `disposition` travels because
+    // a rotation is a change of key, not a change of what a reviewer decided.
+    record.identity = identity::StoredIdentity::secret(new);
+    findings::save_one(store_dir, &record)?;
+    findings::forget(store_dir, old)?;
+    Ok(true)
+}
+
+/// Journal one evaluation entry per identity this scan spoke about.
+///
+/// # Read back from the store rather than folded a second time
+///
+/// [`findings::record`] folds identical spans into one identity with a count
+/// inside itself and returns only a summary, so an entry built from the scan
+/// would have to repeat that fold — two implementations of "how many
+/// occurrences", drifting the moment either changes. Reading the instance back
+/// means the journal reports exactly what the store holds, with the store as the
+/// single authority.
+///
+/// # The clear side is the whole point
+///
+/// An evaluation journal that recorded only raises could never show an
+/// oscillation, because half of every oscillation is a clear. `record`'s resolve
+/// pass has just written `Observed(0)` for everything this context no longer
+/// sees, so reading instances back picks up raises, clears and holds in one pass
+/// — which is what makes a flap ratio computable at all (CLOUD-165).
+///
+/// # The growth this accepts, stated rather than discovered
+///
+/// One entry per evaluated identity per run is unbounded in a long session, where
+/// a disposition entry is written once. That is inherent to an evaluation record:
+/// the denominator of a state-change *rate* is every evaluation, including the
+/// unchanged ones, so suppressing repeats would remove the denominator. What
+/// bounds it is that shards die with their worktree and a generation rotation
+/// truncates the log, and that every reader takes a bounded suffix.
+///
+/// # Errors
+///
+/// Returns an error when the store cannot be read or a shard cannot be appended.
+fn journal_evaluations(store_dir: &Path, context: &findings::Context) -> Result<usize> {
+    let shard = journal::shard_id(Path::new("."));
+    let mut appended = 0;
+    for record in findings::load_all(store_dir)? {
+        let Some(instance) = record.instance(context) else {
+            continue;
+        };
+        journal::append(
+            store_dir,
+            &shard,
+            &journal::Entry {
+                identity: record.identity.fingerprint.to_hex(),
+                rule: record.rule.clone(),
+                origin: journal::Origin::Scan,
+                context: Some(context.as_str().to_owned()),
+                observation: Some(instance.occurrences),
+                // A scan settles nothing and shows nothing: the disposition is the
+                // agent's to give, and `presentation` belongs to the drain channel
+                // (`journal::Origin::Scan`), which is why `merge` ignores this one.
+                disposition: None,
+                presentation: findings::Presentation::Shown,
+            },
+        )?;
+        appended += 1;
+    }
+    Ok(appended)
+}
+
 /// Where one observation is being written: the ref it belongs to, the commit
 /// that ref was at, and the store that will hold it.
 ///
@@ -2414,7 +2754,12 @@ fn run_rules(
     // and files from another.
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
-    let mut findings = runner(&config.rules, &config.provisions, &root)?.findings;
+    // The whole `Scan`, not just its findings: `not_evaluated` is what keeps the
+    // store's resolve pass fail-closed (CLOUD-81), and the enforce surface now
+    // journals (CLOUD-529), so dropping it here would let a rule that never
+    // looked resolve every finding it covers.
+    let scan = runner(&config.rules, &config.provisions, &root)?;
+    let mut findings = scan.findings.clone();
 
     // Declared budgets are gates, evaluated here rather than only under `policy
     // budget` (CLOUD-50). Reading files and summing them spawns nothing, so this
@@ -2485,6 +2830,11 @@ fn run_rules(
     if surface == Surface::Spawning {
         let raised = run_judges(err, mode, &config, &root)?;
         register_advisories(&raised, err)?;
+        // The enforce surface's own findings, journalled from where they already
+        // run (CLOUD-529). Gated on the surface and not on the kind: `check` must
+        // reach no store write at all, which is what keeps its `read` effect
+        // honest, and `run_state_record` stays the read surface's recorder.
+        register_enforce_findings(&scan, mode, err)?;
     }
 
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function

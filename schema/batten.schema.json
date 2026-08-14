@@ -480,11 +480,32 @@
           "default": 10,
           "minimum": 0
         },
+        "emit_cap": {
+          "description": "How many times a flapping identity may be emitted inside its window.\n\n`0` withholds a flapping identity outright. A steady one is unaffected at\nany value, because the cap and the annotation are read as a conjunction.",
+          "type": "integer",
+          "format": "uint",
+          "default": 3,
+          "minimum": 0
+        },
         "empty_poll_giveup": {
           "description": "How many consecutive silent drains before wakes stop draining until the\nstore moves.\n\n`0` means the give-up applies immediately once a drain says nothing, so a\nquiet session pays a format read per wake and nothing more.",
           "type": "integer",
           "format": "uint32",
           "default": 3,
+          "minimum": 0
+        },
+        "flap_percent": {
+          "description": "The flap threshold, as state changes per hundred adjacent evaluations.\n\n`0` annotates every identity with two evaluations in its window, and `101`\nor above annotates none, both of which are the range's honest ends rather\nthan special cases.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 50,
+          "minimum": 0
+        },
+        "flap_window": {
+          "description": "How many of a subject's evaluations the flap ratio is computed over\n(CLOUD-165), counted in evaluation boundaries and never in wall-clock time.\n\n`0` and `1` both mean no window can hold a transition, so nothing is ever\nannotated flapping and nothing is ever flap-suppressed — the honest bottom\nof the range, and the setting a consumer uses to turn the policy off\nwithout a second key that could disagree with this one.",
+          "type": "integer",
+          "format": "uint",
+          "default": 8,
           "minimum": 0
         },
         "interval_ms": {

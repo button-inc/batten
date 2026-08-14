@@ -58,7 +58,7 @@ use fs4::TryLockError;
 use serde::{Deserialize, Serialize};
 
 use crate::findings::{
-    Disposition, FINDINGS_SCHEMA, FINDINGS_SCHEMA_MIN, FindingRecord, Presentation,
+    Disposition, FINDINGS_SCHEMA, FINDINGS_SCHEMA_MIN, FindingRecord, Observation, Presentation,
 };
 use crate::identity::Fingerprint;
 
@@ -237,19 +237,89 @@ fn write_format(store_dir: &Path, format: &Format) -> Result<()> {
 
 /// One journalled observation of a disposition.
 ///
-/// Pointer-only by construction: a fingerprint, a rule id, the two enum axes.
-/// No matched content reaches this file, because the store never holds any.
+/// Pointer-only by construction: a fingerprint, a rule id, a ref name, the two
+/// enum axes and an occurrence count. No matched content reaches this file,
+/// because the store never holds any.
+///
+/// # It became an EVALUATION record, and the two added fields are why (CLOUD-529)
+///
+/// Until the enforce surface journalled, the only writer was [`crate::drain`],
+/// so every entry was a statement about *presentation* and the log was a set of
+/// them. That set cannot answer "how often did this identity change state", which
+/// is what an emission policy needs (CLOUD-165): the log carried no context to
+/// separate two refs by and no observation to compare between entries, so
+/// interleaved scans of two worktrees were indistinguishable from one identity
+/// oscillating.
+///
+/// Both fields are `Option` with a `serde` default, which is the store's
+/// write-old/read-both rule applied at the field level rather than the schema
+/// one: an entry written by a binary that predates them reads back as "did not
+/// say", and a reader must treat that as unknown rather than as a default ref or
+/// a count of zero — the same fail-closed reading [`Observation::NotObserved`]
+/// exists to force one level up.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
     /// The identity this entry is about, as hex.
     pub identity: String,
     /// The rule that produced it — the key the FP rate aggregates by.
     pub rule: String,
+    /// Which surface wrote it.
+    #[serde(default)]
+    pub origin: Origin,
+    /// The ref this evaluation belongs to, when the writer knew one.
+    ///
+    /// A ref name, never a worktree path — [`crate::findings::Context`]'s law,
+    /// restated here because this is the coordinate that keeps two worktrees at
+    /// two refs from folding into one history. `None` is a writer that did not
+    /// say, never a default ref.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// What the scan saw, when this entry records an evaluation.
+    ///
+    /// **Never applied to the record by [`merge`].** Occurrence state has exactly
+    /// one writer, [`crate::findings::record`], and a second write path for the
+    /// same field would be a second authority on it. This field exists so the
+    /// emission plane can read an ordered per-(identity × context) history off
+    /// the log it already keeps, rather than keeping a second one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation: Option<Observation>,
     /// What the agent did, if it has settled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disposition: Option<Disposition>,
-    /// Whether it reached the agent.
+    /// Whether it reached the agent through the drain.
+    ///
+    /// Authoritative only from [`Origin::Drain`] — see that arm.
     pub presentation: Presentation,
+}
+
+/// Which surface journalled an entry.
+///
+/// The log has two writers now, and they make different kinds of claim. Naming
+/// the writer is what lets one rule read the emission channel and another read
+/// the evaluation history off one file, instead of each inferring the writer from
+/// which optional fields happen to be set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Origin {
+    /// The advisory drain: a statement about **the emission channel** — this
+    /// identity reached the agent, or the engine withheld it and why.
+    ///
+    /// The default, and that is not arbitrary: every entry written before
+    /// [`Origin`] existed was a drain's, so an absent field reads back as the
+    /// truth about those bytes rather than as a guess.
+    #[default]
+    Drain,
+    /// A rule scan on the enforce surface (CLOUD-529): a statement about **an
+    /// evaluation** — this identity was looked for at this ref, and this is what
+    /// was seen.
+    ///
+    /// [`merge`] does **not** take `presentation` from one of these. Every
+    /// [`crate::findings::NotShown`] arm is a reason the engine withheld a finding
+    /// from the *drain*, so a scan surface has no standing to write that field; a
+    /// scan that overwrote it would erase the drain's own suppression record and
+    /// silently move the false-positive denominator [`crate::findings::effective_fp_rates`]
+    /// computes.
+    Scan,
 }
 
 /// Append `entry` to this writer's shard, fsynced before returning.
@@ -386,7 +456,13 @@ pub fn merge(store_dir: &Path) -> Result<Merge> {
             continue;
         };
         record.merge_disposition(entry.disposition);
-        record.presentation = entry.presentation;
+        // Presentation comes from the drain and nowhere else (see [`Origin::Scan`]),
+        // and `observation` is applied by no writer here at all: occurrence state
+        // belongs to `findings::record`, and folding it in a second time from the
+        // log would be a second authority on one field.
+        if entry.origin == Origin::Drain {
+            record.presentation = entry.presentation;
+        }
         crate::findings::save_one(store_dir, &record)?;
         applied += 1;
     }
@@ -490,6 +566,19 @@ fn read_merged(store_dir: &Path) -> Vec<Entry> {
     text.lines()
         .filter_map(|line| serde_json::from_str::<Entry>(line).ok())
         .collect()
+}
+
+/// The whole merged log, for a reader that holds no cursor and wants none.
+///
+/// [`since`] is the cursor-holding read: it answers a *delta* and issues the
+/// position to hold next. A policy computing a ratio over a window of the history
+/// needs the history rather than the delta, and asking for it through `since`
+/// would mint a cursor nobody holds and report a resync nobody asked for. Same
+/// bytes, no position — which is what keeps the emission policy a pure function
+/// of the log (CLOUD-165) instead of a second holder of drain state.
+#[must_use]
+pub fn all(store_dir: &Path) -> Vec<Entry> {
+    read_merged(store_dir)
 }
 
 /// Everything after `cursor`, or a full resync when it cannot be honoured.
@@ -719,6 +808,9 @@ mod tests {
         Entry {
             identity: identity_for(span).fingerprint.to_hex(),
             rule: "r".to_owned(),
+            origin: Origin::Scan,
+            context: None,
+            observation: None,
             disposition: Some(disposition),
             presentation: Presentation::Shown,
         }
@@ -925,6 +1017,9 @@ mod tests {
         let entry = Entry {
             identity: identity_for("TODO").fingerprint.to_hex(),
             rule: "r".to_owned(),
+            origin: Origin::Scan,
+            context: None,
+            observation: None,
             disposition: None,
             presentation: Presentation::NotShown(NotShown::OverCardinalityCap),
         };

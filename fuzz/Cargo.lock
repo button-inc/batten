@@ -87,7 +87,7 @@ checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 
 [[package]]
 name = "batten"
-version = "0.0.71"
+version = "0.0.72"
 dependencies = [
  "anyhow",
  "clap",

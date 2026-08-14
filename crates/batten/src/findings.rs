@@ -292,6 +292,16 @@ pub enum NotShown {
     OverCardinalityCap,
     /// The host does not declare the capability the emission needed.
     CapabilityAbsent,
+    /// The identity is flapping and has spent its re-emit budget for this window
+    /// (CLOUD-165).
+    ///
+    /// A statement about the **emission channel only**. The finding's own state
+    /// tracked every evaluation truthfully and cleared the instant its check said
+    /// so — hysteresis never reaches the state plane, which is CLOUD-81's law kept
+    /// as an invariant here rather than traded against. Being a `NotShown` reason
+    /// is what keeps the suppression out of both sides of the false-positive rate:
+    /// the agent was not shown it, so its silence says nothing.
+    FlapSuppressed,
 }
 
 /// Whether a finding ever reached the agent.
@@ -510,6 +520,33 @@ impl FindingRecord {
             (None, new) => new,
         };
     }
+
+    /// Return this finding to unsettled, and report whether it moved.
+    ///
+    /// **The one deliberate bypass of the disposition join**, and it needs the
+    /// justification the join's own doc gives for being a join: [`Disposition::merge`]
+    /// is `max` over a total order precisely so concurrent writers converge, which
+    /// means nothing in that algebra can ever *lower* a settled answer. Every
+    /// ordinary path wants that. A key-loss orphan is not an ordinary path
+    /// (CLOUD-529): it is not a new observation the join could absorb, it is the
+    /// loss of the ability to compare this record against a re-scan at all, because
+    /// the key that minted its identity is gone. The settled answer was reached by
+    /// looking at evidence that can no longer be reproduced, so keeping it would be
+    /// asserting a triage nobody can now check.
+    ///
+    /// Returns `false` when the record was already unsettled, so a caller reports a
+    /// count of what actually changed rather than of what it looked at — the same
+    /// reason [`crate::drain::record_suppressions`] counts appends.
+    ///
+    /// Deliberately narrow: it clears the disposition and touches nothing else. The
+    /// instances, the tier and the presentation are all still true, and re-deriving
+    /// any of them here would make an orphan event a re-mint, which is the exact
+    /// thing §7(d) forbids.
+    pub fn reopen(&mut self) -> bool {
+        let settled = self.disposition.is_some();
+        self.disposition = None;
+        settled
+    }
 }
 
 /// The directory holding one file per identity, under a bound store.
@@ -577,6 +614,33 @@ pub fn load_one(store_dir: &Path, fingerprint: Fingerprint) -> Result<Option<Fin
 /// Returns an error when the record cannot be written or published.
 pub fn save_one(store_dir: &Path, record: &FindingRecord) -> Result<()> {
     write_record(store_dir, record)
+}
+
+/// Drop one identity's record, if it is there.
+///
+/// # Not a GC door, and not a way to close a finding
+///
+/// [`gc`] collects by ref existence and exempts `rejected-by-design`, because a
+/// finding disappearing is how a rejected decision would silently come back. This
+/// removes one file by identity and is for exactly one caller: a key rotation that
+/// has already written the SAME finding under its new identity (CLOUD-529). The
+/// record is not being dropped, it is being renamed, and leaving the old file
+/// behind would leave the store holding one finding twice — under a fingerprint
+/// nothing can re-derive, so nothing would ever clear it.
+///
+/// Absent is success: an already-applied rotation finds nothing to remove, which is
+/// what lets the join ledger be replayed without an "applied" marker.
+///
+/// # Errors
+///
+/// Returns an error when the record exists and cannot be removed.
+pub fn forget(store_dir: &Path, fingerprint: Fingerprint) -> Result<()> {
+    let path = record_path(store_dir, fingerprint);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("remove the record {}", path.display())),
+    }
 }
 
 /// Every stored finding, sorted by fingerprint hex.

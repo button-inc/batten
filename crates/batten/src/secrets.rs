@@ -36,12 +36,32 @@
 //! self-describing about which key generation minted it and a later dual-HMAC
 //! rotation has something to name the pair by.
 //!
-//! **What wave one deliberately does not ship**: rotation, and the loud forced
-//! re-triage on key loss (never a silent re-mint). Both act on stored records,
-//! and no secret-class identity reaches the store today — `state record` scans
-//! with [`crate::rules::run_static`], which refuses every spawning kind. They
-//! land with the journaling that gives them something to decide (CLOUD-529).
-//! What wave one protects is the keyed `-J` emission.
+//! # Key custody, wave two: rotation and loss (CLOUD-529)
+//!
+//! Wave one shipped mint-and-emit only, because rotation and the loud key-loss
+//! event both act on **stored records** and nothing secret-class could reach the
+//! store: `state record` scans with [`crate::rules::run_static`], which refuses
+//! every spawning kind. The enforce surface journals now, so both have something to
+//! decide.
+//!
+//! **This module holds the keys and reads no store**, and the split is the
+//! invariant rather than a layering preference: what keying buys is that the key is
+//! unreachable from the digests it protects, and a module that opened the store
+//! would be one edit from spending it. So the store-side half —
+//! `reconcile_secret_custody` — lives beside the store and never sees a key byte,
+//! and the two meet through [`Event`], the append-only ledger beside the key file.
+//!
+//! The ledger exists because the key id is *inside* every identity's HMAC
+//! preimage. Self-describing is not readable: no stored fingerprint can be asked
+//! which generation minted it, and that is exactly the question rotation and loss
+//! turn on.
+//!
+//! [`rotate`] holds **two** generations and opens a window rather than performing a
+//! write, because the new fingerprint is an HMAC over a span and no span is stored
+//! anywhere — so the dual-HMAC pair is computable only inside a scan, while both
+//! keys are held. Key loss is the other branch and never a degraded rotation: its
+//! predicate is [`orphaned_key_ids`], ledger against file, because "the key file is
+//! missing" is indistinguishable from a repository that never scanned.
 
 use std::fs;
 use std::io::Write;
@@ -49,8 +69,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::UsageError;
-use crate::identity::{IdentityKey, SecretSpan};
+use crate::identity::{Fingerprint, IdentityKey, SecretSpan};
 use crate::provision::Provision;
 use crate::refusal::{Fix, Refusal};
 use crate::rules::{Finding, Rule};
@@ -166,17 +188,105 @@ pub fn load_or_mint(repo_root: &Path, today: Date) -> Result<IdentityKey> {
 ///
 /// As [`load_or_mint`], minus the state-directory resolution.
 pub fn load_or_mint_at(path: &Path, today: Date) -> Result<IdentityKey> {
+    Ok(custody_at(path, today)?.into_current())
+}
+
+/// The keys this repository holds: the one identities are minted under, and the
+/// retired one a rotation in flight is still joining against (CLOUD-529).
+///
+/// # Two generations, because rotation has a window
+///
+/// A rotation re-mints: the new identity for a secret is `HMAC(new key, span)`,
+/// and the old one cannot be recomputed from the new one — that is what keying
+/// buys. So joining old to new requires both keys **and** the span, which only
+/// comes back from a scan. Rotation is therefore an operation with a window rather
+/// than a single write, and the window is a state of the key file: two generations
+/// held, the old one dropped once nothing is left keyed under it.
+///
+/// **Never more than two.** A third would need a rule for which pair a join names,
+/// and an operator rotating twice before the first window closed would silently
+/// orphan the middle generation — so [`rotate`] refuses while a window is open,
+/// which is a refusal an operator can see rather than a loss they cannot.
+#[derive(Debug)]
+pub struct Custody {
+    current: IdentityKey,
+    retired: Option<IdentityKey>,
+}
+
+impl Custody {
+    /// The key new identities are minted under.
+    #[must_use]
+    pub const fn current(&self) -> &IdentityKey {
+        &self.current
+    }
+
+    /// The generation a rotation in flight is still joining against.
+    #[must_use]
+    pub const fn retired(&self) -> Option<&IdentityKey> {
+        self.retired.as_ref()
+    }
+
+    /// Every key id this repository can still reproduce an identity under.
+    ///
+    /// Ids, never bytes: this is the value the orphan check compares the ledger
+    /// against, and it travels into messages and comparisons where a key must not.
+    #[must_use]
+    pub fn held_ids(&self) -> Vec<String> {
+        let mut ids = vec![self.current.id().to_owned()];
+        if let Some(retired) = &self.retired {
+            ids.push(retired.id().to_owned());
+        }
+        ids
+    }
+
+    /// Take the current key, discarding the retired one.
+    #[must_use]
+    pub fn into_current(self) -> IdentityKey {
+        self.current
+    }
+}
+
+/// [`custody`] against an explicit key path, minting on first need.
+///
+/// # Errors
+///
+/// As [`load_or_mint_at`].
+pub fn custody_at(path: &Path, today: Date) -> Result<Custody> {
     if let Some(existing) = read(path)? {
         return Ok(existing);
     }
-    mint(path, today)
+    let current = mint(path, today)?;
+    // The ledger's first entry, and the reason the ledger exists: the key id is
+    // inside the HMAC preimage, so it is not readable back off a stored
+    // fingerprint. Without a record of which generations ever minted, a key file
+    // that loses a generation is indistinguishable from one that never had it,
+    // and "indistinguishable" resolves to a silent re-mint.
+    append_event(
+        path,
+        &Event::Minted {
+            key_id: current.id().to_owned(),
+        },
+    )?;
+    Ok(Custody {
+        current,
+        retired: None,
+    })
+}
+
+/// The keys `repo_root` holds, minting one on first need.
+///
+/// # Errors
+///
+/// As [`load_or_mint`].
+pub fn custody(repo_root: &Path, today: Date) -> Result<Custody> {
+    custody_at(&key_path(repo_root)?, today)
 }
 
 /// Read an existing key file, or `None` when there is none.
 ///
 /// Errors are pointer-only: a malformed file is named by path and by which line
 /// failed, never by its contents, because its contents are key material.
-fn read(path: &Path) -> Result<Option<IdentityKey>> {
+fn read(path: &Path) -> Result<Option<Custody>> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -205,7 +315,47 @@ fn read(path: &Path) -> Result<Option<IdentityKey>> {
             KEY_BYTES * 2
         )
     })?;
-    Ok(Some(IdentityKey::new(id, bytes)))
+
+    // The retired generation, lines 3 and 4. Absent is the ordinary case — no
+    // rotation in flight — but a HALF-present pair is not: an id with no key, or a
+    // key with no id, is a generation we can neither use nor honestly declare
+    // lost, so it is refused on the same terms as a malformed current key rather
+    // than being dropped into the absent case.
+    let retired_id = lines.next().map(str::trim);
+    let retired_hex = lines.next().map(str::trim);
+    let retired = match (retired_id, retired_hex) {
+        (None, _) | (Some(""), None) => None,
+        (Some(retired_id), Some(retired_hex)) if !retired_id.is_empty() => {
+            let retired_bytes = decode_key(retired_hex).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}:4 malformed retired secret-identity key (expected {} lowercase hex \
+                     characters). Refusing to drop it: a rotation window closed by discarding a \
+                     key is the silent re-mint custody forbids.",
+                    path.display(),
+                    KEY_BYTES * 2
+                )
+            })?;
+            if retired_id == id {
+                anyhow::bail!(
+                    "{}:3 the retired secret-identity key shares the current key's id. Refusing: \
+                     the id is inside every identity's preimage, so two generations under one id \
+                     are conflated and a rotation join cannot name which is which.",
+                    path.display()
+                );
+            }
+            Some(IdentityKey::new(retired_id, retired_bytes))
+        }
+        _ => anyhow::bail!(
+            "{}:3 malformed retired secret-identity key (an id without its key, or a key without \
+             its id). Refusing to re-mint or to drop it.",
+            path.display()
+        ),
+    };
+
+    Ok(Some(Custody {
+        current: IdentityKey::new(id, bytes),
+        retired,
+    }))
 }
 
 /// Decode the key line, or `None` if it is not exactly the expected hex.
@@ -260,7 +410,7 @@ fn mint(path: &Path, today: Date) -> Result<IdentityKey> {
     // retrying is the whole reason `create_new` is used — a truncating write
     // here would re-identify every finding already emitted under the winner's
     // key, which is exactly the silent re-mint custody forbids.
-    read(path)?.ok_or_else(|| {
+    read(path)?.map(Custody::into_current).ok_or_else(|| {
         anyhow::anyhow!(
             "{}: the secret-identity key was created and removed while minting",
             path.display()
@@ -344,6 +494,450 @@ fn write_private(path: &Path, contents: &str) -> Result<bool> {
     Ok(true)
 }
 
+/// Replace an existing key file's contents, atomically, keeping its mode.
+///
+/// The counterpart to [`write_private`]'s `create_new`, and the split is the
+/// point: minting must never overwrite, and rotation must never half-write. A
+/// truncating write of a file holding two generations that failed midway would
+/// leave a file with one generation and no record of which — so the new contents
+/// are staged beside it and renamed over, which is either the old file or the new
+/// one and never a mixture.
+fn replace_private(path: &Path, contents: &str) -> Result<()> {
+    let temp = path.with_file_name(format!(
+        "{}.{}.tmp",
+        path.file_name().map_or_else(
+            || KEY_FILE.to_owned(),
+            |name| name.to_string_lossy().into_owned()
+        ),
+        std::process::id()
+    ));
+    // Removed first rather than truncated: `write_private` refuses to open an
+    // existing file, which is exactly the guarantee that makes the staged copy
+    // `0600` from its first byte.
+    let _ = fs::remove_file(&temp);
+    if !write_private(&temp, contents)? {
+        anyhow::bail!(
+            "{}: could not stage the secret-identity key rewrite",
+            temp.display()
+        );
+    }
+    fs::rename(&temp, path)
+        .with_context(|| format!("publish the secret-identity key {}", path.display()))?;
+    Ok(())
+}
+
+// --- the custody ledger -------------------------------------------------------
+
+/// The custody ledger's file name, beside the key file it records.
+const LEDGER_FILE: &str = "custody.jsonl";
+
+/// The custody ledger for `repo_root`.
+///
+/// # Errors
+///
+/// Propagates [`key_path`]'s failure to resolve the state directory.
+pub fn ledger_path(repo_root: &Path) -> Result<PathBuf> {
+    Ok(ledger_beside(&key_path(repo_root)?))
+}
+
+/// The ledger beside a key file.
+fn ledger_beside(key: &Path) -> PathBuf {
+    key.with_file_name(LEDGER_FILE)
+}
+
+/// One custody event: what happened to a key generation, or to an identity that
+/// was minted under one.
+///
+/// # Why a ledger exists at all
+///
+/// The key id is **inside** every secret-class identity's HMAC preimage, which
+/// [`crate::identity::secret_code_fingerprint`] chose deliberately so an identity
+/// is self-describing about its generation. Self-describing is not readable: a
+/// stored fingerprint cannot be asked which key minted it — only re-derivation
+/// under a candidate key can answer, and re-derivation needs the span. So the
+/// store cannot look at a record and know whether the key behind it is still held,
+/// which is precisely the question rotation and key loss turn on. This is that
+/// question's answer, recorded when it is knowable.
+///
+/// It lives beside the key file, in the same out-of-tree state directory as the
+/// findings store, and it holds **ids, fingerprints and counts — never key bytes**.
+/// Nothing here weakens the invariant that the key is not reachable from the
+/// digests it protects: a key id is a coordinate, and a fingerprint is already in
+/// the store.
+///
+/// Append-only, and never rewritten: a custody history that could be edited to
+/// remove a generation would let the silent re-mint back in through the record
+/// meant to catch it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "kebab-case")]
+pub enum Event {
+    /// A generation was minted. The first event any repository records.
+    Minted {
+        /// The new generation's id.
+        key_id: String,
+    },
+    /// A rotation opened a window: both generations are held.
+    Rotated {
+        /// The generation being retired.
+        from: String,
+        /// The generation new identities are now minted under.
+        to: String,
+    },
+    /// One identity was re-minted across a rotation, old paired to new by a
+    /// dual-HMAC over the same span while both keys were held.
+    Joined {
+        /// The retired generation's id.
+        from_key: String,
+        /// The current generation's id.
+        to_key: String,
+        /// The fingerprint under the retired key, as hex.
+        old: String,
+        /// The fingerprint under the current key, as hex.
+        new: String,
+    },
+    /// A rotation window closed: nothing is keyed under the retired generation
+    /// any more, so it was dropped from the key file.
+    Retired {
+        /// The generation that was dropped.
+        key_id: String,
+    },
+    /// A generation the ledger names is no longer held, so every identity minted
+    /// under it is unreproducible and was re-opened for re-triage.
+    ///
+    /// **The loud half.** Recorded once per lost generation rather than per run,
+    /// so the event is an event; the `reopened` count is what the operator reads.
+    Orphaned {
+        /// The generation that went missing.
+        key_id: String,
+        /// How many findings were returned to unsettled.
+        reopened: usize,
+    },
+}
+
+/// Append one event to the ledger beside `key`.
+fn append_event(key: &Path, event: &Event) -> Result<()> {
+    let path = ledger_beside(key);
+    let parent = path.parent().unwrap_or(&path);
+    create_dir_private(parent)?;
+    let line = format!("{}\n", serde_json::to_string(event)?);
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(KEY_MODE);
+    }
+    let mut file = options
+        .open(&path)
+        .with_context(|| format!("open the custody ledger {}", path.display()))?;
+    file.write_all(line.as_bytes())
+        .with_context(|| format!("append to the custody ledger {}", path.display()))?;
+    file.sync_all()
+        .with_context(|| format!("flush the custody ledger {}", path.display()))?;
+    Ok(())
+}
+
+/// Every event the ledger holds, in the order they were recorded.
+///
+/// An absent ledger is an empty history — the ordinary state of a repository that
+/// has never scanned for a secret. An unparseable line is skipped rather than
+/// failing the read, the same way [`crate::journal`] drops a torn trailing line:
+/// refusing to read the whole history over one partial append would make a crash
+/// during a write into a permanent custody outage.
+///
+/// # Errors
+///
+/// Returns an error when the ledger exists and cannot be read.
+pub fn events(repo_root: &Path) -> Result<Vec<Event>> {
+    events_at(&ledger_path(repo_root)?)
+}
+
+/// [`events`] against an explicit ledger path.
+///
+/// # Errors
+///
+/// As [`events`].
+pub fn events_at(path: &Path) -> Result<Vec<Event>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => {
+            return Err(err).with_context(|| format!("read the custody ledger {}", path.display()));
+        }
+    };
+    Ok(text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Event>(line).ok())
+        .collect())
+}
+
+/// Every rotation pair the ledger holds, oldest first, as fingerprints.
+///
+/// Parsed here rather than at the call site so the ledger's shape stays this
+/// module's business: a caller matching on [`Event`] to pull pairs out would be a
+/// second reader of the format, and the one that applies pairs to records is
+/// deliberately the one that knows least about keys.
+///
+/// A pair whose either half is not a well-formed fingerprint is skipped rather
+/// than failing the read — the same reading [`events_at`] gives a torn line.
+///
+/// # Errors
+///
+/// Returns an error when the ledger exists and cannot be read.
+pub fn joins(ledger: &Path) -> Result<Vec<(Fingerprint, Fingerprint)>> {
+    Ok(events_at(ledger)?
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::Joined { old, new, .. } => Some((
+                Fingerprint::from_hex(&old).ok()?,
+                Fingerprint::from_hex(&new).ok()?,
+            )),
+            _ => None,
+        })
+        .collect())
+}
+
+/// What a rotation opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rotation {
+    /// The generation now retired but still held.
+    pub from: String,
+    /// The generation new identities are minted under.
+    pub to: String,
+}
+
+/// Open a rotation window: mint a new generation and retire the current one,
+/// keeping both.
+///
+/// # What this deliberately does NOT do
+///
+/// It does not re-key a single stored finding, because it cannot: the new
+/// fingerprint for a secret is an HMAC over that secret's span, and no span is
+/// stored anywhere — that is the containment this whole module exists for. The join
+/// is computed by the next scan, while both keys are held, and applied to the store
+/// from the journaling seam. So this verb's whole job is to open the window and say
+/// so, and a rotation is only *finished* when [`retire`] closes it.
+///
+/// # Errors
+///
+/// - There is no key to rotate. Minting one here would be a rotation that rotated
+///   nothing, reported as success.
+/// - A window is already open. Two retired generations cannot both be held, and
+///   dropping the older one to make room would orphan every identity still keyed
+///   under it — the silent re-mint, arrived at by a route the operator did not ask
+///   for. Finish the open window first.
+/// - The new id would equal the current one, which happens when a rotation is asked
+///   for twice on one date. The id is inside every preimage, so two generations
+///   sharing an id are conflated and a join cannot name which is which.
+pub fn rotate(repo_root: &Path, today: Date) -> Result<Rotation> {
+    rotate_at(&key_path(repo_root)?, today)
+}
+
+/// [`rotate`] against an explicit key path.
+///
+/// # Errors
+///
+/// As [`rotate`].
+pub fn rotate_at(path: &Path, today: Date) -> Result<Rotation> {
+    let Some(held) = read(path)? else {
+        return Err(UsageError::raise(format!(
+            "{}: there is no secret-identity key to rotate. A rotation that mints the first key \
+             has rotated nothing, and reporting it as a rotation would claim a join that never \
+             happened.",
+            path.display()
+        )));
+    };
+    if let Some(retired) = held.retired() {
+        return Err(UsageError::raise(format!(
+            "{}: a rotation from {} is already in flight. Refusing a second: only two generations \
+             are held, so this would drop {} while identities are still keyed under it.",
+            path.display(),
+            retired.id(),
+            retired.id()
+        )));
+    }
+    let to = key_id(today);
+    if to == held.current().id() {
+        return Err(UsageError::raise(format!(
+            "{}: a rotation on {} would mint a second generation under the id {} the current key \
+             already carries. The id is inside every identity's preimage, so the two would be \
+             indistinguishable in the tuple a join names them by.",
+            path.display(),
+            to,
+            to
+        )));
+    }
+
+    let mut bytes = [0u8; KEY_BYTES];
+    getrandom::fill(&mut bytes).map_err(|err| {
+        anyhow::anyhow!(
+            "the OS randomness source failed, so no secret-identity key was minted: {err}. \
+             This is not a reason to fall back to a weaker source — a guessable key is a key \
+             an attacker can re-derive."
+        )
+    })?;
+    let from = held.current().id().to_owned();
+    let (retiring_id, retiring_hex) = generation_lines(path)?;
+    // Current generation first, retired second, so the file's first two lines mean
+    // what they have always meant and a binary that predates rotation reads the
+    // current key correctly rather than the retired one.
+    replace_private(
+        path,
+        &format!(
+            "{to}\n{}\n{retiring_id}\n{retiring_hex}\n",
+            encode_key(&bytes)
+        ),
+    )?;
+    append_event(
+        path,
+        &Event::Rotated {
+            from: from.clone(),
+            to: to.clone(),
+        },
+    )?;
+    Ok(Rotation { from, to })
+}
+
+/// Record that one identity was re-minted across the open rotation window.
+///
+/// Called from the scan, which is the only place both keys and the span meet.
+///
+/// # Errors
+///
+/// Returns an error when the ledger cannot be appended to.
+pub fn record_join(
+    key: &Path,
+    from_key: &str,
+    to_key: &str,
+    old: Fingerprint,
+    new: Fingerprint,
+) -> Result<()> {
+    append_event(
+        key,
+        &Event::Joined {
+            from_key: from_key.to_owned(),
+            to_key: to_key.to_owned(),
+            old: old.to_hex(),
+            new: new.to_hex(),
+        },
+    )
+}
+
+/// Close an open rotation window: drop the retired generation and say so.
+///
+/// The caller decides *when* — it is the seam holding the store that can see
+/// whether anything is still keyed under the retired generation, and this module
+/// deliberately never reads the store it protects. Returns the id that was dropped,
+/// or `None` when no window was open.
+///
+/// # Errors
+///
+/// Returns an error when the key file cannot be read or rewritten.
+pub fn retire(path: &Path) -> Result<Option<String>> {
+    let Some(held) = read(path)? else {
+        return Ok(None);
+    };
+    let Some(retired) = held.retired() else {
+        return Ok(None);
+    };
+    let key_id = retired.id().to_owned();
+    let (current_id, current_hex) = generation_lines(path)?;
+    replace_private(path, &format!("{current_id}\n{current_hex}\n"))?;
+    append_event(
+        path,
+        &Event::Retired {
+            key_id: key_id.clone(),
+        },
+    )?;
+    Ok(Some(key_id))
+}
+
+/// Record that a generation the ledger names is gone, and how many findings that
+/// re-opened.
+///
+/// # Errors
+///
+/// Returns an error when the ledger cannot be appended to.
+pub fn record_orphan(key: &Path, key_id: &str, reopened: usize) -> Result<()> {
+    append_event(
+        key,
+        &Event::Orphaned {
+            key_id: key_id.to_owned(),
+            reopened,
+        },
+    )
+}
+
+/// Generations the ledger says existed, that the key file no longer holds, and
+/// that have not already been reported.
+///
+/// # This is the key-loss predicate, and it is deliberately not "the key file is
+/// missing"
+///
+/// An absent key file is indistinguishable from a repository that never scanned
+/// for a secret, and [`custody_at`] mints one on need — correctly, because a first
+/// mint is not a re-mint. What makes a mint a *re*-mint is that a generation which
+/// once existed is no longer held, and only the ledger knows that. So the
+/// comparison is ledger-against-file, which catches the case the file alone cannot
+/// see: a key deleted and silently re-minted under a new id.
+///
+/// Reported **once** per lost generation: an already-recorded orphan is filtered
+/// out, so the loud event stays an event rather than becoming a line on every run.
+/// Re-opening is not idempotent in the direction that matters — a finding
+/// re-triaged after the loss must not be re-opened again by the next scan.
+///
+/// # Errors
+///
+/// Returns an error when the ledger or the key file cannot be read.
+pub fn orphaned_key_ids(repo_root: &Path, today: Date) -> Result<Vec<String>> {
+    let path = key_path(repo_root)?;
+    let held = custody_at(&path, today)?.held_ids();
+    let mut known = Vec::new();
+    let mut reported = Vec::new();
+    for event in events_at(&ledger_beside(&path))? {
+        match event {
+            Event::Minted { key_id } | Event::Retired { key_id } => known.push(key_id),
+            Event::Rotated { from, to } => {
+                known.push(from);
+                known.push(to);
+            }
+            Event::Orphaned { key_id, .. } => reported.push(key_id),
+            Event::Joined { .. } => {}
+        }
+    }
+    let mut lost: Vec<String> = known
+        .into_iter()
+        // A `Retired` generation is deliberately NOT excluded here by its event:
+        // retiring is how a window closes once nothing is keyed under the
+        // generation any more, and a `Retired` id that is still named by a live
+        // record IS a loss. What excludes it is the record check the caller does.
+        .filter(|id| !held.contains(id) && !reported.contains(id))
+        .collect();
+    lost.sort();
+    lost.dedup();
+    Ok(lost)
+}
+
+/// The key file's first two lines, as bytes on disk.
+///
+/// # Why a rewrite goes through the TEXT and not through the parsed value
+///
+/// [`IdentityKey`] exposes no accessor for its bytes — that is the property the
+/// containment claim rests on, and the redacting `Debug` is the same decision
+/// applied to formatting. So a value cannot be re-serialized into a key file, and
+/// widening the type to allow it would put a byte accessor on the key for the sake
+/// of a file rewrite. Copying the lines the file already holds needs no accessor
+/// and no new capability: the bytes move from disk to disk through one `String`
+/// that is never rendered.
+fn generation_lines(path: &Path) -> Result<(String, String)> {
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("read the secret-identity key {}", path.display()))?;
+    let mut lines = text.lines();
+    let id = lines.next().unwrap_or_default().trim().to_owned();
+    let hex = lines.next().unwrap_or_default().trim().to_owned();
+    Ok((id, hex))
+}
+
 // --- the scanner adapter ------------------------------------------------------
 
 /// One parsed match, before it becomes a [`Finding`].
@@ -381,12 +975,12 @@ pub fn scan(
     // Same resolution as the scanner's cache, and for the same reason: the key
     // lives under the repository's state directory, which cannot be named from a
     // relative anchor.
-    let key = load_or_mint(
-        &root
-            .canonicalize()
-            .with_context(|| format!("resolve the repository root at {}", root.display()))?,
-        crate::waiver::today()?,
-    )?;
+    let canonical = root
+        .canonicalize()
+        .with_context(|| format!("resolve the repository root at {}", root.display()))?;
+    let key_file = key_path(&canonical)?;
+    let held = custody_at(&key_file, crate::waiver::today()?)?;
+    let key = held.current();
 
     let mut parsed: Vec<Match> = Vec::new();
     for batch in crate::rules::batches(matched) {
@@ -395,7 +989,25 @@ pub fn scan(
 
     for hit in parsed {
         let fingerprint =
-            crate::identity::secret_code_fingerprint(&key, &rule.id, &hit.path, &hit.span)?;
+            crate::identity::secret_code_fingerprint(key, &rule.id, &hit.path, &hit.span)?;
+        // The rotation join, computed **here** because this is the only place both
+        // keys and the span meet: the old fingerprint is an HMAC over this span
+        // under the retired key, and no span is stored anywhere for a later pass to
+        // recover. So the window a rotation opens is exactly the interval in which
+        // scans can still pair the generations, and each pairing is written down as
+        // it is computed. Applying the pair to the store is the journaling seam's
+        // job — this module never reads the store it protects.
+        if let Some(retired) = held.retired() {
+            let old =
+                crate::identity::secret_code_fingerprint(retired, &rule.id, &hit.path, &hit.span)?;
+            record_join(
+                &key_file,
+                retired.id(),
+                key.id(),
+                discriminated(old, rule),
+                discriminated(fingerprint, rule),
+            )?;
+        }
         findings.push(Finding {
             rule: rule.id.clone(),
             severity: rule.severity(),
@@ -405,19 +1017,36 @@ pub fn scan(
             // `override_fingerprint` hashes the already-keyed fingerprint as a
             // field, so a discriminator can split a group and can never unkey
             // one.
-            identity: crate::identity::StoredIdentity::secret(match rule.identity_key.as_deref() {
-                Some(discriminator) => {
-                    crate::identity::override_fingerprint(fingerprint, discriminator)
-                }
-                None => fingerprint,
-            }),
+            identity: crate::identity::StoredIdentity::secret(discriminated(fingerprint, rule)),
             check: rule
                 .settling_check()
                 .unwrap_or(crate::findings::Check::Reevaluate),
-            remediation: None,
+            // The rule's own column, exactly as every other kind reads it
+            // (`rules::run_rule`). This was hardcoded `None` while no secret-class
+            // finding could reach the store — `record` refuses a finding with no
+            // remediation, so the hardcode was invisible right up to the moment
+            // this surface started journalling (CLOUD-529), at which point it
+            // would have silently dropped every secret finding at the store
+            // boundary.
+            remediation: rule.remediation(),
         });
     }
     Ok(())
+}
+
+/// The rule's identity override applied, if it declares one.
+///
+/// Extracted because the join needs the SAME transformation on both sides: a pair
+/// recorded as (bare old, discriminated new) would name two coordinates the store
+/// never holds together, and the record it was supposed to move would sit
+/// untouched under a third. The override still keeps the identity keyed —
+/// `override_fingerprint` hashes the already-keyed fingerprint as a field, so a
+/// discriminator can split a group and can never unkey one.
+fn discriminated(fingerprint: Fingerprint, rule: &Rule) -> Fingerprint {
+    match rule.identity_key.as_deref() {
+        Some(discriminator) => crate::identity::override_fingerprint(fingerprint, discriminator),
+        None => fingerprint,
+    }
 }
 
 /// Where the scanner binary is, or a refusal naming the verb that installs it.

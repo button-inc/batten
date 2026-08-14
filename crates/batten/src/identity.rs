@@ -332,6 +332,23 @@ impl StoredIdentity {
         let tag = self.version.split(':').next()?;
         FindingKind::from_tag(tag)
     }
+
+    /// Whether this identity was minted under a **key** — the secret class.
+    ///
+    /// [`StoredIdentity::kind`] answers `None` here, and deliberately keeps
+    /// answering `None`: the question that method exists for is the changed-scope
+    /// filter's, and "cannot classify" is the honest answer to it (see
+    /// [`SECRET_IDENTITY_VERSION`]). But key custody asks a *different* question —
+    /// is this record replayable only while a key is held — and `None` cannot
+    /// answer it, because a future fifth kind would answer `None` too and is
+    /// replayable by re-scanning like any other unkeyed identity. Reading the two
+    /// off one method would put a custody decision on a value that means "I do not
+    /// know", which is how a key-loss orphan would either be missed or be
+    /// manufactured out of a version this binary simply has not met (CLOUD-529).
+    #[must_use]
+    pub fn is_secret(&self) -> bool {
+        self.version == SECRET_IDENTITY_VERSION
+    }
 }
 
 /// Canonicalize a repo-relative path for use in an identity tuple: `\` becomes
