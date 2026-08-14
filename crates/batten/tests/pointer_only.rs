@@ -569,6 +569,21 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::MediatedCall,
         disposition: Disposition::PointerOnly,
     },
+    // THE ONE VERB WHOSE ANSWER IS THE PAYLOAD, and `command` is deliberately the
+    // field asked for: it is where `mediated_call` seeds its canary, so any other
+    // choice would classify this verb by dodging its own question. It exists so a
+    // shell hook can read one field without an unpinned `jq` on the per-turn hot
+    // path (CLOUD-479), which means printing the caller's own bytes back is the
+    // entire job — `Passthrough` rather than `PointerOnly`, held to a COUNT so
+    // Batten adding a second copy in a report of its own still fails.
+    Verb {
+        path: "payload field",
+        args: &["--name", "command"],
+        stdin: Stdin::MediatedCall,
+        disposition: Disposition::Passthrough(
+            "it prints one allowlisted field of the payload the caller piped in",
+        ),
+    },
     Verb {
         path: "receipt record",
         args: &["final"],
