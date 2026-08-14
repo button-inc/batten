@@ -1133,7 +1133,7 @@ description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commi
 # definition of which commits are in scope. It also fails closed for free: mise
 # stops before this body runs, so the no-`set -e` trap does not apply (CLOUD-274).
 depends = ["commit-attribution"]
-shell = "bash -c" # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
+shell = "bash -c"                # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
 # The SERVER-SIDE half of CLOUD-431. The claim receipt lives in `.git/` and never
 # leaves the clone, so no reviewer and no workflow can see it; what a server CAN
 # see is whether each commit names the issue it serves. `verify` holds the
