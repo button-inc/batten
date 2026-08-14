@@ -48,3 +48,29 @@ setup() {
 	run grep -c 'crates/\|Cargo\.lock\|Cargo\.toml' "$TASK"
 	[ "$output" -gt 0 ]
 }
+
+# A killed run never reaches the EXIT trap that removes the worktree, and `land`
+# kills this gate on purpose whenever `main-watch` wins the race. What survives is
+# the ADMIN ENTRY under `.git/worktrees` with its directory already gone — after
+# which `git worktree add` refuses that path forever and every later `verify` in
+# the clone fails at "could not create a worktree", having measured nothing.
+#
+# Measured 2026-08-14, on the landing immediately after this gate went in.
+@test "a leaked worktree entry cannot wedge the next run: prune precedes add" {
+	local prune add
+	# Executable lines only — the comment above the fix names `git worktree add`
+	# to explain what it prevents, and matching that would compare prose.
+	prune=$(grep -nE '^\s*git worktree prune' "$TASK" | head -n1 | cut -d: -f1)
+	add=$(grep -nE '^\s*if ! git worktree add' "$TASK" | head -n1 | cut -d: -f1)
+	[ -n "$prune" ]
+	[ -n "$add" ]
+	[ "$prune" -lt "$add" ]
+}
+
+# `prune` removes only entries whose directory has already vanished, so it is safe
+# beside a concurrent healthy worktree — but `remove` would not be, and reaching
+# for it here is the plausible wrong fix.
+@test "the recovery prunes rather than removing, so a live worktree is untouched" {
+	run grep -nE '^\s*git worktree remove' "$TASK"
+	[ "$status" -ne 0 ]
+}

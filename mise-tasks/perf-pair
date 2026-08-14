@@ -116,6 +116,19 @@ else
 	# other's artifacts on every lap, and would race the target-dir lock against
 	# whatever else `verify` is running.
 	worktree="$OUT_DIR/base-tree"
+	# PRUNE FIRST, because the EXIT trap below is not reached by a killed run.
+	# `land` races this gate against `main-watch` and kills the loser, and the
+	# harness kills a foreground command at ~2 minutes — either leaves the
+	# worktree's ADMIN ENTRY under `.git/worktrees` while its directory is gone.
+	# `git worktree add` then refuses the same path forever, so one interrupted
+	# run wedges every later `verify` in the clone, reading as a broken gate
+	# rather than as leftover state. Measured 2026-08-14: a killed lap left
+	# `worktrees/base-tree` prunable, and the next landing failed at
+	# `could not create a worktree`, having measured nothing.
+	#
+	# Pruning only removes entries whose directory has already vanished, so it
+	# cannot disturb a concurrent, healthy worktree.
+	git worktree prune >/dev/null 2>&1 || true
 	if ! git worktree add -q --detach "$worktree" "$base_sha"; then
 		echo "::error:: perf-pair: could not create a worktree at ${base_sha:0:8}. No measurement." >&2
 		exit 2
