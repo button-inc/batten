@@ -116,6 +116,7 @@ use crate::findings::{Check, NotObserved, Remediation};
 use crate::identity::{self, CountChange, FindingKind, StoredIdentity};
 use crate::rules::{Finding, Scan};
 use crate::severity::RuleSeverity;
+use crate::state;
 use crate::store;
 use crate::waiver::Date;
 use crate::worktree;
@@ -215,6 +216,37 @@ impl Baseline {
     }
 }
 
+/// Whether **any** store on this machine holds a baseline at all.
+///
+/// The short-circuit that keeps [`load`] off `check`'s hot path, and it is exact
+/// rather than a heuristic: every directory [`store::bound_dir`] can name is a
+/// store directory under [`state::state_root`], so if none of them carries a
+/// [`BASELINE_FILE`] there is nothing this checkout could possibly load. A `false`
+/// here is a proof, never a guess — which is what lets it stand in front of the
+/// resolution instead of merely usually agreeing with it.
+///
+/// It exists because the resolution behind it is **not** cheap: `store::resolve`
+/// spawns git several times (the common dir, the remotes, the root commits) and
+/// may walk every store. Measured by `perf-gate` on this change's first draft,
+/// which put that on every `check`: p50 went 3.25ms → 24.93ms, a 7.7x regression
+/// on the workhorse verb, for a question that is almost always "no". One
+/// `read_dir` of the state root answers it with no process spawn.
+///
+/// An unreadable or absent state root is `false` for the same reason: nothing has
+/// been recorded, so nothing can be suppressed. The direction is safe — findings
+/// report.
+fn any_baseline_exists() -> bool {
+    let Ok(root) = state::state_root() else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return false;
+    };
+    entries
+        .flatten()
+        .any(|entry| entry.path().join(BASELINE_FILE).exists())
+}
+
 /// Where the baseline lives for the checkout containing `root`, or `None` when
 /// no store is bound to it.
 ///
@@ -250,11 +282,20 @@ pub fn path(root: &Path) -> Result<Option<PathBuf>> {
 /// would report every baselined finding as new — loud, but loud about the wrong
 /// thing, and it would tempt a re-mint that discards the record.
 ///
+/// [`any_baseline_exists`] guards the resolution, and the guard is on **this**
+/// function rather than on [`path`] because the two callers want opposite things
+/// from an empty machine: `check` wants to spend nothing discovering there is no
+/// baseline, and [`save`] is on its way to writing the first one, so a
+/// short-circuit there would make minting impossible.
+///
 /// # Errors
 ///
 /// Raises when the file exists and cannot be read or parsed, or carries a schema
 /// outside this build's range.
 pub fn load(root: &Path) -> Result<Option<Baseline>> {
+    if !any_baseline_exists() {
+        return Ok(None);
+    }
     let Some(file) = path(root)? else {
         return Ok(None);
     };
