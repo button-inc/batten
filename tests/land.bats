@@ -928,6 +928,79 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$(verify_calls)" -eq 1 ]
 }
 
+@test "CLOUD-510: a racer land killed on purpose delivers no verdict" {
+	# DIAGNOSIS FIRST, because the issue offered two mechanisms and they land the
+	# fix in different places. Measured 2026-08-13 against post-CLOUD-383 `land`,
+	# with a real nested `mise run` of a real file task, inside and outside a
+	# mise-managed process group, under both the current FIFO rendezvous and the
+	# pre-CLOUD-383 bare `wait -n`: the killed child's own
+	# `ERROR … exited with non-zero status: no exit status` / `task failed` lines
+	# DO appear — they are the child mise's diagnostics — but they arrive after
+	# the parent has already read the rc files, and the parent exits 0 and laps.
+	# So "a killed nested task aborts the parent" is REFUTED; those lines are
+	# noise correlated with the kill rather than its consequence.
+	#
+	# What the measurement did expose is a real ordering hazard, and it is the
+	# issue's own title read literally. The two racers answer at the same instant
+	# by construction, so nothing stops the loser finishing on its OWN in the
+	# window between the winner reaching the rendezvous and the group kill
+	# landing: `ci-wait` returning a red verdict in the same breath as
+	# `main-watch` reporting that main moved. Emptiness is a PROXY for "this
+	# racer lost"; the rendezvous token is the fact.
+	#
+	# The environment cannot deterministically create that window — it is bounded
+	# by a kill, and a timing-based setup would pass vacuously on a loaded box,
+	# which is the CLOUD-249 defect this repo has already paid for once. So the
+	# DECISION is extracted and driven directly, which is what
+	# `.claude/rules/rust.md` prescribes for exactly this case.
+	local block
+	block=$(awk '/^\tcase "\$ciwinner" in/{p=1} p{print} p&&/^\tesac$/{exit}' "$REAL_LAND")
+	[ -n "$block" ]
+
+	# main-watch won, and ci-wait ALSO finished on its own with a red verdict
+	# before the kill landed. That verdict is about a SHA that is no longer
+	# landable, and the run behind it is superseded by the next lap's push
+	# through `concurrency: cancel-in-progress`. Stopping the landing on it
+	# reports a red nobody needs to fix.
+	run bash -c "ciwinner=m; ci_rc=1; main_rc=0; $block; echo \"ci_rc='\$ci_rc' main_rc='\$main_rc'\""
+	[ "$status" -eq 0 ]
+	[ "$output" = "ci_rc='' main_rc='0'" ]
+
+	# The mirror, and the reason this is not simply "ignore ci_rc": ci-wait won,
+	# so ITS code is the verdict and main-watch's is the void one.
+	run bash -c "ciwinner=c; ci_rc=1; main_rc=0; $block; echo \"ci_rc='\$ci_rc' main_rc='\$main_rc'\""
+	[ "$output" = "ci_rc='1' main_rc=''" ]
+
+	# An unreadable rendezvous names no winner, and then nothing is voided — the
+	# fallback is exactly the reading this file had before CLOUD-510, so a FIFO
+	# that could not be read never invents a lap.
+	run bash -c "ciwinner=; ci_rc=1; main_rc=0; $block; echo \"ci_rc='\$ci_rc' main_rc='\$main_rc'\""
+	[ "$output" = "ci_rc='1' main_rc='0'" ]
+
+	# The VERIFY race carries the identical hazard and the identical block, so it
+	# is asserted here rather than left to be discovered when only one of the two
+	# gets fixed. A verify that refused the tree in the same breath as main
+	# moving is a refusal of a tree the next lap rebases away.
+	local vblock
+	vblock=$(awk '/^\t\tcase "\$vwinner" in/{p=1} p{print} p&&/^\t\tesac$/{exit}' "$REAL_LAND")
+	[ -n "$vblock" ]
+	run bash -c "vwinner=m; verify_rc=1; vmain_rc=0; $vblock; echo \"verify_rc='\$verify_rc' vmain_rc='\$vmain_rc'\""
+	[ "$output" = "verify_rc='' vmain_rc='0'" ]
+	run bash -c "vwinner=v; verify_rc=1; vmain_rc=0; $vblock; echo \"verify_rc='\$verify_rc' vmain_rc='\$vmain_rc'\""
+	[ "$output" = "verify_rc='1' vmain_rc=''" ]
+}
+
+@test "CLOUD-510: a genuine ci-wait failure still stops the lap" {
+	# The negative self-test. Voiding the loser must not become voiding every
+	# non-zero: when `ci-wait` wins its own race and answers red, that is a
+	# verdict about this branch and the landing stops on it, exactly as before.
+	task_fails ci-wait
+	head_is_graded
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CI is red"* ]]
+}
+
 @test "CLOUD-407: a refused tree stops on lap 1 and carries the gate's own pointers" {
 	# Measured on PR #322. `batten check` refused three files by name, `verify`
 	# passed that refusal out as exit 2 through its `depends`, and `land` read the

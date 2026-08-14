@@ -258,10 +258,37 @@ new_rendezvous() {
 	mkfifo "$f" 2>/dev/null || return 1
 	printf '%s' "$f"
 }
+# The winner's token, set by `await_first` in THIS shell (see there).
+AWAIT_WINNER=""
 await_first() {
-	# The byte itself carries nothing — which racer won is read from the rc files,
-	# where it always was. This waits, and that is all it does.
-	read -r _ <"$1" || true
+	# The byte NAMES THE WINNER, and the caller voids the loser's rc with it
+	# (CLOUD-510). It used to be discarded — "which racer won is read from the rc
+	# files" — and that reading is only correct while the loser leaves no file.
+	#
+	# The loser usually leaves none, because the group kill lands before its
+	# `echo $? >` runs; measured, and that is why this was safe enough to ship.
+	# But "usually" is doing load-bearing work there: the two racers are answering
+	# at the same instant by construction, so nothing stops the loser finishing on
+	# its OWN — `ci-wait` returning a red verdict in the same breath as
+	# `main-watch` reporting main moved. Then the rc file is non-empty, honestly
+	# written, and about a run whose verdict is already void; the arm below reads
+	# it and stops the landing over a run the next lap supersedes anyway.
+	#
+	# Emptiness is a proxy for "this racer lost". The token is the fact itself,
+	# and it is minted by the rendezvous that actually decided the race. An empty
+	# token — an unreadable FIFO — leaves both codes as they are, so a caller that
+	# cannot learn the winner falls back to exactly today's reading.
+	#
+	# THROUGH A GLOBAL, NEVER A COMMAND SUBSTITUTION, and that is not style. The
+	# read here BLOCKS, and `$( )` runs its body in a subshell: bash defers a trap
+	# until the current foreground command finishes, so with the read one level
+	# down a `land` killed mid-race would never reach `on_exit` — it would hang on
+	# the FIFO with its watchers still polling, which is the leak the trap exists
+	# to close. Measured: it hung `tests/land.bats`'s "a land killed mid-race
+	# takes its watchers with it". Assigning in THIS shell keeps the read
+	# interruptible and the trap prompt.
+	AWAIT_WINNER=""
+	read -r AWAIT_WINNER <"$1" || true
 	rm -f "$1"
 }
 # The live race pids, so the EXIT trap can reap what an in-flight race spawned.
@@ -1069,6 +1096,7 @@ while :; do
 		race_pid_a=$v_pid
 		race_pid_b=$vm_pid
 		await_first "$fifo_v"
+		vwinner="$AWAIT_WINNER"
 		kill -- -"$v_pid" -"$vm_pid" 2>/dev/null
 		wait "$v_pid" "$vm_pid" 2>/dev/null
 		reap_residue "$v_pid"
@@ -1077,6 +1105,14 @@ while :; do
 		race_pid_b=
 		verify_rc="$(cat "$rc_v" 2>/dev/null)"
 		vmain_rc="$(cat "$rc_vm" 2>/dev/null)"
+		# CLOUD-510: void the loser. `m` means main-watch reached the rendezvous
+		# first, so whatever verify managed to write is about a tree that is no
+		# longer the one being landed. The arms below are unchanged and stay the
+		# authority on what a code MEANS; this only decides whose code counts.
+		case "$vwinner" in
+		m) verify_rc="" ;;
+		v) vmain_rc="" ;;
+		esac
 		# The tail is taken BEFORE the temp files go, because `die` exits and a
 		# message assembled after the cleanup would name a file that is gone. It
 		# is only ever read on the stop path below; a lap that laps pays nothing.
@@ -1428,6 +1464,7 @@ $verify_tail"
 	# Measured: it turned every lap of tests/land.bats into a no-verdict lap. A
 	# FIFO nobody else writes to cannot be woken by a third job at all.
 	await_first "$fifo_ci"
+	ciwinner="$AWAIT_WINNER"
 	kill -- -"$ci_pid" -"$main_pid" 2>/dev/null
 	# NAMED, never bare. A bare `wait` waits for EVERY background job of this
 	# shell, and since CLOUD-393 one of them is the lease heartbeat — which by
@@ -1442,6 +1479,15 @@ $verify_tail"
 	race_pid_b=
 	ci_rc="$(cat "$rc_ci" 2>/dev/null)"
 	main_rc="$(cat "$rc_main" 2>/dev/null)"
+	# CLOUD-510: void the loser, before any arm reads a code. `m` means main-watch
+	# won, and a CI verdict on a SHA that is no longer landable is not a verdict
+	# about this branch — it is about a run the next lap's push supersedes through
+	# `concurrency: cancel-in-progress`. Stopping the landing on it reports a red
+	# that nobody needs to fix.
+	case "$ciwinner" in
+	m) ci_rc="" ;;
+	c) main_rc="" ;;
+	esac
 	rm -f "$rc_ci" "$rc_main"
 
 	if [ -z "$ci_rc" ] && [ "$main_rc" = "0" ]; then
