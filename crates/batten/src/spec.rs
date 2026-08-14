@@ -433,6 +433,10 @@ mod tests {
                 "attribution".to_owned(),
                 "attribution check".to_owned(),
                 "attribution identity".to_owned(),
+                // The adoption path for an already-dirty repository (CLOUD-67).
+                // §2's listing gained the row in the same change, which is what
+                // this assertion exists to prompt.
+                "baseline".to_owned(),
                 "check".to_owned(),
                 "config".to_owned(),
                 "config epoch".to_owned(),

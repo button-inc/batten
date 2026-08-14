@@ -83,6 +83,36 @@ err)` takes **both** channels and the resolved `Mode`, so a verb can write a
   literal is not. Authority-only, and here that is a security property rather than
   a consistency one: a `batten.local.toml` able to add a row could run anything
   under the agent's own hook.
+- `baseline.rs` — the adoption path for an already-dirty repository (CLOUD-67),
+  surfaced as `baseline [--prune]`: the persisted set of finding identities that
+  already existed, so `check` stops failing on them and still fails on anything
+  new. A bulk waiver by another name, which is why the load-bearing part is not
+  the filter but the **minting predicate**: only landed, committed state may be
+  baselined, and it is spelled `worktree::status` — patch identity through
+  `git::landing` — because `git.rs`'s `no_ancestry_decides_merged_ness` forbids
+  a reachability verdict crate-wide and a rebased landing is invisible to
+  ancestry anyway. `Unlanded::NotComputable` refuses too: unproven is not clean.
+  The artifact is one JSON document under the **bound store** (`store::bound_dir`,
+  beside `findings/` and `journal/`), not a plain `repo_state_dir` join like every
+  other store here — it keys on finding identities, so a baseline that survived a
+  `state adopt` would describe a store the checkout no longer owns, the second
+  answer `store.rs` exists to refuse. Drift reuses CLOUD-123's direction-aware
+  semantics wholesale (`identity::compare_to_anchor`): increase re-raises (new
+  evidence fails), decrease ratchets and surfaces only as prune staleness,
+  zero resolves. **Count drift never moves a tier** — `severity.rs`'s deferred
+  invariant, landed here and structural rather than promised, since `apply` only
+  ever removes elements and never builds or mutates a `Finding`. Staleness is an
+  ordinary `Finding` (`Scope`, `baseline.stale`) joined where `budget` and
+  `defects` join, inheriting waivers, `-J`, the exit contract and the store; the
+  filter sits immediately BEFORE the waiver filter, and that order is
+  load-bearing — waivers first would make a live entry read as unmatched. Two
+  fail-closed holds that are never pruned: a rule in `Scan::not_evaluated` holds
+  its entries (silence is not evidence), and an entry minted under a superseded
+  `identity_version` holds as `baseline.version-drift` rather than silently
+  unmatching, which is the issue's "a bump must not invalidate every adopter's
+  baseline". The clock is an input (`waiver::today`'s idiom) and no predicate
+  reads it: `minted_at` is provenance beside the ref and two SHAs, which are git
+  facts. Output is pointer-only — `rule <digest12>`, never a baselined line.
 - `budget.rs` — declared file-set token budgets (CLOUD-50), surfaced as `policy
 budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct with
   a field per set: the set name is the consumer's, and an engine field called

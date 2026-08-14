@@ -634,6 +634,30 @@ const UNGATED: FlagDecl = FlagDecl {
 /// raise-only rule is explicit that a bug in a dry-run path must not be able to
 /// claim safety the verb does not have, so `provision apply` stays `write` with
 /// or without it.
+/// `--prune` on `baseline` (CLOUD-67).
+///
+/// The staleness half of the baseline lifecycle, and a flag rather than a
+/// `baseline prune` sub-verb because the Ready block spells it that way and
+/// because both spellings do the same thing to the same artifact: re-evaluate,
+/// then write. A sub-verb would put one store behind two paths.
+///
+/// It does **not** raise the effect (§5's `max_effect` is a monotone maximum, and
+/// this stays at `write`): pruning removes only entries whose backing finding no
+/// longer exists, and every one of them is recreated by running `baseline` again.
+const PRUNE: FlagDecl = FlagDecl {
+    id: "prune",
+    long: Some("prune"),
+    short: None,
+    help: "Drop baseline entries whose finding no longer exists, and ratchet reduced counts down",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 const DRY_RUN: FlagDecl = FlagDecl {
     id: "dry_run",
     long: Some("dry-run"),
@@ -965,6 +989,30 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Write,
         flags: &[DRY_RUN],
+    },
+    // The adoption path for a repository that is already dirty (CLOUD-67).
+    // `write` for the same reason `provision apply` is: everything it creates is
+    // recreatable by running it again, and it replaces nothing the caller
+    // authored — the artifact is out of tree and Batten's own. `--prune` does not
+    // raise that, per the flag's own note.
+    //
+    // A baseline is a bulk suppression, so what keeps it inside the threat model
+    // is not the classification but the minting predicate `crate::baseline`
+    // enforces: only landed, committed state can be baselined. `-n` previews the
+    // set without writing it, which is the affordance a reviewer needs before a
+    // suppression that size.
+    CommandDecl {
+        path: "baseline",
+        about: "Record the findings that already exist, so only new ones fail",
+        // No `-J`, matching every other write row (`init`, `defects add`,
+        // `provision apply`). The set a baseline holds is read back through
+        // `check -J`, which is where the verdict about it lives; a second
+        // document emitted by the *mutating* verb would be a second authority
+        // over one set, and byte-stability is not a claim a mutating verb can
+        // make about two consecutive runs.
+        data_channel: false,
+        effect: Effect::Write,
+        flags: &[PRUNE, DRY_RUN],
     },
     CommandDecl {
         path: "generate",

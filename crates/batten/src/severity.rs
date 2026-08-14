@@ -105,7 +105,14 @@
 //! * **A duplicate-occurrence count never escalates a tier** — CLOUD-80's
 //!   no-escalation law. Lands with the findings store (CLOUD-78).
 //! * **Baseline count drift may invalidate a baseline entry but never moves a
-//!   tier.** Lands with the `baseline` command (CLOUD-67).
+//!   tier.** Landed with the `baseline` command (CLOUD-67), and structural
+//!   rather than asserted-and-hoped: [`crate::baseline::apply`] only ever
+//!   *removes* elements from the finding vector and never constructs or mutates
+//!   one, so a re-raised finding carries the severity its rule declared and
+//!   resolves through this table unchanged. There is no code path there that
+//!   could move a tier. `baseline_count_drift_never_moves_a_tier` in
+//!   `tests/baseline.rs` pins it over the compiled binary anyway, because
+//!   "structural" is a claim about today's code.
 //!
 //! # Sources (public prior art)
 //!

@@ -10,6 +10,7 @@
 
 pub mod action;
 pub mod attribution;
+pub mod baseline;
 pub mod brief;
 pub mod budget;
 pub mod bypass;
@@ -142,6 +143,12 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // `init` reads no config — it is the verb that exists because there is
         // none — so the §8 chain is deliberately not threaded through it.
         Some(Command::Init { dry_run }) => run_init(dry_run, mode, out, err),
+        // `baseline` reads config — it evaluates the same rules `check` does, and
+        // its minting predicate consults `must_land_on` — so the §8 chain is
+        // threaded through it like any other rule-running verb.
+        Some(Command::Baseline { prune, dry_run }) => {
+            run_baseline(prune, dry_run, mode, &overrides, out, err)
+        }
         Some(Command::Generate { command }) => run_generate(&command, out),
         // `exec` reads no config and renders no verdict: it runs what the caller
         // named and reports what that returned. The §8 chain is deliberately not
@@ -392,6 +399,135 @@ fn run_init(
             Ok(ExitCode::Violation)
         }
     }
+}
+
+/// Record the findings that already exist, so only new ones fail (CLOUD-67).
+///
+/// Two modes over one artifact. Without `--prune` this **mints**: it runs the
+/// same rules `check` runs and records their identities, behind
+/// [`baseline::mintable`] — only landed, committed state may be baselined, which
+/// is the whole thing that keeps a bulk suppression inside the threat model.
+/// With `--prune` it **subtracts**: entries nothing backs are dropped and reduced
+/// anchors ratchet down, which needs no mint gate because it can only ever
+/// suppress less.
+///
+/// `rules::run_static` deliberately, not `run_all`: the predicate this baseline
+/// serves is `batten check`'s, so it must cover exactly that surface — and it
+/// keeps a `write` verb from reaching user-supplied code on the way.
+///
+/// Output is pointer-only (rule 4): a count and `rule <digest>` pointers, never a
+/// baselined line.
+///
+/// # Errors
+///
+/// Propagates config resolution, the rule scan, and the store write. Raises a
+/// [`UsageError`] (exit `1`) when no findings store is bound to this checkout.
+fn run_baseline(
+    prune: bool,
+    dry_run: bool,
+    mode: Mode,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let root = anchor();
+    let config = resolve::resolve(&root, overrides)?;
+    let scan = rules::run_static(&config.rules, &config.provisions, &root)?;
+
+    if prune {
+        let Some(existing) = baseline::load(&root)? else {
+            output::verdict(
+                err,
+                "baseline --prune: no baseline is recorded for this checkout",
+            )?;
+            return Ok(ExitCode::Violation);
+        };
+        let (pruned, drifted) = baseline::prune(&existing, &scan);
+        let dropped = existing.entries.len() - pruned.entries.len();
+        for item in &drifted {
+            writeln!(out, "{}", item.entry.pointer())?;
+        }
+        if dry_run {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("baseline: would drop {dropped} entr{}", plural(dropped)),
+            )?;
+            return Ok(ExitCode::Success);
+        }
+        let file = baseline::save(&root, &pruned)?;
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "baseline: dropped {dropped} entr{}, {} remain ({})",
+                plural(dropped),
+                pruned.entries.len(),
+                file.display()
+            ),
+        )?;
+        return Ok(ExitCode::Success);
+    }
+
+    // The minting gate. A refusal is the verdict, not an error: exit 2, on the
+    // one table, unprefixed — a host reads that as a policy answer rather than
+    // as Batten falling over (§7).
+    if let Some(refusal) = baseline::mintable(&root, config.must_land_on.as_deref())? {
+        for line in refusal.lines() {
+            output::verdict(err, &line)?;
+        }
+        return Ok(ExitCode::Violation);
+    }
+
+    let target = worktree::land_target(&root, config.must_land_on.as_deref())?;
+    let sha = match target.as_deref() {
+        Some(reference) => git::resolve_ref(&root, reference)?,
+        None => None,
+    };
+    let commit = git::head_commit(&root)?;
+    let minted = baseline::mint(&scan, target, sha, commit, waiver::today()?);
+
+    for entry in &minted.entries {
+        writeln!(out, "{}", entry.pointer())?;
+    }
+    let count = minted.entries.len();
+    if dry_run {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("baseline: would record {count} identit{}", plural(count)),
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    let file = baseline::save(&root, &minted)?;
+    // The audit line every mint owes, unconditional at `Normal` for the same
+    // reason a waiver's is: a suppression this size must not be a detail a
+    // default run has to ask for. Pointer-only — a ref, a sha and a count.
+    output::message(
+        mode,
+        Verbosity::Normal,
+        err,
+        &format!(
+            "baseline: recorded {count} identit{} against {} {} ({})",
+            plural(count),
+            minted.minted.reference.as_deref().unwrap_or("-"),
+            minted
+                .minted
+                .sha
+                .as_deref()
+                .map_or("-", |sha| &sha[..12.min(sha.len())]),
+            file.display()
+        ),
+    )?;
+    Ok(ExitCode::Success)
+}
+
+/// The `y`/`ies` suffix for `entr…` and `identit…`, which share one.
+const fn plural(count: usize) -> &'static str {
+    if count == 1 { "y" } else { "ies" }
 }
 
 /// Report work that is uncommitted, unpushed, or not landed (CLOUD-51).
@@ -2857,6 +2993,45 @@ fn run_rules(
         // reach no store write at all, which is what keeps its `read` effect
         // honest, and `run_state_record` stays the read surface's recorder.
         register_enforce_findings(&scan, mode, err)?;
+    }
+
+    // The baseline filter (CLOUD-67), immediately before the waiver filter and
+    // in the same slot for the same reasons — this function is the one funnel
+    // `check` and `enforce` share, and the filter must precede rendering and
+    // `any_blocking` or a suppression would be invisible to the exit code.
+    //
+    // BEFORE waivers, specifically. The order is load-bearing in one direction:
+    // a waiver removes a finding, so applying waivers first would make a live
+    // baseline entry look unmatched and report staleness for a finding that is
+    // still there. Baselining first asks its question of the full set.
+    //
+    // The drift the filter reports joins `findings` on exactly the terms
+    // `budget` and `defects` above join on: an unmatched entry is an ordinary
+    // `Finding`, so it is waivable, appears in `-J`, reaches the store and
+    // decides the exit code without any of that being re-implemented on a
+    // private verdict path. `is_reportable` is what keeps a *hold* out of it —
+    // an entry whose rule never ran has no verdict to contribute.
+    let mut baseline_drift = Vec::new();
+    if let Some(recorded) = baseline::load(&root)? {
+        let (kept, drifted) = baseline::apply(findings, &recorded, &scan.not_evaluated);
+        findings = kept;
+        findings.extend(drifted.iter().filter_map(baseline::Drifted::finding));
+        baseline_drift = drifted;
+    }
+    // The audit half, on the ERROR channel beside the waiver lines below: a
+    // baseline is a suppression, so the record of one is the compensating
+    // control, and it must not be able to corrupt a `-J` document even in
+    // principle. Holds are reported here and nowhere else — they are exactly the
+    // entries that produced no finding.
+    for held in &baseline_drift {
+        if !held.is_reportable() {
+            output::message(
+                mode,
+                Verbosity::Normal,
+                err,
+                &format!("baseline held {}", held.entry.pointer()),
+            )?;
+        }
     }
 
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function

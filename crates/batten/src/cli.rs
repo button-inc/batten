@@ -151,6 +151,15 @@ pub enum Command {
         /// Report what would be written, writing nothing.
         dry_run: bool,
     },
+    /// Record the findings that already exist, so only new ones fail.
+    Baseline {
+        /// Drop entries whose finding no longer exists, and ratchet reduced
+        /// counts down. Two verbs' worth of behaviour behind one flag because
+        /// both write the same artifact — see `surface::PRUNE`.
+        prune: bool,
+        /// Report what would be recorded, writing nothing.
+        dry_run: bool,
+    },
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -618,6 +627,10 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             json: flag(matches, "json"),
         }),
         "init" => Some(Command::Init {
+            dry_run: flag(matches, "dry_run"),
+        }),
+        "baseline" => Some(Command::Baseline {
+            prune: flag(matches, "prune"),
             dry_run: flag(matches, "dry_run"),
         }),
         "policy" => policy_of(matches).map(|command| Command::Policy { command }),

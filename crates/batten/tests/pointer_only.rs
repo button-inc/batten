@@ -465,6 +465,18 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::PointerOnly,
     },
     Verb {
+        // `-n` for the same reason `init` carries it: the census must not author
+        // into the corpus. It changes nothing about what is emitted — the mint
+        // gate reads the corpus's git state, not the flag, and whichever branch
+        // it takes emits rule ids, fingerprint prefixes and `worktree`'s own
+        // pointers. The one thing a baseline could leak is the finding it
+        // suppresses, and it names that finding by identity digest.
+        path: "baseline",
+        args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    Verb {
         path: "generate completions",
         args: &["--shell", "bash"],
         stdin: Stdin::Nothing,

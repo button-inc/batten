@@ -530,6 +530,31 @@ impl AtRisk {
     }
 }
 
+/// The ref work in `repo` is expected to land on: the declared `must_land_on`,
+/// else the remote's own recorded default branch.
+///
+/// Absent config is not an error — work lands on the trunk unless told otherwise,
+/// and charging every consumer a config line for that buys nothing. `None` is the
+/// honest third answer, and what it must never become is a *pass*: a caller that
+/// cannot name a target has not shown work landed, it has failed to look.
+///
+/// Extracted so the resolution is written once (CLOUD-67). [`status`] reads it,
+/// and so does [`crate::baseline`]'s minting predicate; two spellings of "which
+/// ref is the trunk" is exactly the second answer this crate refuses elsewhere.
+/// The remote default is *read*, never guessed — a hardcoded `main` that happens
+/// to exist answers against the wrong trunk silently.
+///
+/// # Errors
+///
+/// Propagates a `git` failure. Not being inside a repository raises a
+/// [`crate::UsageError`] (→ exit `1`).
+pub fn land_target(repo: &Path, must_land_on: Option<&str>) -> Result<Option<String>> {
+    match must_land_on {
+        Some(declared) => Ok(Some(declared.to_owned())),
+        None => git::remote_default_branch(repo),
+    }
+}
+
 /// Judge the work in `repo` against `must_land_on`, and the machine against
 /// `pileup_threshold`.
 ///
@@ -550,15 +575,9 @@ pub fn status(
     let branch = git::current_branch(repo)?;
     let label = branch.clone().unwrap_or_else(|| DETACHED.to_owned());
 
-    // The landing target: the declared key, else the remote's recorded default.
-    // Absent config is not an error — work lands on the trunk unless told
-    // otherwise, and charging every consumer a config line for that buys
-    // nothing. What it must never become is a *pass*, which is what the third
-    // arm below is for.
-    let target = match must_land_on {
-        Some(declared) => Some(declared.to_owned()),
-        None => git::remote_default_branch(repo)?,
-    };
+    // The landing target, resolved by the one resolver. What it must never
+    // become is a *pass*, which is what the third arm below is for.
+    let target = land_target(repo, must_land_on)?;
 
     // Computed first, because the upstream half consults it: a branch with no
     // upstream is judged against the target instead.
