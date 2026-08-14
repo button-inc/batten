@@ -69,11 +69,25 @@ jobs:
     # that replaces this with a measured budget once runs exist to measure.
     timeout-minutes: 20 # budget: grandfathered measured=2026-08-11
     permissions:
-      contents: read
+      # `write`, and only here (CLOUD-172): the recording step pushes the series
+      # to `refs/notes/bench`. Every other scheduled workflow reads; this one
+      # writes exactly one ref that no branch protection covers and no build
+      # consumes — a note is not a commit, so nothing this pushes can change
+      # what `main` builds.
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          persist-credentials: false
+          # Credentials ARE persisted here, unlike every other scheduled job,
+          # because the recording step pushes. Scoped by the `contents: write`
+          # above and by the single explicit refspec that push names.
+          fetch-depth: 0
+      # `git notes append` needs the existing note to append TO; without this
+      # every run would start a fresh note and the series would be a list of
+      # singletons. `|| true` because on the first run the ref does not exist,
+      # and a missing ref is the empty series rather than a failure.
+      - name: Fetch the existing series
+        run: git fetch origin "refs/notes/bench:refs/notes/bench" || true
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # rust builds the binary under measurement, hyperfine samples it, jq
@@ -94,6 +108,24 @@ jobs:
         run: mise run bench >"$RUNNER_TEMP/bench.txt"
       - name: Assert the budget
         run: mise run bench-assert <"$RUNNER_TEMP/bench.txt"
+      # The series (CLOUD-172). AFTER the assertion, deliberately: a measurement
+      # that broke its budget is a defect to fix, not a datum to enshrine, and a
+      # series carrying known-bad readings is one nobody can read a trend from.
+      #
+      # `bench-record` refuses to run off the trunk by itself, so the schedule's
+      # main-only guarantee is belt and braces rather than the only guard.
+      - name: Record the series
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mise run bench-record <"$RUNNER_TEMP/bench.txt"
+        env:
+          BENCH_RUNNER: ubuntu-latest
+      # Its own step, so a push that fails is distinguishable from a measurement
+      # that failed. The refspec is explicit and singular: this job may write the
+      # series and nothing else.
+      - name: Push the series
+        run: git push origin "refs/notes/bench:refs/notes/bench"
       # Always, including on a budget violation: the records are the evidence
       # for the failure, and a run that fails without publishing what it measured
       # sends the reader to re-run it by hand.

@@ -992,6 +992,25 @@ if [ "$sonar_rc" != 0 ] && [ "$sonar_rc" != 3 ]; then
   echo "::error:: verify: sonar-gate failed — see its message. No receipt written." >&2
   exit 1
 fi
+# The latency regression gate (CLOUD-172). `bench-assert` holds the published
+# number to an absolute ceiling; this asks the other question — did THIS branch
+# make an invocation path slower than its own merge base — which a ceiling
+# cannot answer and a shared runner's absolute wall clock cannot answer honestly.
+#
+# It costs almost nothing on the common change: `bench-gate` exits early and
+# clean when the diff against the merge base touches no crate source, manifest
+# or lockfile, because a binary that cannot have changed cannot have got slower.
+# The two release builds are paid only by a commit that could actually regress
+# the hook path — the commit worth paying for.
+#
+# Here rather than as a CI job, deliberately: `ready-guard` will not let a PR be
+# readied without a verify receipt for this exact HEAD, so a regression blocks
+# the PR before it can spend a runner at all. That is strictly earlier and
+# cheaper than a check that reds after the matrix has been paid for.
+if ! mise run bench-gate; then
+  echo "::error:: verify: bench-gate failed — this branch made an invocation path measurably slower than its merge base, or the measurement could not run. No receipt written." >&2
+  exit 1
+fi
 # The receipt write is the binary's job (CLOUD-203): `batten receipt record`
 # keys the claim to the exact commit verified — an amend or a rebase produces a
 # new HEAD and therefore no receipt, which is the point (see ready-guard) — and
