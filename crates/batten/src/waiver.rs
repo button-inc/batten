@@ -70,7 +70,49 @@
 //! rather than a fact about where [`apply`] happens to sit, and it is CLOUD-606's
 //! — [`crate::hook::adjudicate`] is contractually pure ("no I/O, no environment,
 //! no clock") and an expiry is a clock, which is the tension that issue owns.
+//! Decided below.
+//!
+//! ## The mediation channel's hatch: liveness is resolved at the boundary
+//!
+//! CLOUD-606's verdict. The channel **does** get a durable, lapsing exemption,
+//! and the expiry never enters the pure core: [`live`] projects the waiver table
+//! against a date *at the boundary*, and [`crate::hook::adjudicate`] is handed a
+//! set of already-lapse-checked rule ids. It reads set membership; it never sees
+//! a [`Date`].
+//!
+//! This is not a new idiom, it is the one that call path already uses three
+//! times. `crate::hook::ReceiptFacts` is resolved at the boundary "because
+//! `adjudicate` is contractually pure — no I/O, no environment, no clock … the
+//! boundary looks, the core decides"; `crate::stop::StopFacts` is resolved there
+//! for the same stated reason; the bypass hatch arrives as a caller-resolved
+//! boolean. [`today`] already reads the clock at the edge for this module. A
+//! waiver's liveness is the fourth ambient fact on a path that resolves ambient
+//! facts at its edge.
+//!
+//! **Rejected: pass the date into `adjudicate`.** It dissolves the contract it
+//! claims to honour. The pin is not "no `SystemTime::now()`", it is "no clock",
+//! and a [`Date`] parameter is that clock moved one frame up the stack — the one
+//! input arriving *undecided*, to be judged inside the core, where receipts, stop
+//! facts and bypass all arrive decided. It also widens the hottest signature in
+//! the binary to carry a value used only to compute a boolean the boundary could
+//! have computed, and CLOUD-435's lesson is that "it still fits the ≤100 ms
+//! budget" is not the test: a ceiling does not notice a fivefold move underneath
+//! it.
+//!
+//! **Rejected: leave the channel unwaivable.** That leaves `BATTEN_*_BYPASS` as
+//! its only hatch — session-scoped, unjustified, undated — which is precisely the
+//! undesigned tier this module's opening paragraph exists to replace. Nothing
+//! about a mediated call argues for it; the channel that can *deny* an agent's
+//! work is the one that most needs an exemption written down, reviewable, and
+//! lapsing.
+//!
+//! [`reaches`] does **not** yet admit the mediated kinds, and the order is
+//! deliberate: until `adjudicate` consults these facts, a waiver over a `shape`
+//! row still suppresses nothing, so CLOUD-293's `waiver-unreachable-kind` is
+//! still true and must keep firing. The flip is one line, in that one authority,
+//! belonging to the change that lands the consumption.
 
+use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -243,25 +285,36 @@ impl Waiver {
         })
     }
 
-    /// Whether this waiver covers `finding` on `today`.
+    /// Whether this waiver has lapsed on `today`.
     ///
-    /// A malformed expiry covers **nothing**. That is the fail-closed reading and
-    /// the only safe one: a waiver whose lapse cannot be computed must not
-    /// suppress a finding, or an unparseable date would be the strongest waiver
-    /// in the file. [`validate`] makes the case unreachable through the loader;
-    /// this is the belt.
+    /// One home for the lapse question, because two consumers now ask it —
+    /// [`covers`](Waiver::covers) for the tree filter and [`live`] for the
+    /// mediation boundary — and a second copy is how they come to disagree about
+    /// what "lapsed" means.
+    ///
+    /// A malformed expiry counts as **lapsed**. That is the fail-closed reading
+    /// and the only safe one: a waiver whose lapse cannot be computed must not
+    /// suppress anything, or an unparseable date would be the strongest waiver in
+    /// the file. [`validate`] makes the case unreachable through the loader; this
+    /// is the belt.
+    #[must_use]
+    pub fn lapsed(&self, today: Date) -> bool {
+        let Ok(expiry) = self.expiry() else {
+            return true;
+        };
+        // `expires` is the last day it applies, so equality is still live: a
+        // waiver written "expires 2026-08-10" that stopped working on the 10th
+        // would surprise every author who read the key as a deadline.
+        expiry < today
+    }
+
+    /// Whether this waiver covers `finding` on `today`.
     #[must_use]
     pub fn covers(&self, finding: &Finding, today: Date) -> bool {
         if self.rule != finding.rule {
             return false;
         }
-        let Ok(expiry) = self.expiry() else {
-            return false;
-        };
-        // `expires` is the last day it applies, so equality is still live: a
-        // waiver written "expires 2026-08-10" that stopped working on the 10th
-        // would surprise every author who read the key as a deadline.
-        if expiry < today {
+        if self.lapsed(today) {
             return false;
         }
         match &self.path {
@@ -362,6 +415,40 @@ impl Applied {
             ),
         }
     }
+}
+
+/// The rule ids a live waiver suppresses on `today` — the mediation channel's
+/// facts, resolved where the clock is already legible (CLOUD-606).
+///
+/// This is the whole of the verdict's mechanism on this side of the boundary:
+/// the caller reads the date once at the edge (as [`crate::hook::adjudicate`]'s
+/// caller already does for receipts, stop facts and the bypass hatch) and the
+/// adjudicator is handed a decided set. Nothing downstream needs a [`Date`],
+/// which is what keeps the purity contract intact rather than relocated.
+///
+/// Two exclusions, each fail-closed in the same direction [`Waiver::lapsed`]
+/// takes:
+///
+/// * a **lapsed** waiver, which is the mechanism working — nobody had to act for
+///   it to stop applying;
+/// * a waiver carrying a **`path`**, because a mediated call is not a file and
+///   has no path to match. Admitting one would silently widen it from the slice
+///   its author narrowed it to into the whole rule, which is the one direction a
+///   waiver must never move on its own.
+///
+/// Cheap when irrelevant (house style §4): an empty table does no per-waiver work
+/// at all, the same early return [`apply`] takes, because this is evaluated on
+/// the hottest path in the binary.
+#[must_use]
+pub fn live(waivers: &[Waiver], today: Date) -> BTreeSet<String> {
+    if waivers.is_empty() {
+        return BTreeSet::new();
+    }
+    waivers
+        .iter()
+        .filter(|waiver| waiver.path.is_none() && !waiver.lapsed(today))
+        .map(|waiver| waiver.rule.clone())
+        .collect()
 }
 
 /// Whether a waiver can reach findings of `kind` (CLOUD-293).
@@ -669,6 +756,76 @@ mod tests {
         assert_eq!(Date::from_unix_seconds(86_400).text(), "1970-01-02");
         // 2000-02-29 exists; 1900-02-29 did not, which is the century rule.
         assert_eq!(Date::from_unix_seconds(951_782_400).text(), "2000-02-29");
+    }
+
+    /// The projection as a sorted vector, so a case reads as a list.
+    fn live_rules(waivers: &[Waiver], today: Date) -> Vec<String> {
+        live(waivers, today).into_iter().collect()
+    }
+
+    #[test]
+    fn the_boundary_projection_carries_only_live_waivers() {
+        let rows = [waiver("live", "2099-01-01"), waiver("lapsed", "2020-01-01")];
+        assert_eq!(live_rules(&rows, TODAY), ["live"]);
+    }
+
+    #[test]
+    fn the_expiry_day_itself_is_still_live_at_the_boundary_too() {
+        // The same boundary `covers` draws, asserted on the other consumer: two
+        // readings of `expires` would be two different hatches.
+        let rows = [waiver("r", &TODAY.text())];
+        assert_eq!(live_rules(&rows, TODAY), ["r"]);
+    }
+
+    #[test]
+    fn an_unparseable_expiry_reaches_no_mediated_call() {
+        // Fail closed, exactly as the tree filter does: a waiver whose lapse
+        // cannot be computed must not become the strongest waiver in the file.
+        let mut broken = waiver("r", "whenever");
+        broken.expires = "whenever".to_owned();
+        assert!(live_rules(&[broken], TODAY).is_empty());
+    }
+
+    #[test]
+    fn a_path_narrowed_waiver_reaches_no_mediated_call() {
+        // A mediated call is not a file. Admitting this row would widen it from
+        // the slice its author narrowed it to into the whole rule — the one
+        // direction a waiver must never move on its own.
+        let mut narrowed = waiver("r", "2099-01-01");
+        narrowed.path = Some("vendor/**".to_owned());
+        assert!(live_rules(&[narrowed], TODAY).is_empty());
+    }
+
+    #[test]
+    fn no_waivers_is_an_empty_set_and_no_per_waiver_work() {
+        assert!(live(&[], TODAY).is_empty());
+    }
+
+    #[test]
+    fn both_consumers_of_lapsed_agree_on_the_same_inputs() {
+        // `covers` and `live` ask one question through one predicate. Swept
+        // across the boundary day so the agreement is checked where it is
+        // decided, not only where it is obvious.
+        for expires in ["2020-01-01", "2026-08-09", "2026-08-10", "2099-01-01"] {
+            let row = waiver("r", expires);
+            let by_filter = row.covers(&finding("r", "src/a.rs"), TODAY);
+            let by_boundary = live(std::slice::from_ref(&row), TODAY).contains("r");
+            assert_eq!(
+                by_filter, by_boundary,
+                "{expires}: the tree filter and the mediation boundary disagreed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_mediated_kinds_are_still_out_of_reach_until_the_hook_consumes_the_facts() {
+        // CLOUD-606's sequencing, pinned rather than left to be rediscovered.
+        // `live` exists, but `hook::adjudicate` does not yet read it, so a waiver
+        // over a `shape` row STILL suppresses nothing — which is what keeps
+        // CLOUD-293's `waiver-unreachable-kind` smell true. Flip these with the
+        // change that lands the consumption, not before.
+        assert!(!reaches(RuleKind::Shape));
+        assert!(!reaches(RuleKind::Receipt));
     }
 
     #[test]
