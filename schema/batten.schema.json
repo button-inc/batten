@@ -470,9 +470,16 @@
       ]
     },
     "DrainConfig": {
-      "description": "The `[drain]` table: how often the advisory drain may wake, and when it stops\nasking.\n\nBoth keys are **pacing**, which is why neither is layered raise-only by\n[`crate::resolve`]: \"raise\" has no meaning for an interval — a longer one is\nquieter and a shorter one is louder, and neither direction is a weakening of\na bar. The committed authority sets it, and a local file does not move it.",
+      "description": "The `[drain]` table: how often the advisory drain may wake, when it stops\nasking, and how much it may say when it does.\n\nEvery key here bounds **the engine's own output**, which is why none of them\nis layered raise-only by [`crate::resolve`]: \"raise\" has no meaning for an\ninterval — a longer one is quieter and a shorter one is louder — and a cap on\nwhat Batten prints about itself is not a policy bar a local file could\nweaken. The committed authority sets them, and a local file does not move\nthem.",
       "type": "object",
       "properties": {
+        "cardinality_cap": {
+          "description": "Distinct identities one rule may spend entries on in a single drain.\n\nA rule over it renders one `rule R: K+ findings` summary line instead,\nand never `K` entries. `0` caps every rule that surfaced anything, which\nis the honest bottom of the range — a drain of nothing but summary lines\n— rather than a disabled feature.",
+          "type": "integer",
+          "format": "uint",
+          "default": 10,
+          "minimum": 0
+        },
         "empty_poll_giveup": {
           "description": "How many consecutive silent drains before wakes stop draining until the\nstore moves.\n\n`0` means the give-up applies immediately once a drain says nothing, so a\nquiet session pays a format read per wake and nothing more.",
           "type": "integer",
@@ -485,6 +492,13 @@
           "type": "integer",
           "format": "uint64",
           "default": 2000,
+          "minimum": 0
+        },
+        "token_budget": {
+          "description": "The rendered payload's ceiling, in estimated tokens.\n\nApplied after the cap, over the payload as a whole. `0` means the drain\nsays nothing at all, which is a legitimate setting for a host that reads\nfindings some other way and not a disabled feature.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1024,
           "minimum": 0
         }
       },

@@ -82,9 +82,40 @@
 //! that ran and found nothing. That is the false green this engine exists to
 //! catch, in a place nobody would look.
 //!
-//! Emission is deliberately thin: one pointer line per surfaced identity. The
-//! shape, the per-rule cardinality cap and the token budget are CLOUD-82's
-//! contract, and it replaces [`render`] rather than extending it.
+//! # Emission is bounded twice, and the two bounds measure different things
+//!
+//! CLOUD-82's contract, and the reason [`cycle`] selects before it renders: a
+//! payload the agent cannot read is not information.
+//!
+//! * The **per-rule cardinality cap** ([`DrainConfig::cardinality_cap`]) bounds
+//!   how many distinct identities one rule may spend lines on. A rule over it
+//!   contributes one `rule R: K+ findings` summary line and no entries, and the
+//!   identities it withheld are journalled as [`NotShown::OverCardinalityCap`].
+//!   That is a statement about the **rule** — a check firing on eleven distinct
+//!   identities inside one changed scope is a rule-health signal, not a to-do
+//!   list — which is why it is the reason that feeds CLOUD-78's sampled review.
+//! * The **token budget** ([`DrainConfig::token_budget`]) bounds the payload as
+//!   a whole, measured with [`crate::budget::estimate_tokens`] rather than a
+//!   second estimator. What it drops is journalled as
+//!   [`NotShown::DrainSuppressed`], because that is a statement about **this
+//!   boundary**: the finding is unchanged, the drain simply had no room for it
+//!   this time, and the next drain reconsiders it.
+//!
+//! Between the two, lines are ordered **salient-first** — by tier, then rule,
+//! then fingerprint. The occurrence count is deliberately *not* a sort key:
+//! CLOUD-80's no-escalation law says a duplicate count never escalates a tier,
+//! and on the emission plane the way to obey it is to make salience structurally
+//! independent of the count rather than to remember not to look.
+//!
+//! A **group re-raise** renders as `old->new` in the count field, against what
+//! this session's last drain actually said ([`WakeState::counts`]) — the store
+//! carries no count anchor, and the honest anchor for "should I mention this
+//! again" is what the agent was last told. One identity's occurrences are a
+//! count by construction ([`crate::identity::count_occurrences`]), so a 500→501
+//! re-raise is one line carrying one in-scope pointer; there is no instance list
+//! to expand and no path by which 501 pointers could be emitted. A count that
+//! *fell* renders as the plain new count: a ratchet is not a re-raise, because
+//! re-raising on incremental fixing punishes the fix.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -96,6 +127,7 @@ use serde::{Deserialize, Serialize};
 use crate::findings::{Context, FindingRecord, Instance, NotShown, Observation, Presentation};
 use crate::identity::{FindingKind, drain_result_fingerprint};
 use crate::journal;
+use crate::severity::AdvisoryTier;
 
 /// The persisted wake state's schema version, independent of the record schema
 /// and of the journal layout: the window's shape and the store's contents evolve
@@ -119,13 +151,31 @@ pub const DEFAULT_INTERVAL_MS: u64 = 2_000;
 /// declares none.
 pub const DEFAULT_EMPTY_POLL_GIVEUP: u32 = 3;
 
-/// The `[drain]` table: how often the advisory drain may wake, and when it stops
-/// asking.
+/// Distinct identities one rule may spend entries on in a single drain, when the
+/// config declares none.
 ///
-/// Both keys are **pacing**, which is why neither is layered raise-only by
-/// [`crate::resolve`]: "raise" has no meaning for an interval — a longer one is
-/// quieter and a shorter one is louder, and neither direction is a weakening of
-/// a bar. The committed authority sets it, and a local file does not move it.
+/// Ten because the cap is a **rule-health** threshold rather than a display
+/// preference: a check that fires on more than ten distinct identities inside
+/// one changed scope is telling the operator something about itself, and the
+/// summary line is the honest way to say it in one line instead of eleven.
+pub const DEFAULT_CARDINALITY_CAP: usize = 10;
+
+/// The rendered payload's token ceiling, when the config declares none.
+///
+/// Sized to a payload an agent reads rather than skims — roughly forty pointer
+/// lines — and small enough that the drain firing on every batch boundary of a
+/// long session stays a rounding error against the context it is protecting.
+pub const DEFAULT_TOKEN_BUDGET: usize = 1_024;
+
+/// The `[drain]` table: how often the advisory drain may wake, when it stops
+/// asking, and how much it may say when it does.
+///
+/// Every key here bounds **the engine's own output**, which is why none of them
+/// is layered raise-only by [`crate::resolve`]: "raise" has no meaning for an
+/// interval — a longer one is quieter and a shorter one is louder — and a cap on
+/// what Batten prints about itself is not a policy bar a local file could
+/// weaken. The committed authority sets them, and a local file does not move
+/// them.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DrainConfig {
@@ -145,6 +195,21 @@ pub struct DrainConfig {
     /// quiet session pays a format read per wake and nothing more.
     #[serde(default = "default_empty_poll_giveup")]
     pub empty_poll_giveup: u32,
+    /// Distinct identities one rule may spend entries on in a single drain.
+    ///
+    /// A rule over it renders one `rule R: K+ findings` summary line instead,
+    /// and never `K` entries. `0` caps every rule that surfaced anything, which
+    /// is the honest bottom of the range — a drain of nothing but summary lines
+    /// — rather than a disabled feature.
+    #[serde(default = "default_cardinality_cap")]
+    pub cardinality_cap: usize,
+    /// The rendered payload's ceiling, in estimated tokens.
+    ///
+    /// Applied after the cap, over the payload as a whole. `0` means the drain
+    /// says nothing at all, which is a legitimate setting for a host that reads
+    /// findings some other way and not a disabled feature.
+    #[serde(default = "default_token_budget")]
+    pub token_budget: usize,
 }
 
 fn default_interval_ms() -> u64 {
@@ -155,11 +220,21 @@ fn default_empty_poll_giveup() -> u32 {
     DEFAULT_EMPTY_POLL_GIVEUP
 }
 
+fn default_cardinality_cap() -> usize {
+    DEFAULT_CARDINALITY_CAP
+}
+
+fn default_token_budget() -> usize {
+    DEFAULT_TOKEN_BUDGET
+}
+
 impl Default for DrainConfig {
     fn default() -> Self {
         DrainConfig {
             interval_ms: DEFAULT_INTERVAL_MS,
             empty_poll_giveup: DEFAULT_EMPTY_POLL_GIVEUP,
+            cardinality_cap: DEFAULT_CARDINALITY_CAP,
+            token_budget: DEFAULT_TOKEN_BUDGET,
         }
     }
 }
@@ -225,6 +300,21 @@ pub struct WakeState {
     /// short-circuit compares against this.
     #[serde(rename = "resultId", default, skip_serializing_if = "Option::is_none")]
     pub result_id: Option<String>,
+    /// What the last drain told this session, per identity: fingerprint hex to
+    /// occurrence count.
+    ///
+    /// The anchor a group re-raise is measured against. The store holds no count
+    /// anchor — [`crate::identity::compare_to_anchor`] is fed by decision
+    /// records, which answer a different question — and the honest anchor for
+    /// "is this worth saying again" is what the agent was last *told*, not what
+    /// some other surface last saw.
+    ///
+    /// Bounded by the payload rather than by the store: only identities that
+    /// were actually emitted are remembered, so a rule with five thousand
+    /// identities behind a cap leaves five thousand nothing here. Still a
+    /// coordinate and a count, so rule 4 holds.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub counts: BTreeMap<String, u64>,
 }
 
 impl Default for WakeState {
@@ -237,6 +327,7 @@ impl Default for WakeState {
             armed_seqno: 0,
             cursor: None,
             result_id: None,
+            counts: BTreeMap::new(),
         }
     }
 }
@@ -255,13 +346,19 @@ impl WakeState {
     /// and it counts as an empty poll for exactly that reason — the give-up is
     /// about how long the drain has been *silent*, not how long the store has
     /// been empty.
-    pub fn drained(&mut self, now_ms: u64, seqno: u64, result_id: String, emitted: bool) {
+    ///
+    /// The remembered counts move only when something was **emitted**, for the
+    /// same reason: they are the anchor for "what the agent was last told", and
+    /// a payload nobody was shown told it nothing. Advancing them on a silent
+    /// drain would let a re-raise that happened during the silence go unsaid.
+    pub fn drained(&mut self, now_ms: u64, seqno: u64, cycle: &Drained, emitted: bool) {
         self.last_drain_ms = now_ms;
         self.pending = false;
         self.armed_seqno = seqno;
-        self.result_id = Some(result_id);
+        self.result_id = Some(cycle.result_id.clone());
         if emitted {
             self.empty_polls = 0;
+            self.counts.clone_from(&cycle.counts);
         } else {
             self.empty_polls = self.empty_polls.saturating_add(1);
         }
@@ -313,30 +410,108 @@ pub fn in_scope(record: &FindingRecord, changed: &BTreeSet<String>) -> bool {
     }
 }
 
-/// One drain cycle's result: what to say, what was withheld, and the digest that
-/// decides whether saying it again would be repetition.
+/// One drain cycle's result: what to say, what was withheld and why, what the
+/// agent was told each identity's count was, and the digest that decides whether
+/// saying it again would be repetition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Drained {
-    /// The pointer lines to emit, sorted so the payload is byte-stable.
+    /// The pointer lines to emit, ordered salient-first and deterministically,
+    /// so the payload is byte-stable.
     pub lines: Vec<String>,
     /// Identities the scope filter withheld.
     pub scope_filtered: Vec<FindingRecord>,
+    /// Identities withheld because their rule was over the cardinality cap. A
+    /// property of the rule, and so the reason rule-health telemetry reads.
+    pub capped: Vec<FindingRecord>,
+    /// Identities withheld because the payload had no room for them **this
+    /// boundary**. A property of the payload, and so retried on the next drain.
+    pub over_budget: Vec<FindingRecord>,
     /// Re-raises of an identity already carried by this payload, suppressed and
     /// counted rather than emitted twice.
     pub duplicates: usize,
+    /// What this payload told the agent each emitted identity's count was, by
+    /// fingerprint hex. The anchor the next drain's re-raise detection reads.
+    pub counts: BTreeMap<String, u64>,
     /// The digest of [`Drained::lines`], as hex.
     pub result_id: String,
 }
 
-/// Render one line for a record, given the instance to point at.
+/// One identity that survived selection, with the instance to point at.
+///
+/// Selection and rendering are separate passes because the cap is a decision
+/// about a *set* of identities: a renderer that emitted as it walked could not
+/// know that an eleventh identity for the same rule was still coming.
+#[derive(Debug, Clone, Copy)]
+struct Surfaced<'a> {
+    record: &'a FindingRecord,
+    instance: &'a Instance,
+}
+
+/// One thing the payload can say: a pointer, or a rule's cardinality summary.
+///
+/// Both are subject to the token budget, which is why they are one type — a
+/// summary line that escaped the clamp would be a payload the budget did not
+/// actually bound.
+#[derive(Debug, Clone, Copy)]
+enum Item<'a> {
+    /// One identity's pointer line.
+    Entry(Surfaced<'a>),
+    /// One rule's summary, standing for the identities the cap withheld.
+    Summary {
+        rule: &'a str,
+        tier: AdvisoryTier,
+        withheld: usize,
+    },
+}
+
+impl Item<'_> {
+    /// The sort key: tier first (strongest first), then rule, then fingerprint.
+    ///
+    /// The occurrence count is **not** in it, and that is the point: CLOUD-80's
+    /// no-escalation law says a duplicate count never escalates a tier, so
+    /// salience is made structurally independent of the count rather than left
+    /// to a reviewer noticing.
+    fn key(&self) -> (std::cmp::Reverse<AdvisoryTier>, &str, String) {
+        match self {
+            Item::Entry(surfaced) => (
+                std::cmp::Reverse(surfaced.record.tier),
+                surfaced.record.rule.as_str(),
+                surfaced.record.identity.fingerprint.to_hex(),
+            ),
+            // The empty digest sorts a rule's summary ahead of any entry that
+            // shares its tier and rule — of which, by construction, it has none.
+            Item::Summary { rule, tier, .. } => (std::cmp::Reverse(*tier), rule, String::new()),
+        }
+    }
+
+    /// How many findings this item stands for, for the withheld count the budget
+    /// line reports.
+    const fn weight(&self) -> usize {
+        match self {
+            Item::Entry(_) => 1,
+            Item::Summary { withheld, .. } => *withheld,
+        }
+    }
+}
+
+/// Render one line for a record, given the instance to point at and what the
+/// last drain said this identity's count was.
 ///
 /// **Pointer-only** (rule 4): a fingerprint, a rule id, a `path:line` coordinate
 /// and a count. The store holds no matched content, so there is none here to
-/// leak — the discipline is stated anyway because the renderer is what CLOUD-82
-/// replaces, and it inherits the contract rather than re-deriving it.
-fn render_line(record: &FindingRecord, instance: &Instance) -> String {
+/// leak — the discipline is stated anyway because this is the one place emission
+/// shape is decided, and it should carry the contract rather than assume it.
+///
+/// A count that **rose** renders as `old->new`: the identity is the same, and
+/// the delta is the news. A count that fell renders plainly — a ratchet is not a
+/// re-raise, because re-raising on incremental fixing punishes the fix. The line
+/// stays four space-separated fields whichever branch is taken.
+fn render_line(record: &FindingRecord, instance: &Instance, previous: Option<u64>) -> String {
     let count = match instance.occurrences {
-        Observation::Observed(count) => count.to_string(),
+        Observation::Observed(count) => match previous {
+            Some(old) if count > old => format!("{old}->{count}"),
+            _ => count.to_string(),
+        },
         Observation::NotObserved(_) => "held".to_owned(),
     };
     let at = match instance.line {
@@ -348,6 +523,29 @@ fn render_line(record: &FindingRecord, instance: &Instance) -> String {
         record.identity.fingerprint.to_hex(),
         record.rule
     )
+}
+
+/// The one line a rule over the cardinality cap gets, in place of its entries.
+fn cap_summary(rule: &str, cap: usize) -> String {
+    format!("rule {rule}: {cap}+ findings")
+}
+
+/// The one line closing a payload the token budget clamped.
+fn budget_summary(withheld: usize) -> String {
+    format!("budget: {withheld} findings withheld")
+}
+
+/// Whether `lines` plus `candidate` — and the closing summary a later clamp
+/// would owe — still fits the budget.
+///
+/// Measured over the joined payload with [`crate::budget::estimate_tokens`],
+/// which is the same estimator `[budget]` gates instruction files with. A second
+/// estimator here would let the two disagree about what a token is.
+fn within(lines: &[String], candidate: &str, reserve: Option<&str>, budget: usize) -> bool {
+    let mut payload: Vec<&str> = lines.iter().map(String::as_str).collect();
+    payload.push(candidate);
+    payload.extend(reserve);
+    crate::budget::estimate_tokens(&payload.join("\n")) <= budget
 }
 
 /// Run one drain cycle over a store snapshot. Pure.
@@ -362,17 +560,57 @@ fn render_line(record: &FindingRecord, instance: &Instance) -> String {
 /// renders one line per *instance*, which is right for `state list` — a listing
 /// should show every context — and wrong here, where the contract is one line
 /// per *identity* and a repeat within a drain is suppressed and counted.
+///
+/// `previous` is what the last drain told this session, per identity, which is
+/// what makes a re-raise sayable as `old->new`. An empty map is the honest first
+/// drain: everything is news, and nothing is a re-raise.
+///
+/// Three ordered stages, and the order is the contract: **select** the one
+/// instance per identity worth pointing at, **cap** each rule that surfaced more
+/// distinct identities than it may spend lines on, then **order and clamp** the
+/// survivors to the token budget.
 #[must_use]
 pub fn cycle(
     records: &[FindingRecord],
     changed: &BTreeSet<String>,
     context: Option<&Context>,
+    config: &DrainConfig,
+    previous: &BTreeMap<String, u64>,
 ) -> Drained {
+    let selected = select(records, changed, context);
+    let (items, capped) = cap(selected.shown, config.cardinality_cap);
+    let clamped = clamp(&items, config, previous);
+    let result_id = drain_result_fingerprint(&clamped.lines).to_hex();
+    Drained {
+        lines: clamped.lines,
+        scope_filtered: selected.scope_filtered,
+        capped,
+        over_budget: clamped.over_budget,
+        duplicates: selected.duplicates,
+        counts: clamped.counts,
+        result_id,
+    }
+}
+
+/// What the selection stage found: one entry per identity, what the scope filter
+/// withheld, and how many records collapsed into an entry already taken.
+struct Selected<'a> {
+    shown: BTreeMap<String, Surfaced<'a>>,
+    scope_filtered: Vec<FindingRecord>,
+    duplicates: usize,
+}
+
+/// Stage one: the one instance per identity worth pointing at.
+fn select<'a>(
+    records: &'a [FindingRecord],
+    changed: &BTreeSet<String>,
+    context: Option<&Context>,
+) -> Selected<'a> {
     let mut scope_filtered = Vec::new();
     // Keyed by identity, which is what makes "suppressed and counted" the
     // structure rather than a rule applied afterwards: a second record for one
     // identity cannot occupy a second entry.
-    let mut shown: BTreeMap<String, String> = BTreeMap::new();
+    let mut shown: BTreeMap<String, Surfaced<'a>> = BTreeMap::new();
     let mut duplicates = 0;
 
     for record in records {
@@ -400,21 +638,145 @@ pub fn cycle(
             continue;
         };
         let key = record.identity.fingerprint.to_hex();
-        if shown.insert(key, render_line(record, instance)).is_some() {
+        if shown.insert(key, Surfaced { record, instance }).is_some() {
             duplicates += 1;
         }
     }
 
-    // `BTreeMap` iteration is by fingerprint hex, so the payload is sorted
-    // without a sort call and two renders of one snapshot are byte-identical.
-    let lines: Vec<String> = shown.into_values().collect();
-    let result_id = drain_result_fingerprint(&lines).to_hex();
-    Drained {
-        lines,
+    Selected {
+        shown,
         scope_filtered,
         duplicates,
-        result_id,
     }
+}
+
+/// Stage two: collapse every rule that surfaced more distinct identities than it
+/// may spend entries on, and carry what it withheld out for journalling.
+///
+/// Grouped by rule over `shown`, whose iteration is by fingerprint hex, so both
+/// the grouping and every group's contents are a function of the SET. The result
+/// is sorted salient-first, which is the order the clamp then spends the budget
+/// in — dropping the least salient first is what makes a truncated payload the
+/// most useful one that fits.
+fn cap(shown: BTreeMap<String, Surfaced<'_>>, cap: usize) -> (Vec<Item<'_>>, Vec<FindingRecord>) {
+    let mut per_rule: BTreeMap<&str, Vec<Surfaced<'_>>> = BTreeMap::new();
+    for surfaced in shown.into_values() {
+        per_rule
+            .entry(surfaced.record.rule.as_str())
+            .or_default()
+            .push(surfaced);
+    }
+
+    let mut capped: Vec<FindingRecord> = Vec::new();
+    let mut items: Vec<Item<'_>> = Vec::new();
+    for (rule, surfaced) in per_rule {
+        if surfaced.len() > cap {
+            // The summary carries the strongest tier the rule surfaced, so
+            // collapsing a rule cannot bury it below a weaker rule's entries.
+            let tier = surfaced
+                .iter()
+                .map(|entry| entry.record.tier)
+                .max()
+                .unwrap_or(AdvisoryTier::Advisory);
+            capped.extend(surfaced.iter().map(|entry| entry.record.clone()));
+            items.push(Item::Summary {
+                rule,
+                tier,
+                withheld: surfaced.len(),
+            });
+        } else {
+            items.extend(surfaced.into_iter().map(Item::Entry));
+        }
+    }
+    items.sort_by(|left, right| left.key().cmp(&right.key()));
+    (items, capped)
+}
+
+/// What the clamp emitted, what it had no room for, and the counts it told the
+/// agent — which become the next drain's re-raise anchor.
+struct Clamped {
+    lines: Vec<String>,
+    over_budget: Vec<FindingRecord>,
+    counts: BTreeMap<String, u64>,
+}
+
+/// Stage three: spend the token budget salient-first, and say how much went
+/// unsaid.
+///
+/// Greedy, reserving room for the closing summary line a later drop would owe.
+/// Reserving against the *remaining* weight is what makes the bound hold rather
+/// than nearly hold: the line that finally gets written can only be shorter than
+/// the one that was budgeted for.
+fn clamp(items: &[Item<'_>], config: &DrainConfig, previous: &BTreeMap<String, u64>) -> Clamped {
+    let suffix = suffix_weights(items);
+    let mut lines: Vec<String> = Vec::new();
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut over_budget: Vec<FindingRecord> = Vec::new();
+    let mut withheld = 0;
+    let mut clamped = false;
+
+    for (index, item) in items.iter().enumerate() {
+        if !clamped {
+            let candidate = match item {
+                Item::Entry(surfaced) => {
+                    let key = surfaced.record.identity.fingerprint.to_hex();
+                    render_line(
+                        surfaced.record,
+                        surfaced.instance,
+                        previous.get(&key).copied(),
+                    )
+                }
+                Item::Summary { rule, .. } => cap_summary(rule, config.cardinality_cap),
+            };
+            let reserve = suffix
+                .get(index + 1)
+                .filter(|remaining| **remaining > 0)
+                .map(|remaining| budget_summary(*remaining));
+            if within(&lines, &candidate, reserve.as_deref(), config.token_budget) {
+                if let Item::Entry(surfaced) = item {
+                    // Only an observed count anchors the next drain's re-raise:
+                    // a rule that did not run said nothing about how many.
+                    if let Observation::Observed(count) = surfaced.instance.occurrences {
+                        counts.insert(surfaced.record.identity.fingerprint.to_hex(), count);
+                    }
+                }
+                lines.push(candidate);
+                continue;
+            }
+            clamped = true;
+        }
+        withheld += item.weight();
+        if let Item::Entry(surfaced) = item {
+            over_budget.push(surfaced.record.clone());
+        }
+    }
+
+    if clamped {
+        // The reserve above budgeted for this line; it is written only if it
+        // still fits, because a first item too large to keep leaves no room
+        // that was ever checked.
+        let summary = budget_summary(withheld);
+        if within(&lines, &summary, None, config.token_budget) {
+            lines.push(summary);
+        }
+    }
+
+    Clamped {
+        lines,
+        over_budget,
+        counts,
+    }
+}
+
+/// How many findings each suffix of `items` stands for, so the clamp can reserve
+/// room for the closing line it might owe. One entry longer than `items`, whose
+/// last element is zero: past the end nothing remains to withhold.
+fn suffix_weights(items: &[Item<'_>]) -> Vec<usize> {
+    let mut weights: Vec<usize> = vec![0; items.len() + 1];
+    for (index, item) in items.iter().enumerate().rev() {
+        weights[index] = weights[index + 1].saturating_add(item.weight());
+    }
+    weights
 }
 
 /// The directory holding one wake-state file per session, under a bound store.
@@ -516,6 +878,45 @@ pub fn record_suppressions(
     Ok(appended)
 }
 
+/// Journal every identity this cycle withheld, under the reason it was withheld
+/// for.
+///
+/// One call rather than three at the boundary, because the *pairing* of a
+/// withheld set with its reason is a fact about the emission contract and not
+/// about the caller: the cap is a property of the rule and feeds rule-health
+/// telemetry, where the scope filter and the token clamp are properties of this
+/// boundary — the finding is unchanged and the next drain reconsiders it. A
+/// caller free to pair them differently could put a transient suppression into
+/// the number CLOUD-78's sampled review reads as rule health.
+///
+/// Returns how many entries were actually written, which is what tells the
+/// caller whether a fold is worth running.
+///
+/// # Errors
+///
+/// Returns an error when a shard cannot be appended to.
+pub fn journal_suppressions(store_dir: &Path, shard: &str, cycle: &Drained) -> Result<usize> {
+    let mut appended = record_suppressions(
+        store_dir,
+        shard,
+        &cycle.scope_filtered,
+        NotShown::DrainSuppressed,
+    )?;
+    appended += record_suppressions(
+        store_dir,
+        shard,
+        &cycle.capped,
+        NotShown::OverCardinalityCap,
+    )?;
+    appended += record_suppressions(
+        store_dir,
+        shard,
+        &cycle.over_budget,
+        NotShown::DrainSuppressed,
+    )?;
+    Ok(appended)
+}
+
 /// The payload as the agent sees it: the pointer lines, one per line.
 ///
 /// A separate function from [`cycle`] so the bytes emitted are a pure function of
@@ -566,6 +967,37 @@ mod tests {
         paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
+    /// A cycle under the shipped defaults, with no memory of a previous drain —
+    /// the shape every test that is not about the cap, the budget or a re-raise
+    /// wants, so those three stay legible as the ones passing a config.
+    fn cycled(
+        records: &[FindingRecord],
+        changed: &BTreeSet<String>,
+        context: Option<&Context>,
+    ) -> Drained {
+        cycle(
+            records,
+            changed,
+            context,
+            &DrainConfig::default(),
+            &BTreeMap::new(),
+        )
+    }
+
+    /// A completed cycle carrying nothing but a digest, for the state-machine
+    /// tests: they fold a drain back in and care only about what the fold does.
+    fn folded(result_id: &str) -> Drained {
+        Drained {
+            lines: Vec::new(),
+            scope_filtered: Vec::new(),
+            capped: Vec::new(),
+            over_budget: Vec::new(),
+            duplicates: 0,
+            counts: BTreeMap::new(),
+            result_id: result_id.to_owned(),
+        }
+    }
+
     // --- (a) one wake per batch --------------------------------------------
 
     #[test]
@@ -577,6 +1009,7 @@ mod tests {
         let config = DrainConfig {
             interval_ms: 2_000,
             empty_poll_giveup: 3,
+            ..DrainConfig::default()
         };
         let mut state = WakeState::default();
         let start = 1_000_000_u64;
@@ -586,7 +1019,7 @@ mod tests {
             match decide_wake(&state, &config, start + offset, 0) {
                 Wake::Drain => {
                     drains += 1;
-                    state.drained(start + offset, 0, "r".to_owned(), true);
+                    state.drained(start + offset, 0, &folded("r"), true);
                 }
                 Wake::Coalesced => state.coalesce(),
                 Wake::GaveUp => panic!("a fresh state never gives up"),
@@ -604,13 +1037,14 @@ mod tests {
         let config = DrainConfig {
             interval_ms: 1_000,
             empty_poll_giveup: 3,
+            ..DrainConfig::default()
         };
         let mut state = WakeState::default();
         let start = 1_000_000_u64;
 
         // The drain that opens the window.
         assert_eq!(decide_wake(&state, &config, start, 0), Wake::Drain);
-        state.drained(start, 0, "r0".to_owned(), true);
+        state.drained(start, 0, &folded("r0"), true);
 
         // Two whole batches land inside it. Every one is masked.
         for offset in [10, 20, 30, 500, 510, 520] {
@@ -624,7 +1058,7 @@ mod tests {
 
         // Past the window, the six masked wakes redeem as ONE drain.
         assert_eq!(decide_wake(&state, &config, start + 1_000, 0), Wake::Drain);
-        state.drained(start + 1_000, 0, "r1".to_owned(), true);
+        state.drained(start + 1_000, 0, &folded("r1"), true);
         assert!(!state.pending, "the follow-up was paid");
         assert_eq!(
             decide_wake(&state, &config, start + 1_001, 0),
@@ -641,6 +1075,7 @@ mod tests {
         let config = DrainConfig {
             interval_ms: 100,
             empty_poll_giveup: 1,
+            ..DrainConfig::default()
         };
         let quiet = WakeState {
             empty_polls: 5,
@@ -676,7 +1111,8 @@ mod tests {
                 &state,
                 &DrainConfig {
                     interval_ms: 1_000,
-                    empty_poll_giveup: 3
+                    empty_poll_giveup: 3,
+                    ..DrainConfig::default()
                 },
                 now,
                 0
@@ -688,7 +1124,8 @@ mod tests {
                 &state,
                 &DrainConfig {
                     interval_ms: 100,
-                    empty_poll_giveup: 3
+                    empty_poll_giveup: 3,
+                    ..DrainConfig::default()
                 },
                 now,
                 0
@@ -700,7 +1137,8 @@ mod tests {
                 &state,
                 &DrainConfig {
                     interval_ms: 0,
-                    empty_poll_giveup: 3
+                    empty_poll_giveup: 3,
+                    ..DrainConfig::default()
                 },
                 now,
                 0
@@ -725,7 +1163,8 @@ mod tests {
                 &state,
                 &DrainConfig {
                     interval_ms: 10,
-                    empty_poll_giveup: 2
+                    empty_poll_giveup: 2,
+                    ..DrainConfig::default()
                 },
                 9_000,
                 4
@@ -737,7 +1176,8 @@ mod tests {
                 &state,
                 &DrainConfig {
                     interval_ms: 10,
-                    empty_poll_giveup: 3
+                    empty_poll_giveup: 3,
+                    ..DrainConfig::default()
                 },
                 9_000,
                 4
@@ -754,6 +1194,7 @@ mod tests {
         let config = DrainConfig {
             interval_ms: 10,
             empty_poll_giveup: 1,
+            ..DrainConfig::default()
         };
         let state = WakeState {
             empty_polls: 3,
@@ -774,9 +1215,9 @@ mod tests {
             empty_polls: 2,
             ..WakeState::default()
         };
-        state.drained(1, 0, "r".to_owned(), false);
+        state.drained(1, 0, &folded("r"), false);
         assert_eq!(state.empty_polls, 3, "silence accumulates");
-        state.drained(2, 0, "r".to_owned(), true);
+        state.drained(2, 0, &folded("r"), true);
         assert_eq!(state.empty_polls, 0, "speaking resets it");
     }
 
@@ -835,8 +1276,8 @@ mod tests {
             record(FindingKind::Code, "r", "src/b.rs", "FIXME"),
         ];
         let scope = changed(&["src/a.rs", "src/b.rs"]);
-        let first = cycle(&records, &scope, None);
-        let again = cycle(&records, &scope, None);
+        let first = cycled(&records, &scope, None);
+        let again = cycled(&records, &scope, None);
         assert_eq!(first.result_id, again.result_id);
         assert_eq!(
             first.lines, again.lines,
@@ -848,7 +1289,7 @@ mod tests {
         let mut moved = records.clone();
         moved[0].instances[0].occurrences = Observation::Observed(9);
         assert_ne!(
-            cycle(&moved, &scope, None).result_id,
+            cycled(&moved, &scope, None).result_id,
             first.result_id,
             "a re-raise is new information"
         );
@@ -863,8 +1304,8 @@ mod tests {
         let b = record(FindingKind::Code, "r", "src/b.rs", "FIXME");
         let scope = changed(&["src/a.rs", "src/b.rs"]);
         assert_eq!(
-            render(&cycle(&[a.clone(), b.clone()], &scope, None)),
-            render(&cycle(&[b, a], &scope, None))
+            render(&cycled(&[a.clone(), b.clone()], &scope, None)),
+            render(&cycled(&[b, a], &scope, None))
         );
     }
 
@@ -874,7 +1315,7 @@ mod tests {
         // counted" — one line per IDENTITY, never one per record, and the
         // duplicate is a number rather than a silently dropped row.
         let one = record(FindingKind::Code, "r", "src/a.rs", "TODO");
-        let drained = cycle(
+        let drained = cycled(
             &[one.clone(), one.clone(), one],
             &changed(&["src/a.rs"]),
             None,
@@ -938,7 +1379,7 @@ mod tests {
         let scope = changed(&["src/a.rs"]);
         let emittable = record(FindingKind::Code, "r", "src/a.rs", "TODO");
         assert_eq!(
-            cycle(std::slice::from_ref(&emittable), &scope, None)
+            cycled(std::slice::from_ref(&emittable), &scope, None)
                 .lines
                 .len(),
             1,
@@ -961,7 +1402,7 @@ mod tests {
             },
         ] {
             assert!(!withheld.is_emittable());
-            let drained = cycle(std::slice::from_ref(&withheld), &scope, None);
+            let drained = cycled(std::slice::from_ref(&withheld), &scope, None);
             assert!(drained.lines.is_empty(), "un-actionable, so unspoken");
             // NOT a drain suppression: the engine did not choose to withhold
             // it, so counting it as one would put a schema gap into the
@@ -974,7 +1415,7 @@ mod tests {
     fn a_scope_filtered_record_is_carried_out_for_journalling_not_dropped() {
         // The suppression has to be recordable, or the drain's own filtering
         // inflates the false-positive rate it feeds.
-        let drained = cycle(
+        let drained = cycled(
             &[record(FindingKind::Code, "r", "src/a.rs", "TODO")],
             &changed(&[]),
             None,
@@ -998,13 +1439,13 @@ mod tests {
             line: Some(1),
         });
         let scope = changed(&["src/a.rs"]);
-        let here = cycle(
+        let here = cycled(
             &multi_records(&multi),
             &scope,
             Some(&Context::new("refs/heads/z")),
         );
         assert!(here.lines[0].ends_with(" 42"));
-        let fallback = cycle(&multi_records(&multi), &scope, None);
+        let fallback = cycled(&multi_records(&multi), &scope, None);
         assert!(
             fallback.lines[0].ends_with(" 1"),
             "no ref: the first instance, deterministically, never nothing"
@@ -1021,7 +1462,7 @@ mod tests {
         // pointer with no target would be a line the agent cannot act on.
         let mut empty = record(FindingKind::Sequence, "r", "src/a.rs", "TODO");
         empty.instances.clear();
-        assert!(cycle(&[empty], &changed(&[]), None).lines.is_empty());
+        assert!(cycled(&[empty], &changed(&[]), None).lines.is_empty());
     }
 
     #[test]
@@ -1031,7 +1472,7 @@ mod tests {
         let mut held = record(FindingKind::Sequence, "r", "src/a.rs", "TODO");
         held.instances[0].occurrences =
             Observation::NotObserved(crate::findings::NotObserved::RuleSkipped);
-        let drained = cycle(&[held], &changed(&[]), None);
+        let drained = cycled(&[held], &changed(&[]), None);
         assert!(drained.lines[0].ends_with(" held"));
     }
 
@@ -1041,7 +1482,7 @@ mod tests {
         // fingerprint, a rule id, a `path:line` and a count — and nothing that
         // could be the matched content, which the store does not hold anyway.
         let one = record(FindingKind::Code, "r", "src/a.rs", "TODO");
-        let drained = cycle(std::slice::from_ref(&one), &changed(&["src/a.rs"]), None);
+        let drained = cycled(std::slice::from_ref(&one), &changed(&["src/a.rs"]), None);
         assert_eq!(
             drained.lines,
             vec![format!(
@@ -1049,6 +1490,351 @@ mod tests {
                 one.identity.fingerprint.to_hex()
             )]
         );
+    }
+
+    // --- (f) CLOUD-82: the emission contract -------------------------------
+
+    /// `count` distinct identities for one rule, all inside one changed file.
+    fn spread(rule: &str, count: usize) -> Vec<FindingRecord> {
+        (0..count)
+            .map(|index| {
+                record(
+                    FindingKind::Code,
+                    rule,
+                    "src/a.rs",
+                    &format!("TODO {index}"),
+                )
+            })
+            .collect()
+    }
+
+    fn at_tier(mut record: FindingRecord, tier: AdvisoryTier) -> FindingRecord {
+        record.tier = tier;
+        record
+    }
+
+    fn generous() -> DrainConfig {
+        DrainConfig {
+            cardinality_cap: usize::MAX,
+            token_budget: usize::MAX,
+            ..DrainConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_rule_over_the_cardinality_cap_renders_one_summary_line_and_never_k_entries() {
+        // §7 (b). K+1 distinct identities for one rule collapse to exactly one
+        // pointer-only summary line — never K entries, which is the failure this
+        // cap exists to prevent: a rule firing everywhere spending the agent's
+        // whole payload on itself.
+        let config = DrainConfig {
+            cardinality_cap: 3,
+            ..generous()
+        };
+        let scope = changed(&["src/a.rs"]);
+
+        let under = cycle(&spread("r", 3), &scope, None, &config, &BTreeMap::new());
+        assert_eq!(under.lines.len(), 3, "at the cap, every identity speaks");
+        assert!(under.capped.is_empty());
+
+        let over = cycle(&spread("r", 4), &scope, None, &config, &BTreeMap::new());
+        assert_eq!(
+            over.lines,
+            vec!["rule r: 3+ findings".to_owned()],
+            "one line for the rule, and no entries at all"
+        );
+        assert_eq!(over.capped.len(), 4, "all four are withheld BY THE CAP");
+        assert!(
+            over.counts.is_empty(),
+            "nothing was shown, so nothing is remembered as having been shown"
+        );
+    }
+
+    #[test]
+    fn the_cap_is_per_rule_so_one_noisy_rule_never_silences_a_quiet_one() {
+        // The cap is a statement about a rule's health, so it must not be
+        // reachable by a rule's neighbours: a second rule with one finding still
+        // gets its pointer.
+        let config = DrainConfig {
+            cardinality_cap: 2,
+            ..generous()
+        };
+        let mut records = spread("noisy", 5);
+        records.push(record(FindingKind::Code, "quiet", "src/a.rs", "TODO once"));
+        let drained = cycle(
+            &records,
+            &changed(&["src/a.rs"]),
+            None,
+            &config,
+            &BTreeMap::new(),
+        );
+        assert_eq!(drained.lines.len(), 2);
+        assert!(
+            drained
+                .lines
+                .contains(&"rule noisy: 2+ findings".to_owned())
+        );
+        assert!(
+            drained.lines.iter().any(|line| line.contains(" quiet ")),
+            "the quiet rule keeps its pointer: {:?}",
+            drained.lines
+        );
+    }
+
+    #[test]
+    fn the_rendered_payload_stays_at_or_under_the_configured_token_budget() {
+        // §7 (a), both halves. The clamped payload is at or under the budget,
+        // and the SAME assertion over the unclamped set fails — without which
+        // this test could pass on a fixture that never approached the bar.
+        const BUDGET: usize = 60;
+        let records = spread("r", 40);
+        let scope = changed(&["src/a.rs"]);
+
+        let unclamped = cycle(&records, &scope, None, &generous(), &BTreeMap::new());
+        assert!(
+            crate::budget::estimate_tokens(&render(&unclamped)) > BUDGET,
+            "the fixture must actually overflow, or the clamp is untested"
+        );
+
+        let clamped = cycle(
+            &records,
+            &scope,
+            None,
+            &DrainConfig {
+                token_budget: BUDGET,
+                ..generous()
+            },
+            &BTreeMap::new(),
+        );
+        assert!(
+            crate::budget::estimate_tokens(&render(&clamped)) <= BUDGET,
+            "over budget: {:?}",
+            render(&clamped)
+        );
+        assert!(
+            !clamped.over_budget.is_empty(),
+            "and something was actually withheld"
+        );
+        assert_eq!(
+            clamped.lines.last().map(String::as_str),
+            Some(format!("budget: {} findings withheld", clamped.over_budget.len()).as_str()),
+            "the payload says how much it did not say: {:?}",
+            clamped.lines
+        );
+    }
+
+    #[test]
+    fn a_zero_budget_says_nothing_rather_than_saying_one_thing() {
+        // The honest bottom of the range. A budget that cannot afford even the
+        // closing summary emits nothing at all — and still carries every
+        // withheld identity out for journalling, so silence is recorded rather
+        // than merely observed.
+        let records = spread("r", 3);
+        let drained = cycle(
+            &records,
+            &changed(&["src/a.rs"]),
+            None,
+            &DrainConfig {
+                token_budget: 0,
+                ..generous()
+            },
+            &BTreeMap::new(),
+        );
+        assert!(drained.lines.is_empty());
+        assert_eq!(drained.over_budget.len(), 3);
+        assert!(drained.counts.is_empty());
+    }
+
+    #[test]
+    fn a_group_re_raise_says_old_to_new_over_one_in_scope_pointer() {
+        // §7 (c). A 500 -> 501 re-raise is ONE line carrying the delta and one
+        // `path:line`. There is no instance list to expand — occurrences are a
+        // count by construction — so 501 pointers is unreachable, and this pins
+        // that the count field is where the delta shows up.
+        let mut record = record(FindingKind::Code, "r", "src/a.rs", "TODO");
+        record.instances[0].occurrences = Observation::Observed(501);
+        let key = record.identity.fingerprint.to_hex();
+        let previous: BTreeMap<String, u64> = [(key.clone(), 500)].into_iter().collect();
+
+        let drained = cycle(
+            std::slice::from_ref(&record),
+            &changed(&["src/a.rs"]),
+            None,
+            &generous(),
+            &previous,
+        );
+        assert_eq!(drained.lines, vec![format!("{key} r src/a.rs:1 500->501")]);
+        assert_eq!(
+            drained.counts.get(&key).copied(),
+            Some(501),
+            "and the new count becomes the next drain's anchor"
+        );
+    }
+
+    #[test]
+    fn a_count_that_fell_is_a_ratchet_and_never_a_re_raise() {
+        // Re-raising on a falling count would punish incremental fixing: an
+        // agent that removed forty of fifty occurrences would be told about the
+        // rule again, which teaches it that partial fixes are not worth making.
+        let mut record = record(FindingKind::Code, "r", "src/a.rs", "TODO");
+        record.instances[0].occurrences = Observation::Observed(10);
+        let key = record.identity.fingerprint.to_hex();
+        let previous: BTreeMap<String, u64> = [(key.clone(), 50)].into_iter().collect();
+
+        let drained = cycle(
+            std::slice::from_ref(&record),
+            &changed(&["src/a.rs"]),
+            None,
+            &generous(),
+            &previous,
+        );
+        assert_eq!(drained.lines, vec![format!("{key} r src/a.rs:1 10")]);
+    }
+
+    #[test]
+    fn a_rising_count_never_moves_a_finding_ahead_of_a_stronger_tier() {
+        // §7 (e), and CLOUD-80's no-escalation law on the emission plane: a
+        // duplicate count is not evidence of urgency. Salience is a function of
+        // the tier, so the count cannot buy a better position however far it
+        // climbs — and the drain, taking a shared slice, cannot restate the tier
+        // either.
+        let loud = at_tier(
+            record(FindingKind::Code, "advisory-rule", "src/a.rs", "TODO loud"),
+            AdvisoryTier::Advisory,
+        );
+        let urgent = at_tier(
+            record(FindingKind::Code, "warning-rule", "src/a.rs", "TODO urgent"),
+            AdvisoryTier::Warning,
+        );
+        let scope = changed(&["src/a.rs"]);
+
+        let quiet = cycle(
+            &[loud.clone(), urgent.clone()],
+            &scope,
+            None,
+            &generous(),
+            &BTreeMap::new(),
+        );
+        assert!(
+            quiet.lines[0].contains(" warning-rule "),
+            "the stronger tier leads: {:?}",
+            quiet.lines
+        );
+
+        let mut escalating = loud.clone();
+        escalating.instances[0].occurrences = Observation::Observed(9_000);
+        let before = vec![escalating.clone(), urgent.clone()];
+        let shouted = cycle(&before, &scope, None, &generous(), &BTreeMap::new());
+        assert!(
+            shouted.lines[0].contains(" warning-rule "),
+            "nine thousand occurrences buy no position: {:?}",
+            shouted.lines
+        );
+        assert_eq!(
+            before,
+            vec![escalating, urgent],
+            "and the tier on the record itself is left exactly as it was found"
+        );
+    }
+
+    #[test]
+    fn a_capped_or_clamped_identity_is_never_remembered_as_something_the_agent_saw() {
+        // The remembered counts are the anchor for "what was it last told", so
+        // an identity withheld this boundary must not enter them: it would make
+        // the NEXT drain's re-raise silent, because the delta would be measured
+        // against a number nobody ever read.
+        let config = DrainConfig {
+            cardinality_cap: 1,
+            token_budget: usize::MAX,
+            ..DrainConfig::default()
+        };
+        let drained = cycle(
+            &spread("r", 4),
+            &changed(&["src/a.rs"]),
+            None,
+            &config,
+            &BTreeMap::new(),
+        );
+        assert_eq!(drained.lines, vec!["rule r: 1+ findings".to_owned()]);
+        assert!(drained.counts.is_empty());
+    }
+
+    #[test]
+    fn a_silent_drain_leaves_the_remembered_counts_where_they_were() {
+        // A payload the `resultId` short-circuit swallowed told the agent
+        // nothing. Advancing the anchor anyway would consume a re-raise the
+        // agent never saw.
+        let mut state = WakeState {
+            counts: [("abc".to_owned(), 1)].into_iter().collect(),
+            ..WakeState::default()
+        };
+        let spoke = Drained {
+            counts: [("abc".to_owned(), 7)].into_iter().collect(),
+            ..folded("r")
+        };
+        state.drained(1, 0, &spoke, false);
+        assert_eq!(
+            state.counts.get("abc").copied(),
+            Some(1),
+            "silence anchors nothing"
+        );
+        state.drained(2, 0, &spoke, true);
+        assert_eq!(state.counts.get("abc").copied(), Some(7));
+    }
+
+    #[test]
+    fn the_capped_and_the_clamped_are_withheld_for_different_recorded_reasons() {
+        // The two bounds measure different things, and the store has to be able
+        // to tell them apart: the cap is a property of the RULE and feeds
+        // rule-health telemetry, where the clamp is a property of THIS payload
+        // and the finding is reconsidered next boundary. One reason for both
+        // would put a transient suppression into the rule-health number.
+        let dir = std::env::temp_dir().join(format!("batten-reasons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // One rule over the cap, one rule under it whose entries the clamp then
+        // has no room for, and one code-anchored finding outside the changed
+        // scope. Three withheld sets, three reasons, one cycle.
+        let mut records = spread("noisy", 4);
+        records.extend(spread("quiet", 2));
+        records.push(record(FindingKind::Code, "elsewhere", "src/z.rs", "TODO"));
+        let drained = cycle(
+            &records,
+            &changed(&["src/a.rs"]),
+            None,
+            &DrainConfig {
+                cardinality_cap: 3,
+                token_budget: 20,
+                ..DrainConfig::default()
+            },
+            &BTreeMap::new(),
+        );
+        assert_eq!(drained.capped.len(), 4, "the noisy rule, by the cap");
+        assert_eq!(drained.scope_filtered.len(), 1, "the one outside the diff");
+        assert!(
+            !drained.over_budget.is_empty(),
+            "and the clamp took at least one of the quiet rule's entries"
+        );
+        let capped: BTreeSet<String> = drained
+            .capped
+            .iter()
+            .map(|record| record.identity.fingerprint.to_hex())
+            .collect();
+        assert!(
+            drained
+                .over_budget
+                .iter()
+                .all(|record| !capped.contains(&record.identity.fingerprint.to_hex())),
+            "the two sets are disjoint, so no identity is journalled under two reasons"
+        );
+        assert_eq!(
+            journal_suppressions(&dir, "shard", &drained).unwrap(),
+            drained.capped.len() + drained.scope_filtered.len() + drained.over_budget.len(),
+            "every withheld identity is recorded, once"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1060,7 +1846,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let mut state = WakeState::default();
-        state.drained(1_234, 7, "abc".to_owned(), true);
+        state.drained(1_234, 7, &folded("abc"), true);
         save_wake(&dir, "session-1", &state).unwrap();
         assert_eq!(load_wake(&dir, "session-1"), state);
 

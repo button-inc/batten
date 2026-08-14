@@ -1359,6 +1359,8 @@ fn drain_advisories(
         &findings::load_all(&dir)?,
         &git::changed_paths(here)?,
         context.as_ref(),
+        &config,
+        &state.counts,
     );
 
     // Persist before emit. A degraded store cannot record the suppression, and
@@ -1366,12 +1368,7 @@ fn drain_advisories(
     // The emission still happens — dedupe and reporting work read-only — so the
     // agent is not silenced by an out-of-date binary.
     if access.is_writable()
-        && drain::record_suppressions(
-            &dir,
-            &journal::shard_id(here),
-            &drained.scope_filtered,
-            findings::NotShown::DrainSuppressed,
-        )? > 0
+        && drain::journal_suppressions(&dir, &journal::shard_id(here), &drained)? > 0
     {
         // Fold the entries into their records now rather than leaving them for
         // whenever `state record` next runs. Two reasons, and the second is the
@@ -1394,7 +1391,28 @@ fn drain_advisories(
     if emitted {
         output::verdict(err, &drain::render(&drained))?;
     }
-    state.drained(now_ms, seqno, drained.result_id, emitted);
+
+    // Volume and suppression counts are the operator's, not the agent's: they
+    // say how the drain is behaving, which is a diagnostic about Batten rather
+    // than a finding about the repository. They travel on the `batten: ` channel
+    // at the verbose rung, so the default path — the one an agent reads — spends
+    // nothing on them (§5). Routing them into `systemMessage` proper rides
+    // CLOUD-44's per-host emitter shims.
+    output::message(
+        mode,
+        Verbosity::Verbose,
+        err,
+        &format!(
+            "hook: drained {} line(s); withheld {} out of scope, {} over the cardinality cap, {} \
+             over the token budget",
+            drained.lines.len(),
+            drained.scope_filtered.len(),
+            drained.capped.len(),
+            drained.over_budget.len(),
+        ),
+    )?;
+
+    state.drained(now_ms, seqno, &drained, emitted);
     drain::save_wake(&dir, session, &state)?;
     Ok(())
 }

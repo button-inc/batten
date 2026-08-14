@@ -81,6 +81,13 @@ fn state_cmd(dir: &Path, home: &Path, args: &[&str]) -> Output {
 /// which `filters_a_code_finding_whose_file_is_not_in_the_changed_scope` does
 /// deliberately, and this one must not do by accident.
 fn drained_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
+    marked_fixture(name, drain_table, "fn main() {}\n// TODO fix me\n")
+}
+
+/// [`drained_fixture`] over an arbitrary file body, so a test that needs a
+/// different number of distinct identities states that number rather than
+/// layering markers on top of this one's.
+fn marked_fixture(name: &str, drain_table: &str, body: &str) -> (PathBuf, PathBuf) {
     let root = scratch(name);
     let config = format!(
         "version = 1\n\n\
@@ -95,7 +102,7 @@ fn drained_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
     );
     let repo = Fixture::at(root.join("repo"))
         .config(&config)
-        .file("src/a.rs", "fn main() {}\n// TODO fix me\n")
+        .file("src/a.rs", body)
         .git()
         .base_commit()
         .build();
@@ -111,11 +118,7 @@ fn drained_fixture(name: &str, drain_table: &str) -> (PathBuf, PathBuf) {
 
     // Put the finding's file into the changed scope without re-recording, so the
     // stored instance still points at the path the filter is asked about.
-    common::write(
-        &repo,
-        "src/a.rs",
-        "fn main() {}\n// TODO fix me\n// edited\n",
-    );
+    common::write(&repo, "src/a.rs", &format!("{body}// edited\n"));
     (repo, home)
 }
 
@@ -290,6 +293,120 @@ fn a_session_less_payload_degrades_without_draining_or_failing() {
         "asking for detail produces it: {}",
         common::stderr(&loud)
     );
+}
+
+/// [`drained_fixture`] with `spans` distinct forbidden markers in one file, so
+/// one rule surfaces that many distinct identities in a single drain.
+///
+/// Distinct spans rather than a repeated one deliberately: identical spans fold
+/// into one identity with a count, which is the input the *re-raise* case wants
+/// and the opposite of what the cardinality cap is about.
+fn spread_fixture(name: &str, drain_table: &str, spans: usize) -> (PathBuf, PathBuf) {
+    let mut body = String::from("fn main() {}\n");
+    for index in 0..spans {
+        body.push_str(&format!("// TODO number {index}\n"));
+    }
+    marked_fixture(name, drain_table, &body)
+}
+
+#[test]
+fn a_rule_over_the_cardinality_cap_emits_one_summary_line_and_the_cap_is_config() {
+    // CLOUD-82 (b) over the binary, and the half a renderer unit test cannot
+    // reach: the cap that decides is the one in `batten.toml`. Same fixture,
+    // same findings, two caps, two payloads — a hard-coded K could not produce
+    // both columns, and a key that parsed but did nothing would produce neither.
+    let (capped, home_c) = spread_fixture(
+        "drain-cap-on",
+        "\n[drain]\ninterval_ms = 0\ncardinality_cap = 2\n",
+        4,
+    );
+    let lines = payload(&hook(&capped, &home_c, &post_tool("s1")));
+    assert_eq!(
+        lines,
+        vec!["rule no-todo: 2+ findings".to_owned()],
+        "one pointer-only summary line, never the four entries"
+    );
+
+    let (uncapped, home_u) = spread_fixture(
+        "drain-cap-off",
+        "\n[drain]\ninterval_ms = 0\ncardinality_cap = 10\n",
+        4,
+    );
+    let lines = payload(&hook(&uncapped, &home_u, &post_tool("s1")));
+    assert_eq!(
+        lines.len(),
+        4,
+        "under the cap every identity speaks: {lines:?}"
+    );
+
+    // The withheld identities are recorded under the reason that feeds
+    // rule-health telemetry — not as an ordinary drain suppression, which is
+    // what a transient bound would be.
+    let shown = state_cmd(&capped, &home_c, &["state", "list", "-J"]);
+    let document: serde_json::Value =
+        serde_json::from_slice(&shown.stdout).expect("state list -J is JSON");
+    assert_eq!(
+        document[0]["presentation"]["not-shown"], "over-cardinality-cap",
+        "the cap is journalled as itself: {document}"
+    );
+}
+
+#[test]
+fn the_emitted_payload_stays_under_the_configured_token_budget() {
+    // CLOUD-82 (a) over the binary. The budget is asserted against the bytes the
+    // host actually receives, with the same estimator `[budget]` gates
+    // instruction files with — a second estimator here could agree with nothing.
+    const BUDGET: usize = 20;
+    let (repo, home) = spread_fixture(
+        "drain-budget",
+        &format!("\n[drain]\ninterval_ms = 0\ncardinality_cap = 100\ntoken_budget = {BUDGET}\n"),
+        12,
+    );
+    let lines = payload(&hook(&repo, &home, &post_tool("s1")));
+    assert!(
+        batten::budget::estimate_tokens(&lines.join("\n")) <= BUDGET,
+        "over the configured budget: {lines:?}"
+    );
+    assert!(
+        lines.last().is_some_and(
+            |line| line.starts_with("budget: ") && line.ends_with(" findings withheld")
+        ),
+        "and the payload says how much it did not say: {lines:?}"
+    );
+}
+
+#[test]
+fn a_re_raised_group_reports_the_delta_rather_than_the_instance_list() {
+    // CLOUD-82 (c) over the binary. The same identity observed more often is one
+    // line carrying `old->new` — the identity did not change, the count did, and
+    // the delta is the whole of the news.
+    let (repo, home) = drained_fixture("drain-re-raise", "\n[drain]\ninterval_ms = 0\n");
+    let first = payload(&hook(&repo, &home, &post_tool("s1")));
+    assert_eq!(first.len(), 1);
+    assert!(
+        first[0].ends_with(" 1"),
+        "the first sighting is a count: {first:?}"
+    );
+
+    // The SAME span again: identical spans fold into one identity with a count
+    // of two, which is the multiset re-raise this asserts.
+    common::write(
+        &repo,
+        "src/a.rs",
+        "fn main() {}\n// TODO fix me\n// TODO fix me\n",
+    );
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0));
+
+    let again = payload(&hook(&repo, &home, &post_tool("s1")));
+    assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
+    assert!(
+        again[0].ends_with(" 1->2"),
+        "the count field carries the delta: {again:?}"
+    );
+    let fields: Vec<&str> = again[0].split(' ').collect();
+    assert_eq!(fields.len(), 4, "still a pointer, not an instance list");
+    assert_eq!(fields[2], "src/a.rs:2", "and one in-scope pointer");
 }
 
 #[test]
