@@ -7553,8 +7553,18 @@ const ATTRIBUTION_HOSTS: &[&str] = &[
 ];
 
 /// A repo whose attribution policy refuses one thing the fixture message says.
+///
+/// The **repo-local git identity is written**, and that is load-bearing rather
+/// than tidy (CLOUD-513). Message mode reads the identity git is about to stamp
+/// through `git var GIT_AUTHOR_IDENT`, and `common::git_command` supplies the
+/// fixture's identity transiently with `-c` — so it never reaches the repo
+/// config, and the `batten` child process resolves whatever the ambient global
+/// config carries. A developer's container has one and a CI runner does not, so
+/// without this the gate answers exit 1 ("could not look") there and exit 2 here:
+/// green locally, red in CI, which is the exact shape this repository has already
+/// been bitten by.
 fn attribution_fixture(name: &str) -> PathBuf {
-    Fixture::at(scratch(name))
+    let dir = Fixture::at(scratch(name))
         .config(concat!(
             "version = 1\n",
             "[attribution]\n",
@@ -7569,16 +7579,33 @@ fn attribution_fixture(name: &str) -> PathBuf {
         .file("pending-message", "Generated with SomeTool\n")
         .git()
         .base_commit()
-        .build()
+        .build();
+    // Written into the repo, where the binary's own `git var` will find it.
+    git_in(&dir, &["config", "user.name", "Accountable Human"]);
+    git_in(&dir, &["config", "user.email", "human@example.test"]);
+    dir
 }
 
 /// `attribution check -J` over the fixture message, optionally naming a host.
+///
+/// The ambient global and system git config are fenced off, so the fixture's own
+/// identity is the only one in play. Belt to the repo-local identity's suspenders,
+/// and the half that makes the case assert its own premise: without it a
+/// developer's ambient identity could satisfy the run for a reason CI does not
+/// share — which is how a suite comes to pass `verify` and fail CI.
 fn attribution_document(dir: &Path, harness: Option<&str>) -> Output {
     let mut args = vec!["attribution", "check", "--message", "pending-message", "-J"];
     if let Some(harness) = harness {
         args.extend(["--harness", harness]);
     }
-    batten_with(dir, &args, &[])
+    batten_with(
+        dir,
+        &args,
+        &[
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_SYSTEM", "/dev/null"),
+        ],
+    )
 }
 
 #[test]
