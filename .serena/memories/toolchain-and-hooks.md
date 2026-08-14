@@ -351,6 +351,32 @@ programs the engine will replace, and churning their contract now would rewrite
 suites that are about to be deleted. The hazard is recorded rather than fixed
 because the fix is the port itself.
 
+## Declare the break when you write it, not when `semver` asks
+
+`mise run semver` is **verify-time**, and a break declared late is not free: the
+`!` has to land on the commit that makes the break, which is routinely not HEAD
+by the time verify runs. Fixing it then means unwinding to that commit
+(`reset --soft`, un-stage the later work, `--amend`, re-commit) — interactive
+rebase is unavailable here. Declaring it on whichever commit happens to be HEAD
+**satisfies the gate**, because it reads the whole `base..head` range for any `!`
+or `BREAKING CHANGE:` — and leaves a `test(...)!` or `docs(...)!` in permanent
+history claiming an API break it did not make.
+
+Measured twice in one bundle (CLOUD-59), both by an author who knew:
+
+- `Provision` gained a field and its `url`/`sha256` became `Option` —
+  `constructible_struct_adds_field`, committed as a plain `feat(provision):`.
+- `rules::run_static`/`run_all` gained a parameter —
+  `function_parameter_count_changed`, committed as a plain `feat(rules):` **whose
+  own body explained the threading**. Knowing a change is breaking and marking it
+  breaking are independent acts; the second one is the one that gets skipped.
+
+The cheap check is at authoring time, not at verify time. A public struct that
+callers construct, a public fn's parameter list, an enum variant's position —
+touch one and the subject needs `!` before the commit exists. Recorded rather
+than mechanised: a commit-time semver check would need a baseline rustdoc build
+per commit, which is the cost `verify` exists to amortise.
+
 ## Never hand awk a regex through `-v`
 
 The value is escape-processed by the assignment before awk sees it as a pattern,

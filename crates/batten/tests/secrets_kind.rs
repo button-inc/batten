@@ -177,10 +177,13 @@ fn other_token() -> String {
 /// weakening the assertion to exclude the cache would have hidden a real leak in
 /// the one place Batten writes files nobody reads.
 fn shell_token(parts: [&str; 5]) -> String {
-    parts
-        .iter()
-        .map(|part| format!("\"{part}\""))
-        .collect::<String>()
+    let mut out = String::new();
+    for part in parts {
+        out.push('"');
+        out.push_str(part);
+        out.push('"');
+    }
+    out
 }
 
 /// A stub emitting ripsecrets' measured output shape for the given matches.
