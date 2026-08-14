@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.72](https://github.com/button-inc/batten/compare/v0.0.71...v0.0.72) - 2026-08-14
+
+### Added
+
+- *(hook)* derive per-harness hook wiring, and gate the committed copy against it
+- *(drain)* [**breaking**] answer an unchanged cycle with a marker, and never skip its record
+- *(drain)* [**breaking**] bound the advisory payload by a per-rule cap and a token budget
+
+### Fixed
+
+- *(state)* key the out-of-tree state root on the checkout, not its directory name
+- *(release)* publish the override schema, and gate the drift glob it moved
+- *(exec)* record the decision on an output match's exit code, and drop the rough edge
+
+### Other
+
+- *(pointer-only)* classify `payload field`, whose answer IS the payload
+- *(hooks)* [**breaking**] register the surviving hooks by path, and pay for it with a gate
+
 ## [0.0.71](https://github.com/button-inc/batten/compare/v0.0.70...v0.0.71) - 2026-08-14
 
 ### Added
