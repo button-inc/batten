@@ -185,7 +185,7 @@ of `memory-guard`, whose last five write shapes — a destination-only copy, an
 in-place stream edit, and a version-control move or remove — became expressible
 as `[[verb]]` qualifiers in CLOUD-442, so that guard is **deleted** rather than
 still runnable. It does **not** yet carry `run-shape-guard`, `issue-guard`,
-`claim-guard`, or `contract-drift` — each is a linked capability gap on
+or `contract-drift` — each is a linked capability gap on
 CLOUD-312, and each of those guards still runs by hand (`mise run <guard>`,
 payload on stdin). The bullets below describe every
 guard's predicate; which of them a hook actually fires is the settings file's
@@ -248,19 +248,23 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   because `issue-guard` already forces a key onto every one. `worth checking`
   (2 firings, both review prompts) and `deliberate` (16) were measured and
   dropped; one shape survived, firing once, correctly.
-- `claim-guard` is the pull-time half of the pair `issue-guard` finishes
-  (CLOUD-272): it denies a Write/Edit whose target is **inside the repo and not
-  git-ignored** when the current branch carries no claim receipt. `claim-check`
-  mints that receipt on its pullable path, under `.git/batten-receipts/`, keyed
-  by **branch** — not by SHA like `ready-guard`'s, because a claim attests to a
-  decision about an _issue_ that every commit on the branch continues to serve,
-  and a SHA-keyed one would demand a re-claim per commit. The naive form
-  ("refuse unless a `CLOUD-<n>` is In Progress") is not computable in a hook at
-  all: no tracker credential exists there, which is why `claim-check` is a pure
-  function of piped stdin. Scratch work is excluded structurally rather than by
-  tuning — git-ignored and out-of-repo paths are never judged — while an
+- **`claim-guard` is retired** (CLOUD-444); the pull-time half of the pair
+  `issue-guard` finishes (CLOUD-272) is now the `claim-needs-receipt` row in
+  `batten.toml` — a `receipt` rule with `trigger = "write"` and `key = "branch"`.
+  It denies a write whose target is **inside the repo and not git-ignored** when
+  the current branch carries no claim receipt. `claim-check` still mints that
+  receipt on its pullable path, under `.git/batten-receipts/`, and the engine
+  reads the same file: keyed by **branch**, not by SHA like `ready-guard`'s,
+  because a claim attests to a decision about an _issue_ that every commit on the
+  branch continues to serve, and a SHA-keyed one would demand a re-claim per
+  commit. The naive form ("refuse unless a `CLOUD-<n>` is In Progress") is not
+  computable in a hook at all: no tracker credential exists there, which is why
+  `claim-check` is a pure function of piped stdin. Scratch work is excluded
+  structurally rather than by tuning — git-ignored, out-of-repo and `.git` paths
+  are never judged, and a detached HEAD has no branch to key on — while an
   untracked-but-not-ignored file **is**, since opening a new feature file is the
-  first edit this catches. Bypass: `BATTEN_CLAIM_GUARD_BYPASS=1`.
+  first edit this catches. There is no `BATTEN_CLAIM_GUARD_BYPASS`: a mediated
+  deny takes the engine's own hatch.
 - `run-shape-guard` denies three ways of throwing away a **verdict-bearing**
   command's exit status: piping it into a pager or filter, following it with `;`
   or `||` in the same list, and detaching it with `nohup`/`&`. A fourth shape

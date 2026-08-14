@@ -2,7 +2,7 @@
 # CLOUD-508. The guard that demands the read receipt be RECENT.
 #
 # The rows below are written so that a gate testing mere existence — which is
-# what `claim-guard` and `issue-search-guard` do, correctly, for their own
+# what the claim receipt and `issue-search-guard` do, correctly, for their own
 # questions — fails exactly one of them. That row is the incident.
 
 setup() {

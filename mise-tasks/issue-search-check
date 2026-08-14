@@ -2,7 +2,8 @@
 #MISE description="Gate: you searched the board before filing (reads a list_issues payload on stdin, mints the receipt issue-search-guard demands)"
 #
 # CLOUD-505. Every path ONTO the board is gated except the one that creates rows.
-# `claim-check` refuses an issue already claimed, `claim-guard` an edit with no
+# `claim-check` refuses an issue already claimed, the engine's claim receipt an
+# edit with no
 # claim receipt, `issue-guard` a PR naming no issue, `ready-lint` an unrefined
 # block, `graph-check` an incoherent frontier. Filing has none, and the cost is
 # not a redundant row: measured 2026-08-13, a session blocked behind a starved
@@ -24,7 +25,7 @@
 # pure function of the filesystem.
 #
 # THE HONEST LIMIT, stated because it will occur to every reader: nothing stops a
-# nonsense search satisfying this. It does not have to. `claim-guard` has the
+# nonsense search satisfying this. It does not have to. The claim receipt has the
 # identical property — its receipt attests that a read happened, not that it was
 # understood — and that was accepted there deliberately. The gate forces the
 # ACTION; an agent that runs the search sees the results, and seeing them is the

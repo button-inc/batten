@@ -971,13 +971,13 @@ run = '''
 # should exist at all — a cheaper question than any below it, and a different
 # kind of question from all of them.
 #
-# `claim-guard` is the fast feedback for this and it is a HOOK, which means it
-# can be unloaded; today it is not even registered. So the load-bearing half sits
-# here, in the one task every landing path runs. `claim-check` mints the receipt
-# on its pullable path only, so its presence attests that some issue was checked
-# for a competitor AND for refinement that predates this session.
+# `batten hook`'s `claim-needs-receipt` row is the fast feedback for this and it
+# is a HOOK, which means it can be unloaded. So the load-bearing half sits here,
+# in the one task every landing path runs. `claim-check` mints the receipt on its
+# pullable path only, so its presence attests that some issue was checked for a
+# competitor AND for refinement that predates this session.
 #
-# Detached HEAD is exempt, the same carve-out `claim-guard` makes deliberately:
+# Detached HEAD is exempt, the same carve-out the engine makes deliberately:
 # a rebase detaches, and refusing there would fail every lap of `land` for a
 # state that is not a defect.
 claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"

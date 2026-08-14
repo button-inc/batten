@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # CLOUD-505. The guard that demands the search receipt.
 #
-# Split from `issue-search-check.bats` for the reason `claim-guard` is split from
+# Split from `issue-search-check.bats` for the reason the claim gate is split from
 # `claim-check`: `mutant` derives a suite from the gate's own name, so a decision
 # and its adapter each need their own file to be coverable at all.
 #

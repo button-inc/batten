@@ -249,6 +249,53 @@ retry — or just `mise run land`, which drives the whole loop. A red run on a \
 freshly-readied PR means that step was skipped, and the CI minutes are already \
 spent by then."""
 
+# `claim-guard`, as config (CLOUD-444) — the other half of the pair
+# `ready-needs-receipts` starts, and the one the receipt kind could not express
+# until this change.
+#
+# TWO COLUMNS DO THE WORK, and neither is a tuning knob:
+#
+#   trigger = "write"  The precondition is due before the work is TOUCHED, not at
+#                      some recognisable command. `issue-guard` fires at `gh pr
+#                      create`, which is the END of the work; the edit this
+#                      catches is the first one, whatever tool makes it. No
+#                      command shape can express that, which is why every write
+#                      went unjudged by anything but the protected-path gate.
+#   key = "branch"     A claim attests to a decision about an ISSUE, and every
+#                      commit on the branch continues to serve it. A HEAD-keyed
+#                      claim would expire on every commit and amend — the
+#                      false-positive rate that gets a guard bypassed, so the
+#                      wrong keying here would not merely annoy, it would end
+#                      enforcement.
+#
+# What is NOT here, deliberately: the exclusion set. Git-ignored paths, paths
+# outside the repository and `.git/*` are never judged, and those are questions
+# about a checkout rather than policy — so they live at the boundary
+# (`receipt::judgeable`) and this file does not restate them. A detached HEAD has
+# no branch to key a claim on and therefore allows, which is what keeps a rebase
+# conflict resolution — the one moment the contract says a human decides —
+# editable.
+#
+# The receipt is minted by `mise run claim-check` on its pullable path, and that
+# task's write side is untouched by this row: the engine reads the file it already
+# writes.
+[[rule]]
+id = "claim-needs-receipt"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+trigger = "write"
+checks = ["claim"]
+key = "branch"
+reason = """
+Pull the issue first: search the board (`mise run graph-check` prints the ready \
+frontier), then pipe the issue's `get_issue` payload to `mise run claim-check`. \
+It exits non-zero if someone is already on it, and mints the receipt if not. \
+Then move it Todo -> In Progress and assign yourself — the tracker automation \
+will not, since it fires on the PR event. Scratch work is not gated: anything \
+git-ignored, anything outside the repository, and anything under `.git` is never \
+judged."""
+
 # A conflict marker reaching a source file means a botched merge landed — and
 # this row DELEGATES that check rather than re-implementing it (CLOUD-229).
 #
@@ -962,7 +1009,7 @@ expires = "2026-11-14"
 
 [[waiver]]
 rule = "bats-tests-not-deleted"
-reason = "Two retirements, both deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), and CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, taking `tests/memory-guard.bats` with it — the corpus moves to `crates/batten/tests/mediated_verbs.rs`, so what falls is the bats count, not the coverage."
+reason = "Two retirements, both deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, and CLOUD-444 retires `claim-guard` once a receipt row can be branch-keyed and write-triggered. Each takes its bats suite with it and each corpus moves to a Rust one (`crates/batten/tests/mediated_verbs.rs`, `crates/batten/tests/claim_receipt.rs`), so what falls is the bats count, not the coverage."
 expires = "2026-09-13"
 
 [ci]

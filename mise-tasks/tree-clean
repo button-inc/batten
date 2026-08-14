@@ -32,7 +32,8 @@
 # dirty for the same reason: the index is not HEAD. Ignored paths are excluded
 # STRUCTURALLY — `git status` never reports them — so `target/`, `.serena/cache/`,
 # `batten.local.toml` and the worktree dirs are outside the judgement rather than
-# tuned out of it, the same structural exclusion `claim-guard` uses for scratch.
+# tuned out of it, the same structural exclusion the claim receipt uses for scratch
+# (`receipt::judgeable`).
 #
 # Output is a pointer (non-negotiable rule 4): a count and the porcelain
 # status/path lines, never a diff body.

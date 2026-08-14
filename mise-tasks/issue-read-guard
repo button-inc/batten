@@ -15,7 +15,7 @@
 # Fails OPEN on everything it cannot establish, and on BATTEN_ISSUE_READ_BYPASS=1.
 #
 # The mutation turns the recency test back into an existence test — a receipt of
-# any age authorises the write. That is precisely the gate `claim-guard` and
+# any age authorises the write. That is precisely the gate the claim receipt and
 # `issue-search-guard` implement for their own questions, and precisely what let
 # the CLOUD-504 groom through, so every DENY row for a MISSING receipt still
 # passes under it. Only the aged rows can catch it.

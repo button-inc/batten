@@ -1175,7 +1175,7 @@ rival_holds_for() { # <branch>
 # the lease can change hands, and no caller can take it without leaving one.
 
 # The key is the branch with `/` folded to `-`, the transform `claim-check` and
-# `claim-guard` already use — read here the same way the task writes it, and
+# `receipt::branch_receipt_name` already uses — read here the same way the task writes it, and
 # exercised on a SLASHED branch because that is the only shape this repository
 # actually produces.
 receipt() {

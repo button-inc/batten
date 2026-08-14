@@ -2,7 +2,7 @@
 # CLOUD-512. The guard that demands a move to In Review be ADJUDICATED.
 #
 # The rows are written so that a gate testing mere receipt EXISTENCE — which is
-# what `claim-guard` and `issue-search-guard` do, correctly, for their own
+# what the claim receipt and `issue-search-guard` do, correctly, for their own
 # questions — fails the wrong-id row and the stale row. Those two are the
 # incident: the CLOUD-480 sweep would have satisfied an existence gate, because
 # the same session had run `graph-check` over a different closure minutes earlier.

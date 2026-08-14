@@ -470,7 +470,8 @@ lease_receipt() {
 	[ -n "$land_branch" ] || return 0
 	dir=$(git rev-parse --git-dir 2>/dev/null) || return 0
 	dir="$dir/batten-receipts"
-	# `/` -> `-`, the same transform `claim-check` and `claim-guard` already use
+	# `/` -> `-`, the same transform `claim-check` and `receipt::branch_receipt_name`
+	# already use
 	# on their branch-keyed receipt. Every branch in this repository carries a
 	# slash (`claude/…`, `wenzowski/…`), and a raw name makes `lease.claude/foo`
 	# a path through a directory that does not exist — the write fails, no

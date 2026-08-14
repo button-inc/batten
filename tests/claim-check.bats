@@ -159,7 +159,7 @@ payload() {
 #
 # `claim-check` was a pure read: it answered "is this pullable" and left no
 # trace, so nothing downstream could tell a claimed branch from an unclaimed
-# one. The receipt is that answer made durable, and `claim-guard` is its only
+# one. The receipt is that answer made durable, and the engine's claim row is its only
 # reader.
 
 setup_repo() {
@@ -325,7 +325,7 @@ refined_after_the_stamp() {
 
 @test "the bypass mints a receipt in BOTH refused cases, and says so" {
 	# The hatch is a human's visible decision, so it is loud. It is also its own
-	# variable: `BATTEN_CLAIM_GUARD_BYPASS` says "do not refuse my edit", which is
+	# variable: the mediated gate's hatch says "do not refuse my edit", which is
 	# a different decision from "mint a receipt for a story refined just now".
 	setup_repo
 	local later

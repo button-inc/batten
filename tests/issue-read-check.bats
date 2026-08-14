@@ -2,7 +2,7 @@
 # CLOUD-508. The half that records how fresh a read of an issue was.
 #
 # Split from `issue-read-guard.bats` for the reason `claim-check` is split from
-# `claim-guard`: `mutant` derives a suite from the gate's own name, so a decision
+# the claim gate: `mutant` derives a suite from the gate's own name, so a decision
 # and its adapter each need their own file to be coverable at all.
 #
 # Every test runs inside a throwaway `git init`, because the subject IS the git
@@ -40,7 +40,7 @@ payload() {
 }
 
 # The receipt must carry WHEN, not only THAT. Existence alone is the gate this
-# replaces — `claim-guard`'s shape — and it cannot express a bound.
+# replaces — the claim gate's shape — and it cannot express a bound.
 @test "the receipt records the revision seen and the time it was seen" {
 	payload CLOUD-7 "2026-08-13T03:00:00.000Z" | "$CHECK" >/dev/null
 	local line

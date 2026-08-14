@@ -99,8 +99,8 @@
 #MUTANT takeover-unrecorded|s/^\t\tif \[ "\$takeover" -ne 0 \]; then$/\t\tif false; then/|NAMES the refusals it overrode
 set -euo pipefail
 
-# The one escape hatch, and it is deliberately not shared with `claim-guard`'s
-# (`BATTEN_CLAIM_GUARD_BYPASS`). That one says "do not refuse my edit"; this one
+# The one escape hatch, and it is deliberately not shared with the mediated
+# gate's (`batten hook`'s own). That one says "do not refuse my edit"; this one
 # says "mint a receipt for a story refined in this session". They are different
 # decisions and a single switch for both would grant the second while a human
 # only meant the first. A gate with false positives gets bypassed, and a bypassed
@@ -225,7 +225,7 @@ while read -r id; do
 	#
 	# OUTSIDE A CHECKOUT the question is not applicable rather than unanswerable,
 	# and skipping it there closes no hole: the receipt is a side effect of being
-	# in a clone, so a run from anywhere else mints nothing for `claim-guard` or
+	# in a clone, so a run from anywhere else mints nothing for the mediated gate or
 	# `verify` to honour. Refusing here would only break the composability
 	# `graph-check` and this gate share — a caller inspecting the board from
 	# anywhere still deserves the verdict.
@@ -292,7 +292,8 @@ fi
 #
 # This gate used to be a pure read: it answered "is this pullable" and left no
 # trace, so nothing downstream could tell a claimed branch from an unclaimed one
-# — and `claim-guard` needs exactly that distinction to sit between discovering
+# — and the mediated claim gate needs exactly that distinction to sit between
+# discovering
 # work and editing files for it.
 #
 # Written ONLY here, on the pullable path, which is what makes it a claim rather
@@ -315,11 +316,12 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 	[ -n "$branch" ] &&
 	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
 	# Slashes are the one character a filename cannot carry; the substitution
-	# must match `claim-guard`'s spelling exactly.
+	# must match `receipt::branch_receipt_name`'s spelling exactly, which
+	# `receipt::tests::the_branch_receipt_filename_matches_the_minting_task` pins.
 	#
 	# WIDENED FROM A BARE ID LIST (CLOUD-431) to the record the sequence question
 	# needs — the ids, the `ready-lint` verdict at claim time, when the claim was
-	# made, and the `updatedAt` the payload reported. `claim-guard` reads only the
+	# made, and the `updatedAt` the payload reported. The mediated gate reads only the
 	# file's EXISTENCE, so nothing downstream breaks on the new lines; they are
 	# for the human debugging a refusal, who otherwise has to reconstruct which
 	# revision the claimant had in front of them. Line 1 keeps the id list exactly

@@ -3,7 +3,7 @@
 #
 # CLOUD-505. The pure decision is `issue-search-check`, which owns the reasoning
 # and mints the receipt; this file is the adapter, split for the same reason
-# `claim-guard` is split from `claim-check` — the decision stays directly
+# the claim gate is split from `claim-check` — the decision stays directly
 # callable and directly testable, and the receipt path is spelled in both places
 # only because a hook cannot shell out to a second task per tool call.
 #
@@ -22,7 +22,7 @@
 # prefix-anchored matcher degrades to "never fires" rather than to "fires on the
 # wrong tool".
 #
-# FAILS OPEN on everything it cannot establish, exactly as `claim-guard` does: an
+# FAILS OPEN on everything it cannot establish, exactly as the claim receipt does: an
 # unparseable payload, no git dir, a detached HEAD, or the bypass. A guard that
 # blocked filing because it could not read its own inputs would be worse than the
 # gap it closes — the board is how anything gets recorded at all.
@@ -87,7 +87,7 @@ jq -n --arg b "$branch" '{
     hookEventName: "PreToolUse",
     permissionDecision: "deny",
     permissionDecisionReason: (
-      "Refused: branch \"" + $b + "\" carries no issue-search receipt, so this would file a row without anyone having looked for an existing one.\n\nEvery other path onto the board is gated — claim-check, claim-guard, issue-guard, ready-lint, graph-check. Filing was not, and it cost a measured 45 minutes of re-deriving a cause that was already filed, plus two wrong diagnoses reported to a human, before a duplicate was opened (CLOUD-505).\n\nSearch first, then record it:\n\n  mcp__Linear__list_issues with a query drawn from the finding\n  ... pipe that payload to: mise run issue-search-check\n\nA search that returns nothing still mints the receipt — zero hits is the honest outcome for a genuinely new finding, and is not refused.\n\nThis does not judge whether you are filing a duplicate; it cannot, and a gate that guessed would be a model verdict. It only refuses to let the question go unasked. Updating an existing issue is never gated. Bypass with BATTEN_ISSUE_SEARCH_BYPASS=1."
+      "Refused: branch \"" + $b + "\" carries no issue-search receipt, so this would file a row without anyone having looked for an existing one.\n\nEvery other path onto the board is gated — claim-check, the mediated claim receipt, issue-guard, ready-lint, graph-check. Filing was not, and it cost a measured 45 minutes of re-deriving a cause that was already filed, plus two wrong diagnoses reported to a human, before a duplicate was opened (CLOUD-505).\n\nSearch first, then record it:\n\n  mcp__Linear__list_issues with a query drawn from the finding\n  ... pipe that payload to: mise run issue-search-check\n\nA search that returns nothing still mints the receipt — zero hits is the honest outcome for a genuinely new finding, and is not refused.\n\nThis does not judge whether you are filing a duplicate; it cannot, and a gate that guessed would be a model verdict. It only refuses to let the question go unasked. Updating an existing issue is never gated. Bypass with BATTEN_ISSUE_SEARCH_BYPASS=1."
     )
   }
 }'

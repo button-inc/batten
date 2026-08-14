@@ -204,7 +204,7 @@ called() {
 
 # --- the claim receipt (CLOUD-431) -------------------------------------------
 #
-# `claim-guard` is the fast feedback for this and it is a HOOK, which can be
+# `batten hook`'s claim row is the fast feedback for this and it is a HOOK, which can be
 # unloaded — today it is not even registered in `.claude/settings.json`. So the
 # load-bearing half sits here, in the one task every landing path runs, and these
 # cases are what make that a guarantee rather than an intention.
@@ -228,7 +228,7 @@ called() {
 }
 
 @test "a detached HEAD is exempt, because a rebase detaches" {
-	# The same carve-out `claim-guard` makes deliberately. Refusing here would
+	# The same carve-out the engine's claim row makes deliberately. Refusing here would
 	# fail every lap of `land`, which detaches to rebase — a state that is not a
 	# defect and that no claim receipt could describe.
 	cat >"$STUB/git" <<-EOF
