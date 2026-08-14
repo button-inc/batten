@@ -344,11 +344,15 @@ fn exit_code_contract() {
             expected: 1,
         },
         Case {
-            name: "config show, missing config → usage",
+            // CLOUD-70 retired the usage error here, and the two cases above are
+            // what keep that from being a blanket relaxation: absence resolves
+            // to the compiled-in default layer, while a config that is *present*
+            // and cannot be honoured is refused exactly as before.
+            name: "config show, missing config → the default layer",
             args: &["config", "show"],
             config: None,
             env: &[],
-            expected: 1,
+            expected: 0,
         },
         Case {
             name: "config show, rule omitting severity → usage (no implicit fallback)",
@@ -2397,9 +2401,15 @@ fn a_library_usage_error_is_loud_under_silent_too() {
     // `output::error`, which *does* see the mode. Several gates in this repo read
     // this message rather than the code (CLOUD-40's DoD, CLOUD-48's fail-loud
     // test), so the invariant is bundle-wide, not local to clap.
-    let dir = scratch("silent-missing-config");
+    //
+    // The vehicle is an *unsupported version* rather than a missing config,
+    // which is what it used to be: CLOUD-70 made absence resolve to the default
+    // layer, so it no longer raises anything. The invariant under test is
+    // unchanged — a library-raised `UsageError` is loud at the quietest rung —
+    // and a present-but-unhonourable config is still exactly that error.
+    let dir = scratch("silent-invalid-config");
     fs::create_dir_all(&dir).expect("create dir");
-    let _ = fs::remove_file(dir.join("batten.toml"));
+    fs::write(dir.join("batten.toml"), "version = 2\n").expect("write batten.toml");
     let output = batten_with(&dir, &["--silent", "config", "show"], &[]);
     assert_eq!(output.status.code(), Some(1));
     assert!(

@@ -32,6 +32,14 @@
 //! `batten config show` prints the resolved config **with its sources**, so
 //! which layer won a key is an answer the tool gives rather than one a reader
 //! has to reconstruct.
+//!
+//! **A repository with no authority at all resolves to layer 0** (CLOUD-70):
+//! [`config::defaults`] becomes the whole configuration and every key attributes
+//! to [`Source::Default`]. That adds no place configuration may come from — the
+//! chain is still one committed file plus raise-only overrides, with no upward
+//! walk — it only stops the chain from refusing when the first layer above the
+//! default is missing. `--config-from` is the one exception and stays strict;
+//! [`authority`] says why.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -169,6 +177,15 @@ pub struct Overrides {
 /// fixed and the map is sorted, so the output is byte-stable (§6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Resolved {
+    /// Whether a committed authority existed at all (CLOUD-70).
+    ///
+    /// Skipped by serde, exactly as [`Resolved::sources`] is, and for the same
+    /// reason: the emitted document is the *config*, and this is a fact about
+    /// where the config came from. `config show` already says it in the language
+    /// it has — every key attributed to `default` — so a key here would be a
+    /// second, redundant spelling that `check`'s stdout would then have to carry.
+    #[serde(skip_serializing)]
+    pub authority: config::Authority,
     /// The schema version of the committed authority.
     pub version: u32,
     /// The minimum Batten version the authority permits (enforcement: CLOUD-33).
@@ -480,17 +497,27 @@ pub fn resolve(dir: &Path, overrides: &Overrides) -> Result<Resolved> {
 
 /// Load the committed authority — layer 1 of the §8 chain.
 ///
-/// Required: there is no upward walk to fall back on, and a missing authority is
-/// bad input, not an empty policy.
+/// **Optional in the working tree, required from a ref.** A missing working-tree
+/// `batten.toml` resolves to [`config::defaults`], layer 0 (CLOUD-70): there is
+/// still no upward walk to fall back on — the answer comes from the binary, not
+/// from somewhere else on disk — so this is zero-config onboarding and not a
+/// second place configuration may live.
 ///
 /// Under `--config-from`, it is read from a git ref rather than the working
 /// tree — same layer, same precedence, different source. That is the whole trust
 /// mechanism: policy loads out of band of the change under review, so a branch
-/// cannot relax the rules it is judged by (CLOUD-31).
-fn authority(dir: &Path, config_from: Option<&str>) -> Result<config::Config> {
+/// cannot relax the rules it is judged by (CLOUD-31). **That path stays strict**,
+/// and the asymmetry is deliberate: a caller naming a ref asked to be judged by
+/// what that ref declares, so answering with the engine's defaults would let a
+/// branch that deletes `batten.toml` pick its own policy — the exact weakening
+/// the flag exists to prevent.
+fn authority(dir: &Path, config_from: Option<&str>) -> Result<(config::Config, config::Authority)> {
     match config_from {
-        Some(reference) => crate::trust::load_base(dir, reference),
-        None => config::load(&dir.join(config::CONFIG_FILE)),
+        Some(reference) => Ok((
+            crate::trust::load_base(dir, reference)?,
+            config::Authority::Present,
+        )),
+        None => config::load_authority(&dir.join(config::CONFIG_FILE)),
     }
 }
 
@@ -505,7 +532,7 @@ pub fn resolve_with_env(
     overrides: &Overrides,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Resolved> {
-    let repo = authority(dir, overrides.config_from.as_deref())?;
+    let (repo, present) = authority(dir, overrides.config_from.as_deref())?;
 
     // Layer 0 — the compiled-in default, overwritten by anything above it.
     let mut strictness = Layered {
@@ -535,11 +562,10 @@ pub fn resolve_with_env(
     }
 
     let mut tables = Tables {
-        rules_source: if repo.rules.is_empty() {
-            Source::Default
-        } else {
-            Source::RepoConfig
-        },
+        // Presence, not emptiness: the default layer now carries a rule of its
+        // own (CLOUD-70), so "the table is non-empty" no longer implies a
+        // committed file said so.
+        rules_source: declared_by(present, !repo.rules.is_empty()),
         rules: repo.rules.clone(),
         exec_patterns: repo.exec_patterns.clone(),
         waivers: repo.waivers.clone(),
@@ -547,7 +573,7 @@ pub fn resolve_with_env(
 
     // The three policy-bearing path sets (CLOUD-37), seeded from the authority
     // and narrowable by the local layer below (CLOUD-239).
-    let mut paths = Paths::from_authority(&repo);
+    let mut paths = Paths::from_authority(&repo, present);
 
     // Layer 2 — the git-ignored local file. Optional, and raise-only.
     let local_path = dir.join(LOCAL_CONFIG_FILE);
@@ -604,7 +630,28 @@ pub fn resolve_with_env(
             fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
 
-    Ok(assemble(&repo, strictness, fail_on_warning, tables, paths))
+    Ok(assemble(
+        &repo,
+        present,
+        strictness,
+        fail_on_warning,
+        tables,
+        paths,
+    ))
+}
+
+/// Which layer a key that only the authority can set came from.
+///
+/// One function for the whole document, so the two halves of the answer cannot
+/// drift apart: a key is `repo-config` when a committed authority exists **and**
+/// declares it, and `default` otherwise. Absence of the authority collapses the
+/// first half, which is what makes every key on an unconfigured repository read
+/// `default` (CLOUD-70) without that being written out per key.
+const fn declared_by(present: config::Authority, declared: bool) -> Source {
+    match present {
+        config::Authority::Present if declared => Source::RepoConfig,
+        _ => Source::Default,
+    }
 }
 
 /// The append-only tables, carried as one value through the layering.
@@ -726,14 +773,8 @@ impl Paths {
     /// Attribution follows the same present-means-`repo-config` rule every
     /// authority key gets, so a set the local layer never touches reads exactly
     /// as it did before these keys became layerable.
-    fn from_authority(repo: &config::Config) -> Self {
-        let authority_set = |present: bool| {
-            if present {
-                Source::RepoConfig
-            } else {
-                Source::Default
-            }
-        };
+    fn from_authority(repo: &config::Config, present: config::Authority) -> Self {
+        let authority_set = |declared: bool| declared_by(present, declared);
         Paths {
             scope_source: authority_set(!repo.scope.is_empty()),
             protected_source: authority_set(!repo.protected.is_empty()),
@@ -860,6 +901,7 @@ fn merge_local_waivers(
 /// ending in a field-by-field copy of every key the authority carries.
 fn assemble(
     repo: &config::Config,
+    present: config::Authority,
     strictness: Layered<Strictness>,
     fail_on_warning: Layered<bool>,
     tables: Tables,
@@ -869,12 +911,14 @@ fn assemble(
     // into the document rather than cloned beside it.
     let sources = attribution(
         repo,
+        present,
         strictness.source,
         fail_on_warning.source,
         tables.rules_source,
         &paths,
     );
     Resolved {
+        authority: present,
         version: repo.version,
         min_batten_version: repo.min_batten_version.clone(),
         strictness: strictness.value,
@@ -911,22 +955,19 @@ fn assemble(
 /// `default` — so the two cannot drift apart by being written out per key.
 fn attribution(
     repo: &config::Config,
+    present: config::Authority,
     strictness: Source,
     fail_on_warning: Source,
     rules: Source,
     paths: &Paths,
 ) -> BTreeMap<&'static str, Source> {
-    let authority_set = |present: bool| {
-        if present {
-            Source::RepoConfig
-        } else {
-            Source::Default
-        }
-    };
+    let authority_set = |declared: bool| declared_by(present, declared);
     BTreeMap::from([
-        // `version` always comes from the authority: the file is required, and
-        // the key is required within it.
-        ("version", Source::RepoConfig),
+        // `version` comes from the authority whenever there is one: the key is
+        // required within the file. With no file it is the defaults' own
+        // `SUPPORTED_VERSION`, which is layer 0 like everything else on an
+        // unconfigured repository (CLOUD-70).
+        ("version", authority_set(true)),
         (
             "min_batten_version",
             authority_set(repo.min_batten_version.is_some()),
@@ -1472,13 +1513,145 @@ mod tests {
 
     #[test]
     fn there_is_no_upward_walk() {
-        // §8: no directory walk. A config in the parent must not be found.
-        let parent = repo("resolve-no-walk", "version = 1\n", None);
+        // §8: no directory walk, and CLOUD-70 does not weaken it — it is the
+        // property most at risk from "zero-config", so this case is sharper now
+        // than when it only had to observe an error. The child resolves to the
+        // DEFAULTS; the parent's `strictness = "strict"` must not reach it.
+        let parent = repo(
+            "resolve-no-walk",
+            "version = 1\nstrictness = \"strict\"\n",
+            None,
+        );
         let child = parent.join("child");
         fs::create_dir_all(&child).unwrap();
-        let err = resolve_with_env(&child, &Overrides::default(), &no_env).unwrap_err();
+        let resolved = resolve_with_env(&child, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(resolved.authority, config::Authority::Absent);
+        assert_eq!(
+            resolved.strictness,
+            Strictness::Standard,
+            "the parent's config must not be found by walking up"
+        );
+        assert_eq!(resolved.sources["strictness"], Source::Default);
+    }
+
+    #[test]
+    fn an_unconfigured_repository_resolves_to_the_default_layer() {
+        // CLOUD-70: absence of the authority IS layer 0, never an error.
+        let dir = repo("resolve-zero-config", "version = 1\n", None);
+        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(resolved.authority, config::Authority::Absent);
+        assert_eq!(resolved.version, config::SUPPORTED_VERSION);
+        assert_eq!(resolved.strictness, Strictness::Standard);
+        assert!(!resolved.fail_on_warning);
+    }
+
+    #[test]
+    fn every_key_of_an_unconfigured_repository_is_attributed_to_default() {
+        // The §5 obligation `config show` answers: with no committed file there
+        // is no key any layer above the default could have set, and `version` —
+        // which used to be hard-coded `repo-config` because the file was
+        // required — is the one this would most easily get wrong.
+        let dir = repo("resolve-zero-config-sources", "version = 1\n", None);
+        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        let document = resolved
+            .attributed()
+            .expect("every emitted key is attributed");
+        for (key, attributed) in &document {
+            assert_eq!(
+                attributed.source,
+                Source::Default,
+                "{key} is attributed to {:?} on an unconfigured repository",
+                attributed.source
+            );
+        }
+        assert!(document.contains_key("version"), "the scan must find keys");
+    }
+
+    #[test]
+    fn the_default_rule_survives_resolution() {
+        // The defaults are only worth having if they reach the runner: a rule
+        // that loads and is dropped by the layering gates nothing.
+        let dir = repo("resolve-zero-config-rules", "version = 1\n", None);
+        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(resolved.rules, config::defaults().rules);
+        assert!(!resolved.rules.is_empty());
+        assert_eq!(resolved.sources["rule"], Source::Default);
+    }
+
+    #[test]
+    fn a_committed_authority_declaring_no_rules_gets_no_default_rule() {
+        // The defaults are the WHOLE configuration or none of it. Merging one in
+        // underneath a committed file would widen a policy its author wrote, and
+        // §8 has no layer that may do that.
+        let dir = repo("resolve-authority-no-rules", "version = 1\n", None);
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(resolved.authority, config::Authority::Present);
+        assert!(resolved.rules.is_empty());
+        assert_eq!(resolved.sources["version"], Source::RepoConfig);
+    }
+
+    #[test]
+    fn a_local_override_still_layers_over_an_absent_authority() {
+        // The chain does not lose its upper layers when its first layer is
+        // missing — and it stays raise-only, which is what keeps an uncommitted
+        // file from being able to weaken the defaults it now sits on.
+        let dir = repo(
+            "resolve-zero-config-local",
+            "version = 1\n",
+            Some("version = 1\nstrictness = \"strict\"\n"),
+        );
+        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(resolved.strictness, Strictness::Strict);
+        assert_eq!(resolved.sources["strictness"], Source::LocalFile);
+
+        // …and the clamp still refuses a local file that redefines a default
+        // rule, exactly as it refuses one redefining a committed rule.
+        let redefining = repo(
+            "resolve-zero-config-local-redefine",
+            "version = 1\n",
+            Some(
+                "version = 1\n\n[[rule]]\nid = \"no-conflict-markers\"\nkind = \"forbid\"\n\
+                 glob = \"nothing/**\"\npattern = \"x\"\nseverity = \"deny\"\n",
+            ),
+        );
+        fs::remove_file(redefining.join(config::CONFIG_FILE)).unwrap();
+        let err = resolve_with_env(&redefining, &Overrides::default(), &no_env).unwrap_err();
         assert!(is_usage_error(&err));
-        assert!(err.to_string().contains("no config found"), "got: {err}");
+        assert!(err.to_string().contains("may not redefine"), "got: {err}");
+    }
+
+    #[test]
+    fn a_present_but_invalid_authority_still_refuses() {
+        // Absence selects the defaults; invalidity never does. A config that
+        // silently resolved to the engine's own rules would report green over
+        // the rules its author actually wrote.
+        for text in [
+            "version = = 1\n",
+            "version = 1\nbogus = true\n",
+            "version = 9\n",
+        ] {
+            let dir = repo("resolve-zero-config-invalid", text, None);
+            let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
+            assert!(is_usage_error(&err), "{text:?} must be refused");
+        }
+    }
+
+    #[test]
+    fn zero_config_resolution_is_byte_stable() {
+        // §6, over the layer CLOUD-70 adds: the defaults are a compiled-in
+        // constant, so two runs must not differ.
+        let dir = repo("resolve-zero-config-stable", "version = 1\n", None);
+        fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
+        let first = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        let second = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap()
+        );
     }
 
     #[test]

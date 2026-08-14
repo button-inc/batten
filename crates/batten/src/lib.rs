@@ -2969,6 +2969,16 @@ fn run_rules(
     // and files from another.
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
+    // Zero-config onboarding's one visible half (CLOUD-70). Ladder-gated on the
+    // messaging channel, like `transcript::ABSENT_NOTICE` above it: stdout is
+    // the findings channel and must stay byte-identical to a run whose committed
+    // authority states the same effective config, so this can only ever be a
+    // stderr line. Emitted from this funnel because it is the surface a first
+    // contact reaches; `config show` already says the same thing in its own
+    // language, by attributing every key to `default`.
+    if config.authority == config::Authority::Absent {
+        output::message(mode, Verbosity::Normal, err, config::DEFAULTS_NOTE)?;
+    }
     // The whole `Scan`, not just its findings: `not_evaluated` is what keeps the
     // store's resolve pass fail-closed (CLOUD-81), and the enforce surface now
     // journals (CLOUD-529), so dropping it here would let a rule that never

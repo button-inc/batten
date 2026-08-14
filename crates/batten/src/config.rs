@@ -10,6 +10,26 @@
 //! typed struct with **no unknown keys** — a typo is an error, not a silently
 //! ignored setting — and a required schema `version` so an incompatible file
 //! fails loudly rather than being half-understood.
+//!
+//! ## Absence is the default layer; invalidity is still a refusal (CLOUD-70)
+//!
+//! A repository with **no** `batten.toml` resolves to [`defaults`] — §8's layer
+//! 0, the one [`crate::resolve::Source::Default`] already models — rather than
+//! failing, so `check` works out of the box and `init` is opt-in.
+//!
+//! That is emphatically **not** a widening of where configuration may come from
+//! (non-negotiable rule 6): there is still one committed authority, still no
+//! upward walk and no `conf.d` merge. Nothing new is *discovered*; a compiled-in
+//! value is used when nothing was written. The two cases stay sharply apart —
+//! **absence selects the defaults, invalidity never does.** A `batten.toml` that
+//! is present and malformed, carries an unknown key, or declares an unsupported
+//! `version` is refused exactly as before.
+//!
+//! [`load`] keeps the strict reading, and [`load_authority`] carries the
+//! defaulting one, because absence means different things to different callers:
+//! [`crate::trust`]'s comparand needs "this authority grants nothing" (deleting
+//! the file is the *maximal weakening*, CLOUD-243) and [`crate::doctor`] needs to
+//! report `config-missing`. Only the §8 resolution chain wants defaults.
 
 use std::fs;
 use std::io;
@@ -650,6 +670,116 @@ impl Config {
     }
 }
 
+/// Whether the committed authority was there to read (CLOUD-70).
+///
+/// A named type rather than a `bool` because it travels: [`crate::resolve`]
+/// carries it into attribution, where "the authority was absent" is what makes
+/// every emitted key read `default` rather than `repo-config`. A bare boolean at
+/// that call site would say nothing about which way `true` points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Authority {
+    /// A `batten.toml` was found and parsed.
+    Present,
+    /// No `batten.toml` exists, so [`defaults`] is the whole configuration.
+    Absent,
+}
+
+/// The one stderr line an unconfigured run emits (§6: stderr is messaging).
+///
+/// It names the consequence and the fix, not just the fact — the shape
+/// [`crate::transcript::ABSENT_NOTICE`] uses. "There is no `batten.toml`" is a
+/// filesystem observation; "the built-in defaults are what just gated your tree,
+/// and here is how to state your own" is what a reader has to act on.
+///
+/// Exactly one line, and only on stderr: stdout stays the findings channel and
+/// must be byte-identical to a run whose committed authority states the same
+/// effective config, which is also why no `-J` field pairs with this.
+///
+/// The file name is written out rather than interpolated from [`CONFIG_FILE`],
+/// because a `const` cannot format one; `tests::the_defaults_note_names_the_config_file`
+/// is what keeps the two from drifting.
+pub const DEFAULTS_NOTE: &str =
+    "no batten.toml; running on built-in defaults — `batten init` writes one to edit";
+
+/// The compiled-in default layer: §8's layer 0, as a whole [`Config`].
+///
+/// Stated **once**, and only where the existing layer 0 does not already state
+/// it. `strictness` and `fail_on_warning` are deliberately left `None` here:
+/// [`crate::resolve`] supplies their layer-0 values and attributes them to
+/// [`crate::resolve::Source::Default`], so restating them here would be a second
+/// defaults table that could disagree with the first.
+///
+/// What this *does* add is the default rule set. An unconfigured `check` that
+/// evaluated nothing would exit `0` over every repository on earth — a pass that
+/// means "no rule looked", which is precisely the false green this engine exists
+/// to refuse. So the defaults ship one repo-agnostic gate (see [`default_rules`])
+/// and the zero-config run answers on findings.
+///
+/// The defaults are the **whole** configuration or none of it. They are not
+/// merged into a `batten.toml` that declares no rules: an authority that states
+/// its policy has stated it, and folding a rule in underneath would widen a
+/// committed policy from the engine — the direction §8 never permits.
+///
+/// Built from [`Config::declaring_nothing`] rather than beside it, so the delta
+/// is the only thing written here and a field added to [`Config`] still fails to
+/// compile at the one site that has to decide what it means.
+#[must_use]
+pub fn defaults() -> Config {
+    Config {
+        rules: default_rules(),
+        ..Config::declaring_nothing()
+    }
+}
+
+/// The rules a repository gets when it has declared none.
+///
+/// **One rule, and it has to earn its place twice over**: it must be meaningful
+/// in *every* repository (non-negotiable rule 1 — no consumer-specific
+/// identifier can appear here), and its finding must be one no project would
+/// defend. An unresolved merge conflict is the one shape that qualifies: it is
+/// syntactically broken in every language, nobody commits one on purpose, and
+/// the pattern is a literal git itself writes.
+///
+/// A function rather than a `const` because [`Rule`] carries owned `String`s.
+/// Written as a literal rather than parsed from an embedded TOML blob: this path
+/// cannot fail, so it needs no `expect` (which the workspace lints forbid), and
+/// a column added to [`Rule`] fails to compile here rather than being silently
+/// absent. [`tests::the_default_rules_pass_the_validator`] holds it to the same
+/// validator every committed rule passes.
+fn default_rules() -> Vec<Rule> {
+    vec![Rule {
+        id: "no-conflict-markers".to_owned(),
+        kind: crate::rules::RuleKind::Forbid,
+        // Every path, unlike the starter's `**/*/*`. That narrower glob exists
+        // to keep the rule off the `batten.toml` that declares it — a `forbid`
+        // pattern is a literal, so it appears in its own config — and this layer
+        // has no config file to trip over.
+        glob: Some("**/*".to_owned()),
+        severity: Some(crate::severity::RuleSeverity::Deny),
+        scope: crate::rules::RuleScope::Tree,
+        pattern: Some("<<<<<<< ".to_owned()),
+        regex: None,
+        exclude: None,
+        contains: None,
+        reason: None,
+        policy_url: None,
+        check: None,
+        fix: None,
+        run: None,
+        verbatim: None,
+        identity_key: None,
+        direction: None,
+        base: None,
+        no_fix_reason: None,
+        checks: None,
+        key: None,
+        trigger: None,
+        criteria: None,
+        tier: None,
+    }]
+}
+
 /// Load and validate the `batten.toml` at `path`.
 ///
 /// # Errors
@@ -659,6 +789,37 @@ impl Config {
 /// I/O failure propagates as an internal error (→ exit `3`).
 pub fn load(path: &Path) -> Result<Config> {
     parse(&read(path)?, &path.display().to_string())
+}
+
+/// Load the committed authority at `path`, or the compiled-in [`defaults`] when
+/// there is none (CLOUD-70).
+///
+/// The **only** difference from [`load`] is what a missing file means, and the
+/// asymmetry is the whole point: absence selects the default layer, invalidity
+/// never does. A present file that does not parse, carries an unknown key,
+/// declares an unsupported `version`, or demands a newer binary is refused
+/// exactly as [`load`] refuses it, and a non-`NotFound` I/O failure still
+/// propagates as an internal error (→ exit `3`) — "I could not look" must never
+/// resolve to "there was nothing to see".
+///
+/// [`load`] keeps the strict reading for the callers whose question is different:
+/// `doctor` reports a missing authority as a finding, and `trust` compares an
+/// unreadable one against [`Config::declaring_nothing`] because deleting the file
+/// is the maximal weakening (CLOUD-243) — both would be silently answered wrong
+/// by a loader that handed them defaults.
+///
+/// # Errors
+///
+/// As [`load`], minus the missing-file case.
+pub fn load_authority(path: &Path) -> Result<(Config, Authority)> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok((
+            parse(&text, &path.display().to_string())?,
+            Authority::Present,
+        )),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok((defaults(), Authority::Absent)),
+        Err(err) => Err(err.into()),
+    }
 }
 
 /// Load an *override* layer, without the [`Config::min_batten_version`] gate.
@@ -904,8 +1065,126 @@ mod tests {
 
     #[test]
     fn missing_file_is_a_usage_error() {
+        // `load` keeps the strict reading. CLOUD-70 defaults the *authority*
+        // loader, not this one: `doctor` reports a missing config as a finding
+        // and `trust` compares an unreadable one against `declaring_nothing`,
+        // and a `load` that answered with defaults would silently break both.
         let err = load(Path::new("does/not/exist/batten.toml")).unwrap_err();
         assert!(is_usage_error(&err));
+    }
+
+    #[test]
+    fn a_missing_authority_loads_the_defaults() {
+        // CLOUD-70's whole change, at the loader: absence selects layer 0.
+        let (config, present) = load_authority(Path::new("does/not/exist/batten.toml")).unwrap();
+        assert_eq!(present, Authority::Absent);
+        assert_eq!(config, defaults());
+        assert_eq!(config.version, SUPPORTED_VERSION);
+    }
+
+    #[test]
+    fn a_present_authority_is_parsed_and_reported_present() {
+        let dir = std::env::temp_dir().join("batten-config-authority-present");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        fs::write(&path, "version = 1\nstrictness = \"strict\"\n").unwrap();
+        let (config, present) = load_authority(&path).unwrap();
+        assert_eq!(present, Authority::Present);
+        assert_eq!(config.strictness, Some(Strictness::Strict));
+    }
+
+    #[test]
+    fn a_present_but_invalid_authority_is_still_a_usage_error() {
+        // The asymmetry CLOUD-70 rests on: absence selects the defaults,
+        // invalidity never does. Each of these three would be a *silent policy
+        // downgrade* if it defaulted — the operator wrote a file, and answering
+        // with the engine's own rules would report green over rules they wrote.
+        let dir = std::env::temp_dir().join("batten-config-authority-invalid");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILE);
+        for text in [
+            "version = = 1\n",                                 // malformed
+            "version = 1\nbogus = 1\n",                        // unknown key
+            "version = 2\n",                                   // unsupported version
+            "version = 1\nmin_batten_version = \"999.0.0\"\n", // too old a build
+        ] {
+            fs::write(&path, text).unwrap();
+            let err = load_authority(&path).unwrap_err();
+            assert!(
+                is_usage_error(&err),
+                "{text:?} must be refused, not defaulted"
+            );
+        }
+    }
+
+    #[test]
+    fn the_defaults_declare_a_live_rule() {
+        // An unconfigured `check` that evaluated nothing would exit 0 over every
+        // repository on earth — the "did it even run" pass this engine exists to
+        // refuse. The obligation is the same one `init::tests` puts on the
+        // starter, over the other artifact a fresh consumer can arrive through.
+        let config = defaults();
+        assert!(
+            !config.rules.is_empty(),
+            "the default layer ships no rule: a zero-config `check` would gate nothing"
+        );
+    }
+
+    #[test]
+    fn the_default_rules_pass_the_validator() {
+        // Held to the validator every committed rule passes, so a hand-written
+        // literal cannot ship a shape the loader would refuse from a file.
+        crate::rules::validate(&defaults().rules).expect("the default rules validate");
+    }
+
+    #[test]
+    fn the_defaults_are_evaluable_by_the_read_only_surface() {
+        // `check` refuses a spawning kind outright, so a default rule carrying
+        // one would make the zero-config run exit 1 — the one exit CLOUD-70 says
+        // a missing authority must never produce.
+        for rule in &defaults().rules {
+            assert!(
+                !rule.kind.spawns_processes(),
+                "default rule {} spawns, so `batten check` would refuse the whole run",
+                rule.id
+            );
+            assert_eq!(
+                rule.scope,
+                crate::rules::RuleScope::Tree,
+                "a default rule no tree scan evaluates would gate nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn the_defaults_leave_the_layer_zero_keys_unset() {
+        // `strictness` and `fail_on_warning` have their layer-0 values in
+        // `resolve`, and stating them again here would be a second defaults
+        // table — two answers to one question, free to drift.
+        let config = defaults();
+        assert_eq!(config.strictness, None);
+        assert_eq!(config.fail_on_warning, None);
+    }
+
+    #[test]
+    fn the_defaults_carry_no_consumer_identifier() {
+        // Non-negotiable rule 1, at the one place a compiled-in policy could
+        // break it: every default rule must be meaningful in any repository, so
+        // it names no path a particular project happens to have.
+        for rule in &defaults().rules {
+            assert_eq!(rule.glob.as_deref(), Some("**/*"));
+        }
+    }
+
+    #[test]
+    fn the_defaults_note_names_the_config_file() {
+        // The note spells the file name out because a `const` cannot format one;
+        // this is what keeps the literal and `CONFIG_FILE` from drifting.
+        assert!(DEFAULTS_NOTE.contains(CONFIG_FILE));
+        assert!(
+            !DEFAULTS_NOTE.contains('\n'),
+            "the defaults note is exactly one line"
+        );
     }
 
     #[test]

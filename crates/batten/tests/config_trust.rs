@@ -504,16 +504,28 @@ fn a_deleted_working_config_does_not_manufacture_a_verdict() {
 }
 
 #[test]
-fn without_a_base_ref_a_missing_config_is_still_a_usage_error() {
-    // The asymmetry is the point, and pinning it is what stops a later change
-    // from quietly making an unreadable config fall back everywhere. A trusted
-    // base is exactly what makes the fallback safe; with no base there is no
-    // policy to fall back to, so refusing is correct.
+fn without_a_base_ref_a_missing_config_falls_back_to_the_defaults_and_not_to_the_base() {
+    // The asymmetry is still the point, and CLOUD-70 moved which asymmetry it
+    // is. A missing working config used to be a usage error here; it now
+    // resolves to the compiled-in default layer. What must NOT happen is the
+    // thing this case has always been about: the base ref's policy reaching a
+    // run that did not ask for it. `--config-from` is what makes the trusted
+    // fallback safe, and without it the base's rules are simply not in play.
+    //
+    // `no-todo` is declared only in the base, so a `// TODO` line firing here
+    // would be exactly that leak — which is why the assertion is on the verdict
+    // and not merely on the exit code being reachable.
     let repo = pr_fixture_without_working_config(
         "trust-no-config-no-base",
         &format!("version = 1{}", rule("no-todo", "deny")),
         &[("a.rs", "// TODO\n")],
     );
     let output = run(&repo, &["check"]);
-    assert_eq!(output.status.code(), Some(1), "stdout: {}", stdout(&output));
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the defaults gate this tree, and they declare no `no-todo`. stdout: {}",
+        stdout(&output)
+    );
+    assert_eq!(stdout(&output), "", "the base's rule must not have fired");
 }

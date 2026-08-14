@@ -297,9 +297,14 @@ fn config_show_resolves_or_refuses_and_never_reaches_a_policy_verdict() {
             expected: 0,
         },
         Case {
+            // CLOUD-70: absence resolves to the compiled-in default layer, so
+            // there is a config to print — every key of it attributed to
+            // `default`. The three rows below are what keep that from reading as
+            // "an unreadable config is tolerated": a file that is *present* and
+            // cannot be honoured is still refused.
             name: "no authority at all",
             config: None,
-            expected: 1,
+            expected: 0,
         },
         Case {
             name: "an unknown key",
