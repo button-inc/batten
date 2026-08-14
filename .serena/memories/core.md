@@ -728,10 +728,24 @@ NotComputable`, a third answer `Option` cannot express because it cannot tell
   pacing, not consumer policy, and it is unlayered because an interval has no
   monotone direction for a raise-only clamp to read. Rides `hook` at the
   post-tool event — an event no host offers a deny channel for — so it is
-  structurally unable to block (§0.3). Emission shape, the cardinality cap and
-  the token budget are CLOUD-82's. A record with no `check` or no `remediation`
-  is never emitted (CLOUD-81's `is_emittable`) and is NOT counted as a
-  suppression — the engine did not choose to withhold it.
+  structurally unable to block (§0.3). A record with no `check` or no
+  `remediation` is never emitted (CLOUD-81's `is_emittable`) and is NOT counted
+  as a suppression — the engine did not choose to withhold it.
+  **Emission is bounded twice, and the two bounds are not interchangeable**
+  (CLOUD-82, which is why `cycle` selects before it renders): the per-rule
+  `cardinality_cap` collapses a rule over K distinct identities to one
+  `rule R: K+ findings` line and journals the rest as `OverCardinalityCap` — a
+  statement about the RULE, and the counter rule-health telemetry reads — where
+  the `token_budget` clamps the payload as a whole (via `budget::estimate_tokens`,
+  never a second estimator) and journals what it drops as `DrainSuppressed`, a
+  statement about THIS boundary that the next drain reconsiders. Lines are
+  ordered salient-first by tier, then rule, then fingerprint, and the count is
+  deliberately NOT a sort key: that is CLOUD-80's no-escalation law made
+  structural rather than remembered. A group re-raise renders `old->new` against
+  `WakeState::counts` — what this session's last drain actually SAID, since the
+  store carries no count anchor — and only for emitted identities, so a capped
+  rule anchors nothing. A count that fell renders plainly: a ratchet is not a
+  re-raise, because re-raising on incremental fixing punishes the fix.
 - `judge.rs` — the judge's payload-privacy boundary (CLOUD-135): what may be sent
   to a model. Config types plus one pure function; **no command, no effect-table
   row, no egress** — enforcement of the config half rides `config lint`'s landed
