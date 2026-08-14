@@ -1779,4 +1779,95 @@ mod tests {
         assert!(Fingerprint::from_hex(&hex.to_uppercase()).is_err());
         assert!(Fingerprint::from_hex("abc").is_err());
     }
+
+    // --- (h) key-loss custody at the store boundary (CLOUD-529) --------------
+
+    // The one bypass of the join, and its whole justification is that `merge` is
+    // `max`: nothing in that algebra can lower a settled answer, which is exactly
+    // right for concurrent writers and exactly wrong for an orphan. So the bypass
+    // has to exist as its own verb, and it has to say whether anything moved — a
+    // caller reporting "N re-opened" must count what changed, not what it read.
+    #[test]
+    fn reopening_a_settled_finding_clears_it_and_says_so() {
+        let mut record = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        record.disposition = Some(Disposition::RejectedByDesign);
+        assert!(record.reopen(), "a settled record moves");
+        assert_eq!(record.disposition, None);
+        assert!(
+            !record.reopen(),
+            "an already-unsettled record is not a second re-open"
+        );
+        // The join could not have done this: `max` over the precedence order only
+        // ever raises, which is the property this bypasses and not one it breaks.
+        record.merge_disposition(Some(Disposition::RejectedWrong));
+        record.merge_disposition(None);
+        assert_eq!(record.disposition, Some(Disposition::RejectedWrong));
+    }
+
+    // Re-opening touches the disposition and nothing else. An orphan event is the
+    // loss of the ability to compare, not a re-mint — so re-deriving the tier, the
+    // instances or the presentation here would be the silent re-mint arriving by
+    // another route.
+    #[test]
+    fn reopening_a_finding_re_mints_nothing_else() {
+        let mut record = record_of(vec![instance("refs/heads/a", Observation::Observed(3))]);
+        record.disposition = Some(Disposition::Acted);
+        record.presentation = Presentation::NotShown(NotShown::DrainSuppressed);
+        let before = FindingRecord {
+            disposition: None,
+            ..record.clone()
+        };
+        record.reopen();
+        assert_eq!(record, before);
+    }
+
+    // A rotation writes the same finding under its new identity and then drops the
+    // old file. Leaving it would hold one finding twice, the second copy under a
+    // fingerprint nothing can re-derive — so nothing would ever clear it.
+    #[test]
+    fn forgetting_a_record_is_absent_safe_and_leaves_its_siblings() {
+        let dir = store("forget");
+        let kept = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        let mut dropped = kept.clone();
+        dropped.identity = identity_for("r", "src/b.rs", "TODO");
+        save_one(&dir, &kept).unwrap();
+        save_one(&dir, &dropped).unwrap();
+
+        forget(&dir, dropped.identity.fingerprint).unwrap();
+        assert!(
+            load_one(&dir, dropped.identity.fingerprint)
+                .unwrap()
+                .is_none(),
+            "the rotated-away identity is gone"
+        );
+        assert!(
+            load_one(&dir, kept.identity.fingerprint).unwrap().is_some(),
+            "and only that one"
+        );
+        forget(&dir, dropped.identity.fingerprint)
+            .expect("forgetting an absent record is success, which is what lets a join replay");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A flap suppression is the engine withholding a finding, so it must be
+    // excluded from both sides of the false-positive rate for the same reason the
+    // other three reasons are: the agent was never shown it, so its silence is not
+    // a judgement. Free from being a `NotShown` arm — asserted because "free" is a
+    // claim about a type, and a fourth arm added outside `Presentation` would not
+    // have been.
+    #[test]
+    fn a_flap_suppressed_finding_is_excluded_from_the_false_positive_rate() {
+        let mut suppressed = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        suppressed.presentation = Presentation::NotShown(NotShown::FlapSuppressed);
+        let mut shown = record_of(vec![instance("refs/heads/a", Observation::Observed(1))]);
+        shown.identity = identity_for("r", "src/b.rs", "TODO");
+        let rates = effective_fp_rates(&[suppressed, shown]);
+        assert_eq!(
+            rates["r"],
+            FpRate {
+                shown: 1,
+                ignored: 1
+            }
+        );
+    }
 }

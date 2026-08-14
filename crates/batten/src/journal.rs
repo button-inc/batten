@@ -264,7 +264,11 @@ pub struct Entry {
     /// The rule that produced it — the key the FP rate aggregates by.
     pub rule: String,
     /// Which surface wrote it.
-    #[serde(default)]
+    ///
+    /// Skipped when it is the default, so a drain entry is byte-identical to what a
+    /// binary predating [`Origin`] wrote — a mixed fleet folding the same shard does
+    /// not rewrite the log into a shape its siblings read differently.
+    #[serde(default, skip_serializing_if = "Origin::is_drain")]
     pub origin: Origin,
     /// The ref this evaluation belongs to, when the writer knew one.
     ///
@@ -320,6 +324,14 @@ pub enum Origin {
     /// silently move the false-positive denominator [`crate::findings::effective_fp_rates`]
     /// computes.
     Scan,
+}
+
+impl Origin {
+    /// Whether this is the default arm, for the serialization skip above.
+    #[must_use]
+    pub const fn is_drain(&self) -> bool {
+        matches!(self, Origin::Drain)
+    }
 }
 
 /// Append `entry` to this writer's shard, fsynced before returning.
@@ -1017,7 +1029,7 @@ mod tests {
         let entry = Entry {
             identity: identity_for("TODO").fingerprint.to_hex(),
             rule: "r".to_owned(),
-            origin: Origin::Scan,
+            origin: Origin::Drain,
             context: None,
             observation: None,
             disposition: None,
@@ -1025,5 +1037,162 @@ mod tests {
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), entry);
+    }
+
+    // Write-old/read-both at the FIELD level (CLOUD-529). An entry written by a
+    // binary that predates `origin`, `context` and `observation` must still load,
+    // and its silence must read as the truth about those bytes: a drain's
+    // presentation statement, no ref, nothing seen. If `origin` defaulted to `Scan`
+    // instead, every pre-existing suppression entry would stop being applied to its
+    // record the moment this binary shipped.
+    #[test]
+    fn an_entry_predating_the_evaluation_fields_loads_as_a_drain_saying_nothing() {
+        let json = format!(
+            r#"{{"identity":"{}","rule":"r","presentation":"shown"}}"#,
+            identity_for("TODO").fingerprint.to_hex()
+        );
+        let entry: Entry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry.origin, Origin::Drain);
+        assert_eq!(entry.context, None);
+        assert_eq!(entry.observation, None);
+    }
+
+    // And the round trip is byte-clean the other way: an entry saying nothing
+    // extra serializes to the same bytes an older binary wrote, so a mixed fleet
+    // does not rewrite the log into a shape its siblings read differently.
+    #[test]
+    fn a_drain_entry_that_says_nothing_extra_serializes_no_extra_fields() {
+        let entry = Entry {
+            identity: identity_for("TODO").fingerprint.to_hex(),
+            rule: "r".to_owned(),
+            origin: Origin::Drain,
+            context: None,
+            observation: None,
+            disposition: None,
+            presentation: Presentation::Shown,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(!json.contains("origin"), "{json}");
+        assert!(!json.contains("context"), "{json}");
+        assert!(!json.contains("observation"), "{json}");
+    }
+
+    // The rule that keeps one field to one authority. A scan journals an
+    // evaluation, and every `NotShown` arm is a reason the DRAIN withheld
+    // something — so a scan entry must not move `presentation`, or a scan would
+    // erase the drain's own suppression record and silently move the denominator
+    // `effective_fp_rates` divides by.
+    #[test]
+    fn a_scan_entry_never_overwrites_the_drains_presentation() {
+        let dir = store("scan-presentation");
+        let mut record = record_for("TODO");
+        record.presentation = Presentation::NotShown(NotShown::DrainSuppressed);
+        crate::findings::save_one(&dir, &record).unwrap();
+
+        let fingerprint = record.identity.fingerprint;
+        append(
+            &dir,
+            "shard",
+            &Entry {
+                identity: fingerprint.to_hex(),
+                rule: "r".to_owned(),
+                origin: Origin::Scan,
+                context: Some("refs/heads/a".to_owned()),
+                observation: Some(Observation::Observed(1)),
+                disposition: None,
+                presentation: Presentation::Shown,
+            },
+        )
+        .unwrap();
+        merge(&dir).unwrap();
+
+        let folded = crate::findings::load_one(&dir, fingerprint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            folded.presentation,
+            Presentation::NotShown(NotShown::DrainSuppressed),
+            "the scan said `Shown` and had no standing to"
+        );
+        // Anti-vacuity: the entry WAS folded — a drain entry from the same shard
+        // moves the field, so the assertion above is about the origin and not about
+        // the merge having skipped the record.
+        append(
+            &dir,
+            "shard",
+            &Entry {
+                identity: fingerprint.to_hex(),
+                rule: "r".to_owned(),
+                origin: Origin::Drain,
+                context: None,
+                observation: None,
+                disposition: None,
+                presentation: Presentation::Shown,
+            },
+        )
+        .unwrap();
+        merge(&dir).unwrap();
+        assert_eq!(
+            crate::findings::load_one(&dir, fingerprint)
+                .unwrap()
+                .unwrap()
+                .presentation,
+            Presentation::Shown
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Occurrence state has exactly one writer, `findings::record`. An evaluation
+    // entry carries the observation so the emission plane can read a history, and
+    // folding it into the record would make the log a second authority on the
+    // field — two writers converging by luck rather than by design.
+    #[test]
+    fn a_folded_observation_never_reaches_the_record() {
+        let dir = store("scan-observation");
+        let record = record_for("TODO");
+        crate::findings::save_one(&dir, &record).unwrap();
+        let fingerprint = record.identity.fingerprint;
+
+        append(
+            &dir,
+            "shard",
+            &Entry {
+                identity: fingerprint.to_hex(),
+                rule: "r".to_owned(),
+                origin: Origin::Scan,
+                context: Some("refs/heads/a".to_owned()),
+                observation: Some(Observation::Observed(99)),
+                disposition: None,
+                presentation: Presentation::Shown,
+            },
+        )
+        .unwrap();
+        merge(&dir).unwrap();
+
+        let folded = crate::findings::load_one(&dir, fingerprint)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            folded.instances[0].occurrences,
+            Observation::Observed(1),
+            "the instance still says what the scan that wrote it said"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // `all` and `since` read the same bytes and differ in what they take: a policy
+    // computing a ratio over a window needs the history and must not mint a cursor
+    // it does not hold.
+    #[test]
+    fn all_reads_the_log_without_taking_a_position() {
+        let dir = store("all-no-cursor");
+        assert!(all(&dir).is_empty(), "an absent log is an empty one");
+        let record = record_for("TODO");
+        crate::findings::save_one(&dir, &record).unwrap();
+        append(&dir, "shard", &entry_for("TODO", Disposition::Acted)).unwrap();
+        merge(&dir).unwrap();
+        assert_eq!(all(&dir).len(), 1);
+        assert_eq!(all(&dir), since(&dir, None).unwrap().entries().to_vec());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

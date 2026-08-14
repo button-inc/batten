@@ -241,13 +241,6 @@ pub fn assess(log: &[Entry], window: usize, percent: u32) -> Assessment {
     assessment
 }
 
-/// The ratio over one subject's window, and the threshold test.
-///
-/// Only evaluations that **looked** are counted, on both sides. A rule that was
-/// skipped or errored reports [`Observation::NotObserved`], and reading that
-/// silence as a state — either one — is the fail-open that type exists to prevent:
-/// as a clear it would manufacture a transition out of a rule that never ran, and
-/// in the denominator it would dilute a real oscillation toward steadiness.
 fn health_of(window: &[(usize, Observation)], percent: u32) -> Health {
     let raised: Vec<bool> = window
         .iter()
@@ -272,4 +265,345 @@ fn health_of(window: &[(usize, Observation)], percent: u32) -> Health {
         };
     }
     Health::Steady
+}
+
+/// The ratio over one subject's window, and the threshold test.
+///
+/// Only evaluations that **looked** are counted, on both sides. A rule that was
+/// skipped or errored reports [`Observation::NotObserved`], and reading that
+/// silence as a state — either one — is the fail-open that type exists to prevent:
+/// as a clear it would manufacture a transition out of a rule that never ran, and
+/// in the denominator it would dilute a real oscillation toward steadiness.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::findings::{NotObserved, Presentation};
+    use crate::journal::Origin;
+
+    /// One evaluation of `identity` at `context`, raised or cleared.
+    fn seen(identity: &str, context: Option<&str>, raised: bool) -> Entry {
+        Entry {
+            identity: identity.to_owned(),
+            rule: "r".to_owned(),
+            origin: Origin::Scan,
+            context: context.map(ToOwned::to_owned),
+            observation: Some(Observation::Observed(u64::from(raised))),
+            disposition: None,
+            presentation: Presentation::Shown,
+        }
+    }
+
+    /// One evaluation that did not look.
+    fn skipped(identity: &str, context: Option<&str>) -> Entry {
+        Entry {
+            observation: Some(Observation::NotObserved(NotObserved::RuleSkipped)),
+            ..seen(identity, context, true)
+        }
+    }
+
+    /// One drain emission of `identity`.
+    fn shown(identity: &str) -> Entry {
+        Entry {
+            identity: identity.to_owned(),
+            rule: "r".to_owned(),
+            origin: Origin::Drain,
+            context: None,
+            observation: None,
+            disposition: None,
+            presentation: Presentation::Shown,
+        }
+    }
+
+    /// An alternating run of evaluations at one context.
+    fn alternating(identity: &str, context: Option<&str>, count: usize) -> Vec<Entry> {
+        (0..count)
+            .map(|at| seen(identity, context, at % 2 == 0))
+            .collect()
+    }
+
+    // The acceptance's first bullet, on the arithmetic half: a rule that alternates
+    // every evaluation is the maximal flap, and it must reach a threshold set at
+    // 100 rather than falling just under it — which is what dividing by evaluations
+    // instead of by adjacent pairs would have done.
+    #[test]
+    fn a_rule_alternating_every_evaluation_is_the_maximal_flap() {
+        let log = alternating("a", Some("refs/heads/main"), 8);
+        let assessment = assess(&log, 8, 100);
+        assert_eq!(
+            assessment.health("a"),
+            Health::Flapping {
+                transitions: 7,
+                evaluations: 8,
+            }
+        );
+    }
+
+    // A raise that gets fixed is one transition, which is what the threshold has to
+    // stay clear of: if an ordinary fix read as flapping, the policy would suppress
+    // exactly the findings the drain exists to deliver.
+    #[test]
+    fn a_raise_and_a_fix_is_not_flapping() {
+        let context = Some("refs/heads/main");
+        let log = vec![
+            seen("a", context, true),
+            seen("a", context, true),
+            seen("a", context, true),
+            seen("a", context, false),
+        ];
+        assert_eq!(assess(&log, 8, DEFAULT_PERCENT).health("a"), Health::Steady);
+    }
+
+    /// The shipped threshold, so these cases are pinned against the default a
+    /// consumer actually gets rather than a number chosen to make them pass.
+    const DEFAULT_PERCENT: u32 = crate::drain::DEFAULT_FLAP_PERCENT;
+
+    // Acceptance (b). The load-bearing case: two worktrees at two refs, each
+    // perfectly monotone, interleaved in one log. Read per identity alone this is
+    // `raised, raised, cleared, cleared` in an order that depends on scheduling;
+    // read per (identity × context) each ref never changes state at all.
+    #[test]
+    fn a_worktree_pair_at_different_refs_is_not_flapping() {
+        let a = Some("refs/heads/a");
+        let b = Some("refs/heads/b");
+        let log = vec![
+            seen("x", a, true),
+            seen("x", b, false),
+            seen("x", a, true),
+            seen("x", b, false),
+            seen("x", a, true),
+            seen("x", b, false),
+        ];
+        assert_eq!(
+            assess(&log, 8, 100).health("x"),
+            Health::Steady,
+            "each ref's own sequence is monotone; only the interleaving alternates"
+        );
+        // And the same six observations at ONE ref are the flap, which is what makes
+        // the assertion above about the context rather than about the counts.
+        let merged: Vec<Entry> = log
+            .iter()
+            .map(|entry| Entry {
+                context: a.map(ToOwned::to_owned),
+                ..entry.clone()
+            })
+            .collect();
+        assert!(assess(&merged, 8, 100).health("x").is_flapping());
+    }
+
+    // One flapping ref is enough. The pair keeps two calm refs from reading as one
+    // oscillation; it is not a rule that every ref must agree before an identity is
+    // annotated, which would let one quiet worktree mask a genuinely broken check.
+    #[test]
+    fn one_flapping_context_annotates_the_identity_even_beside_a_calm_one() {
+        let mut log = alternating("x", Some("refs/heads/noisy"), 6);
+        log.extend((0..6).map(|_| seen("x", Some("refs/heads/calm"), true)));
+        assert!(assess(&log, 8, 100).health("x").is_flapping());
+    }
+
+    // Fewer than two evaluations has no rate, and the answer is `Steady` rather
+    // than a guess in either direction — `FpRate::rate`'s "no rate rather than a
+    // perfect one", resolved toward showing the finding.
+    #[test]
+    fn one_evaluation_has_no_rate_and_is_not_flapping() {
+        let log = vec![seen("a", Some("refs/heads/main"), true)];
+        assert_eq!(assess(&log, 8, 0).health("a"), Health::Steady);
+    }
+
+    // A rule that was skipped or errored said nothing about state. Counting it as a
+    // clear would manufacture a transition out of a rule that never ran, which is
+    // the fail-open `Observation::NotObserved` exists to prevent, one layer up.
+    #[test]
+    fn a_rule_that_did_not_look_neither_transitions_nor_dilutes() {
+        let context = Some("refs/heads/main");
+        let raised_around_a_skip = vec![
+            seen("a", context, true),
+            skipped("a", context),
+            seen("a", context, true),
+        ];
+        assert_eq!(
+            assess(&raised_around_a_skip, 8, 100).health("a"),
+            Health::Steady,
+            "two raises with a skip between them are one state, not two changes"
+        );
+        // Nor is the skip in the denominator: an alternating pair with a skip
+        // between them is still 1 transition over 2 evaluations, so a threshold of
+        // 100 is met rather than diluted to 50 by counting the skip.
+        let alternating_around_a_skip = vec![
+            seen("a", context, true),
+            skipped("a", context),
+            seen("a", context, false),
+        ];
+        assert!(
+            assess(&alternating_around_a_skip, 8, 100)
+                .health("a")
+                .is_flapping()
+        );
+    }
+
+    // The window is counted in evaluation boundaries, so an identity that HAS
+    // stopped oscillating is believed again once the flapping evaluations fall out
+    // of it. A wall-clock window could not express this at all.
+    #[test]
+    fn a_settled_identity_leaves_the_window_and_is_believed_again() {
+        let context = Some("refs/heads/main");
+        let mut log = alternating("a", context, 4);
+        assert!(assess(&log, 4, 100).health("a").is_flapping());
+        log.extend((0..4).map(|_| seen("a", context, true)));
+        assert_eq!(
+            assess(&log, 4, 100).health("a"),
+            Health::Steady,
+            "the last four evaluations hold no transition, whatever came before"
+        );
+    }
+
+    // The cap and the annotation are read as a CONJUNCTION, and this is the half
+    // that makes the policy hysteresis rather than a rate limiter: a steady
+    // identity emitted far past the cap is still emitted.
+    #[test]
+    fn the_cap_never_bites_a_steady_identity() {
+        let context = Some("refs/heads/main");
+        let mut log: Vec<Entry> = (0..4).map(|_| seen("a", context, true)).collect();
+        log.extend((0..9).map(|_| shown("a")));
+        let assessment = assess(&log, 8, DEFAULT_PERCENT);
+        assert_eq!(assessment.health("a"), Health::Steady);
+        assert_eq!(assessment.decide("a", 3), Emission::Emit);
+    }
+
+    // And the other half: a flapping identity emits up to the cap and then stops.
+    #[test]
+    fn a_flapping_identity_emits_up_to_the_cap_and_then_stops() {
+        let context = Some("refs/heads/main");
+        let mut log = alternating("a", context, 6);
+        assert_eq!(
+            assess(&log, 8, 100).decide("a", 3),
+            Emission::Emit,
+            "nothing has been emitted yet, so the budget is unspent"
+        );
+        log.extend((0..3).map(|_| shown("a")));
+        assert_eq!(
+            assess(&log, 8, 100).decide("a", 3),
+            Emission::Withhold(NotShown::FlapSuppressed)
+        );
+    }
+
+    // Emissions are counted inside the window whose ratio was computed, not over
+    // the whole log: an identity that flapped, was capped, then settled and later
+    // flapped again must get its budget back, or one bad afternoon silences a
+    // finding forever.
+    #[test]
+    fn emissions_outside_the_window_do_not_spend_this_windows_budget() {
+        let context = Some("refs/heads/main");
+        let mut log: Vec<Entry> = Vec::new();
+        log.extend((0..3).map(|_| shown("a")));
+        log.extend(alternating("a", context, 4));
+        let assessment = assess(&log, 4, 100);
+        assert!(assessment.health("a").is_flapping());
+        assert_eq!(
+            assessment.decide("a", 3),
+            Emission::Emit,
+            "the three emissions predate every evaluation in the window"
+        );
+    }
+
+    // An identity the journal has never mentioned is emitted. The policy is a
+    // filter on a history, so no history means no reason to withhold — and reading
+    // absence as suppression would make the first drain after a GC silent.
+    #[test]
+    fn an_unknown_identity_is_steady_and_emitted() {
+        let assessment = assess(&[], 8, 0);
+        assert_eq!(assessment.health("nobody"), Health::Steady);
+        assert_eq!(assessment.decide("nobody", 0), Emission::Emit);
+    }
+
+    // A window of 0 or 1 is how a consumer turns the policy off, and it must be off
+    // for BOTH halves: nothing annotated, and therefore nothing suppressed however
+    // much has been emitted.
+    #[test]
+    fn a_window_under_two_disables_the_policy_outright() {
+        let context = Some("refs/heads/main");
+        let mut log = alternating("a", context, 8);
+        log.extend((0..9).map(|_| shown("a")));
+        for window in [0, 1] {
+            let assessment = assess(&log, window, 0);
+            assert_eq!(assessment.health("a"), Health::Steady, "window {window}");
+            assert_eq!(assessment.decide("a", 0), Emission::Emit, "window {window}");
+        }
+    }
+
+    // An entry written before `observation` existed says nothing about what was
+    // seen, and must not enter the denominator as an unknown. Write-old/read-both
+    // at the field level: the fold has to survive meeting one.
+    #[test]
+    fn an_entry_that_names_no_observation_is_not_an_evaluation() {
+        let context = Some("refs/heads/main");
+        let mut log = alternating("a", context, 2);
+        log.push(Entry {
+            observation: None,
+            ..seen("a", context, false)
+        });
+        assert_eq!(
+            assess(&log, 8, 100).health("a"),
+            Health::Flapping {
+                transitions: 1,
+                evaluations: 2,
+            },
+            "the silent entry changes neither count"
+        );
+    }
+
+    // A secret-class record carries no `FindingKind`, so nothing about it can be
+    // classified — and the emission plane must handle that without defaulting,
+    // exactly as the changed-scope filter does (CLOUD-529 §7(e)). Here that means
+    // its evaluations are folded on their context like any other subject's.
+    #[test]
+    fn an_identity_with_no_context_is_its_own_subject_never_a_default_ref() {
+        let mut log = alternating("secret", None, 6);
+        assert!(
+            assess(&log, 8, 100).health("secret").is_flapping(),
+            "a subject with no ref still has a history of its own"
+        );
+        // And it is not folded together with a named ref: adding a monotone run at
+        // a real ref cannot make the unattributed subject's flap disappear, nor
+        // does the unattributed run make the named one flap.
+        log.extend((0..6).map(|_| seen("named", Some("refs/heads/main"), true)));
+        let assessment = assess(&log, 8, 100);
+        assert!(assessment.health("secret").is_flapping());
+        assert_eq!(assessment.health("named"), Health::Steady);
+    }
+
+    // The annotation is telemetry, so it has to be enumerable with its counts —
+    // "flapping" with no ratio is a label nobody can check.
+    #[test]
+    fn the_annotation_enumerates_only_flapping_identities_with_their_counts() {
+        let context = Some("refs/heads/main");
+        let mut log = alternating("noisy", context, 6);
+        log.extend((0..6).map(|_| seen("calm", context, true)));
+        let assessment = assess(&log, 8, 100);
+        let annotated: Vec<(&String, Health)> = assessment.flapping().collect();
+        assert_eq!(annotated.len(), 1);
+        assert_eq!(annotated[0].0, "noisy");
+        assert_eq!(
+            annotated[0].1,
+            Health::Flapping {
+                transitions: 5,
+                evaluations: 6,
+            }
+        );
+    }
+
+    // Byte-stability's precondition: the fold is a function of the log's contents
+    // and its order, and holds no map whose iteration could vary.
+    #[test]
+    fn two_folds_of_one_log_agree() {
+        let context = Some("refs/heads/main");
+        let mut log = alternating("a", context, 5);
+        log.extend(alternating("b", Some("refs/heads/other"), 5));
+        log.extend((0..2).map(|_| shown("a")));
+        let first = assess(&log, 8, 50);
+        let second = assess(&log, 8, 50);
+        assert_eq!(first.health("a"), second.health("a"));
+        assert_eq!(first.health("b"), second.health("b"));
+        assert_eq!(first.decide("a", 1), second.decide("a", 1));
+    }
 }

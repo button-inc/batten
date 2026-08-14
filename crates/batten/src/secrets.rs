@@ -892,9 +892,18 @@ pub fn record_orphan(key: &Path, key_id: &str, reopened: usize) -> Result<()> {
 pub fn orphaned_key_ids(repo_root: &Path, today: Date) -> Result<Vec<String>> {
     let path = key_path(repo_root)?;
     let held = custody_at(&path, today)?.held_ids();
+    Ok(lost_from(&events_at(&ledger_beside(&path))?, &held))
+}
+
+/// [`orphaned_key_ids`]'s decision, over values.
+///
+/// Split out for the reason the module splits `load_or_mint_at`: the key path is
+/// ambient env-selected state a suite cannot move, so the predicate is testable
+/// only if it is a function of what was read rather than of where it was read from.
+fn lost_from(events: &[Event], held: &[String]) -> Vec<String> {
     let mut known = Vec::new();
     let mut reported = Vec::new();
-    for event in events_at(&ledger_beside(&path))? {
+    for event in events.iter().cloned() {
         match event {
             Event::Minted { key_id } | Event::Retired { key_id } => known.push(key_id),
             Event::Rotated { from, to } => {
@@ -915,7 +924,7 @@ pub fn orphaned_key_ids(repo_root: &Path, today: Date) -> Result<Vec<String>> {
         .collect();
     lost.sort();
     lost.dedup();
-    Ok(lost)
+    lost
 }
 
 /// The key file's first two lines, as bytes on disk.
@@ -1519,5 +1528,328 @@ severity = "deny"
             "uppercase is a second spelling of one key, so it is refused"
         );
         assert_eq!(decode_key(&hex[..62]), None, "a short key is not a key");
+    }
+
+    // --- rotation and loss custody (CLOUD-529) -------------------------------
+
+    /// The day after [`date`], so a rotation has a distinct id to mint under.
+    fn tomorrow() -> Date {
+        Date {
+            year: 2026,
+            month: 8,
+            day: 14,
+        }
+    }
+
+    // Rotation holds BOTH generations, and the order in the file is not cosmetic:
+    // the current key stays on lines 1 and 2, so a binary predating rotation reads
+    // the key new identities are minted under rather than the retired one.
+    #[test]
+    fn a_rotation_holds_both_generations_with_the_current_one_first() {
+        let path = scratch("rotate-holds-both");
+        let before = load_or_mint_at(&path, date()).unwrap();
+        let rotation = rotate_at(&path, tomorrow()).unwrap();
+        assert_eq!(rotation.from, before.id());
+        assert_eq!(rotation.to, "2026-08-14");
+
+        let held = read(&path).unwrap().unwrap();
+        assert_eq!(held.current().id(), "2026-08-14");
+        assert_eq!(held.retired().map(IdentityKey::id), Some(before.id()));
+        assert_eq!(held.held_ids(), vec!["2026-08-14", before.id()]);
+        // The pre-rotation reader's view: lines 1 and 2 are the current key.
+        assert_eq!(load_or_mint_at(&path, date()).unwrap().id(), "2026-08-14");
+    }
+
+    // The retired key is the SAME key, not a re-mint of it — otherwise the join it
+    // exists for could not reproduce a single old fingerprint.
+    #[test]
+    fn the_retired_generation_is_the_key_that_was_current() {
+        let path = scratch("rotate-preserves");
+        load_or_mint_at(&path, date()).unwrap();
+        let span = crate::identity::SecretSpan::mint("shhh");
+        let before = crate::identity::secret_code_fingerprint(
+            read(&path).unwrap().unwrap().current(),
+            "r",
+            "src/a.rs",
+            &span,
+        )
+        .unwrap();
+
+        rotate_at(&path, tomorrow()).unwrap();
+        let held = read(&path).unwrap().unwrap();
+        let after = crate::identity::secret_code_fingerprint(
+            held.retired().unwrap(),
+            "r",
+            "src/a.rs",
+            &span,
+        )
+        .unwrap();
+        assert_eq!(
+            after, before,
+            "the retired key still mints the identities it minted"
+        );
+        assert_ne!(
+            crate::identity::secret_code_fingerprint(held.current(), "r", "src/a.rs", &span)
+                .unwrap(),
+            before,
+            "and the new one does not, which is what a join is for"
+        );
+    }
+
+    // Three refusals, each a case where proceeding would lose a generation
+    // silently. They are `UsageError` (exit 1), never a verdict about the tree.
+    #[test]
+    fn rotation_refuses_every_case_that_would_lose_a_generation() {
+        let missing = scratch("rotate-nothing");
+        let err = rotate_at(&missing, date()).expect_err("nothing to rotate");
+        assert!(err.to_string().contains("no secret-identity key"), "{err}");
+        assert!(
+            !missing.exists(),
+            "a refused rotation minted nothing, or it would have rotated into existence"
+        );
+
+        let same_day = scratch("rotate-same-day");
+        load_or_mint_at(&same_day, date()).unwrap();
+        let err = rotate_at(&same_day, date()).expect_err("one id, two generations");
+        assert!(err.to_string().contains("2026-08-13"), "{err}");
+
+        let twice = scratch("rotate-twice");
+        load_or_mint_at(&twice, date()).unwrap();
+        rotate_at(&twice, tomorrow()).unwrap();
+        let err = rotate_at(
+            &twice,
+            Date {
+                year: 2026,
+                month: 8,
+                day: 15,
+            },
+        )
+        .expect_err("a window is already open");
+        assert!(err.to_string().contains("already in flight"), "{err}");
+        // And the open window survived the refusal intact.
+        let held = read(&twice).unwrap().unwrap();
+        assert_eq!(held.retired().map(IdentityKey::id), Some("2026-08-13"));
+    }
+
+    // Retiring closes the window and is idempotent-safe: called with none open it
+    // reports `None` rather than rewriting the file.
+    #[test]
+    fn retiring_closes_the_window_and_is_a_no_op_without_one() {
+        let path = scratch("retire");
+        load_or_mint_at(&path, date()).unwrap();
+        assert_eq!(retire(&path).unwrap(), None, "no window is open");
+        rotate_at(&path, tomorrow()).unwrap();
+        assert_eq!(retire(&path).unwrap(), Some("2026-08-13".to_owned()));
+        let held = read(&path).unwrap().unwrap();
+        assert_eq!(held.current().id(), "2026-08-14");
+        assert_eq!(held.retired().map(IdentityKey::id), None);
+        assert_eq!(retire(&path).unwrap(), None, "and not twice");
+    }
+
+    // A rewrite must not widen the key file's permissions. The mode is set at
+    // creation on the staged copy, so the published file was never world-readable
+    // even for the instant a chmod-afterwards would leave open.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewritten_key_file_is_still_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = scratch("rotate-mode");
+        load_or_mint_at(&path, date()).unwrap();
+        rotate_at(&path, tomorrow()).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, KEY_MODE, "0o{mode:o}");
+    }
+
+    // A half-present retired generation is refused rather than read as absent: an
+    // id with no key is a generation we can neither use nor honestly declare lost,
+    // and dropping it into the absent case is the silent path.
+    #[test]
+    fn a_half_present_retired_generation_is_refused() {
+        let path = scratch("retired-half");
+        let key = load_or_mint_at(&path, date()).unwrap();
+        let (id, hex) = generation_lines(&path).unwrap();
+        assert_eq!(id, key.id());
+
+        replace_private(&path, &format!("{id}\n{hex}\n2026-08-01\n")).unwrap();
+        let err = read(&path).expect_err("an id with no key");
+        assert!(err.to_string().contains(":3"), "{err}");
+
+        replace_private(&path, &format!("{id}\n{hex}\n2026-08-01\nnot-hex\n")).unwrap();
+        let err = read(&path).expect_err("a key that is not one");
+        assert!(err.to_string().contains(":4"), "{err}");
+        assert!(
+            !err.to_string().contains("not-hex"),
+            "pointer-only: the file's bytes are key material, {err}"
+        );
+    }
+
+    // Two generations sharing one id are conflated inside the preimage, so a join
+    // could not name which is which. Refused on read, not only on rotate — a file
+    // hand-edited into that shape must not be used.
+    #[test]
+    fn two_generations_under_one_id_are_refused_on_read() {
+        let path = scratch("retired-same-id");
+        load_or_mint_at(&path, date()).unwrap();
+        let (id, hex) = generation_lines(&path).unwrap();
+        replace_private(&path, &format!("{id}\n{hex}\n{id}\n{hex}\n")).unwrap();
+        let err = read(&path).expect_err("one id, two generations");
+        assert!(
+            err.to_string().contains("shares the current key's id"),
+            "{err}"
+        );
+    }
+
+    // The ledger is the answer to a question the store cannot ask: the key id is
+    // inside the preimage, so no stored fingerprint can be asked which generation
+    // minted it. A first mint records itself, and a rotation records the pair.
+    #[test]
+    fn the_ledger_records_every_generation_that_ever_minted() {
+        let path = scratch("ledger");
+        load_or_mint_at(&path, date()).unwrap();
+        rotate_at(&path, tomorrow()).unwrap();
+        retire(&path).unwrap();
+        assert_eq!(
+            events_at(&ledger_beside(&path)).unwrap(),
+            vec![
+                Event::Minted {
+                    key_id: "2026-08-13".to_owned()
+                },
+                Event::Rotated {
+                    from: "2026-08-13".to_owned(),
+                    to: "2026-08-14".to_owned()
+                },
+                Event::Retired {
+                    key_id: "2026-08-13".to_owned()
+                },
+            ]
+        );
+    }
+
+    // Pointer-only, structurally: the ledger holds ids, fingerprints and counts.
+    // A key byte reaching it would put the key in the same directory as a digest
+    // it protects, in a file that is not the key file.
+    #[test]
+    fn no_ledger_event_can_carry_a_key_byte() {
+        let path = scratch("ledger-pointer-only");
+        let key = load_or_mint_at(&path, date()).unwrap();
+        let hex = generation_lines(&path).unwrap().1;
+        rotate_at(&path, tomorrow()).unwrap();
+        record_join(
+            &path,
+            "2026-08-13",
+            "2026-08-14",
+            crate::identity::store_fingerprint(&["old"]),
+            crate::identity::store_fingerprint(&["new"]),
+        )
+        .unwrap();
+        record_orphan(&path, "2026-08-13", 2).unwrap();
+
+        let text = fs::read_to_string(ledger_beside(&path)).unwrap();
+        assert!(!text.contains(&hex), "the ledger carries no key material");
+        assert!(text.contains(key.id()), "it does carry the coordinate");
+        // And the redacting `Debug` holds for the custody wrapper too, which is a
+        // new value in a formatting path.
+        let rendered = format!("{:?}", read(&path).unwrap().unwrap());
+        assert!(!rendered.contains(&hex), "{rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
+    }
+
+    // The key-loss predicate is ledger-against-file, NOT "the key file is missing":
+    // an absent file is indistinguishable from a repository that never scanned, and
+    // `custody_at` mints there correctly. What makes a mint a RE-mint is that a
+    // generation which once existed is no longer held.
+    #[test]
+    fn a_deleted_key_is_a_lost_generation_and_a_fresh_one_is_not() {
+        let path = scratch("orphan-detect");
+        // A first mint names one generation, and nothing is lost.
+        load_or_mint_at(&path, date()).unwrap();
+        assert!(lost_ids(&path, date()).is_empty());
+
+        // The key is deleted and re-minted under a new id: the ledger still names
+        // the generation the file no longer holds.
+        fs::remove_file(&path).unwrap();
+        load_or_mint_at(&path, tomorrow()).unwrap();
+        assert_eq!(lost_ids(&path, tomorrow()), vec!["2026-08-13".to_owned()]);
+
+        // Reported once: an already-recorded orphan drops out, so the loud event
+        // stays an event rather than a line on every run.
+        record_orphan(&path, "2026-08-13", 1).unwrap();
+        assert!(lost_ids(&path, tomorrow()).is_empty());
+    }
+
+    // A generation still HELD is never lost, however many events name it — the
+    // comparison is against the file, so an open rotation window is not a loss.
+    #[test]
+    fn an_open_rotation_window_is_not_a_loss() {
+        let path = scratch("orphan-window");
+        load_or_mint_at(&path, date()).unwrap();
+        rotate_at(&path, tomorrow()).unwrap();
+        assert!(
+            lost_ids(&path, tomorrow()).is_empty(),
+            "both generations are in the file"
+        );
+        retire(&path).unwrap();
+        assert_eq!(
+            lost_ids(&path, tomorrow()),
+            vec!["2026-08-13".to_owned()],
+            "a retired generation IS unheld; whether that matters is a question \
+             about records, which is the store side's to answer"
+        );
+    }
+
+    /// [`orphaned_key_ids`] against an injected key path.
+    ///
+    /// The public entry point resolves the path from the repository, which a unit
+    /// test cannot move (`set_var` is unsafe and forbidden), so the predicate is
+    /// exercised through the same split [`load_or_mint_at`] uses.
+    fn lost_ids(path: &Path, today: Date) -> Vec<String> {
+        let held = custody_at(path, today).unwrap().held_ids();
+        lost_from(&events_at(&ledger_beside(path)).unwrap(), &held)
+    }
+
+    // The scan reads the current key and, while a window is open, mints the pair.
+    // Asserted on the fingerprints rather than through the scanner, which needs a
+    // provisioned binary: what is being pinned is that the join names the identity
+    // the store actually holds, override and all.
+    #[test]
+    fn a_join_names_the_same_identity_the_store_holds() {
+        let path = scratch("join-identity");
+        load_or_mint_at(&path, date()).unwrap();
+        rotate_at(&path, tomorrow()).unwrap();
+        let held = read(&path).unwrap().unwrap();
+        let span = crate::identity::SecretSpan::mint("shhh");
+
+        let new = crate::identity::secret_code_fingerprint(held.current(), "r", "src/a.rs", &span)
+            .unwrap();
+        let old = crate::identity::secret_code_fingerprint(
+            held.retired().unwrap(),
+            "r",
+            "src/a.rs",
+            &span,
+        )
+        .unwrap();
+        // The rule declares an identity override, so BOTH halves must carry it: a
+        // pair recorded as (bare old, discriminated new) names two coordinates the
+        // store never holds together, and the record it was meant to move sits
+        // untouched under a third.
+        let split = |fingerprint| crate::identity::override_fingerprint(fingerprint, "split");
+        record_join(
+            &path,
+            held.retired().unwrap().id(),
+            held.current().id(),
+            split(old),
+            split(new),
+        )
+        .unwrap();
+
+        let pairs = joins(&ledger_beside(&path)).unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(
+            pairs[0].1,
+            split(new),
+            "the join's new half is the identity a finding carries"
+        );
+        assert_eq!(pairs[0].0, split(old));
+        assert_ne!(pairs[0].0, pairs[0].1);
     }
 }
