@@ -49,6 +49,14 @@ use crate::error::UsageError;
 /// name (`CARGO_PKG_NAME`) so it tracks the binary rather than being a literal.
 const APP_NAMESPACE: &str = env!("CARGO_PKG_NAME");
 
+/// How many hex characters of the checkout digest the state segment carries.
+///
+/// Twelve, matching the short-sha convention this repo already reads by eye. The
+/// digest separates checkouts on one machine, so the population it must not
+/// collide over is a handful of directories rather than a content-addressed
+/// store — and the readable prefix, not the digest, is what a person navigates by.
+const CHECKOUT_DIGEST_LEN: usize = 12;
+
 /// Batten's OS data directory: `<data-dir>/<app>`, per the CLOUD-23 per-OS rule,
 /// resolved via `etcetera` (XDG on Linux/macOS, the roaming known folder on
 /// Windows).
@@ -77,24 +85,52 @@ pub fn repo_state_dir(repo_root: &Path) -> Result<PathBuf> {
     Ok(state_root()?.join(name))
 }
 
-/// Derive the state-directory name for the repository at `repo_root`: its final
-/// path component (the repository's own directory name), resolved at runtime.
+/// Derive the state-directory segment for the repository at `repo_root`:
+/// `<final path component>-<checkout digest>`, both resolved at runtime.
+///
+/// # The final component alone is not sufficient, and that is why the digest is here
+///
+/// It was, until CLOUD-296. The segment was the repository's directory name and
+/// nothing else, so `~/work/batten` and `~/scratch/batten` — a worktree, a second
+/// clone, a colleague's layout, a CI checkout beside a local one — resolved to one
+/// state root, and the second checkout read and wrote the first one's records with
+/// nothing detecting it. Survivable for receipts, which are SHA-keyed, so a foreign
+/// receipt reads as `stale-head` rather than as an answer. Not survivable for the
+/// capture store (CLOUD-162): it is written on every `batten exec`, and a capture
+/// handle is part of the finding-identity contract, so a handle could expand to
+/// output produced by a command that ran **in a different tree** — misattribution
+/// in a pointer whose only purpose is provenance.
+///
+/// The digest is [`crate::identity::checkout_fingerprint`] of the canonical
+/// absolute root, truncated to [`CHECKOUT_DIGEST_LEN`] hex characters. The
+/// readable prefix stays first so the directory is still findable by eye and the
+/// segment is still *derived* rather than baked in (CLOUD-38).
+///
+/// **A moved checkout orphans its records, deliberately.** Moving the tree changes
+/// the canonical root, so it derives a new segment and the old records stay where
+/// they were. The alternative — records following the move — needs a marker file
+/// in the checkout or a registry mapping paths to segments, which is durable state
+/// *and* a second answer to "which repository is this". One scheme answers that
+/// question, and the capture digest goes on answering only "which bytes are these".
 ///
 /// # Errors
 ///
 /// Returns a [`UsageError`] when `repo_root` has no final component (it is a
-/// filesystem root, empty, or ends in `..`) or that component is not valid UTF-8.
+/// filesystem root, empty, or ends in `..`), that component is not valid UTF-8, or
+/// the root is relative — the digest is a statement about *where* this checkout
+/// is, which a relative path cannot make.
 pub fn derive_repo_name(repo_root: &Path) -> Result<String> {
-    repo_root
+    let name = repo_root
         .file_name()
         .and_then(|name| name.to_str())
-        .map(ToOwned::to_owned)
         .ok_or_else(|| {
             UsageError::raise(format!(
                 "cannot derive a repository name from {}",
                 repo_root.display()
             ))
-        })
+        })?;
+    let digest = crate::identity::checkout_fingerprint(repo_root)?.to_hex();
+    Ok(format!("{name}-{}", &digest[..CHECKOUT_DIGEST_LEN]))
 }
 
 #[cfg(test)]
@@ -103,14 +139,111 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repo_name_is_the_final_path_component() {
-        assert_eq!(
-            derive_repo_name(Path::new("/home/user/my-project")).unwrap(),
-            "my-project"
+    fn repo_name_leads_with_the_final_path_component() {
+        // Was `repo_name_is_the_final_path_component` until CLOUD-296. The
+        // component leads the segment rather than being the whole of it — see
+        // `derive_repo_name` for why the whole of it was a collision.
+        for (root, name) in [
+            ("/home/user/my-project", "my-project"),
+            ("/srv/git/other-repo", "other-repo"),
+        ] {
+            let segment = derive_repo_name(Path::new(root)).unwrap();
+            assert!(
+                segment.starts_with(&format!("{name}-")),
+                "{root} must derive a segment led by {name}, got {segment}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_relative_root_is_a_usage_error() {
+        // The digest is a statement about WHERE this checkout is, and a relative
+        // path cannot make one: `./batten` names a different tree from each
+        // directory it is read in, so a segment derived from it would silently
+        // follow the caller's cwd.
+        let err = derive_repo_name(Path::new("some/repo")).unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a relative root is bad input, not an internal failure"
         );
+    }
+
+    #[test]
+    fn a_trailing_separator_names_the_same_checkout() {
+        // `/a/repo` and `/a/repo/` are one tree, so they must not address two
+        // stores. `file_name()` already ignores the trailing slash; this pins
+        // that the digest half does too.
         assert_eq!(
-            derive_repo_name(Path::new("/srv/git/other-repo")).unwrap(),
-            "other-repo"
+            derive_repo_name(Path::new("/a/repo")).unwrap(),
+            derive_repo_name(Path::new("/a/repo/")).unwrap()
+        );
+    }
+
+    #[test]
+    fn two_checkouts_sharing_a_directory_name_do_not_share_a_state_root() {
+        // CLOUD-296. The segment used to be the final path component and nothing
+        // else, so `~/work/batten` and `~/scratch/batten` — a worktree, a second
+        // clone, a CI checkout beside a local one — resolved to ONE state root
+        // and silently read and wrote each other's records.
+        //
+        // Asserted as PREFIX-DISJOINTNESS rather than by naming the receipt and
+        // capture stores: every store is a plain join onto this one root
+        // (`captures`, `receipts`, decisions, secrets, provision), so disjoint
+        // roots separate all of them, including any store added later. Naming two
+        // would leave the rest unasserted.
+        let here = repo_state_dir(Path::new("/work/batten")).expect("resolve one");
+        let there = repo_state_dir(Path::new("/scratch/batten")).expect("resolve the other");
+
+        assert_ne!(here, there, "same directory name must not mean same store");
+        assert!(
+            !here.starts_with(&there) && !there.starts_with(&here),
+            "neither root may contain the other, or one checkout's store nests \
+             inside the other's: {} vs {}",
+            here.display(),
+            there.display()
+        );
+        // And the readable half survives: the directory is still findable by eye.
+        for (dir, root) in [(&here, "/work/batten"), (&there, "/scratch/batten")] {
+            let segment = dir
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a segment");
+            assert!(
+                segment.starts_with("batten-"),
+                "the segment for {root} must keep the repository's own name as its \
+                 prefix, got {segment}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_state_root_is_byte_stable_for_one_checkout() {
+        // §6's determinism law, applied to a path. Two derivations for the same
+        // checkout must be byte-identical — no clock, no counter, no ambient
+        // value — or every run would address a different store.
+        let root = Path::new("/home/user/project");
+        assert_eq!(
+            derive_repo_name(root).expect("first derivation"),
+            derive_repo_name(root).expect("second derivation")
+        );
+    }
+
+    #[test]
+    fn a_moved_checkout_orphans_its_records_which_is_the_chosen_outcome() {
+        // CLOUD-296 left this open with two defensible answers; this is the one
+        // taken, pinned so the doc cannot drift from it. Moving a checkout
+        // changes the canonical root, so it derives a new segment and the old
+        // records stay where they were rather than following.
+        //
+        // The alternative — records follow — needs a marker file in the checkout
+        // or a registry: durable state, and a SECOND answer to "which repository
+        // is this", which this issue's acceptance forbids outright.
+        let before = derive_repo_name(Path::new("/home/user/project")).expect("before the move");
+        let after = derive_repo_name(Path::new("/srv/project")).expect("after the move");
+        assert_ne!(
+            before, after,
+            "a moved checkout addresses a new store; its old records are orphaned, \
+             deliberately and not silently"
         );
     }
 
@@ -121,7 +254,11 @@ mod tests {
         let alpha = derive_repo_name(Path::new("/a/alpha")).unwrap();
         let beta = derive_repo_name(Path::new("/b/beta")).unwrap();
         assert_ne!(alpha, beta);
-        assert_eq!((alpha.as_str(), beta.as_str()), ("alpha", "beta"));
+        // The readable prefix is still the repository's own directory name — the
+        // digest CLOUD-296 appended separates checkouts, it does not replace the
+        // name a person navigates by.
+        assert!(alpha.starts_with("alpha-"), "got {alpha}");
+        assert!(beta.starts_with("beta-"), "got {beta}");
     }
 
     #[test]
@@ -155,9 +292,16 @@ mod tests {
         let dir = repo_state_dir(Path::new("/x/demo-repo")).expect("resolve repo state dir");
         let root = state_root().expect("resolve state root");
         assert_eq!(dir.parent(), Some(root.as_path()));
+        // One segment under the root, still — CLOUD-296 changed what the segment
+        // says, not how many there are, which is what keeps every store beneath
+        // it (captures, receipts, decisions) separating by construction.
         assert_eq!(
             dir.file_name().and_then(|name| name.to_str()),
-            Some("demo-repo")
+            Some(
+                derive_repo_name(Path::new("/x/demo-repo"))
+                    .unwrap()
+                    .as_str()
+            )
         );
     }
 

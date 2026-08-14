@@ -823,10 +823,18 @@ fn state_paths_resolve_through_the_one_repo_root_finder() {
 
     let root = git::repo_root(&nested).expect("resolve the repo root");
     let state = batten::state::repo_state_dir(&root).expect("resolve the state dir");
-    assert_eq!(
-        state.file_name(),
-        Path::new("state-composition").file_name(),
-        "the repo segment is derived from the repository at runtime"
+    let segment = state
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("the state dir has a segment");
+    // Led by the repository's own directory name, not equal to it: CLOUD-296
+    // appended a per-checkout digest so two clones sharing a directory name
+    // cannot share a store. The prefix is what keeps the segment DERIVED from
+    // the repository at runtime rather than baked in, which is what this
+    // composition case is about.
+    assert!(
+        segment.starts_with("state-composition-"),
+        "the repo segment is derived from the repository at runtime, got {segment}"
     );
     assert!(
         !state.starts_with(&repo.dir),

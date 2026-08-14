@@ -375,6 +375,54 @@ pub fn canonical_repo_path(path: &str) -> anyhow::Result<String> {
     Ok(trimmed.nfc().collect())
 }
 
+/// Fingerprint a repository **checkout** by its canonical absolute root
+/// (CLOUD-296), so two checkouts sharing a directory name address different
+/// out-of-tree state.
+///
+/// The mirror image of [`canonical_repo_path`], and deliberately not a reuse of
+/// it: that function normalizes a path *inside* a repository and refuses an
+/// absolute one, because a finding's identity must not depend on where the
+/// checkout lives. This one asks the opposite question — *which checkout is
+/// this* — for which the location is the only answer that separates two clones
+/// of one repository. Two functions stating opposite halves of one rule, in the
+/// module that owns normalization, rather than a third scheme somewhere else.
+///
+/// Normalization matches its sibling's where the questions overlap: `\` becomes
+/// `/` and the result is NFC, so a macOS NFD path and a Linux NFC one agree. A
+/// trailing separator is dropped, because `/a/repo` and `/a/repo/` are one
+/// checkout.
+///
+/// **No filesystem access.** Resolving symlinks would make this impure, fail for
+/// a path that does not exist, and answer differently depending on when it ran —
+/// none of which a state path may do (§6).
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] for a relative or empty root — the exact refusal
+/// [`canonical_repo_path`] makes for an absolute one.
+pub fn checkout_fingerprint(repo_root: &std::path::Path) -> anyhow::Result<Fingerprint> {
+    let raw = repo_root
+        .to_str()
+        .ok_or_else(|| UsageError::raise(format!("checkout root is not UTF-8: {repo_root:?}")))?;
+    let slashed = raw.replace('\\', "/");
+    let trimmed = slashed.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err(UsageError::raise("checkout root is empty"));
+    }
+    let mut chars = slashed.chars();
+    let drive_absolute = matches!(
+        (chars.next(), chars.next()),
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic()
+    );
+    if !slashed.starts_with('/') && !drive_absolute {
+        return Err(UsageError::raise(format!(
+            "checkout root must be absolute, got {raw:?}"
+        )));
+    }
+    let canonical: String = trimmed.nfc().collect();
+    Ok(tagged_fingerprint(CHECKOUT_TAG, &[canonical.as_bytes()]))
+}
+
 /// Normalize span text for hashing: NFC, `CRLF -> LF`, and — under
 /// [`SpanNormalization::Collapsed`] — all whitespace removed.
 #[must_use]
@@ -423,6 +471,13 @@ const SURFACE_TAG: &str = "surface";
 /// [`FindingKind`] tag and from [`SURFACE_TAG`] for the same reason: three
 /// domains under one tag could collide across kinds of thing.
 const CAPTURE_TAG: &str = "capture";
+
+/// The domain tag for a repository **checkout's location** (CLOUD-296), distinct
+/// from [`CAPTURE_TAG`] above all: those two answer adjacent questions — "which
+/// bytes are these" and "which checkout produced them" — and a shared tag would
+/// let one be mistaken for the other in exactly the place the distinction is
+/// load-bearing.
+const CHECKOUT_TAG: &str = "checkout";
 
 /// The domain tag for the **context** a guard decision was taken in (CLOUD-133),
 /// distinct from every other tag here for the reason they are all distinct.
@@ -1076,6 +1131,52 @@ mod tests {
         assert!(canonical_repo_path("C:\\repo\\src").is_err());
         assert!(canonical_repo_path("a/../b").is_err());
         assert!(canonical_repo_path("").is_err());
+    }
+
+    #[test]
+    fn a_checkout_is_fingerprinted_by_where_it_is_and_refuses_a_relative_root() {
+        use std::path::Path;
+
+        // The mirror image of the case above, asserted together with it on
+        // purpose: `canonical_repo_path` refuses an ABSOLUTE path because a
+        // finding's identity must not depend on where the checkout lives, and
+        // `checkout_fingerprint` refuses a RELATIVE one because a checkout's
+        // identity is precisely where it lives (CLOUD-296). Two halves of one
+        // rule; a reader who finds only one of them will reach for the wrong
+        // function.
+        let here = checkout_fingerprint(Path::new("/work/batten")).unwrap();
+        let there = checkout_fingerprint(Path::new("/scratch/batten")).unwrap();
+        assert_ne!(
+            here, there,
+            "the same directory name in two places is two checkouts"
+        );
+
+        // Deterministic, and insensitive to the spellings that name one tree.
+        assert_eq!(
+            here,
+            checkout_fingerprint(Path::new("/work/batten")).unwrap()
+        );
+        assert_eq!(
+            here,
+            checkout_fingerprint(Path::new("/work/batten/")).unwrap(),
+            "a trailing separator names the same checkout"
+        );
+        assert_eq!(
+            checkout_fingerprint(Path::new("/repo/caf\u{e9}")).unwrap(),
+            checkout_fingerprint(Path::new("/repo/cafe\u{301}")).unwrap(),
+            "an NFD checkout path and its NFC form are one checkout, as they are \
+             for a repo-relative path"
+        );
+
+        for relative in ["batten", "./batten", "some/repo", ""] {
+            assert!(
+                checkout_fingerprint(Path::new(relative)).is_err(),
+                "{relative:?} names a different tree from each directory it is read \
+                 in, so it cannot identify a checkout"
+            );
+        }
+        // A Windows drive-absolute root is absolute, so it is accepted.
+        assert!(checkout_fingerprint(Path::new("C:\\repo\\batten")).is_ok());
     }
 
     // -- The kind discriminator prevents cross-kind collisions. --

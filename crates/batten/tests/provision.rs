@@ -79,6 +79,23 @@ impl Env {
         self.home.join("data").join("batten")
     }
 
+    /// This repository's own directory under the cache.
+    ///
+    /// The segment comes from [`batten::state::derive_repo_name`] rather than
+    /// being spelled `repo` here: CLOUD-296 gave it a per-checkout digest, so a
+    /// fixture holding its own copy of the old rule points at a directory
+    /// nothing writes. Canonicalized because the binary's root comes from
+    /// `git rev-parse --path-format=absolute`, which resolves symlinks.
+    fn state_dir(&self) -> PathBuf {
+        let canonical = self
+            .repo
+            .canonicalize()
+            .unwrap_or_else(|_| self.repo.clone());
+        let segment =
+            batten::state::derive_repo_name(&canonical).expect("derive the state segment");
+        self.cache().join(segment)
+    }
+
     /// Every file under the cache, sorted — the comparand for "cache unchanged".
     fn cache_contents(&self) -> Vec<(String, Vec<u8>)> {
         let mut out = Vec::new();
@@ -158,7 +175,7 @@ fn apply_installs_out_of_tree_and_leaves_the_repository_untouched() {
     // Installed where `state.rs` resolves, which is outside the repository by
     // construction — the acceptance's "never committed" as a property rather
     // than a promise.
-    let installed = env.cache().join("repo/provision/demo/1.2.3/bin/demo");
+    let installed = env.state_dir().join("provision/demo/1.2.3/bin/demo");
     assert!(
         installed.is_file(),
         "the binary is cached at the version-encoded path"
@@ -295,7 +312,7 @@ fn a_tar_gz_artifact_yields_the_named_binary_from_a_nested_path() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
-        fs::read(env.cache().join("repo/provision/demo/1.2.3/bin/demo")).unwrap(),
+        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
         BINARY
     );
 }
@@ -474,7 +491,7 @@ fn an_https_fetch_honours_the_hosts_ca_configuration() {
         String::from_utf8_lossy(&trusted.stderr)
     );
     assert_eq!(
-        fs::read(env.cache().join("repo/provision/demo/1.2.3/bin/demo")).unwrap(),
+        fs::read(env.state_dir().join("provision/demo/1.2.3/bin/demo")).unwrap(),
         BINARY,
         "the artifact fetched over https is what was installed"
     );

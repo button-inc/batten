@@ -342,8 +342,19 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   the bug. `upstream_of_head` therefore asks about a bare `@{upstream}` with no
   branch name interpolated, so there is no caller-influenced token in the argv
   and omitting the flag costs nothing.
-- `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<repo-name>/`, CLOUD-23),
-  via `etcetera`; repo-name derived at runtime, never baked in (rule 1).
+- `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via
+  `etcetera`; the segment derived at runtime, never baked in (rule 1). Since
+  CLOUD-296 the segment is `<dir-name>-<12 hex>`, not the bare directory name: the
+  name alone put `~/work/batten` and `~/scratch/batten` in ONE store, survivable for
+  SHA-keyed receipts and not for the capture store, where a handle could expand to
+  output from a different tree. The digest is `identity::checkout_fingerprint` of
+  the canonical absolute root — the mirror image of `canonical_repo_path`, which
+  refuses an absolute path because a FINDING's identity must not depend on checkout
+  location, where a CHECKOUT's identity is exactly that. A moved checkout derives a
+  new segment and orphans its records, chosen over a marker file or a registry
+  because either is a second answer to "which repository is this". Worktree siblings
+  are unaffected: `git::repo_root` already routes them to the main checkout's root
+  (CLOUD-164) before this function sees anything.
 - `stop.rs` — the end-of-turn gate (CLOUD-85), house-style §10's "the stop hook is
   the reconciliation point". `deny-stop ⇔ at-risk work ∨ an undischarged denial`,
   and **both inputs are consumed, never re-derived**: `worktree::status` is the

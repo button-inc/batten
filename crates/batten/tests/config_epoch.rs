@@ -368,9 +368,19 @@ fn cache_home(name: &str) -> PathBuf {
 }
 
 /// The cache file for the repo at `dir`, wherever it landed under `home`.
+///
+/// The segment comes from [`batten::state::derive_repo_name`], not from a second
+/// spelling of the rule here. It was `dir.file_name()` until CLOUD-296 gave the
+/// segment a per-checkout digest — and a fixture re-deriving a production rule is
+/// a fixture that can disagree with it, which is precisely what happened.
+///
+/// Canonicalized for the same reason the binary's root is: `git rev-parse
+/// --path-format=absolute` resolves symlinks, and `std::env::temp_dir()` is one
+/// on macOS, so an unresolved path here would name a segment nothing writes.
 fn cache_file(home: &Path, dir: &Path) -> PathBuf {
-    let repo = dir.file_name().expect("repo dir has a name");
-    home.join("batten").join(repo).join("epoch.json")
+    let canonical = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
+    home.join("batten").join(segment).join("epoch.json")
 }
 
 #[test]

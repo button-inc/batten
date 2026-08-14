@@ -184,6 +184,25 @@ fn committed_budget_surfaces(dir: &Path) {
 /// the ambient `XDG_DATA_HOME` points at, which is the "fixture that reads the
 /// environment it runs inside" defect this helper's own history is about.
 ///
+/// The out-of-tree state root a fixture's runs write to, under its own `home`.
+///
+/// Derived through the library's own [`batten::state::derive_repo_name`] rather
+/// than re-spelled here. It used to be re-spelled — `dir.file_name()`, a second
+/// implementation of the segment rule — and CLOUD-296 is what that cost: the
+/// segment gained a per-checkout digest, and every fixture holding a hand-rolled
+/// copy of the old rule started reading a directory nothing writes. A test that
+/// re-derives a production rule is a test that can disagree with it.
+///
+/// Canonicalized because the binary's own root comes from
+/// `git rev-parse --path-format=absolute`, which resolves symlinks; deriving from
+/// an unresolved path here would address a different segment than the child does.
+fn fixture_state_dir(repo: &Path, home: &Path) -> PathBuf {
+    let canonical = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let segment =
+        batten::state::derive_repo_name(&canonical).expect("derive the fixture's state segment");
+    home.join("data/batten").join(segment)
+}
+
 /// SEEDED, never fetched: `provision apply` would reach github for a real
 /// artifact, and a suite about the exit-code contract must not depend on the
 /// network. The adapter asks only whether the binary is there, so a stub answers
@@ -195,15 +214,7 @@ fn committed_config_fixture_git(dir: &std::path::Path) -> PathBuf {
     git_in(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
 
     let home = dir.join(".batten-test-home");
-    let name = dir
-        .canonicalize()
-        .ok()
-        .and_then(|path| path.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "fixture".to_owned());
-    let bin = home
-        .join("data/batten")
-        .join(name)
-        .join("provision/ripsecrets/0.1.11/bin");
+    let bin = fixture_state_dir(dir, &home).join("provision/ripsecrets/0.1.11/bin");
     fs::create_dir_all(&bin).expect("create the fixture provision cache");
     let scanner = bin.join("ripsecrets");
     fs::write(&scanner, "#!/bin/sh\nexit 0\n").expect("write the stub scanner");
@@ -3500,7 +3511,7 @@ fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
 
     // The canonical store is idempotent on identity: three records of one
     // check are one receipt file, updated in place.
-    let store = home.join("data/batten/repo/receipts");
+    let store = fixture_state_dir(&repo, &home).join("receipts");
     let receipts: Vec<_> = fs::read_dir(&store).expect("receipt store").collect();
     assert_eq!(
         receipts.len(),
@@ -3533,7 +3544,7 @@ fn receipt_records_the_config_epoch_at_its_subject_commit() {
     let epoch_of = |dir: &std::path::Path, home: &std::path::Path| -> String {
         let out = receipt_cmd(dir, home, &["receipt", "record", "verify"]);
         assert_eq!(out.status.code(), Some(0), "record must succeed");
-        let store = home.join("data/batten/repo/receipts");
+        let store = fixture_state_dir(dir, home).join("receipts");
         let file = fs::read_dir(&store)
             .expect("receipt store")
             .next()
@@ -3609,7 +3620,7 @@ fn the_agent_context_statement_is_bounded_and_never_carries_free_text() {
     let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
     assert_eq!(record.status.code(), Some(0), "record must succeed");
 
-    let store = home.join("data/batten/repo/receipts");
+    let store = fixture_state_dir(&repo, &home).join("receipts");
     let agent_file = fs::read_dir(&store)
         .expect("receipt store")
         .filter_map(Result::ok)
@@ -3678,7 +3689,7 @@ fn a_configured_but_absent_transcript_refuses_rather_than_recording_an_empty_con
         Some(1),
         "a usage error, not a verdict"
     );
-    let store = home.join("data/batten/repo/receipts");
+    let store = fixture_state_dir(&repo, &home).join("receipts");
     let agent = fs::read_dir(&store)
         .into_iter()
         .flatten()
@@ -3796,7 +3807,7 @@ fn the_receipt_statement_is_in_toto_shaped_and_never_printed() {
     assert_eq!(record.status.code(), Some(0));
 
     // The stored statement uses the in-toto vocabulary: subject = digest.
-    let store = home.join("data/batten/repo/receipts");
+    let store = fixture_state_dir(&repo, &home).join("receipts");
     let entry = fs::read_dir(&store)
         .expect("receipt store")
         .next()

@@ -509,9 +509,17 @@ fn the_key_is_minted_owner_only_under_the_state_root() {
     // `batten::secrets::key_path` reads the ambient environment, which in the
     // test runner is the developer's own, so calling it here would assert about
     // the wrong directory entirely.
+    //
+    // The SEGMENT, though, comes from the library — `derive_repo_name` is a pure
+    // function of the root and reads nothing ambient, so it is safe to call here
+    // and it is the one authority for the rule. Spelling it `file_name()` was a
+    // second copy of that rule, and CLOUD-296 (which gave the segment a
+    // per-checkout digest) is what a second copy costs.
+    let canonical = env.repo.canonicalize().unwrap_or_else(|_| env.repo.clone());
+    let segment = batten::state::derive_repo_name(&canonical).expect("derive the state segment");
     let key = env
         .cache()
-        .join(env.repo.file_name().unwrap())
+        .join(segment)
         .join("identity")
         .join("secret-key");
     assert!(key.is_file(), "the run minted a key at {}", key.display());
