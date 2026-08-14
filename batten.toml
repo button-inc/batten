@@ -974,6 +974,52 @@ regex = "^[ \\t]*wait -n"
 severity = "deny"
 scope = "tree"
 
+# SBOM conformance as an adopted verdict rather than a clause list (CLOUD-580,
+# settling CLOUD-279 verdict 1). `mise run sbom-check` already asks whether the
+# published inventory DESCRIBES this tree; these two ask whether it is USABLE by
+# whoever receives it — the NTIA 2021 minimum elements and CISA's 2024 FSCT
+# minimum expectation, which is what a procurement review actually checks.
+# `mise-tasks/ntia-check` carries the reasoning and the measurements; what belongs
+# here is why this is TWO rows at two severities.
+#
+# The clause set is the tool's, named by its own `--comply` flag: no clause list
+# in the engine and no crosswalk table (CLOUD-279 verdict 2). `policy_url` would
+# be the natural home for the standard's URL and a `command` row does not permit
+# one (`RuleKind::permits` — it is a shape-row column), so the standard travels in
+# the check itself, which is also the only place that could keep it honest.
+#
+# ROW 1 IS THE MECHANISM, and it is `deny` because it is the half that can stop
+# working silently: an unresolvable checker or an underivable document would
+# otherwise make row 2 pass by never asking anything (non-negotiable rule 2, and
+# `sbom-empty`'s lesson one layer up).
+[[rule]]
+id = "sbom-ntia-precondition"
+kind = "command"
+glob = "Cargo.lock"
+check = "mise run ntia-check --precondition"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "install the pinned checker (`mise install pipx:ntia-conformance-checker`) or fix why `mise run sbom` cannot derive a document; neither is a change to this tree's content"
+
+# ROW 2 IS THE VERDICT, and it is `warn` by measurement rather than by taste.
+# Measured 2026-08-14 on this tree: 243 components, no supplier on 190, no
+# concluded license and no copyright text on 243/243 — and `Cargo.lock` carries
+# ZERO license fields and no supplier field at all, which is the only input syft's
+# cargo cataloger reads. So the gap cannot be closed by a flag; it needs the
+# document ENRICHED from `cargo metadata`, which is its own change. `deny` here
+# would fail `batten enforce` -> `verify` and stop every landing in the repo until
+# that change exists — a gate answering a question nobody asked it. Recording the
+# level per SHA is the claim this row can honestly make, and row 1 is what keeps
+# the recording real.
+[[rule]]
+id = "sbom-ntia-conformance"
+kind = "command"
+glob = "Cargo.lock"
+check = "mise run ntia-check"
+severity = "warn"
+scope = "tree"
+no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no command over this tree can add them: the SBOM has to be enriched from `cargo metadata` first"
+
 # The one legitimate reduction this ratchet has seen, taken through the hatch its
 # own `no_fix_reason` names — "restore the tests, or waive the reduction
 # deliberately; which of the two is the whole question." Restoring is not an

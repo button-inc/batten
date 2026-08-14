@@ -116,6 +116,28 @@ uv = "0.8"                                  # fast Rust installer the pipx: back
 # .mcp.json — so its version lives with every other tool and lands in mise.lock.
 # The pipx backend installs it with `uv` (present above), keeping the fast resolver.
 "pipx:serena-agent" = "1.6.1"
+# The SBOM conformance checker the `sbom-ntia-*` rows in batten.toml run
+# (CLOUD-580, adopted by CLOUD-279 verdict 1). It answers the question
+# `mise run sbom-check` cannot: that gate asks whether the inventory describes
+# this tree, this one asks whether the inventory meets the NTIA/CISA minimum
+# elements a procurement review checks for. Two different claims, and CLOUD-279's
+# M1 measured that v0.0.52's published SPDX satisfies the first and fails the
+# second under both standards.
+#
+# `pipx:`, and NOT by choice — upstream v5.0.3 publishes ZERO release assets, so
+# `[[provision]]` (url + sha256 -> one binary) has nothing to point at and
+# neither `aqua:` nor `github:` can express this tool at all. A `cargo:`-style
+# source build is not the fallback either: it is a Python package, and
+# `no-source-built-tool` refuses that shape regardless of language.
+#
+# WHAT THAT COSTS, stated because it is strictly weaker than every other pin
+# here: `mise-tasks/lock-complete` exempts the `pipx:` backend by design (those
+# backends "resolve through their own package manager and lock no URLs at all"),
+# so this pin binds a VERSION but not BYTES. `uv`'s `--require-hashes`
+# resolution is the reachable mitigation if a version-only pin is ever judged
+# insufficient; it is not adopted here because it needs a hash-pinned
+# requirements file this repo does not yet carry (CLOUD-580 records it).
+"pipx:ntia-conformance-checker" = "5.0.3"
 
 [env]
 CARGO_TERM_COLOR = "always"
