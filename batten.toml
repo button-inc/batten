@@ -908,10 +908,23 @@ trailer_allow = []
 name = "Alec Wenzowski"
 email = "alec@wenzowski.com"
 
+# `mise.lock` joins the surface for a reason the other four do not share
+# (CLOUD-581). A receipt records the epoch at its subject commit, so whatever is
+# tracked here is what a receipt can later be held to. The clause list of an
+# adopted external verifier — an SBOM conformance checker's standard edition, say
+# — is owned and versioned by that tool, so the *edition* a check judged against
+# lives in the pin and nowhere else. Without the lockfile in this set, a receipt
+# reading "check X passed for SHA Y" cannot answer "against which edition", which
+# is precisely the overclaim CLOUD-132 bounds.
+#
+# The cost is stated rather than discovered: a pin bump now moves the epoch and
+# invalidates receipts, exactly as an AGENTS.md edit already does. That is the
+# intended direction — a toolchain change IS a change in what decided the check.
 [epoch]
 tracked = [
   "batten.toml",
   "AGENTS.md",
   "hk.pkl",
+  "mise.lock",
   ".claude/settings.json",
 ]

@@ -3472,6 +3472,70 @@ fn receipt_lifecycle_amend_rebase_and_moved_main_invalidate() {
     );
 }
 
+/// CLOUD-581's three acceptance bullets, over the real binary.
+///
+/// The receipt records the config epoch at its subject commit, so it can answer
+/// "under which governing surface" — and for a check that delegates its clause
+/// list to an external verifier, that surface is where the tool's pin, and
+/// therefore the standard's edition, lives.
+#[test]
+fn receipt_records_the_config_epoch_at_its_subject_commit() {
+    let root = scratch("receipt-epoch");
+    let _ = fs::remove_dir_all(&root);
+    // A tracked surface wider than batten.toml, so the test can move a
+    // governing file that is NOT the policy — the toolchain-pin shape.
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n[epoch]\ntracked = [\"batten.toml\", \"pinned.lock\"]\n")
+        .file("pinned.lock", "tool = \"1.0.0\"\n")
+        .git()
+        .base_commit()
+        .work_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+
+    let epoch_of = |dir: &std::path::Path, home: &std::path::Path| -> String {
+        let out = receipt_cmd(dir, home, &["receipt", "record", "verify"]);
+        assert_eq!(out.status.code(), Some(0), "record must succeed");
+        let store = home.join("data/batten/repo/receipts");
+        let file = fs::read_dir(&store)
+            .expect("receipt store")
+            .next()
+            .expect("one receipt")
+            .expect("readable entry")
+            .path();
+        let doc: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(file).expect("read receipt"))
+                .expect("receipt is JSON");
+        doc["predicate"]["configEpoch"]
+            .as_str()
+            .expect("configEpoch is a string")
+            .to_owned()
+    };
+
+    // 1. The field is recorded, and it is a real epoch rather than a placeholder.
+    let first = epoch_of(&repo, &home);
+    assert!(!first.is_empty(), "an epoch is recorded");
+
+    // 3. A WORKING-TREE edit to a governing file does not move it: the subject
+    //    is a commit, so every byte the statement binds comes from that commit.
+    fs::write(repo.join("pinned.lock"), "tool = \"2.0.0\"\n").expect("edit the pin");
+    let uncommitted = epoch_of(&repo, &home);
+    assert_eq!(
+        uncommitted, first,
+        "an uncommitted pin bump must not move the recorded epoch"
+    );
+
+    // 2. Committing that same bump does move it: the two are distinguishable,
+    //    which is what lets a reader tell which toolchain decided the check.
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-q", "-m", "bump the pin"]);
+    let committed = epoch_of(&repo, &home);
+    assert_ne!(
+        committed, first,
+        "a committed pin bump must move the recorded epoch"
+    );
+}
+
 #[test]
 fn receipt_identity_is_per_check() {
     let (repo, home) = receipt_fixture("receipt-per-check");

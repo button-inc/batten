@@ -56,6 +56,23 @@
 //! * **`policyDigest` hashes the policy committed at HEAD** (`git show
 //!   HEAD:batten.toml`), never working-tree bytes: the statement's subject is
 //!   a commit digest, so every byte it binds must come from that commit.
+//! * **`configEpoch` binds the whole governing surface at HEAD**, not only the
+//!   policy (CLOUD-581). A receipt names *which check passed* and `policyDigest`
+//!   names *under which rules*; neither names **which build of the tool decided
+//!   it**. For a check that delegates its clause list to an external verifier —
+//!   the shape CLOUD-279 verdict 2 settles for conformance checking — the
+//!   standard's *edition* lives entirely in that tool's pin, so a receipt
+//!   without it cannot answer "against which edition", and claiming it could
+//!   would be the overclaim CLOUD-132 bounds.
+//!
+//!   It is [`crate::epoch::compute`] at `HEAD`, **not** a second digest of a
+//!   named lockfile, because which files govern a repository is that
+//!   repository's business: a toolchain manifest is `[epoch] tracked` config in
+//!   the consumer's own `batten.toml`, and naming one here would put a
+//!   consumer's filename in the core (non-negotiable rule 1). It also reuses one
+//!   length-prefixed construction over committed bytes instead of inventing a
+//!   second, and costs no new config key — which is what CLOUD-279 verdict 2
+//!   asked for.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -137,6 +154,18 @@ pub struct Predicate {
     /// Digest of the policy (`batten.toml`) committed at the subject commit.
     #[serde(rename = "policyDigest")]
     pub policy_digest: PolicyDigest,
+    /// The config epoch at the subject commit — a hash of every file the
+    /// consumer declares as governing, which is what lets a receipt name the
+    /// *version* of whatever external verifier decided the check (CLOUD-581).
+    ///
+    /// Deliberately **not** `Option` with a `serde(default)`. A receipt written
+    /// before this field existed fails to deserialize, so [`load_statement`]
+    /// answers [`Validity::Missing`] and the gate denies until the check is
+    /// re-run. That is the module's existing fail-closed direction — a receipt
+    /// that cannot be read is never valid — and a default would instead mint an
+    /// epoch-shaped hole that reads as "the surface was recorded".
+    #[serde(rename = "configEpoch")]
+    pub config_epoch: String,
     /// When the conclusion was recorded (RFC 3339 UTC). Informational — no
     /// validity condition reads it; expiry is a git fact, never a clock.
     #[serde(rename = "recordedAt")]
@@ -405,6 +434,13 @@ pub fn run_record(check: &str) -> Result<ExitCode> {
         &["show", "HEAD:batten.toml"],
         "batten.toml is not committed at HEAD, so there is no policy to digest",
     )?;
+    // At HEAD, never the working tree, for the same reason the policy is: the
+    // subject is a commit digest, so every byte the statement binds comes from
+    // that commit. `compute` resolves BOTH the tracked list and the tracked
+    // bytes from the ref, so an uncommitted edit to a governing file — a pin
+    // bump included — does not move this value, and the next `record` after it
+    // lands does.
+    let config_epoch = crate::epoch::compute(Path::new("."), Some("HEAD"))?;
     let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -425,6 +461,7 @@ pub fn run_record(check: &str) -> Result<ExitCode> {
             policy_digest: PolicyDigest {
                 sha256: hex_sha256(&policy),
             },
+            config_epoch,
             recorded_at: rfc3339_utc(now),
             conclusion: CONCLUSION_PASS.to_owned(),
             identity: IdentityRef {
@@ -528,6 +565,7 @@ mod tests {
                 policy_digest: PolicyDigest {
                     sha256: "00".to_owned(),
                 },
+                config_epoch: "epoch1".to_owned(),
                 recorded_at: "1970-01-01T00:00:00Z".to_owned(),
                 conclusion: CONCLUSION_PASS.to_owned(),
                 identity: IdentityRef {
@@ -609,6 +647,48 @@ mod tests {
         assert!(json.contains("\"_type\""));
         assert!(json.contains("\"predicateType\""));
         assert!(json.contains("\"gitCommit\""));
+        assert!(json.contains("\"configEpoch\""));
+    }
+
+    /// A receipt written before `configEpoch` existed must read as
+    /// [`Validity::Missing`], not as a valid receipt with an empty surface
+    /// (CLOUD-581). This is the whole reason the field is not
+    /// `Option`+`serde(default)`: fail closed, the same posture an unreadable
+    /// receipt already gets.
+    #[test]
+    fn a_receipt_predating_the_epoch_field_is_missing() {
+        let dir = std::env::temp_dir().join("batten-receipt-pre-epoch");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("legacy.json");
+
+        // The exact shape `run_record` wrote before this field landed.
+        let legacy = serde_json::json!({
+            "_type": STATEMENT_TYPE,
+            "subject": [{ "name": "repo", "digest": { "gitCommit": "head1" } }],
+            "predicateType": PREDICATE_TYPE,
+            "predicate": {
+                "check": "verify",
+                "recordedMain": "main1",
+                "recordedGitDir": "/repo/.git",
+                "policyDigest": { "sha256": "00" },
+                "recordedAt": "1970-01-01T00:00:00Z",
+                "conclusion": CONCLUSION_PASS,
+                "identity": { "fingerprint": "00", "version": "1" },
+            },
+        });
+        std::fs::write(&path, serde_json::to_string(&legacy).unwrap()).unwrap();
+
+        let loaded = load_statement(&path);
+        assert!(
+            loaded.is_none(),
+            "a predicate missing configEpoch is unusable"
+        );
+        assert_eq!(
+            validity(loaded.as_ref(), "head1", "main1", "/repo/.git"),
+            Validity::Missing,
+            "and the verdict denies rather than passing over an unrecorded surface"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
