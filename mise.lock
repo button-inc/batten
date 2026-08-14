@@ -241,6 +241,66 @@ checksum = "sha256:c8bda517ba1c640ce4a715c0fa665439ddbe4357ba5e9b77b0e51e70e2b9c
 url = "https://github.com/mvdan/sh/releases/download/v3.12.0/shfmt_v3.12.0_windows_amd64.exe"
 url_api = "https://api.github.com/repos/mvdan/sh/releases/assets/270490128"
 
+[[tools."aqua:ossf/scorecard"]]
+version = "5.5.0"
+backend = "aqua:ossf/scorecard"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-arm64"]
+checksum = "sha256:3ce59d20c1d53e540c4a14e0da1e0d96b3b294e8ddc96a3c5a7b8a637b32991e"
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/403812978"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-arm64".provenance.slsa]
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/multiple.intoto.jsonl"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-arm64-musl"]
+checksum = "sha256:3ce59d20c1d53e540c4a14e0da1e0d96b3b294e8ddc96a3c5a7b8a637b32991e"
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_linux_arm64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/403812978"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-arm64-musl".provenance.slsa]
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/multiple.intoto.jsonl"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-x64"]
+checksum = "sha256:83b90a05c1540ef1390db1cd5711e5fd04be9c1d8537fb84d39d02092d6a8dff"
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/403812999"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-x64".provenance.slsa]
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/multiple.intoto.jsonl"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-x64-musl"]
+checksum = "sha256:83b90a05c1540ef1390db1cd5711e5fd04be9c1d8537fb84d39d02092d6a8dff"
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_linux_amd64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/403812999"
+
+[tools."aqua:ossf/scorecard"."platforms.linux-x64-musl".provenance.slsa]
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/multiple.intoto.jsonl"
+
+[tools."aqua:ossf/scorecard"."platforms.macos-arm64"]
+checksum = "sha256:bac6371a4f810d6bdd0b65d63c3311906bdfe3ba0d76a5ea743ce24ced170fcf"
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_darwin_arm64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/403812997"
+
+[tools."aqua:ossf/scorecard"."platforms.macos-arm64".provenance.slsa]
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/multiple.intoto.jsonl"
+
+[tools."aqua:ossf/scorecard"."platforms.macos-x64"]
+checksum = "sha256:979487ca20e726f6a4d2bd63a0a4c544184f589724b3d12d2ba8d0ea80889063"
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_darwin_amd64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/403812977"
+
+[tools."aqua:ossf/scorecard"."platforms.macos-x64".provenance.slsa]
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/multiple.intoto.jsonl"
+
+[tools."aqua:ossf/scorecard"."platforms.windows-x64"]
+checksum = "sha256:21ca42b37260785e670c58f602b483510099e7b1988e3c6eb5005f143dc2a2ab"
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/scorecard_5.5.0_windows_amd64.tar.gz"
+url_api = "https://api.github.com/repos/ossf/scorecard/releases/assets/403812975"
+
+[tools."aqua:ossf/scorecard"."platforms.windows-x64".provenance.slsa]
+url = "https://github.com/ossf/scorecard/releases/download/v5.5.0/multiple.intoto.jsonl"
+
 [[tools."aqua:release-plz/release-plz"]]
 version = "0.3.160"
 backend = "aqua:release-plz/release-plz"

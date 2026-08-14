@@ -46,6 +46,19 @@ local gate = new Mapping<String, Step> {
     glob = List(".github/workflows/ci.yml", "mise.toml")
     check = "mise run ci-tools-check"
   }
+  // `coverage` and `scorecard` emit a number for a human and must never gate a
+  // branch — a coverage threshold rewards line-touching, and scorecard scores
+  // deliberate design decisions (trunk-based review, the landing lease's
+  // `actions: write`) as defects. Both said so in a comment and nothing held
+  // it: the only thing keeping them off the landing path was that nobody had
+  // added them to it (CLOUD-582). This is the inverse of `ci-local-parity`'s
+  // "every task CI runs, verify runs" — named reports appear in NEITHER
+  // `[tasks.verify]` nor any `pull_request` workflow. Kept separate from that
+  // gate because the two fail for opposite reasons and one deny cannot say both.
+  ["report-only-check"] {
+    glob = List(".github/workflows/*.yml", "mise.toml", "mise-tasks/report-only-check")
+    check = "mise run report-only-check"
+  }
   // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
   // a runnable gate, not prose (see AGENTS.md): fails if any docs/ path is
   // tracked. Research deliverables and evidence notes attach to the Linear

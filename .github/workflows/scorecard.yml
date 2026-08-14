@@ -1,0 +1,103 @@
+name: scorecard
+
+# An OSSF scorecard REPORT, not a gate (CLOUD-582).
+#
+# The distinction is the whole design, and here it is sharper than coverage's.
+# Measured 2026-08-13 this repository scores 5.2/10, and three of the four
+# zero-scores are scorecard disagreeing with decisions taken deliberately:
+# `Code-Review: 0` ("0/18 approved changesets") is trunk-based
+# review-after-merge; `Token-Permissions: 0` counts 18 grants of which 16 are
+# load-bearing, 13 being the landing lease's job-level `actions: write`; and
+# `Maintained: 0` is repo age. Binding that to landing would gate on a tool's
+# opinion about our own design.
+#
+# So, deliberately, and mirroring coverage.yml:
+#   * NOT triggered by `pull_request`. A repo-practice score says nothing about
+#     whether a given branch may land, and putting it on the landing path would
+#     spend a runner per push for a report nobody blocks on. It also keeps
+#     `ci-local-parity` honest: that gate requires every task a PR workflow runs
+#     to be one `mise run verify` runs, and satisfying it by adding scorecard to
+#     `verify` would make this the gate it refuses to be.
+#   * NOT a required status, and NOT in ci.yml's `final` fan-in.
+#   * NO threshold. Only a broken run fails this job; the number itself never
+#     exits non-zero.
+#
+# `mise run report-only-check` is the sensor on all three, so the property does
+# not rest on this comment.
+#
+# Not a push-to-main trigger either: `main` only ever advances by fast-forward
+# to a commit a PR already tested, so triggering on push would re-run work that
+# is by construction already done. The schedule is what samples `main`.
+
+on:
+  schedule:
+    # Mondays, 09:00 UTC — after every other weekly job, and a slot no other
+    # workflow holds (`ci-local-parity` fails if two share a cron expression).
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: scorecard
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  # Restores locked installs, which `[settings] lockfile = false` turns off
+  # along with the install-time write it exists to deny (CLOUD-223). Every
+  # workflow using mise-action must set this; `mise run lock-complete` fails if
+  # one does not.
+  MISE_LOCKFILE: "true"
+
+jobs:
+  scorecard:
+    name: scorecard
+    runs-on: ubuntu-latest
+    # Grandfathered rather than measured, and deliberately: no run of THIS job
+    # exists yet, so there is no p95 to state. The task alone measured 16s, 13s
+    # and 12s locally on 2026-08-14, which sizes the scan but not the checkout
+    # and toolchain install around it. `mise run timeout-drift` supplies the
+    # real number once the job has history; until then this is visible debt
+    # rather than a justification.
+    timeout-minutes: 15 # budget: grandfathered measured=2026-08-14
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # scorecard reads the repository over the API and the checkout from
+          # disk; nothing else is invoked. `mise run ci-tools-check` fails if a
+          # name here drifts from mise.toml.
+          install_args: aqua:ossf/scorecard
+      # Redirected, never piped. A pipeline hands the exit status to its LAST
+      # stage, so `mise run scorecard | tee ...` would report success whenever
+      # `tee` succeeded — the false-green shape `mise run run-shape-guard`
+      # exists to refuse locally, and it is no less wrong in a workflow.
+      - env:
+          # The default token's read scope is all scorecard needs here; it is
+          # never written back and the job holds `contents: read` only.
+          GITHUB_AUTH_TOKEN: ${{ github.token }}
+        run: mise run scorecard >"$RUNNER_TEMP/scorecard.txt" 2>&1
+      # The report as a job summary, so it is readable without downloading
+      # anything.
+      - name: Publish the summary
+        if: always()
+        run: |
+          {
+            cat <<'MD'
+          ## OSSF scorecard
+
+          A report, not a gate — no threshold, not a required check.
+
+          Three zero-scores are expected and are not defects: Code-Review
+          (trunk-based review-after-merge), Token-Permissions (the landing
+          lease needs job-level actions write), and Maintained (repository age).
+
+          MD
+            echo '```'
+            cat "$RUNNER_TEMP/scorecard.txt"
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"

@@ -40,6 +40,19 @@ hk = "1.54.0"                                                # git-hook runner (
 # Unlike cargo-msrv above, this one ships aarch64-unknown-linux-gnu, so a
 # release-asset backend locks every platform `lock-complete` requires.
 "aqua:taiki-e/cargo-llvm-cov" = "0.8.7"
+# Repo-practice scoring as a REPORT, never a gate (CLOUD-582), on the same terms
+# coverage holds above. Measured 2026-08-13: this repository scores 5.2/10, and
+# three of the four zero-scores are scorecard disagreeing with choices made
+# deliberately — `Code-Review: 0` is trunk-based review-after-merge, and
+# `Token-Permissions: 0` counts the landing lease's `actions: write` grants as
+# excessive. Binding that exit code to landing would gate on a tool's opinion
+# about our own design, which is the model-verdict shape non-negotiable rule 3
+# refuses, wearing a scanner's clothes. So: scheduled workflow, absent from
+# `verify` and from `final`, and `report-only-check` reds if that ever changes.
+#
+# aqua, and mise verifies its SLSA provenance on install — measured, "✓ SLSA
+# provenance verified" — so `lock-complete` can hold every required platform.
+"aqua:ossf/scorecard" = "5.5.0"
 # NOTE: the fuzz driver (`mise run fuzz`, CLOUD-112) deliberately pins NO tool
 # here, for the same shape of reason cargo-msrv does not — and it is upstream's
 # constraint twice over, not a preference. cargo-fuzz 0.13.2 publishes x86_64
@@ -379,6 +392,46 @@ mkdir -p "${COVERAGE_OUT_DIR:-target/coverage}"
 # and a summary a human reads. `--workspace` matches what `test:cargo` runs.
 cargo llvm-cov --workspace --lcov --output-path "${COVERAGE_OUT_DIR:-target/coverage}/lcov.info"
 cargo llvm-cov report --summary-only
+'''
+
+[tasks.scorecard]
+description = "Report: OSSF scorecard over this repository. A REPORT, never a gate — deliberately not in `verify` and not a required check"
+shell = "bash -c"
+# WHY THIS IS NOT A GATE, and must not become one. Measured 2026-08-13 at
+# aggregate 5.2/10, and three of the four zero-scores are scorecard disagreeing
+# with decisions this repository made deliberately: `Code-Review: 0` counts
+# "0/18 approved changesets", which is trunk-based review-after-merge working as
+# specified; `Token-Permissions: 0` counts 18 grants of which 16 are
+# load-bearing, 13 of them the landing lease's job-level `actions: write`; and
+# `Maintained: 0` is repo age. Binding that exit code to landing would gate on a
+# tool's opinion about our own design — the model-verdict shape non-negotiable
+# rule 3 refuses, in a scanner's clothes.
+#
+# Consequences, all deliberate and all mirrored from `[tasks.coverage]`: absent
+# from `[tasks.verify]`, absent from `final`'s `needs` in ci.yml, scheduled
+# rather than `pull_request`. `mise run report-only-check` is the sensor on
+# every one of those, so this comment is not the only thing holding the line.
+#
+# The token is the ONE input that is not the tree. scorecard reads its own
+# `GITHUB_AUTH_TOKEN`; nothing here mints or stores one, and a missing token is
+# scorecard's own error rather than a silent partial score.
+#
+# Task bodies do not run under `set -e`, and a report built from a half-run
+# scan is a misleading number rather than a missing one, so the body opts in.
+run = '''
+set -euo pipefail
+: "${GITHUB_AUTH_TOKEN:=${GH_TOKEN:-${GITHUB_TOKEN:-}}}"
+export GITHUB_AUTH_TOKEN
+if [ -z "$GITHUB_AUTH_TOKEN" ]; then
+	echo "::error:: scorecard: no GITHUB_AUTH_TOKEN/GH_TOKEN/GITHUB_TOKEN in the environment, so no report was produced." >&2
+	exit 1
+fi
+# The repository is named from the origin remote, never hardcoded: the same
+# reason `[epoch] tracked` is config — a consumer's coordinates are theirs.
+remote=$(git remote get-url origin)
+slug=${remote#*github.com[:/]}
+slug=${slug%.git}
+scorecard --repo="github.com/${slug}" "$@"
 '''
 
 [tasks.fuzz]
