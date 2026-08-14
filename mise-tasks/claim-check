@@ -74,9 +74,29 @@
 # Exit 0 pullable / 1 not pullable / 2 unreadable stdin — matching `graph-check`
 # so the two compose in one pipeline.
 #
+# A SIXTH PATH, WHICH IS NOT A RULE: the deliberate takeover. The three
+# competitor rules read a RESUMED branch exactly as they read a collision, and
+# they are right about the facts every time — work in flight is In Progress,
+# assigned, and carries its own pull request. Measured on this gate's own
+# landing: the receipt lives under `.git/` and never leaves the clone, which is
+# what makes it unforgeable and also what strands it, so a branch picked up in a
+# fresh container can never mint one and can never pass the `verify` half this
+# same change adds. In a fleet of disposable containers that is the second
+# session on any branch, not an edge case. `BATTEN_CLAIM_TAKEOVER=1` mints over
+# the refusals and RECORDS which ones it overrode; it is not folded into
+# `BATTEN_CLAIM_CHECK_BYPASS`, because "this story was refined in my session" and
+# "I am resuming work that already looks occupied" are different decisions.
+#
 # The mutation drops the stamp comparison, so an issue refined seconds ago reads
 # as refined long ago and the incident replay mints a receipt again.
-#MUTANT claim-ignores-the-stamp|s/\[ "\$updated_epoch" -gt "\$stamp_epoch" \]/false/|a claim that cannot see the session boundary cannot refuse the replay
+#MUTANT claim-ignores-the-stamp|s/\[ "\$updated_epoch" -gt "\$stamp_epoch" \]/false/|THE INCIDENT REPLAY
+# The takeover must stay OPT-IN. Unset, the refusal is the answer; a mutation that
+# takes over unconditionally turns every collision into a silent claim, which is
+# the failure this gate exists to prevent.
+#MUTANT takeover-always-on|s/^\tif \[ -n "\${BATTEN_CLAIM_TAKEOVER:-}" \]; then$/\tif true; then/|an occupied issue is refused when no takeover is asked for
+# And it must RECORD what it overrode: a takeover that mints a receipt
+# indistinguishable from a clean pull is a bypass wearing a better name.
+#MUTANT takeover-unrecorded|s/^\t\tif \[ "\$takeover" -ne 0 \]; then$/\t\tif false; then/|NAMES the refusals it overrode
 set -euo pipefail
 
 # The one escape hatch, and it is deliberately not shared with `claim-guard`'s
@@ -105,11 +125,16 @@ if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else
 fi
 
 blocked=0
+# What the takeover overrode, accumulated as `<id> <rule>` pairs so the receipt
+# can name them rather than merely admitting that something was overridden.
+overridden=""
+takeover=0
 # Pointer-only per non-negotiable rule 4: the issue id and the rule id, plus the
 # PR number where there is one. Never an issue body, never a title.
 report() {
 	echo "$1 $2" >&2
 	blocked=$((blocked + 1))
+	overridden="${overridden}${overridden:+; }$1 $2"
 }
 
 # --- the refinement-sequence machinery (CLOUD-431) ---------------------------
@@ -234,8 +259,33 @@ while read -r id; do
 done <<<"$(jq -r '.[].id' <<<"$issues")"
 
 if [ "$blocked" -ne 0 ]; then
-	echo "::error:: claim-check: not pullable — someone is already on it. Pick another issue from \`mise run graph-check\`'s frontier, or take this one over deliberately rather than by collision." >&2
-	exit 1
+	# THE DELIBERATE TAKEOVER, which this message has always named without
+	# offering (CLOUD-431). The three competitor rules read a RESUMED branch
+	# exactly as they read a collision, and they are right about the facts every
+	# time: work in flight IS In Progress, IS assigned, and DOES carry its own
+	# pull request. What they cannot see is that the competitor is this branch.
+	#
+	# MEASURED, on this gate's own landing. The receipt lives under `.git/` and
+	# never leaves the clone — which is the property that makes it unforgeable and
+	# also the one that strands it. A branch picked up in a fresh container has no
+	# receipt, cannot mint one (all three rules fire, truthfully), and so can never
+	# pass the `verify` half this same change adds. In a fleet where a container is
+	# disposable that is not an edge case; it is the second session on any branch.
+	#
+	# So the hatch is a TAKEOVER rather than a bypass, and the distinction is what
+	# it writes down: the receipt records which rules fired and for which ids, so
+	# the claim says "I took this over from a state that looked occupied" instead
+	# of quietly looking like a clean pull. `BATTEN_CLAIM_CHECK_BYPASS` is not
+	# widened to cover this — that switch means "this story was refined in my own
+	# session", a different decision a human might well want without this one.
+	if [ -n "${BATTEN_CLAIM_TAKEOVER:-}" ]; then
+		echo "claim-check: BATTEN_CLAIM_TAKEOVER set — claiming over $blocked refusal(s) above, recorded in the receipt" >&2
+		takeover="$blocked"
+		blocked=0
+	else
+		echo "::error:: claim-check: not pullable — someone is already on it. Pick another issue from \`mise run graph-check\`'s frontier, or take it over deliberately with BATTEN_CLAIM_TAKEOVER=1, which mints the receipt and records what it overrode." >&2
+		exit 1
+	fi
 fi
 
 # --- the claim receipt (CLOUD-272) -------------------------------------------
@@ -283,6 +333,13 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 			echo "ready-lint bypassed (BATTEN_CLAIM_CHECK_BYPASS)"
 		else
 			echo "ready-lint pass"
+		fi
+		# A takeover is recorded with WHAT it overrode, never as a bare flag: the
+		# reason to allow one is that a resumed branch looks identical to a
+		# collision, and the only thing that tells them apart afterwards is which
+		# rules fired for which ids.
+		if [ "$takeover" -ne 0 ]; then
+			echo "takeover $takeover refusal(s) overridden (BATTEN_CLAIM_TAKEOVER): $overridden"
 		fi
 		echo "claimed-at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 		jq -r '[.[] | "updated-at \(.id) \(.updatedAt // "-")"] | .[]' <<<"$issues"

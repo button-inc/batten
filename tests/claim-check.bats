@@ -365,3 +365,67 @@ refined_after_the_stamp() {
 	run bash -c "$(declare -f payload); payload CLOUD-1 Todo '' '' '$UNREFINED' | (cd '$REPO' && BATTEN_CLAIM_CHECK_BYPASS=1 $CHECK)"
 	[[ "$(cat "$RECEIPT")" == *"ready-lint bypassed"* ]]
 }
+
+# --- the deliberate takeover -------------------------------------------------
+#
+# The three competitor rules cannot tell a RESUMED branch from a collision, and
+# they are right about the facts in both: work in flight is In Progress, assigned
+# and carrying its own PR. The receipt that would prove it is this branch's own
+# work lives under `.git/` and never leaves the clone, so a fresh container has
+# nothing to show — which is the second session on any branch, in a fleet where
+# containers are disposable.
+
+@test "an occupied issue is refused when no takeover is asked for" {
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-407 not-todo"* ]]
+	[ ! -f "$RECEIPT" ]
+	# The refusal names the way out, since a gate whose remedy is undiscoverable
+	# is one a caller works around instead of using.
+	[[ "$output" == *"BATTEN_CLAIM_TAKEOVER=1"* ]]
+}
+
+@test "THE TAKEOVER: an occupied issue is claimable deliberately, and mints a receipt" {
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && BATTEN_CLAIM_TAKEOVER=1 $CHECK)"
+	[ "$status" -eq 0 ]
+	[ -f "$RECEIPT" ]
+	[[ "$output" == *"BATTEN_CLAIM_TAKEOVER set"* ]]
+}
+
+@test "a takeover receipt NAMES the refusals it overrode, never a bare flag" {
+	# The whole difference between a takeover and a bypass. A receipt that merely
+	# recorded "taken over" would be indistinguishable from a clean pull weeks
+	# later, which is what makes the hatch auditable rather than a hole.
+	setup_repo
+	# Todo but assigned AND carrying a PR, so TWO rules fire: `not-todo` returns
+	# early, and a receipt naming only the first refusal would understate what was
+	# overridden.
+	run bash -c "$(declare -f payload); payload CLOUD-407 Todo someone https://github.com/button-inc/batten/pull/401 | (cd '$REPO' && BATTEN_CLAIM_TAKEOVER=1 $CHECK)"
+	[ "$status" -eq 0 ]
+	local body
+	body=$(cat "$RECEIPT")
+	[[ "$body" == *"takeover 2 refusal(s)"* ]]
+	[[ "$body" == *"CLOUD-407 assigned"* ]]
+	[[ "$body" == *"CLOUD-407 has-pr (401)"* ]]
+	# Pointer-only still holds: ids and rule ids, never the block it read.
+	[[ "$body" != *"Refinement"* ]]
+}
+
+@test "a clean claim records no takeover line" {
+	# The anti-vacuity direction: if every receipt carried the line, its presence
+	# would say nothing about the claim it describes.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-230 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$RECEIPT")" != *"takeover"* ]]
+}
+
+@test "the takeover does not silence the refusals — they are still reported" {
+	# It overrides the verdict, not the reporting: a human reading the run still
+	# sees exactly what was occupied, and so does the receipt.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && BATTEN_CLAIM_TAKEOVER=1 $CHECK)"
+	[[ "$output" == *"CLOUD-407 not-todo"* ]]
+}
