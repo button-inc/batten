@@ -1147,22 +1147,23 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 # anything unverified. `blockedBy CLOUD-585` was removed from the issue on that
 # measurement: a public repository is what makes the verdict INTERESTING, never
 # what makes this gate runnable.
-# THE GLOB IS `mise-tasks/**`, AND BOTH REASONS ARE MEASURED. It has to be a path
-# `batten-glob-check` can prove covered — that gate accepts a verbatim match or a
-# `P/**` prefix against hk.pkl's `batten-check` list, and `.github/workflows/*.yml`
-# and `mise-tasks/**` are both in it, while a lone literal `release-artifacts.yml`
+# THE GLOB IS THIS ROW'S OWN MECHANISM, and both constraints that produced it were
+# measured rather than reasoned. It must be a path `batten-glob-check` can prove
+# covered — that gate accepts a verbatim match or a `P/**` prefix against hk.pkl's
+# `batten-check` list, and `mise-tasks/**` is in it, so any path under
+# `mise-tasks/` is provable while a lone `.github/workflows/release-artifacts.yml`
 # is not. And it must not match inside a FIXTURE tree: a `check` spelled `mise run`
-# only resolves where a mise.toml is findable, so any row whose glob matches a
-# fixture repository reports a violation there for a reason that has nothing to do
-# with policy. `tests/prebuilt-lint.bats` copies `mise.toml` and the workflows into
-# its fixture and asserts this repository's own config is clean over it, which is
-# what caught the workflow-set spelling (CLOUD-614 carries the general defect).
-# `mise-tasks/**` is also where this row's own mechanism lives, so the trigger and
-# the thing triggered are the same file set.
+# resolves only where a mise.toml is findable, so a row matching a fixture reports
+# the launcher rather than the tree. Two suites caught the two wider spellings —
+# `tests/prebuilt-lint.bats` copies `mise.toml` and the workflows into its fixture,
+# and `cli.rs`'s portability case writes a `mise-tasks/seed` — and neither failure
+# had anything to do with attestation. CLOUD-614 carries the general defect; naming
+# the file the row exists to run is what makes the trigger and the mechanism the
+# same object rather than a coincidence.
 [[rule]]
 id = "release-attestation-precondition"
 kind = "command"
-glob = "mise-tasks/**"
+glob = "mise-tasks/attestation-check"
 check = "mise run attestation-check --precondition"
 severity = "deny"
 scope = "tree"
