@@ -1384,12 +1384,35 @@ fn drain_advisories(
         let _ = journal::merge(&dir)?;
     }
 
-    // The `resultId` cheap path: a payload byte-identical to the last one is
-    // repetition, and repeating it spends the agent's context to say nothing.
-    let repeat = state.result_id.as_deref() == Some(drained.result_id.as_str());
+    // The `resultId` cheap path (CLOUD-166), measured against the LINEAGE's
+    // watermark rather than this session's own bookkeeping, so a warm fork does
+    // not re-list the set its parent had just shown.
+    let root = session::root(&dir, session)?;
+    let previous = session::load_watermark(&dir, &root)?;
+    let repeat = previous
+        .as_ref()
+        .is_some_and(|mark| mark.result_id == drained.result_id);
+
+    // **Persistence is never skipped, which is the half the short-circuit must
+    // not take with it.** The ordinal advances on every cycle including this one,
+    // so a reader can tell a repeated cycle from a cycle that never ran — and the
+    // flap rate that divides by it stays honest. Written before the emit, for the
+    // same reason the suppressions above are.
+    session::save_watermark(
+        &dir,
+        &root,
+        &session::Watermark::next(previous.as_ref(), drained.result_id.clone()),
+    )?;
+
+    // Three outcomes, and the middle one is what CLOUD-166 adds: say the payload,
+    // say `unchanged`, or say nothing. A repeat answers with the fixed marker
+    // rather than silence, because silence is indistinguishable from a drain that
+    // never ran. Nothing found still says nothing — that is a different claim.
     let emitted = !drained.lines.is_empty() && !repeat;
     if emitted {
         output::verdict(err, &drain::render(&drained))?;
+    } else if repeat && !drained.lines.is_empty() {
+        output::verdict(err, drain::UNCHANGED)?;
     }
 
     // Volume and suppression counts are the operator's, not the agent's: they

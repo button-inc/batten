@@ -188,6 +188,53 @@ pub struct SessionRecord {
     /// is byte-stable whatever order holders write in.
     #[serde(default)]
     pub cursors: BTreeMap<String, Cursor>,
+    /// What the drain last told this lineage, and how many cycles it has run
+    /// (CLOUD-166).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<Watermark>,
+}
+
+/// One drain cycle's durable trace: which cycle it was, and what it said.
+///
+/// **On the lineage record rather than beside the wake state, and that is the
+/// whole point.** The wake state is per session and a warm fork does not inherit
+/// it, so a fork would re-emit the set its parent had just shown — the
+/// re-listing the short-circuit exists to prevent, at exactly the moment an agent
+/// has least context to spare. Stored on the root's record, the resume point is
+/// the one CLOUD-83's lineage already carries.
+///
+/// Pointer-only: an ordinal and a digest, no finding content, so this stays a
+/// record about *reports* rather than about findings (rule 4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Watermark {
+    /// How many drain cycles this lineage has run.
+    ///
+    /// Advances on **every** cycle, including one the `resultId` short-circuited
+    /// — which is what makes "persistence is never skipped" a fact something can
+    /// read rather than a claim. An ordinal that moved only when the payload
+    /// moved could not tell a repeated cycle from a cycle that never happened,
+    /// and the flap rate CLOUD-165 measures needs the first number as its
+    /// denominator.
+    pub scan: u64,
+    /// The `resultId` that cycle computed, as hex. The short-circuit compares
+    /// against this and nothing else, so there is one authority for "what did we
+    /// last say".
+    #[serde(rename = "resultId")]
+    pub result_id: String,
+}
+
+impl Watermark {
+    /// The watermark a cycle computing `result_id` leaves behind `previous`.
+    ///
+    /// Saturating rather than wrapping: a lineage that somehow reached `u64::MAX`
+    /// cycles should stop counting rather than claim to be its own first drain.
+    #[must_use]
+    pub fn next(previous: Option<&Watermark>, result_id: String) -> Self {
+        Watermark {
+            scan: previous.map_or(0, |mark| mark.scan).saturating_add(1),
+            result_id,
+        }
+    }
 }
 
 impl SessionRecord {
@@ -198,6 +245,7 @@ impl SessionRecord {
             session: session.to_owned(),
             parent: parent.map(ToOwned::to_owned),
             cursors: BTreeMap::new(),
+            watermark: None,
         }
     }
 }
@@ -414,6 +462,36 @@ pub fn save_cursor(store_dir: &Path, root: &Root, holder: &str, cursor: &Cursor)
     let mut record = read_record(&record_path(store_dir, &root.key))
         .unwrap_or_else(|| SessionRecord::fresh(&root.key, None));
     record.cursors.insert(holder.to_owned(), cursor.clone());
+    write_record(store_dir, &record)
+}
+
+/// What the drain last told `root`'s lineage, if it has spoken at all.
+///
+/// **Reads only.** `None` is a first drain for this lineage, which cannot
+/// short-circuit — the honest answer, and the one a fork avoids paying for by
+/// finding its parent's watermark here.
+///
+/// # Errors
+///
+/// Infallible today; the signature matches the rest of the store's readers.
+pub fn load_watermark(store_dir: &Path, root: &Root) -> Result<Option<Watermark>> {
+    Ok(read_record(&record_path(store_dir, &root.key)).and_then(|record| record.watermark))
+}
+
+/// Record what the drain said this cycle, on `root`'s record.
+///
+/// Stored on the **root's**, never the calling session's, for the same reason a
+/// cursor is: every descendant of one fork chain shares one position, so a fork
+/// does not re-emit what its parent already showed. Mints the root's record when
+/// there is none.
+///
+/// # Errors
+///
+/// Returns an error when the record cannot be written or published.
+pub fn save_watermark(store_dir: &Path, root: &Root, watermark: &Watermark) -> Result<()> {
+    let mut record = read_record(&record_path(store_dir, &root.key))
+        .unwrap_or_else(|| SessionRecord::fresh(&root.key, None));
+    record.watermark = Some(watermark.clone());
     write_record(store_dir, &record)
 }
 

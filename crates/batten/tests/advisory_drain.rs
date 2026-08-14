@@ -122,6 +122,62 @@ fn marked_fixture(name: &str, drain_table: &str, body: &str) -> (PathBuf, PathBu
     (repo, home)
 }
 
+/// [`hook`] for a session that declares a parent, which is what a warm fork is.
+///
+/// The two env vars are the host's contract (`session::SESSION_ENV` /
+/// `PARENT_ENV`); the payload still carries the child's own id, because a fork is
+/// a new session that inherited a lineage rather than a renamed one.
+fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
+    let mut command = batten();
+    command
+        .args(["hook", "--harness", "claude-code"])
+        .current_dir(dir)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("BATTEN_SESSION_PARENT", parent)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten hook");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin is piped")
+        .write_all(payload.as_bytes())
+        .expect("write the payload");
+    child.wait_with_output().expect("run batten hook")
+}
+
+/// The `(scan, resultId)` watermark from the one session record under `home` that
+/// carries one.
+///
+/// Read off disk rather than through a verb: the persistence clause is about what
+/// survives the process, and a reader that went through the same binary could not
+/// tell a written record from a remembered one. Searching for the record that has
+/// a watermark rather than computing the lineage key keeps the assertion about the
+/// fact — some record holds it — instead of restating the hashing this crate does.
+fn watermark(home: &Path) -> Option<(u64, String)> {
+    let sessions = std::fs::read_dir(home.join("data").join("batten"))
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path().join("sessions"))
+        .find(|path| path.is_dir())?;
+    for entry in std::fs::read_dir(sessions).ok()?.flatten() {
+        let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+        let document: serde_json::Value = match serde_json::from_str(&text) {
+            Ok(document) => document,
+            Err(_) => continue,
+        };
+        if let Some(mark) = document.get("watermark") {
+            let scan = mark.get("scan").and_then(serde_json::Value::as_u64)?;
+            let id = mark.get("resultId").and_then(serde_json::Value::as_str)?;
+            return Some((scan, id.to_owned()));
+        }
+    }
+    None
+}
+
 /// The drain payload on stderr, with Batten's own `batten: ` notes removed —
 /// those are messages *about* Batten and travel on a different channel by
 /// construction (`output::message` vs `output::verdict`).
@@ -213,15 +269,128 @@ fn a_batch_of_wakes_drains_once_and_the_interval_is_config() {
 }
 
 #[test]
-fn an_unchanged_finding_set_is_not_repeated() {
-    // Acceptance (e) over the binary: the second drain finds exactly what the
-    // first did and says nothing, because repeating an identical payload spends
-    // the agent's context to convey no information.
+fn an_unchanged_finding_set_answers_with_the_marker_rather_than_the_listing() {
+    // CLOUD-166 (a) over the binary. The second drain finds exactly what the
+    // first did, and says so in one fixed token: re-listing spends context to
+    // convey nothing, and SILENCE would be indistinguishable from a drain that
+    // never ran — the false green this engine exists to catch.
     let (repo, home) = drained_fixture("drain-result-id", "\n[drain]\ninterval_ms = 0\n");
     assert_eq!(payload(&hook(&repo, &home, &post_tool("s1"))).len(), 1);
-    assert!(
-        payload(&hook(&repo, &home, &post_tool("s1"))).is_empty(),
-        "the same set again is repetition, not news"
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool("s1"))),
+        vec!["unchanged".to_owned()],
+        "the same set again is repetition, and repetition has a name"
+    );
+
+    // Constant-size whatever the set: a fixture with four findings answers with
+    // the same one token as a fixture with one.
+    let (many, home_many) = spread_fixture(
+        "drain-result-id-many",
+        "\n[drain]\ninterval_ms = 0\ncardinality_cap = 100\n",
+        4,
+    );
+    assert_eq!(payload(&hook(&many, &home_many, &post_tool("s1"))).len(), 4);
+    assert_eq!(
+        payload(&hook(&many, &home_many, &post_tool("s1"))),
+        vec!["unchanged".to_owned()]
+    );
+}
+
+#[test]
+fn a_drain_with_nothing_to_say_stays_silent_rather_than_claiming_unchanged() {
+    // The distinction the marker would lose if it were emitted unconditionally:
+    // "nothing to report" and "the same as before" are different claims, and an
+    // agent that cannot tell them apart learns nothing from either.
+    let (repo, home) = drained_fixture("drain-nothing-unchanged", "\n[drain]\ninterval_ms = 0\n");
+    common::git_in(&repo, &["checkout", "--", "src/a.rs"]);
+    for _ in 0..2 {
+        assert!(
+            payload(&hook(&repo, &home, &post_tool("s1"))).is_empty(),
+            "an empty payload is never the unchanged marker"
+        );
+    }
+}
+
+#[test]
+fn every_cycle_advances_the_watermark_even_the_one_it_short_circuits() {
+    // CLOUD-166's persistence clause: the short-circuit skips EMISSION only. The
+    // ordinal is what makes that checkable — an id that moved only when the
+    // payload moved could not tell a repeated cycle from one that never ran, and
+    // the flap rate that divides by it would be measuring nothing.
+    let (repo, home) = drained_fixture("drain-watermark", "\n[drain]\ninterval_ms = 0\n");
+    assert_eq!(payload(&hook(&repo, &home, &post_tool("s1"))).len(), 1);
+    let first = watermark(&home).expect("the first drain leaves a watermark");
+    assert_eq!(first.0, 1, "one cycle, ordinal one");
+
+    assert_eq!(
+        payload(&hook(&repo, &home, &post_tool("s1"))),
+        vec!["unchanged".to_owned()]
+    );
+    let second = watermark(&home).expect("and so does the one that said nothing new");
+    assert_eq!(
+        second.0, 2,
+        "the ordinal advances through the short-circuit"
+    );
+    assert_eq!(
+        first.1, second.1,
+        "the id does not, because the report did not change"
+    );
+}
+
+#[test]
+fn a_count_only_change_is_news_and_does_not_short_circuit() {
+    // CLOUD-166 (b). The same identity observed more often is a state change, and
+    // a bare set-hash would have skipped it. The count is in the rendered line, so
+    // the digest moves — asserted over the binary because that is where a
+    // regression would actually reach an agent.
+    let (repo, home) = drained_fixture("drain-count-change", "\n[drain]\ninterval_ms = 0\n");
+    assert_eq!(payload(&hook(&repo, &home, &post_tool("s1"))).len(), 1);
+
+    common::write(
+        &repo,
+        "src/a.rs",
+        "fn main() {}\n// TODO fix me\n// TODO fix me\n",
+    );
+    let recorded = state_cmd(&repo, &home, &["state", "record"]);
+    assert_eq!(recorded.status.code(), Some(0));
+
+    let again = payload(&hook(&repo, &home, &post_tool("s1")));
+    assert_eq!(again.len(), 1, "one identity, one line: {again:?}");
+    assert_ne!(again, vec!["unchanged".to_owned()], "a count is news");
+    assert!(again[0].ends_with(" 1->2"));
+}
+
+#[test]
+fn a_warm_fork_resumes_from_its_parents_watermark() {
+    // CLOUD-166 (c), and the reason the watermark lives on the LINEAGE record
+    // rather than beside the per-session wake state: a fork that re-listed its
+    // parent's set would re-spend the context the short-circuit exists to save,
+    // at the moment a restarted agent has least to spare.
+    let (repo, home) = drained_fixture("drain-fork-watermark", "\n[drain]\ninterval_ms = 0\n");
+    assert_eq!(payload(&hook(&repo, &home, &post_tool("parent"))).len(), 1);
+
+    // The fork edge is written by the verb that observes the session, which is
+    // CLOUD-83's half and not this one's: the drain reads a lineage, it does not
+    // mint one. Recording under the child's declared parentage is what a warm
+    // restart does before any tool call reaches the hook.
+    let observed = batten()
+        .args(["state", "record"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
+        .env("BATTEN_SESSION", "child")
+        .env("BATTEN_SESSION_PARENT", "parent")
+        .output()
+        .expect("run batten state record");
+    assert_eq!(observed.status.code(), Some(0));
+
+    let forked = forked_hook(&repo, &home, &post_tool("child"), "parent");
+    assert_eq!(forked.status.code(), Some(0));
+    assert_eq!(
+        payload(&forked),
+        vec!["unchanged".to_owned()],
+        "the child inherits what the parent was told, and does not repeat it"
     );
 }
 

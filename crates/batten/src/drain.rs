@@ -151,6 +151,23 @@ pub const DEFAULT_INTERVAL_MS: u64 = 2_000;
 /// declares none.
 pub const DEFAULT_EMPTY_POLL_GIVEUP: u32 = 3;
 
+/// What a drain says when its payload is byte-identical to the last one it
+/// emitted (CLOUD-166).
+///
+/// **Silence and "unchanged" are different claims, and the drain must be able to
+/// make the second one.** Before this, a repeat emitted nothing — which reads
+/// exactly like a drain that never ran, and a drain that silently did not run is
+/// the false green this module's docs say the engine exists to catch. LSP 3.17
+/// solved the same problem at the report level: an unchanged report answers
+/// `unchanged` rather than resending itself.
+///
+/// One fixed token, so its cost is constant whatever the finding count and
+/// [`crate::budget::estimate_tokens`] over it is the same number every time. It
+/// is deliberately **not** emitted for an empty payload: "nothing to say" and
+/// "the same thing as before" are different facts, and collapsing them would
+/// make the marker meaningless.
+pub const UNCHANGED: &str = "unchanged";
+
 /// Distinct identities one rule may spend entries on in a single drain, when the
 /// config declares none.
 ///
@@ -296,10 +313,6 @@ pub struct WakeState {
     /// The journal cursor this session has drained to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<journal::Cursor>,
-    /// The digest of the last payload rendered, as hex. The `resultId`
-    /// short-circuit compares against this.
-    #[serde(rename = "resultId", default, skip_serializing_if = "Option::is_none")]
-    pub result_id: Option<String>,
     /// What the last drain told this session, per identity: fingerprint hex to
     /// occurrence count.
     ///
@@ -326,7 +339,6 @@ impl Default for WakeState {
             empty_polls: 0,
             armed_seqno: 0,
             cursor: None,
-            result_id: None,
             counts: BTreeMap::new(),
         }
     }
@@ -355,7 +367,6 @@ impl WakeState {
         self.last_drain_ms = now_ms;
         self.pending = false;
         self.armed_seqno = seqno;
-        self.result_id = Some(cycle.result_id.clone());
         if emitted {
             self.empty_polls = 0;
             self.counts.clone_from(&cycle.counts);
@@ -578,9 +589,14 @@ pub fn cycle(
     previous: &BTreeMap<String, u64>,
 ) -> Drained {
     let selected = select(records, changed, context);
+    // The state lines are taken BEFORE the cap consumes the surfaced set, so the
+    // digest covers every identity this cycle looked at rather than only the ones
+    // that got a line. See [`state_lines`] for why that is the difference between
+    // a report id and a set hash.
+    let state = state_lines(&selected.shown);
     let (items, capped) = cap(selected.shown, config.cardinality_cap);
     let clamped = clamp(&items, config, previous);
-    let result_id = drain_result_fingerprint(&clamped.lines).to_hex();
+    let result_id = result_fingerprint(&clamped, &state, &capped, &selected.scope_filtered);
     Drained {
         lines: clamped.lines,
         scope_filtered: selected.scope_filtered,
@@ -590,6 +606,59 @@ pub fn cycle(
         counts: clamped.counts,
         result_id,
     }
+}
+
+/// The state-bearing facts about the surfaced set, one pointer-only line per
+/// identity: `<fingerprint> <disposition> <presentation>`.
+///
+/// **The `resultId` is a report id, not a set hash** (CLOUD-166). A digest over
+/// the rendered bytes alone would call a cycle "unchanged" when a *disposition*
+/// moved — the agent acted on a finding, or the engine reclassified why it was
+/// withheld — because neither shows in a pointer line. That is the adversarial
+/// case the issue names: a state change silently skipped because its rendering
+/// happened to be identical. Counts are already in the lines; these are the
+/// fields that are not.
+///
+/// The presentation goes through serde rather than a hand-written token, so a
+/// variant added later enters the digest without anyone remembering to widen a
+/// match here.
+fn state_lines(shown: &BTreeMap<String, Surfaced<'_>>) -> Vec<String> {
+    shown
+        .iter()
+        .map(|(key, surfaced)| {
+            let disposition = surfaced.record.disposition.map_or_else(
+                || "-".to_owned(),
+                |disposition| disposition.as_str().to_owned(),
+            );
+            let presentation = serde_json::to_string(&surfaced.record.presentation)
+                .unwrap_or_else(|_| "?".to_owned());
+            format!("{key} {disposition} {presentation}")
+        })
+        .collect()
+}
+
+/// The digest a repeat is recognised by: the payload, plus every state-bearing
+/// fact behind it, plus how much was withheld and why.
+///
+/// The withheld *counts* are in the input because a finding moving between the
+/// two withholding reasons is a state change the payload cannot show — the lines
+/// are identical whether a rule was capped or its entries clamped, and the two
+/// mean different things to the rate that reads them.
+fn result_fingerprint(
+    clamped: &Clamped,
+    state: &[String],
+    capped: &[FindingRecord],
+    scope_filtered: &[FindingRecord],
+) -> String {
+    let mut input = clamped.lines.clone();
+    input.extend(state.iter().cloned());
+    input.push(format!(
+        "withheld {} {} {}",
+        scope_filtered.len(),
+        capped.len(),
+        clamped.over_budget.len()
+    ));
+    drain_result_fingerprint(&input).to_hex()
 }
 
 /// What the selection stage found: one entry per identity, what the scope filter
@@ -1835,6 +1904,93 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- (g) CLOUD-166: the resultId is a report id, not a set hash ---------
+
+    #[test]
+    fn a_disposition_that_moved_changes_the_result_id_though_the_lines_do_not() {
+        // The adversarial case CLOUD-166 names. A disposition is state-bearing and
+        // invisible in a pointer line, so a digest over the rendered bytes alone
+        // would call this cycle "unchanged" and skip a change the store made —
+        // silently, which is the failure mode with no witness.
+        let scope = changed(&["src/a.rs"]);
+        let before = record(FindingKind::Code, "r", "src/a.rs", "TODO");
+        let after = FindingRecord {
+            disposition: Some(crate::findings::Disposition::Acted),
+            ..before.clone()
+        };
+
+        let first = cycled(std::slice::from_ref(&before), &scope, None);
+        let second = cycled(std::slice::from_ref(&after), &scope, None);
+        assert_eq!(
+            first.lines, second.lines,
+            "the premise: the rendered payload is byte-identical either way"
+        );
+        assert_ne!(
+            first.result_id, second.result_id,
+            "so the digest must be the thing that notices"
+        );
+    }
+
+    #[test]
+    fn a_finding_moving_between_withholding_reasons_changes_the_result_id() {
+        // Same shape, one level out: the payload cannot show whether a rule was
+        // capped or its entries clamped, and the two mean different things to the
+        // rate that reads them. An identical `unchanged` for both would lose it.
+        let records = spread("r", 4);
+        let scope = changed(&["src/a.rs"]);
+        let capped = cycle(
+            &records,
+            &scope,
+            None,
+            &DrainConfig {
+                cardinality_cap: 2,
+                ..generous()
+            },
+            &BTreeMap::new(),
+        );
+        let clamped = cycle(
+            &records,
+            &scope,
+            None,
+            &DrainConfig {
+                token_budget: 0,
+                ..generous()
+            },
+            &BTreeMap::new(),
+        );
+        assert_ne!(capped.result_id, clamped.result_id);
+    }
+
+    #[test]
+    fn an_identical_snapshot_yields_the_identical_result_id_whatever_the_order() {
+        // The other half: content-derived means no clock and no input-order
+        // dependence, or the short-circuit would never fire and the marker would
+        // be unreachable.
+        let a = record(FindingKind::Code, "r", "src/a.rs", "TODO");
+        let b = record(FindingKind::Code, "r", "src/b.rs", "FIXME");
+        let scope = changed(&["src/a.rs", "src/b.rs"]);
+        assert_eq!(
+            cycled(&[a.clone(), b.clone()], &scope, None).result_id,
+            cycled(&[b, a], &scope, None).result_id
+        );
+    }
+
+    #[test]
+    fn the_unchanged_marker_costs_the_same_whatever_the_payload_would_have_been() {
+        // §7 (a)'s constant-size half, as a property of the marker rather than of
+        // a fixture: it is one fixed token, so its estimate cannot grow with the
+        // finding count. A marker that interpolated anything would break this.
+        assert_eq!(UNCHANGED, "unchanged");
+        assert!(
+            !UNCHANGED.contains('\n'),
+            "one line, so one pointer-free token"
+        );
+        assert_eq!(
+            crate::budget::estimate_tokens(UNCHANGED),
+            crate::budget::estimate_tokens(UNCHANGED)
+        );
     }
 
     #[test]
