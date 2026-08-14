@@ -1399,10 +1399,7 @@ fn run_hook(
     // `check-ignore` behind it runs only when a write-triggered row actually
     // selected, so a repository declaring none pays nothing for it.
     let required = policy.required_checks_for(&envelope);
-    let judgeable = envelope
-        .writes
-        .as_deref()
-        .is_none_or(|path| receipt::judgeable(path));
+    let judgeable = envelope.writes.as_deref().is_none_or(receipt::judgeable);
     let receipts: hook::ReceiptFacts = if required.is_empty() || !judgeable {
         None
     } else {

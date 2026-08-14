@@ -532,7 +532,7 @@ fn branch_validity(git_dir: &str, check: &str, branch: &str) -> Validity {
 /// target need not exist, so nothing here may require it to. A `..` above the
 /// root is dropped rather than escaping into a prefix, which keeps the result a
 /// path this containment test can compare.
-fn lexically_normal(path: std::path::PathBuf) -> std::path::PathBuf {
+fn lexically_normal(path: &Path) -> std::path::PathBuf {
     let mut normalised = std::path::PathBuf::new();
     for component in path.components() {
         match component {
@@ -588,7 +588,9 @@ pub(crate) fn judgeable(path: &str) -> bool {
     // OVER-denies — it refuses a write to a path outside the repository — and an
     // over-denying claim gate is the false-positive rate that gets a guard
     // switched off.
-    let Ok(absolute) = std::path::absolute(Path::new(path)).map(lexically_normal) else {
+    let Ok(absolute) =
+        std::path::absolute(Path::new(path)).map(|absolute| lexically_normal(&absolute))
+    else {
         return false;
     };
     if !absolute.starts_with(&root) {
@@ -861,7 +863,7 @@ pub fn run_status(check: &str, json: bool, out: &mut dyn Write) -> Result<ExitCo
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -1131,21 +1133,21 @@ mod tests {
         // it — a deny on a write OUTSIDE the repository, which is the
         // over-denying direction a claim gate cannot afford.
         assert_eq!(
-            lexically_normal(std::path::PathBuf::from("/repo/../sibling.md")),
+            lexically_normal(Path::new("/repo/../sibling.md")),
             std::path::PathBuf::from("/sibling.md")
         );
         assert_eq!(
-            lexically_normal(std::path::PathBuf::from("/repo/./src/../src/x.rs")),
+            lexically_normal(Path::new("/repo/./src/../src/x.rs")),
             std::path::PathBuf::from("/repo/src/x.rs")
         );
         // A traversal above the root stays a path rather than escaping upward.
         assert_eq!(
-            lexically_normal(std::path::PathBuf::from("/../../x")),
+            lexically_normal(Path::new("/../../x")),
             std::path::PathBuf::from("/x")
         );
         // A path needing no resolution is unchanged.
         assert_eq!(
-            lexically_normal(std::path::PathBuf::from("/repo/src/x.rs")),
+            lexically_normal(Path::new("/repo/src/x.rs")),
             std::path::PathBuf::from("/repo/src/x.rs")
         );
     }
