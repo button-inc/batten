@@ -228,8 +228,7 @@ impl Custody {
 
     /// Every key id this repository can still reproduce an identity under.
     ///
-    /// Ids, never bytes: this is the value the orphan check compares the ledger
-    /// against, and it travels into messages and comparisons where a key must not.
+    /// Ids, never bytes: this is what travels into a message an operator reads.
     #[must_use]
     pub fn held_ids(&self) -> Vec<String> {
         let mut ids = vec![self.current.id().to_owned()];
@@ -237,6 +236,28 @@ impl Custody {
             ids.push(retired.id().to_owned());
         }
         ids
+    }
+
+    /// A witness per held generation: which *keys* these are, not which labels.
+    ///
+    /// # The id is not enough, and the gap is a real one rather than a hypothetical
+    ///
+    /// A key id is `key_id`'s date, so a key deleted and re-minted **on the same
+    /// day** comes back under the same id carrying different bytes. Compared by id,
+    /// that re-mint is invisible: the ledger names a generation, the file holds one
+    /// with that name, and every identity in the store has silently stopped being
+    /// reproducible. Which is precisely the silent re-mint the whole custody
+    /// contract exists to refuse, arriving through the check meant to catch it.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the fingerprint's failure, which is unreachable for this input.
+    pub fn witnesses(&self) -> Result<Vec<String>> {
+        let mut witnesses = vec![witness(&self.current)?];
+        if let Some(retired) = &self.retired {
+            witnesses.push(witness(retired)?);
+        }
+        Ok(witnesses)
     }
 
     /// Take the current key, discarding the retired one.
@@ -265,6 +286,7 @@ pub fn custody_at(path: &Path, today: Date) -> Result<Custody> {
         path,
         &Event::Minted {
             key_id: current.id().to_owned(),
+            witness: witness(&current)?,
         },
     )?;
     Ok(Custody {
@@ -575,6 +597,9 @@ pub enum Event {
     Minted {
         /// The new generation's id.
         key_id: String,
+        /// Which key that id names — see [`Custody::witnesses`] for why the id
+        /// alone cannot answer it.
+        witness: String,
     },
     /// A rotation opened a window: both generations are held.
     Rotated {
@@ -582,6 +607,8 @@ pub enum Event {
         from: String,
         /// The generation new identities are now minted under.
         to: String,
+        /// The witness of the generation now current.
+        witness: String,
     },
     /// One identity was re-minted across a rotation, old paired to new by a
     /// dual-HMAC over the same span while both keys were held.
@@ -612,6 +639,32 @@ pub enum Event {
         /// How many findings were returned to unsettled.
         reopened: usize,
     },
+}
+
+/// The label a key witness is computed over.
+///
+/// A fixed rule id and path, so the witness is a function of the key alone. It
+/// looks like a rule but is not one and can never collide with a finding's
+/// identity: a real `rule_id` comes from a config, and this one carries a colon no
+/// config key may hold.
+const WITNESS_LABEL: &str = "batten:key-witness";
+
+/// A digest that identifies a key without revealing it.
+///
+/// Through [`crate::identity::secret_code_fingerprint`] rather than a second
+/// hashing construction, which is the same reason the store's own id is minted
+/// there: one authority on how bytes become an identity. The key is the HMAC key
+/// and the span is a fixed label, so the value is reproducible from the key and
+/// from nothing else — which is exactly the property a custody comparison needs and
+/// the opposite of what a key file may contain.
+fn witness(key: &IdentityKey) -> Result<String> {
+    Ok(crate::identity::secret_code_fingerprint(
+        key,
+        WITNESS_LABEL,
+        "batten",
+        &SecretSpan::mint(WITNESS_LABEL),
+    )?
+    .to_hex())
 }
 
 /// Append one event to the ledger beside `key`.
@@ -793,6 +846,11 @@ pub fn rotate_at(path: &Path, today: Date) -> Result<Rotation> {
         &Event::Rotated {
             from: from.clone(),
             to: to.clone(),
+            witness: witness(
+                read(path)?
+                    .ok_or_else(|| anyhow::anyhow!("{}: the rotated key vanished", path.display()))?
+                    .current(),
+            )?,
         },
     )?;
     Ok(Rotation { from, to })
@@ -891,7 +949,7 @@ pub fn record_orphan(key: &Path, key_id: &str, reopened: usize) -> Result<()> {
 /// Returns an error when the ledger or the key file cannot be read.
 pub fn orphaned_key_ids(repo_root: &Path, today: Date) -> Result<Vec<String>> {
     let path = key_path(repo_root)?;
-    let held = custody_at(&path, today)?.held_ids();
+    let held = custody_at(&path, today)?.witnesses()?;
     Ok(lost_from(&events_at(&ledger_beside(&path))?, &held))
 }
 
@@ -900,27 +958,28 @@ pub fn orphaned_key_ids(repo_root: &Path, today: Date) -> Result<Vec<String>> {
 /// Split out for the reason the module splits `load_or_mint_at`: the key path is
 /// ambient env-selected state a suite cannot move, so the predicate is testable
 /// only if it is a function of what was read rather than of where it was read from.
-fn lost_from(events: &[Event], held: &[String]) -> Vec<String> {
-    let mut known = Vec::new();
+fn lost_from(events: &[Event], held_witnesses: &[String]) -> Vec<String> {
+    // Every generation the ledger says minted, as (id, witness). `Retired` and
+    // `Orphaned` carry no witness and mint nothing, so they are read for what they
+    // are: a window that closed, and a loss already announced.
+    let mut minted: Vec<(String, String)> = Vec::new();
     let mut reported = Vec::new();
     for event in events.iter().cloned() {
         match event {
-            Event::Minted { key_id } | Event::Retired { key_id } => known.push(key_id),
-            Event::Rotated { from, to } => {
-                known.push(from);
-                known.push(to);
-            }
+            Event::Minted { key_id, witness } => minted.push((key_id, witness)),
+            Event::Rotated { to, witness, .. } => minted.push((to, witness)),
             Event::Orphaned { key_id, .. } => reported.push(key_id),
-            Event::Joined { .. } => {}
+            Event::Retired { .. } | Event::Joined { .. } => {}
         }
     }
-    let mut lost: Vec<String> = known
+    let mut lost: Vec<String> = minted
         .into_iter()
-        // A `Retired` generation is deliberately NOT excluded here by its event:
-        // retiring is how a window closes once nothing is keyed under the
-        // generation any more, and a `Retired` id that is still named by a live
-        // record IS a loss. What excludes it is the record check the caller does.
-        .filter(|id| !held.contains(id) && !reported.contains(id))
+        // A `Retired` generation is deliberately NOT excluded: retiring is how a
+        // window closes once nothing is keyed under the generation any more, and a
+        // retired id still named by a live record IS a loss. What excludes it is
+        // the record check the caller does, which is the only side that can see it.
+        .filter(|(id, witness)| !held_witnesses.contains(witness) && !reported.contains(id))
+        .map(|(id, _)| id)
         .collect();
     lost.sort();
     lost.dedup();
@@ -1708,21 +1767,32 @@ severity = "deny"
         load_or_mint_at(&path, date()).unwrap();
         rotate_at(&path, tomorrow()).unwrap();
         retire(&path).unwrap();
-        assert_eq!(
-            events_at(&ledger_beside(&path)).unwrap(),
-            vec![
-                Event::Minted {
-                    key_id: "2026-08-13".to_owned()
-                },
-                Event::Rotated {
-                    from: "2026-08-13".to_owned(),
-                    to: "2026-08-14".to_owned()
-                },
-                Event::Retired {
-                    key_id: "2026-08-13".to_owned()
-                },
-            ]
+        let events = events_at(&ledger_beside(&path)).unwrap();
+        assert!(
+            matches!(
+                events.as_slice(),
+                [
+                    Event::Minted { key_id, .. },
+                    Event::Rotated { from, to, .. },
+                    Event::Retired { key_id: retired },
+                ] if key_id == "2026-08-13"
+                    && from == "2026-08-13"
+                    && to == "2026-08-14"
+                    && retired == "2026-08-13"
+            ),
+            "{events:?}"
         );
+        // Each mint names WHICH key, not only which label — the two witnesses
+        // differ, which is what makes a same-day re-mint detectable at all.
+        let witnesses: Vec<&String> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Minted { witness, .. } | Event::Rotated { witness, .. } => Some(witness),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(witnesses.len(), 2);
+        assert_ne!(witnesses[0], witnesses[1]);
     }
 
     // Pointer-only, structurally: the ledger holds ids, fingerprints and counts.
@@ -1777,6 +1847,30 @@ severity = "deny"
         assert!(lost_ids(&path, tomorrow()).is_empty());
     }
 
+    // The case the id alone cannot see, and the reason a witness exists. A key
+    // deleted and re-minted the SAME day comes back under the same id carrying
+    // different bytes: compared by label, the ledger names a generation the file
+    // appears to hold, while every identity in the store has silently stopped being
+    // reproducible — the exact silent re-mint the contract refuses, arriving through
+    // the check meant to catch it.
+    #[test]
+    fn a_same_day_re_mint_is_still_a_lost_generation() {
+        let path = scratch("orphan-same-day");
+        load_or_mint_at(&path, date()).unwrap();
+        fs::remove_file(&path).unwrap();
+        let after = load_or_mint_at(&path, date()).unwrap();
+        assert_eq!(
+            after.id(),
+            "2026-08-13",
+            "the id is the date, so it came back identical"
+        );
+        assert_eq!(
+            lost_ids(&path, date()),
+            vec!["2026-08-13".to_owned()],
+            "and the witness says it is not the same key"
+        );
+    }
+
     // A generation still HELD is never lost, however many events name it — the
     // comparison is against the file, so an open rotation window is not a loss.
     #[test]
@@ -1803,7 +1897,7 @@ severity = "deny"
     /// test cannot move (`set_var` is unsafe and forbidden), so the predicate is
     /// exercised through the same split [`load_or_mint_at`] uses.
     fn lost_ids(path: &Path, today: Date) -> Vec<String> {
-        let held = custody_at(path, today).unwrap().held_ids();
+        let held = custody_at(path, today).unwrap().witnesses().unwrap();
         lost_from(&events_at(&ledger_beside(path)).unwrap(), &held)
     }
 
