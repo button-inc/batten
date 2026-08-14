@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.71](https://github.com/button-inc/batten/compare/v0.0.70...v0.0.71) - 2026-08-14
+
+### Added
+
+- *(rules)* [**breaking**] add the `secrets` rule kind and its pointer-only adapter
+- *(receipt)* record what was acting, bounded by what it cannot see
+- *(transcript)* type the agent's own composition
+- *(receipt)* [**breaking**] bind the governing surface, not only the policy
+
+### Fixed
+
+- *(test)* make batten.toml an input of the step whose tests read it
+- *(resolve)* drop the expect whose lint exemption cited a test that never existed
+- *(test)* build the stub's token without a format! iterator chain
+
+### Other
+
+- *(perf)* [**breaking**] move the latency family into the perf namespace and gate it in CI
+- *(secrets)* prove the containment claim end to end over the compiled binary
+
 ## [0.0.70](https://github.com/button-inc/batten/compare/v0.0.69...v0.0.70) - 2026-08-14
 
 ### Added
