@@ -49,7 +49,7 @@ use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
 use crate::rules::{PathSet, Rule, RuleKind, RuleScope};
 use crate::severity::{self, ReportLevel, RuleSeverity};
-use crate::verbs::MutatingVerb;
+use crate::verbs::{MutatingVerb, OperandScope};
 
 /// The harness adapters `batten hook` can speak. Each owns the decode of its
 /// host's payload into an [`Envelope`] and the encode of a [`Decision`] into
@@ -1551,10 +1551,21 @@ pub fn adjudicate(
     // is how the two halves come to disagree. It also means the refusal keeps
     // its declared `redirect`, so the consumer's own remedy text survives the
     // move out of bash, which is what CLOUD-312's differential suite asserts.
+    //
+    // Classified by program alone, and since CLOUD-442 that is a decision rather
+    // than an omission: `verbs::classify` is `qualify` over no arguments, so a
+    // row whose mutation is qualified by a flag or a subcommand cannot fire here.
+    // A write tool names one path and no argv, so there is nothing a qualifier
+    // could be satisfied by — firing anyway would deny on a condition never met.
     if let Some(path) = envelope.writes.as_deref() {
         if let Some(verb) = crate::verbs::classify(&policy.verbs, &envelope.tool) {
             if policy.protected.contains(normalise(path)) {
-                return Decision::Deny(protected_refusal(&envelope.tool, path, verb));
+                return Decision::Deny(protected_refusal(&Target {
+                    program: &envelope.tool,
+                    subcommand: None,
+                    path,
+                    verb,
+                }));
             }
         }
     }
@@ -1783,28 +1794,72 @@ pub const REDIRECT_VERBS: &[&str] = &[">", ">>"];
 /// The predicate is an intersection and nothing more: `{program ∈ [[verb]]} ×
 /// {path ∈ protected}`. Both tables are the consumer's, so the crate holds no
 /// path literal and no verb name (`tests::the_source_bakes_in_no_protected_path`).
+/// One resolved write target: the action that reaches for it, and the row that
+/// declared that action mutating.
+///
+/// The row travels with the target rather than being looked up again at the deny
+/// site, because since CLOUD-442 a program can carry more than one row and only
+/// the one that *qualified* holds the right redirect. `subcommand` is carried
+/// separately so the refusal can name the whole action (`<program> <subcommand>`)
+/// while nothing is allocated on the allow path.
+struct Target<'a> {
+    program: &'a str,
+    subcommand: Option<&'a str>,
+    path: &'a str,
+    verb: &'a MutatingVerb,
+}
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
     for segment in segments(command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         // Operands of the effective program, plus any redirect target. Both are
         // candidates; a redirect needs no program at all.
-        let mut candidates: Vec<(&str, &str)> = Vec::new();
+        let mut candidates: Vec<Target<'_>> = Vec::new();
         if let Some(index) = effective_program(&tokens) {
             let program = tokens[index];
-            for operand in operands(&tokens, index + 1) {
-                candidates.push((program, operand));
+            // The row is resolved ONCE per segment, from the program and its
+            // arguments together (CLOUD-442). Before this the lookup was by
+            // program alone, so a program that mutates under one subcommand or
+            // behind one flag could only be declared as mutating under all of
+            // them — which is why five write shapes could not be expressed.
+            if let Some(matched) =
+                crate::verbs::qualify(&policy.verbs, program, &tokens[index + 1..])
+            {
+                let operands = operands(&tokens, index + 1 + matched.consumed);
+                // `Last` is the destination-only narrowing. An empty operand
+                // list has no last element and therefore no target, which is the
+                // same answer as before for a program invoked with none.
+                let targets: &[&str] = match matched.operands {
+                    OperandScope::All => &operands,
+                    OperandScope::Last => operands.last().map_or(&[], std::slice::from_ref),
+                };
+                for path in targets {
+                    candidates.push(Target {
+                        program,
+                        subcommand: matched.verb.subcommand.as_deref(),
+                        path,
+                        verb: matched.verb,
+                    });
+                }
             }
         }
-        candidates.extend(redirect_targets(&tokens));
+        // A redirect is a pseudo-program with no argv of its own, so it carries
+        // no qualifier and is looked up by name.
+        for (operator, path) in redirect_targets(&tokens) {
+            if let Some(verb) = crate::verbs::classify(&policy.verbs, operator) {
+                candidates.push(Target {
+                    program: operator,
+                    subcommand: None,
+                    path,
+                    verb,
+                });
+            }
+        }
 
-        for (program, path) in candidates {
-            let Some(verb) = crate::verbs::classify(&policy.verbs, program) else {
-                continue;
-            };
-            if !policy.protected.contains(normalise(path)) {
+        for target in candidates {
+            if !policy.protected.contains(normalise(target.path)) {
                 continue;
             }
-            return Decision::Deny(protected_refusal(program, path, verb));
+            return Decision::Deny(protected_refusal(&target));
         }
     }
     Decision::Allow
@@ -1889,11 +1944,20 @@ fn normalise(path: &str) -> &str {
 /// useful redirect is a property of what is being protected, not of the verb
 /// reaching for it, so a per-path-class table lands *here* and this fallback
 /// becomes the third tier rather than the second.
-fn protected_refusal(program: &str, path: &str, verb: &MutatingVerb) -> Refusal {
+///
+/// A subcommand-qualified row names the whole action, not just the front-end:
+/// `<program> <subcommand>` is what the caller typed and what a reader has to
+/// recognise, and a refusal naming only the front-end would read as a ban on
+/// every use of it (CLOUD-442).
+fn protected_refusal(target: &Target<'_>) -> Refusal {
+    let action = match target.subcommand {
+        Some(subcommand) => format!("{} {subcommand}", target.program),
+        None => target.program.to_owned(),
+    };
     Refusal::new(
         PROTECTED_MUTATION,
-        format!("`{program}` targets the protected path {path}"),
-        Fix::declared(verb.redirect.as_deref()),
+        format!("`{action}` targets the protected path {}", target.path),
+        Fix::declared(target.verb.redirect.as_deref()),
     )
 }
 
@@ -2318,6 +2382,33 @@ mod tests {
             verb: name.to_owned(),
             effect: crate::effect::Effect::Destructive,
             redirect: redirect.map(ToOwned::to_owned),
+            subcommand: None,
+            requires_flag: None,
+            operands: None,
+        }
+    }
+
+    /// The three qualifier shapes CLOUD-442 adds, each as a row a `batten.toml`
+    /// could carry. Written as builders over [`verb`] so the unqualified default
+    /// stays the thing every other test in this module declares.
+    fn destination_only(name: &str, redirect: Option<&str>) -> MutatingVerb {
+        MutatingVerb {
+            operands: Some(OperandScope::Last),
+            ..verb(name, redirect)
+        }
+    }
+
+    fn behind_flag(name: &str, flags: &[&str], redirect: Option<&str>) -> MutatingVerb {
+        MutatingVerb {
+            requires_flag: Some(flags.iter().map(|flag| (*flag).to_owned()).collect()),
+            ..verb(name, redirect)
+        }
+    }
+
+    fn under_subcommand(name: &str, subcommand: &str, redirect: Option<&str>) -> MutatingVerb {
+        MutatingVerb {
+            subcommand: Some(subcommand.to_owned()),
+            ..verb(name, redirect)
         }
     }
 
@@ -3156,6 +3247,196 @@ mod tests {
         ));
         assert!(matches!(
             guarded("mv batten.toml notes.md"),
+            Decision::Deny(_)
+        ));
+    }
+
+    /// Adjudicate `command` against a policy carrying exactly `verbs`.
+    ///
+    /// [`guarded`] pins the unqualified table; this is its sibling for the
+    /// qualifier rows, so each test declares the rows it is about.
+    fn guarded_by(verbs: Vec<MutatingVerb>, command: &str) -> Decision {
+        adjudicate(
+            &protected_policy(verbs),
+            &envelope(command),
+            false,
+            &None,
+            &crate::stop::StopFacts::default(),
+        )
+    }
+
+    #[test]
+    fn a_destination_only_verb_denies_the_write_and_allows_the_read() {
+        // CLOUD-442's load-bearing case, and the ALLOW is the half that matters:
+        // the gate treats every operand as a candidate, so a row for a
+        // destination-only program used to refuse copying a guarded file OUT —
+        // a read, denied. A guard that refuses reads is one people switch off.
+        let table = vec![destination_only(
+            "cp",
+            Some("write through the owning surface"),
+        )];
+        assert!(
+            matches!(
+                guarded_by(table.clone(), "cp draft.md batten.toml"),
+                Decision::Deny(_)
+            ),
+            "the destination is the write"
+        );
+        assert_eq!(
+            guarded_by(table.clone(), "cp batten.toml /tmp/backup.toml"),
+            Decision::Allow,
+            "copying the protected file out is a read"
+        );
+        // A value-taking flag leaves its value among the operands, which can only
+        // ADD one — the destination is still last.
+        assert!(matches!(
+            guarded_by(table.clone(), "cp -m 644 draft.md batten.toml"),
+            Decision::Deny(_)
+        ));
+        // And with no operand at all there is no last one, so nothing is a target.
+        assert_eq!(guarded_by(table, "cp --help"), Decision::Allow);
+    }
+
+    #[test]
+    fn a_flag_qualified_verb_denies_only_with_the_flag() {
+        let table = vec![behind_flag(
+            "sed",
+            &["-i", "--in-place"],
+            Some("change it through the owning surface"),
+        )];
+        for command in [
+            "sed -i s/a/b/ batten.toml",
+            "sed --in-place s/a/b/ batten.toml",
+            "sed -i.bak s/a/b/ batten.toml",
+            // The wrapper form, which the parser already looks through: in this
+            // sandbox it is often the only working spelling.
+            "mise exec -- sed -i s/a/b/ batten.toml",
+        ] {
+            assert!(
+                matches!(guarded_by(table.clone(), command), Decision::Deny(_)),
+                "must deny: {command}"
+            );
+        }
+        for command in [
+            "sed --version",
+            "sed s/a/b/ batten.toml",
+            "sed -n 1p batten.toml",
+        ] {
+            assert_eq!(
+                guarded_by(table.clone(), command),
+                Decision::Allow,
+                "must allow: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_subcommand_qualified_verb_denies_only_under_that_subcommand() {
+        // The effective program is the same word either way, so before the column
+        // existed a row for it would have refused every read it spells too.
+        let table = vec![
+            under_subcommand("git", "mv", Some("rename through the owning surface")),
+            under_subcommand("git", "rm", Some("restore it with a checkout")),
+        ];
+        assert!(matches!(
+            guarded_by(table.clone(), "git mv batten.toml elsewhere.toml"),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            guarded_by(table.clone(), "git rm .serena/memories/core.md"),
+            Decision::Deny(_)
+        ));
+        for command in [
+            "git log --oneline batten.toml",
+            "git show HEAD:batten.toml",
+            "git diff batten.toml",
+            "git mv src/a.rs src/b.rs",
+        ] {
+            assert_eq!(
+                guarded_by(table.clone(), command),
+                Decision::Allow,
+                "must allow: {command}"
+            );
+        }
+        // Each subcommand resolves to its OWN row, which is what makes two rows
+        // for one front-end worth having: the redirect differs.
+        assert_eq!(
+            denial(guarded_by(table.clone(), "git mv batten.toml x.toml"))
+                .fix()
+                .declared_alternative(),
+            Some("rename through the owning surface")
+        );
+        assert_eq!(
+            denial(guarded_by(table, "git rm batten.toml"))
+                .fix()
+                .declared_alternative(),
+            Some("restore it with a checkout")
+        );
+    }
+
+    #[test]
+    fn a_subcommand_deny_names_the_whole_action_not_just_the_front_end() {
+        // A refusal naming only the front-end reads as a ban on every use of it,
+        // which is the opposite of what a subcommand-qualified row says.
+        let reason = denial_text(guarded_by(
+            vec![under_subcommand("git", "mv", None)],
+            "git mv batten.toml elsewhere.toml",
+        ));
+        assert!(reason.contains("git mv"), "names the action: {reason}");
+        assert!(reason.contains("batten.toml"), "names where: {reason}");
+    }
+
+    #[test]
+    fn a_qualified_row_cannot_fire_on_a_write_tool_that_parses_no_argv() {
+        // A write tool names one path and carries no arguments, so a qualifier
+        // has nothing to be satisfied by. Denying anyway would be a deny on a
+        // condition that was never met.
+        for row in [
+            behind_flag("Write", &["-i"], None),
+            under_subcommand("Write", "mv", None),
+        ] {
+            assert_eq!(
+                adjudicate(
+                    &protected_policy(vec![row]),
+                    &write_envelope("Write", "batten.toml"),
+                    false,
+                    &None,
+                    &crate::stop::StopFacts::default(),
+                ),
+                Decision::Allow
+            );
+        }
+        // The unqualified row still denies, so this is a narrowing rather than a
+        // hole: the surface did not stop working.
+        assert!(matches!(
+            adjudicate(
+                &protected_policy(vec![verb("Write", None)]),
+                &write_envelope("Write", "batten.toml"),
+                false,
+                &None,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn a_qualified_verb_is_judged_per_segment_like_every_other() {
+        // A read in one segment must not be condemned by a write in another, and
+        // — the direction that matters — a write must not be excused by a read.
+        let table = vec![
+            behind_flag("sed", &["-i"], None),
+            destination_only("cp", None),
+        ];
+        assert_eq!(
+            guarded_by(
+                table.clone(),
+                "sed -n 1p batten.toml; cp batten.toml /tmp/x"
+            ),
+            Decision::Allow
+        );
+        assert!(matches!(
+            guarded_by(table, "cat /tmp/x; sed -i s/a/b/ batten.toml"),
             Decision::Deny(_)
         ));
     }

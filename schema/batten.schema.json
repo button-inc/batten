@@ -672,8 +672,36 @@
           "description": "What running it does, in the one effect vocabulary: `write` for state\nthe caller can recreate, `destructive` for state whose recovery means\nredoing work.",
           "$ref": "#/$defs/Effect"
         },
+        "operands": {
+          "description": "Which of this verb's operands its mutation targets. Absent means\n[`OperandScope::All`], the conservative reading.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperandScope"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "redirect": {
           "description": "The sanctioned mutation to point at when this verb is refused — the\n\"run this instead\" half of the refusal contract. Optional, because not\nevery verb has an alternative; a consumer with none falls back to\nnaming the rule.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requires_flag": {
+          "description": "The flags, any one of which turns this program into a mutation.\n\nA stream editor writes only in place; every other invocation of it is a\nread, so a row with no flag column would refuse the whole read half. The\nentries are spellings of one switch, so **any** match qualifies, and a\ndeclared flag also matches its value-bearing forms (`<flag>.<suffix>`,\n`<flag>=<value>`) — the way an in-place switch is written with a backup\nsuffix.\n\nBundled short flags are deliberately **not** decomposed: a switch hidden\ninside a cluster goes unseen, which under-denies, and the table this\nports from did not decompose them either.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "subcommand": {
+          "description": "The subcommand that makes this program a mutation, where the program\nalone is not one.\n\nA front-end dispatching on its first argument mutates under some of them\nand reads under the rest — the effective program is the same word either\nway, so a row keyed on it alone would refuse every read it also spells.\nOne row per mutating subcommand, which is why the duplicate check keys on\nthe pair rather than on the program.\n\nMatched against the **first** argument only, exactly as the table this\nports from did: a global option written before the subcommand hides it,\nwhich under-denies — the sanctioned direction (house-style §5).",
           "type": [
             "string",
             "null"
@@ -688,6 +716,21 @@
       "required": [
         "verb",
         "effect"
+      ]
+    },
+    "OperandScope": {
+      "description": "Which operands of a matched invocation are write targets.\n\n[`OperandScope::All`] is the default, and that is load-bearing rather than\nincidental: it is the reading that fails toward *refusing*, and it is the one\na move needs — guarding only the source would miss the direction that\ndestroys the destination, which\n`hook::tests::every_operand_is_a_candidate_so_a_destination_is_guarded_too`\npins. [`OperandScope::Last`] is the narrowing a destination-only program\nneeds, where copying a guarded file *out* of the guarded set is a read and\nrefusing it is the false positive that gets a guard switched off.",
+      "oneOf": [
+        {
+          "description": "Every operand is a candidate target.",
+          "type": "string",
+          "const": "all"
+        },
+        {
+          "description": "Only the final operand is a target — the destination.",
+          "type": "string",
+          "const": "last"
+        }
       ]
     },
     "OutputPattern": {
