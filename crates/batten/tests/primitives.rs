@@ -1059,19 +1059,29 @@ fn no_session_scoped_field_enters_a_code_log_or_scope_identity() {
     // matters — someone adding a session parameter. Each function BODY is
     // bounded by the first column-zero `}`, which is where an item ends under
     // this crate's formatting.
+    // Normalized, and terminated by `split_once` rather than by `next()`, for
+    // the reason `identity.rs`'s own copy of this idiom now states at length
+    // (CLOUD-612): `read_to_string` does no line-ending translation, so a CRLF
+    // checkout leaves `"\n}\n"` matching nothing, and `next()` answers that
+    // with the whole rest of the file instead of with an error. This site is
+    // the same defect one target further on — it never ran on Windows, because
+    // cargo stopped at the `--lib` failure before reaching the integration
+    // tests.
     let source =
         fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/identity.rs"))
-            .expect("read identity.rs");
+            .expect("read identity.rs")
+            .replace("\r\n", "\n");
     for name in [
         "pub fn code_fingerprint",
         "pub fn log_fingerprint",
         "pub fn scope_fingerprint",
     ] {
-        let body = source
-            .split(name)
-            .nth(1)
-            .and_then(|rest| rest.split("\n}\n").next())
-            .unwrap_or_else(|| panic!("{name} is in identity.rs"));
+        let Some((body, _)) = source
+            .split_once(name)
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+        else {
+            panic!("{name} is in identity.rs, and its body ends at a column-zero `}}`")
+        };
         assert!(
             !body.contains("session"),
             "{name} reads a session; a process-local component in a code/log/scope \

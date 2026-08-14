@@ -1364,7 +1364,23 @@ mod tests {
         // same-file caller, and the unkeyed function is in this file.
         //
         // Same idiom as `tests/primitives.rs`'s body greps. `\n}\n` is the
-        // column-zero close, so the slice is exactly one function body.
+        // column-zero close, so the slice is exactly one function body — but
+        // only once the source is read in one line-ending shape, and only if a
+        // missing terminator is an error rather than an answer. Both halves are
+        // CLOUD-612, and both are load-bearing:
+        //
+        //   * `include_str!` embeds the WORKING TREE's bytes, and a Windows
+        //     checkout takes `core.autocrlf=true`. Measured on the first Windows
+        //     run this repository ever did: the `code_fingerprint` slice went
+        //     from 309 characters to 18302 — the rest of the file — and this
+        //     gate reported `SecretSpan` in a function that does not name it.
+        //   * `split(…).next()` cannot tell "found the terminator" from "no
+        //     terminator, here is everything", so it reports the second as a
+        //     body. `split_once` makes that state unrepresentable. The failure
+        //     is loud here only because these assertions are negative; the same
+        //     widening passes any "must CONTAIN x" gate vacuously.
+        //
+        // Normalizing is a no-op on an LF checkout, so no verdict here moves.
         //
         // Comments are stripped first, and that is not tidiness: the wrapper's
         // own doc comment *lists* the conversions it refuses, so a scan over raw
@@ -1378,21 +1394,19 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let source = include_str!("identity.rs");
+        let source = include_str!("identity.rs").replace("\r\n", "\n");
         for name in [
             "pub fn code_fingerprint",
             "pub fn log_fingerprint",
             "pub fn scope_fingerprint",
         ] {
-            let body = code(
-                source
-                    .split(name)
-                    .nth(1)
-                    .unwrap_or_else(|| panic!("{name} is declared in this module"))
-                    .split("\n}\n")
-                    .next()
-                    .unwrap_or_default(),
-            );
+            let Some((declared, _)) = source
+                .split_once(name)
+                .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            else {
+                panic!("{name} is declared in this module, and its body ends at a column-zero `}}`")
+            };
+            let body = code(declared);
             assert!(
                 !body.contains("keying_input"),
                 "{name} reads a secret span's bytes; only the keyed path may"
@@ -1405,15 +1419,13 @@ mod tests {
 
         // And the escapes a derive would have added, checked where they would be
         // written rather than inferred from their absence in the impl block.
-        let wrapper = code(
-            source
-                .split("mod secret_span {")
-                .nth(1)
-                .unwrap_or_default()
-                .split("\n}\n")
-                .next()
-                .unwrap_or_default(),
-        );
+        let Some((wrapper_body, _)) = source
+            .split_once("mod secret_span {")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+        else {
+            panic!("mod secret_span is in this file, and its body ends at a column-zero `}}`")
+        };
+        let wrapper = code(wrapper_body);
         for escape in [
             "impl Deref",
             "AsRef<str>",

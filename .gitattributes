@@ -1,0 +1,24 @@
+# One line-ending shape in the working tree, on every platform (CLOUD-612).
+#
+# WHY THIS FILE EXISTS, measured rather than assumed. Several test gates read
+# their own source with `include_str!` or `fs::read_to_string` and slice one
+# item's body out of it, bounded by a column-zero `}` — the string "\n}\n".
+# `include_str!` embeds the bytes of the WORKING TREE, and without this file a
+# Windows checkout takes git's `core.autocrlf=true`: every line ends `\r\n`, the
+# terminator matches nothing, and the slice silently widens to the rest of the
+# file. On the first Windows run this repository ever did, two gates then
+# asserted against ~20k characters of unrelated code and reported violations in
+# functions that do not contain them.
+#
+# THIS IS THE BELT, NOT THE PROPERTY. Each of those sites was also fixed to
+# normalize at the read and to treat an absent terminator as an error instead of
+# an answer, because a gate that only holds because of a checkout setting is one
+# edit to this file away from not holding. What this buys on top is the sites
+# nobody has audited: the integration suites had never run on Windows at all
+# (cargo stops at the first failing target), and any future `include_str!` gate
+# inherits the guarantee rather than having to remember it.
+#
+# `text=auto` lets git detect and leave binary files alone; `eol=lf` is what
+# makes the checkout LF everywhere rather than only in the index. The repository
+# is already LF throughout, so this normalizes no committed bytes today.
+* text=auto eol=lf

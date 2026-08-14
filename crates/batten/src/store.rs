@@ -985,16 +985,32 @@ mod tests {
         // directory name, so the matcher must not reach for one. `repo_name` is
         // recorded and reported, which is why the check is on the comparison
         // helpers rather than on the whole module.
-        let source = include_str!("store.rs");
+        // LINE ENDINGS NORMALIZED AT THE READ (CLOUD-612). `include_str!`
+        // embeds the WORKING TREE's bytes, and there is more than one shape
+        // those come in: a Windows checkout takes `core.autocrlf=true`, so
+        // every line ends `\r\n` and the `"\n}\n"` terminator below matches
+        // nothing at all. Measured on the first Windows run this repository
+        // ever did — the slice went from 907 characters to 24318, i.e. the
+        // whole rest of the file, and this gate then reported `repo_name` in a
+        // function that does not mention it. On an LF checkout this is a no-op.
+        let source = include_str!("store.rs").replace("\r\n", "\n");
         // The function BODY only — bounded by the first column-zero `}`, which
         // is where an item ends under this crate's formatting. A slice that ran
         // to the next `fn` would swallow that function's doc comment and fail on
         // prose rather than on code; measured, on the first run of this gate.
+        //
+        // `split_once`, NEVER `split(…).next()`, and that is the property rather
+        // than a style preference: `next()` cannot distinguish "found the
+        // terminator" from "no terminator, here is the rest of the file", so it
+        // answers the second case with a silently widened body. The widening is
+        // loud here because this assertion is negative; the same widening makes
+        // any "the body must CONTAIN x" gate pass vacuously. Absent terminator
+        // is now a panic naming the cause.
         let matcher = source
-            .split("pub fn match_criterion")
-            .nth(1)
-            .and_then(|rest| rest.split("\n}\n").next())
-            .expect("the matcher is in this file");
+            .split_once("pub fn match_criterion")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(body, _)| body)
+            .expect("the matcher is in this file, and its body ends at a column-zero `}`");
         assert!(
             !matcher.contains("repo_name"),
             "match_criterion reads repo_name; basename keying merges same-named \
