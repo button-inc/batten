@@ -966,6 +966,28 @@ run = '''
 #
 # This is the ONLY `exit 2` in the task, and that is now a checkable property
 # rather than an intention (tests/verify.bats). Everything else is a stop.
+#
+# THE CLAIM RECEIPT, FIRST (CLOUD-431), because it decides whether this branch
+# should exist at all — a cheaper question than any below it, and a different
+# kind of question from all of them.
+#
+# `claim-guard` is the fast feedback for this and it is a HOOK, which means it
+# can be unloaded; today it is not even registered. So the load-bearing half sits
+# here, in the one task every landing path runs. `claim-check` mints the receipt
+# on its pullable path only, so its presence attests that some issue was checked
+# for a competitor AND for refinement that predates this session.
+#
+# Detached HEAD is exempt, the same carve-out `claim-guard` makes deliberately:
+# a rebase detaches, and refusing there would fail every lap of `land` for a
+# state that is not a defect.
+claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+if [ -n "$claim_branch" ]; then
+  claim_receipt="$(git rev-parse --git-dir)/batten-receipts/claim.${claim_branch//\//-}"
+  if [ ! -f "$claim_receipt" ]; then
+    echo "::error:: verify: this branch carries no claim receipt, so nothing attests that the work on it was pulled from a refined issue. Run \`mise run claim-check\` with the issue's get_issue payload on stdin. No receipt written." >&2
+    exit 1
+  fi
+fi
 linear_rc=0
 mise run linear-check || linear_rc=$?
 if [ "$linear_rc" = 2 ]; then
@@ -1101,7 +1123,7 @@ description = "Write: set this clone's repo-local git identity when it is unset 
 run = "cargo run --quiet -p batten -- attribution identity"
 
 [tasks.commit-lint]
-description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits"
+description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commits and names the issue it serves"
 # The attribution gate rides this task's env contract rather than getting its own
 # call site in a workflow, and that is deliberate. `ci-local-parity` requires
 # every `mise run <task>` a workflow invokes to be one `verify` invokes; a second
@@ -1112,14 +1134,47 @@ description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commi
 # stops before this body runs, so the no-`set -e` trap does not apply (CLOUD-274).
 depends = ["commit-attribution"]
 shell = "bash -c" # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
+# The SERVER-SIDE half of CLOUD-431. The claim receipt lives in `.git/` and never
+# leaves the clone, so no reviewer and no workflow can see it; what a server CAN
+# see is whether each commit names the issue it serves. `verify` holds the
+# receipt half, this holds the half that survives a fresh checkout.
+#
+# `claimed-keys` answers "which issue does this CLAIM", and it is asked here
+# rather than re-deriving `CLOUD-[0-9]+` inline — that second-authority mistake is
+# the whole reason that file exists (CLOUD-338/CLOUD-378). Claiming is stricter
+# than mentioning, which is the property wanted: a commit citing an issue as
+# evidence has not thereby become work on it.
+#
+# ONE EXEMPTION, and it is a property of the DIFF rather than of the subject
+# line. release-plz authors `chore: release vX.Y.Z` touching exactly the version
+# and changelog files, and it has no issue to name because it is not work on one;
+# measured on this repo's history, every release commit is keyless and every
+# other commit in the last 200 revs carries a key. Keying the exemption to the
+# file set rather than the wording means it cannot be claimed by a hand-written
+# commit that merely borrows the subject, and it does not encode a message format
+# release-plz is free to change.
 run = '''
 fail=0
+keys="$(git rev-parse --show-toplevel)/mise-tasks/claimed-keys"
 for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   subject=$(git show -s --format=%s "$sha")
   if printf '%s' "$subject" | grep -Eq "$CONVENTIONAL_RE"; then
     echo "OK    ${sha:0:8}  $subject"
   else
     echo "::error::Non-conventional commit ${sha:0:8}: '$subject'"
+    fail=1
+  fi
+  touched=$(git show --name-only --format='' "$sha" | grep -v '^$' || true)
+  if [ -z "$(printf '%s\n' "$touched" | grep -vE '^(Cargo\.(toml|lock)|.*CHANGELOG\.md)$' || true)" ]; then
+    echo "REL   ${sha:0:8}  version/changelog only — no issue to name"
+    continue
+  fi
+  # `</dev/null` is load-bearing, not tidiness: `claimed-keys` reads optional
+  # extra evidence from stdin whenever stdin is not a tty, so under a task runner
+  # — where it never is — a call with nothing piped BLOCKS FOREVER. Measured here
+  # as a two-minute harness kill. Same shape as CLOUD-511's bare `cat`.
+  if [ -z "$("$keys" --log "$(git show -s --format='%B' "$sha")" </dev/null 2>/dev/null)" ]; then
+    echo "::error::Commit ${sha:0:8} claims no CLOUD-<n> issue: '$subject' — add a 'Refs: CLOUD-<n>' trailer naming the work it serves"
     fail=1
   fi
 done

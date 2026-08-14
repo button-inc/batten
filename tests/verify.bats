@@ -30,6 +30,11 @@ setup() {
 	mkdir -p "$STUB"
 	BODY_FILE="$BATS_TEST_TMPDIR/verify-body"
 	printf '%s\n' "$MAPPER" >"$BODY_FILE"
+
+	FAKE_BRANCH="work"
+	FAKE_GIT_DIR="$BATS_TEST_TMPDIR/gitdir"
+	mkdir -p "$FAKE_GIT_DIR/batten-receipts"
+	claim_receipt CLOUD-431
 }
 
 # The stub stands in for the whole task runner. Each task's exit code is read
@@ -49,13 +54,29 @@ stub_mise() {
 	chmod +x "$STUB/mise"
 }
 
-# `git` is called only for the two rev-parses inside `verify:gated`, which this
-# suite never runs; the mapper needs none. Stubbed anyway so a case that grows
-# one cannot silently reach the real repository.
+# `git` answers the three questions the mapper asks: which branch this is, where
+# the git dir lives, and (inside `verify:gated`, which this suite does not run)
+# a couple of rev-parses. Stubbed so no case can reach the real repository —
+# without it the claim-receipt check below would read the DEVELOPER's branch and
+# the developer's receipt, and the suite would pass or fail on the state of
+# whatever clone it happened to run in.
 stub_git() {
-	printf '%s\n' '#!/usr/bin/env bash' 'echo 0000000' >"$STUB/git"
+	cat >"$STUB/git" <<-EOF
+		#!/usr/bin/env bash
+		case "\$1 \$2" in
+		  "symbolic-ref --quiet") echo "$FAKE_BRANCH" ;;
+		  "rev-parse --git-dir")  echo "$FAKE_GIT_DIR" ;;
+		  *) echo 0000000 ;;
+		esac
+	EOF
 	chmod +x "$STUB/git"
 }
+
+# CLOUD-431: the claim receipt `verify` now demands. Present by default, because
+# every case below is about the EXIT-CODE contract and would otherwise stop at a
+# refusal that is not its subject.
+claim_receipt() { printf '%s\n' "$1" >"$FAKE_GIT_DIR/batten-receipts/claim.$FAKE_BRANCH"; }
+no_claim_receipt() { rm -f "$FAKE_GIT_DIR/batten-receipts/claim.$FAKE_BRANCH"; }
 
 task_exits() { printf '%s\n' "$2" >"$BATS_TEST_TMPDIR/rc.$1"; }
 
@@ -179,4 +200,69 @@ called() {
 	# absence of that shape is asserted rather than assumed.
 	[[ "$MAPPER" != *"grep"* ]]
 	[[ "$MAPPER" != *"awk"* ]]
+}
+
+# --- the claim receipt (CLOUD-431) -------------------------------------------
+#
+# `claim-guard` is the fast feedback for this and it is a HOOK, which can be
+# unloaded — today it is not even registered in `.claude/settings.json`. So the
+# load-bearing half sits here, in the one task every landing path runs, and these
+# cases are what make that a guarantee rather than an intention.
+
+@test "a branch with no claim receipt cannot pass verify" {
+	no_claim_receipt
+	run_verify
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no claim receipt"* ]]
+	# It stops BEFORE spending anything: the question "should this branch exist"
+	# is cheaper than every question below it, and different in kind.
+	[ "$(called linear-check)" -eq 0 ]
+	[ "$(called verify:gated)" -eq 0 ]
+}
+
+@test "the refusal names the remedy rather than only the rule" {
+	no_claim_receipt
+	run_verify
+	[[ "$output" == *"claim-check"* ]]
+	[[ "$output" == *"No receipt written."* ]]
+}
+
+@test "a detached HEAD is exempt, because a rebase detaches" {
+	# The same carve-out `claim-guard` makes deliberately. Refusing here would
+	# fail every lap of `land`, which detaches to rebase — a state that is not a
+	# defect and that no claim receipt could describe.
+	cat >"$STUB/git" <<-EOF
+		#!/usr/bin/env bash
+		case "\$1 \$2" in
+		  "symbolic-ref --quiet") exit 1 ;;
+		  "rev-parse --git-dir")  echo "$FAKE_GIT_DIR" ;;
+		  *) echo 0000000 ;;
+		esac
+	EOF
+	chmod +x "$STUB/git"
+	no_claim_receipt
+	# `stub_mise` explicitly, because this case cannot use `run_verify` — that
+	# helper reinstalls the git stub and would undo the detached HEAD.
+	stub_mise
+	MISE_STUB_DIR="$BATS_TEST_TMPDIR" \
+		MISE_STUB_CALLS="$BATS_TEST_TMPDIR/calls" \
+		PATH="$STUB:$PATH" \
+		run bash "$BODY_FILE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"no claim receipt"* ]]
+}
+
+@test "the receipt check precedes every other question in the mapper" {
+	# Ordering asserted textually as well as behaviourally: a later reader moving
+	# it below `linear-check` would still pass the cases above (both refuse), and
+	# would quietly start paying for a fetch to answer a question that does not
+	# need one.
+	# Matched on the CALLS, not on prose: the body's opening comment discusses
+	# linear-check several lines above any code, so grepping the bare name would
+	# compare a comment against a command and always fail.
+	local claim_line linear_line
+	claim_line=$(grep -n 'claim_receipt=' <<<"$MAPPER" | head -1 | cut -d: -f1)
+	linear_line=$(grep -n '^mise run linear-check' <<<"$MAPPER" | head -1 | cut -d: -f1)
+	[ -n "$claim_line" ]
+	[ "$claim_line" -lt "$linear_line" ]
 }

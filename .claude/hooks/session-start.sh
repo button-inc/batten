@@ -40,6 +40,25 @@ set -uo pipefail
 
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel)}" || exit 0
 
+# THE SESSION STAMP (CLOUD-431), written before anything else this hook does.
+#
+# `claim-check`'s `refined-this-session` rule compares an issue's tracker-minted
+# `updatedAt` against this file's mtime: refinement must PREDATE the session that
+# implements it. That predicate is only honest if the stamp marks the beginning
+# of the session, so it is written here — above the provisioning steps, and above
+# the `exit 1` a degraded container takes — rather than appended at the end. A
+# session whose install failed still began, and a stamp written after the work
+# would date the session to whenever the agent got round to claiming, which is
+# exactly the ordering the rule exists to refuse.
+#
+# Silent and never fatal: this hook's job is setup, and a clone whose git dir is
+# unwritable has larger problems than the claim gate. `claim-check` refuses on a
+# MISSING stamp rather than passing, so a failure here fails closed downstream.
+if stamp_dir=$(git rev-parse --git-dir 2>/dev/null) &&
+	mkdir -p "$stamp_dir/batten-receipts" 2>/dev/null; then
+	: >"$stamp_dir/batten-receipts/session-start" 2>/dev/null || true
+fi
+
 fail=0
 step() { # step <label> <cmd...>
 	local label="$1"

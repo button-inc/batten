@@ -23,6 +23,7 @@ own. Where they disagree the spec wins — fix the pointer, don't fork the conte
 [house-style]: https://linear.app/buttoninc/document/batten-cli-the-button-house-style-f2db95581c41
 [dor-dod]: https://linear.app/buttoninc/document/definition-of-ready-and-done-e4e8defb6774
 [attribution]: https://linear.app/buttoninc/document/agent-neutral-attribution-the-decision-record-e869f1cc5633
+[tbd]: https://trunkbaseddevelopment.com/
 
 ## Serena memories — read the right one at the right time
 
@@ -66,8 +67,10 @@ you run them yourself, and they halt you by _failing_, not by needing a blessing
 
 **When you SHOULD still stop** (real exceptions, not an escape hatch for ordinary
 caution): a gate fails and the fix is genuinely ambiguous; a rebase conflict needs
-a human decision; the change is outside the scope you were asked; or an action is
-destructive and _not_ gated (force-pushing `main`, deleting history, an
+a human decision; the change is outside the scope you were asked — the gates
+authorize the STEPS of agreed work, never whether it is agreed, so `claim-check`
+refuses an unrefined or same-session claim and `verify` a receiptless branch
+(CLOUD-431, bypass `BATTEN_CLAIM_CHECK_BYPASS`); or an action is destructive and _not_ gated (force-pushing `main`, deleting history, an
 out-of-band release). **Each stops the fix, never the record** — what you decline
 to fix, you file; out of scope is why a defect becomes a ticket, never why it
 evaporates into chat. **A punt is any deferral you could have closed**, a
@@ -89,8 +92,7 @@ noting"), self-indicting every time. Boundary reports, permission-seeking on an
 authorized step (clarifying an _ambiguous_ action is fine), compliance
 reassurance, restating a rule you just followed, sycophancy and narrating a
 visible result fail the same test. **It is a predicate, not a list**: enumeration
-is why the previous version did not hold. CLOUD-200's blindness was
-`PreToolUse`-only: `stop-guard` now kicks a hedged flag once (CLOUD-248).
+is why the previous version did not hold (CLOUD-200, CLOUD-248).
 
 ## The board: move the issue as you move the work
 
@@ -104,8 +106,6 @@ event, the _end_ of the work, so waiting for it reserves nothing; **In Review**
 (`closing-key-check`) — [trunk-based development][tbd] reviews after merge,
 flagged not withheld; **Done** = [dor-dod]'s Done holds — **released**, yours to
 set, never the merge (`done-check`). Detail: `mem:workflow/board-states`.
-
-[tbd]: https://trunkbaseddevelopment.com/
 
 **Branching is trunk-based.** `main` is the one long-lived, always-releasable
 branch; short-lived branches land by fast-forward, keeping it linear and tested.

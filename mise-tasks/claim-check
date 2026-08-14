@@ -38,17 +38,69 @@
 # not. `not-todo` is what actually catches a concurrent agent, and `has-pr`
 # catches one that published before the column moved.
 #
+# TWO MORE RULES, ANSWERING A DIFFERENT QUESTION (CLOUD-431). All three above
+# detect a COMPETITOR, and every one of them reads "clear" when nobody else is
+# involved — so they are blind by construction to a SOLE agent moving too fast.
+# Measured on CLOUD-427, 2026-08-12: an agent asked to discuss a design instead
+# filed the issue, wrote its own Ready block, moved it Todo, piped a payload it
+# had hand-written to this gate, took the receipt, and implemented ~600 lines
+# across a new module and two new workspace dependencies. Every guard that fired
+# gated the SHAPE of an action; none gated the SEQUENCE, and against a
+# self-minted receipt "the gates are your authorization" resolves to "I
+# authorized myself".
+#
+#   not-ready              the payload's Ready block fails `ready-lint`, so the
+#                          receipt would name a story nothing has refined.
+#   refined-this-session   the Ready block's `updatedAt` is newer than this
+#                          clone's session-start stamp. Refinement must PREDATE
+#                          the session that implements it.
+#
+# WHY THE TIMESTAMP IS THE FORGERY-RESISTANT HALF. The payload is agent-supplied,
+# so any CONTENT claim in it can be authored by the thing being checked —
+# `not-ready` alone would be a gate an agent satisfies by writing better prose.
+# `updatedAt` is different in kind: the tracker mints it, and refining an issue
+# moves it FORWARD. There is no way to write a Ready block in this session that
+# carries an older one. A hand-edited payload defeats it, and that is fabrication
+# rather than honest error — outside the threat model, and recorded in the
+# issue's own history on the tracker regardless.
+#
+# THE LEGITIMATE PATH MUST NOT PROMPT. Pulling a human-refined issue off the
+# frontier and carrying it to landed without asking permission between steps is
+# what AGENTS.md's autonomous-workflow section protects, and both rules are
+# silent on it: the block passed lint, and it was written in an earlier session.
+# In-session refinement stays reachable, but through `BATTEN_CLAIM_CHECK_BYPASS`,
+# which makes it a human's visible decision rather than an agent's silent one.
+#
 # Exit 0 pullable / 1 not pullable / 2 unreadable stdin — matching `graph-check`
 # so the two compose in one pipeline.
+#
+# The mutation drops the stamp comparison, so an issue refined seconds ago reads
+# as refined long ago and the incident replay mints a receipt again.
+#MUTANT claim-ignores-the-stamp|s/\[ "\$updated_epoch" -gt "\$stamp_epoch" \]/false/|a claim that cannot see the session boundary cannot refuse the replay
 set -euo pipefail
+
+# The one escape hatch, and it is deliberately not shared with `claim-guard`'s
+# (`BATTEN_CLAIM_GUARD_BYPASS`). That one says "do not refuse my edit"; this one
+# says "mint a receipt for a story refined in this session". They are different
+# decisions and a single switch for both would grant the second while a human
+# only meant the first. A gate with false positives gets bypassed, and a bypassed
+# gate enforces nothing — so the hatch exists, and it is loud rather than silent.
+if [ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]; then
+	echo "claim-check: BATTEN_CLAIM_CHECK_BYPASS set — the refinement-sequence rules are not being applied" >&2
+fi
 
 # Accept either a JSON array or a concatenated stream of payload objects, the
 # same normalisation `graph-check` performs, so a caller can pipe either shape
 # to either gate. Exit 2 is "unreadable input", distinct from a failing check.
+# `description` joined `id` and `status` with CLOUD-431: the gate now asks whether
+# the story is REFINED, and it cannot ask that of a payload whose body was
+# projected away. Widening the contract rather than skipping the rules on a thin
+# payload is the whole point — a rule that silently disappears when a field is
+# absent is a rule an agent turns off by sending less.
 if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
 	[ "$(jq 'length' <<<"$issues")" = 0 ] ||
-	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
-	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
+	! jq -e 'all(.[]; has("id") and has("status") and has("description"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: stdin is not a set of get_issue payloads (need id, status and description per issue)" >&2
 	exit 2
 fi
 
@@ -59,6 +111,41 @@ report() {
 	echo "$1 $2" >&2
 	blocked=$((blocked + 1))
 }
+
+# --- the refinement-sequence machinery (CLOUD-431) ---------------------------
+
+# The session boundary. Written by `.claude/hooks/session-start.sh` before it
+# does anything else, so its mtime is when the session BEGAN.
+#
+# Two sessions sharing one clone read the LATER stamp, which is stricter and
+# never laxer: the failure direction is a refusal, not a pass.
+stamp_file=""
+if stamp_dir=$(git rev-parse --git-dir 2>/dev/null); then
+	stamp_file="$stamp_dir/batten-receipts/session-start"
+fi
+
+# `stat` disagrees across platforms and `cross-check` covers macOS, so both
+# spellings are tried rather than one being assumed (CLOUD-282's class).
+mtime_of() {
+	stat -c %Y "$1" 2>/dev/null && return 0
+	stat -f %m "$1" 2>/dev/null && return 0
+	return 1
+}
+
+# An ISO-8601 instant to epoch seconds. GNU `date -d` first; BSD `date` reads -d
+# as a daylight-savings flag and fails, which is the fallthrough to its own
+# explicit-format form. Fractional seconds and the trailing Z are trimmed for
+# the BSD parse, which accepts neither.
+iso_epoch() {
+	local iso="$1" trimmed
+	date -u -d "$iso" +%s 2>/dev/null && return 0
+	trimmed="${iso%%.*}"
+	trimmed="${trimmed%Z}"
+	date -u -j -f '%Y-%m-%dT%H:%M:%S' "$trimmed" +%s 2>/dev/null && return 0
+	return 1
+}
+
+lint="$(dirname -- "${BASH_SOURCE[0]}")/ready-lint"
 
 while read -r id; do
 	[ -n "$id" ] || continue
@@ -81,6 +168,68 @@ while read -r id; do
 	            | first // ""' <<<"$payload")
 	if [ -n "$pr" ]; then
 		report "$id" "has-pr (${pr##*/})"
+	fi
+
+	# --- is this a real, refined story? (CLOUD-431) --------------------------
+	#
+	# Skipped wholesale under the bypass, announced above. Both rules below are
+	# about the SEQUENCE of refinement, and the bypass is the one way a human
+	# says "I refined it just now, on purpose".
+	[ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ] && continue
+
+	# `not-ready`. The same gate `graph-check` already calls by path, at the
+	# point of PULLING — which is where the decision is actually made, and what
+	# makes a claim receipt mean what its name implies.
+	#
+	# `.description` is guaranteed present by the input contract above, so the
+	# only exit-2 left here is `ready-lint` failing to read what it was handed —
+	# "could not look" in both scripts, and never a verdict.
+	lint_rc=0
+	printf '%s' "$payload" | "$lint" >/dev/null 2>&1 || lint_rc=$?
+	if [ "$lint_rc" = 2 ]; then
+		echo "::error:: claim-check: ready-lint could not read $id's payload at all" >&2
+		exit 2
+	fi
+	if [ "$lint_rc" != 0 ]; then
+		report "$id" "not-ready (ready-lint refuses this block — run \`mise run ready-lint\` on it)"
+		continue
+	fi
+
+	# `refined-this-session`. The sequence predicate, and the forgery-resistant
+	# one: `updatedAt` is the tracker's, and refining moves it forward.
+	#
+	# OUTSIDE A CHECKOUT the question is not applicable rather than unanswerable,
+	# and skipping it there closes no hole: the receipt is a side effect of being
+	# in a clone, so a run from anywhere else mints nothing for `claim-guard` or
+	# `verify` to honour. Refusing here would only break the composability
+	# `graph-check` and this gate share — a caller inspecting the board from
+	# anywhere still deserves the verdict.
+	if [ -z "$stamp_file" ]; then
+		continue
+	fi
+	# INSIDE one, a MISSING stamp is a REFUSAL, not a pass. The sequence question
+	# is answerable here and we simply cannot see the answer, and a gate that
+	# silently clears everything it cannot see is the false green this repo keeps
+	# re-meeting. The remedy is local and cheap — the SessionStart hook writes it
+	# before it does anything else — and the bypass covers a human who means it.
+	if [ ! -e "$stamp_file" ]; then
+		report "$id" "no-session-stamp (run .claude/hooks/session-start.sh, or set BATTEN_CLAIM_CHECK_BYPASS)"
+		continue
+	fi
+	updated=$(jq -r '.updatedAt // ""' <<<"$payload")
+	if [ -z "$updated" ]; then
+		report "$id" "no-updated-at (the payload cannot date its own refinement)"
+		continue
+	fi
+	stamp_epoch=$(mtime_of "$stamp_file") || stamp_epoch=""
+	updated_epoch=$(iso_epoch "$updated") || updated_epoch=""
+	if [ -z "$stamp_epoch" ] || [ -z "$updated_epoch" ]; then
+		echo "::error:: claim-check: could not compare $id's updatedAt against the session stamp" >&2
+		exit 2
+	fi
+	if [ "$updated_epoch" -gt "$stamp_epoch" ]; then
+		report "$id" "refined-this-session (refinement must predate the session that implements it)"
+		continue
 	fi
 done <<<"$(jq -r '.[].id' <<<"$issues")"
 
@@ -117,8 +266,27 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 	mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
 	# Slashes are the one character a filename cannot carry; the substitution
 	# must match `claim-guard`'s spelling exactly.
-	printf '%s\n' "$(jq -r '[.[].id] | join(" ")' <<<"$issues")" \
-		>"$git_dir/batten-receipts/claim.${branch//\//-}" 2>/dev/null || true
+	#
+	# WIDENED FROM A BARE ID LIST (CLOUD-431) to the record the sequence question
+	# needs — the ids, the `ready-lint` verdict at claim time, when the claim was
+	# made, and the `updatedAt` the payload reported. `claim-guard` reads only the
+	# file's EXISTENCE, so nothing downstream breaks on the new lines; they are
+	# for the human debugging a refusal, who otherwise has to reconstruct which
+	# revision the claimant had in front of them. Line 1 keeps the id list exactly
+	# where it was, so any reader that did parse it still finds it.
+	#
+	# Pointer-only: keys, a verdict word and timestamps. Never a line of the body
+	# that was linted.
+	{
+		jq -r '[.[].id] | join(" ")' <<<"$issues"
+		if [ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]; then
+			echo "ready-lint bypassed (BATTEN_CLAIM_CHECK_BYPASS)"
+		else
+			echo "ready-lint pass"
+		fi
+		echo "claimed-at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+		jq -r '[.[] | "updated-at \(.id) \(.updatedAt // "-")"] | .[]' <<<"$issues"
+	} >"$git_dir/batten-receipts/claim.${branch//\//-}" 2>/dev/null || true
 fi
 
 echo "claim-check: pullable ($(jq 'length' <<<"$issues") issue(s)) — claim it before you write code: move Todo -> In Progress and assign yourself. The tracker automation will not do this for you; it fires on the PR event, which is the end of the work, not the start."
