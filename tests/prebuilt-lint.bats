@@ -52,6 +52,27 @@ setup() {
 	git -C "$ROOT" init -q
 	git -C "$ROOT" -c user.email=t@t -c user.name=t commit -q --allow-empty -m base
 	git -C "$ROOT" update-ref refs/remotes/origin/main HEAD
+
+	# An isolated state root, plus a stub in the provision cache, because the
+	# copied batten.toml carries CLOUD-59's `no-secrets` row and that kind
+	# resolves a PINNED scanner from the cache — absent, it is exit 1 naming
+	# `batten provision apply`, which every case below would fail on rather than
+	# on the rule it is about. Same shape as the `ratchet` rows needing a
+	# resolvable `origin/main` above: satisfy the precondition, do not strip the
+	# row.
+	#
+	# The cache is SEEDED rather than fetched. `provision apply` would reach
+	# github for a real artifact, making a suite about mise.toml's `[tools]`
+	# table depend on the network; the adapter only asks whether the binary is
+	# there, so a stub answers the same question offline. The stub exits 0 with
+	# no output, which is what real ripsecrets does on this fixture anyway — it
+	# holds no credential.
+	export HOME="$BATS_TEST_TMPDIR/home"
+	export XDG_DATA_HOME="$HOME/data"
+	local cache="$XDG_DATA_HOME/batten/$(basename "$ROOT")/provision/ripsecrets/0.1.11/bin"
+	mkdir -p "$cache"
+	printf '#!/bin/sh\nexit 0\n' >"$cache/ripsecrets"
+	chmod +x "$cache/ripsecrets"
 }
 
 # The committed ruleset inside the fixture. Built from the working tree, so the

@@ -35,10 +35,24 @@ status_of() {
 
 # --- batten-check: the expensive one --------------------------------------
 
-@test "a Markdown file that is not an input does not select batten-check" {
-	# The regression this whole issue is about. README.md carries no rule glob
-	# and is in no budget, so `batten check` cannot judge it differently.
-	[ "$(status_of batten-check README.md)" = "skipped" ]
+@test "every path selects batten-check once a rule globs the whole tree" {
+	# SUPERSEDES "a Markdown file that is not an input does not select
+	# batten-check", which asserted `skipped` for README.md on the premise that
+	# it "carries no rule glob and is in no budget". CLOUD-59's `no-secrets` row
+	# globs `**`, so that premise is simply false now: a credential can be in
+	# README.md, and narrowing the rule would be choosing which files are
+	# allowed to carry one.
+	#
+	# The case is kept rather than deleted, inverted rather than weakened,
+	# because the property it guards is still worth pinning — it just moved. The
+	# question is no longer "does the glob exclude this path" but "is the glob
+	# still total", and a narrowing that reintroduced a skip would fail here.
+	#
+	# What kept CLOUD-224's economy is now the TIER, not the glob:
+	# `batten-check` is `slow`-profile, so a docs-only commit still pays nothing
+	# locally. `hook-profile-check` is the gate on that, and it is what would go
+	# red if the tier were removed.
+	[ "$(status_of batten-check README.md)" = "included" ]
 }
 
 @test "AGENTS.md DOES select batten-check — a budget file is an input" {
