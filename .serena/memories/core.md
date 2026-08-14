@@ -889,6 +889,40 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   target are payload, not pointers. The intent question is permanently out of
   scope (CLOUD-93), not deferred. Store/tier/drain integration waits on
   CLOUD-81/82.
+- `bypass.rs` — guardrail bypass (CLOUD-98): a refused operation retried with
+  enforcement off, the THIRD detector over `transcript.rs`'s stream and the
+  second occupant of the `Sequence` seam. Neither half is visible to a
+  synchronous hook — the sandbox toggle does not route through Batten — so only
+  the completed record sees both, which is why this is a post-hoc audit and not
+  a reference monitor (the scope reminder still holds). **Both halves alone are
+  deliberately silent**: a refusal raises nothing, and flagging every
+  enforcement-disable is the alternative the issue rejects, since turning the
+  sandbox off is a declared affordance. Only the ordered pair raises, and the
+  ORDER is the predicate — one forward pass, so a call that disables enforcement
+  before anything refused the same operation pairs with nothing. A refusal has
+  two producers joined by the host's `tool_use` id: a hook record at the §7
+  verdict code (`Mediated`) and the typed `is_error` boolean (`Failed`, which is
+  what covers the sandbox denial no hook ever sees). `Refusal` is declared
+  weakest-first so derived `Ord` IS the precedence and merging is `max` —
+  `Disposition`'s construction, and for the same reason: byte-stability must not
+  depend on the order a host wrote two records about one call. Equivalence is
+  EXACT (verb + normalized target, trim and `\`->`/` only — no case folding, no
+  path resolution, no shell parsing, each of which would decide two different
+  operations are one); a call declaring none of `TARGET_FIELDS` is SKIPPED, since
+  "same operation" over a field nobody declared is a guess.
+  `ENFORCEMENT_OFF_ARGS` is a crate const on `selfwrite::MEMORY_TOOLS`'s
+  precedent — a host's own escape-hatch name is host-adapter data, and a
+  repository does not get to redefine what disables enforcement (rule 6) — and
+  the match is an exact JSON `true`, never a truthy string. One finding per
+  bypassed OPERATION (the identity hashes verb+target beside the session), so two
+  operations are two findings and a repeat is a count. Tier `Warning`
+  (answer-now, above `completion.rs`'s `Caution`), still unable to block.
+  **It never self-clears, and that is a property of its subject**: it anchors to
+  an immutable transcript event, so the observation is always positive and a
+  clean scan writes NOTHING rather than a clear — a later transcript saying
+  nothing about an earlier bypass is not evidence it did not happen. It settles
+  by disposition (CLOUD-78), which is the issue's assumption 1 landed as written
+  — and the verb that would mint one does not exist yet (CLOUD-587).
 - `completion.rs` — declared done with work not landed (CLOUD-97), the second
   detector over `transcript.rs`'s stream and the FIRST occupant of the
   `FindingKind::Sequence` seam that module reserved. A conjunction, both halves

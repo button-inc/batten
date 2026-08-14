@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"fixture-different-op","message":{"role":"user","content":"CANARY-USER-PROMPT"}}
+{"type":"assistant","sessionId":"fixture-different-op","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"CANARY-COMMAND --protected"}}],"stop_reason":"tool_use"}}
+{"type":"attachment","sessionId":"fixture-different-op","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":2,"stderr":"CANARY-DENY-REASON"}}
+{"type":"assistant","sessionId":"fixture-different-op","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"CANARY-COMMAND --somewhere-else","dangerouslyDisableSandbox":true}}],"stop_reason":"tool_use"}}
+{"type":"assistant","sessionId":"fixture-different-op","message":{"role":"assistant","content":[{"type":"text","text":"CANARY-SUMMARY"}],"stop_reason":"end_turn"}}

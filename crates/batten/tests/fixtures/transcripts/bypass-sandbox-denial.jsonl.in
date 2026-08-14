@@ -1,0 +1,5 @@
+{"type":"user","sessionId":"fixture-sandbox","message":{"role":"user","content":"CANARY-USER-PROMPT"}}
+{"type":"assistant","sessionId":"fixture-sandbox","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Write","input":{"file_path":"/w/CANARY-TARGET.txt","content":"CANARY-BODY"}}],"stop_reason":"tool_use"}}
+{"type":"user","sessionId":"fixture-sandbox","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"CANARY-RESULT"}]}}
+{"type":"assistant","sessionId":"fixture-sandbox","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"/w/CANARY-TARGET.txt","content":"CANARY-BODY","dangerouslyDisableSandbox":true}}],"stop_reason":"tool_use"}}
+{"type":"assistant","sessionId":"fixture-sandbox","message":{"role":"assistant","content":[{"type":"text","text":"CANARY-SUMMARY"}],"stop_reason":"end_turn"}}

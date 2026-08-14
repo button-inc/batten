@@ -12,6 +12,7 @@ pub mod action;
 pub mod attribution;
 pub mod brief;
 pub mod budget;
+pub mod bypass;
 pub mod capture;
 pub mod ci;
 pub mod cli;
@@ -719,13 +720,13 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
         &scan.not_evaluated,
     )?;
 
-    // The transcript-substrate detector (CLOUD-97), folded in beside the rule
-    // scan rather than through it: its identity is a sequence over the session's
-    // event order, which `rules::run_static` has no input for and no vocabulary
-    // to express. It runs AFTER `record` on purpose — that pass resolves what
-    // this context no longer sees, and a raise written before it would be
-    // reasoning about a store mid-update.
-    register_completion(
+    // The transcript-substrate detectors (CLOUD-97, CLOUD-98), folded in beside
+    // the rule scan rather than through it: their identities are sequences over
+    // the session's event order, which `rules::run_static` has no input for and
+    // no vocabulary to express. They run AFTER `record` on purpose — that pass
+    // resolves what this context no longer sees, and a raise written before it
+    // would be reasoning about a store mid-update.
+    register_transcript_detectors(
         &repo,
         &Recording {
             context: &context,
@@ -1813,47 +1814,42 @@ struct Recording<'a> {
     schema: u32,
 }
 
-/// Evaluate the done-but-not-landed predicate and fold its answer into the
-/// store (CLOUD-97).
+/// Run every detector that reads the completed transcript, and fold what they
+/// found into the store (CLOUD-97, CLOUD-98).
 ///
 /// Called from `state record` — the verb that already binds the store, owns the
 /// ref context, and is the declared write half — so this costs **no new command
-/// and no new effect-table row**. `check` is deliberately untouched: the finding
-/// never enters that verb's `findings` vec, which is how "an advisory surface is
-/// structurally unable to block" (§0.3) is satisfied here, exactly as
+/// and no new effect-table row**. `check` is deliberately untouched: these
+/// findings never enter that verb's `findings` vec, which is how "an advisory
+/// surface is structurally unable to block" (§0.3) is satisfied here, exactly as
 /// [`register_advisories`] satisfies it for a judge.
 ///
-/// Every state is an answer rather than a skip, and the three silent ones differ:
+/// The transcript is resolved and parsed **once** for every detector. Not only
+/// an economy: the absent notice below is a statement about a capability rather
+/// than about a rule, so emitting it per detector would report one fact as
+/// several, and two parses of one file are two chances to disagree about it.
+///
+/// Two of the three silent states are shared by every detector:
 ///
 /// * **Unconfigured** — the repository does not use the transcript input, so
 ///   nothing is written and nothing is said ([`transcript`]'s absent-is-not-empty
 ///   law).
-/// * **Absent** — configured and unreadable, so the predicate did not run. The
-///   store is left exactly as it was, which **holds** an open finding rather
-///   than clearing it, and the notice is reported for the same reason `check`
-///   reports it: a skipped gate that exits `0` in silence is the false green.
-/// * **Not signalled** — the session declared no stopping point. Nothing is
-///   written, because resolving an open finding on that silence would let a scan
-///   of a still-running session clear an incident nobody addressed.
+/// * **Absent** — configured and unreadable, so no predicate ran. The store is
+///   left exactly as it was, which **holds** an open finding rather than
+///   clearing it, and the notice is reported for the same reason `check` reports
+///   it: a skipped gate that exits `0` in silence is the false green.
 ///
 /// # Errors
 ///
-/// Propagates a write failure, and an unresolvable declared `must_land_on` —
-/// which is a config error the caller owes exit `1`, the reading
-/// [`worktree::status`] already gives a target its author named and got wrong.
-fn register_completion(
+/// Propagates a write failure, an undecodable transcript, and an unresolvable
+/// declared `must_land_on`.
+fn register_transcript_detectors(
     repo: &Path,
     recording: &Recording<'_>,
     config: &resolve::Resolved,
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<()> {
-    let &Recording {
-        context,
-        commit,
-        store_dir,
-        schema,
-    } = recording;
     let declared = config
         .transcript
         .as_ref()
@@ -1867,7 +1863,38 @@ fn register_completion(
         }
         transcript::Capability::Present(stream) => stream,
     };
+    register_completion(repo, recording, config, declared, stream, mode, err)?;
+    register_bypass(recording, declared, stream, mode, err)
+}
 
+/// Evaluate the done-but-not-landed predicate and fold its answer into the
+/// store (CLOUD-97).
+///
+/// The one silent state that is this detector's own rather than the
+/// capability's: **not signalled** — the session declared no stopping point, so
+/// nothing is written, because resolving an open finding on that silence would
+/// let a scan of a still-running session clear an incident nobody addressed.
+///
+/// # Errors
+///
+/// Propagates a write failure, and an unresolvable declared `must_land_on` —
+/// which is a config error the caller owes exit `1`, the reading
+/// [`worktree::status`] already gives a target its author named and got wrong.
+fn register_completion(
+    repo: &Path,
+    recording: &Recording<'_>,
+    config: &resolve::Resolved,
+    declared: Option<&str>,
+    stream: &transcript::Stream,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let &Recording {
+        context,
+        commit,
+        store_dir,
+        schema,
+    } = recording;
     let signal = completion::signal(stream);
     // The landing question is asked only once the session has declared a
     // stopping point. Not an optimisation: an unsignalled session's outcome is
@@ -1960,6 +1987,90 @@ fn register_completion(
             outcome.as_str()
         ),
     )?;
+    Ok(())
+}
+
+/// Register every guardrail bypass the session recorded (CLOUD-98).
+///
+/// The store side is [`register_completion`]'s exactly — [`bypass::Detection`]
+/// is a different predicate over the same substrate, registered through the same
+/// door — and the two differences are both properties of the subject rather than
+/// choices:
+///
+/// * **It never clears.** A bypass anchors to an immutable transcript event, so
+///   the observation is always positive and never resolves to zero. A clean scan
+///   writes nothing rather than a clear, because a later transcript saying
+///   nothing about an earlier session's bypass is not evidence the bypass did
+///   not happen. It settles by disposition instead (CLOUD-78's three-valued
+///   model) — the issue's stated assumption 1, landed as written.
+/// * **It carries a tier above the completion rule's.** `Warning` is CLOUD-80's
+///   "answer now, before the work continues", which is what an overridden
+///   guardrail is. Still structurally unable to block: an [`findings::Advisory`]
+///   carries no severity the exit contract can read.
+///
+/// One finding per bypassed **operation**, so two different operations are two
+/// findings and a repeat of one is a count.
+///
+/// # Errors
+///
+/// Propagates a write failure.
+fn register_bypass(
+    recording: &Recording<'_>,
+    declared: Option<&str>,
+    stream: &transcript::Stream,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let &Recording {
+        context,
+        commit,
+        store_dir,
+        schema,
+    } = recording;
+    let detections = bypass::scan(stream);
+    if detections.is_empty() {
+        return Ok(());
+    }
+    let path = declared.unwrap_or_default();
+    let here = std::env::current_dir().ok();
+    for detection in &detections {
+        let advisory = findings::Advisory {
+            rule: bypass::RULE_ID.to_owned(),
+            identity: detection.identity.clone(),
+            tier: severity::AdvisoryTier::Warning,
+            path: path.to_owned(),
+            // The refusal's line, so the pointer names where the guardrail
+            // spoke; the retry's line rides the report below. Never the command,
+            // never the target, never an argument.
+            line: Some(detection.denied_line),
+            check: findings::Check::Reevaluate,
+            remediation: findings::Remediation::NoFix(bypass::no_fix_reason()),
+        };
+        findings::record_sequence(
+            store_dir,
+            context,
+            commit,
+            here.as_deref().and_then(Path::to_str),
+            &advisory,
+            findings::Observation::Observed(detection.retries),
+            schema,
+        )?;
+        // Pointer-only (rule 4): the ref, the identity, the turn pair, the
+        // refusal token and a count.
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "bypass: raised {context} {} {path}:{}->{} {} retry(ies), refusal {}",
+                detection.identity.fingerprint.to_hex(),
+                detection.denied_line,
+                detection.retry_line,
+                detection.retries,
+                detection.refusal.as_str()
+            ),
+        )?;
+    }
     Ok(())
 }
 

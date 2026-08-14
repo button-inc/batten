@@ -1,0 +1,7 @@
+{"type":"user","sessionId":"fixture-bypass","message":{"role":"user","content":"CANARY-USER-PROMPT"}}
+{"type":"assistant","sessionId":"fixture-bypass","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"CANARY-COMMAND --protected"}}],"stop_reason":"tool_use"}}
+{"type":"attachment","sessionId":"fixture-bypass","attachment":{"type":"hook_success","hookEvent":"PreToolUse","hookName":"PreToolUse:Bash","toolUseID":"t1","exitCode":2,"stderr":"CANARY-DENY-REASON"}}
+{"type":"user","sessionId":"fixture-bypass","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","is_error":true,"content":"CANARY-RESULT"}]}}
+{"type":"assistant","sessionId":"fixture-bypass","message":{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"CANARY-COMMAND --protected","dangerouslyDisableSandbox":true}}],"stop_reason":"tool_use"}}
+{"type":"user","sessionId":"fixture-bypass","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","is_error":false,"content":"CANARY-RESULT"}]}}
+{"type":"assistant","sessionId":"fixture-bypass","message":{"role":"assistant","content":[{"type":"text","text":"CANARY-SUMMARY forced it through"}],"stop_reason":"end_turn"}}
