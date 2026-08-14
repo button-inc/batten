@@ -322,22 +322,28 @@ fail_on_warning = true
 `batten exec` is deliberately **not** a consumer — an exec output match already
 fails unconditionally, so there is nothing for a promotion to promote.
 
-### The two promotion paths do not share a code, and that is worth knowing
+### The two promotion paths answer different questions, so they carry different codes
 
 |                                         | Not promoted | Promoted |
 | --------------------------------------- | ------------ | -------- |
 | a `warn` finding from `check`/`enforce` | exit `0`     | exit `2` |
 | an `exec` output match                  | —            | exit `1` |
 
-A rule finding is a policy verdict about the repository, which is exit `2` on
-every surface that renders one. An `exec` match reports that the _invocation's own
-report_ was untrustworthy, and `exec` is a transparent passthrough whose codes are
-otherwise the wrapped command's — so it uses exit `1`.
+Read that table as two questions rather than one question with two answers. A rule
+finding is a **policy verdict about the repository**, which is exit `2` on every
+surface that renders one. An `exec` output match is **a statement about the
+invocation** — the wrapped command reported success while its own output betrays
+that it is not done — which is what exit `1` means in the table above. Neither is
+an exception to §7; they are §7 applied to two different claims.
 
-That asymmetry is a known rough edge rather than a settled design: a transparent
-verb cannot also render a policy verdict on the same channel without some
-ambiguity against the child's own codes, whichever number it picks. Tracked as
-CLOUD-292 rather than papered over here.
+The codes are not interchangeable here, and `1` is not a placeholder for a `2` that
+would be tidier. `exec` is a transparent passthrough, so every other code on that
+channel is the child's, and the one thing that makes such a channel readable is
+that **Batten never mints a `2` on it**: a `2` out of `exec` came from the wrapped
+command, and nothing can mistake it for a verdict. Renumbering an output match to
+`2` would spend that guarantee for a symmetry the table does not ask for. Decided
+on CLOUD-292, with the three rejected alternatives recorded there; `crates/batten/src/exit.rs`
+carries the reasoning and `crates/batten/tests/extension_surfaces.rs` gates it.
 
 ### Whatever you reach for: output is a pointer, never the payload
 

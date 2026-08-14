@@ -165,8 +165,12 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   code**. That last is the one deliberate exception to the §7 table: the code is
   the child's, so it travels as `error::Passthrough` rather than widening
   `ExitCode`, which stays total over the four codes Batten _chooses_. Batten never
-  mints a `2` here — an unspawnable program is exit 1 — and `hook` is not
-  reachable from this path, so no host can read a wrapped code as a deny.
+  mints a `2` here — the only two codes it mints are exit 1: an unspawnable
+  program, and an `exec_pattern` matching on an otherwise-clean exit 0 (CLOUD-117).
+  Both are statements about the INVOCATION, which is what 1 means, so neither is a
+  §7 exception; CLOUD-292 decided that against renumbering the second to 2, because
+  "never a `2` here" is the property that makes the channel readable at all. `hook`
+  is not reachable from this path, so no host can read a wrapped code as a deny.
   Capturing the streams is CLOUD-162's, not this module's.
 - `effect.rs` — the house-style §5 effect _vocabulary_ (`read`/`write`/
   `destructive`/`unclassified`/`ask`) and its stable tokens. The classification

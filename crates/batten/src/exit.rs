@@ -26,6 +26,33 @@
 //! adjudicated by [`crate::hook`], which is not reachable from `exec`. So no host
 //! can read a wrapped command's status as a policy verdict of Batten's.
 //!
+//! ### The two codes Batten *does* mint there, and why both are `1` (CLOUD-292)
+//!
+//! A passthrough channel that carried only the child's codes would need no
+//! paragraph. This one mints exactly two of its own, and both are [`Usage`]:
+//!
+//! * the named program cannot be started — there is no child, so there is no
+//!   code of the child's to report;
+//! * a declared `exec_pattern` matched on an otherwise-clean exit `0`
+//!   (CLOUD-117): the command reported success while its own output betrays that
+//!   it is not done.
+//!
+//! Both are **a statement about the invocation**, which is what [`Usage`] means —
+//! not a verdict about the repository, which is what [`Violation`] means. So
+//! neither is a per-verb exception to the table above; they are the table applied.
+//! §7's "no per-verb exception" holds here unqualified, and the thing that was
+//! wrong was the *characterisation*: an output match was once tabled beside a rule
+//! finding as though the two were one kind of answer wearing two numbers.
+//!
+//! This is also why the second one is not renumbered to `2` for symmetry. Doing
+//! that would mint a `2` on the one channel whose whole readability rests on
+//! **never a `2`** — spending the guarantee above to buy an agreement the table
+//! does not actually ask for. The decision and the three rejected alternatives are
+//! recorded on CLOUD-292; `crates/batten/tests/extension_surfaces.rs` gates it.
+//!
+//! [`Usage`]: ExitCode::Usage
+//! [`Violation`]: ExitCode::Violation
+//!
 //! The cost, accepted deliberately: this inverts the `grep`/`eslint` habit of
 //! `1` for findings and `2` for tool error. The two conventions collide on one
 //! byte, and the mediation channel wins it — that is the surface where a wrong

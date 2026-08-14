@@ -270,12 +270,75 @@ fn the_doc_states_pointer_only_as_a_law_over_every_surface_not_one_adapter() {
 }
 
 #[test]
-fn the_doc_records_the_asymmetry_as_a_rough_edge_rather_than_a_design() {
-    // The honest half. Two things both called policy violations use different
-    // codes, and §7 says 2 is *the* policy verdict with no per-verb exception. The
-    // doc must not present that as settled, because it is not.
+fn the_doc_records_the_decision_rather_than_an_open_asymmetry() {
+    // Replaces `the_doc_records_the_asymmetry_as_a_rough_edge_rather_than_a_design`
+    // (CLOUD-292). That test was right while the question was open: two things
+    // both called policy violations used different codes, and the doc was not
+    // allowed to present that as settled. It is settled now — `1` is the right
+    // class, because an output match is a statement about the INVOCATION and `2`
+    // is a verdict about the repository — so the honest assertion inverts.
+    //
+    // Replaced rather than deleted, so a later drift back to "unsettled" is a red
+    // gate rather than a silent loss of coverage.
+    let prose = readme_prose();
     assert!(
-        readme_prose().contains("known rough edge"),
-        "the doc must name the exit-code asymmetry as a rough edge, not a decision"
+        !prose.contains("known rough edge"),
+        "the question is decided; the doc must not still call it an open rough edge"
+    );
+    assert!(
+        prose.contains("a statement about the invocation"),
+        "the doc must give the reason `1` is the right class, not just assert the code"
+    );
+    assert!(
+        prose.contains("CLOUD-292"),
+        "and must cite the issue the decision is recorded on, since the reasoning \
+         lives there rather than in the README"
+    );
+}
+
+#[test]
+fn only_exec_claims_a_channel_carrying_codes_batten_did_not_choose() {
+    // CLOUD-292's third obligation. `exec` is the one verb whose channel carries
+    // codes Batten did not choose, and `exit.rs` — the §1 authority for what a
+    // code means — is where that is stated. Read from the source rather than
+    // restated here, the idiom `config.rs`'s
+    // `every_typed_config_table_has_a_validation_call_site` already uses: a
+    // second verb quietly claiming a passthrough channel fails here.
+    let exit_rs = fs::read_to_string(at_root("crates/batten/src/exit.rs")).expect("read exit.rs");
+    let section = {
+        let start = exit_rs
+            .find("## The one verb whose code is not in this table")
+            .expect("exit.rs states which verb owns a passthrough channel");
+        let rest = &exit_rs[start..];
+        // The section runs to the end of the module doc — the first line that is
+        // no longer a `//!` comment.
+        let end = rest
+            .find("\n\n/// ")
+            .unwrap_or_else(|| panic!("the module doc ends before the first item"));
+        &rest[..end]
+    };
+
+    assert!(
+        section.contains("`batten exec`"),
+        "the section must name the verb it is about"
+    );
+    // Every other verb that renders a code of its own. If one of these appears
+    // here, either it grew a passthrough channel — in which case "the ONE verb"
+    // is now false — or the section drifted into describing something else.
+    for other in [
+        "batten check",
+        "batten enforce",
+        "batten hook",
+        "batten doctor",
+    ] {
+        assert!(
+            !section.contains(other),
+            "`{other}` appears in the passthrough section, so it is no longer the one verb"
+        );
+    }
+    // And the decision itself: the codes Batten mints there are `1`, never `2`.
+    assert!(
+        section.contains("never a `2`") || section.contains("never mints a `2`"),
+        "the section must keep the property fail-open rests on: no `2` is minted here"
     );
 }
