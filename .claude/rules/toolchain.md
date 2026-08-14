@@ -378,12 +378,17 @@ a null comparison (identical binary as both arms, n=30) spread 0.966–1.102, an
 perf-pair --null`; a bats case fails if the constant is tightened below the
 recorded floor.
 
-**In `verify`, not as a CI job.** `ready-guard` refuses `gh pr ready` without a
-verify receipt for this exact HEAD, so a regression stops the PR before it can
-spend a matrix — earlier and cheaper than a check that reds after the runner is
-paid for. It costs the common change nothing: `perf-gate` exits clean without
-building when the diff against the merge base touches no crate source, manifest
-or lockfile, because a binary that cannot have changed cannot have got slower.
+**In `verify` AND as a CI job, and the second is not redundant.** `verify` is
+where it catches a regression earliest: `ready-guard` refuses `gh pr ready`
+without a verify receipt for this exact HEAD, so the branch stops before it can
+spend a matrix. But `verify` is what an author runs, not a check — `[tasks.ci]`
+is `depends = ["hooks", "deny"]`, so for its whole life `perf-gate` ran on no
+runner at all, and CLOUD-172's "a PR that regresses fails a check that names the
+regressed measurement" was unmet. The `perf` job in `ci.yml` is that check, in
+`final`'s `needs:` and in `CI_REQUIRED_CHECKS`. Both placements cost the common
+change nothing: `perf-gate` exits clean without building when the diff against
+the merge base touches no crate source, manifest or lockfile, because a binary
+that cannot have changed cannot have got slower.
 
 **The series records on a clock, not on a push to `main`.** A per-commit series
 implies a push-to-`main` workflow, which AGENTS.md forbids — and the reason holds
