@@ -55,7 +55,7 @@ jobs:
     name: ci
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # budget: grandfathered measured=2026-08-10
+    timeout-minutes: 36 # budget: p95=701s x3 measured=2026-08-14
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
     # that could not cancel itself would have to fail instead, and a failed job
