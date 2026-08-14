@@ -3536,6 +3536,128 @@ fn receipt_records_the_config_epoch_at_its_subject_commit() {
     );
 }
 
+/// CLOUD-579's three acceptance bullets, over the real binary.
+///
+/// The distinctive string in the fixture is the load-bearing part: a transcript
+/// is the richest source of secrets the engine can be pointed at, so the test
+/// that matters is not "the record has fields" but "the record has NO free
+/// text" (non-negotiable rule 4).
+#[test]
+fn the_agent_context_statement_is_bounded_and_never_carries_free_text() {
+    const SECRET: &str = "SUPERSECRETPROMPTBODY";
+    let root = scratch("receipt-agent-context");
+    let _ = fs::remove_dir_all(&root);
+    let transcript = format!(
+        concat!(
+            r#"{{"type":"assistant","sessionId":"s-9","version":"9.9.9","entrypoint":"remote","#,
+            r#""cwd":"/w","gitBranch":"topic","attributionMcpServer":"srv-a","#,
+            r#""message":{{"role":"assistant","model":"a-model","#,
+            r#""content":[{{"type":"text","text":"{secret}"}}]}}}}"#,
+            "\n",
+            r#"{{"type":"user","sessionId":"s-9","message":{{"role":"user","#,
+            r#""content":"{secret}"}}}}"#,
+        ),
+        secret = SECRET
+    );
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\n")
+        .file("session.jsonl", &transcript)
+        .git()
+        .base_commit()
+        .work_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+
+    let head = git_in(&repo, &["rev-parse", "HEAD"]);
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(record.status.code(), Some(0), "record must succeed");
+
+    let store = home.join("data/batten/repo/receipts");
+    let agent_file = fs::read_dir(&store)
+        .expect("receipt store")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.to_string_lossy().ends_with(".agent-context.json"))
+        .expect("an agent-context statement beside the receipt");
+    let raw = fs::read_to_string(&agent_file).expect("read the statement");
+
+    // 3. NO FREE TEXT. The fixture's prompt body appears twice in the
+    //    transcript and must appear nowhere in the emitted bytes.
+    assert!(
+        !raw.contains(SECRET),
+        "the statement must carry no transcript free text"
+    );
+
+    let doc: serde_json::Value = serde_json::from_str(&raw).expect("statement is JSON");
+
+    // 1. ROUND-TRIP AGAINST THE SIBLING. Same envelope, same subject digest,
+    //    different predicate — which is what makes the pair joinable.
+    assert_eq!(
+        doc["predicateType"], "https://batten.dev/agent-context/v1",
+        "the predicate is ours; the envelope is in-toto's"
+    );
+    assert_eq!(doc["subject"][0]["digest"]["gitCommit"], head);
+    let (code, line) = receipt_status(&repo, &home, "verify");
+    assert_eq!(code, 0, "the sibling receipt still reads back valid");
+    assert_eq!(line, format!("verify {head} valid\n"));
+
+    // 2. THE BOUND IS PRESENT. A statement without it would read as a complete
+    //    agent bill of materials, which CLOUD-279 measured it is not.
+    let coverage = doc["predicate"]["coverage"]
+        .as_array()
+        .expect("coverage is an array");
+    assert!(!coverage.is_empty(), "the bound is never empty");
+
+    // The typed facts, as sets rather than a picked occurrence.
+    assert_eq!(doc["predicate"]["models"][0], "a-model");
+    assert_eq!(doc["predicate"]["exercisedMcpServers"][0], "srv-a");
+    assert_eq!(doc["predicate"]["sessionId"], "s-9");
+    assert!(
+        doc["predicate"]["configEpoch"]
+            .as_str()
+            .is_some_and(|epoch| !epoch.is_empty()),
+        "the governing surface is bound here too"
+    );
+}
+
+/// A configured transcript that is not there is reported, never papered over
+/// with an empty statement — "nothing was stated" and "nothing was in effect"
+/// are different claims and only one of them is true.
+#[test]
+fn a_configured_but_absent_transcript_refuses_rather_than_recording_an_empty_context() {
+    let root = scratch("receipt-agent-absent");
+    let _ = fs::remove_dir_all(&root);
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n[transcript]\npath = \"session.jsonl\"\n")
+        .git()
+        .base_commit()
+        .work_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+
+    let record = receipt_cmd(&repo, &home, &["receipt", "record", "verify"]);
+    assert_eq!(
+        record.status.code(),
+        Some(1),
+        "a usage error, not a verdict"
+    );
+    let store = home.join("data/batten/repo/receipts");
+    let agent = fs::read_dir(&store)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .path()
+                .to_string_lossy()
+                .ends_with(".agent-context.json")
+        });
+    assert!(
+        !agent,
+        "no statement is written when there is nothing to state"
+    );
+}
+
 #[test]
 fn receipt_identity_is_per_check() {
     let (repo, home) = receipt_fixture("receipt-per-check");

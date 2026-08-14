@@ -921,10 +921,21 @@ email = "alec@wenzowski.com"
 # invalidates receipts, exactly as an AGENTS.md edit already does. That is the
 # intended direction — a toolchain change IS a change in what decided the check.
 [epoch]
+# `.mcp.json` is here for the agent-context record (CLOUD-579), which covers the
+# agent config a repository governs itself with through the epoch rather than by
+# naming those paths in the engine — `crates/batten` must contain no consumer's
+# filenames (rule 1). Which agent config governs a repository is that
+# repository's business, so this is where the answer belongs.
+#
+# The record's own `coverage` states the limit this does NOT close: the file
+# declares what the repository asks for, while the harness injects servers at
+# runtime that are written to no file at all. Tracking it binds the declaration,
+# never the effective set.
 tracked = [
   "batten.toml",
   "AGENTS.md",
   "hk.pkl",
   "mise.lock",
+  ".mcp.json",
   ".claude/settings.json",
 ]

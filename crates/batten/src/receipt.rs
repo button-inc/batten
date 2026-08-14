@@ -93,6 +93,39 @@ const STATEMENT_TYPE: &str = "https://in-toto.io/Statement/v1";
 /// the envelope is in-toto's.
 const PREDICATE_TYPE: &str = "https://batten.dev/receipt/v1";
 
+/// The agent-context predicate type (CLOUD-579): what the harness reported about
+/// itself while the check ran.
+///
+/// A **second predicate in the same envelope**, not a second format. The
+/// `CycloneDX` Agent Bill of Materials is an open specification issue, so there is
+/// nothing to emit against; the envelope choice here is reversible — a third
+/// `predicateType`
+/// alongside these two, whenever it standardises — while a record not taken while
+/// the agent was acting cannot be reconstructed afterwards, because the facts live
+/// in a session rather than in the tree. Reversible against unrecoverable settles
+/// it without predicting the standard.
+const AGENT_PREDICATE_TYPE: &str = "https://batten.dev/agent-context/v1";
+
+/// The surfaces an agent-context statement does **not** cover, named in the
+/// statement itself.
+///
+/// CLOUD-279 measured the harness surface and found the exposure partial in ways
+/// no amount of engineering closes from inside Batten: `.mcp.json` declared one
+/// server while the session reached three, the rest injected at runtime and
+/// written to no file a gate can read. A record that omitted this list would look
+/// like a complete agent bill of materials, be read as one, and silently understate
+/// the composition — the overclaim CLOUD-132 bounds, in the direction that flatters.
+///
+/// So the bound ships **inside the record**, and [`validate_agent`] refuses a
+/// statement without it. A limit stated in a doc comment is a limit the artifact
+/// does not carry.
+const AGENT_COVERAGE: &[&str] = &[
+    "mcp-servers: exercised only; the permitted set is enumerated by no file this engine can read",
+    "mcp-server-identity: the host's opaque identifier, with no published name mapping",
+    "permission-mode: omitted; it is per-event and changes mid-session, so no single value is true",
+    "skills-and-plugins: covered only where the consumer tracks them in `[epoch] tracked`",
+];
+
 /// The scope key of a receipt's identity tuple. Receipt-specific so a receipt
 /// for check `x` can never alias a repo-scoped finding for a rule named `x`.
 const RECEIPT_SCOPE_KEY: &str = "verification-receipt";
@@ -176,6 +209,85 @@ pub struct Predicate {
     /// The receipt's content-keyed identity, with its version beside the hash
     /// (CLOUD-123: never inside it).
     pub identity: IdentityRef,
+}
+
+/// An agent-context statement: the same in-toto envelope, a different predicate.
+///
+/// Written **beside** the verification receipt rather than folded into it. The
+/// two answer different questions — "did this check pass" and "what was acting
+/// when it did" — and only the first is a verdict. Merging them would put a
+/// harness-reported fact inside the object [`validity`] decides on, so a host
+/// that changed how it reports would move a gate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentStatement {
+    /// The in-toto statement type, always [`STATEMENT_TYPE`].
+    #[serde(rename = "_type")]
+    pub statement_type: String,
+    /// The artifacts the claim is about: exactly one, the same commit its
+    /// sibling receipt names.
+    pub subject: Vec<Subject>,
+    /// The predicate type, always [`AGENT_PREDICATE_TYPE`].
+    #[serde(rename = "predicateType")]
+    pub predicate_type: String,
+    /// The agent-context claim itself.
+    pub predicate: AgentPredicate,
+}
+
+/// What the harness stated about itself while the check ran.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentPredicate {
+    /// The check this context accompanies — the same name its sibling records,
+    /// so the pair is joinable.
+    pub check: String,
+    /// The host's session id, when it reported one.
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The config epoch at the subject commit, exactly as the sibling records
+    /// it — which is what covers the consumer's tracked agent config without
+    /// this engine naming a single one of those files (rule 1).
+    #[serde(rename = "configEpoch")]
+    pub config_epoch: String,
+    /// The distinct models the session recorded.
+    pub models: Vec<String>,
+    /// The distinct harness versions.
+    #[serde(rename = "harnessVersions")]
+    pub harness_versions: Vec<String>,
+    /// The distinct entrypoints.
+    pub entrypoints: Vec<String>,
+    /// The distinct MCP servers a call was attributed to. **Exercised, not
+    /// permitted** — the name is the claim's bound, and `coverage` states why.
+    #[serde(rename = "exercisedMcpServers")]
+    pub exercised_mcp_servers: Vec<String>,
+    /// When the context was recorded (RFC 3339 UTC).
+    #[serde(rename = "recordedAt")]
+    pub recorded_at: String,
+    /// What this statement does not cover. Never empty — [`validate_agent`]
+    /// refuses a statement whose bound is missing.
+    pub coverage: Vec<String>,
+}
+
+/// Refuse an agent-context statement that states no bound.
+///
+/// The one invariant this type has that its sibling does not, and it is a gate
+/// rather than a convention: a record without `coverage` reads as a complete
+/// agent bill of materials, and CLOUD-279 measured that it is not one. Enforced
+/// here so removing the bound fails rather than quietly widening the claim.
+///
+/// # Errors
+///
+/// [`UsageError`] when `coverage` is empty or the envelope is not this type's.
+pub fn validate_agent(statement: &AgentStatement) -> Result<()> {
+    if statement.predicate_type != AGENT_PREDICATE_TYPE {
+        return Err(UsageError::raise(format!(
+            "an agent-context statement must carry predicateType {AGENT_PREDICATE_TYPE}"
+        )));
+    }
+    if statement.predicate.coverage.is_empty() {
+        return Err(UsageError::raise(
+            "an agent-context statement with no `coverage` claims completeness it cannot have: the permitted tool set and the effective MCP composition are readable from no file, so an unbounded record understates what was in effect",
+        ));
+    }
+    Ok(())
 }
 
 /// A digest set for the policy bytes.
@@ -491,7 +603,77 @@ pub fn run_record(check: &str) -> Result<ExitCode> {
     std::fs::write(&compat, &facts.main)
         .with_context(|| format!("write the compatibility receipt {}", compat.display()))?;
 
+    record_agent_context(check, &facts, &statement.subject, now)?;
+
     Ok(ExitCode::Success)
+}
+
+/// The agent-context path of [`run_record`] (CLOUD-579).
+///
+/// Silent and side-effect-free when no transcript is configured: a repository
+/// that never named one is not missing one, and minting an empty statement would
+/// read as "nothing was in effect" rather than "nothing was stated". A configured
+/// path with nothing at it is reported, for the same reason — the caller asked
+/// for the record and did not get it.
+fn record_agent_context(
+    check: &str,
+    facts: &RepoFacts,
+    subject: &[Subject],
+    now: u64,
+) -> Result<()> {
+    let config = crate::config::load(Path::new(crate::config::CONFIG_FILE))?;
+    let declared = config
+        .transcript
+        .as_ref()
+        .and_then(|declared| declared.path.as_deref());
+    let agent = match crate::transcript::resolve(Path::new("."), declared)? {
+        crate::transcript::Capability::Unconfigured => return Ok(()),
+        crate::transcript::Capability::Absent => {
+            return Err(UsageError::raise(format!(
+                "{}, so no agent-context statement was written",
+                crate::transcript::ABSENT_NOTICE
+            )));
+        }
+        crate::transcript::Capability::Present(stream) => stream,
+    };
+
+    let statement = AgentStatement {
+        statement_type: STATEMENT_TYPE.to_owned(),
+        subject: subject.to_vec(),
+        predicate_type: AGENT_PREDICATE_TYPE.to_owned(),
+        predicate: AgentPredicate {
+            check: check.to_owned(),
+            session: agent.session.clone(),
+            config_epoch: crate::epoch::compute(Path::new("."), Some("HEAD"))?,
+            models: agent.agent.models.iter().cloned().collect(),
+            harness_versions: agent.agent.harness_versions.iter().cloned().collect(),
+            entrypoints: agent.agent.entrypoints.iter().cloned().collect(),
+            exercised_mcp_servers: agent.agent.exercised_mcp_servers.iter().cloned().collect(),
+            recorded_at: rfc3339_utc(now),
+            coverage: AGENT_COVERAGE
+                .iter()
+                .map(|note| (*note).to_owned())
+                .collect(),
+        },
+    };
+    // Refused before it is written, never after: a statement that reached disk
+    // without its bound is one a reader can already act on.
+    validate_agent(&statement)?;
+
+    let path = agent_path(&facts.repo_root, check)?;
+    let json = serde_json::to_string_pretty(&statement)?;
+    std::fs::write(&path, format!("{json}\n"))
+        .with_context(|| format!("write the agent-context statement {}", path.display()))?;
+    Ok(())
+}
+
+/// The agent-context statement's path: the receipt's own, with a second
+/// extension, so the pair sits together and neither can overwrite the other.
+fn agent_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
+    let fingerprint = identity::scope_fingerprint(check, RECEIPT_SCOPE_KEY);
+    Ok(state::repo_state_dir(Path::new(repo_root))?
+        .join("receipts")
+        .join(format!("{}.agent-context.json", fingerprint.to_hex())))
 }
 
 /// The `receipt status -J` document: the pointer line's three tokens, named.
@@ -648,6 +830,65 @@ mod tests {
         assert!(json.contains("\"predicateType\""));
         assert!(json.contains("\"gitCommit\""));
         assert!(json.contains("\"configEpoch\""));
+    }
+
+    fn agent_statement(coverage: Vec<String>) -> AgentStatement {
+        AgentStatement {
+            statement_type: STATEMENT_TYPE.to_owned(),
+            subject: vec![Subject {
+                name: "repo".to_owned(),
+                digest: SubjectDigest {
+                    git_commit: "head1".to_owned(),
+                },
+            }],
+            predicate_type: AGENT_PREDICATE_TYPE.to_owned(),
+            predicate: AgentPredicate {
+                check: "verify".to_owned(),
+                session: Some("s-1".to_owned()),
+                config_epoch: "epoch1".to_owned(),
+                models: vec!["m".to_owned()],
+                harness_versions: vec![],
+                entrypoints: vec![],
+                exercised_mcp_servers: vec![],
+                recorded_at: "1970-01-01T00:00:00Z".to_owned(),
+                coverage,
+            },
+        }
+    }
+
+    /// CLOUD-579's second acceptance bullet: the bound is enforced, not
+    /// documented. A statement with no `coverage` claims a completeness
+    /// CLOUD-279 measured it cannot have.
+    #[test]
+    fn an_agent_statement_without_its_bound_is_refused() {
+        let bounded = agent_statement(vec!["mcp-servers: exercised only".to_owned()]);
+        assert!(validate_agent(&bounded).is_ok());
+
+        let unbounded = agent_statement(Vec::new());
+        let err = validate_agent(&unbounded).unwrap_err();
+        assert!(
+            err.to_string().contains("coverage"),
+            "the refusal names the missing bound"
+        );
+    }
+
+    /// The bound `run_record` actually ships is one the validator accepts, so
+    /// the two cannot drift into a state where every recorded statement would
+    /// be refused — or, worse, where the shipped notes are blank strings that
+    /// satisfy the length check and state nothing.
+    #[test]
+    fn the_shipped_coverage_is_one_the_validator_accepts() {
+        let shipped = agent_statement(
+            AGENT_COVERAGE
+                .iter()
+                .map(|note| (*note).to_owned())
+                .collect(),
+        );
+        assert!(validate_agent(&shipped).is_ok());
+        assert!(
+            AGENT_COVERAGE.iter().all(|note| !note.is_empty()),
+            "a blank note is a bound that states nothing"
+        );
     }
 
     /// A receipt written before `configEpoch` existed must read as
