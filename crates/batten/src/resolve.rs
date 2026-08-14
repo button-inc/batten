@@ -132,19 +132,17 @@ pub const SETTINGS: &[SettingSpec] = &[
     },
 ];
 
-/// Look up a setting's declaration by key.
+/// Look up a setting's declaration by key, or `None` for a key [`SETTINGS`]
+/// does not declare.
 ///
-/// # Panics
-///
-/// Never: [`tests::every_resolved_key_is_declared`] pins that each key the
-/// resolver uses is present, so the `expect` below is unreachable in a build
-/// that passes its tests.
-fn setting(key: &str) -> &'static SettingSpec {
-    #[allow(clippy::expect_used)]
-    SETTINGS
-        .iter()
-        .find(|spec| spec.key == key)
-        .expect("every resolved key is declared in SETTINGS")
+/// Absence is a value rather than a panic (CLOUD-300). The alternative was an
+/// `expect` exempted from the no-panic lint by a doc comment citing a test that
+/// pinned "every key reaching here is declared" — and that test did not exist,
+/// so the exemption rested on a mechanism nobody had built. Both callers have a
+/// "this layer does not speak to the key" answer already, so handing them one
+/// more way to reach it costs nothing and leaves nothing needing a pin.
+fn setting(key: &str) -> Option<&'static SettingSpec> {
+    SETTINGS.iter().find(|spec| spec.key == key)
 }
 
 /// The flag layer: values supplied on the command line, highest precedence.
@@ -410,17 +408,23 @@ fn token(strictness: Strictness) -> String {
 /// that exports every knob unconditionally, both produce one. Filtering that
 /// here rather than in each key's parser is what keeps empty→default (§10) a
 /// single rule instead of one every new setting has to remember.
+///
+/// A key [`SETTINGS`] does not declare joins a key declaring no env var: this
+/// layer does not speak to it, which is the answer the `?` chain already gives.
 fn env_layer(key: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<(&'static str, String)> {
-    let name = setting(key).env?;
+    let name = setting(key)?.env?;
     let raw = env(name)?;
     let trimmed = raw.trim();
     (!trimmed.is_empty()).then(|| (name, trimmed.to_owned()))
 }
 
 /// The flag that overrides one key, falling back to `default` for a key the
-/// table declares no flag for.
+/// table declares no flag for — or does not declare at all, which reaches the
+/// same fallback rather than a distinct one.
 fn flag_name(key: &str, default: &'static str) -> &'static str {
-    setting(key).long_flag.unwrap_or(default)
+    setting(key)
+        .and_then(|spec| spec.long_flag)
+        .unwrap_or(default)
 }
 
 /// The token a boolean key is written as in config, env, and messages.
@@ -1216,6 +1220,40 @@ mod tests {
         })
         .unwrap_err();
         assert!(is_usage_error(&err));
+    }
+
+    #[test]
+    fn an_undeclared_key_has_no_env_layer_and_falls_back_to_the_declared_default() {
+        // CLOUD-300. `setting()` used to `expect` its key into existence, under
+        // an `#[allow(clippy::expect_used)]` whose `# Panics` comment cited a
+        // test that was never written. The panic was unreachable only by
+        // coincidence of today's call sites, so this pins the property the
+        // citation claimed — from the other end, over the two functions that
+        // actually call it, now that absence is a value rather than a panic.
+        //
+        // The env closure answers EVERY name, so a `None` here can only come
+        // from the table lookup; an unset variable cannot produce it.
+        assert!(
+            env_layer("not_a_declared_key", &|_| Some("loud".to_owned())).is_none(),
+            "a key SETTINGS does not declare has no env layer"
+        );
+        assert_eq!(
+            flag_name("not_a_declared_key", "--fallback"),
+            "--fallback",
+            "an undeclared key falls back exactly as a declared key with no flag does"
+        );
+
+        // The declared keys still resolve, so this cannot pass by `setting()`
+        // answering `None` to everything.
+        assert_eq!(
+            env_layer("strictness", &|_| Some("strict".to_owned())),
+            Some(("BATTEN_STRICTNESS", "strict".to_owned()))
+        );
+        assert_eq!(flag_name("strictness", "--fallback"), "--strictness");
+        assert!(
+            env_layer("rule", &|_| Some("loud".to_owned())).is_none(),
+            "a declared key with no env var has no env layer either"
+        );
     }
 
     #[test]
