@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #MISE description="Measure this branch and its merge base back to back on one machine, and print both arms as paired records"
 #
-# CLOUD-172. The driver behind `bench-compare`: it produces the two measurements,
-# the gate decides over them. Same split as `bench`/`bench-assert`, for the same
+# CLOUD-172. The driver behind `perf-compare`: it produces the two measurements,
+# the gate decides over them. Same split as `perf`/`perf-assert`, for the same
 # reason — the decision has to be exercisable without a build, and the
 # measurement has to happen somewhere a measurement means something.
 #
@@ -30,7 +30,7 @@
 #
 # `--null` measures HEAD against ITSELF: a comparison of a binary with its own
 # copy, whose ratio is by construction 1.0 plus pure noise. That is how
-# `bench-compare`'s threshold was derived, and the flag exists so the noise floor
+# `perf-compare`'s threshold was derived, and the flag exists so the noise floor
 # stays a thing anyone can re-measure rather than a number in a comment.
 set -euo pipefail
 
@@ -47,7 +47,7 @@ fi
 
 for tool in hyperfine jq; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
-		echo "::error:: bench-pair: $tool is not installed — run \`mise install\`; it is pinned in mise.toml." >&2
+		echo "::error:: perf-pair: $tool is not installed — run \`mise install\`; it is pinned in mise.toml." >&2
 		exit 2
 	fi
 done
@@ -56,7 +56,7 @@ done
 # unresolvable base is "the gate could not look", a property of the checkout
 # (a shallow clone, a missing fetch), not a verdict about the branch.
 if ! base_sha="$(git merge-base HEAD "$BASE_REF" 2>/dev/null)" || [ -z "$base_sha" ]; then
-	echo "::error:: bench-pair: no merge base between HEAD and $BASE_REF — fetch it first (\`git fetch origin main\`). No measurement." >&2
+	echo "::error:: perf-pair: no merge base between HEAD and $BASE_REF — fetch it first (\`git fetch origin main\`). No measurement." >&2
 	exit 2
 fi
 
@@ -67,7 +67,7 @@ head_sha="$(git rev-parse HEAD)"
 # exit rather than a case of the skip below, because the diff is empty for a
 # different reason — nothing was authored, not "nothing that matters".
 if [ "$null" = 0 ] && [ "$base_sha" = "$head_sha" ]; then
-	echo "bench-pair: HEAD is its own merge base (${head_sha:0:8}) — no change to compare. Nothing measured."
+	echo "perf-pair: HEAD is its own merge base (${head_sha:0:8}) — no change to compare. Nothing measured."
 	exit 0
 fi
 
@@ -76,7 +76,7 @@ fi
 # against. A path outside that set cannot change a single byte of the artifact.
 if [ "$null" = 0 ]; then
 	if ! changed="$(git diff --name-only "$base_sha" HEAD)"; then
-		echo "::error:: bench-pair: could not diff $BASE_REF..HEAD, so the skip could not be decided. No measurement." >&2
+		echo "::error:: perf-pair: could not diff $BASE_REF..HEAD, so the skip could not be decided. No measurement." >&2
 		exit 2
 	fi
 	# Literal grep patterns, and `-c` rather than `-q`: an early-exiting `grep -q`
@@ -84,12 +84,12 @@ if [ "$null" = 0 ]; then
 	# writing (`mise run pipefail-grep-check`).
 	touching="$(grep -cE '^(crates/|Cargo\.lock$|Cargo\.toml$)' <<<"$changed" || true)"
 	if [ "$touching" = 0 ]; then
-		echo "bench-pair: no change to crates/, Cargo.toml or Cargo.lock between ${base_sha:0:8} and ${head_sha:0:8} — the binary is unchanged, so its latency is too. Nothing measured."
+		echo "perf-pair: no change to crates/, Cargo.toml or Cargo.lock between ${base_sha:0:8} and ${head_sha:0:8} — the binary is unchanged, so its latency is too. Nothing measured."
 		exit 0
 	fi
 fi
 
-out_dir="${BENCH_OUT_DIR:-target/bench}/pair"
+out_dir="${BENCH_OUT_DIR:-target/perf}/pair"
 rm -rf "$out_dir"
 mkdir -p "$out_dir"
 OUT_DIR="$(cd "$out_dir" && pwd)"
@@ -98,7 +98,7 @@ readonly OUT_DIR
 # The head binary, in the ordinary target dir so it shares the cache every other
 # task warms.
 if ! cargo build --quiet --release -p batten; then
-	echo "::error:: bench-pair: the head release build failed, so there is nothing to compare. No measurement." >&2
+	echo "::error:: perf-pair: the head release build failed, so there is nothing to compare. No measurement." >&2
 	exit 2
 fi
 head_bin="$PWD/target/release/batten"
@@ -117,7 +117,7 @@ else
 	# whatever else `verify` is running.
 	worktree="$OUT_DIR/base-tree"
 	if ! git worktree add -q --detach "$worktree" "$base_sha"; then
-		echo "::error:: bench-pair: could not create a worktree at ${base_sha:0:8}. No measurement." >&2
+		echo "::error:: perf-pair: could not create a worktree at ${base_sha:0:8}. No measurement." >&2
 		exit 2
 	fi
 	# Removed however this exits — a leaked worktree makes the NEXT run fail on a
@@ -125,18 +125,18 @@ else
 	# leftover state.
 	trap 'git worktree remove --force "$worktree" >/dev/null 2>&1 || true' EXIT
 	if ! (cd "$worktree" && CARGO_TARGET_DIR="$OUT_DIR/base-target" cargo build --quiet --release -p batten); then
-		echo "::error:: bench-pair: the base release build failed at ${base_sha:0:8}, so there is nothing to compare against. No measurement." >&2
+		echo "::error:: perf-pair: the base release build failed at ${base_sha:0:8}, so there is nothing to compare against. No measurement." >&2
 		exit 2
 	fi
 	base_bin="$OUT_DIR/base-target/release/batten"
 fi
 
 if [ ! -x "$base_bin" ] || [ ! -x "$head_bin" ]; then
-	echo "::error:: bench-pair: one of the two binaries is missing after a successful build — refusing to measure something else." >&2
+	echo "::error:: perf-pair: one of the two binaries is missing after a successful build — refusing to measure something else." >&2
 	exit 2
 fi
 
-# The check path's fixture, materialised exactly as `bench` materialises it, so
+# The check path's fixture, materialised exactly as `perf` materialises it, so
 # the two tasks measure the same input and a difference between them is never
 # the corpus.
 readonly FIXTURE_REPO="crates/batten/tests/fixtures/repos/forbid-clean"
@@ -164,11 +164,11 @@ pair() {
 	fi
 
 	if ! (cd "$dir" && hyperfine "${flags[@]}" "$base_bin $args" "$head_bin $args" >/dev/null 2>"$OUT_DIR/$id.err"); then
-		echo "::error:: bench-pair: measuring the $id pair failed — see $OUT_DIR/$id.err. No measurement." >&2
+		echo "::error:: perf-pair: measuring the $id pair failed — see $OUT_DIR/$id.err. No measurement." >&2
 		exit 2
 	fi
 
-	# Same units and same rounding as `bench`, plus the `arm=` field that makes a
+	# Same units and same rounding as `perf`, plus the `arm=` field that makes a
 	# record half of a pair. p50 from the sorted times for the same reason.
 	if ! jq -er --arg id "$id" '
 		["base", "head"] as $arms
@@ -180,7 +180,7 @@ pair() {
 		| (($n - 1) * 0.95 | ceil) as $i95
 		| "arm=\($arms[$i]) path=\($id) p50=\($t[$i50] * 1000 | . * 100 | round / 100) p95=\($t[$i95] * 1000 | . * 100 | round / 100) mean=\($r.mean * 1000 | . * 100 | round / 100) runs=\($n)"
 	' "$json"; then
-		echo "::error:: bench-pair: could not read the $id pair out of $json. No measurement." >&2
+		echo "::error:: perf-pair: could not read the $id pair out of $json. No measurement." >&2
 		exit 2
 	fi
 }

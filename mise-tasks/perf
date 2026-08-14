@@ -8,13 +8,13 @@
 # routed around, and the rule it enforces stops binding. The repo asserted speed
 # nowhere and measured it nowhere before this task.
 #
-# THIS MEASURES; IT DOES NOT DECIDE. The verdict is `mise run bench-assert`'s, a
+# THIS MEASURES; IT DOES NOT DECIDE. The verdict is `mise run perf-assert`'s, a
 # pure function of the records below, for the same reason every board gate here
 # splits that way (`graph-check`, `claim-check`, `ci-wait`): agents fetch, gates
 # decide. A measurement needs a quiet machine, a release build and a couple of
 # minutes; a decision needs none of those, so keeping them apart is what lets the
 # decision run in the hk gate on every commit while the measurement runs where it
-# can be trusted (.github/workflows/bench.yml, on a schedule).
+# can be trusted (.github/workflows/perf.yml, on a schedule).
 #
 # THE THREE PATHS, chosen because they bracket what a hook actually costs:
 #
@@ -31,7 +31,7 @@
 # FIXTURES ARE REUSED, NOT INVENTED. The check path materialises
 # `crates/batten/tests/fixtures/repos/forbid-clean/`, and the hook path feeds
 # `crates/batten/tests/fixtures/hooks/claude-code.json` — the same bytes the Rust
-# suite already pins against drift. A second corpus maintained only for the bench
+# suite already pins against drift. A second corpus maintained only for the perf
 # would drift from the one the tests assert on, and then the published number
 # would describe an input nothing else uses.
 #
@@ -46,7 +46,7 @@
 #
 # OUTPUT IS A POINTER, NEVER A PAYLOAD (non-negotiable rule 4): one KEY=VALUE
 # record per path on stdout and nothing else, so a caller can redirect it into
-# `bench-assert`, append it to a series (CLOUD-172), or paste it into a summary
+# `perf-assert`, append it to a series (CLOUD-172), or paste it into a summary
 # without a parser. The raw hyperfine JSON stays under target/ for a human.
 #
 # Task bodies do not run under `set -e`, and a number computed from a failed
@@ -57,13 +57,13 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 # Where the measurement's working files go. Under target/, which is git-ignored,
-# so a bench run never dirties a clone and never has to be cleaned up by hand.
+# so a perf run never dirties a clone and never has to be cleaned up by hand.
 #
 # Resolved to an ABSOLUTE path below, once it exists: the check path runs with
 # the fixture repo as its working directory, and a relative one would put that
 # path's JSON and stderr inside the fixture — where the first of them failed to
 # open at all, since the directory does not exist relative to there.
-bench_out="${BENCH_OUT_DIR:-target/bench}"
+perf_out="${BENCH_OUT_DIR:-target/perf}"
 
 # Runs per path. hyperfine's default (10, or as many as fit its time budget) is
 # tuned for commands measured in seconds; these are measured in milliseconds, so
@@ -75,7 +75,7 @@ readonly WARMUP="${BENCH_WARMUP:-10}"
 
 for tool in hyperfine jq; do
 	if ! command -v "$tool" >/dev/null 2>&1; then
-		echo "::error:: bench: $tool is not installed — run \`mise install\`; it is pinned in mise.toml." >&2
+		echo "::error:: perf: $tool is not installed — run \`mise install\`; it is pinned in mise.toml." >&2
 		exit 1
 	fi
 done
@@ -83,18 +83,18 @@ done
 # The binary under measurement. Built once, up front: hyperfine would otherwise
 # time the first invocation of an unbuilt binary as if the compile were startup.
 if ! cargo build --quiet --release -p batten; then
-	echo "::error:: bench: the release build failed, so there is nothing to measure. No records written." >&2
+	echo "::error:: perf: the release build failed, so there is nothing to measure. No records written." >&2
 	exit 1
 fi
 readonly BIN="target/release/batten"
 if [ ! -x "$BIN" ]; then
-	echo "::error:: bench: $BIN is missing after a successful build — refusing to measure something else." >&2
+	echo "::error:: perf: $BIN is missing after a successful build — refusing to measure something else." >&2
 	exit 1
 fi
 
-rm -rf "$bench_out"
-mkdir -p "$bench_out"
-OUT_DIR="$(cd "$bench_out" && pwd)"
+rm -rf "$perf_out"
+mkdir -p "$perf_out"
+OUT_DIR="$(cd "$perf_out" && pwd)"
 readonly OUT_DIR
 
 # The check path's repository: a fixture with one `forbid` rule and one file to
@@ -104,7 +104,7 @@ readonly FIXTURE_REPO="crates/batten/tests/fixtures/repos/forbid-clean"
 readonly FIXTURE_HOOK="crates/batten/tests/fixtures/hooks/claude-code.json"
 for f in "$FIXTURE_REPO/batten.toml.in" "$FIXTURE_REPO/lib.rs.in" "$FIXTURE_HOOK"; do
 	if [ ! -f "$f" ]; then
-		echo "::error:: bench: fixture $f is missing, so the measured input is not the one the test suite pins." >&2
+		echo "::error:: perf: fixture $f is missing, so the measured input is not the one the test suite pins." >&2
 		exit 1
 	fi
 done
@@ -153,7 +153,7 @@ measure() {
 	# still perfectly timeable, and without the check it would be published as
 	# a fast number rather than a broken path.
 	if ! (cd "$dir" && hyperfine "${args[@]}" "$command" >/dev/null 2>"$OUT_DIR/$id.err"); then
-		echo "::error:: bench: measuring the $id path failed — see $OUT_DIR/$id.err. No records written." >&2
+		echo "::error:: perf: measuring the $id path failed — see $OUT_DIR/$id.err. No records written." >&2
 		exit 1
 	fi
 
@@ -172,7 +172,7 @@ measure() {
 		| (($n - 1) * 0.95 | ceil) as $i95
 		| "path=\($id) p50=\($t[$i50] * 1000 | . * 100 | round / 100) p95=\($t[$i95] * 1000 | . * 100 | round / 100) mean=\($r.mean * 1000 | . * 100 | round / 100) runs=\($n)"
 	' "$json"; then
-		echo "::error:: bench: could not read the $id measurement out of $json. No records written." >&2
+		echo "::error:: perf: could not read the $id measurement out of $json. No records written." >&2
 		exit 1
 	fi
 }
@@ -188,7 +188,7 @@ measure hook "$PWD" "$ABS_BIN hook --harness claude-code"
 #
 # DERIVED from the settings file rather than hardcoded, so the measurement
 # cannot describe a wiring the repository no longer has. That is the whole
-# defect this path exists to close: `bench-assert` was green over an uninvoked
+# defect this path exists to close: `perf-assert` was green over an uninvoked
 # binary for as long as the budget existed.
 #
 # One entry today. If the file ever wires several, this measures the first and
@@ -197,16 +197,16 @@ measure hook "$PWD" "$ABS_BIN hook --harness claude-code"
 wired_cmd=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command] | .[0] // empty' .claude/settings.json 2>/dev/null || true)
 wired_count=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command] | length' .claude/settings.json 2>/dev/null || echo 0)
 if [ -z "$wired_cmd" ]; then
-	echo "::error:: bench: .claude/settings.json wires no PreToolUse command, so the wired path cannot be measured. No records written." >&2
+	echo "::error:: perf: .claude/settings.json wires no PreToolUse command, so the wired path cannot be measured. No records written." >&2
 	exit 1
 fi
 # The settings file spells the project dir as a variable the harness expands.
 wired_cmd=${wired_cmd//\$CLAUDE_PROJECT_DIR/$PWD}
 if [ ! -x "$wired_cmd" ]; then
-	echo "::error:: bench: the wired PreToolUse command is not executable: $wired_cmd. No records written." >&2
+	echo "::error:: perf: the wired PreToolUse command is not executable: $wired_cmd. No records written." >&2
 	exit 1
 fi
 if [ "$wired_count" -ne 1 ]; then
-	echo "::warning:: bench: $wired_count PreToolUse commands wired; measuring only the first ($wired_cmd)." >&2
+	echo "::warning:: perf: $wired_count PreToolUse commands wired; measuring only the first ($wired_cmd)." >&2
 fi
 measure wired "$PWD" "$wired_cmd"

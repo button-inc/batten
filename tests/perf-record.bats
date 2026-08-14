@@ -7,7 +7,7 @@
 # the suite runs in the gate like any other.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/bench-record"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/perf-record"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	cd "$REPO" || return 1
@@ -26,7 +26,7 @@ records() {
 }
 
 note_body() {
-	git notes --ref=refs/notes/bench show HEAD
+	git notes --ref=refs/notes/perf show HEAD
 }
 
 @test "a measurement on the trunk lands in the notes, keyed to the commit" {
@@ -62,7 +62,7 @@ $(records)
 IN"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"not 'main'"* ]]
-	run git notes --ref=refs/notes/bench list
+	run git notes --ref=refs/notes/perf list
 	[ -z "$output" ]
 }
 
@@ -92,7 +92,7 @@ IN"
 	run bash -c "'$TASK' </dev/null"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"stdin is empty"* ]]
-	run git notes --ref=refs/notes/bench list
+	run git notes --ref=refs/notes/perf list
 	[ -z "$output" ]
 }
 
@@ -102,8 +102,8 @@ path=noop p50=2.40 p95=2.88 mean=2.44 runs=100
 Benchmark 1: target/release/batten --help
 IN"
 	[ "$status" -eq 2 ]
-	[[ "$output" == *"not \`bench\` records"* ]]
-	run git notes --ref=refs/notes/bench list
+	[[ "$output" == *"not \`perf\` records"* ]]
+	run git notes --ref=refs/notes/perf list
 	[ -z "$output" ]
 }
 
@@ -122,5 +122,5 @@ IN"
 $(records)
 IN"
 	[[ "$output" != *"p50="* ]]
-	[[ "$output" == *"refs/notes/bench"* ]]
+	[[ "$output" == *"refs/notes/perf"* ]]
 }

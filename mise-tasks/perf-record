@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-#MISE description="Append a measurement to the trunk's invocation-cost series in git notes (reads `bench` records on stdin; refuses to run off main)"
+#MISE description="Append a measurement to the trunk's invocation-cost series in git notes (reads `perf` records on stdin; refuses to run off main)"
 #
 # CLOUD-172. CLOUD-207 published one number, and a number measured once decays
 # in silence: nobody notices 3ms becoming 40ms, they notice months later that
 # the hook got uninstalled. This is the series that makes the decay visible, and
 # a regression attributable to a SHA rather than to a quarter.
 #
-# GIT NOTES, NOT AN EXTERNAL SERVICE. `refs/notes/bench`, keyed to the commit
+# GIT NOTES, NOT AN EXTERNAL SERVICE. `refs/notes/perf`, keyed to the commit
 # measured. Three properties follow from that choice and none of them are
 # available from a dashboard: the history travels with the clone, a reader can
-# ask `git log --notes=bench` and get the series interleaved with the commits
+# ask `git log --notes=perf` and get the series interleaved with the commits
 # that caused it, and nothing has to be re-run to attribute a change. It also
 # costs no credential and no vendor.
 #
@@ -34,10 +34,10 @@
 # reason holds here rather than merely applying — `main` only advances by
 # fast-forward to a SHA CI already judged, so a push trigger buys a runner per
 # merge for a measurement that a schedule can take just as well. The trigger is
-# the daily schedule in `.github/workflows/bench.yml`, which already samples
+# the daily schedule in `.github/workflows/perf.yml`, which already samples
 # `main`. What that costs is resolution: the series is per-sample, not
 # per-commit. That trade is affordable precisely because it is not the only
-# mechanism — `bench-compare` catches a regression on the PULL REQUEST that
+# mechanism — `perf-compare` catches a regression on the PULL REQUEST that
 # caused it, at the commit that caused it, which is where attribution actually
 # matters. The series carries the trend. (Recorded in .claude/rules/toolchain.md
 # too; AGENTS.md is at its budgeted line ceiling and already carries the rule
@@ -50,7 +50,7 @@ cd "$(git rev-parse --show-toplevel)"
 # default notes ref is what `git notes` writes with no argument and what a
 # contributor is most likely to have local edits on, and a series is not a
 # comment.
-readonly NOTES_REF="${BENCH_NOTES_REF:-refs/notes/bench}"
+readonly NOTES_REF="${BENCH_NOTES_REF:-refs/notes/perf}"
 
 # The branch a measurement is allowed to describe. An argument so the bats suite
 # can drive a fixture repository whose trunk is named something else; the real
@@ -63,27 +63,27 @@ readonly METRIC="${BENCH_METRIC:-wall-clock}"
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$branch" != "$TRUNK" ]; then
-	echo "::error:: bench-record: HEAD is on '$branch', not '$TRUNK' — a branch's numbers are not the trunk's, and a series mixing them cannot be read. Nothing written." >&2
+	echo "::error:: perf-record: HEAD is on '$branch', not '$TRUNK' — a branch's numbers are not the trunk's, and a series mixing them cannot be read. Nothing written." >&2
 	exit 1
 fi
 
 commit="$(git rev-parse HEAD)"
 
-# Exit 2 for "could not look", matching `bench-assert` and the `lock-complete`
+# Exit 2 for "could not look", matching `perf-assert` and the `lock-complete`
 # doctrine: a caller that redirected nothing here needs to hear that, not a
 # silent empty note that later reads as a measurement of zero.
 records="$(cat)"
 if [ -z "${records//[[:space:]]/}" ]; then
-	echo "::error:: bench-record: stdin is empty — redirect \`mise run bench\` to a file and read it back. Nothing written." >&2
+	echo "::error:: perf-record: stdin is empty — redirect \`mise run perf\` to a file and read it back. Nothing written." >&2
 	exit 2
 fi
 
 # Only records. A stray line would enter the series as a datum nothing can
-# parse, and the series is read by machine (`bench-compare`) as well as by eye.
+# parse, and the series is read by machine (`perf-compare`) as well as by eye.
 # Literal awk patterns, never a `-v` regex — `mise run awk-regex-check` refuses
 # the latter for having implementation-defined escape handling.
 if awk '/^path=/ { next } /[^[:space:]]/ { bad = 1 } END { exit !bad }' <<<"$records"; then
-	echo "::error:: bench-record: stdin carries lines that are not \`bench\` records, so the series would take a datum nothing can parse. Nothing written." >&2
+	echo "::error:: perf-record: stdin carries lines that are not \`perf\` records, so the series would take a datum nothing can parse. Nothing written." >&2
 	exit 2
 fi
 
@@ -94,10 +94,10 @@ fi
 note="$(printf 'metric=%s runner=%s\n%s' "$METRIC" "${BENCH_RUNNER:-$(uname -m)-$(nproc)core}" "$records")"
 
 if ! git notes --ref="$NOTES_REF" append -m "$note" "$commit"; then
-	echo "::error:: bench-record: could not append the note to $NOTES_REF for $commit." >&2
+	echo "::error:: perf-record: could not append the note to $NOTES_REF for $commit." >&2
 	exit 1
 fi
 
 # A pointer, never the payload (non-negotiable rule 4): the ref and the commit,
 # so a reader knows where to look. The numbers are in the note.
-echo "bench-record: appended a $METRIC measurement to $NOTES_REF for ${commit:0:8}"
+echo "perf-record: appended a $METRIC measurement to $NOTES_REF for ${commit:0:8}"

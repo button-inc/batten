@@ -2,12 +2,12 @@
 # Static properties of the paired driver.
 #
 # The measurement itself needs two release builds and a worktree, so it is not
-# exercised here — `tests/bench-compare.bats` covers the decision, and this
+# exercised here — `tests/perf-compare.bats` covers the decision, and this
 # covers the two setup choices that are invisible until they fail in a way that
 # looks like something else.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/bench-pair"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/perf-pair"
 }
 
 # THE MEASURED DEFECT (CLOUD-172). Both arms used to run in the repo root, so

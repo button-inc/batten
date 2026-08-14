@@ -6,10 +6,10 @@
 # that caused the regression arrives while the author still has the context to
 # fix it.
 #
-# A PURE FUNCTION OF STDIN, like `bench-assert`, `graph-check` and `claim-check`
-# before it: agents fetch, gates decide. `mise run bench-pair` is the driver that
+# A PURE FUNCTION OF STDIN, like `perf-assert`, `graph-check` and `claim-check`
+# before it: agents fetch, gates decide. `mise run perf-pair` is the driver that
 # produces the paired measurement; this decides over it. That split is what lets
-# `tests/bench-compare.bats` exercise every verdict on every commit in
+# `tests/perf-compare.bats` exercise every verdict on every commit in
 # milliseconds, with no build, no hyperfine and no worktree.
 #
 # THE VERDICT IS A RATIO, NEVER AN ABSOLUTE. This is the whole design, and it is
@@ -57,7 +57,7 @@ set -euo pipefail
 # hook path do real work: a config read, a git invocation, a filesystem walk.
 # Against a 2.6ms base those are multiples, not percentages.
 #
-# Re-measure with `mise run bench-pair --null`; that flag exists so the floor
+# Re-measure with `mise run perf-pair --null`; that flag exists so the floor
 # stays checkable rather than historical.
 REGRESSION_RATIO="${BENCH_REGRESSION_RATIO:-1.30}"
 NOISE_FLOOR="1.102" # measured null maximum, n=30; reported, never compared against
@@ -66,7 +66,7 @@ fail=0
 reported=0
 report() {
 	if [ "$reported" = 0 ]; then
-		echo "::error:: bench-compare: an invocation path is measurably slower than the merge base (threshold ${REGRESSION_RATIO}x, measured noise floor ${NOISE_FLOOR}x):" >&2
+		echo "::error:: perf-compare: an invocation path is measurably slower than the merge base (threshold ${REGRESSION_RATIO}x, measured noise floor ${NOISE_FLOOR}x):" >&2
 		reported=1
 	fi
 	echo "  $1" >&2
@@ -77,7 +77,7 @@ report() {
 # the merge-base binary, `head` for this branch's. Anything else is unreadable.
 pairs="$(cat)"
 if [ -z "${pairs//[[:space:]]/}" ]; then
-	echo "::error:: bench-compare: stdin is empty — redirect \`mise run bench-pair\` to a file and read it back. No verdict." >&2
+	echo "::error:: perf-compare: stdin is empty — redirect \`mise run perf-pair\` to a file and read it back. No verdict." >&2
 	exit 2
 fi
 
@@ -105,7 +105,7 @@ parsed="$(awk '
 
 malformed="$(awk -F'\t' '$1=="MALFORMED"{print $2}' <<<"$parsed")"
 if [ -n "$malformed" ]; then
-	echo "::error:: bench-compare: stdin carries lines that are not paired records, so no comparison is possible:" >&2
+	echo "::error:: perf-compare: stdin carries lines that are not paired records, so no comparison is possible:" >&2
 	while IFS= read -r line; do
 		[ -n "$line" ] || continue
 		echo "  stdin:$line: not an \`arm=<base|head> path=<id> p50=… p95=… mean=… runs=…\` record" >&2
@@ -114,14 +114,14 @@ if [ -n "$malformed" ]; then
 fi
 
 # p50, not p95, and the reason is the pairing. p95 is the right statistic for an
-# absolute budget (`bench-assert`), because a hook's worst case is what an agent
+# absolute budget (`perf-assert`), because a hook's worst case is what an agent
 # feels. It is the wrong one for a ratio: the tail is where a runner's
 # contention lands, so a p95 ratio is the noisiest number available, while p50
 # is the most stable estimate of what the binary itself costs. The budget gate
 # still holds the tail; this one holds the shape.
 heads="$(awk -F'\t' '$1=="OK" && $2=="head" {print $3"\t"$4}' <<<"$parsed")"
 if [ -z "$heads" ]; then
-	echo "::error:: bench-compare: no \`head\` measurements on stdin — the driver produced no arm to judge. No verdict." >&2
+	echo "::error:: perf-compare: no \`head\` measurements on stdin — the driver produced no arm to judge. No verdict." >&2
 	exit 2
 fi
 
@@ -132,7 +132,7 @@ while IFS=$'\t' read -r id head_p50; do
 	# failed to measure that path, and reporting green over a comparison that did
 	# not happen is the partial-coverage false green this repo keeps re-meeting.
 	if [ -z "$base_p50" ]; then
-		echo "::error:: bench-compare: path '$id' was measured on head but not on base, so it was never compared. No verdict." >&2
+		echo "::error:: perf-compare: path '$id' was measured on head but not on base, so it was never compared. No verdict." >&2
 		exit 2
 	fi
 	# awk for the arithmetic: the values are fractional milliseconds and `[ ]`
@@ -144,4 +144,4 @@ while IFS=$'\t' read -r id head_p50; do
 done <<<"$heads"
 
 [ "$fail" = 0 ] || exit 1
-echo "bench-compare: every measured path is within ${REGRESSION_RATIO}x of the merge base"
+echo "perf-compare: every measured path is within ${REGRESSION_RATIO}x of the merge base"

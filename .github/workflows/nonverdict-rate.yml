@@ -63,7 +63,7 @@ jobs:
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
       # Measure to a FILE, then read it back — never `scan | assert`. A pipeline
       # hands the step's exit status to its last stage, so a scan that died would
-      # be judged as an empty window rather than reported (bench.yml:84-92).
+      # be judged as an empty window rather than reported (perf.yml:84-92).
       #
       # GH_TOKEN through env, never interpolated into the run block: a `${{ }}`
       # expansion is textual substitution into the shell script, which zizmor gates

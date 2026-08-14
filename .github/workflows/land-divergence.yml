@@ -22,7 +22,7 @@ name: land-divergence
 
 on:
   schedule:
-    # Daily, 04:00 UTC — an hour before bench.yml (05:00), which is the only
+    # Daily, 04:00 UTC — an hour before perf.yml (05:00), which is the only
     # other daily job, and clear of the Monday 06:00-08:15 weekly ladder.
     - cron: "0 4 * * *"
   workflow_dispatch:
@@ -59,7 +59,7 @@ jobs:
       # Measure to a FILE, then read it back — never `measure | assert`. A
       # pipeline hands the step's exit status to its last stage, so a measurement
       # that died would be judged as a clean empty window rather than reported
-      # (bench.yml:84-92, and `run-shape-guard` refuses the shape locally).
+      # (perf.yml:84-92, and `run-shape-guard` refuses the shape locally).
       #
       # GH_TOKEN through env, never interpolated into the run block: a `${{ }}`
       # expansion is textual substitution into the shell script, which zizmor

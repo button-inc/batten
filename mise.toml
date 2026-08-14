@@ -14,7 +14,7 @@ hk = "1.54.0"                                                # git-hook runner (
 "aqua:anchore/syft" = "1.42"                                 # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom)
 "aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
 "aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
-# The measurement instrument for `mise run bench` (CLOUD-207). Batten runs as a
+# The measurement instrument for `mise run perf` (CLOUD-207). Batten runs as a
 # PreToolUse hook, so its startup cost is paid on every mediated tool call, and
 # that number is only defensible if the thing producing it is fixed: a change in
 # how the sampler warms, discards outliers, or computes a quantile enters the
@@ -25,7 +25,7 @@ hk = "1.54.0"                                                # git-hook runner (
 # tool compiled here, and hyperfine ships prebuilt linux-arm64/x64 and macOS
 # assets, so `mise run lock-complete` can hold every platform this repo installs
 # on. Deliberately NOT in ci.yml's install lists: nothing on the landing path
-# measures (see .github/workflows/bench.yml for why measurement is scheduled).
+# measures (see .github/workflows/perf.yml for why measurement is scheduled).
 "aqua:sharkdp/hyperfine" = "1.20.0"
 # NOTE: the MSRV gate (`mise run msrv`) deliberately pins NO tool. cargo-msrv
 # would be the obvious choice and cannot be used: upstream ships no
@@ -147,7 +147,7 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,semver,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,semver,perf,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
@@ -580,7 +580,7 @@ if ! cargo deny check; then exit 1; fi
 [tasks."build:release"]
 description = "Build the release binary the PreToolUse hook executes"
 # The one place the hook's binary is produced, so `.claude/hooks/batten-hook.sh`,
-# `session-start.sh` and `mise-tasks/bench` name a task rather than three copies
+# `session-start.sh` and `mise-tasks/perf` name a task rather than three copies
 # of a cargo line that could drift in their flags.
 #
 # Release, not debug, and not `cargo run`: this runs on EVERY mediated tool call.
@@ -992,12 +992,12 @@ if [ "$sonar_rc" != 0 ] && [ "$sonar_rc" != 3 ]; then
   echo "::error:: verify: sonar-gate failed — see its message. No receipt written." >&2
   exit 1
 fi
-# The latency regression gate (CLOUD-172). `bench-assert` holds the published
+# The latency regression gate (CLOUD-172). `perf-assert` holds the published
 # number to an absolute ceiling; this asks the other question — did THIS branch
 # make an invocation path slower than its own merge base — which a ceiling
 # cannot answer and a shared runner's absolute wall clock cannot answer honestly.
 #
-# It costs almost nothing on the common change: `bench-gate` exits early and
+# It costs almost nothing on the common change: `perf-gate` exits early and
 # clean when the diff against the merge base touches no crate source, manifest
 # or lockfile, because a binary that cannot have changed cannot have got slower.
 # The two release builds are paid only by a commit that could actually regress
@@ -1007,8 +1007,8 @@ fi
 # readied without a verify receipt for this exact HEAD, so a regression blocks
 # the PR before it can spend a runner at all. That is strictly earlier and
 # cheaper than a check that reds after the matrix has been paid for.
-if ! mise run bench-gate; then
-  echo "::error:: verify: bench-gate failed — this branch made an invocation path measurably slower than its merge base, or the measurement could not run. No receipt written." >&2
+if ! mise run perf-gate; then
+  echo "::error:: verify: perf-gate failed — this branch made an invocation path measurably slower than its merge base, or the measurement could not run. No receipt written." >&2
   exit 1
 fi
 # The receipt write is the binary's job (CLOUD-203): `batten receipt record`

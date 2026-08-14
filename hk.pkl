@@ -200,9 +200,10 @@ local gate = new Mapping<String, Step> {
   // declarations and fixtures, and on the modules whose output shape IS the
   // measurement, since a change to any of them moves the numbers.
   //
-  // `token-bench`, not `bench`: CLOUD-207's `mise run bench` measures batten's
-  // INVOCATION COST and landed under that name first. Two benchmarks with two
-  // subjects need two names, and the more specific one moves.
+  // `token-bench`, not `perf`: CLOUD-207's `mise run perf` measures batten's
+  // INVOCATION COST, and it held the name `bench` until CLOUD-172 moved the whole
+  // latency family into the `perf` namespace its own Mechanism specifies. Two
+  // benchmarks with two subjects need two names, and neither may be `bench`.
   ["token-bench-check"] {
     // `slow` tier: re-executes `token-bench`, which builds the engine and then
     // runs N workloads x N runs. See the `profiles` note at the foot of this file.

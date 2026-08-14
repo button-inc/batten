@@ -496,6 +496,78 @@ jobs:
           key: semver
       - run: mise run semver
 
+  # The latency regression gate on the surface that reaches a person (CLOUD-172).
+  #
+  # WHY THIS JOB EXISTS AT ALL, since `perf-gate` is already a step in `verify`.
+  # The issue's Done clause is "a PR that regresses past the threshold FAILS A
+  # CHECK that names the regressed measurement", and `verify` is not a check —
+  # it is what an author runs locally. `[tasks.ci]` is `depends = ["hooks",
+  # "deny"]`, so nothing in CI ran `perf-gate`: the gate existed and no runner
+  # ever invoked it, which is a gate that decides nothing about a pull request.
+  # A regression would have reached `main` past a green required check.
+  #
+  # It is affordable for the reason `perf-gate`'s own header argues: the gate
+  # exits clean without building anything when the diff against the merge base
+  # touches no crate source, manifest or lockfile. Most of this repository's
+  # traffic is task-layer, workflow and documentation changes, which pay a
+  # `git diff --name-only` here and nothing more. Only a change that can have
+  # moved the binary pays for two release builds.
+  #
+  # Deliberately NOT the recording half. `perf-record` writes the series and
+  # refuses to run off `main`; it runs from `perf.yml` on a schedule, because a
+  # push-to-`main` trigger is forbidden (AGENTS.md) and `main` only ever advances
+  # by fast-forward to a SHA this job already judged.
+  perf:
+    name: perf
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20 # budget: measured=2026-08-13 two release builds plus 2x110 samples
+    # `actions: write` is here for one call and one only: cancelling THIS run
+    # when the landing lease does not authorise this branch (CLOUD-420). A job
+    # that could not cancel itself would have to fail instead, and a failed job
+    # makes the run conclude `failure` rather than `cancelled` — which reds
+    # `final` and makes `land` re-draft a healthy PR.
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT. First
+      # step, before any checkout or toolchain install, for the reason the `ci`
+      # job states at length: a run this branch is not authorised to make should
+      # cost the rounding rather than a matrix. `|| exit 0` on both lines.
+      - name: Landing lease precondition
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LEASE_HEAD_REF: ${{ github.head_ref }}
+          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEASE_RUN_ID: ${{ github.run_id }}
+        run: |
+          body=$(gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+          bash -c "$body" || exit 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # `perf-pair` builds BOTH arms — the merge base and this head — so the
+          # baseline commit has to be in the clone. A shallow checkout has no
+          # merge base, and an unresolvable base is exit 2 by design rather than
+          # a pass, so this would fail loudly rather than measure nothing.
+          fetch-depth: 0
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # rust builds the two binaries under measurement, hyperfine samples
+          # them, jq reads the ratio out. See the ci job for why these lists are
+          # narrow.
+          install_args: rust aqua:sharkdp/hyperfine aqua:jqlang/jq
+      # A distinct key: this job builds `--release`, where every other cargo job
+      # here builds debug, so sharing an entry would thrash it — the same reason
+      # msrv and semver carry their own.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: perf
+      - run: mise run perf-gate
+
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
   #
@@ -537,7 +609,7 @@ jobs:
     # carries the reason it cannot change, so the next reader who notices that a
     # stopped run reds `final` does not re-derive the skip and ship it.
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [ci, cross, darwin-link, msrv, semver]
+    needs: [ci, cross, darwin-link, msrv, semver, perf]
     runs-on: ubuntu-latest
     # `checks: read` is the whole reason this job now needs a permission at all:
     # the analyzer's verdict is a check-run on the head commit.

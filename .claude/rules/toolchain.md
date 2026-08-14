@@ -355,11 +355,11 @@ token otherwise surfaces as an unrelated 403 in whichever task runs first.
 
 ## Invocation latency: the number, the series, and the regression gate
 
-`bench` measures batten's own invocation cost (hyperfine over a release build:
-`noop`, `check`, `hook`) and `bench-assert` holds it to the ceiling README
-publishes — an ABSOLUTE budget, 100ms, clig's floor. `bench-pair` asks the other
+`perf` measures batten's own invocation cost (hyperfine over a release build:
+`noop`, `check`, `hook`) and `perf-assert` holds it to the ceiling README
+publishes — an ABSOLUTE budget, 100ms, clig's floor. `perf-pair` asks the other
 question: it builds this branch's binary AND its merge base's, measures them back
-to back on one machine, and `bench-compare` decides the RATIO. `bench-gate`
+to back on one machine, and `perf-compare` decides the RATIO. `perf-gate`
 composes those two and is the one name `verify` calls. Do not confuse this with
 `hook-latency-drift`, which measures the hk gate's own pre-commit tier (CLOUD-509)
 rather than the binary's startup.
@@ -370,18 +370,18 @@ reports "tool not found in registry", so it cannot be pinned, and
 `no-source-built-tool` forbids compiling one; the fallback is the only branch.
 What rescues wall clock is not a better clock but a better experiment — machine
 noise is common-mode across a pair measured seconds apart, so it divides out.
-Hence a ratio, never an absolute, and `bench-record` stamps `metric=wall-clock`
+Hence a ratio, never an absolute, and `perf-record` stamps `metric=wall-clock`
 into every series entry so a later instruction-count series can never be diffed
 against this one and read as a step change. The threshold is derived, not chosen:
 a null comparison (identical binary as both arms, n=30) spread 0.966–1.102, and
-`bench-compare`'s 1.30 clears that measured maximum. Re-measure with `mise run
-bench-pair --null`; a bats case fails if the constant is tightened below the
+`perf-compare`'s 1.30 clears that measured maximum. Re-measure with `mise run
+perf-pair --null`; a bats case fails if the constant is tightened below the
 recorded floor.
 
 **In `verify`, not as a CI job.** `ready-guard` refuses `gh pr ready` without a
 verify receipt for this exact HEAD, so a regression stops the PR before it can
 spend a matrix — earlier and cheaper than a check that reds after the runner is
-paid for. It costs the common change nothing: `bench-gate` exits clean without
+paid for. It costs the common change nothing: `perf-gate` exits clean without
 building when the diff against the merge base touches no crate source, manifest
 or lockfile, because a binary that cannot have changed cannot have got slower.
 
@@ -389,10 +389,10 @@ or lockfile, because a binary that cannot have changed cannot have got slower.
 implies a push-to-`main` workflow, which AGENTS.md forbids — and the reason holds
 rather than merely applying: `main` advances only by fast-forward to a SHA CI
 already judged, so a push trigger buys a runner per merge for a measurement a
-clock can take. `bench.yml` records daily from `main` into `refs/notes/bench`.
+clock can take. `perf.yml` records daily from `main` into `refs/notes/perf`.
 The cost is resolution, affordable because the series is not the attribution
-mechanism — `bench-gate` catches a regression at the commit that caused it.
-`bench-record` refuses to run off the trunk, because a series mixing a branch's
+mechanism — `perf-gate` catches a regression at the commit that caused it.
+`perf-record` refuses to run off the trunk, because a series mixing a branch's
 numbers with the trunk's cannot be read at all. (That decision belongs in
 AGENTS.md beside the rule it honours; AGENTS.md is at its budgeted line ceiling,
 so it lives here with the rest of the workshop detail.)

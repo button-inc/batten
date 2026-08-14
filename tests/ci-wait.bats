@@ -52,15 +52,34 @@ response() {
 # answers "no run at all" over a reading that omits one, and here that does not
 # read as a failed assertion but as a HANG, since the poll is unbounded and only
 # the case's own `run_timeout` stops it.
+# DERIVED FROM THE ROSTER, never hand-listed, and the difference is a hang.
+#
+# These cases read the real `$CI_REQUIRED_CHECKS` on purpose (see the header), so
+# a hand-written green set is a SECOND copy of the roster that drifts the moment
+# a required check is added. Adding `perf` (CLOUD-172) is what proved it: the
+# fixture answered green for every name it knew, `ci-wait` correctly kept waiting
+# for the one it did not, and the suite HUNG rather than failed — twice, for the
+# better part of an hour each time, because a poll with no answer is exactly what
+# this task is built to do and it cannot tell "the roster grew" from "the run is
+# still going".
+#
+# Deriving it means the green set is green BY CONSTRUCTION for whatever the
+# roster says today. Absent-ok names are excluded deliberately: `zizmor` and the
+# `action*` jobs are path-filtered and mint no run at all on most PRs, so a
+# fixture that reported them would assert a shape the real API never produces.
 green_body() {
-	local rows
-	rows='{"status":"completed","conclusion":"success","name":"ci"},'
-	rows+='{"status":"completed","conclusion":"success","name":"cross"},'
-	rows+='{"status":"completed","conclusion":"success","name":"commit-lint"},'
-	rows+='{"status":"completed","conclusion":"success","name":"darwin-link (aarch64-apple-darwin)"},'
-	rows+='{"status":"completed","conclusion":"success","name":"msrv"},'
-	rows+='{"status":"completed","conclusion":"success","name":"semver"},'
-	rows+='{"status":"completed","conclusion":"success","name":"final"}'
+	local rows='' name
+	while IFS= read -r name; do
+		[ -n "$name" ] || continue
+		rows+="${rows:+,}{\"status\":\"completed\",\"conclusion\":\"success\",\"name\":\"$name\"}"
+	done < <(tr ',' '\n' <<<"${CI_REQUIRED_CHECKS:?the suite runs under mise, which supplies the roster}" |
+		grep -vxF -f <(tr ',' '\n' <<<"${CI_ABSENT_OK_CHECKS:-}") || true)
+	# Anti-vacuity: an empty set would make every one of these cases pass by
+	# asserting nothing, which is the false green the task itself exists to stop.
+	[ -n "$rows" ] || {
+		echo "green_body derived an empty check set from CI_REQUIRED_CHECKS" >&2
+		return 1
+	}
 	if [ "$#" -gt 0 ]; then
 		printf '{"check_runs":[%s,%s]}' "$rows" "$*"
 	else

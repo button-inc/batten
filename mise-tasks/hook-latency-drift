@@ -33,7 +33,7 @@ set -euo pipefail
 
 PROFILE="slow"
 
-# The budget, in seconds, written once as data — the placement `bench-assert`'s
+# The budget, in seconds, written once as data — the placement `perf-assert`'s
 # BUDGETS and `run-shape-guard`'s verdict-bearing list use. It is a ceiling
 # derived from measurement (see CLOUD-509), not a target chosen in advance.
 #
@@ -76,7 +76,7 @@ scratch="$(mktemp -d)"
 cleanup() { rm -rf "$scratch"; }
 trap cleanup EXIT
 
-# The measurement. Deliberately NOT hyperfine: `bench` uses it for a
+# The measurement. Deliberately NOT hyperfine: `perf` uses it for a
 # millisecond-scale binary where 100 runs are cheap and the tail is the point,
 # while this is a multi-second whole-gate run where 3 samples is already minutes
 # of runner time. The median of a few runs is the honest instrument at this

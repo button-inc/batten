@@ -1,14 +1,14 @@
 #!/usr/bin/env bats
 # The regression gate's decision, exercised without building anything.
 #
-# Same separation as tests/bench-assert.bats, and the same reason: producing a
+# Same separation as tests/perf-assert.bats, and the same reason: producing a
 # paired measurement needs two release builds, a worktree and hyperfine, none of
 # which belong in a pre-commit gate — but the thing that can silently rot is the
 # COMPARISON, and it is a pure function of stdin. A regression gate that went
 # dead would look exactly like a regression gate.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/bench-compare"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/perf-compare"
 }
 
 # A full pair, head within noise of base.
@@ -80,7 +80,7 @@ IN"
 # The measured null maximum, asserted as a floor under the threshold. A gate set
 # below the noise of a comparison that measures NOTHING is a coin flip, and the
 # way that happens is somebody tightening the constant without re-running `mise
-# run bench-pair --null`. This case fails the moment they do.
+# run perf-pair --null`. This case fails the moment they do.
 @test "the threshold clears the measured noise floor (n=30, max 1.102x)" {
 	run bash -c "'$GATE' <<'IN'
 arm=base path=hook p50=1.000 p95=3.03 mean=2.64 runs=100
