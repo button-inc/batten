@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.75](https://github.com/button-inc/batten/compare/v0.0.74...v0.0.75) - 2026-08-14
+
+### Added
+
+- *(lint)* report a waiver over a rule kind it cannot reach
+- *(waiver)* name the rule kinds a waiver cannot reach
+
+### Other
+
+- *(lint)* pass the method itself where the closure only forwards
+
 ## [0.0.74](https://github.com/button-inc/batten/compare/v0.0.73...v0.0.74) - 2026-08-14
 
 ### Added
