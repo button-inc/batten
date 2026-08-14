@@ -2893,6 +2893,54 @@ fn anchor() -> PathBuf {
     git::repo_root(&here).unwrap_or(here)
 }
 
+/// Filter `findings` against this checkout's baseline, and fold what drifted
+/// back in (CLOUD-67).
+///
+/// Called from [`run_rules`] immediately before the waiver filter, and that
+/// order is load-bearing in one direction: a waiver *removes* a finding, so
+/// applying waivers first would make a live baseline entry look unmatched and
+/// report staleness for a finding that is still there. Baselining first asks its
+/// question of the full set.
+///
+/// The drift it reports joins `findings` on exactly the terms `budget` and
+/// `defects` join on — an unmatched entry is an ordinary [`rules::Finding`], so
+/// it is waivable, appears in `-J`, reaches the store and decides the exit code
+/// without any of that being re-implemented on a private verdict path.
+/// [`baseline::Drifted::is_reportable`] is what keeps a *hold* out of it: an
+/// entry whose rule never ran has no verdict to contribute, only a note.
+///
+/// A checkout with no bound store, or no baseline in it, returns `findings`
+/// untouched.
+fn apply_baseline(
+    findings: Vec<rules::Finding>,
+    scan: &rules::Scan,
+    root: &Path,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<Vec<rules::Finding>> {
+    let Some(recorded) = baseline::load(root)? else {
+        return Ok(findings);
+    };
+    let (mut kept, drifted) = baseline::apply(findings, &recorded, &scan.not_evaluated);
+    kept.extend(drifted.iter().filter_map(baseline::Drifted::finding));
+
+    // The audit half, on the ERROR channel beside the waiver lines: a baseline
+    // is a suppression, so the record of one is the compensating control, and it
+    // must not be able to corrupt a `-J` document even in principle. Holds are
+    // reported here and nowhere else — they are exactly the entries that
+    // produced no finding, so silence about them would be the whole hold going
+    // unobserved.
+    for held in drifted.iter().filter(|item| !item.is_reportable()) {
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!("baseline held {}", held.entry.pointer()),
+        )?;
+    }
+    Ok(kept)
+}
+
 fn run_rules(
     out: &mut dyn Write,
     err: &mut dyn Write,
@@ -2995,44 +3043,8 @@ fn run_rules(
         register_enforce_findings(&scan, mode, err)?;
     }
 
-    // The baseline filter (CLOUD-67), immediately before the waiver filter and
-    // in the same slot for the same reasons — this function is the one funnel
-    // `check` and `enforce` share, and the filter must precede rendering and
-    // `any_blocking` or a suppression would be invisible to the exit code.
-    //
-    // BEFORE waivers, specifically. The order is load-bearing in one direction:
-    // a waiver removes a finding, so applying waivers first would make a live
-    // baseline entry look unmatched and report staleness for a finding that is
-    // still there. Baselining first asks its question of the full set.
-    //
-    // The drift the filter reports joins `findings` on exactly the terms
-    // `budget` and `defects` above join on: an unmatched entry is an ordinary
-    // `Finding`, so it is waivable, appears in `-J`, reaches the store and
-    // decides the exit code without any of that being re-implemented on a
-    // private verdict path. `is_reportable` is what keeps a *hold* out of it —
-    // an entry whose rule never ran has no verdict to contribute.
-    let mut baseline_drift = Vec::new();
-    if let Some(recorded) = baseline::load(&root)? {
-        let (kept, drifted) = baseline::apply(findings, &recorded, &scan.not_evaluated);
-        findings = kept;
-        findings.extend(drifted.iter().filter_map(baseline::Drifted::finding));
-        baseline_drift = drifted;
-    }
-    // The audit half, on the ERROR channel beside the waiver lines below: a
-    // baseline is a suppression, so the record of one is the compensating
-    // control, and it must not be able to corrupt a `-J` document even in
-    // principle. Holds are reported here and nowhere else — they are exactly the
-    // entries that produced no finding.
-    for held in &baseline_drift {
-        if !held.is_reportable() {
-            output::message(
-                mode,
-                Verbosity::Normal,
-                err,
-                &format!("baseline held {}", held.entry.pointer()),
-            )?;
-        }
-    }
+    // The baseline filter (CLOUD-67), immediately before the waiver filter.
+    let findings = apply_baseline(findings, &scan, &root, mode, err)?;
 
     // The waiver filter (CLOUD-208), applied HERE and nowhere else. This function
     // is the single funnel `check` and `enforce` share — they differ only in the
