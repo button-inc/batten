@@ -610,6 +610,14 @@ fn harness_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::hook::Harness>::new())
 }
 
+/// CLOUD-479's field allowlist, as a pointer to the derive rather than a list of
+/// tokens copied here — the same discipline every other parser in this section
+/// follows, so the accepted spelling can never drift from the type that
+/// receives it.
+fn hook_field_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<crate::hook::Field>::new())
+}
+
 fn spec_format_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::cli::SpecFormat>::new())
 }
@@ -1138,6 +1146,56 @@ pub const SURFACE: &[CommandDecl] = &[
             "The harness whose payload to decode and whose decision channel to answer in",
             harness_parser,
         )],
+    },
+    // The payload noun exists so the extractor is NOT `hook field` (CLOUD-479).
+    // `attach` marks any path with children `subcommand_required`, because §2
+    // says a noun performs no default action — so nesting under `hook` would
+    // have turned the PreToolUse mediator itself into a noun that refuses to
+    // adjudicate. Measured while writing this: `batten hook --harness
+    // claude-code` began answering `requires a subcommand`, which is policy
+    // unenforced for every mediated call.
+    CommandDecl {
+        path: "payload",
+        about: "Read a hook payload from stdin",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // A DECODER, not a mediator, and the classification is the honest one rather
+    // than one inherited from `hook`: this reads stdin, projects one named
+    // field, and renders no verdict, so it is `read` and belongs on the derived
+    // read-only allowlist.
+    //
+    // `data_channel: false` deliberately. The channel column means "this verb
+    // emits a DOCUMENT", and the census that column drives requires the document
+    // to be emitted unconditionally — including when the answer is empty. This
+    // verb must print exactly nothing for an absent field, because its callers
+    // are shell hooks reading `[ -n "$x" ]`, so it emits a bare value and not a
+    // document. There is correspondingly no `-J`: there is no shape to encode.
+    //
+    // It exists because three registrations paid ~203ms of `mise` startup each
+    // to run `jq` for single-digit milliseconds of work, and invoking them by
+    // path would have resolved an unpinned `jq` — turning a pinned dependency
+    // into a silent fail-open, which is worse than the latency.
+    CommandDecl {
+        path: "payload field",
+        about: "Print one field of a hook payload read from stdin, for a shell hook that must not depend on jq",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[
+            FlagDecl::required_enum(
+                "harness",
+                "harness",
+                "The harness whose payload dialect to decode",
+                harness_parser,
+            ),
+            FlagDecl::required_enum(
+                "name",
+                "name",
+                "Which payload field to print; an allowlist, never a JSON path",
+                hook_field_parser,
+            ),
+        ],
     },
     // The `receipt` noun only dispatches, but its subtree carries a write verb;
     // classifying it `read` would put a write-bearing subtree onto the derived

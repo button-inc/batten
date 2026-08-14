@@ -318,6 +318,13 @@ mod tests {
                 // read and the noun row smuggles no write (CLOUD-84).
                 "lint".to_owned(),
                 "lint brief".to_owned(),
+                // CLOUD-479. `payload field` is a decoder, not a mediator: it
+                // reads stdin, projects one allowlisted field, and renders no
+                // verdict — so `read` is the honest classification and the
+                // derived allowlist is where it belongs. `hook` next door stays
+                // unclassified because its DECISION mediates writes.
+                "payload".to_owned(),
+                "payload field".to_owned(),
                 // The `policy` noun is on the list with its verbs, unlike
                 // `receipt`: every verb in its §2 subtree is read, so there is
                 // no write for the noun row to smuggle on (CLOUD-50).
@@ -454,6 +461,13 @@ mod tests {
                 // rather than something the caller names (CLOUD-84).
                 "lint".to_owned(),
                 "lint brief".to_owned(),
+                // CLOUD-479. `payload field` is a decoder, not a mediator: it
+                // reads stdin, projects one allowlisted field, and renders no
+                // verdict — so `read` is the honest classification and the
+                // derived allowlist is where it belongs. `hook` next door stays
+                // unclassified because its DECISION mediates writes.
+                "payload".to_owned(),
+                "payload field".to_owned(),
                 "policy".to_owned(),
                 "policy budget".to_owned(),
                 "provision".to_owned(),

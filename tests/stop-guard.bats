@@ -169,11 +169,19 @@ stranded() {
 # --- wiring ------------------------------------------------------------------
 
 @test "the Stop hook is registered in settings" {
+	# The SHAPE, not merely the name (CLOUD-479). The old assertion matched the
+	# substring `stop-guard`, which `mise run -q stop-guard` and a by-path
+	# registration satisfy identically — so it proved nothing about the one thing
+	# that changed, and would have stayed green through a silent revert to the
+	# ~194ms/call invocation.
 	run python3 -c "
 import json
 d = json.load(open('$SETTINGS'))
 cmds = [h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]
-assert any('stop-guard' in c for c in cmds), cmds
+entry = [c for c in cmds if 'stop-guard' in c]
+assert entry, cmds
+assert entry[0].endswith('/mise-tasks/stop-guard'), entry
+assert 'mise run' not in entry[0], entry
 print('registered')"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"registered"* ]]

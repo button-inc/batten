@@ -80,15 +80,20 @@ drift() {
 }
 
 @test "it names the event it was called on, so one body serves both wirings" {
+	# Matched WITHOUT the separator, because the separator is not the property.
+	# The document is emitted compactly since CLOUD-479 dropped `jq` from this
+	# body — `jq -n` pretty-printed it with `": "` — and pinning the old spacing
+	# would assert the formatter rather than the field. `jq -e` below still holds
+	# the "it is valid JSON" half, which is the part that has to be true.
 	drift s-2 SessionStart
 	printf 'change\n' >>"$REPO/AGENTS.md"
 	run drift s-2 SessionStart
-	[[ "$output" == *'"hookEventName": "SessionStart"'* ]]
+	[[ "$output" == *'"hookEventName"'*'"SessionStart"'* ]]
 
 	drift s-3 PostToolBatch
 	printf 'more\n' >>"$REPO/AGENTS.md"
 	run drift s-3 PostToolBatch
-	[[ "$output" == *'"hookEventName": "PostToolBatch"'* ]]
+	[[ "$output" == *'"hookEventName"'*'"PostToolBatch"'* ]]
 }
 
 @test "ONCE PER CHANGE-SET: the very next call is silent" {

@@ -45,7 +45,31 @@
 # Output is pointer-only per non-negotiable rule 4: the server name and the
 # failure code. Never a log line — these carry the server's stderr, which is
 # arbitrary content this repo does not control.
+#
+# The declared exemption `hook-pin-check` honours, beside the assertion it
+# describes rather than in a list that could drift from it.
+#PIN-OK: jq
 set -uo pipefail
+
+# THE ONE THING THAT DOES NOT DROP jq (CLOUD-479), and it says so rather than
+# leaving the reader to infer it from the registration. This gate's two `jq`
+# calls read a settings FILE and an MCP `.jsonl` LOG — neither is a hook payload,
+# so `payload-field`, which projects a field out of `hook::decode`, cannot serve
+# either. `stop-guard` and `contract-drift` genuinely dropped `jq`; this one only
+# moved by path, and the issue's checkbox is corrected on CLOUD-479 rather than
+# quietly left unmet.
+#
+# Moving by path is what makes this check load-bearing. A by-path invocation does
+# not get mise's env, so the pinned `"aqua:jqlang/jq"` becomes whatever
+# `/usr/bin/jq` happens to be — or nothing at all. Absent, every read below would
+# have failed into the `2>/dev/null` fallbacks and this gate would have reported
+# a clean session while checking nothing. That is the precise trade CLOUD-479
+# refuses: a latency fix must not convert a pinned dependency into a silent
+# fail-open. So the dependency is asserted, loudly, before it is used.
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: mcp-attach-check: no jq on PATH — this gate reads a settings file and an MCP log, neither of which the payload reader can parse, so it is checking NOTHING. Run it through \`mise run mcp-attach-check\`, or install jq." >&2
+	exit 2
+fi
 
 settings=".claude/settings.json"
 logroot=""

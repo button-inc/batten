@@ -482,6 +482,108 @@ pub struct Envelope {
     /// so a session-less host folds to per-invocation handling by construction
     /// instead of through a second rule invented here.
     pub session: Option<String>,
+    /// Whether the host is re-entering a `Stop` hook it already ran.
+    ///
+    /// Read by the `Stop`-path guards, never by [`adjudicate`] — see
+    /// [`field`] for why these three live here rather than in a second decoder.
+    pub stop_active: Option<bool>,
+    /// The assistant's last message, on the `Stop` event.
+    pub last_message: Option<String>,
+    /// The path to the session transcript, on the `Stop` event.
+    pub transcript: Option<String>,
+}
+
+/// The payload fields a shell hook may ask for by name.
+///
+/// A FIXED ALLOWLIST, never a caller-supplied JSON path (CLOUD-479). The
+/// difference is the whole safety argument: a path expression would reach
+/// [`Envelope::input`], which is documented above as never emitted because a
+/// tool input is among the likeliest places in this engine for a secret to
+/// appear (non-negotiable rule 4). An enum cannot name it.
+///
+/// The set is exactly what the three registered shell hooks read today —
+/// `stop-guard`, `contract-drift`, and nothing else. Growing it is a deliberate
+/// edit here, which is the point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[non_exhaustive]
+pub enum Field {
+    /// The host's own event spelling, echoed back untouched.
+    ///
+    /// UNNORMALIZED on purpose: [`Event`] knows neither `UserPromptSubmit` nor
+    /// `PostToolBatch`, and `contract-drift` is wired to two events and echoes
+    /// the name into its own reply — a normalized answer would be wrong at one
+    /// of them.
+    HookEventName,
+    /// The host's session id.
+    SessionId,
+    /// The tool being mediated.
+    ToolName,
+    /// The command text, for shell-shaped tools.
+    Command,
+    /// The host's working directory.
+    Cwd,
+    /// Whether this is a re-entered `Stop` hook.
+    StopHookActive,
+    /// The assistant's last message.
+    ///
+    /// The one prose-bearing member, and it is here because `stop-guard`
+    /// already receives exactly these bytes by exactly this route — it pipes
+    /// them straight to `stop-posture-check`. Moving the read from `jq` to here
+    /// changes which process parses the payload, not what flows where; rule 4
+    /// governs what a CHECK reports, and this is a decoder, not a verdict.
+    LastAssistantMessage,
+    /// The path to the session transcript.
+    TranscriptPath,
+}
+
+impl Field {
+    /// This field's value in `envelope`, or `None` when the payload had none.
+    ///
+    /// Absent and empty are deliberately collapsed to `None` here, because the
+    /// caller is a shell script whose `[ -n "$x" ]` cannot tell them apart
+    /// anyway — and `jq -r '.x // empty'`, the spelling this replaces, collapses
+    /// them identically. Preserving a distinction no consumer can read would be
+    /// a difference that only ever surprises someone.
+    #[must_use]
+    pub fn read(self, envelope: &Envelope) -> Option<String> {
+        let value = match self {
+            Field::HookEventName => Some(envelope.raw_event.clone()),
+            Field::SessionId => envelope.session.clone(),
+            Field::ToolName => Some(envelope.tool.clone()),
+            Field::Command => Some(envelope.command.clone()),
+            Field::Cwd => envelope.cwd.as_ref().map(|path| path.display().to_string()),
+            Field::StopHookActive => envelope.stop_active.map(|active| active.to_string()),
+            Field::LastAssistantMessage => envelope.last_message.clone(),
+            Field::TranscriptPath => envelope.transcript.clone(),
+        };
+        value.filter(|text| !text.is_empty())
+    }
+}
+
+/// One payload field, read through the same decoder [`adjudicate`] uses.
+///
+/// CLOUD-479. Three hook registrations paid ~203ms of `mise` startup per call to
+/// do single-digit milliseconds of work, and the obvious fix — invoke them by
+/// path — was blocked by one thing: they shell out to `jq`, `mise.toml` pins
+/// `jq`, and a by-path invocation does not get mise's env. It would resolve an
+/// unpinned `/usr/bin/jq`, and on a container with none the `|| exit 0`
+/// fail-open posture would turn a missing parser into a silent allow. A latency
+/// fix that converts a pinned dependency into a silent fail-open is a worse
+/// defect than the latency.
+///
+/// So the parser moves into the binary that is already on this path. No new
+/// dependency, no second parser: [`decode`] handles BOM stripping and every
+/// per-harness alias, and this is a projection of its result.
+///
+/// Returns `None` for an undecodable payload AND for an absent field, which is
+/// the fail-open contract the callers already have — they read an empty answer
+/// and allow. The distinction a caller DOES need is "the extractor is missing
+/// entirely", and that is not expressible in this return type: it is the
+/// launcher's job, loudly, the way `.claude/hooks/batten-hook.sh` reports a
+/// missing binary.
+#[must_use]
+pub fn field(harness: Harness, raw: &str, field: Field) -> Option<String> {
+    field.read(&decode(harness, raw)?)
 }
 
 /// The adjudication verdict.
@@ -603,6 +705,20 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
             .iter()
             .find_map(|key| value.get(*key).and_then(Value::as_str))
             .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned),
+        // The three `Stop`-event fields (CLOUD-479). Read by the Stop-path
+        // guards through [`field`] and by nothing in [`adjudicate`] — they are
+        // here rather than in a second decoder because a second decoder is a
+        // second thing to keep in step with the BOM strip and the alias tables
+        // above, for no gain. Three `get`s on an already-parsed value.
+        stop_active: value.get("stop_hook_active").and_then(Value::as_bool),
+        last_message: value
+            .get("last_assistant_message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        transcript: value
+            .get("transcript_path")
+            .and_then(Value::as_str)
             .map(ToOwned::to_owned),
     })
 }
@@ -1601,6 +1717,11 @@ mod tests {
             writes: None,
             cwd: None,
             session: None,
+            // The Stop-path fields (CLOUD-479) are absent on a PreTool envelope,
+            // which is the honest shape rather than a filler value.
+            stop_active: None,
+            last_message: None,
+            transcript: None,
         }
     }
 
@@ -1617,6 +1738,9 @@ mod tests {
             writes: Some(path.to_owned()),
             cwd: None,
             session: None,
+            stop_active: None,
+            last_message: None,
+            transcript: None,
         }
     }
 

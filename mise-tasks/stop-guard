@@ -27,6 +27,15 @@
 # `graph-check` calls `ready-lint`, because this fires at every turn end and a
 # mise startup per turn is pure latency. Measured: ~28ms by path.
 #
+# AND SO IS THIS FILE NOW (CLOUD-479). Its own registration paid the ~203ms mise
+# startup it had already saved its children — measured at 194ms/call against
+# 15ms by path. `jq` was the only thing blocking the swap: a by-path invocation
+# does not get mise's env, so the pinned `jq` would have become an unpinned
+# `/usr/bin/jq`, and on a container with none the `|| exit 0` reads below would
+# have silently allowed rather than errored. The payload reads go through
+# `payload-field` instead, which parses with the compiled binary that is already
+# on this path; see that file for the whole argument.
+#
 # Fails OPEN on anything it cannot read or parse, and on BATTEN_STOP_GUARD_BYPASS.
 # A malformed stdout on exit 0 also fails open harness-side (verified by probe),
 # so the failure modes agree in both directions.
@@ -34,20 +43,28 @@ set -uo pipefail
 
 [ -n "${BATTEN_STOP_GUARD_BYPASS:-}" ] && exit 0
 
-raw=$(cat) || exit 0
+# BOUNDED (CLOUD-511). A bare `cat` blocks forever when this is invoked by hand
+# rather than by the harness — measured as a two-minute harness kill at exit 143
+# — and moving the registration by path is exactly what makes hand-invocation
+# easy. `plan-hold-release` took the same shape for the same reason.
+raw=$(timeout 1s cat 2>/dev/null) || raw=""
+[ -n "$raw" ] || exit 0
+
+field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field"
+[ -x "$field" ] || exit 0
 
 # The recursion bound, before any work. `// empty` rather than a bare read: a
 # payload jq cannot parse must fall through to allow, and comparing the literal
 # string "true" makes an absent or garbage field non-blocking by construction —
 # the inverse spelling (`!= "true" && proceed`) is what let a proposed version run
 # its predicate on unparseable stdin.
-active=$(printf '%s' "$raw" | jq -r '.stop_hook_active // empty' 2>/dev/null) || exit 0
+active=$(printf '%s' "$raw" | "$field" stop-hook-active) || exit 0
 [ "$active" = "true" ] && exit 0
 
 # The turn's final response text, handed over directly — so this hook never opens
 # `transcript_path` and no session content is read beyond the message already
 # being judged.
-msg=$(printf '%s' "$raw" | jq -r '.last_assistant_message // empty' 2>/dev/null) || exit 0
+msg=$(printf '%s' "$raw" | "$field" last-assistant-message) || exit 0
 [ -n "$msg" ] || exit 0
 
 check="$(dirname -- "${BASH_SOURCE[0]}")/stop-posture-check"
@@ -69,7 +86,7 @@ reason=$(printf '%s' "$msg" | "$check") || true
 # no substring of the prose, so a later edit cannot turn the nudge into one.
 if [ -z "$reason" ]; then
 	sink="$(dirname -- "${BASH_SOURCE[0]}")/finding-sink-check"
-	path=$(printf '%s' "$raw" | jq -r '.transcript_path // empty' 2>/dev/null) || path=""
+	path=$(printf '%s' "$raw" | "$field" transcript-path) || path=""
 	if [ -n "$path" ] && [ -x "$sink" ]; then
 		# A fired predicate is exit 1 with the pointer on stdout; anything else
 		# (clean, unreadable, absent) leaves `reason` empty and the turn silent.
@@ -81,9 +98,14 @@ fi
 
 [ -n "$reason" ] || exit 0
 
-jq -n --arg r "$reason" '{
-  hookSpecificOutput: {
-    hookEventName: "Stop",
-    additionalContext: $r
-  }
-}'
+# The reply document, built without `jq` for the same reason the reads above
+# dropped it. Only one value needs escaping and it is ours, not the payload's:
+# `reason` is assembled from `stop-posture-check`/`finding-sink-check` output,
+# which is pointer-only by their own contracts. `printf '%s' | od`-grade escaping
+# is not needed — JSON strings require exactly backslash, quote, and the C0
+# controls, and `sed` covers them in that order (backslash FIRST, or it would
+# double the ones the later rules insert).
+escaped=$(printf '%s' "$reason" |
+	sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' |
+	awk 'NR>1 {printf "\\n"} {printf "%s", $0}')
+printf '{"hookSpecificOutput":{"hookEventName":"Stop","additionalContext":"%s"}}\n' "$escaped"

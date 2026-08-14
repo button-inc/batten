@@ -157,6 +157,11 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
             exec::run_with(&command, &patterns, err)
         }
         Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
+        // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
+        // whole point is that it costs less than the `jq` process it replaces.
+        // `run_hook` loads policy only past its cheap refusals for the same
+        // reason; this has no policy to load at all.
+        Some(Command::HookField { harness, field }) => run_hook_field(harness, field, out),
         // The receipt verbs read their own git facts; the §8 config chain does
         // not apply — a receipt records policy (as a digest), it never resolves it.
         Some(Command::Receipt { command }) => match command {
@@ -1057,6 +1062,36 @@ const UNDECODABLE_PAYLOAD: &str =
 /// the deny; the neutral exit-code adapter denies with [`ExitCode::Violation`],
 /// the same code a `check` violation returns, carrying its reason to stderr
 /// through [`Denial`] so the write stays at the binary boundary.
+/// Print one allowlisted payload field, or nothing (CLOUD-479).
+///
+/// SILENT ON EVERY FAILURE, and that is the contract rather than an oversight:
+/// the callers are shell hooks whose next line is `[ -n "$x" ] || exit 0`, so an
+/// unreadable stdin, an undecodable payload and an absent field must all arrive
+/// as the same empty answer they get from `jq -r '.x // empty'` today. Anything
+/// louder would turn a fail-open guard into one that reports on payloads it was
+/// never meant to judge.
+///
+/// The failure a caller genuinely must NOT miss — the binary being absent
+/// entirely — cannot reach this function, and is the launcher's job to report
+/// loudly. `mise-tasks/stop-guard` and `mise-tasks/contract-drift` carry that
+/// half, copied from `.claude/hooks/batten-hook.sh`.
+///
+/// Exit is always `Success`: this renders no verdict, so it has none to signal.
+fn run_hook_field(
+    harness: hook::Harness,
+    field: hook::Field,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let mut raw = String::new();
+    if std::io::stdin().read_to_string(&mut raw).is_err() {
+        return Ok(ExitCode::Success);
+    }
+    if let Some(value) = hook::field(harness, &raw, field) {
+        writeln!(out, "{value}")?;
+    }
+    Ok(ExitCode::Success)
+}
+
 fn run_hook(
     harness: hook::Harness,
     mode: Mode,

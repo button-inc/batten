@@ -13,7 +13,7 @@
           },
           {
             "type": "command",
-            "command": "mise run -q contract-drift"
+            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/contract-drift"
           }
         ]
       }
@@ -23,7 +23,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mise run -q mcp-attach-check"
+            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/mcp-attach-check"
           }
         ]
       }
@@ -33,7 +33,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mise run -q stop-guard"
+            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/stop-guard"
           }
         ]
       }

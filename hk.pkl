@@ -139,6 +139,14 @@ local gate = new Mapping<String, Step> {
   // carrying the rule's authority. It fails a claim that is present and WRONG,
   // never one that is absent: the file's own rule is to defer, and a gate
   // pushing toward completeness would invert it.
+  // CLOUD-479. Same glob as `rules-drift` below and for the same reason: the
+  // verdict moves when a registration moves, when a task's tool use changes, or
+  // when `mise.toml` pins something new. Sub-second, so it declares no profile —
+  // `hook-profile-check`'s `slow-tier-empty` rule would refuse one.
+  ["hook-pin-check"] {
+    glob = List(".claude/settings.json", "mise-tasks/*", "mise.toml")
+    check = "mise run hook-pin-check"
+  }
   ["rules-drift"] {
     glob = List(".claude/rules/*.md", ".claude/settings.json", "mise-tasks/**")
     check = "mise run rules-drift"

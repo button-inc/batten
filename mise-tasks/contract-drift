@@ -51,8 +51,17 @@ set -uo pipefail
 
 [ -n "${BATTEN_CONTRACT_DRIFT_BYPASS:-}" ] && exit 0
 
-raw=$(cat) || exit 0
+# BOUNDED (CLOUD-511), for the reason CLOUD-479 made pressing: this registration
+# is invoked BY PATH now, so it is hand-invocable, and a bare `cat` there blocks
+# until the harness's ~2-minute kill rather than returning.
+raw=$(timeout 1s cat 2>/dev/null) || raw=""
 [ -n "$raw" ] || exit 0
+
+# The jq-free payload reader (CLOUD-479). This registration paid ~185ms of mise
+# startup per session start to do ~8ms of hashing, and `jq` was the only thing
+# blocking the by-path swap — see `payload-field` for the whole argument.
+field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field"
+[ -x "$field" ] || exit 0
 
 # The snapshot key. Per SESSION, not per clone, because the question is "did the
 # surface change since THIS session read it" — a clone-wide snapshot would remind
@@ -60,13 +69,13 @@ raw=$(cat) || exit 0
 #
 # An absent `session_id` degrades to a shared key rather than to silence: a
 # weaker answer beats a dead mechanism, and every event this is wired to carries
-# the field today. `// empty` rather than a bare read so a payload jq cannot parse
-# lands on the fallback instead of the string "null".
-session=$(printf '%s' "$raw" | jq -r '.session_id // empty' 2>/dev/null) || session=""
+# the field today. An undecodable payload lands on the fallback rather than on
+# the string "null", which is what the reader guarantees by returning nothing.
+session=$(printf '%s' "$raw" | "$field" session-id) || session=""
 # The event names ITSELF in the payload, so the reply's `hookEventName` is read
 # from the caller rather than hardcoded — this one body is wired to two events and
 # a hardcoded name would be wrong at one of them.
-event=$(printf '%s' "$raw" | jq -r '.hook_event_name // empty' 2>/dev/null) || event=""
+event=$(printf '%s' "$raw" | "$field" hook-event-name) || event=""
 [ -n "$event" ] || event="PostToolBatch"
 # Anything but the characters a session id actually uses is dropped, so the key
 # can never escape the snapshot directory or name a path of its own choosing.
@@ -192,9 +201,15 @@ session.
 Reported once per change-set; silence otherwise. BATTEN_CONTRACT_DRIFT_BYPASS=1 to
 switch it off."
 
-jq -n --arg r "$reason" --arg e "$event" '{
-  hookSpecificOutput: {
-    hookEventName: $e,
-    additionalContext: $r
-  }
-}'
+# Built without `jq`, like the reads above. Both values are OURS — `reason` is
+# assembled here from paths and counts (pointer-only, asserted by
+# tests/contract-drift.bats) and `event` is already filtered to a known-safe
+# character class below. Backslash is escaped FIRST or it would double the
+# escapes the later rules insert.
+json_escape() {
+	printf '%s' "$1" |
+		sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' -e 's/\r/\\r/g' |
+		awk 'NR>1 {printf "\\n"} {printf "%s", $0}'
+}
+printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"%s"}}\n' \
+	"$(json_escape "$event")" "$(json_escape "$reason")"

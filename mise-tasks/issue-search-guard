@@ -33,6 +33,23 @@
 #MUTANT update-gated-too|s/^\[ -n "\$existing" \] && exit 0$/[ -n "$existing" ] \&\& :/|updating an existing issue is never gated
 set -uo pipefail
 
+#
+# CLOUD-479's pairing, declared rather than discovered. This hook is registered
+# BY PATH, so it does not get mise's env and the `"aqua:jqlang/jq"` pin below
+# does not reach it — `jq` is whatever the ambient PATH holds, or nothing. Every
+# read here is fail-open, so an absent `jq` would not error: it would ALLOW,
+# silently, which is the one outcome a guard must never reach by accident.
+#
+# Asserted loudly and still open. A `PreToolUse` hook's exit 2 is a DENY, so a
+# missing parser must not take that channel — it says so on stderr and gets out
+# of the way, which is loud where it used to be silent while never blocking a
+# call over a broken toolchain.
+#PIN-OK: jq
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: issue-search-guard: no jq on PATH — this guard is registered by path, so it does not get mise's pinned jq. It is checking NOTHING and allowing every call. Run: mise install" >&2
+	exit 0
+fi
+
 [ -n "${BATTEN_ISSUE_SEARCH_BYPASS:-}" ] && exit 0
 
 raw=$(cat) || exit 0

@@ -15,7 +15,7 @@
 use clap::{ArgMatches, ValueEnum};
 
 use crate::config::Strictness;
-use crate::hook::Harness;
+use crate::hook::{Field as HookFieldName, Harness};
 use crate::surface;
 
 /// The parsed invocation: the global flags plus the chosen command.
@@ -85,6 +85,13 @@ pub enum Command {
     Hook {
         /// The harness whose payload to decode and whose decision channel to answer in.
         harness: Harness,
+    },
+    /// Print one allowlisted field of a hook payload read from stdin.
+    HookField {
+        /// The harness whose payload dialect to decode.
+        harness: Harness,
+        /// Which field to print.
+        field: HookFieldName,
     },
     /// Verification receipts, keyed by SHA.
     Receipt {
@@ -620,6 +627,13 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "hook" => matches
             .get_one::<Harness>("harness")
             .map(|harness| Command::Hook { harness: *harness }),
+        "payload" => match matches.subcommand()? {
+            ("field", inner) => Some(Command::HookField {
+                harness: *inner.get_one::<Harness>("harness")?,
+                field: *inner.get_one::<HookFieldName>("name")?,
+            }),
+            _ => None,
+        },
         "receipt" => receipt_of(matches).map(|command| Command::Receipt { command }),
         "state" => state_of(matches).map(|command| Command::State { command }),
         _ => None,
