@@ -184,7 +184,9 @@ both shell verbs and write tools, and `ready-guard`'s receipt predicate. It also
 of `memory-guard`, whose last five write shapes — a destination-only copy, an
 in-place stream edit, and a version-control move or remove — became expressible
 as `[[verb]]` qualifiers in CLOUD-442, so that guard is **deleted** rather than
-still runnable. It does **not** yet carry `run-shape-guard`, `issue-guard`,
+still runnable, and `run-shape-guard`'s three verdict-discarding shapes
+(CLOUD-443), leaving that guard only the two families named below. It does
+**not** yet carry `issue-guard`,
 or `contract-drift` — each is a linked capability gap on
 CLOUD-312, and each of those guards still runs by hand (`mise run <guard>`,
 payload on stdin). The bullets below describe every
@@ -265,28 +267,33 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   untracked-but-not-ignored file **is**, since opening a new feature file is the
   first edit this catches. There is no `BATTEN_CLAIM_GUARD_BYPASS`: a mediated
   deny takes the engine's own hatch.
-- `run-shape-guard` denies three ways of throwing away a **verdict-bearing**
-  command's exit status: piping it into a pager or filter, following it with `;`
-  or `||` in the same list, and detaching it with `nohup`/`&`. A fourth shape
-  throws away the SESSION rather than a verdict, and needs no verdict-bearing
-  command to do it: a **foreground `sleep`**, which the harness kills at ~2
-  minutes, so a poll meant to be patient fails instead — measured at exit 143
-  and 144 over a hung commit, after which the container was reclaimed with the
-  work uncommitted. `run_in_background` on the call is what tells that apart
-  from the recommended `until <test>; do sleep 1; done`, which is allowed. The
-  verdict-bearing list is written once as data in the task — `mise run`,
-  `git push`/`fetch`/`rebase`, mutating `gh pr`, `cargo` minus its query
-  subcommands, and `bats` given a suite (CLOUD-473: `mise run test:bats` was
-  covered by the `mise` row while `mise exec -- bats` and a path-invoked
-  `tests/bats/bin/bats` ran the same gates unguarded) — because the guard was
-  scoped to the literal string `mise run`
-  and an agent complying with it exactly kept making the identical error on the
-  next command (CLOUD-199, measured on `git push`, `cargo clippy` and
-  `cargo test`). `&&` is deliberately allowed: it short-circuits, so a failure
-  still propagates and there is no false green to stop. The deny message states
+- **The three verdict-discarding shapes are the engine's** (CLOUD-443), as
+  `batten.toml`'s `verdict-not-discarded` row — `kind = "pipeline"`. They are
+  piping a verdict-bearing command into a pager or filter, following it with `;`
+  or `||` in the same list, and detaching it with `nohup`/`&`. The
+  verdict-bearing list is data on the row — `mise run`, `git push`/`fetch`/
+  `rebase`, mutating `gh pr`, `cargo` minus its query subcommands, and `bats`
+  given a suite (CLOUD-473: `mise run test:bats` was covered by the `mise` row
+  while `mise exec -- bats` and a path-invoked `tests/bats/bin/bats` ran the same
+  gates unguarded) — because the predecessor was scoped to the literal string
+  `mise run` and an agent complying with it exactly kept making the identical
+  error on the next command (CLOUD-199, measured on `git push`, `cargo clippy`
+  and `cargo test`). `&&` is deliberately allowed: it short-circuits, so a
+  failure still propagates and there is no false green to stop. The deny states
   the principle — read the status from the harness — rather than naming one
   command, since complying with the narrower wording is how the second instance
-  happened. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.
+  happened.
+- `run-shape-guard` is what remains after that move, and it is **two families the
+  engine cannot express**. A **foreground `sleep`** throws away the SESSION
+  rather than a verdict: the harness kills the call at ~2 minutes, so a poll
+  meant to be patient fails instead — measured at exit 143 and 144 over a hung
+  commit, after which the container was reclaimed with the work uncommitted.
+  `run_in_background` on the call is what tells that apart from the recommended
+  `until <test>; do sleep 1; done`, which is allowed, and it is a fact about the
+  call rather than the command string. A **`git commit` that cannot obtain a
+  message** spends the whole gate first, because `githooks(5)` runs `pre-commit`
+  before git asks for one; its predicate is over heredoc binding. Retiring both
+  into the engine is CLOUD-613. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.
 - `contract-drift` is not `PreToolUse`, and it cannot
   be: that event's model-facing channel is exit 2, which _blocks_ the call, and
   CLOUD-97 and CLOUD-219 each ruled a deny out independently. So it runs on

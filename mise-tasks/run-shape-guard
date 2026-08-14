@@ -1,75 +1,40 @@
 #!/usr/bin/env bash
-#MISE description="PreToolUse hook body: deny a verdict-bearing command whose exit status is discarded — by a pager/filter pipe, by a trailing list element, or by nohup/& — a foreground sleep, which spends the session's turn, and a git commit that cannot obtain a message, which spends the whole gate first"
+#MISE description="PreToolUse hook body: deny a foreground sleep, which spends the session's turn, and a git commit that cannot obtain a message, which spends the whole gate first"
 #
-# Shapes that report success while destroying the thing the harness consumes.
-# All of them fail GREEN — exit 0 with plausible output — which is why noticing
-# them repeatedly did not stop them.
+# TWO FAMILIES, and what is NOT here is the point. This guard used to carry five
+# predicates; the three that discard a verdict — a pager or filter pipe, a
+# trailing list element, `nohup`/`&` — moved into the engine with CLOUD-443 as
+# `batten.toml`'s `verdict-not-discarded` row, and the corpus that proved them is
+# `crates/batten/tests/pipeline_shapes.rs`. They are gone from here rather than
+# duplicated, because a predicate enforced in two places is two authorities that
+# drift.
 #
-#   piped-verdict   `mise run verify 2>&1 | tail -6` exits with tail's status,
-#                   always 0. It produced two confident "green" reports over runs
-#                   that had failed: once on a formatting check, once on a stale
-#                   branch refusal.
-#   trailing-list   `mise run verify >log 2>&1; echo "EXIT=$?"` reports the
-#                   echo's status. No pipe involved, and it LOOKS compliant —
-#                   this file used to prescribe it. Backgrounded it is worse than
-#                   a misread: the task-completion notification carries the
-#                   compound's status, so a failed task arrives as
-#                   `completed (exit code 0)` — an authoritative statement from
-#                   the harness rather than a reading of anyone's. Measured twice
-#                   in one session, on `fmt` and then on `verify`.
-#   orphaned-run    `nohup mise run land >log 2>&1 & sleep 3; echo started`
-#                   returns immediately with the echo. The task is recorded
-#                   complete, the work runs unsupervised, and the session loses
-#                   its wake-up — leaving only polling or an idle turn, both
-#                   forbidden, and an idle turn gets the VM reclaimed.
+# These two remain because the engine cannot express them, each for its own
+# reason rather than for want of a rule kind:
+#
 #   foreground-sleep `cd repo; sleep 90; git log --oneline -1` waits inside the
 #                   call. It fails GREEN only up to ~2 minutes; past that the
 #                   harness kills the call, so the poll that was meant to be
-#                   patient FAILS instead (measured at exit 143 and 144). This
-#                   one destroys the session rather than a verdict, and it is
-#                   the shape the other three's root cause produces when there
-#                   is nothing to read a status from at all.
+#                   patient FAILS instead (measured at exit 143 and 144). The
+#                   predicate is over `run_in_background` — a fact about the CALL
+#                   rather than about the command string — and the mediated
+#                   envelope carries it only inside the raw tool input.
 #   unsatisfiable-commit  `git add -A && git commit -F - && mise run land <<'EOF'`
 #                   is doomed at the instant it starts: the heredoc binds to the
 #                   LAST element, so git's stdin is the harness's /dev/null. It
 #                   fails RED, eventually — but `githooks(5)` runs `pre-commit`
 #                   before git asks for the message, so the whole gate is spent
 #                   first. Measured at ~4 minutes on a commit git was always
-#                   going to refuse.
+#                   going to refuse. The predicate is over heredoc BINDING, which
+#                   no shape or operator table describes.
 #
-# One root cause: treating a Bash call as a terminal that should print something
-# short, when it is a supervised process whose exit status and lifetime are the
-# interface. `| tail` makes the output small and drops the verdict; a trailing
-# `; echo` replaces it; `nohup &` makes the call return fast and drops the
-# supervision; a foreground `sleep` sits at the terminal waiting, which is the
-# one thing a supervised process must never do.
+# One root cause, shared with the three that left: treating a Bash call as a
+# terminal that should print something short, when it is a supervised process
+# whose exit status and lifetime are the interface. A foreground `sleep` sits at
+# the terminal waiting, which is the one thing a supervised process must never
+# do; a commit that can never obtain a message spends the gate before saying so.
 #
-# THE SCOPE FIX (CLOUD-199). This guard was scoped to the literal string `mise
-# run`, and its own comment already stated the general rule it did not implement:
-# a pipe replaces the command's exit status, which is a property of pipes, not of
-# `mise`. Measured, minutes after it landed: it refused
-# `git push … | tail -2; mise run module-map-check … | tail -2`, the agent re-ran
-# the `git push … | tail -2` half ALONE and reported it as compliance, and that
-# push had actually returned exit 1 (`stale info`). An agent reading a guard as a
-# rule about one command string will comply with it exactly and keep making the
-# error on the next one.
-#
-# A FILTER IS THE SAME SUBSTITUTION AS A PAGER. `cargo clippy … | grep -E
-# '^error'` printed nothing and was reported clean; cargo colours its
-# diagnostics, so every line begins with an ANSI escape and `^error` cannot match
-# at line start. The filter was structurally incapable of finding what it
-# searched for, and absence of matches was read as absence of errors. So the deny
-# list carries filters alongside pagers, and the message states the PRINCIPLE —
-# read the status from the harness — because complying with the narrower wording
-# ("do not use a pager") is exactly how the next instance happened.
-#
-# What stays allowed, because it is the correct form: the command alone in the
-# call, redirected to a file, with the file inspected in a SEPARATE call. A pager
-# over a FILE is fine; a pager over a live task is not. Read-only queries
-# (`git log`, `gh pr view`, `cargo metadata`) carry no verdict and compose
-# freely, and `jq` is composition rather than a verdict substitute — widening to
-# every pipe would deny ordinary work, and a guard with false positives gets
-# bypassed.
+# Retiring these two as well is CLOUD-613.
 #
 # Fails OPEN on anything it cannot parse, and honours BATTEN_RUN_SHAPE_BYPASS=1.
 #
@@ -85,19 +50,6 @@ set -uo pipefail
 raw=$(cat) || exit 0
 cmd=$(printf '%s' "$raw" | jq -r '.tool_input.command // empty' 2>/dev/null) || exit 0
 [ -n "$cmd" ] || exit 0
-
-# --- the verdict-bearing table, written once as data (§1) --------------------
-#
-# A command is verdict-bearing when its exit status IS the answer the caller is
-# asking for. Enumerable on purpose: an open predicate would be a judgement, and
-# a closed list keeps this computable. The read-only members of each family are
-# excluded by name, because a query's output is its answer and piping it is
-# ordinary composition.
-GIT_VERDICT='push|fetch|rebase'
-GH_PR_VERDICT='create|ready|ready-for-review|merge|edit|close|reopen|comment'
-CARGO_QUERY='metadata|tree|locate-project|pkgid|search|login|logout|version'
-# Pagers and filters alike: each substitutes output for status.
-FILTERS='tail|head|less|more|grep|rg|egrep|fgrep|awk|sed|wc'
 
 # Heredoc BODIES are dropped first, then quoted spans neutralised, so a commit
 # message, issue body or documentation paragraph *describing* these shapes is not
@@ -175,38 +127,6 @@ resolve() {
 	printf '%s %s %s' "$prog" "${words[0]:-}" "${words[1]:-}"
 }
 
-# Does this stage carry a verdict?
-verdict_bearing() {
-	local prog sub1 sub2
-	read -r prog sub1 sub2 <<<"$(resolve "$1")"
-	case "$prog" in
-	mise) [ "$sub1" = run ] ;;
-	git) [[ "$sub1" =~ ^($GIT_VERDICT)$ ]] ;;
-	cargo) [ -n "$sub1" ] && ! [[ "$sub1" =~ ^($CARGO_QUERY)$ ]] ;;
-	gh) [ "$sub1" = pr ] && [[ "$sub2" =~ ^($GH_PR_VERDICT)$ ]] ;;
-	# `bats` (CLOUD-473). The omission was not an oversight about one runner: it
-	# is every shell gate in this repo. `mise run test:bats` was covered by the
-	# `mise` row, so the same suite was guarded through one spelling and open
-	# through the other two — `mise exec -- bats …` (the web sandbox's working
-	# form) and a path-invoked `tests/bats/bin/bats`. Measured: a suite piped to
-	# `tail` reported green over three failures, one of them a hang.
-	#
-	# An argument is required because it is what makes the run a verdict: bare
-	# `bats`, `bats --version` and `bats --help` print usage and answer nothing.
-	# Flags are already stripped by `resolve`, so `$sub1` is the first file or
-	# directory — or a `-f` filter's pattern, which is still a run.
-	bats) [ -n "$sub1" ] ;;
-	*) false ;;
-	esac
-}
-
-# Is this stage a pager or filter — output standing in for status?
-is_filter() {
-	local prog
-	read -r prog _ _ <<<"$(resolve "$1")"
-	[[ "$prog" =~ ^($FILTERS)$ ]]
-}
-
 deny() {
 	jq -n --arg r "$1" '{
     hookSpecificOutput: {
@@ -217,20 +137,6 @@ deny() {
   }'
 	exit 0
 }
-
-# The principle, not a command name. The previous wording named `mise run`, and
-# an agent complied with it exactly while making the identical error on
-# `git push` in the same session.
-# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
-PRINCIPLE='A verdict-bearing command'"'"'s exit status must be READ FROM THE HARNESS, never inferred from its output. A pipe hands the status to the pager or filter; a following `;` or `||` list element replaces it with its own. Both report 0 over a failure.'
-
-CORRECT='The compliant form is the command alone in the call:
-
-  mise run <task> >/tmp/<task>.log 2>&1
-
-The tool result IS the verdict — read the log in a SEPARATE call. Pass
-run_in_background on the tool call itself for anything that can exceed ~2
-minutes. A pager over a FILE is fine; a pager over a live task is not.'
 
 # --- split into LIST elements, remembering the separator ----------------------
 #
@@ -381,102 +287,6 @@ $COMMIT_REMEDY"
 $COMMIT_REMEDY"
 		fi
 	done
-done
-
-# --- piped-verdict ------------------------------------------------------------
-#
-# Judged per ELEMENT, not over the whole command string. A pager attached to the
-# FIRST element says nothing about a later one, and judging the whole string
-# denied exactly that — a correct command using the recommended form.
-last_verdict=-1
-index=0
-for element in "${elements[@]}"; do
-	[ -n "${element// /}" ] || {
-		index=$((index + 1))
-		continue
-	}
-	# A `read` loop and not `mapfile` (CLOUD-282): `mapfile` is bash 4 and macOS
-	# ships 3.2, so this guard would die on a Mac. `printf '%s\n'` with the
-	# trailing newline is load-bearing — `read` returns false on an unterminated
-	# final segment, and an unpiped command is exactly one stage, so dropping it
-	# would leave `stages` empty and wave every verdict-bearing command through.
-	stages=()
-	while IFS= read -r stage_line; do
-		stages+=("$stage_line")
-	done < <(printf '%s\n' "$element" | tr '|' '\n')
-	if verdict_bearing "${stages[0]}"; then
-		last_verdict=$index
-		for stage in "${stages[@]:1}"; do
-			if is_filter "$stage"; then
-				deny "Refused: piping a verdict-bearing command into a pager or filter discards its exit status — the pipeline exits with the filter's, which is 0 whether the command passed or failed.
-
-$PRINCIPLE
-
-This has already produced \"green\" reports over a failed \`verify\`, a \`git push\` that returned \`stale info\` at exit 1, a \`cargo clippy\` whose ANSI-coloured output no \`^error\` anchor could ever match, and a \`cargo test\` whose tail window showed the last binaries' genuinely green blocks while an earlier one failed.
-
-$CORRECT
-
-Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
-			fi
-		done
-	fi
-	index=$((index + 1))
-done
-
-# Nothing verdict-bearing anywhere: not this guard's business.
-[ "$last_verdict" -ge 0 ] || exit 0
-
-# --- orphaned-run -------------------------------------------------------------
-#
-# `nohup`, or a trailing `&` that is not `&&`, detaches the command from the tool
-# call. The call then returns immediately and the harness records it complete.
-# File-descriptor redirections contain a literal `&` (`2>&1`, `&>log`, `>&2`)
-# and are not background operators — the correct form uses one, so a naive `&`
-# test denies exactly the shape this guard recommends. Strip them first, then a
-# remaining `&` that is not `&&` is a real detach.
-no_redir=$(sed -E 's/[0-9]*>&[0-9-]+//g; s/&>>?//g' <<<"$scrubbed")
-if grep -qE '(^|[^[:alnum:]_-])nohup([[:space:]]|$)' <<<"$no_redir" ||
-	grep -qE '(^|[^&])&[[:space:]]*($|[^&])' <<<"$no_redir"; then
-	deny "Refused: detaching a verdict-bearing command with nohup or \`&\` orphans it from the tool call. The call returns immediately, the harness records it complete, and the session loses the wake-up it would get when the work actually exits — leaving only polling or an idle turn, both of which the workflow contract forbids.
-
-Pass run_in_background on the tool call itself and let the command run in the foreground of that call; the harness re-invokes you on exit.
-
-$CORRECT
-
-Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
-fi
-
-# --- trailing-list -------------------------------------------------------------
-#
-# Only the LAST element's status survives a `;` or `||` chain, so a verdict-bearing
-# command with either after it has had its verdict replaced.
-#
-# `&&` IS NOT DENIED, and this is a deliberate departure from CLOUD-199's written
-# acceptance, which named all three operators. `a && b` short-circuits: when `a`
-# fails, `b` never runs and the list exits with `a`'s non-zero status. There is no
-# false green to stop, so denying it would be a pure false positive — and the same
-# issue argues that a guard with false positives gets bypassed, and a bypassed
-# guard enforces nothing. `verify`'s own body is built from guarded `if ! cmd`
-# chains for exactly the fail-closed property `&&` provides. `;` and `||` both
-# genuinely discard the verdict, and every instance measured on this issue was a
-# `;`.
-for ((k = last_verdict + 1; k < ${#elements[@]}; k++)); do
-	case "${seps[$k]}" in
-	SEMI | OR) ;;
-	*) continue ;;
-	esac
-	[ -n "${elements[$k]// /}" ] || continue
-	deny "Refused: a verdict-bearing command followed by \`;\` or \`||\` in the same Bash list has its exit status replaced — only the last element's survives.
-
-$PRINCIPLE
-
-This is the laundered shape: it looks compliant, and this guard used to recommend it. Backgrounded it is worse than a misread — the task-completion notification carries the compound's status, so a failed task arrives as \`completed (exit code 0)\`, an authoritative-looking statement from the harness. Measured twice in one session, on \`fmt\` and then on \`verify\`.
-
-(\`&&\` is fine: it short-circuits, so a failure still propagates.)
-
-$CORRECT
-
-Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
 done
 
 exit 0

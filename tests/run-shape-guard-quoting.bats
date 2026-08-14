@@ -52,21 +52,25 @@ PY'
 @test "a here-string does not open a skip that swallows the rest" {
 	# `<<<` is a here-STRING. Treating it as a heredoc opener would skip every
 	# following line, silently disabling the guard for the rest of the command.
-	run guard 'grep -q x <<<"$v"; mise run land &'
+	#
+	# Probed with a foreground `sleep` since CLOUD-443: the shape this used to
+	# probe with — a detached `mise run` — belongs to the engine now, but the
+	# SCRUBBING is still this guard's and is what the case is about.
+	run guard 'grep -q x <<<"$v"; sleep 90'
 	denied "$output"
 }
 
 @test "a real shape after a closed heredoc is still caught" {
 	run guard 'python3 - <<PY
-print("nohup and & described here")
+print("a sleep described here")
 PY
-mise run verify 2>&1 | tail -5'
+sleep 120'
 	denied "$output"
 }
 
 @test "a real shape after a closed quoted span is still caught" {
 	run guard 'git commit -m "a message
 
-spanning lines"; mise run ci | tail -3'
+spanning lines"; sleep 30'
 	denied "$output"
 }

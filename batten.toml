@@ -1161,7 +1161,7 @@ expires = "2026-11-14"
 
 [[waiver]]
 rule = "bats-tests-not-deleted"
-reason = "Two retirements, both deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, and CLOUD-444 retires `claim-guard` once a receipt row can be branch-keyed and write-triggered. Each takes its bats suite with it and each corpus moves to a Rust one (`crates/batten/tests/mediated_verbs.rs`, `crates/batten/tests/claim_receipt.rs`), so what falls is the bats count, not the coverage."
+reason = "Two retirements, both deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, CLOUD-444 retires `claim-guard` once a receipt row can be branch-keyed and write-triggered, and CLOUD-443 moves `run-shape-guard`'s three verdict-discarding shapes into a `pipeline` row, shrinking that suite to the two families the engine cannot express. Each takes its bats suite with it and each corpus moves to a Rust one (`crates/batten/tests/mediated_verbs.rs`, `crates/batten/tests/claim_receipt.rs`), so what falls is the bats count, not the coverage."
 expires = "2026-09-13"
 
 [ci]
