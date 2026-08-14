@@ -55,9 +55,21 @@ say so loudly — the human is the bottleneck and silence hides it.
 
 ## Caps, and what actually bounds N
 
-Build WIP cap: **2**, enforced at claim time, re-checked after claiming (on an
-overshoot the holder of the lexically-highest id yields). Past ~2–3
-implementers the binding constraint is **land contention**, not compute: every
+Build WIP cap: **6**, enforced at claim time, re-checked after claiming (on an
+overshoot the holder of the lexically-highest id yields).
+
+**Set to 6 by the owner, 2026-08-14, superseding the 2 this file carried.** That
+2 was never an owner decision — it was written here alongside the land-contention
+model below and then read back by every later session (and by CLOUD-607) as though
+it were one, which is how a number nobody approved becomes a standing constraint.
+The measurement below is unaffected and is NOT the cap: N ≈ 2.9 prices _land
+contention_, and the lever that measurement argues for is still "serialise the
+landing, shorten the lap, quiet `main`". The cap is a separate, owner-set bound on
+how many implementers may hold a claim at once, and the two must not be conflated
+again — if the arithmetic below argues for a different number, that is an argument
+to bring to the owner, not a licence to edit this one.
+
+Past the cap the binding constraint is **land contention**, not compute: every
 land forces siblings to rebase and re-run `verify`, so N ≈ time-between-lands ÷
 verify-duration. **A rising re-verify rate is NOT the stop signal** — an
 earlier version of this file said it was, and that optimises against the wrong
