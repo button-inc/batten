@@ -61,18 +61,34 @@ setup() {
 	# resolvable `origin/main` above: satisfy the precondition, do not strip the
 	# row.
 	#
-	# The cache is SEEDED rather than fetched. `provision apply` would reach
-	# github for a real artifact, making a suite about mise.toml's `[tools]`
-	# table depend on the network; the adapter only asks whether the binary is
-	# there, so a stub answers the same question offline. The stub exits 0 with
-	# no output, which is what real ripsecrets does on this fixture anyway — it
-	# holds no credential.
+	# The artifact is a local STUB rather than the pinned download — reaching
+	# github would make a suite about mise.toml's `[tools]` table depend on the
+	# network. The adapter only asks whether the binary is there, so a stub
+	# answers the same question offline; it exits 0 with no output, which is what
+	# real ripsecrets does on this fixture anyway, since it holds no credential.
+	#
+	# INSTALLED BY `provision apply`, not written to a path computed here. This
+	# used to seed `$XDG_DATA_HOME/batten/$(basename "$ROOT")/provision/…`, which
+	# was a second implementation — in bash — of `state::derive_repo_name`. When
+	# CLOUD-296 gave that segment a per-checkout digest, every case in this file
+	# started failing on a cache directory nothing writes. Letting the binary
+	# place its own cache is the fix that cannot go stale again.
 	export HOME="$BATS_TEST_TMPDIR/home"
 	export XDG_DATA_HOME="$HOME/data"
-	local cache="$XDG_DATA_HOME/batten/$(basename "$ROOT")/provision/ripsecrets/0.1.11/bin"
-	mkdir -p "$cache"
-	printf '#!/bin/sh\nexit 0\n' >"$cache/ripsecrets"
-	chmod +x "$cache/ripsecrets"
+	local stub="$BATS_TEST_TMPDIR/stub"
+	mkdir -p "$stub"
+	printf '#!/bin/sh\nexit 0\n' >"$stub/ripsecrets"
+	chmod +x "$stub/ripsecrets"
+	tar czf "$BATS_TEST_TMPDIR/ripsecrets.tar.gz" -C "$stub" ripsecrets
+	local sha
+	sha=$(sha256sum "$BATS_TEST_TMPDIR/ripsecrets.tar.gz" | cut -d' ' -f1)
+	# Point every platform row at the stub: only the host's row is consulted, but
+	# rewriting one by name would make this fixture host-specific.
+	sed -i \
+		-e "s|^url = \"https://github.com/sirwart/ripsecrets/.*\"|url = \"file://$BATS_TEST_TMPDIR/ripsecrets.tar.gz\"|" \
+		-e "/^\[provision.platforms/,/^$/ s|^sha256 = \".*\"|sha256 = \"$sha\"|" \
+		"$ROOT/batten.toml"
+	(cd "$ROOT" && cargo run --quiet -p batten -- provision apply) >/dev/null
 }
 
 # The committed ruleset inside the fixture. Built from the working tree, so the
