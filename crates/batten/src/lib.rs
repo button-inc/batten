@@ -686,7 +686,7 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
     let commit = git::head_commit(Path::new("."))?;
 
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let scan = rules::run_static(&config.rules, Path::new("."))?;
+    let scan = rules::run_static(&config.rules, &config.provisions, Path::new("."))?;
 
     let bound = store::commit(store::resolve(&repo)?)?;
     if let Some(note) = &bound.note {
@@ -2221,7 +2221,7 @@ fn run_rules(
     err: &mut dyn Write,
     mode: Mode,
     overrides: &Overrides,
-    runner: fn(&[rules::Rule], &Path) -> Result<rules::Scan>,
+    runner: fn(&[rules::Rule], &[provision::Provision], &Path) -> Result<rules::Scan>,
     surface: Surface,
     json: bool,
 ) -> Result<ExitCode> {
@@ -2235,7 +2235,7 @@ fn run_rules(
     // and files from another.
     let root = anchor();
     let config = resolve::resolve(&root, overrides)?;
-    let mut findings = runner(&config.rules, &root)?.findings;
+    let mut findings = runner(&config.rules, &config.provisions, &root)?.findings;
 
     // Declared budgets are gates, evaluated here rather than only under `policy
     // budget` (CLOUD-50). Reading files and summing them spawns nothing, so this

@@ -49,8 +49,51 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::identity::IdentityKey;
+use crate::error::UsageError;
+use crate::identity::{IdentityKey, SecretSpan};
+use crate::provision::Provision;
+use crate::refusal::{Fix, Refusal};
+use crate::rules::{Finding, Rule};
 use crate::waiver::Date;
+
+/// The `[[provision]]` entry this kind runs.
+///
+/// A constant rather than a rule column, because the kind permits no new column
+/// (CLOUD-59): a `tool = "..."` key would let one config point the secret kind at
+/// an arbitrary binary and read its output as secret spans, which is a wider
+/// capability than "scan for credentials" and a worse one to hand a config file.
+/// The manifest still owns the version, the URL and the checksum — this only
+/// fixes *which entry* is the scanner.
+pub const SCANNER: &str = "ripsecrets";
+
+/// The verb that installs the scanner, named once so the refusal and the
+/// documentation cannot disagree.
+const PROVISION_VERB: &str = "batten provision apply";
+
+/// The scanner's flags, pinned here beside the parser that reads their output.
+///
+/// `--only-matching` is **not** an option: it is what makes the third output
+/// field the matched literal alone rather than the whole source line. The span
+/// this kind hashes has to be the literal, because
+/// [`crate::identity::secret_code_fingerprint`] forces `Verbatim` normalization —
+/// a whole-line span would fold every edit elsewhere on the line into the
+/// secret's identity, re-minting a finding nobody changed.
+const SCANNER_FLAGS: &[&str] = &["--only-matching"];
+
+/// The scanner's exit codes, pinned in one place and cross-checked against the
+/// parse count (CLOUD-59's fail-closed clause).
+///
+/// Measured against ripsecrets 0.1.11 rather than assumed:
+///
+/// | code | meaning |
+/// | ---- | ------- |
+/// | 0    | clean — no secret found |
+/// | 1    | one or more secrets found |
+/// | 2    | the tool itself failed |
+///
+/// Anything else, and any signal, is neither verdict.
+const EXIT_CLEAN: i32 = 0;
+const EXIT_FOUND: i32 = 1;
 
 /// The directory the key file lives in, under the repository's state directory.
 const KEY_DIR: &str = "identity";
@@ -301,6 +344,233 @@ fn write_private(path: &Path, contents: &str) -> Result<bool> {
     Ok(true)
 }
 
+// --- the scanner adapter ------------------------------------------------------
+
+/// One parsed match, before it becomes a [`Finding`].
+///
+/// The span is already opaque: [`parse_line`] wraps it at the moment it is read
+/// off the pipe, so no value in this module holds a matched byte as a `&str`
+/// after that point. That is the containment claim, and it is a property of the
+/// types rather than of the code below being careful.
+struct Match {
+    path: String,
+    line: usize,
+    span: SecretSpan,
+}
+
+/// Run the pinned scanner over `matched` and turn every match into a pointer.
+///
+/// # Errors
+///
+/// - **exit 1** ([`UsageError`]) when the manifest declares no scanner entry, or
+///   the provision cache holds no binary — the message names
+///   [`PROVISION_VERB`]. Never a silent pass: a scanner that did not run is not
+///   evidence of a clean tree.
+/// - **exit 3** (a plain internal error) for every fail-closed case: an
+///   unparseable output line, a clean exit that nonetheless produced matches, a
+///   found exit that produced none, and any other exit code or signal. Clean is
+///   never inferred from a stream that failed to parse.
+pub fn scan(
+    rule: &Rule,
+    provisions: &[Provision],
+    root: &Path,
+    matched: &[&String],
+    findings: &mut Vec<Finding>,
+) -> Result<()> {
+    let binary = resolve_scanner(provisions, root)?;
+    // Same resolution as the scanner's cache, and for the same reason: the key
+    // lives under the repository's state directory, which cannot be named from a
+    // relative anchor.
+    let key = load_or_mint(
+        &root
+            .canonicalize()
+            .with_context(|| format!("resolve the repository root at {}", root.display()))?,
+        crate::waiver::today()?,
+    )?;
+
+    let mut parsed: Vec<Match> = Vec::new();
+    for batch in crate::rules::batches(matched) {
+        parsed.extend(run_once(rule, &binary, root, &batch)?);
+    }
+
+    for hit in parsed {
+        let fingerprint =
+            crate::identity::secret_code_fingerprint(&key, &rule.id, &hit.path, &hit.span)?;
+        findings.push(Finding {
+            rule: rule.id.clone(),
+            severity: rule.severity(),
+            path: hit.path,
+            line: Some(hit.line),
+            // The override still applies, and still keeps the identity keyed:
+            // `override_fingerprint` hashes the already-keyed fingerprint as a
+            // field, so a discriminator can split a group and can never unkey
+            // one.
+            identity: crate::identity::StoredIdentity::secret(match rule.identity_key.as_deref() {
+                Some(discriminator) => {
+                    crate::identity::override_fingerprint(fingerprint, discriminator)
+                }
+                None => fingerprint,
+            }),
+            check: rule
+                .settling_check()
+                .unwrap_or(crate::findings::Check::Reevaluate),
+            remediation: None,
+        });
+    }
+    Ok(())
+}
+
+/// Where the scanner binary is, or a refusal naming the verb that installs it.
+fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
+    let Some(entry) = provisions.iter().find(|entry| entry.name == SCANNER) else {
+        return Err(UsageError::raise(
+            Refusal::new(
+                SCANNER,
+                "a `secrets` rule needs the scanner pinned, and this config declares no \
+                 `[[provision]]` entry for it",
+                Fix::Run(PROVISION_VERB.to_owned()),
+            )
+            .render(),
+        ));
+    };
+    // The anchor is a RELATIVE path (`.`) whenever the config sits in the cwd,
+    // and the cache is keyed by the repository's own directory name — which
+    // `state::derive_repo_name` cannot read off `.`. Canonicalize rather than
+    // reach for `git::repo_root`: that would resolve a scratch fixture under
+    // `target/` to *this* repository, so a fixture asserting "no scanner
+    // installed" would start reading whichever cache the developer happened to
+    // have warmed. Canonicalizing answers for the directory actually anchored,
+    // which is what `provision apply` resolves to as well whenever the two run
+    // from the same place.
+    let repo = root
+        .canonicalize()
+        .with_context(|| format!("resolve the repository root at {}", root.display()))?;
+    let path = crate::provision::binary_path(&repo, entry)?;
+    if !path.is_file() {
+        // Never a silent pass — the missing-binary posture the command kind
+        // already holds, with the verb named because a refusal that says only
+        // what it would not do leaves the caller guessing (CLOUD-122).
+        return Err(UsageError::raise(
+            Refusal::new(
+                SCANNER,
+                "the pinned scanner is not in the provision cache, so no file was scanned",
+                Fix::Run(PROVISION_VERB.to_owned()),
+            )
+            .render(),
+        ));
+    }
+    Ok(path)
+}
+
+/// One scanner invocation over one batch of paths.
+fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<Vec<Match>> {
+    let output = std::process::Command::new(binary)
+        .args(SCANNER_FLAGS)
+        .args(batch)
+        .current_dir(root)
+        // Both streams are captured and NEITHER is forwarded. stdout carries the
+        // matched bytes and is parsed here; stderr can carry a path the tool
+        // failed to read, and echoing a child's stream would put output Batten
+        // never shaped onto Batten's own (§6).
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .with_context(|| format!("rule {}: run the pinned secret scanner", rule.id))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parsed = Vec::new();
+    for (ordinal, line) in stdout.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        // Pointer-only, and this one matters most: the line that failed to parse
+        // is a line the scanner emitted because it found a secret in it. The
+        // error names WHICH line by ordinal and never what it said.
+        let hit = parse_line(line, batch).ok_or_else(|| {
+            anyhow::anyhow!(
+                "rule {}: the secret scanner emitted a line this build cannot parse \
+                 (output line {}); refusing to report a clean tree from a stream that \
+                 failed to parse",
+                rule.id,
+                ordinal + 1
+            )
+        })?;
+        parsed.push(hit);
+    }
+
+    cross_check(rule, output.status.code(), parsed.len())?;
+    Ok(parsed)
+}
+
+/// The exit-status/parse-count cross-check, both directions.
+///
+/// Disagreement is exit 3 rather than a verdict, because each direction means
+/// the parser and the tool disagree about what happened, and neither answer can
+/// be trusted over the other. A clean exit with matches parsed would report
+/// secrets the tool says it did not find; a found exit with nothing parsed would
+/// report a clean tree the tool says is not clean — and that second one is the
+/// silent false green this whole clause exists to prevent.
+fn cross_check(rule: &Rule, code: Option<i32>, parsed: usize) -> Result<()> {
+    match code {
+        Some(EXIT_CLEAN) if parsed == 0 => Ok(()),
+        Some(EXIT_FOUND) if parsed > 0 => Ok(()),
+        Some(EXIT_CLEAN) => Err(anyhow::anyhow!(
+            "rule {}: the secret scanner exited clean while emitting {parsed} match(es); \
+             the exit status and the output disagree, so neither is a verdict",
+            rule.id
+        )),
+        Some(EXIT_FOUND) => Err(anyhow::anyhow!(
+            "rule {}: the secret scanner reported findings and emitted none this build \
+             could parse; clean is never inferred from a stream that failed to parse",
+            rule.id
+        )),
+        Some(other) => Err(anyhow::anyhow!(
+            "rule {}: the secret scanner exited {other}, which is neither its clean nor \
+             its found status",
+            rule.id
+        )),
+        None => Err(anyhow::anyhow!(
+            "rule {}: the secret scanner was killed by a signal, so it reached no verdict",
+            rule.id
+        )),
+    }
+}
+
+/// Parse one `<path>:<line>:<span>` output line, given the paths this batch
+/// passed in.
+///
+/// **Anchored on the known paths, never on separator position.** Splitting on
+/// `:` is wrong twice over: a path may contain one, and so may a secret — and
+/// the second is the dangerous one, because a mis-split there does not fail, it
+/// silently keys a truncated span. Matching the longest known path that the line
+/// starts with makes both non-events, and makes an unrecognised path a parse
+/// failure (exit 3) rather than a guess.
+///
+/// The span is wrapped **here**, at the boundary, and the `&str` it came from
+/// does not outlive this function.
+fn parse_line(line: &str, batch: &[&str]) -> Option<Match> {
+    // Longest first: with `a.rs` and `a.rs.bak` both in the batch, the shorter
+    // is a prefix of the longer and would claim the longer's lines.
+    let path = batch
+        .iter()
+        .filter(|path| line.len() > path.len() && line.as_bytes()[path.len()] == b':')
+        .filter(|path| line.starts_with(**path))
+        .max_by_key(|path| path.len())?;
+
+    let rest = &line[path.len() + 1..];
+    let (number, span) = rest.split_once(':')?;
+    let line_number: usize = number.parse().ok()?;
+    if line_number == 0 {
+        // Line numbers are 1-based; a zero is a shape this build does not know.
+        return None;
+    }
+    Some(Match {
+        path: (*path).to_owned(),
+        line: line_number,
+        span: SecretSpan::mint(span),
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -435,6 +705,177 @@ mod tests {
         // The first byte's own two nibbles, as a weaker but independent check:
         // a partial leak is a leak, and a whole-string search would miss one.
         assert!(!rendered.contains(&hex[..2]) || rendered.contains("<redacted>"));
+    }
+
+    // -- the parse boundary and the fail-closed cross-check -------------------
+
+    /// The span, recovered the only way a test can: fingerprint it under a known
+    /// key and compare against the fingerprint of a candidate string. There is
+    /// deliberately no accessor, so this is the assertion shape the design
+    /// leaves available — and that it is awkward is the containment working.
+    fn span_is(hit: &Match, expected: &str) -> bool {
+        let key = IdentityKey::new("k", [7u8; 32]);
+        let got = crate::identity::secret_code_fingerprint(&key, "r", "p", &hit.span).unwrap();
+        let want =
+            crate::identity::secret_code_fingerprint(&key, "r", "p", &SecretSpan::mint(expected))
+                .unwrap();
+        got == want
+    }
+
+    #[test]
+    fn a_line_parses_into_path_line_and_span() {
+        let batch = ["src/a.rs"];
+        let hit = parse_line("src/a.rs:12:tok-abc", &batch).unwrap();
+        assert_eq!(hit.path, "src/a.rs");
+        assert_eq!(hit.line, 12);
+        assert!(span_is(&hit, "tok-abc"));
+    }
+
+    #[test]
+    fn a_colon_in_the_span_is_not_a_separator() {
+        // The dangerous case, and the reason the parser anchors on known paths:
+        // splitting on `:` here does not fail, it silently keys a truncated
+        // span — a wrong answer that looks like a right one.
+        let batch = ["src/a.rs"];
+        let hit = parse_line("src/a.rs:3:user:password@host", &batch).unwrap();
+        assert_eq!(hit.line, 3);
+        assert!(
+            span_is(&hit, "user:password@host"),
+            "the whole remainder is the span, colons included"
+        );
+    }
+
+    #[test]
+    fn a_colon_in_the_path_is_not_a_separator_either() {
+        let batch = ["weird:name.rs"];
+        let hit = parse_line("weird:name.rs:9:tok", &batch).unwrap();
+        assert_eq!(hit.path, "weird:name.rs");
+        assert_eq!(hit.line, 9);
+        assert!(span_is(&hit, "tok"));
+    }
+
+    #[test]
+    fn the_longest_matching_path_wins() {
+        // `a.rs` is a prefix of `a.rs.bak`, so a first-match parser would credit
+        // the shorter path with the longer one's findings — a pointer to the
+        // wrong file, which is worse than no pointer.
+        let batch = ["a.rs", "a.rs.bak"];
+        let hit = parse_line("a.rs.bak:4:tok", &batch).unwrap();
+        assert_eq!(hit.path, "a.rs.bak");
+    }
+
+    #[test]
+    fn an_unparseable_line_is_none_rather_than_a_guess() {
+        let batch = ["src/a.rs"];
+        for line in [
+            "src/other.rs:1:tok", // a path this batch never passed in
+            "src/a.rs:notanumber:tok",
+            "src/a.rs:0:tok", // line numbers are 1-based
+            "src/a.rs",       // no line, no span
+            "src/a.rs:1",     // no span field
+            "",
+            "totally unrelated output",
+        ] {
+            assert!(
+                parse_line(line, &batch).is_none(),
+                "must not parse: {line:?}"
+            );
+        }
+    }
+
+    /// A `secrets` row, parsed from TOML rather than built as a struct — the
+    /// `identity_churn.rs` idiom, and the one that keeps a test from silently
+    /// depending on a field ordering the config surface does not have.
+    fn rule() -> Rule {
+        toml::from_str(
+            r#"
+id = "no-secrets"
+kind = "secrets"
+glob = "**"
+severity = "deny"
+"#,
+        )
+        .expect("the fixture row loads")
+    }
+
+    #[test]
+    fn the_two_agreeing_cases_are_the_only_ones_that_pass() {
+        assert!(cross_check(&rule(), Some(EXIT_CLEAN), 0).is_ok());
+        assert!(cross_check(&rule(), Some(EXIT_FOUND), 3).is_ok());
+    }
+
+    #[test]
+    fn a_clean_exit_with_matches_is_refused() {
+        // The tool says nothing was found and the stream says otherwise. Neither
+        // is a verdict, so this is exit 3 rather than a report.
+        let err = cross_check(&rule(), Some(EXIT_CLEAN), 2).unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_none(),
+            "internal, not usage"
+        );
+        assert!(err.to_string().contains("disagree"), "{err}");
+    }
+
+    #[test]
+    fn a_found_exit_with_no_matches_is_refused() {
+        // The silent false green this clause exists to prevent: the tool found
+        // secrets, the parser produced none, and reporting clean would be a
+        // clean tree inferred from a stream that failed to parse.
+        let err = cross_check(&rule(), Some(EXIT_FOUND), 0).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_none());
+        assert!(err.to_string().contains("never inferred"), "{err}");
+    }
+
+    #[test]
+    fn a_tool_error_or_a_signal_is_neither_verdict() {
+        let err = cross_check(&rule(), Some(2), 0).unwrap_err();
+        assert!(err.to_string().contains("neither its clean nor"), "{err}");
+
+        let err = cross_check(&rule(), None, 0).unwrap_err();
+        assert!(err.to_string().contains("signal"), "{err}");
+    }
+
+    #[test]
+    fn no_refusal_or_error_rendering_carries_a_span() {
+        // Every message this module can emit, checked against a span that would
+        // be in it if any path echoed one. Pointer-only is the rule these all
+        // serve, and an error is the easiest place to break it by accident.
+        const SECRET: &str = "tok-would-be-leaked";
+        let batch = ["src/a.rs"];
+        let rendered: Vec<String> = vec![
+            cross_check(&rule(), Some(EXIT_CLEAN), 2)
+                .unwrap_err()
+                .to_string(),
+            cross_check(&rule(), Some(EXIT_FOUND), 0)
+                .unwrap_err()
+                .to_string(),
+            cross_check(&rule(), Some(2), 0).unwrap_err().to_string(),
+            cross_check(&rule(), None, 0).unwrap_err().to_string(),
+            resolve_scanner(&[], Path::new("/nowhere"))
+                .unwrap_err()
+                .to_string(),
+        ];
+        for message in &rendered {
+            assert!(
+                !message.contains(SECRET) && !message.contains("tok-"),
+                "a message rendered a span: {message}"
+            );
+        }
+        // And the parse failure names an ordinal, never the line — asserted at
+        // the one place the line is in scope.
+        assert!(parse_line(&format!("unknown.rs:1:{SECRET}"), &batch).is_none());
+    }
+
+    #[test]
+    fn a_missing_scanner_entry_names_the_verb_that_installs_it() {
+        let err = resolve_scanner(&[], Path::new("/nowhere")).unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a config that cannot run its own gate is exit 1"
+        );
+        let text = err.to_string();
+        assert!(text.contains(PROVISION_VERB), "{text}");
+        assert!(text.contains(SCANNER), "{text}");
     }
 
     #[test]

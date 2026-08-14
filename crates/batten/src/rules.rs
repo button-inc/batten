@@ -145,6 +145,26 @@ pub enum RuleKind {
     /// gate, and its findings deny. This one's command consults a model, and its
     /// findings advise. The gate/judge line (CLOUD-93) is exactly this pair.
     Judge,
+    /// A **credential in the tree** (CLOUD-59): run the pinned secret scanner
+    /// over the matched paths and turn each match into a pointer.
+    ///
+    /// The kind exists because [`RuleKind::Forbid`] bans literals named in
+    /// advance, and a credential is the banned shape nobody can enumerate — so a
+    /// committed secret passes every other gate this engine has. Detection is
+    /// adopted prior art; what this kind owns is **containment**, in
+    /// [`crate::secrets`].
+    ///
+    /// Distinct from [`RuleKind::Command`], which could run the same binary and
+    /// could not express this: a command rule's contract is the exit code alone,
+    /// with both child streams nulled, so it yields one batch verdict per glob —
+    /// no per-secret `path:line`, no per-secret identity, and nothing to key.
+    /// Reading the scanner's output is precisely what makes this kind different,
+    /// and precisely what makes it dangerous: the scanner prints the byte it
+    /// matched. Every span is opaque from the parse boundary onward
+    /// ([`crate::identity::SecretSpan`]), and [`Finding`] has no field one could
+    /// occupy, so pointer-only output is structural rather than a property of
+    /// the renderer.
+    Secrets,
 }
 
 impl RuleKind {
@@ -160,6 +180,7 @@ impl RuleKind {
         RuleKind::Ratchet,
         RuleKind::Receipt,
         RuleKind::Judge,
+        RuleKind::Secrets,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -172,6 +193,7 @@ impl RuleKind {
             RuleKind::Ratchet => "ratchet",
             RuleKind::Receipt => "receipt",
             RuleKind::Judge => "judge",
+            RuleKind::Secrets => "secrets",
         }
     }
 
@@ -203,11 +225,13 @@ impl RuleKind {
             // every spawning kind with `Tree` alone, which is what keeps `hook`
             // structurally unable to execute a configured command.
             RuleKind::Forbid | RuleKind::Shape | RuleKind::Ratchet | RuleKind::Receipt => false,
-            // Both run a program a `batten.toml` named, which is the whole
-            // predicate — that a judge's program consults a model and a
-            // command's decides a gate makes no difference to the surface
-            // question. `check` refuses both, naming `batten enforce`.
-            RuleKind::Command | RuleKind::Judge => true,
+            // All three run a program a `batten.toml` named, which is the
+            // whole predicate — that a judge's consults a model, a command's
+            // decides a gate, and a secrets rule's scans for credentials makes
+            // no difference to the surface question. `check` refuses all three,
+            // naming `batten enforce`, with no code per kind: that refusal reads
+            // this predicate and nothing else.
+            RuleKind::Command | RuleKind::Judge | RuleKind::Secrets => true,
         }
     }
 
@@ -219,7 +243,15 @@ impl RuleKind {
             // `pattern` or `regex`, and this list cannot express "one of"
             // (CLOUD-283). `validate` carries that check, which is also where
             // the both-columns case is refused.
-            RuleKind::Forbid => &["glob", "severity"],
+            // `Secrets` shares the pair, and for a related reason: for both, the
+            // `glob` is the gate before it is anything else — no match means no
+            // file is read and, for the scanner, no process is spawned at all.
+            // `severity` is required of every non-judge kind because it is what
+            // reaches the exit contract. The secrets kind takes nothing further:
+            // the issue's own constraint is that it permits no NEW column, so
+            // the scanner's identity is a constant in the adapter rather than a
+            // row every config repeats.
+            RuleKind::Forbid | RuleKind::Secrets => &["glob", "severity"],
             // `check`, never `fix`: enforcement is always the check side (§9),
             // so the gate half is what a row cannot load without. A row
             // carrying only a `fix` declares a mutation with nothing deciding
@@ -320,6 +352,20 @@ impl RuleKind {
                 "policy_url",
                 "no_fix_reason",
             ],
+            // `identity_key` is permitted and `verbatim` is not: a secret span
+            // hashes, so an override has something to split, but the
+            // normalization is not the author's to choose — a secret IS literal
+            // content, so `secret_code_fingerprint` forces `Verbatim` and a
+            // column offering the other value would name a choice that does not
+            // exist.
+            RuleKind::Secrets => &[
+                "glob",
+                "severity",
+                "identity_key",
+                "reason",
+                "policy_url",
+                "no_fix_reason",
+            ],
         }
     }
 
@@ -332,9 +378,11 @@ impl RuleKind {
     #[must_use]
     pub const fn scopes(self) -> &'static [RuleScope] {
         match self {
-            RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet | RuleKind::Judge => {
-                &[RuleScope::Tree]
-            }
+            RuleKind::Forbid
+            | RuleKind::Command
+            | RuleKind::Ratchet
+            | RuleKind::Judge
+            | RuleKind::Secrets => &[RuleScope::Tree],
             RuleKind::Shape | RuleKind::Receipt => &[RuleScope::MediatedCall],
         }
     }
@@ -912,7 +960,13 @@ impl Rule {
                     .map(ToOwned::to_owned)
                     .collect(),
             )),
-            RuleKind::Forbid | RuleKind::Ratchet => Some(Check::Reevaluate),
+            // Re-running the gate is what settles all three. For `Secrets` the
+            // important half is what this is NOT: an `Argv` here would put the
+            // scanner's invocation on the record, and the whole design is that
+            // nothing carrying a matched byte leaves the adapter. It is also the
+            // honest answer — unlike a judge's verdict, the engine can re-decide
+            // a secret finding by scanning again.
+            RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Secrets => Some(Check::Reevaluate),
             // Neither reaches the store: both are adjudicated per mediated call
             // and produce a decision, not a finding.
             RuleKind::Shape | RuleKind::Receipt => None,
@@ -1139,7 +1193,11 @@ pub const SPAWNING_VERB: &str = "batten enforce";
 /// Returns a [`UsageError`] (→ exit `1`) when any configured rule's kind spawns
 /// processes, naming [`SPAWNING_VERB`] as the verb that runs it, and for a
 /// malformed rule. An I/O failure propagates as an internal error (→ exit `3`).
-pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
+pub fn run_static(
+    rules: &[Rule],
+    _provisions: &[crate::provision::Provision],
+    root: &Path,
+) -> anyhow::Result<Scan> {
     // Refuse before any work: the read-only surface must not even begin a run
     // it cannot complete honestly.
     for rule in rules {
@@ -1161,7 +1219,7 @@ pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
             ));
         }
     }
-    run(rules, root)
+    run(rules, &[], root)
 }
 
 /// Run every configured rule, including process-spawning kinds.
@@ -1176,7 +1234,11 @@ pub fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
 /// a capability this engine does not have. Returns a [`UsageError`] (→ exit
 /// `1`): a config naming a capability the binary lacks is the config-or-usage
 /// class (§7), never a policy verdict about the repository.
-pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
+pub fn run_all(
+    rules: &[Rule],
+    provisions: &[crate::provision::Provision],
+    root: &Path,
+) -> anyhow::Result<Scan> {
     // Refuse before any work, the shape `run_static` above already uses: the
     // alternative is running the check side, exiting on its verdict, and having
     // silently ignored a repair the config declared. A key that parses and does
@@ -1190,7 +1252,7 @@ pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
             )));
         }
     }
-    run(rules, root)
+    run(rules, provisions, root)
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -1201,12 +1263,16 @@ pub fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
 /// Returns a [`UsageError`] (→ exit `1`) for a malformed rule (e.g. an empty
 /// `glob`). An I/O failure while walking the tree propagates as an internal
 /// error (→ exit `3`).
-fn run(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
+fn run(
+    rules: &[Rule],
+    provisions: &[crate::provision::Provision],
+    root: &Path,
+) -> anyhow::Result<Scan> {
     let files = tree_files(root)?;
 
     let mut scan = Scan::default();
     for rule in rules {
-        if let Some(why) = run_rule(rule, root, &files, &mut scan.findings)? {
+        if let Some(why) = run_rule(rule, provisions, root, &files, &mut scan.findings)? {
             scan.not_evaluated.insert(rule.id.clone(), why);
         }
     }
@@ -1224,6 +1290,7 @@ fn run(rules: &[Rule], root: &Path) -> anyhow::Result<Scan> {
 /// finding whose rule never looked instead of resolving it (CLOUD-81).
 fn run_rule(
     rule: &Rule,
+    provisions: &[crate::provision::Provision],
     root: &Path,
     files: &[String],
     findings: &mut Vec<Finding>,
@@ -1282,6 +1349,7 @@ fn run_rule(
             }
         }
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
+        RuleKind::Secrets => crate::secrets::scan(rule, provisions, root, &matched, findings)?,
         // Unreachable: shape and receipt rules are `mediated_call`-scoped
         // and a ratchet
         // returned above. Stated rather than caught by a wildcard so adding a
@@ -1421,7 +1489,7 @@ fn command_rule(
 /// Split `matched` into groups whose joined byte length stays under
 /// [`MAX_FILES_BYTES`]. Order is preserved, so batching is deterministic and the
 /// resulting findings stay byte-stable (§6).
-fn batches<'a>(matched: &[&'a String]) -> Vec<Vec<&'a str>> {
+pub(crate) fn batches<'a>(matched: &[&'a String]) -> Vec<Vec<&'a str>> {
     let mut batches = Vec::new();
     let mut current: Vec<&str> = Vec::new();
     let mut bytes = 0usize;
@@ -2271,11 +2339,11 @@ mod tests {
     /// found; [`Scan::not_evaluated`] has its own tests, so shadowing keeps the
     /// suite reading as it did before that half existed.
     fn run_static(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
-        super::run_static(rules, root).map(|scan| scan.findings)
+        super::run_static(rules, &[], root).map(|scan| scan.findings)
     }
 
     fn run_all(rules: &[Rule], root: &Path) -> anyhow::Result<Vec<Finding>> {
-        super::run_all(rules, root).map(|scan| scan.findings)
+        super::run_all(rules, &[], root).map(|scan| scan.findings)
     }
 
     fn forbid(id: &str, glob: &str, pattern: &str) -> Rule {
@@ -2449,7 +2517,7 @@ mod tests {
         let dir = temp_dir("scan-skipped");
         write(&dir, "src/a.rs", "fine\n");
 
-        let clean = super::run_static(&[forbid("looked", "**/*.rs", "TODO")], &dir).unwrap();
+        let clean = super::run_static(&[forbid("looked", "**/*.rs", "TODO")], &[], &dir).unwrap();
         assert!(clean.findings.is_empty());
         assert!(
             clean.not_evaluated.is_empty(),
@@ -2457,7 +2525,7 @@ mod tests {
         );
 
         let skipped =
-            super::run_static(&[forbid("never-looked", "**/*.md", "TODO")], &dir).unwrap();
+            super::run_static(&[forbid("never-looked", "**/*.md", "TODO")], &[], &dir).unwrap();
         assert!(skipped.findings.is_empty());
         assert_eq!(
             skipped.not_evaluated.get("never-looked"),
@@ -2472,6 +2540,7 @@ mod tests {
                 severity: Some(RuleSeverity::Allow),
                 ..forbid("switched-off", "**/*.rs", "TODO")
             }],
+            &[],
             &dir,
         )
         .unwrap();
@@ -2877,12 +2946,13 @@ mod tests {
                 | RuleKind::Shape
                 | RuleKind::Ratchet
                 | RuleKind::Receipt
-                | RuleKind::Judge => {}
+                | RuleKind::Judge
+                | RuleKind::Secrets => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            6,
+            7,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

@@ -1,0 +1,23 @@
+version = 1
+
+# The `secrets` kind with its scanner NOT provisioned, which is the honest
+# fixture for a corpus that installs nothing (CLOUD-59). The happy path needs a
+# stub binary in a cache this harness has no way to populate, so it lives in
+# `tests/secrets_kind.rs`, which stands up its own XDG_DATA_HOME.
+#
+# What this pins is the posture that matters most on a cold machine: a scanner
+# that did not run is NEVER reported as a clean tree. Exit 1 naming the verb that
+# installs it, never exit 0.
+[[provision]]
+name = "ripsecrets"
+version = "0.0.0-fixture"
+url = "file:///dev/null/never-fetched"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+binary = "ripsecrets"
+
+[[rule]]
+id = "no-secrets"
+kind = "secrets"
+glob = "**/*.rs"
+severity = "deny"
+scope = "tree"
