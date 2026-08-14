@@ -51,6 +51,17 @@ path = "schema/batten.schema.json"
 # schema is derived rather than hand-narrowed, and `mise run schema-check` diffs
 # it byte-for-byte like the authority's. A key this schema accepts is a key the
 # loader honours; every other key is a parse error naming itself.
+#
+# It is published beside the authority's, so a consumer writes the matching rule
+# for the file they actually hand-edit most:
+#
+#   [[rule]]
+#   include = ["batten.local.toml"]
+#   [rule.schema]
+#   url = "https://github.com/button-inc/batten/releases/latest/download/batten.local.schema.json"
+#
+# `path` here for the reason the rule above gives: this repo is the source, so a
+# released URL would validate the working tree against the last tag.
 [[rule]]
 include = ["batten.local.toml"]
 [rule.schema]

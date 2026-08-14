@@ -25,7 +25,7 @@ setup() {
 		            build-tool: cargo
 		          - target: aarch64-apple-darwin
 		            build-tool: zigbuild
-		        run: gh release upload "$TAG" schema/batten.schema.json "$SPDX" "$CDX" --clobber
+		        run: gh release upload "$TAG" schema/batten.schema.json schema/batten.local.schema.json "$SPDX" "$CDX" --clobber
 	EOF
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
@@ -90,6 +90,7 @@ complete() {
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.schema.json \
+		batten.local.schema.json \
 		batten.spdx.json \
 		batten.cdx.json \
 		batten-cli-reference.md
@@ -133,28 +134,34 @@ complete() {
 	# everything that is not per-target.
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
-		batten.schema.json
+		batten.schema.json \
+		batten.local.schema.json
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.spdx.json"* ]]
 	[[ "$output" == *"batten.cdx.json"* ]]
-	[[ "$output" == *"3 of 4 non-target assets"* ]]
+	[[ "$output" == *"3 of 5 non-target assets"* ]]
 	# The per-target half must stay clean — the two failures are independent.
 	[[ "$output" != *"targets have no asset"* ]]
 }
 
 @test "the non-target list comes from BOTH sources, not just one" {
-	# The schema is a literal operand on the upload line; the two SBOM names come
+	# Both schemas are literal operands on the upload line; the two SBOM names come
 	# from `sbom --names`. If either source silently produced nothing, this release
 	# would pass while missing an asset.
+	#
+	# EVERY literal, not the first one: the scrape splits the line on spaces, so a
+	# parser that stopped at one operand would still satisfy every assertion this
+	# suite made before the override schema joined it (CLOUD-33).
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.schema.json"* ]]
+	[[ "$output" == *"batten.local.schema.json"* ]]
 	[[ "$output" == *"batten.spdx.json"* ]]
 	[[ "$output" == *"batten-cli-reference.md"* ]]
-	[[ "$output" == *"4 of 4 non-target assets"* ]]
+	[[ "$output" == *"5 of 5 non-target assets"* ]]
 }
 
 @test "an upload line the parser cannot read exits 2 rather than covering nothing" {
@@ -174,6 +181,7 @@ complete() {
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.schema.json \
+		batten.local.schema.json \
 		batten.spdx.json.sig \
 		batten.cdx.json \
 		batten-cli-reference.md
@@ -182,14 +190,38 @@ complete() {
 	[[ "$output" == *"batten.spdx.json"* ]]
 }
 
+@test "the authority schema does not stand in for the override schema" {
+	# The pair CLOUD-33 shipped one half of. `-x` is what keeps them distinct:
+	# `batten.schema.json` is a proper substring of nothing here, but
+	# `batten.local.schema.json` contains `schema.json`, and a substring match
+	# in either direction would let one published artifact answer for two.
+	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
+		batten-9.9.9-aarch64-apple-darwin.tar.gz \
+		batten.schema.json \
+		batten.spdx.json \
+		batten.cdx.json \
+		batten-cli-reference.md
+	run "$CHECK" v9.9.9
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"batten.local.schema.json"* ]]
+	[[ "$output" == *"1 of 5 non-target assets"* ]]
+}
+
 @test "the real workflow publishes the non-target assets this gate derives" {
 	# The fixtures prove the logic; this proves it is pointed at the committed
 	# workflow's actual shape, so the suite cannot pass while production derives
 	# an empty list.
+	#
+	# BOTH schemas by name (CLOUD-33). `mise run schema` writes two artifacts and
+	# the upload line published one of them for the whole life of CLOUD-239's
+	# split — a gate deriving its expectations FROM that line could not notice,
+	# because an asset never uploaded is never expected. Naming them here is what
+	# turns "whatever the workflow uploads" into "these two, or fail".
 	unset BATTEN_RELEASE_WORKFLOW
 	run bash -c "grep -F 'gh release upload' .github/workflows/release-artifacts.yml | tr ' ' '\n' | sed -nE 's#^\"?([A-Za-z0-9_./-]+\.json)\"?\$#\1#p' | sed 's#^.*/##' | sort -u"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"batten.schema.json"* ]]
+	[[ "$output" == *"batten.local.schema.json"* ]]
 }
 
 @test "the failure names the recovery, not merely that it refused" {
@@ -231,7 +263,7 @@ complete() {
 	complete
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"manifest covering all 6 asset(s) (sha256 verified)"* ]]
+	[[ "$output" == *"manifest covering all 7 asset(s) (sha256 verified)"* ]]
 }
 
 @test "THE CLOUD-278 GAP: every asset present but no manifest fails" {
@@ -241,6 +273,7 @@ complete() {
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.schema.json \
+		batten.local.schema.json \
 		batten.spdx.json \
 		batten.cdx.json \
 		batten-cli-reference.md
@@ -258,6 +291,7 @@ complete() {
 	# written before a later job's upload would read.
 	add_manifest batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
+		batten.local.schema.json \
 		batten.spdx.json \
 		batten.cdx.json \
 		batten-cli-reference.md

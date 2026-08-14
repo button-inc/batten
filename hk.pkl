@@ -244,20 +244,50 @@ local gate = new Mapping<String, Step> {
     glob = List("batten.toml", "crates/batten/src/lint.rs", "crates/batten/src/trust.rs")
     check = "mise run config-lint"
   }
-  // Every module the derived schema is reachable from, or the step does not fire
-  // on the commit that moved it. `provision.rs` and `waiver.rs` were absent while
-  // both were already reachable from `Config` (CLOUD-59): a commit touching only
-  // one of them changed `schema/batten.schema.json` and skipped the gate that
-  // exists to notice, so the drift arrived on `main` and waited for whichever
-  // later commit happened to touch `config.rs`.
+  // Every module the derived schemas are reachable from, or the step does not
+  // fire on the commit that moved them. `provision.rs` and `waiver.rs` were
+  // absent while both were already reachable from `Config` (CLOUD-59): a commit
+  // touching only one of them changed `schema/batten.schema.json` and skipped
+  // the gate that exists to notice, so the drift arrived on `main` and waited
+  // for whichever later commit happened to touch `config.rs`.
+  //
+  // That patch fixed the INSTANCE and not the CLASS, which is why this is now
+  // gated rather than merely longer. It added exactly the two modules its own
+  // change touched, and left fourteen others that were already reachable from
+  // `Config` — so the list was incomplete at the moment it was repaired, not
+  // merely decayed since. A hand-kept list gets extended to whatever its author
+  // is holding. So the list is no longer the authority — `config_schema.rs`'s
+  // `the_schema_check_glob_names_every_module_the_schemas_derive_from` holds it
+  // equal to the set of modules deriving `JsonSchema`, in BOTH directions, and
+  // fails naming whichever side moved. A literal list is what hk needs; a test
+  // is what keeps it true.
+  //
+  // Scope this honestly: `mise run hooks` is `hk check --all`, so `verify` and
+  // CI ran the step regardless of this glob and the landing path was never
+  // open. What a missing entry costs is the PRE-COMMIT firing — seconds of
+  // feedback traded for a ~3-minute `verify`.
   ["schema-check"] {
     glob =
       List(
+        "crates/batten/src/action.rs",
+        "crates/batten/src/attribution.rs",
+        "crates/batten/src/budget.rs",
+        "crates/batten/src/ci.rs",
         "crates/batten/src/config.rs",
+        "crates/batten/src/defects.rs",
+        "crates/batten/src/design.rs",
+        "crates/batten/src/drain.rs",
+        "crates/batten/src/effect.rs",
+        "crates/batten/src/judge.rs",
+        "crates/batten/src/markers.rs",
+        "crates/batten/src/outputs.rs",
         "crates/batten/src/provision.rs",
         "crates/batten/src/rules.rs",
         "crates/batten/src/severity.rs",
+        "crates/batten/src/transcript.rs",
+        "crates/batten/src/verbs.rs",
         "crates/batten/src/waiver.rs",
+        "crates/batten/src/worktree.rs",
         "schema/*",
       )
     check = "mise run schema-check"

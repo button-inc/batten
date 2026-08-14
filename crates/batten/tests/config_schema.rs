@@ -624,3 +624,97 @@ fn the_honoured_keys_still_load_together() {
         serde_json::json!(["a/**", "b/**"])
     );
 }
+
+// --- the drift gate fires on every module the schemas derive from (CLOUD-33) -
+//
+// `schema-check` diffs the committed artifacts against their generator, and
+// `hk.pkl` scopes it with a literal glob. A module reachable from `Config` but
+// absent from that glob is a gate that does not fire on the commit that moved
+// the artifact — CLOUD-59 measured exactly that and patched the list by hand,
+// adding the two modules its own change touched and leaving fourteen others
+// that were already reachable. The repair was incomplete the day it landed,
+// which is the argument for a gate rather than for a longer list.
+//
+// So the list stops being the authority. Set EQUALITY, in both directions:
+// a module deriving `JsonSchema` and absent from the glob is the CLOUD-59
+// failure; a glob entry naming a module that no longer derives one is a dead
+// entry claiming coverage it does not need. Equality rather than an exemption
+// list on purpose — an entry that turns out unreachable costs one extra
+// pre-commit run of a cheap gate, and a list of stated exceptions is a second
+// authority that goes stale the same way the first one did.
+
+/// The `crates/batten/src/*.rs` entries of `hk.pkl`'s `schema-check` glob.
+fn schema_check_globbed_modules() -> Vec<String> {
+    let hk = fs::read_to_string(at_root("hk.pkl")).expect("read hk.pkl");
+    let start = hk
+        .find("[\"schema-check\"]")
+        .expect("hk.pkl declares a schema-check step");
+    let rest = &hk[start..];
+    let step = &rest[..rest.find("\n  }").expect("the step closes")];
+
+    let mut modules: Vec<String> = step
+        .lines()
+        .filter_map(|line| {
+            let entry = line.trim().trim_end_matches(',').trim_matches('"');
+            entry
+                .strip_prefix("crates/batten/src/")?
+                .strip_suffix(".rs")
+                .map(str::to_owned)
+        })
+        .collect();
+    modules.sort();
+    modules
+}
+
+/// Every module under `crates/batten/src` that derives `JsonSchema`, which is
+/// exactly the set either schema can be reachable from.
+fn modules_deriving_json_schema() -> Vec<String> {
+    let mut modules: Vec<String> = fs::read_dir(at_root("crates/batten/src"))
+        .expect("read the crate source directory")
+        .map(|entry| entry.expect("read a directory entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| {
+            fs::read_to_string(path)
+                .expect("read a source file")
+                .contains("JsonSchema")
+        })
+        .map(|path| {
+            path.file_stem()
+                .expect("a .rs file has a stem")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    modules.sort();
+    modules
+}
+
+#[test]
+fn the_schema_check_glob_names_every_module_the_schemas_derive_from() {
+    let globbed = schema_check_globbed_modules();
+    let deriving = modules_deriving_json_schema();
+
+    assert!(
+        !globbed.is_empty() && !deriving.is_empty(),
+        "one side of this comparison came back empty, so the test would pass \
+         vacuously. Neither the glob nor the deriving set can legitimately be \
+         empty in this crate."
+    );
+
+    let missing: Vec<&String> = deriving.iter().filter(|m| !globbed.contains(m)).collect();
+    assert!(
+        missing.is_empty(),
+        "these modules derive `JsonSchema` and are absent from hk.pkl's \
+         `schema-check` glob, so a commit touching only one of them moves a \
+         published schema without firing the drift gate (CLOUD-59, CLOUD-33): \
+         {missing:?}"
+    );
+
+    let dead: Vec<&String> = globbed.iter().filter(|m| !deriving.contains(m)).collect();
+    assert!(
+        dead.is_empty(),
+        "hk.pkl's `schema-check` glob names these modules, which no longer \
+         derive `JsonSchema`. Drop them rather than leaving the list claiming \
+         a reach it does not have: {dead:?}"
+    );
+}

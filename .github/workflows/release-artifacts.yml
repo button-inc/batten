@@ -188,13 +188,22 @@ jobs:
         with:
           subject-path: ${{ steps.dist.outputs.binary }}
 
-  # The JSON Schema for `batten.toml` (CLOUD-33), published as a release asset.
+  # The JSON Schemas for the two config surfaces (CLOUD-33), published as release
+  # assets.
   #
   # A schema that only sits in the tree is a build artifact; one a validator can
-  # reach is published. This is what makes the consumer-side `.taplo.toml` rule
-  # possible — a consumer binds `batten.toml` to
-  #   https://github.com/button-inc/batten/releases/latest/download/batten.schema.json
+  # reach is published. This is what makes the consumer-side `.taplo.toml` rules
+  # possible — a consumer binds each file to the surface that describes it:
+  #   batten.toml       → .../releases/latest/download/batten.schema.json
+  #   batten.local.toml → .../releases/latest/download/batten.local.schema.json
   # and their config is validated in the editor, not first at `batten check`.
+  #
+  # BOTH, because CLOUD-239 split the override layer into its own Rust type and
+  # its own derived schema and this job kept publishing one of them. The
+  # committed-but-unpublished half is the build artifact the paragraph above
+  # rules out: a consumer had no URL to bind `batten.local.toml` to, so the
+  # surface where a silently-dropped override key does the most damage was the
+  # surface no editor could check.
   #
   # Its own job rather than a step in the matrix: the schema is platform
   # independent, so uploading it seven times would race seven writers onto one
@@ -217,7 +226,7 @@ jobs:
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           cache: false
-      - name: Derive the schema from the tagged config types
+      - name: Derive both schemas from the tagged config types
         run: mise run schema
       # The SBOM rides this job rather than a new one (CLOUD-262). GitHub rounds
       # each job up to the nearest minute, and this job already checks out the tag,
@@ -255,7 +264,7 @@ jobs:
           SPDX: ${{ steps.sbom.outputs.spdx }}
           CDX: ${{ steps.sbom.outputs.cdx }}
           REFERENCE: ${{ steps.reference.outputs.reference }}
-        run: gh release upload "$TAG" schema/batten.schema.json "$SPDX" "$CDX" "$REFERENCE" --clobber
+        run: gh release upload "$TAG" schema/batten.schema.json schema/batten.local.schema.json "$SPDX" "$CDX" "$REFERENCE" --clobber
 
   # The checksum manifest (CLOUD-278), the value every packaging channel consumes:
   # a Homebrew formula pins it, an aqua/mise registry entry carries it, and
