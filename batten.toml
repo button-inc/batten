@@ -106,6 +106,43 @@ protected = [
 [worktree]
 pileup_threshold = 3
 
+# ---------------------------------------------------------------------------
+# Pinned tools (CLOUD-90), fetched and cached out of tree.
+#
+# ripsecrets is the scanner the `secrets` rule kind runs (CLOUD-59). Adopted
+# rather than rebuilt — a credential is the banned shape nobody can enumerate, so
+# detection is prior art and only CONTAINMENT is ours. Its license row is in
+# CONTRIBUTING.md's table, resolved before the pin landed.
+#
+# THE CHECKSUMS WERE MEASURED, NEVER COPIED: each artifact was downloaded and
+# digested locally rather than read off a release page. A copied checksum attests
+# to what a page said, which is the one thing a pin is not for.
+#
+# The per-platform table exists because a compiled tool ships one artifact per
+# target, and an entry carries exactly one of this or a bare `url`/`sha256`. Keys
+# are `<os>-<arch>` off `std::env::consts`, so they name what a running binary
+# knows about itself. CI is `ubuntu-latest` everywhere, so `linux-x86_64` is the
+# only one CI exercises; the darwin rows are for contributors, and there is no
+# `linux-aarch64` row because upstream publishes no such artifact — a machine
+# that needs one gets exit 1 naming the key, never a silent skip.
+[[provision]]
+name = "ripsecrets"
+version = "0.1.11"
+unpack = "tar_gz"
+binary = "ripsecrets"
+
+[provision.platforms.linux-x86_64]
+url = "https://github.com/sirwart/ripsecrets/releases/download/v0.1.11/ripsecrets-0.1.11-x86_64-unknown-linux-gnu.tar.gz"
+sha256 = "9daf017dfdea242a58f672450a2526f0406211afe9e872c740adc49b42feccf5"
+
+[provision.platforms.macos-x86_64]
+url = "https://github.com/sirwart/ripsecrets/releases/download/v0.1.11/ripsecrets-0.1.11-x86_64-apple-darwin.tar.gz"
+sha256 = "21253f4d25be2626779c579c12e30aef1c67d7224cbed50eb7515a8cd45db56d"
+
+[provision.platforms.macos-aarch64]
+url = "https://github.com/sirwart/ripsecrets/releases/download/v0.1.11/ripsecrets-0.1.11-aarch64-apple-darwin.tar.gz"
+sha256 = "b2c822742e8cbf355ba0cb4cc690c3cd8fdc9ec1916c8148f27bd9098cb7aee4"
+
 # Batten gates this repository with its own engine — consumer #1 in practice,
 # not just in principle. Rules below whose `scope` is "tree" run under `batten
 # check`; rules whose `scope` is "mediated_call" are adjudicated by `batten hook`
@@ -260,6 +297,25 @@ spent by then."""
 # failing, "allow" switches the rule off) is required on every rule — the
 # default is stated here, never assumed. `scope` (where the rule looks) is a
 # separate key with its own vocabulary; "tree" is the whole working tree.
+# A credential in the tree (CLOUD-59). The kind runs the pinned scanner above and
+# turns each match into a pointer; the engine never holds a matched byte where it
+# could reach output, so this row cannot leak what it finds.
+#
+# `glob = "**"` because a secret can be in any file, and narrowing it would be
+# choosing which files are allowed to carry one. The tree walk already excludes
+# gitignored paths, so `target/` costs nothing.
+#
+# `enforce`, never `check`: the kind spawns, so the read-effect verb refuses the
+# whole ruleset naming `batten enforce`. `mise run batten-check` already calls
+# `enforce` for the same reason `no-conflict-markers` made it necessary.
+[[rule]]
+id = "no-secrets"
+kind = "secrets"
+glob = "**"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "rotate the credential and purge it from history; removing the line leaves it in every clone and every reflog, so no command can make this right"
+
 [[rule]]
 id = "no-conflict-markers"
 kind = "command"
@@ -831,6 +887,22 @@ scope = "tree"
 # EXPECTED TO LAPSE UNUSED. `base = "origin/main"`, so the moment this lands the
 # floor becomes the new count on its own and this row suppresses nothing. It
 # exists to get one commit past the gate, not to stand.
+# The one residual false positive `no-secrets` finds on this tree, measured
+# before the rule landed rather than discovered by it: ripsecrets matches
+# `${GH_PAT}` in a `git config url."https://x-access-token:${GH_PAT}@…"` line as
+# a credential embedded in a URL. It is a shell expansion of an Actions secret
+# injected at runtime — the shape is real, the instance is not.
+#
+# A `[[waiver]]` and never `severity = "allow"`: switching the rule off would
+# suppress every future finding too, while this names one path, states why, and
+# LAPSES. The expiry is the mechanism — when it does, someone re-reads the line
+# rather than inheriting a decision nobody remembers making.
+[[waiver]]
+rule = "no-secrets"
+path = ".github/workflows/release-plz.yml"
+reason = "ripsecrets reads `${GH_PAT}` in a git-config URL as an embedded credential; it is a shell expansion of an Actions secret, so nothing is committed. Re-check against the pinned scanner's next version."
+expires = "2026-11-14"
+
 [[waiver]]
 rule = "bats-tests-not-deleted"
 reason = "CLOUD-515 removes plan-hold; its three suites test deleted code, so the reduction from 1600 to 1552 is the deletion working rather than coverage lost."

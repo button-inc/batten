@@ -622,6 +622,18 @@ local gate = new Mapping<String, Step> {
         "mise-tasks/**",
         "AGENTS.md",
         ".serena/project.yml",
+        // CLOUD-59's `no-secrets` row globs `**`, because a credential can be in
+        // any file and narrowing that would be choosing which files may carry
+        // one. So this list is now total, and the entries above are kept rather
+        // than collapsed: each records WHICH rule made its path an input, which
+        // is what a reader needs the moment `**` is narrowed again.
+        //
+        // The cost is bounded by the tier, not by the glob: this step is
+        // `slow`-profile, so it is skipped at commit time and runs under
+        // `mise run ci` / `verify` / CI, where `--all` already ignores globs.
+        // What a total glob actually changes is `hk check --from-ref`, which now
+        // reaches this step for any commit at all.
+        "**",
       )
     check = "mise run batten-check"
   }
