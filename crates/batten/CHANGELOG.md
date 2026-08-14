@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.74](https://github.com/button-inc/batten/compare/v0.0.73...v0.0.74) - 2026-08-14
+
+### Added
+
+- *(drain)* withhold a flapping identity's repeats, and nothing else
+- *(store)* [**breaking**] journal enforce-surface scans, and give the secret key rotation and loss custody
+
+### Other
+
+- *(store)* drive the enforce-surface journal and key custody over the binary
+- *(store)* pin the journal, custody and emission-policy laws in-module
+
 ## [0.0.73](https://github.com/button-inc/batten/compare/v0.0.72...v0.0.73) - 2026-08-14
 
 ### Added
