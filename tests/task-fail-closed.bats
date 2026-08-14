@@ -7,17 +7,33 @@
 # caller: `verify` invokes linear-check and commit-lint and then writes the
 # receipt `ready-guard` honours, so an unguarded call there means `gh pr ready`
 # is allowed — and CI minutes spent — on a branch that failed its own pre-flight.
+#
+# CLOUD-407 split that caller in two: `verify` is now a dependency-free mapper
+# owning the exit-code contract, and `verify:gated` carries the gate set and the
+# receipt. The fail-closed property is a property of BOTH bodies — a bare call is
+# just as silent in either — so `BODY` is their concatenation and every assertion
+# below reads it unchanged. `DEPENDS` moved with the gates. The exit-code
+# contract itself is tests/verify.bats's; this file is only about the shape.
 
 setup() {
 	cd "$BATS_TEST_DIRNAME/.." || return 1
-	BODY=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
-	DEPENDS=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^depends = /{print; exit}' mise.toml)
+	MAPPER=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
+	GATED=$(awk '/^\[tasks\."verify:gated"\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
+	# Concatenated in RUN ORDER, which is what keeps the ordering assertions below
+	# meaningful: `linear-check` really does precede the receipt write, across the
+	# task boundary, because the mapper reaches `verify:gated` only past it.
+	BODY="$MAPPER
+$GATED"
+	DEPENDS=$(awk '/^\[tasks\."verify:gated"\]/{f=1} f&&/^depends = /{print; exit}' mise.toml)
 }
 
-@test "the verify body was found at all — this suite is not passing vacuously" {
-	[ -n "$BODY" ]
-	[[ "$BODY" == *"linear-check"* ]]
-	[[ "$BODY" == *"receipt record"* ]]
+@test "both verify bodies were found at all — this suite is not passing vacuously" {
+	[ -n "$MAPPER" ]
+	[ -n "$GATED" ]
+	[[ "$MAPPER" == *"linear-check"* ]]
+	[[ "$MAPPER" == *"verify:gated"* ]]
+	[[ "$GATED" == *"receipt record"* ]]
+	[ -n "$DEPENDS" ]
 }
 
 @test "every command verify's verdict depends on is guarded, since the body has no set -e" {
@@ -70,8 +86,14 @@ setup() {
 	# measured incident: a backgrounded `land` verifying while the session edited
 	# the next ticket) is invisible to it. The body call is the load-bearing one,
 	# which is why its position relative to the receipt write is asserted too.
+	#
+	# Both ends moved to `verify:gated` together under CLOUD-407, which is what
+	# keeps the pair a pair: the window this brackets is the gate set's, and the
+	# gate set is what `verify:gated` now owns. Splitting them across the two
+	# tasks would leave the `depends` end bracketing a window the body end no
+	# longer closes.
 	[[ "$DEPENDS" == *"tree-clean"* ]]
-	[[ "$BODY" == *"tree-clean"* ]]
+	[[ "$GATED" == *"tree-clean"* ]]
 	local guard_line receipt_line
 	guard_line=$(grep -n 'tree-clean' <<<"$BODY" | head -1 | cut -d: -f1)
 	receipt_line=$(grep -n 'receipt record' <<<"$BODY" | head -1 | cut -d: -f1)

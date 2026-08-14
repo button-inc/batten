@@ -334,6 +334,11 @@ if [ -f "\$rc" ]; then
   # A failure can be scripted for ONE call rather than for the whole run, which
   # is what a lap-and-recover case needs: the second lap must see the task pass.
   [ ! -f "\$rc.once" ] || rm -f "\$rc" "\$rc.once"
+  # CLOUD-407's lever: the failing gate's OWN words, before the generic line. A
+  # real refusal names \`path:line\`, and the whole defect was that those lines
+  # existed and never reached the operator — so a case has to be able to write
+  # them and then assert they came back out.
+  [ ! -f "\$rc.says" ] || cat "\$rc.says" >&2
   echo "::error:: \$2 failed" >&2
   exit "\$code"
 fi
@@ -921,6 +926,35 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	# not turn a stop-on-content into a silent retry loop that burns
 	# LAND_MAX_LAPS before reporting the same failure.
 	[ "$(verify_calls)" -eq 1 ]
+}
+
+@test "CLOUD-407: a refused tree stops on lap 1 and carries the gate's own pointers" {
+	# Measured on PR #322. `batten check` refused three files by name, `verify`
+	# passed that refusal out as exit 2 through its `depends`, and `land` read the
+	# 2 as "main moved" — eight laps, ~13 minutes, and an operator told to "look
+	# before lapping again" at a branch whose defect was three `path:line`
+	# pointers printed twenty lines above every one of those messages.
+	#
+	# Two halves, and this row is the second. tests/verify.bats holds the first:
+	# `verify` can no longer mint a 2 for content at all. What is left for `land`
+	# is to stop on lap 1 AND to say what was actually refused.
+	task_fails verify
+	printf '%s\n' \
+		'[hooks] batten-check stderr:' \
+		'[hooks] crates/batten/tests/primitives.rs:1171 no-consumer-repo-name' \
+		'[hooks] crates/batten/tests/primitives.rs:1174 no-consumer-repo-name' \
+		>"$BATS_TEST_TMPDIR/rc.mise.verify.says"
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	# Lap 1, not the backstop. Same assertion as the plain stop above, restated
+	# here because the CODE is what used to decide it and no longer does.
+	[ "$(verify_calls)" -eq 1 ]
+	[ "$(comments)" -eq 0 ]
+	# The pointers survived the race, the tee, and the message assembly.
+	[[ "$output" == *"primitives.rs:1171 no-consumer-repo-name"* ]]
+	[[ "$output" == *"primitives.rs:1174 no-consumer-repo-name"* ]]
+	# And it is NOT reported as the benign race, which is the whole defect.
+	[[ "$output" != *"that is a rebase"* ]]
 }
 
 @test "a verify that failed only because main moved laps instead of stopping" {

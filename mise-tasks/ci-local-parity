@@ -110,9 +110,24 @@ problem() {
 	fail=1
 }
 
-# `[tasks.verify]`'s own block: its `depends` list plus its body. A task named
-# in either is one an agent runs locally before readying.
-verify_block=$(awk '/^\[tasks\.verify\]/{p=1;next} /^\[/{p=0} p' "$manifest")
+# What `mise run verify` actually runs: `[tasks.verify]`'s block AND
+# `[tasks."verify:gated"]`'s, `depends` lists and bodies alike. A task named in
+# any of them is one an agent runs locally before readying.
+#
+# TWO blocks since CLOUD-407, and reading only the first is why this gate is
+# named here rather than left to infer. `verify` is now a dependency-free mapper
+# owning the exit-code contract — 2 means "main moved", every other failure is a
+# stop — and the whole gate set moved to `verify:gated` so that no `depends`
+# code can escape the mapping. The tasks did not stop being run; they moved one
+# hop. A reader that follows only the first hop reports every one of them as
+# CI-only, which is a false alarm rather than a missed one, so this fails in the
+# safe direction — but it fails on every commit, which is its own defect.
+#
+# The hop is spelled out rather than chased generically. `verify` names its
+# successor in exactly one place, a third link would break this loudly (a CI task
+# found in no block is a `problem`), and an awk that followed `mise run` calls
+# transitively would be a second authority on the task graph mise already owns.
+verify_block=$(awk '/^\[tasks\.verify\]|^\[tasks\."verify:gated"\]/{p=1;next} /^\[/{p=0} p' "$manifest")
 if [ -z "$verify_block" ]; then
 	problem "no [tasks.verify] in $manifest, so there is nothing to compare CI against."
 	exit 1

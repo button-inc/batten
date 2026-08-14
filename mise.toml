@@ -930,6 +930,68 @@ depends = ["hooks", "deny"]
 [tasks.verify]
 description = "Full local pre-flight — run this before marking any draft PR ready"
 shell = "bash -c"
+# NO `depends`, and that absence is the whole of CLOUD-407. mise runs a
+# dependency BEFORE the body and propagates its exit code VERBATIM, so every
+# code a `depends` task can mint escaped this task unmapped — including the one
+# code that means something else here. `batten check` exits 2 for a policy
+# violation (house-style §6-§7, non-negotiable rule 5) and reaches `verify`
+# through `hooks` -> `ci`; `tree-clean` and `semver` each exit 2 for "could not
+# look". `land` reads a 2 from `verify` as "main moved under the run, lap", so a
+# real refusal of the tree read as the harmless rebase race and lapped to the
+# backstop — measured on PR #322, eight laps and ~13 minutes, with three named
+# `path:line` pointers nobody surfaced.
+#
+# So this task is now a MAPPER and nothing else. It owns exactly one decision:
+# which failures mean "lap" and which mean "stop". Everything that can fail for a
+# content reason lives in `verify:gated` and reaches here through one guarded
+# call, which flattens whatever code it carried to 1.
+#
+# The ordering changed with the split, deliberately: `linear-check` now runs
+# BEFORE the expensive gate set rather than after it. That is the cheap staleness
+# question preceding the costly one, which is the landing loop's own economy —
+# a branch that is behind is going to lap regardless, and paying for `ci` and
+# `cross-check` first buys nothing. `tree-clean`'s fail-fast is unaffected: it is
+# still in `verify:gated`'s `depends`, which mise runs in parallel.
+run = '''
+# A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
+# every step whose failure changes the verdict is guarded by hand. Unguarded,
+# a failed linear-check let this body run commit-lint against a stale
+# origin/main, write the receipt below, and print "fast-forward-green" — a
+# silent false green in the one gate that decides whether CI minutes get spent.
+# The code is PROPAGATED, not flattened (CLOUD-318). `linear-check` answers 2
+# for "measured, and this branch is behind" and 1 for the two environment
+# refusals — a fetch that failed, an origin/main that does not resolve. A caller
+# driving a loop laps on the first and stops on the second, and it can only do
+# that if the distinction survives this guard.
+#
+# This is the ONLY `exit 2` in the task, and that is now a checkable property
+# rather than an intention (tests/verify.bats). Everything else is a stop.
+linear_rc=0
+mise run linear-check || linear_rc=$?
+if [ "$linear_rc" = 2 ]; then
+  echo "::error:: verify: main moved under this branch — rebase and verify again, there is nothing here to fix. No receipt written." >&2
+  exit 2
+fi
+if [ "$linear_rc" != 0 ]; then
+  echo "::error:: verify: linear-check could not establish linearity at all — see its message. No receipt written." >&2
+  exit 1
+fi
+# The one call that flattens. Whatever `verify:gated` exited — a `depends` task's
+# code, a body step's, a policy verdict's 2 — a content failure is a stop, and it
+# leaves here as 1 so no caller can mistake it for the rebase race above.
+if ! mise run verify:gated; then
+  echo "::error:: verify: a gate refused this tree — read the step's own path:line pointers above, this is not a rebase. No receipt written." >&2
+  exit 1
+fi
+'''
+
+[tasks."verify:gated"]
+description = "Every gate verify runs, and the receipt — invoked only through `verify`, which maps its exit code"
+shell = "bash -c"
+# Split out of `[tasks.verify]` for CLOUD-407. Everything here can fail for a
+# CONTENT reason, so nothing here needs to preserve a distinct exit code: the
+# caller flattens the lot to 1. That is what lets `depends` stay a `depends`.
+#
 # lock-check is deliberately NOT here. It runs `mise lock` — a remote round
 # trip that rewrites the tracked lockfile — so its verdict is "did upstream
 # change since this commit", a property of the world rather than of the branch.
@@ -950,16 +1012,8 @@ shell = "bash -c"
 depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "msrv", "semver"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
-# every step whose failure changes the verdict is guarded by hand. Unguarded,
-# a failed linear-check let this body run commit-lint against a stale
-# origin/main, write the receipt below, and print "fast-forward-green" — a
-# silent false green in the one gate that decides whether CI minutes get spent.
-# The code is PROPAGATED, not flattened (CLOUD-318). `linear-check` answers 2
-# for "measured, and this branch is behind" and 1 for the two environment
-# refusals — a fetch that failed, an origin/main that does not resolve. A caller
-# driving a loop laps on the first and stops on the second, and it can only do
-# that if the distinction survives this guard. Everything below stays 1: a
-# content failure is a stop wherever it comes from.
+# every step whose failure changes the verdict is guarded by hand.
+#
 # First, because it decides whether anything below is ABOUT the commit it names.
 # Every gate above read the working tree; the receipt at the bottom is keyed to
 # HEAD. A dirty tree that FAILS is loud and self-correcting; one that PASSES
@@ -967,16 +1021,6 @@ run = '''
 # commit that was never the thing that passed (CLOUD-277).
 if ! mise run tree-clean; then
   echo "::error:: verify: the working tree is not the bytes at HEAD, so a receipt naming HEAD would attest a run of something else. No receipt written." >&2
-  exit 1
-fi
-linear_rc=0
-mise run linear-check || linear_rc=$?
-if [ "$linear_rc" = 2 ]; then
-  echo "::error:: verify: main moved under this branch — rebase and verify again, there is nothing here to fix. No receipt written." >&2
-  exit 2
-fi
-if [ "$linear_rc" != 0 ]; then
-  echo "::error:: verify: linear-check could not establish linearity at all — see its message. No receipt written." >&2
   exit 1
 fi
 if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mise run commit-lint; then

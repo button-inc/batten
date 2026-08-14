@@ -44,8 +44,13 @@ setup() {
 			}
 		' "$MANIFEST"
 	}
+	# `verify:gated`, not `verify` — CLOUD-407 moved the gate set there when
+	# `verify` became a dependency-free mapper over the exit-code contract. The
+	# property this suite asserts is unchanged and so is where it is decided: the
+	# dependency closure of `mise run verify` is what drags a task onto the
+	# landing path, and `verify:gated` is now the link that carries it.
 	verify_depends() {
-		awk '/^\[tasks\.verify\]/ { intask = 1; next }
+		awk '/^\[tasks\."verify:gated"\]/ { intask = 1; next }
 		     intask && /^\[/ { exit }
 		     intask && /^depends = / { print; exit }' "$MANIFEST"
 	}

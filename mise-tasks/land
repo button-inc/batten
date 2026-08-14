@@ -1036,13 +1036,26 @@ while :; do
 		# costs no rate limit, so the poll's price is the round trip.
 		rc_v="$(mktemp)"
 		rc_vm="$(mktemp)"
+		log_v="$(mktemp)"
 		: >"$rc_v"
 		: >"$rc_vm"
+		: >"$log_v"
 		fifo_v="$(new_rendezvous)" ||
 			die "could not create the race rendezvous for verify — the lap cannot wait on two answers without it, and guessing which one won is the false green this race exists to avoid."
 		(
-			mise run verify
-			echo $? >"$rc_v"
+			# TEED, not redirected (CLOUD-407). The operator still sees verify
+			# stream live — a redirect would make a ~170s gate look hung — and the
+			# copy is what lets the stop below carry the gate's own `path:line`
+			# pointers. They already existed on PR #322, three of them, and the
+			# only reason nobody saw them was that this subshell's output scrolled
+			# past twenty lines above a message that said "rebase".
+			#
+			# `${PIPESTATUS[0]}` rather than `$?`, spelled out rather than leaning
+			# on `pipefail`: the verdict is verify's, and reading it from the
+			# pipeline's aggregate would make a failure of `tee` — a full disk, a
+			# vanished tmpdir — indistinguishable from a refused tree.
+			mise run verify 2>&1 | tee "$log_v"
+			echo "${PIPESTATUS[0]}" >"$rc_v"
 			echo v >"$fifo_v"
 		) &
 		v_pid=$!
@@ -1064,7 +1077,11 @@ while :; do
 		race_pid_b=
 		verify_rc="$(cat "$rc_v" 2>/dev/null)"
 		vmain_rc="$(cat "$rc_vm" 2>/dev/null)"
-		rm -f "$rc_v" "$rc_vm"
+		# The tail is taken BEFORE the temp files go, because `die` exits and a
+		# message assembled after the cleanup would name a file that is gone. It
+		# is only ever read on the stop path below; a lap that laps pays nothing.
+		verify_tail="$(tail -n "${LAND_VERIFY_TAIL_LINES:-40}" "$log_v" 2>/dev/null || true)"
+		rm -f "$rc_v" "$rc_vm" "$log_v"
 		if [ -z "$verify_rc" ] && [ "$vmain_rc" = "0" ]; then
 			echo "land: lap $lap — main moved past $(git rev-parse --short origin/main) while verify ran; its receipt would be void, so the rest of the gate is not paid out. Lapping."
 			continue
@@ -1080,8 +1097,15 @@ while :; do
 			echo "land: lap $lap — verify refused only because main moved past $(git rev-parse --short origin/main) while it ran; that is a rebase, not a defect. Lapping."
 			continue
 		fi
+		# CLOUD-407: the stop carries the gate's own last words. `verify` now exits
+		# 2 for exactly one reason — main moved — so every other non-zero arriving
+		# here is a refusal OF THIS TREE, and the thing the operator needs is the
+		# `path:line` the refusing step already printed. Pointer-only by
+		# inheritance: every gate's output is held to non-negotiable rule 4, and
+		# these bytes were on the terminal a moment ago regardless.
 		[ "$verify_rc" = 0 ] ||
-			die "verify failed on $(git rev-parse --short HEAD). Reproduce and fix locally; CI is not where you discover this."
+			die "verify failed on $(git rev-parse --short HEAD) (exit $verify_rc). Reproduce and fix locally; CI is not where you discover this. Its last words:
+$verify_tail"
 		mise run verified || die "no verify receipt for HEAD — something swallowed verify's verdict."
 	fi
 
