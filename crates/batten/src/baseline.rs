@@ -29,10 +29,14 @@
 //! authoritative ref at its currently-fetched SHA". That claim cannot be spelled
 //! as ancestry in this crate, and the refusal is a compiled one:
 //! `git::tests::no_ancestry_decides_merged_ness` scans every `src/*.rs` file —
-//! including `git.rs` itself — for `merge-base`, `is-ancestor`, `--contains` and
-//! `--ancestry-path`. Merged-ness is decided by **patch identity**, because a
-//! rebased or squashed landing is invisible to ancestry and these repositories
-//! land by fast-forward, where a landed branch is an ancestor of nothing.
+//! including `git.rs` itself, and including this module — for the whole
+//! reachability-answer vocabulary, which is why the tokens are named nowhere in
+//! this file. (It caught this paragraph's first draft, which spelled them out to
+//! explain them. A gate that exempted the prose describing it would be a gate
+//! with a hole shaped exactly like a comment.) Merged-ness is decided by **patch
+//! identity**, because a rebased or squashed landing is invisible to ancestry
+//! and these repositories land by fast-forward, where a landed branch is an
+//! ancestor of nothing.
 //!
 //! So the predicate is the one the tree already has:
 //! [`crate::worktree::status`], whose `unlanded` half is `git::landing` — patch
