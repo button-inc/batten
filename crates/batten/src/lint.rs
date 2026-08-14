@@ -120,6 +120,12 @@ const WAIVER_NAMES_NO_RULE: &str = "waiver-names-no-rule";
 /// A waiver whose expiry has passed. It has already stopped suppressing — this is
 /// the alarm that says so, rather than leaving a dead row in the file forever.
 const WAIVER_EXPIRED: &str = "waiver-expired";
+/// A waiver over a rule whose `kind` mints no [`crate::rules::Finding`], so
+/// [`crate::waiver::apply`] never sees one to suppress (CLOUD-293). The third
+/// dead-suppression shape, and the one that survives both the others: the rule
+/// exists, so `waiver-names-no-rule` is satisfied, and the expiry is in the
+/// future, so `waiver-expired` is too.
+const WAIVER_UNREACHABLE_KIND: &str = "waiver-unreachable-kind";
 /// The spans of the keys the lint locates.
 ///
 /// A parallel view over the same TOML, deserialized with [`Spanned`] so a smell
@@ -229,17 +235,38 @@ pub fn smells(
     // That needs the rules run, and `rules::run_all` can spawn processes — putting
     // one behind `config lint` would put a spawning path behind a verb the derived
     // read-only allowlist pins as `read`. Filed rather than smuggled in.
-    for waiver in &located.waivers {
+    //
+    // The located view is paired with the parsed one by position: both
+    // deserialize the same `[[waiver]]` array from the same bytes, in order, so
+    // index `i` is one row seen two ways. That pairing is what lets a pointer
+    // reuse `Waiver::key`'s single rendering instead of re-deriving `rule` and
+    // `path` into a second spelling of the same identity.
+    for (waiver, parsed) in located.waivers.iter().zip(&config.waivers) {
         let at = Where::Line(line_of(text, waiver.rule.span().start));
-        if !config
+        match config
             .rules
             .iter()
-            .any(|rule| rule.id == *waiver.rule.get_ref())
+            .find(|rule| rule.id == *waiver.rule.get_ref())
         {
-            found.push(Smell {
+            None => found.push(Smell {
                 at: at.clone(),
                 id: WAIVER_NAMES_NO_RULE,
-            });
+            }),
+            // The rule exists and still cannot be waived: `apply` filters
+            // findings, and this kind mints none (`waiver::reaches` says which,
+            // and says it once — this module must not carry a second list that
+            // can disagree with the filter it describes).
+            //
+            // Located by key rather than line, which is what carries the
+            // unreachable kind alongside the waiver's identity in one pointer —
+            // `host_drift` below composes a `Where::Key` for the same reason. The
+            // key is distinct per waiver, so two of them cannot collapse under
+            // `dedup` (CLOUD-233).
+            Some(rule) if !crate::waiver::reaches(rule.kind) => found.push(Smell {
+                at: Where::Key(format!("{} {}", parsed.key(), rule.kind.as_str())),
+                id: WAIVER_UNREACHABLE_KIND,
+            }),
+            Some(_) => {}
         }
         // The expiry is a date, and `today` is the injected input the module docs
         // in `crate::waiver` explain: the smell list for a given config is a
@@ -589,6 +616,87 @@ mod tests {
         let mut found = ids(&text);
         found.sort_unstable();
         assert_eq!(found, vec![WAIVER_EXPIRED, WAIVER_NAMES_NO_RULE]);
+    }
+
+    /// A config declaring one `shape` rule, plus whatever waiver rows follow.
+    ///
+    /// A shape row reads no `glob` — it matches a mediated command line — so it
+    /// is spelled out rather than reusing [`with_waivers`]'s forbid row.
+    fn with_shape_rule(waivers: &str) -> String {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"no-merge\"\nkind = \"shape\"\n\
+             scope = \"mediated_call\"\npattern = \"gh pr merge\"\n\
+             reason = \"land by fast-forward\"\nseverity = \"deny\"\n{waivers}"
+        )
+    }
+
+    #[test]
+    fn a_waiver_over_a_kind_that_mints_no_finding_is_a_smell() {
+        // The rule exists and the expiry is live, so neither sibling smell fires
+        // — and the waiver still suppresses nothing, because `apply` filters
+        // findings and a shape row is adjudicated to a `Decision`.
+        let text = with_shape_rule(&waiver_row("no-merge", "2099-01-01"));
+        assert_eq!(ids(&text), vec![WAIVER_UNREACHABLE_KIND]);
+    }
+
+    #[test]
+    fn the_unreachable_pointer_names_the_waiver_and_the_kind() {
+        let text = with_shape_rule(&waiver_row("no-merge", "2099-01-01"));
+        let found = smells(&text, "test", None, today()).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].line_text(),
+            "batten.toml:waiver[no-merge] shape waiver-unreachable-kind"
+        );
+        assert!(
+            !found[0].line_text().contains("tracked"),
+            "the pointer must never carry the justification text"
+        );
+        assert!(
+            !found[0].line_text().contains("gh pr merge"),
+            "nor the shape the waived rule bans"
+        );
+    }
+
+    #[test]
+    fn a_waiver_over_a_reachable_kind_is_not_the_smell() {
+        // The half that keeps the lint worth reading: it must not fire on every
+        // waiver in the file. `forbid` mints findings, so its waiver is live.
+        let text = with_waivers(&waiver_row("r", "2099-01-01"));
+        assert!(ids(&text).is_empty());
+    }
+
+    #[test]
+    fn a_narrowed_and_a_whole_rule_waiver_of_one_kind_both_survive_dedup() {
+        // CLOUD-233's shape again: two waivers of ONE rule are located by the
+        // same line, so a line-keyed pointer would collapse them. The waiver key
+        // distinguishes them by the path they narrow to.
+        let text = with_shape_rule(&format!(
+            "{}\n[[waiver]]\nrule = \"no-merge\"\nreason = \"tracked\"\n\
+             expires = \"2099-01-01\"\npath = \"vendor/**\"\n",
+            waiver_row("no-merge", "2099-01-01")
+        ));
+        let found = smells(&text, "test", None, today()).unwrap();
+        assert_eq!(
+            found
+                .iter()
+                .map(|smell| smell.line_text())
+                .collect::<Vec<_>>(),
+            vec![
+                "batten.toml:waiver[no-merge] shape waiver-unreachable-kind",
+                "batten.toml:waiver[no-merge][vendor/**] shape waiver-unreachable-kind",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unreachable_waiver_that_also_lapsed_carries_both_smells() {
+        // Separately actionable, and reported separately: fixing the expiry must
+        // not hide the fact that the row could never have applied.
+        let text = with_shape_rule(&waiver_row("no-merge", "2020-01-01"));
+        let mut found = ids(&text);
+        found.sort_unstable();
+        assert_eq!(found, vec![WAIVER_EXPIRED, WAIVER_UNREACHABLE_KIND]);
     }
 
     #[test]

@@ -296,8 +296,12 @@ reason = "set the tool's own severity to deny; do not let a warning ride an exit
 # the same glob vocabulary a rule's own `glob` uses. Absent means the whole rule —
 # the widest a waiver can be, which is why it has to be reached deliberately.
 #
-# `batten config lint` names two dead shapes: `waiver-names-no-rule` (no [[rule]]
-# declares that id) and `waiver-expired`. And `--config-from <ref>` reports an
+# `batten config lint` names three dead shapes: `waiver-names-no-rule` (no
+# [[rule]] declares that id), `waiver-expired`, and `waiver-unreachable-kind` —
+# the rule exists and its `kind` produces no finding to suppress, which is every
+# `shape` and `receipt` row (those are adjudicated per mediated call) and every
+# `judge` row (advisory, so it never becomes a finding at all).
+# And `--config-from <ref>` reports an
 # added waiver as `waiver-added`: it is the one config entity whose PRESENCE
 # lowers the bar, so a branch that adds one is naming a weakening.
 #

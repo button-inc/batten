@@ -597,13 +597,19 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   `receipt.rs`'s "expiry is a git fact, never a clock" is right there and does not
   generalise, because a receipt's claim is about a SHA and a waiver's warrant
   decays in calendar time. Each application writes a pointer-only audit line to
-  stderr through `output::message`. Scope bound: a `shape` rule cannot be waived
-  (`adjudicate` returns `Decision`, not `Finding`). A local file may add a waiver
+  stderr through `output::message`. Scope bound: `reaches` is the authority on
+  which kinds a waiver covers — `apply` filters `Finding`s, so `shape`/`receipt`
+  (adjudicated to a `Decision`) and `judge` (refused `severity`, so `run_rule`
+  skips it) are all out of reach, and its match is exhaustive so a new kind
+  cannot default to reachable. A local file may add a waiver
   for a rule the authority does not declare and is refused outright for one it
   does — the one direction where the local layer lowers the bar, and `trust.rs`'s
   `added_entries`/`WaiverAdded` is the first _added_-direction weakening in the
-  tree. Dead-waiver diagnostics are `lint.rs`'s `waiver-names-no-rule` and
-  `waiver-expired`; the runtime one (a waiver matching nothing) is deliberately
+  tree. Dead-waiver diagnostics are `lint.rs`'s `waiver-names-no-rule`,
+  `waiver-expired` and `waiver-unreachable-kind` (the rule exists and its kind
+  mints no `Finding`, so the row survives the other two and still suppresses
+  nothing — read through `waiver::reaches`, never a second list here);
+  the runtime one (a waiver matching nothing) is deliberately
   out of scope — it would put `rules::run_all`'s spawning path behind a `read` verb.
 - `worktree.rs` — at-risk work detection (CLOUD-51), surfaced as `worktree
 status`. Three categories as one read gate: **uncommitted** (the tree is not

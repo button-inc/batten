@@ -154,6 +154,72 @@ fn the_output_never_carries_the_config_bytes() {
     assert!(!text.contains("version = 1"), "got: {text}");
 }
 
+// --- a waiver that cannot reach its rule (CLOUD-293) -------------------------
+
+/// A config with one `shape` rule — the mediated-call kind, which reads no
+/// `glob` — plus whatever waiver rows the case needs.
+fn shape_config(waivers: &str) -> String {
+    format!(
+        "version = 1\n\n[[rule]]\nid = \"no-merge\"\nkind = \"shape\"\n\
+         scope = \"mediated_call\"\npattern = \"gh pr merge\"\n\
+         reason = \"land by fast-forward\"\nseverity = \"deny\"\n{waivers}"
+    )
+}
+
+fn waiver_row(rule: &str) -> String {
+    format!(
+        "\n[[waiver]]\nrule = \"{rule}\"\nreason = \"tracked in CLOUD-1\"\nexpires = \"2099-01-01\"\n"
+    )
+}
+
+#[test]
+fn a_waiver_over_an_unreachable_kind_is_a_violation_naming_the_kind() {
+    // CLOUD-293's headline acceptance, over the compiled binary. The rule
+    // exists and the expiry is live, so neither sibling waiver smell fires —
+    // and `waiver::apply` filters findings, which a shape row never mints.
+    let dir = repo_with_config("lint-waiver-shape", &shape_config(&waiver_row("no-merge")));
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:waiver[no-merge] shape waiver-unreachable-kind\nconfig-lint: 1 smell(s)\n"
+    );
+}
+
+#[test]
+fn a_waiver_over_a_reachable_kind_exits_zero() {
+    // The half that keeps the smell worth reading: it must not fire on every
+    // waiver in the file. `forbid` mints findings, so its waiver is live.
+    let dir = repo_with_config(
+        "lint-waiver-forbid",
+        &format!("version = 1\n{}{}", rule("r", "deny"), waiver_row("r")),
+    );
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "config-lint: 0 smell(s)\n");
+}
+
+#[test]
+fn the_unreachable_smell_reaches_the_machine_channel_unchanged() {
+    // No new field: the pointer splits into the same `at`/`id` pair every other
+    // smell uses, so a consumer needs no second convention for this one.
+    let dir = repo_with_config("lint-waiver-json", &shape_config(&waiver_row("no-merge")));
+    let output = lint(&dir, &["-J"]);
+    assert_eq!(output.status.code(), Some(2));
+    let text = stdout(&output);
+    assert!(
+        text.contains("\"at\": \"waiver[no-merge] shape\""),
+        "got: {text}"
+    );
+    assert!(
+        text.contains("\"id\": \"waiver-unreachable-kind\""),
+        "got: {text}"
+    );
+    // Pointer-only: never the justification, never the shape the rule bans.
+    assert!(!text.contains("tracked in CLOUD-1"), "got: {text}");
+    assert!(!text.contains("gh pr merge"), "got: {text}");
+}
+
 // --- base-ref comparison smells ----------------------------------------------
 
 #[test]
