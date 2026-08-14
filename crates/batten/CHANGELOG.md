@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.70](https://github.com/button-inc/batten/compare/v0.0.69...v0.0.70) - 2026-08-14
+
+### Added
+
+- *(bypass)* flag a refused operation retried with enforcement off
+- *(provision)* [**breaking**] pin one artifact per platform, and resolve the binary's path
+- *(completion)* flag a session that signalled done with work not landed
+- *(identity)* [**breaking**] route secret spans to the keyed path by type, and mint the key
+
+### Fixed
+
+- *(completion)* land the rebased fixture behind a moved trunk
+
 ## [0.0.69](https://github.com/button-inc/batten/compare/v0.0.68...v0.0.69) - 2026-08-13
 
 ### Added
