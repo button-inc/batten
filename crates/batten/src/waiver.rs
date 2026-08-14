@@ -53,13 +53,23 @@
 //! *counted*. So this module filters the findings vector before the verdict is
 //! taken, and nothing about the severity taxonomy changes.
 //!
-//! ## Scope bound: a shape rule cannot be waived
+//! ## Scope bound: three kinds a waiver cannot reach
 //!
-//! [`crate::hook::adjudicate`] returns a `Decision`, not a
-//! [`crate::rules::Finding`], and is contractually clock-free ("no I/O, no
-//! environment, no clock"). Mediated calls therefore sit outside this filter by
-//! construction, and a waiver naming a `kind = "shape"` rule suppresses nothing.
-//! Stated rather than silently true, because a consumer will eventually want it.
+//! [`apply`] filters [`crate::rules::Finding`]s, so the only kinds a waiver
+//! reaches are the ones that can *mint* one. Three cannot, for two different
+//! reasons, and [`reaches`] is the authority — stated once there and read by
+//! [`crate::lint`]'s `waiver-unreachable-kind` smell rather than restated beside
+//! it (CLOUD-293), so the filter and the diagnostic cannot come to disagree
+//! about which kinds a waiver covers.
+//!
+//! Stated rather than silently true, because a consumer will eventually want it:
+//! a waiver naming one of those kinds loads clean, passes `waiver-names-no-rule`
+//! because the rule genuinely exists, and suppresses nothing.
+//!
+//! Whether the mediation channel *should* stay outside this filter is a decision
+//! rather than a fact about where [`apply`] happens to sit, and it is CLOUD-606's
+//! — [`crate::hook::adjudicate`] is contractually pure ("no I/O, no environment,
+//! no clock") and an expiry is a clock, which is the tension that issue owns.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -68,7 +78,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UsageError;
-use crate::rules::{self, Finding};
+use crate::rules::{self, Finding, RuleKind};
 
 /// A calendar date, to the day.
 ///
@@ -354,6 +364,39 @@ impl Applied {
     }
 }
 
+/// Whether a waiver can reach findings of `kind` (CLOUD-293).
+///
+/// [`apply`] filters [`Finding`]s, so this is not an extra policy about waivers —
+/// it is the same question asked one step earlier: **can this kind mint a
+/// finding at all?** A kind that cannot is a kind a waiver over it suppresses
+/// nothing of, whatever the waiver says.
+///
+/// Two independent reasons put a kind outside, and keeping them distinct is what
+/// stops this from reading as an arbitrary list:
+///
+/// * **The mediated call.** [`RuleKind::scopes`] pairs `shape` and `receipt`
+///   with [`crate::rules::RuleScope::MediatedCall`] alone, and `run_rule` returns
+///   `RuleSkipped` for any scope but `Tree`. Those rows are adjudicated by
+///   [`crate::hook::adjudicate`], which returns a `Decision` rather than a
+///   [`Finding`].
+/// * **The advisory kind.** `judge` is tree-scoped and still cannot mint one:
+///   [`crate::rules::Rule::severity`] is `Allow` for a row carrying no
+///   `severity` column, and a judge row is refused that column — so `run_rule`
+///   skips it as configured off. [`RuleKind::Judge`]'s own docs put it as
+///   "blocking is not forbidden here, it is unrepresentable".
+///
+/// The `match` is exhaustive with no wildcard arm on purpose: a new
+/// [`RuleKind`] fails to compile until it is classified here, which is a
+/// stronger guarantee than the runtime totality [`RuleKind::ALL`] gives — the
+/// answer cannot default to "reachable" for a kind nobody thought about.
+#[must_use]
+pub const fn reaches(kind: RuleKind) -> bool {
+    match kind {
+        RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet | RuleKind::Secrets => true,
+        RuleKind::Shape | RuleKind::Receipt | RuleKind::Judge => false,
+    }
+}
+
 /// Partition `findings` into the ones that survive and the suppressions applied.
 ///
 /// This is the whole predicate, and it is a pure function of its three inputs —
@@ -626,6 +669,49 @@ mod tests {
         assert_eq!(Date::from_unix_seconds(86_400).text(), "1970-01-02");
         // 2000-02-29 exists; 1900-02-29 did not, which is the century rule.
         assert_eq!(Date::from_unix_seconds(951_782_400).text(), "2000-02-29");
+    }
+
+    #[test]
+    fn every_mediated_call_kind_is_out_of_a_waivers_reach() {
+        // Derived rather than listed: whichever kinds `rules` scopes to the
+        // mediated call are the kinds `apply` never sees, because `run_rule`
+        // skips every scope but `Tree`. Written this way so the day a kind moves
+        // scope, this test moves with it instead of pinning a stale spelling.
+        for &kind in RuleKind::ALL {
+            if kind.scopes() == [crate::rules::RuleScope::MediatedCall] {
+                assert!(
+                    !reaches(kind),
+                    "{}: adjudicated to a Decision, so no Finding exists to waive",
+                    kind.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_advisory_kind_is_out_of_reach_for_its_own_reason() {
+        // `judge` is the one unreachable kind the scope pairing does not explain:
+        // it is tree-scoped, and still cannot mint a finding because it is
+        // refused the `severity` column and `run_rule` skips an `allow` row.
+        // Asserted separately so the case survives a scope change to either side.
+        assert_eq!(RuleKind::Judge.scopes(), [crate::rules::RuleScope::Tree]);
+        assert!(!reaches(RuleKind::Judge));
+    }
+
+    #[test]
+    fn the_unreachable_set_is_exactly_the_three_kinds_that_mint_no_finding() {
+        let unreachable: Vec<&str> = RuleKind::ALL
+            .iter()
+            .filter(|&&kind| !reaches(kind))
+            .map(|kind| kind.as_str())
+            .collect();
+        assert_eq!(unreachable, ["shape", "receipt", "judge"]);
+        // And the other direction, so the predicate cannot degenerate into
+        // "false everywhere" and take the smell down to noise with it.
+        assert!(
+            RuleKind::ALL.iter().any(|&kind| reaches(kind)),
+            "a waiver has to reach something, or the surface is dead"
+        );
     }
 
     #[test]
