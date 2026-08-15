@@ -97,6 +97,36 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
         .expect("run batten")
 }
 
+/// Point Batten's OS data directory at `home`, on **every** platform.
+///
+/// A third hermeticity behaviour, in the module whose header already names the
+/// other two — and it arrived the same way they did, as a per-suite copy that
+/// was right about one platform (CLOUD-113's Windows job found it).
+///
+/// Suites redirect state by exporting `XDG_DATA_HOME`, which is the whole of the
+/// answer on Linux and macOS and none of it on Windows: [`state_root`] resolves
+/// through `etcetera`, whose Windows strategy reads `%APPDATA%` and has never
+/// heard of the XDG variable. So on Windows a suite that "redirected" its state
+/// wrote to the **real user's** roaming profile, and only the one test that
+/// reads a record back off disk ever noticed — everything else passed while
+/// polluting.
+///
+/// `<home>/data` for both, so the resolved root is the same
+/// `<home>/data/batten` path a reader can then assert against without asking
+/// which platform it is on. `LOCALAPPDATA` is set too: it is a different known
+/// folder from `APPDATA`, and leaving it ambient would let a cache escape the
+/// fixture even once the data dir is contained.
+///
+/// [`state_root`]: ../../src/state.rs
+pub(crate) fn state_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
+    let data = home.join("data");
+    command
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", &data)
+        .env("APPDATA", &data)
+        .env("LOCALAPPDATA", home.join("cache"))
+}
+
 /// Run `batten` with `args` in `dir`, feeding `input` on stdin.
 ///
 /// Here rather than per-suite for this module's founding reason: `defects add`

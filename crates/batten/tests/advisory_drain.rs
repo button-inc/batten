@@ -25,7 +25,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use common::{Fixture, batten, scratch};
+use common::{Fixture, batten, scratch, state_home};
 
 /// A `PostToolBatch` payload in Claude Code's shape, for `session`.
 ///
@@ -86,12 +86,11 @@ fn hook_as(dir: &Path, home: &Path, harness: &str, payload: &str) -> Output {
 /// are read from raw argument order and so cannot be appended.
 fn hook_at(dir: &Path, home: &Path, payload: &str, leading: &[&str]) -> Output {
     let mut command = batten();
+    state_home(&mut command, home);
     command
         .args(leading)
         .args(["hook", "--harness", "claude-code"])
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -108,11 +107,11 @@ fn hook_at(dir: &Path, home: &Path, payload: &str, leading: &[&str]) -> Output {
 
 /// Run any `batten` subcommand against the fixture's state home.
 fn state_cmd(dir: &Path, home: &Path, args: &[&str]) -> Output {
-    batten()
+    let mut command = batten();
+    state_home(&mut command, home);
+    command
         .args(args)
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten")
@@ -175,11 +174,10 @@ fn marked_fixture(name: &str, drain_table: &str, body: &str) -> (PathBuf, PathBu
 /// a new session that inherited a lineage rather than a renamed one.
 fn forked_hook(dir: &Path, home: &Path, payload: &str, parent: &str) -> Output {
     let mut command = batten();
+    state_home(&mut command, home);
     command
         .args(["hook", "--harness", "claude-code"])
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("BATTEN_SESSION_PARENT", parent)
         .stdin(Stdio::piped())
@@ -510,11 +508,11 @@ fn a_warm_fork_resumes_from_its_parents_watermark() {
     // CLOUD-83's half and not this one's: the drain reads a lineage, it does not
     // mint one. Recording under the child's declared parentage is what a warm
     // restart does before any tool call reaches the hook.
-    let observed = batten()
+    let mut command = batten();
+    state_home(&mut command, &home);
+    let observed = command
         .args(["state", "record"])
         .current_dir(&repo)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("BATTEN_SESSION", "child")
         .env("BATTEN_SESSION_PARENT", "parent")
