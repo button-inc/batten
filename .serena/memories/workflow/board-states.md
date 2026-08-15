@@ -120,9 +120,14 @@ matches (CLOUD-178) — which is exactly how a session lost the ability to updat
 the board for three landed PRs. An identifier in a commit travels in git, where
 nothing can deny it.
 
-`mise run issue-guard` is what guarantees the key exists: it denies `gh pr
-create` and `gh pr ready` unless a `CLOUD-<n>` appears in the branch, a commit,
-or the command.
+The **engine** is what guarantees the key exists (CLOUD-446): `batten.toml`'s
+`pr-names-an-issue` and `ready-names-an-issue` rows deny `gh pr create` and `gh
+pr ready` unless a `CLOUD-<n>` appears in the branch, a commit on
+`origin/main..HEAD`, or the command itself. Any one of the three allows, and a
+call the hook cannot read a checkout for allows too. What no longer counts is a
+key that appears ONLY in a PR body typed by hand — the port dropped the `gh pr
+view` read, because a network call cannot fit the mediated path's latency
+budget. `mise run issue-guard` still decides the duplicate-claim half by hand.
 
 ### This applies to transitions ONLY — never to issue content
 
@@ -227,7 +232,7 @@ Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
   **Scope it to what was measured: a branch naming a different key. A branch
   naming NO key is not that case** — precedence has nothing to rank, so the
   commit trailer carries it and the automation lands on the right issue.
-  `issue-guard` already accepts the key in the branch, a commit, **or** the
+  The key gate already accepts the key in the branch, a commit, **or** the
   command, so the mechanism never required the branch to carry it.
 
   This is worth stating because the unconditional wording cost a session a

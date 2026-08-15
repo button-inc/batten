@@ -359,7 +359,18 @@ impl RuleKind {
             // A shape rule is adjudicated per mediated call and never reaches
             // the store, so an identity column on one is decorative by
             // construction (non-negotiable rule 6).
-            RuleKind::Shape => &["pattern", "reason", "contains", "policy_url", "severity"],
+            // `requires_key` brings `base` with it — the range its evidence is
+            // read over — which is why the ratchet's column is permitted here
+            // rather than duplicated under another name (CLOUD-446).
+            RuleKind::Shape => &[
+                "pattern",
+                "reason",
+                "contains",
+                "requires_key",
+                "base",
+                "policy_url",
+                "severity",
+            ],
             // No `identity_key` or `verbatim`: a ratchet hashes no span — its
             // finding is a pair of integers about a whole rule — so either
             // column would name a normalization that applies to nothing.
@@ -592,6 +603,29 @@ pub struct Rule {
     /// against the raw text of the same segment, quotes included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contains: Option<String>,
+    /// Narrow a [`RuleKind::Shape`] deny to work that names **no** tracker key
+    /// (CLOUD-446).
+    ///
+    /// A bare shape row means *this command is banned*. This modifier turns the
+    /// same row into *this command is banned unless the work is keyed*: the row
+    /// still selects on the command shape, and the expression decides whether
+    /// that selection refuses. It is a modifier rather than a kind of its own
+    /// precisely because the selection half is unchanged.
+    ///
+    /// The evidence is the mediated command itself plus, resolved at the
+    /// boundary, the branch name and the commit subjects on
+    /// `<base>..HEAD` — the same fixed VCS-query class [`RuleKind::Receipt`]
+    /// already makes, which is why [`RuleKind::spawns_processes`] stays `false`.
+    /// Requires `base`, since the range has to be named by the consumer rather
+    /// than by a trunk name baked into the crate.
+    ///
+    /// **The vocabulary is the consumer's.** `CLOUD-<n>` is this repository's
+    /// tracker, not Batten's, so what a key looks like is an expression in
+    /// `batten.toml` (non-negotiable rule 1). Compiled at load, like `regex` and
+    /// `exclude`, so a bad one names its row rather than becoming a gate that
+    /// silently allows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_key: Option<String>,
     /// Why this rule refuses, and what to do instead — the deny's whole text.
     ///
     /// Required by [`RuleKind::Shape`], where the refusal is all a caller gets;
@@ -667,8 +701,14 @@ pub struct Rule {
     /// rejected by every other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<Direction>,
-    /// The git rev a [`RuleKind::Ratchet`] counts against. Any rev git resolves;
-    /// one it cannot is a usage error naming the rev, never a pass.
+    /// The git rev a [`RuleKind::Ratchet`] counts against, and the one a
+    /// `requires_key` shape row reads commit subjects since. Any rev git
+    /// resolves; one it cannot is a usage error naming the rev for the ratchet,
+    /// and "could not look" for the shape row — a tree gate owes an answer where
+    /// a mediated call must not become un-runnable outside a checkout.
+    ///
+    /// One column for both because it is one question — *since where* — and a
+    /// second spelling of it would be the trunk name written twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
     /// Why this rule's findings have no fix — the stated answer, which is not
@@ -1022,7 +1062,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 22] {
+    fn columns(&self) -> [(&'static str, bool); 23] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1038,6 +1078,7 @@ impl Rule {
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
+            ("requires_key", self.requires_key.is_some()),
             ("reason", self.reason.is_some()),
             ("policy_url", self.policy_url.is_some()),
             ("verbatim", self.verbatim.is_some()),
@@ -1096,6 +1137,30 @@ impl Rule {
                     self.id
                 )));
             }
+        }
+        // The key modifier's own obligations (CLOUD-446). Both here rather than
+        // in the column census for the reason stated below it: the census is a
+        // per-kind const, and these depend on a value inside the row.
+        if let Some(expression) = self.requires_key.as_deref() {
+            // Without a range there is nothing to read commit subjects over, so
+            // the row would fall back to the branch name alone — a narrowing
+            // nobody wrote, arrived at by omission.
+            if self.base.is_none() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `requires_key` requires `base` — the rev its commit evidence is read since",
+                    self.id
+                )));
+            }
+            // Compiled at load, like `regex` and `exclude`: an expression the
+            // matcher cannot parse must name its row. Left to adjudication it
+            // would fail open on every call, which is a gate that reads as
+            // present and denies nothing.
+            Regex::new(expression).map_err(|err| {
+                UsageError::raise(format!(
+                    "rule {}: `requires_key` is not valid: {err}",
+                    self.id
+                ))
+            })?;
         }
         // The two trigger-dependent obligations (CLOUD-444). They live here
         // rather than in the column census because the census is a per-kind
@@ -2605,6 +2670,7 @@ mod tests {
             regex: None,
             exclude: None,
             contains: None,
+            requires_key: None,
             reason: None,
             policy_url: None,
             check: None,
@@ -3226,6 +3292,43 @@ mod tests {
         // A mediated deny reaches a model as the whole explanation, so a row
         // that would refuse with nothing but an id cannot load (CLOUD-122).
         assert!(no_reason.validate().is_err(), "a shape needs a reason");
+    }
+
+    #[test]
+    fn a_key_modifier_is_refused_without_the_range_it_reads() {
+        // The two columns are one predicate (CLOUD-446). A row carrying the
+        // expression and no `base` would silently fall back to the branch name
+        // alone — a narrowing nobody wrote, arrived at by omission, and the
+        // shape this file exists to refuse.
+        let mut rule = shape("s", "gh pr create", "name the issue");
+        rule.requires_key = Some(r"\bKEY-[0-9]+\b".to_owned());
+        let err = rule
+            .validate()
+            .expect_err("a key modifier with no range reads nothing");
+        assert!(
+            format!("{err}").contains("`base`"),
+            "the refusal must name the missing column: {err}"
+        );
+
+        rule.base = Some("origin/main".to_owned());
+        assert!(rule.validate().is_ok(), "the pair loads");
+    }
+
+    #[test]
+    fn a_key_expression_that_does_not_compile_is_refused_at_load() {
+        // Same reasoning as `regex` and `exclude` above: left to adjudication an
+        // unparseable expression fails open on every call, which is a gate that
+        // reads as present in the file and denies nothing.
+        let mut rule = shape("s", "gh pr create", "name the issue");
+        rule.base = Some("origin/main".to_owned());
+        rule.requires_key = Some("[unterminated".to_owned());
+        let err = rule
+            .validate()
+            .expect_err("an unparseable key expression cannot load");
+        assert!(
+            format!("{err}").contains("requires_key"),
+            "the refusal must name the column: {err}"
+        );
     }
 
     #[test]

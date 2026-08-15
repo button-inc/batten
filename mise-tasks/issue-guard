@@ -61,6 +61,16 @@
 # Fails OPEN on anything it cannot parse, and honours BATTEN_ISSUE_GUARD_BYPASS=1
 # — for the genuine exception, a PR that precedes its issue (a drive-by fix
 # whose issue is filed from the PR). Bypassing is a decision, not a shortcut.
+#
+# THE NAMING HALF BELOW IS NOW THE ENGINE'S (CLOUD-446), as `batten.toml`'s
+# `pr-names-an-issue` and `ready-names-an-issue` rows — a `shape` row carrying
+# `requires_key`. It is kept here rather than excised because this file is
+# unwired and runs only by hand, so there is no second live authority, and
+# because the duplicate-claim half below is written over the same parse: the
+# whole file retires in one change when that half lands as a `tree`-scoped
+# `command` rule, and shrinking it first would be churn between two PRs of the
+# same issue. What the port does NOT carry is the `gh pr view` read further
+# down — a network call no mediated rule kind can make.
 set -uo pipefail
 
 [ -n "${BATTEN_ISSUE_GUARD_BYPASS:-}" ] && exit 0

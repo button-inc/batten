@@ -1488,6 +1488,40 @@ impl Policy {
             .collect()
     }
 
+    /// The rev a `requires_key` row needs commit evidence read since, if one
+    /// fires on this call at all (CLOUD-446).
+    ///
+    /// `None` is "do not look", and it is the common answer: a call that matches
+    /// no keyed shape row — which is nearly every call — must not pay for a
+    /// branch read and a `git log`. Same selection function [`shape_rules`]
+    /// adjudicates with, so what the boundary resolves and what the core then
+    /// judges cannot disagree about which rows fire.
+    ///
+    /// The **first** such row decides the range. Two keyed rows disagreeing about
+    /// `base` is a config question with two answers, and declaration order is the
+    /// tie-break everywhere else on this surface.
+    #[must_use]
+    pub fn key_base_for(&self, envelope: &Envelope) -> Option<&str> {
+        if envelope.event != Event::PreTool || envelope.command.is_empty() {
+            return None;
+        }
+        // The column test BEFORE the command parse, so "a repository declaring
+        // no such row pays nothing" is true rather than nearly true: without
+        // this, every mediated call would re-parse its segments on the way to
+        // discovering there was no keyed row to match. Cheap-when-irrelevant on
+        // the hottest path in the binary (§4), and the same shape CLOUD-460
+        // applied to the receipt lookup.
+        if !self.shapes.iter().any(|rule| {
+            rule.requires_key.is_some() && blocks(rule.severity(), self.fail_on_warning)
+        }) {
+            return None;
+        }
+        matching_shape_rows(self, &envelope.command)
+            .into_iter()
+            .find(|rule| rule.requires_key.is_some())
+            .and_then(|rule| rule.base.as_deref())
+    }
+
     /// Whether this policy can deny anything at all.
     ///
     /// Both halves must be empty. The protected gate needs *both* its tables to
@@ -1514,6 +1548,7 @@ pub fn adjudicate(
     envelope: &Envelope,
     bypass: bool,
     receipts: &ReceiptFacts,
+    keys: &KeyFacts,
     stop: &crate::stop::StopFacts,
 ) -> Decision {
     // The end-of-turn gate (CLOUD-85), which the note below anticipated: the
@@ -1607,7 +1642,7 @@ pub fn adjudicate(
     // it asked for is the answer. Falling through to the receipt gate would let a
     // second row overrule an escalation the first one wanted, which declaration
     // order is supposed to decide.
-    match shape_rules(policy, &envelope.command) {
+    match shape_rules(policy, &envelope.command, keys) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
         // The pipeline gate before the receipt one, and the ordering is the same
         // ban-outranks-precondition rule the rest of this chain follows: a call
@@ -1657,6 +1692,22 @@ pub fn deny_text(refusal: &Refusal) -> String {
 /// that resolved fewer facts than the policy needs fails closed rather than
 /// silently allowing.
 pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
+
+/// The checkout evidence a `requires_key` shape row is judged against
+/// (CLOUD-446): the branch name, and the commit messages on `base..HEAD`.
+///
+/// `None` is **could not look** and allows, exactly as it does for
+/// [`ReceiptFacts`] — outside a checkout, on a detached HEAD, or against a `base`
+/// git cannot resolve. Resolved at the boundary because [`adjudicate`] is
+/// contractually pure, and resolved only when a `requires_key` row has already
+/// selected this command ([`Policy::key_base_for`]), so a repository declaring no
+/// such row pays nothing on the hottest path in the binary.
+///
+/// Deliberately not a named struct with a `branch` and a `messages` field: every
+/// reader asks the same question of all of it — does the expression match
+/// anywhere — and a field a caller could *print* is one an unreviewed edit turns
+/// into a leaked commit message (non-negotiable rule 4).
+pub type KeyFacts = Option<Vec<String>>;
 
 /// Deny a call whose declared receipts are not all valid (CLOUD-312).
 ///
@@ -1917,7 +1968,62 @@ fn pipeline_refusal(rule: &Rule, discard: Discard) -> Refusal {
     Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
 }
 
-fn shape_rules(policy: &Policy, command: &str) -> Decision {
+fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
+    for rule in matching_shape_rows(policy, command) {
+        // The key modifier (CLOUD-446). A row carrying it selected the command
+        // and then declines to refuse it, which is the whole point: `continue`
+        // rather than `return Allow`, so a later row that bans the same shape
+        // outright still gets its say.
+        if let Some(expression) = rule.requires_key.as_deref() {
+            if key_present(expression, command, keys) {
+                continue;
+            }
+            return Decision::Deny(unkeyed_refusal(rule));
+        }
+        return Decision::Deny(shape_refusal(rule));
+    }
+    Decision::Allow
+}
+
+/// Whether the work this call belongs to names a tracker key (CLOUD-446).
+///
+/// Three sources, and the order is cheapest-first rather than
+/// most-authoritative-first: the command as written, then the boundary's
+/// evidence. A key typed into the call — `--body "… KEY-1 …"` — answers without
+/// the checkout being consulted at all.
+///
+/// `None` evidence is **could not look**, and allows. Outside a checkout, on a
+/// detached HEAD, or against a `base` git cannot resolve, this predicate has no
+/// answer, and a hook that refuses where it cannot look is a hook that has become
+/// the reason work cannot proceed. Same posture as [`ReceiptFacts`].
+///
+/// An expression that will not compile also allows, and cannot be reached from a
+/// config that loaded: [`crate::rules::Rule::validate`] compiles it first, so this
+/// arm is the fail-open reading of an impossible state rather than a second
+/// policy.
+fn key_present(expression: &str, command: &str, keys: &KeyFacts) -> bool {
+    let Ok(pattern) = regex::Regex::new(expression) else {
+        return true;
+    };
+    if pattern.is_match(command) {
+        return true;
+    }
+    let Some(evidence) = keys else {
+        return true;
+    };
+    evidence.iter().any(|text| pattern.is_match(text))
+}
+
+/// Every shape row this command matches, in declaration order within each
+/// segment.
+///
+/// Split out of [`shape_rules`] for [`matching_receipt_rows`]'s reason: the
+/// boundary has to know whether a `requires_key` row will fire *before* it
+/// decides whether to spend two git queries resolving the evidence, and the two
+/// answering separately is how a call comes to pay for a lookup no rule would
+/// have consulted (CLOUD-460).
+fn matching_shape_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
+    let mut matched: Vec<&Rule> = Vec::new();
     for segment in segments(command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
         let Some(program_index) = effective_program(&tokens) else {
@@ -1963,10 +2069,10 @@ fn shape_rules(policy: &Policy, command: &str) -> Decision {
                     continue;
                 }
             }
-            return Decision::Deny(shape_refusal(rule));
+            matched.push(rule);
         }
     }
-    Decision::Allow
+    matched
 }
 
 /// The id the derived protected-path gate denies under.
@@ -2189,6 +2295,30 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
 fn shape_refusal(rule: &Rule) -> Refusal {
     let mut cause = "the mediated call matches a refused command shape".to_owned();
+    if let Some(url) = rule.policy_url.as_deref() {
+        cause.push_str(". See ");
+        cause.push_str(url);
+    }
+    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+}
+
+/// Compose a keyed shape row's refusal (CLOUD-446).
+///
+/// A distinct cause from [`shape_refusal`]'s, because the two say opposite things
+/// about the same command: that one means *this is banned*, and this one means
+/// *this is fine once the work is keyed*. Rendering both as "matches a refused
+/// command shape" would send an author looking for a ban that is not there, which
+/// is the un-actionable refusal CLOUD-122 exists to prevent.
+///
+/// Pointer-only, and here that is load-bearing rather than incidental: the
+/// evidence this searched is a branch name and every commit message on the range,
+/// and the cause names **none** of it (non-negotiable rule 4). What the author
+/// needs is where to put a key, which is the row's own `reason`.
+fn unkeyed_refusal(rule: &Rule) -> Refusal {
+    let mut cause =
+        "the work this call publishes names no tracker key — not in the command, the branch, \
+         or any commit on it"
+            .to_owned();
     if let Some(url) = rule.policy_url.as_deref() {
         cause.push_str(". See ");
         cause.push_str(url);
@@ -2622,6 +2752,7 @@ mod tests {
             regex: None,
             exclude: None,
             contains: contains.map(ToOwned::to_owned),
+            requires_key: None,
             reason: Some(format!("use the sanctioned path for {id}")),
             policy_url: None,
             check: None,
@@ -2708,6 +2839,7 @@ mod tests {
             &envelope(command),
             false,
             &None,
+            &None,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -2776,6 +2908,7 @@ mod tests {
             &gh_policy(),
             &envelope(command),
             false,
+            &None,
             &None,
             &crate::stop::StopFacts::default(),
         )
@@ -2928,6 +3061,7 @@ mod tests {
                 &envelope("gh pr merge"),
                 true,
                 &None,
+                &None,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -3009,6 +3143,7 @@ mod tests {
                 &envelope,
                 false,
                 &None,
+                &None,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Deny(_)
@@ -3025,6 +3160,7 @@ mod tests {
                 &gh_policy(),
                 &envelope_at(event, "gh pr merge 42"),
                 false,
+                &None,
                 &None,
                 &crate::stop::StopFacts::default(),
             );
@@ -3048,6 +3184,7 @@ mod tests {
                 &envelope,
                 false,
                 &None,
+                &None,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -3064,6 +3201,7 @@ mod tests {
                 &Policy::declaring_nothing(),
                 &envelope("gh pr merge 42"),
                 false,
+                &None,
                 &None,
                 &crate::stop::StopFacts::default(),
             ),
@@ -3128,6 +3266,7 @@ mod tests {
                 &envelope("gh pr merge 42"),
                 false,
                 &None,
+                &None,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -3152,6 +3291,7 @@ mod tests {
                 &call,
                 false,
                 &None,
+                &None,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow,
@@ -3170,6 +3310,7 @@ mod tests {
                     &promoted,
                     &call,
                     false,
+                    &None,
                     &None,
                     &crate::stop::StopFacts::default()
                 ),
@@ -3197,6 +3338,7 @@ mod tests {
             &policy,
             &envelope("gh pr merge"),
             false,
+            &None,
             &None,
             &crate::stop::StopFacts::default(),
         ));
@@ -3233,6 +3375,7 @@ mod tests {
             &envelope("gh pr merge"),
             false,
             &None,
+            &None,
             &crate::stop::StopFacts::default(),
         ));
         assert!(reason.contains("example.invalid/policy"), "got: {reason}");
@@ -3263,6 +3406,7 @@ mod tests {
             ]),
             &write_envelope(tool, path),
             false,
+            &None,
             &None,
             &crate::stop::StopFacts::default(),
         )
@@ -3299,6 +3443,7 @@ mod tests {
             &envelope("gh pr ready 42"),
             false,
             facts,
+            &None,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -3326,6 +3471,7 @@ mod tests {
             &write_envelope("Write", "crates/batten/src/new.rs"),
             false,
             facts,
+            &None,
             &crate::stop::StopFacts::default(),
         )
     }
@@ -3354,6 +3500,7 @@ mod tests {
                 &envelope("gh pr ready 42"),
                 false,
                 &Some(resolved(&[("claim", Validity::Missing)])),
+                &None,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow,
@@ -3365,6 +3512,7 @@ mod tests {
                 &write_envelope("Write", "notes.md"),
                 false,
                 &Some(resolved(&[("verify", Validity::Missing)])),
+                &None,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow,
@@ -3538,6 +3686,7 @@ mod tests {
                 &envelope("gh pr view 42"),
                 false,
                 &Some(resolved(&[("verify", Validity::Missing)])),
+                &None,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
@@ -3624,6 +3773,7 @@ mod tests {
                 &envelope,
                 false,
                 &None,
+                &None,
                 &crate::stop::StopFacts::default(),
             ),
             Decision::Allow
@@ -3653,6 +3803,7 @@ mod tests {
             &protected_policy(verbs),
             &envelope(command),
             false,
+            &None,
             &None,
             &crate::stop::StopFacts::default(),
         )
@@ -3794,6 +3945,7 @@ mod tests {
                     &write_envelope("Write", "batten.toml"),
                     false,
                     &None,
+                    &None,
                     &crate::stop::StopFacts::default(),
                 ),
                 Decision::Allow
@@ -3806,6 +3958,7 @@ mod tests {
                 &protected_policy(vec![verb("Write", None)]),
                 &write_envelope("Write", "batten.toml"),
                 false,
+                &None,
                 &None,
                 &crate::stop::StopFacts::default(),
             ),
@@ -3978,6 +4131,7 @@ mod tests {
                 &envelope("rm batten.toml"),
                 false,
                 &None,
+                &None,
                 &crate::stop::StopFacts::default()
             ),
             Decision::Allow
@@ -3993,6 +4147,7 @@ mod tests {
                 &no_paths,
                 &envelope("rm batten.toml"),
                 false,
+                &None,
                 &None,
                 &crate::stop::StopFacts::default()
             ),
@@ -4011,6 +4166,7 @@ mod tests {
             &envelope("rm .serena/memories/core.md"),
             false,
             &None,
+            &None,
             &crate::stop::StopFacts::default(),
         ));
         assert!(reason.contains("no-rm-memories"), "got: {reason}");
@@ -4023,6 +4179,7 @@ mod tests {
                 &protected_policy(vec![verb("rm", None)]),
                 &envelope("rm batten.toml"),
                 true,
+                &None,
                 &None,
                 &crate::stop::StopFacts::default(),
             ),
@@ -4078,6 +4235,7 @@ mod tests {
                     &call,
                     false,
                     &None,
+                    &None,
                     &crate::stop::StopFacts::default()
                 ),
                 Decision::Deny(_)
@@ -4089,6 +4247,7 @@ mod tests {
                 &elsewhere,
                 &call,
                 false,
+                &None,
                 &None,
                 &crate::stop::StopFacts::default()
             ),

@@ -109,14 +109,21 @@ ignore = { version = ">=0.4.23, <0.4.30", default-features = false }
 # declaration here is honest, so the bound is belt-and-braces rather than
 # load-bearing; they move together.
 globset = { version = ">=0.4.15, <0.4.20", default-features = false }
-# `RuleKind::Forbid`'s `regex`/`exclude` columns (CLOUD-283), and deliberately
-# nowhere else. `outputs.rs` recorded the standing deferral — "adding a regex
-# engine is a decision about the whole rule vocabulary, not a detail of this
-# predicate" — and this is that decision, taken narrowly: `[[exec_pattern]]` and
-# `[[marker]]` stay literal, because a count that becomes a function of an
-# expression is a ratchet a rename defeats (`markers.rs`). A regex engine
-# arriving by accident in one more predicate is what the deferral guarded
-# against, so the split is stated rather than left to whoever edits next.
+# `RuleKind::Forbid`'s `regex`/`exclude` columns (CLOUD-283), `RuleKind::Shape`'s
+# `requires_key` (CLOUD-446), and deliberately nowhere else. `outputs.rs`
+# recorded the standing deferral — "adding a regex engine is a decision about the
+# whole rule vocabulary, not a detail of this predicate" — and this is that
+# decision, taken narrowly: `[[exec_pattern]]` and `[[marker]]` stay literal,
+# because a count that becomes a function of an expression is a ratchet a rename
+# defeats (`markers.rs`). A regex engine arriving by accident in one more
+# predicate is what the deferral guarded against, so the split is stated rather
+# than left to whoever edits next.
+#
+# The third consumer earns it on the same terms as the first two: what a tracker
+# key looks like is a property of a CONSUMER's tracker, and an enumeration of
+# spellings in the crate would be non-negotiable rule 1's violation with extra
+# steps. A literal cannot express "some letters, a dash, some digits" at all, so
+# there is no `pattern` twin to prefer here the way there is for `forbid`.
 regex = "1"
 semver = "1"
 tar = "0.4"

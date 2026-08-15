@@ -989,6 +989,32 @@ pub fn current_branch(dir: &Path) -> Result<Option<String>> {
     Ok((name != "HEAD").then_some(name))
 }
 
+/// The commit messages on `base..HEAD`, as one blob (CLOUD-446).
+///
+/// One string rather than a list because every caller asks the same question of
+/// it — does an expression match anywhere in the work's own commits — and a
+/// split would invite a caller to *report* an element. Nothing here is printable
+/// output: a commit message is content, and the refusal this feeds names the
+/// missing key, never the messages it searched (non-negotiable rule 4).
+///
+/// Built on [`query_optional`], whose absent case is exactly the one this owes a
+/// reading: a `base` git cannot resolve is **could not look**, and the mediated
+/// call it gates allows. That direction is deliberate and is the same fail-open
+/// posture every retiring guard has — a hook that refuses because it is outside
+/// a checkout is a hook that has become the reason work cannot proceed.
+///
+/// # Errors
+///
+/// Raises when `git` cannot be run at all, or its output is not UTF-8 — only the
+/// verdict is optional, never the mechanism.
+pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
+    let range = format!("{base}..HEAD");
+    query_optional(
+        dir,
+        &["log", "--format=%B", "--end-of-options", &range, "--"],
+    )
+}
+
 /// Whether git ignores `path` — the scratch-work question (CLOUD-444).
 ///
 /// `check-ignore` rather than a reimplementation of the ignore rules: the

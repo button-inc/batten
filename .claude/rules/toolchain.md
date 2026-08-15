@@ -185,10 +185,14 @@ of `memory-guard`, whose last five write shapes — a destination-only copy, an
 in-place stream edit, and a version-control move or remove — became expressible
 as `[[verb]]` qualifiers in CLOUD-442, so that guard is **deleted** rather than
 still runnable, and `run-shape-guard`'s three verdict-discarding shapes
-(CLOUD-443), leaving that guard only the two families named below. It does
-**not** yet carry `issue-guard`,
-or `contract-drift` — each is a linked capability gap on
-CLOUD-312, and each of those guards still runs by hand (`mise run <guard>`,
+(CLOUD-443), leaving that guard only the two families named below. It carries
+`issue-guard`'s **naming** half as of CLOUD-446 — a `requires_key` modifier on
+the two `gh pr create`/`ready` shape rows — and structurally cannot carry its
+duplicate-claim half, which needs `gh pr list` plus a `gh pr view` per
+competitor; that lands as a `tree`-scoped `command` rule under `batten enforce`,
+which is why the guard still exists. It does **not** carry
+`contract-drift` — a linked capability gap on
+CLOUD-312 — and both of those guards still run by hand (`mise run <guard>`,
 payload on stdin). The bullets below describe every
 guard's predicate; which of them a hook actually fires is the settings file's
 answer, not this list's.
@@ -217,9 +221,23 @@ means it is mediating.
   budget — what every agent pays every turn. It is `batten policy budget`, not a
   shell task: the counted set and both thresholds are `[budget.instructions]` in
   `batten.toml`. An entry matching no file is exit 1, never a quiet pass.
-- `issue-guard` denies `gh pr create` and `gh pr ready` unless the work names a
-  `CLOUD-<n>` issue — in the branch, in a commit on it, or in the command — and,
-  since CLOUD-230, unless that issue is unclaimed: a different **open** PR
+- **`issue-guard`'s naming half is the engine's** (CLOUD-446), as the
+  `pr-names-an-issue` and `ready-names-an-issue` rows in `batten.toml`: a
+  `shape` row carrying `requires_key`, which narrows the deny from _this command
+  is banned_ to _this command is banned unless the work is keyed_. The
+  expression and the `base` it reads commits since are the consumer's, because a
+  tracker's vocabulary in `crates/batten` is non-negotiable rule 1's violation;
+  `(?i)` is load-bearing, since the tracker's own branch names are lower case.
+  Three evidence sources, any one of which allows — the command, the branch, the
+  commit subjects on `origin/main..HEAD` — and all three resolve at the boundary
+  because `adjudicate` is pure. `None` is "could not look" and allows, matching
+  the bash guard's `|| exit 0`. The one source the port drops is `gh pr view`:
+  a PR body typed by hand and never echoed into the branch or a commit is no
+  longer evidence, because a network round trip cannot fit the ≤100ms budget.
+  The guard below is what is left.
+- `issue-guard` now carries only its **duplicate-claim** half, which the engine
+  structurally cannot: since CLOUD-230 it also refuses a key already claimed by a
+  different **open** PR
   **claiming** the key is refused, because CLOUD-49 was implemented twice in one
   cycle and one side was thrown away. Claiming, never merely naming — both sides
   of that comparison go through `claimed-keys`, which is what the key is checked
@@ -227,7 +245,10 @@ means it is mediating.
   self-declarations, its body counts only through a closing keyword. Applying
   the narrowing to one side and not the other made a PR citing the key as
   evidence read as racing it (CLOUD-378). GitHub is the source for that lookup,
-  not the tracker, and it fails open when `gh` is absent or failing. It is the _earliest_ computable moment, not an early one:
+  not the tracker, and it fails open when `gh` is absent or failing — and that
+  network call is exactly why the half cannot move: `RuleKind::scopes` pairs
+  every spawning kind with `RuleScope::Tree` alone, and a round trip on every
+  mediated tool call is disqualifying against the ≤100ms budget besides. It is the _earliest_ computable moment, not an early one:
   no artifact exists at pull time for a hook to inspect, so opening the draft PR
   before the work is what makes the refusal cheap. The
   board rule was prose, and prose is feedforward only: a session followed every

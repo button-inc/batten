@@ -1405,6 +1405,12 @@ fn run_hook(
     } else {
         receipt::verdicts(&required)
     };
+    // The key evidence (CLOUD-446), resolved on the same terms and for the same
+    // reason: two git queries a pure `adjudicate` cannot make, spent only when a
+    // `requires_key` row has already selected this command. A repository
+    // declaring none — and a call matching none, which is nearly every call —
+    // does no git work here at all.
+    let keys: hook::KeyFacts = policy.key_base_for(&envelope).and_then(key_facts);
     // The declared side effects (CLOUD-91), fired BEFORE the decision is written
     // and structurally unable to reach it: `action::fire` returns nothing, so
     // there is no value here to branch on even by mistake.
@@ -1424,7 +1430,33 @@ fn run_hook(
     } else {
         stop::StopFacts::default()
     };
-    decide(harness, &envelope, &policy, bypass, &receipts, &stop, out)
+    let facts = Facts {
+        receipts: &receipts,
+        keys: &keys,
+        stop: &stop,
+    };
+    decide(harness, &envelope, &policy, bypass, &facts, out)
+}
+
+/// Assemble a `requires_key` row's checkout evidence (CLOUD-446).
+///
+/// Two queries, and every failure among them reads as **could not look** — which
+/// allows. That is the fail-open posture the bash guard it ports had at each of
+/// the same points (`|| exit 0`), and it is the right one for a hook: refusing
+/// because there is no checkout would make Batten the reason a call cannot run,
+/// in exactly the directories it governs nothing.
+///
+/// A detached HEAD is not a failure, only a missing *source*: the commit
+/// messages still answer, so the evidence is the shorter list rather than
+/// `None`. `base` failing to resolve is a failure, because with no range there
+/// is no commit evidence at all and the branch name alone would be a narrowing
+/// nobody wrote.
+fn key_facts(base: &str) -> hook::KeyFacts {
+    let repo = git::repo_root(Path::new(".")).ok()?;
+    let messages = git::log_messages(&repo, base).ok()??;
+    let mut evidence = vec![messages];
+    evidence.extend(git::current_branch(&repo).ok().flatten());
+    Some(evidence)
 }
 
 /// Assemble the end-of-turn gate's inputs (CLOUD-85).
@@ -1729,6 +1761,21 @@ fn load_exec_patterns(overrides: &Overrides) -> Result<Vec<outputs::OutputPatter
     Ok(resolve::resolve(here, overrides)?.exec_patterns)
 }
 
+/// Everything the boundary looked up because [`hook::adjudicate`] cannot.
+///
+/// One bundle rather than three parameters, and the grouping is the contract
+/// rather than a signature convenience: `adjudicate` is contractually pure — no
+/// I/O, no environment, no clock — so every field here is a question about a
+/// checkout or a store that had to be answered *before* the decision. A fourth
+/// such fact adds a field and touches no call site, which is the point; the
+/// alternative was a parameter list that grew one argument per gate until clippy
+/// counted them (CLOUD-446).
+struct Facts<'a> {
+    receipts: &'a hook::ReceiptFacts,
+    keys: &'a hook::KeyFacts,
+    stop: &'a stop::StopFacts,
+}
+
 /// Map one decoded call onto its harness's decision channel.
 ///
 /// Split out of [`run_hook`] so the mapping is reachable without the process's
@@ -1740,11 +1787,17 @@ fn decide(
     envelope: &hook::Envelope,
     policy: &hook::Policy,
     bypass: bool,
-    receipts: &hook::ReceiptFacts,
-    stop: &stop::StopFacts,
+    facts: &Facts<'_>,
     out: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match hook::adjudicate(policy, envelope, bypass, receipts, stop) {
+    match hook::adjudicate(
+        policy,
+        envelope,
+        bypass,
+        facts.receipts,
+        facts.keys,
+        facts.stop,
+    ) {
         hook::Decision::Allow => Ok(ExitCode::Success),
         // One dispatch for every host, because the *shape* of the answer is the
         // adapter's business and the decision is not. A host that reads a body

@@ -762,6 +762,7 @@ fn default_rules() -> Vec<Rule> {
         regex: None,
         exclude: None,
         contains: None,
+        requires_key: None,
         reason: None,
         policy_url: None,
         check: None,

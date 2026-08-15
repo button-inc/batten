@@ -217,6 +217,81 @@ reason = """
 Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. Background \
 it rather than holding a foreground poll open."""
 
+# `issue-guard`'s naming half, as config (CLOUD-446).
+#
+# NOT A BAN, and the `requires_key` column is what says so: the row selects on
+# the command shape exactly as the four above it do, and then refuses only the
+# case where the work names no tracker key. `gh pr create` on keyed work is
+# allowed and always was — which is why this is a modifier on a shape row rather
+# than a kind, and why its refusal reads differently from theirs.
+#
+# THE VOCABULARY IS THIS REPOSITORY'S, and it has to be. `CLOUD-<n>` is Button's
+# tracker, not Batten's, so the crate carries no part of this expression
+# (non-negotiable rule 1) — the column takes any regex, and a consumer adopting
+# this row edits a pattern rather than a match arm.
+#
+# Named exactly rather than generically, and that is the safer direction: a
+# shape like `[A-Z]{2,}-[0-9]+` also matches `UTF-8`, `SHA-256` and `RFC-3339`,
+# so a commit that merely mentioned an encoding would satisfy the gate. What a
+# key looks like here is known, so it is written down.
+#
+# `(?i)` is load-bearing, not tidiness: the tracker's own `gitBranchName`
+# produces `wenzowski/cloud-446-...` in lower case, so a case-sensitive
+# expression would leave the branch-name source dead for every branch anyone
+# actually has. `issue-guard` matched case-insensitively (`grep -oiE`) for the
+# same reason, and the port keeps it.
+#
+# Three evidence sources, and each one is a way real work legitimately carries
+# its key: the command itself (`--body "Closes CLOUD-1"`), the branch name, and
+# the commit subjects on `base..HEAD`. Any one of the three allows. `base` names
+# the range rather than the crate hardcoding a trunk, for the same reason as the
+# expression — and it is what keeps the trunk's own history from answering, since
+# `origin/main` is full of other people's keys.
+#
+# WHAT THIS DROPS from the bash guard, stated rather than absorbed: `issue-guard`
+# also read the existing PR's title and body over the network (`gh pr view`),
+# which matters for `gh pr ready` because it carries no body of its own. A
+# mediated call cannot make a network round trip against the <=100ms budget, so
+# the ported half reads the checkout only. The lost case is a PR whose key
+# appears ONLY in a body typed by hand — and `land` is the only readier here, on
+# a branch the tracker named.
+#
+# The guard's OTHER half — refusing a key already claimed by a different open PR
+# — is not here and cannot be: it needs `gh pr list` plus a `gh pr view` per
+# competitor, and `RuleKind::scopes` pairs every spawning kind with
+# `RuleScope::Tree` alone. It lands as a `tree`-scoped `command` rule under
+# `batten enforce`, which is why `mise-tasks/issue-guard` still exists.
+[[rule]]
+id = "pr-names-an-issue"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr create"
+requires_key = '(?i)\bCLOUD-[0-9]+\b'
+base = "origin/main"
+reason = """
+Search the board first (`mise run graph-check` prints the ready frontier), then \
+name the issue: in the branch, in a commit on it, or in the PR body as `Closes \
+CLOUD-<n>`. A PR that names no issue cannot move the board when it merges, so \
+the work lands with nothing recording that it did."""
+
+# The same predicate at the other publishing moment. Two rows rather than one
+# because a shape row's `pattern` is one command line, and `create` and `ready`
+# are two — the alternative would be a `patterns` list whose only user is this
+# pair.
+[[rule]]
+id = "ready-names-an-issue"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr ready"
+requires_key = '(?i)\bCLOUD-[0-9]+\b'
+base = "origin/main"
+reason = """
+Readying publishes the work and starts CI. Name the issue in the branch or in a \
+commit on it before readying — or use `mise run land`, which readies after its \
+own push. A PR that names no issue cannot move the board when it merges."""
+
 # `ready-guard`, as config (CLOUD-312, over CLOUD-203's receipt store).
 #
 # A `receipt` row is not a ban. It refuses a call whose PRECONDITION has not
