@@ -1188,6 +1188,20 @@ pub enum Decision {
     /// question two config surfaces and contradict a decision already taken
     /// (non-negotiable rule 6).
     Ask(Refusal),
+    /// A deny a live waiver suppressed, carrying the record it owes (CLOUD-610).
+    ///
+    /// **An allow, not a fourth verdict.** The call proceeds, exit `0`, §7's
+    /// table untouched — what distinguishes it from [`Decision::Allow`] is that
+    /// something was refused and then let through, and that is a fact somebody
+    /// has to be able to read afterwards. Collapsing it into `Allow` would make
+    /// the suppression the one policy event that leaves no trace, which is the
+    /// undesigned hatch the waiver table exists to replace (CLOUD-208).
+    ///
+    /// It is a variant rather than a side effect at the deny site for the reason
+    /// [`Decision::Ask`] is one: this function is contractually pure and owns no
+    /// channel. The boundary writes the line, so the audit and the verdict are
+    /// decided in one place and cannot disagree about whether a call was waived.
+    Waived(crate::waiver::Suppressed),
 }
 
 /// Decode a harness payload into the normalized envelope.
@@ -1537,13 +1551,60 @@ impl Policy {
     }
 }
 
-/// Adjudicate an envelope against the policy.
+/// Adjudicate an envelope against the policy, then apply the waivers.
 ///
 /// Pure: no I/O, no environment, no clock. `bypass` is the caller-resolved
 /// escape hatch (the boundary reads [`BYPASS_ENV`]), and the policy arrives as a
 /// value, so every verdict is a function of config plus argv and nothing else.
+///
+/// `waived` is the fourth thing that arrives already decided, and it is what
+/// keeps that list true with an expiry in the design (CLOUD-610). A waiver
+/// lapses on a **date**, and reading one here would put a clock inside the pure
+/// core — so the boundary reads it once, projects the table through
+/// [`crate::waiver::live`], and hands down membership. Nothing below this line
+/// can ask what day it is, which is the contract intact rather than relocated.
+///
+/// Suppression is applied **after** the verdict and only to a [`Decision::Deny`],
+/// at this single site rather than at each deny arm. Two consequences worth
+/// stating because they are decisions:
+///
+/// * an [`Decision::Ask`] is **not** suppressible. A waiver says "this refusal is
+///   accepted for now", and an escalation has not refused anything yet — it asked
+///   a person. Turning that into an allow would answer on their behalf.
+/// * a **derived** gate is unreachable in practice even though it carries a rule
+///   id here. [`crate::waiver::validate`]'s companion smell `waiver-names-no-rule`
+///   fails `config lint` for a waiver naming no `[[rule]]` row, and a derived gate
+///   has none — so a waiver over one is refused at the config surface long before
+///   it could reach this match.
 #[must_use]
 pub fn adjudicate(
+    policy: &Policy,
+    envelope: &Envelope,
+    bypass: bool,
+    receipts: &ReceiptFacts,
+    keys: &KeyFacts,
+    stop: &crate::stop::StopFacts,
+    waived: &crate::waiver::Live,
+) -> Decision {
+    match adjudicated(policy, envelope, bypass, receipts, keys, stop) {
+        Decision::Deny(refusal) => match waived.get(refusal.rule()) {
+            Some(expires) => Decision::Waived(crate::waiver::Suppressed {
+                rule: refusal.rule().to_owned(),
+                expires: expires.clone(),
+            }),
+            None => Decision::Deny(refusal),
+        },
+        decided => decided,
+    }
+}
+
+/// The verdict before waivers — every gate this module owns, and nothing else.
+///
+/// Split from [`adjudicate`] so the suppression is one predicate over one value
+/// instead of a check repeated at each of the deny arms below. A deny site that
+/// forgot it would be a rule quietly unwaivable, which is exactly the asymmetry
+/// CLOUD-293 found and CLOUD-606 decided against.
+fn adjudicated(
     policy: &Policy,
     envelope: &Envelope,
     bypass: bool,
@@ -1626,7 +1687,13 @@ pub fn adjudicate(
     if envelope.writes.is_some() {
         match receipt_rules(policy, envelope, receipts) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
-            Decision::Allow => {}
+            // `Waived` is grouped with `Allow` throughout this chain, and it is an
+            // invariant rather than a case: only [`adjudicate`] mints one, from
+            // this function's answer, so no gate below can return it. Stated as an
+            // arm rather than a wildcard so a fifth variant still fails to compile
+            // here, and grouped with `Allow` because that is what a suppression
+            // means if the invariant ever breaks.
+            Decision::Allow | Decision::Waived(_) => {}
         }
     }
     if envelope.command.is_empty() {
@@ -1649,12 +1716,16 @@ pub fn adjudicate(
         // whose verdict is thrown away is refused outright, so telling its author
         // which receipt to earn first would be advice about a call that is not
         // going to run (CLOUD-443).
-        Decision::Allow => match pipeline_rules(policy, &envelope.command) {
+        Decision::Allow | Decision::Waived(_) => match pipeline_rules(policy, &envelope.command) {
             decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-            Decision::Allow => match receipt_rules(policy, envelope, receipts) {
-                decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
-                Decision::Allow => protected_mutation(policy, &envelope.command),
-            },
+            Decision::Allow | Decision::Waived(_) => {
+                match receipt_rules(policy, envelope, receipts) {
+                    decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
+                    Decision::Allow | Decision::Waived(_) => {
+                        protected_mutation(policy, &envelope.command)
+                    }
+                }
+            }
         },
     }
 }
@@ -2741,6 +2812,40 @@ pub fn encode_ask(
 mod tests {
     use super::*;
 
+    /// [`super::adjudicate`] with **no waiver declared** — the shape every case
+    /// below this line was written against.
+    ///
+    /// A deliberate shadow rather than a sixth argument typed thirty times: a
+    /// waiver table is empty in almost every scenario this suite describes, and
+    /// spelling that out at each call would bury the handful of cases where it is
+    /// the subject. The cases that ARE about suppression call `super::adjudicate`
+    /// by its full path, so the reader can see at the call which world they are in.
+    fn adjudicate(
+        policy: &Policy,
+        envelope: &Envelope,
+        bypass: bool,
+        receipts: &ReceiptFacts,
+        keys: &KeyFacts,
+        stop: &crate::stop::StopFacts,
+    ) -> Decision {
+        super::adjudicate(
+            policy,
+            envelope,
+            bypass,
+            receipts,
+            keys,
+            stop,
+            &crate::waiver::Live::new(),
+        )
+    }
+
+    /// A live waiver table over one rule, expiring on a date the case names.
+    fn waiving(rule: &str, expires: &str) -> crate::waiver::Live {
+        let mut live = crate::waiver::Live::new();
+        live.insert(rule.to_owned(), expires.to_owned());
+        live
+    }
+
     fn shape(id: &str, pattern: &str, contains: Option<&str>) -> Rule {
         Rule {
             id: id.to_owned(),
@@ -2903,6 +3008,109 @@ mod tests {
         }
     }
 
+    /// The same call `adjudicate_command` makes, with a waiver table applied.
+    fn adjudicate_command_waiving(command: &str, waived: &crate::waiver::Live) -> Decision {
+        super::adjudicate(
+            &gh_policy(),
+            &envelope(command),
+            false,
+            &None,
+            &None,
+            &crate::stop::StopFacts::default(),
+            waived,
+        )
+    }
+
+    // CLOUD-610. The mediation channel's hatch, asserted on the surface that
+    // grants it. `gh_policy`'s `no-merge` row denies `gh pr merge`, so each case
+    // below is the same call under a different waiver table — which is the only
+    // variable, and is what makes these four a decision table rather than four
+    // scenarios.
+
+    #[test]
+    fn a_live_waiver_suppresses_a_mediation_deny_and_says_what_it_suppressed() {
+        let decision =
+            adjudicate_command_waiving("gh pr merge 42", &waiving("gh-pr-merge", "2099-01-01"));
+        assert_eq!(
+            decision,
+            Decision::Waived(crate::waiver::Suppressed {
+                rule: "gh-pr-merge".to_owned(),
+                expires: "2099-01-01".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn an_expired_waiver_does_not_suppress_a_mediation_deny() {
+        // THE PROPERTY THE WHOLE DESIGN RESTS ON. `live` is what decides lapse,
+        // at the boundary, so an expired waiver is simply absent from the table
+        // this function is handed — and the deny stands with nobody having acted.
+        // Asserted here, on the consuming surface, because a lapse that worked in
+        // `waiver` and was then dropped on the way in would pass that suite.
+        let lapsed = crate::waiver::live(
+            &[crate::waiver::Waiver {
+                rule: "gh-pr-merge".to_owned(),
+                reason: "tracked".to_owned(),
+                expires: "2020-01-01".to_owned(),
+                path: None,
+            }],
+            crate::waiver::Date::parse("2026-08-15").unwrap(),
+        );
+        assert!(matches!(
+            adjudicate_command_waiving("gh pr merge 42", &lapsed),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn a_waiver_over_another_rule_suppresses_nothing() {
+        // The half that keeps the hatch narrow: membership is by rule id, so a
+        // waiver is not a blanket quiet mode for the mediated channel.
+        assert!(matches!(
+            adjudicate_command_waiving("gh pr merge 42", &waiving("some-other-rule", "2099-01-01")),
+            Decision::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn the_suppression_record_carries_no_command() {
+        // Non-negotiable 4 on this channel: the audit line names the rule and the
+        // expiry, and the thing it structurally cannot carry is the command that
+        // was about to be refused.
+        let Decision::Waived(suppressed) =
+            adjudicate_command_waiving("gh pr merge 42", &waiving("gh-pr-merge", "2099-01-01"))
+        else {
+            panic!("expected a suppression");
+        };
+        let line = suppressed.line_text();
+        assert!(!line.contains("gh pr merge"), "{line}");
+        assert!(!line.contains("42"), "{line}");
+        assert_eq!(line, "waived gh-pr-merge (expires 2099-01-01)");
+    }
+
+    #[test]
+    fn adjudicate_reads_no_clock_even_now_that_a_waiver_can_lapse() {
+        // The purity contract, pinned where it is most likely to be relocated.
+        // The body between `adjudicate`'s signature and the end of `adjudicated`
+        // must name no clock: a `Date` parameter, a `SystemTime`, or a call to
+        // `waiver::today` would each move the lapse question into the core, which
+        // is the answer CLOUD-606 rejected by name.
+        let source = include_str!("hook.rs");
+        let start = source
+            .find("pub fn adjudicate(")
+            .expect("adjudicate is defined here");
+        let end = source[start..]
+            .find("/// The text a host reads for one refusal")
+            .expect("the chain ends before deny_text");
+        let body = &source[start..start + end];
+        for clock in ["SystemTime", "waiver::today", "today()", "Date"] {
+            assert!(
+                !body.contains(clock),
+                "adjudicate must read no clock, and it named {clock}"
+            );
+        }
+    }
+
     fn adjudicate_command(command: &str) -> Decision {
         adjudicate(
             &gh_policy(),
@@ -2930,8 +3138,13 @@ mod tests {
             Decision::Deny(refusal) => deny_text(&refusal),
             // An `Ask` is not a deny, and collapsing the two here would let a
             // row that silently started escalating keep passing every assertion
-            // below about what a refusal says.
-            Decision::Ask(_) | Decision::Allow => panic!("expected a deny"),
+            // below about what a refusal says. A `Waived` is not one either, and
+            // for a sharper reason: it is a deny that was let through, so folding
+            // it in here would let a suppression pass every assertion about what
+            // a refusal says while the call actually ran.
+            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) => {
+                panic!("expected a deny")
+            }
         }
     }
 
@@ -2940,7 +3153,9 @@ mod tests {
     fn denial(decision: Decision) -> Refusal {
         match decision {
             Decision::Deny(refusal) => refusal,
-            Decision::Ask(_) | Decision::Allow => panic!("expected a deny"),
+            Decision::Ask(_) | Decision::Allow | Decision::Waived(_) => {
+                panic!("expected a deny")
+            }
         }
     }
 

@@ -1377,8 +1377,9 @@ fn run_hook(
     // the gate (CLOUD-312). The cheap-refusals-first ordering is intact — a
     // bypassed call, and a payload that is neither a command nor a write, still
     // never touch config.
-    let policy = if bypass || (envelope.command.is_empty() && envelope.writes.is_none()) {
-        hook::Policy::declaring_nothing()
+    let (policy, waivers) = if bypass || (envelope.command.is_empty() && envelope.writes.is_none())
+    {
+        (hook::Policy::declaring_nothing(), Vec::new())
     } else {
         load_policy(overrides)?
     };
@@ -1411,6 +1412,23 @@ fn run_hook(
     // declaring none — and a call matching none, which is nearly every call —
     // does no git work here at all.
     let keys: hook::KeyFacts = policy.key_base_for(&envelope).and_then(key_facts);
+    // The waiver facts (CLOUD-610), resolved HERE for exactly the reason above:
+    // a waiver lapses on a date, `adjudicate` is contractually pure, and reading
+    // the clock inside it would dissolve the contract rather than satisfy it.
+    // The boundary already reads a clock for `check`'s tree filter, so this is
+    // the one edge where the environment is legible, not a new one.
+    //
+    // Cheap when irrelevant, the same narrowing `required_checks_for` applies:
+    // an empty waiver table skips `today()` entirely, so a repository declaring
+    // no waiver pays no clock read on the hottest path in the binary. `today()`
+    // can fail — a clock before the epoch — and that propagates rather than
+    // defaulting, because a date nobody could read must not silently become a
+    // table where every waiver is live.
+    let waived = if waivers.is_empty() {
+        waiver::Live::new()
+    } else {
+        waiver::live(&waivers, waiver::today()?)
+    };
     // The declared side effects (CLOUD-91), fired BEFORE the decision is written
     // and structurally unable to reach it: `action::fire` returns nothing, so
     // there is no value here to branch on even by mistake.
@@ -1431,11 +1449,13 @@ fn run_hook(
         stop::StopFacts::default()
     };
     let facts = Facts {
+        bypass,
         receipts: &receipts,
         keys: &keys,
         stop: &stop,
+        waived: &waived,
     };
-    decide(harness, &envelope, &policy, bypass, &facts, out)
+    decide(harness, &envelope, &policy, &facts, mode, out, err)
 }
 
 /// Assemble a `requires_key` row's checkout evidence (CLOUD-446).
@@ -1746,12 +1766,19 @@ fn drain_advisories(
 /// this engine exists to catch. It surfaces as a [`UsageError`] — exit `1`, loud
 /// on stderr, and structurally not a deny, because §7 spends `2` on the verdict
 /// alone.
-fn load_policy(overrides: &Overrides) -> Result<hook::Policy> {
+fn load_policy(overrides: &Overrides) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
     let here = std::path::Path::new(".");
     if !here.join(config::CONFIG_FILE).exists() {
-        return Ok(hook::Policy::declaring_nothing());
+        return Ok((hook::Policy::declaring_nothing(), Vec::new()));
     }
-    hook::Policy::from_resolved(&resolve::resolve(here, overrides)?)
+    // The waivers travel beside the policy rather than inside it (CLOUD-610).
+    // `Policy` is what `adjudicate` decides against and is resolved without a
+    // clock; a waiver is only half a fact until a date is applied to it, so
+    // folding the table into `Policy` would put an undecided value in the one
+    // structure whose whole point is that everything in it is decided.
+    let resolved = resolve::resolve(here, overrides)?;
+    let policy = hook::Policy::from_resolved(&resolved)?;
+    Ok((policy, resolved.waivers))
 }
 
 /// Resolve the `exec` output predicates for this run (CLOUD-117).
@@ -1782,10 +1809,23 @@ fn load_exec_patterns(overrides: &Overrides) -> Result<Vec<outputs::OutputPatter
 /// such fact adds a field and touches no call site, which is the point; the
 /// alternative was a parameter list that grew one argument per gate until clippy
 /// counted them (CLOUD-446).
+///
+/// `bypass` joined them with CLOUD-610 rather than staying a sibling parameter,
+/// and it belongs by the same reading: the hatch is an environment variable, so
+/// it is one more thing the boundary looked up because the core may not. Keeping
+/// it outside would have left `decide` one argument over clippy's ceiling for a
+/// value that answers the same question every other field here answers.
 struct Facts<'a> {
+    /// The caller-resolved [`hook::BYPASS_ENV`] hatch.
+    bypass: bool,
+    /// The receipt verdicts this call is judged against, or "could not look".
     receipts: &'a hook::ReceiptFacts,
+    /// The tracker-key evidence a `requires_key` row is judged against.
     keys: &'a hook::KeyFacts,
+    /// The end-of-turn facts, default on every event but `Stop`.
     stop: &'a stop::StopFacts,
+    /// The rules a live waiver suppresses today, with the expiry each claims.
+    waived: &'a waiver::Live,
 }
 
 /// Map one decoded call onto its harness's decision channel.
@@ -1798,19 +1838,37 @@ fn decide(
     harness: hook::Harness,
     envelope: &hook::Envelope,
     policy: &hook::Policy,
-    bypass: bool,
     facts: &Facts<'_>,
+    mode: Mode,
     out: &mut dyn Write,
+    err: &mut dyn Write,
 ) -> Result<ExitCode> {
     match hook::adjudicate(
         policy,
         envelope,
-        bypass,
+        facts.bypass,
         facts.receipts,
         facts.keys,
         facts.stop,
+        facts.waived,
     ) {
         hook::Decision::Allow => Ok(ExitCode::Success),
+        // A suppressed deny (CLOUD-610) is an allow that owes a record, and this
+        // is where the record is written — on the ERROR channel, at `Normal`, in
+        // the shape the tree side writes at the `waiver::apply` call site. Both
+        // choices are the tree side's, taken again rather than re-decided: stderr
+        // because a decision document on stdout is what a host parses and an
+        // audit line is not part of it, and `Normal` because a policy finding
+        // that was let through is not a detail a default run should have to ask
+        // for.
+        //
+        // Pointer-only (non-negotiable rule 4): `Suppressed` carries a rule and
+        // an expiry and structurally cannot carry the command, so this call site
+        // has nothing to leak even by mistake.
+        hook::Decision::Waived(suppressed) => {
+            output::message(mode, Verbosity::Normal, err, &suppressed.line_text())?;
+            Ok(ExitCode::Success)
+        }
         // One dispatch for every host, because the *shape* of the answer is the
         // adapter's business and the decision is not. A host that reads a body
         // gets one; a host whose channel is the exit code alone gets the §7 `2`

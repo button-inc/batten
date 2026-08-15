@@ -23,7 +23,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{Fixture, batten, scratch};
+use common::{Fixture, batten, run_with_stdin, scratch, stderr};
 
 /// A `forbid` rule at `deny` over the fixture's one Rust file.
 const RULE: &str = "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
@@ -42,6 +42,41 @@ fn waiver(expires: &str) -> String {
 /// asserting against the same clock it is testing.
 const LIVE: &str = "2099-12-31";
 const LAPSED: &str = "2000-01-01";
+
+/// A `shape` rule at `deny` over one mediated command (CLOUD-610).
+///
+/// The mediated channel's counterpart to [`RULE`]: it reads no `glob`, because it
+/// matches a command line rather than a file, and it is the row the cases at the
+/// end of this file waive.
+const SHAPE_RULE: &str = "\n[[rule]]\nid = \"no-merge\"\nkind = \"shape\"\n\
+                          scope = \"mediated_call\"\npattern = \"gh pr merge\"\n\
+                          reason = \"land by fast-forward\"\nseverity = \"deny\"\n";
+
+/// A waiver of that row, expiring on `expires`.
+fn shape_waiver(expires: &str) -> String {
+    format!(
+        "\n[[waiver]]\nrule = \"no-merge\"\nreason = \"tracked in CLOUD-1\"\nexpires = \"{expires}\"\n"
+    )
+}
+
+/// A Claude Code `PreToolUse` envelope carrying a shell command.
+fn bash_payload(command: &str) -> String {
+    let escaped = serde_json::to_string(command).expect("a command is encodable");
+    format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{escaped}}}}}"
+    )
+}
+
+/// Adjudicate one command in `repo`, on the adapter whose channel IS the code.
+fn adjudicate(repo: &std::path::Path, command: &str) -> (i32, String) {
+    let output = run_with_stdin(
+        repo,
+        &["hook", "--harness", "exit-code"],
+        &bash_payload(command),
+    );
+    (output.status.code().expect("exit code"), stderr(&output))
+}
 
 /// A fixture repo whose `batten.toml` is `version = 1` plus `extra`, containing
 /// one file that trips the rule.
@@ -257,4 +292,77 @@ fn config_show_attributes_the_waiver_table_to_its_layer() {
         Some("repo-config"),
         "got: {stdout}"
     );
+}
+
+// --- the mediation channel's hatch (CLOUD-610) --------------------------------
+//
+// CLOUD-606 decided that a mediated call gets the same durable, lapsing exemption
+// a finding does, with the expiry resolved at the boundary so `hook::adjudicate`
+// stays clock-free. These four are that verdict at the surface a caller sees. The
+// unit tests in `src/hook.rs` pin the predicate; only the compiled binary can
+// answer which channel the audit lands on and what the exit code is.
+
+#[test]
+fn without_a_waiver_the_mediated_row_denies() {
+    // The baseline the three below are a delta from, for the reason the tree
+    // side has one: a bug that stopped the shape row firing would make every
+    // suppression assertion pass for the wrong reason.
+    let (repo, _home) = repo("waiver-hook-baseline", SHAPE_RULE);
+    let (code, err) = adjudicate(&repo, "gh pr merge 42");
+    assert_eq!(code, 2, "a mediated deny is the policy verdict: {err}");
+    assert!(err.contains("no-merge"), "got: {err}");
+}
+
+#[test]
+fn a_live_waiver_lets_the_mediated_call_through_and_audits_it() {
+    let (repo, _home) = repo(
+        "waiver-hook-live",
+        &format!("{SHAPE_RULE}{}", shape_waiver(LIVE)),
+    );
+    let (code, err) = adjudicate(&repo, "gh pr merge 42");
+    assert_eq!(code, 0, "the call proceeds: {err}");
+    // The compensating control, in the tree side's shape minus the pointer a
+    // mediated call does not have.
+    assert!(
+        err.contains(&format!("waived no-merge (expires {LIVE})")),
+        "got: {err}"
+    );
+    // Pointer-only (non-negotiable 4): never the command, never the reason.
+    assert!(!err.contains("gh pr merge 42"), "got: {err}");
+    assert!(!err.contains("tracked in CLOUD-1"), "got: {err}");
+}
+
+#[test]
+fn a_lapsed_waiver_leaves_the_mediated_deny_alone() {
+    // THE PROPERTY THE WHOLE DESIGN RESTS ON, at the surface a caller sees:
+    // nobody had to act for this waiver to stop working, and the boundary is
+    // where the date was read.
+    let (repo, _home) = repo(
+        "waiver-hook-lapsed",
+        &format!("{SHAPE_RULE}{}", shape_waiver(LAPSED)),
+    );
+    let (code, err) = adjudicate(&repo, "gh pr merge 42");
+    assert_eq!(code, 2, "the row refuses again: {err}");
+    assert!(!err.contains("waived"), "and nothing is audited: {err}");
+}
+
+#[test]
+fn a_waived_row_does_not_waive_the_rest_of_the_policy() {
+    // The half that keeps the hatch narrow, and the mediated counterpart of
+    // `a_narrowed_waiver_leaves_the_rest_of_the_rule_gating`: suppression is by
+    // rule id, so a second row still refuses.
+    // A pattern of non-flag words only: a shape row matches the effective program
+    // plus the adjacent words that are not flags, so `git push --force` would
+    // never fire and this case would pass for the wrong reason.
+    let second = "\n[[rule]]\nid = \"no-run-watch\"\nkind = \"shape\"\n\
+                  scope = \"mediated_call\"\npattern = \"gh run watch\"\n\
+                  reason = \"wait through ci-wait\"\nseverity = \"deny\"\n";
+    let (repo, _home) = repo(
+        "waiver-hook-narrow",
+        &format!("{SHAPE_RULE}{second}{}", shape_waiver(LIVE)),
+    );
+    assert_eq!(adjudicate(&repo, "gh pr merge 42").0, 0);
+    let (code, err) = adjudicate(&repo, "gh run watch 123");
+    assert_eq!(code, 2, "the unwaived row still refuses: {err}");
+    assert!(err.contains("no-run-watch"), "got: {err}");
 }

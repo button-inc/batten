@@ -172,17 +172,35 @@ fn waiver_row(rule: &str) -> String {
     )
 }
 
+/// A config declaring one `judge` RULE — the one kind left outside
+/// `waiver::reaches` after CLOUD-610 — plus whatever waiver rows follow.
+///
+/// Not to be confused with `judge_config` further down, which builds a `[judge]`
+/// TABLE: that is the payload-boundary knob, this is a `[[rule]]` row of kind
+/// `judge`. Two different config surfaces that share a word.
+fn judge_rule_config(waivers: &str) -> String {
+    format!(
+        "version = 1\n\n[[rule]]\nid = \"intentional\"\nkind = \"judge\"\n\
+         glob = \"**/*.rs\"\ncriteria = \"does this read as intentional\"\n\
+         tier = \"advisory\"\nno_fix_reason = \"answered by a person\"\n{waivers}"
+    )
+}
+
 #[test]
 fn a_waiver_over_an_unreachable_kind_is_a_violation_naming_the_kind() {
-    // CLOUD-293's headline acceptance, over the compiled binary. The rule
-    // exists and the expiry is live, so neither sibling waiver smell fires —
-    // and `waiver::apply` filters findings, which a shape row never mints.
-    let dir = repo_with_config("lint-waiver-shape", &shape_config(&waiver_row("no-merge")));
+    // CLOUD-293's headline acceptance, over the compiled binary — now on the one
+    // kind that stayed unreachable. A judge row is refused the `severity` column,
+    // so it mints no finding for `waiver::apply` and renders no `Decision` for
+    // `hook::adjudicate`, and a waiver over it suppresses nothing either way.
+    let dir = repo_with_config(
+        "lint-waiver-judge",
+        &judge_rule_config(&waiver_row("intentional")),
+    );
     let output = lint(&dir, &[]);
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(
         stdout(&output),
-        "batten.toml:waiver[no-merge] shape waiver-unreachable-kind\nconfig-lint: 1 smell(s)\n"
+        "batten.toml:waiver[intentional] judge waiver-unreachable-kind\nconfig-lint: 1 smell(s)\n"
     );
 }
 
@@ -200,24 +218,43 @@ fn a_waiver_over_a_reachable_kind_exits_zero() {
 }
 
 #[test]
+fn a_waiver_over_a_mediated_kind_exits_zero_since_the_hook_honours_it() {
+    // CLOUD-610's retirement over the compiled binary, and the pairing is the
+    // point: the same `shape` row that produced the smell above now produces
+    // none, because `hook::adjudicate` consults the waiver table this file
+    // declares. A `judge` waiver still smells (above), which is what proves the
+    // set was read from `waiver::reaches` rather than restated in the lint.
+    let dir = repo_with_config("lint-waiver-shape", &shape_config(&waiver_row("no-merge")));
+    let output = lint(&dir, &[]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "config-lint: 0 smell(s)\n");
+}
+
+#[test]
 fn the_unreachable_smell_reaches_the_machine_channel_unchanged() {
     // No new field: the pointer splits into the same `at`/`id` pair every other
     // smell uses, so a consumer needs no second convention for this one.
-    let dir = repo_with_config("lint-waiver-json", &shape_config(&waiver_row("no-merge")));
+    let dir = repo_with_config(
+        "lint-waiver-json",
+        &judge_rule_config(&waiver_row("intentional")),
+    );
     let output = lint(&dir, &["-J"]);
     assert_eq!(output.status.code(), Some(2));
     let text = stdout(&output);
     assert!(
-        text.contains("\"at\": \"waiver[no-merge] shape\""),
+        text.contains("\"at\": \"waiver[intentional] judge\""),
         "got: {text}"
     );
     assert!(
         text.contains("\"id\": \"waiver-unreachable-kind\""),
         "got: {text}"
     );
-    // Pointer-only: never the justification, never the shape the rule bans.
+    // Pointer-only: never the justification, never the criteria the rule judges by.
     assert!(!text.contains("tracked in CLOUD-1"), "got: {text}");
-    assert!(!text.contains("gh pr merge"), "got: {text}");
+    assert!(
+        !text.contains("does this read as intentional"),
+        "got: {text}"
+    );
 }
 
 // --- base-ref comparison smells ----------------------------------------------

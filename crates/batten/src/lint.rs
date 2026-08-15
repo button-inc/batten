@@ -147,10 +147,20 @@ struct Located {
     waivers: Vec<LocatedWaiver>,
 }
 
+/// A rule's span, located by its `id`, plus the one column a smell reads.
+///
+/// `severity` is **optional here** and must stay so: a `judge` row is refused
+/// that column outright ([`crate::rules::RuleKind::permits`]), so a required
+/// field made this whole view unparseable for any config carrying one — `config
+/// lint` answered exit 1 with serde's "missing field severity" on a config the
+/// real loader accepts. This mirror exists only to recover spans `config::parse`
+/// discards, so anything it demands beyond what that loader demands is a second,
+/// stricter authority on what a config may be.
 #[derive(Debug, Deserialize)]
 struct LocatedRule {
     id: Spanned<String>,
-    severity: RuleSeverity,
+    #[serde(default)]
+    severity: Option<RuleSeverity>,
 }
 
 /// A waiver's span, located by the one field a smell has to name: the rule it
@@ -218,7 +228,11 @@ pub fn smells(
     // file and is not one. Legal, and occasionally deliberate — which is exactly
     // why it deserves to be named rather than left to be noticed.
     for rule in &located.rules {
-        if rule.severity == RuleSeverity::Allow {
+        // An absent `severity` is a judge row, which cannot be at `allow` because
+        // it cannot carry the column at all — so it is not "configured off", it is
+        // a kind with no on/off axis. Reporting it here would name every judge row
+        // in the file as a disabled gate.
+        if rule.severity == Some(RuleSeverity::Allow) {
             found.push(Smell {
                 at: Where::Line(line_of(text, rule.id.span().start)),
                 id: RULE_DISABLED,
@@ -618,6 +632,20 @@ mod tests {
         assert_eq!(found, vec![WAIVER_EXPIRED, WAIVER_NAMES_NO_RULE]);
     }
 
+    /// A config declaring one `judge` rule, plus whatever waiver rows follow.
+    ///
+    /// `judge` is the one kind left outside [`crate::waiver::reaches`] since
+    /// CLOUD-610, so it is the only fixture this smell can be exercised with. It
+    /// reads no `severity` — a judge row is refused that column, which is exactly
+    /// why it can decide nothing and why a waiver over it suppresses nothing.
+    fn with_judge_rule(waivers: &str) -> String {
+        format!(
+            "version = 1\n\n[[rule]]\nid = \"intentional\"\nkind = \"judge\"\n\
+             glob = \"**/*.rs\"\ncriteria = \"does this read as intentional\"\n\
+             tier = \"advisory\"\nno_fix_reason = \"answered by a person\"\n{waivers}"
+        )
+    }
+
     /// A config declaring one `shape` rule, plus whatever waiver rows follow.
     ///
     /// A shape row reads no `glob` — it matches a mediated command line — so it
@@ -631,30 +659,31 @@ mod tests {
     }
 
     #[test]
-    fn a_waiver_over_a_kind_that_mints_no_finding_is_a_smell() {
+    fn a_waiver_over_a_kind_that_can_decide_nothing_is_a_smell() {
         // The rule exists and the expiry is live, so neither sibling smell fires
-        // — and the waiver still suppresses nothing, because `apply` filters
-        // findings and a shape row is adjudicated to a `Decision`.
-        let text = with_shape_rule(&waiver_row("no-merge", "2099-01-01"));
+        // — and the waiver still suppresses nothing, because a judge row mints no
+        // finding for `apply` to filter and renders no `Decision` for the hook to
+        // suppress.
+        let text = with_judge_rule(&waiver_row("intentional", "2099-01-01"));
         assert_eq!(ids(&text), vec![WAIVER_UNREACHABLE_KIND]);
     }
 
     #[test]
     fn the_unreachable_pointer_names_the_waiver_and_the_kind() {
-        let text = with_shape_rule(&waiver_row("no-merge", "2099-01-01"));
+        let text = with_judge_rule(&waiver_row("intentional", "2099-01-01"));
         let found = smells(&text, "test", None, today()).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].line_text(),
-            "batten.toml:waiver[no-merge] shape waiver-unreachable-kind"
+            "batten.toml:waiver[intentional] judge waiver-unreachable-kind"
         );
         assert!(
             !found[0].line_text().contains("tracked"),
             "the pointer must never carry the justification text"
         );
         assert!(
-            !found[0].line_text().contains("gh pr merge"),
-            "nor the shape the waived rule bans"
+            !found[0].line_text().contains("intentional\""),
+            "nor the criteria the waived rule judges by"
         );
     }
 
@@ -667,21 +696,31 @@ mod tests {
     }
 
     #[test]
+    fn a_waiver_over_a_mediated_kind_stopped_being_the_smell_with_cloud_610() {
+        // The retirement CLOUD-610 bought, asserted rather than assumed: the flip
+        // is one line in `waiver::reaches` and this is the surface that proves the
+        // set was READ from there and not restated here. A `shape` row is now
+        // waivable, because `hook::adjudicate` consults the same table.
+        let text = with_shape_rule(&waiver_row("no-merge", "2099-01-01"));
+        assert!(ids(&text).is_empty());
+    }
+
+    #[test]
     fn a_narrowed_and_a_whole_rule_waiver_of_one_kind_both_survive_dedup() {
         // CLOUD-233's shape again: two waivers of ONE rule are located by the
         // same line, so a line-keyed pointer would collapse them. The waiver key
         // distinguishes them by the path they narrow to.
-        let text = with_shape_rule(&format!(
-            "{}\n[[waiver]]\nrule = \"no-merge\"\nreason = \"tracked\"\n\
+        let text = with_judge_rule(&format!(
+            "{}\n[[waiver]]\nrule = \"intentional\"\nreason = \"tracked\"\n\
              expires = \"2099-01-01\"\npath = \"vendor/**\"\n",
-            waiver_row("no-merge", "2099-01-01")
+            waiver_row("intentional", "2099-01-01")
         ));
         let found = smells(&text, "test", None, today()).unwrap();
         assert_eq!(
             found.iter().map(Smell::line_text).collect::<Vec<_>>(),
             vec![
-                "batten.toml:waiver[no-merge] shape waiver-unreachable-kind",
-                "batten.toml:waiver[no-merge][vendor/**] shape waiver-unreachable-kind",
+                "batten.toml:waiver[intentional] judge waiver-unreachable-kind",
+                "batten.toml:waiver[intentional][vendor/**] judge waiver-unreachable-kind",
             ]
         );
     }
@@ -690,7 +729,7 @@ mod tests {
     fn an_unreachable_waiver_that_also_lapsed_carries_both_smells() {
         // Separately actionable, and reported separately: fixing the expiry must
         // not hide the fact that the row could never have applied.
-        let text = with_shape_rule(&waiver_row("no-merge", "2020-01-01"));
+        let text = with_judge_rule(&waiver_row("intentional", "2020-01-01"));
         let mut found = ids(&text);
         found.sort_unstable();
         assert_eq!(found, vec![WAIVER_EXPIRED, WAIVER_UNREACHABLE_KIND]);

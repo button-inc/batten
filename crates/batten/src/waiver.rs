@@ -53,32 +53,37 @@
 //! *counted*. So this module filters the findings vector before the verdict is
 //! taken, and nothing about the severity taxonomy changes.
 //!
-//! ## Scope bound: three kinds a waiver cannot reach
+//! ## Scope bound: one kind a waiver cannot reach
 //!
-//! [`apply`] filters [`crate::rules::Finding`]s, so the only kinds a waiver
-//! reaches are the ones that can *mint* one. Three cannot, for two different
-//! reasons, and [`reaches`] is the authority — stated once there and read by
+//! A waiver suppresses what a rule can *produce*, and [`reaches`] is the
+//! authority on which kinds those are — stated once there and read by
 //! [`crate::lint`]'s `waiver-unreachable-kind` smell rather than restated beside
 //! it (CLOUD-293), so the filter and the diagnostic cannot come to disagree
 //! about which kinds a waiver covers.
 //!
-//! Stated rather than silently true, because a consumer will eventually want it:
-//! a waiver naming one of those kinds loads clean, passes `waiver-names-no-rule`
-//! because the rule genuinely exists, and suppresses nothing.
+//! It is down to **one** kind: `judge`, which mints no [`crate::rules::Finding`]
+//! and renders no [`crate::hook::Decision`] — it is refused the `severity` column
+//! and `run_rule` skips it as configured off, so a waiver over it suppresses
+//! nothing however either channel behaves. The mediated kinds left this set with
+//! CLOUD-610, when the channel that adjudicates them started honouring a waiver.
 //!
-//! Whether the mediation channel *should* stay outside this filter is a decision
-//! rather than a fact about where [`apply`] happens to sit, and it is CLOUD-606's
+//! Stated rather than silently true, because a consumer will eventually want it:
+//! a waiver naming `judge` loads clean, passes `waiver-names-no-rule` because the
+//! rule genuinely exists, and suppresses nothing.
+//!
+//! Whether the mediation channel *should* stay outside this hatch was a decision
+//! rather than a fact about where [`apply`] happens to sit, and it was CLOUD-606's
 //! — [`crate::hook::adjudicate`] is contractually pure ("no I/O, no environment,
-//! no clock") and an expiry is a clock, which is the tension that issue owns.
+//! no clock") and an expiry is a clock, which is the tension that issue owned.
 //! Decided below.
 //!
 //! ## The mediation channel's hatch: liveness is resolved at the boundary
 //!
-//! CLOUD-606's verdict. The channel **does** get a durable, lapsing exemption,
-//! and the expiry never enters the pure core: [`live`] projects the waiver table
-//! against a date *at the boundary*, and [`crate::hook::adjudicate`] is handed a
-//! set of already-lapse-checked rule ids. It reads set membership; it never sees
-//! a [`Date`].
+//! CLOUD-606's verdict, consumed by CLOUD-610. The channel **does** get a
+//! durable, lapsing exemption, and the expiry never enters the pure core:
+//! [`live`] projects the waiver table against a date *at the boundary*, and
+//! [`crate::hook::adjudicate`] is handed a table of already-lapse-checked rule
+//! ids. It reads membership; it never sees a [`Date`].
 //!
 //! This is not a new idiom, it is the one that call path already uses three
 //! times. `crate::hook::ReceiptFacts` is resolved at the boundary "because
@@ -106,13 +111,19 @@
 //! work is the one that most needs an exemption written down, reviewable, and
 //! lapsing.
 //!
-//! [`reaches`] does **not** yet admit the mediated kinds, and the order is
-//! deliberate: until `adjudicate` consults these facts, a waiver over a `shape`
-//! row still suppresses nothing, so CLOUD-293's `waiver-unreachable-kind` is
-//! still true and must keep firing. The flip is one line, in that one authority,
-//! belonging to the change that lands the consumption.
+//! [`reaches`] admits the mediated kinds, and it started doing so **with** the
+//! consumption rather than before it (CLOUD-610). The order was the point: until
+//! `adjudicate` consulted these facts a waiver over a `shape` row suppressed
+//! nothing, so CLOUD-293's `waiver-unreachable-kind` was true about it and had to
+//! keep firing. One line, in one authority, moved by the change that made it
+//! false.
+//!
+//! What a suppression owes is a record: [`Suppressed`] is [`Applied`]'s
+//! counterpart for a channel that has no findings, and `crate::hook`'s boundary
+//! writes it on stderr exactly where the tree side writes `Applied`'s. Neither
+//! carries what was matched — a path and a line on one side, a rule and an expiry
+//! on the other, and never a byte of the thing suppressed (non-negotiable 4).
 
-use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -417,13 +428,23 @@ impl Applied {
     }
 }
 
-/// The rule ids a live waiver suppresses on `today` — the mediation channel's
-/// facts, resolved where the clock is already legible (CLOUD-606).
+/// The mediation channel's waiver facts: rule id → the expiry its waiver claims.
+///
+/// A **map** and not a set (CLOUD-610), for one reason: the suppression owes an
+/// audit line, and §5 fixes that line's content as the waiver and its expiry.
+/// Handing the adjudicator a bare set would answer "may this be suppressed" and
+/// leave "under what claim" to a second lookup at the boundary — two readings of
+/// one table, which is how they come to disagree. Membership is still the
+/// predicate; the value is what the record is written from.
+pub type Live = std::collections::BTreeMap<String, String>;
+
+/// The waivers live on `today`, keyed by rule — the mediation channel's facts,
+/// resolved where the clock is already legible (CLOUD-606).
 ///
 /// This is the whole of the verdict's mechanism on this side of the boundary:
 /// the caller reads the date once at the edge (as [`crate::hook::adjudicate`]'s
 /// caller already does for receipts, stop facts and the bypass hatch) and the
-/// adjudicator is handed a decided set. Nothing downstream needs a [`Date`],
+/// adjudicator is handed a decided table. Nothing downstream needs a [`Date`],
 /// which is what keeps the purity contract intact rather than relocated.
 ///
 /// Two exclusions, each fail-closed in the same direction [`Waiver::lapsed`]
@@ -436,19 +457,62 @@ impl Applied {
 ///   its author narrowed it to into the whole rule, which is the one direction a
 ///   waiver must never move on its own.
 ///
+/// Two waivers over one rule collapse to the **later** expiry, which is the same
+/// answer `apply`'s first-match already gives for the tree: both are live, so the
+/// call is suppressed either way, and the record should name the claim that is
+/// still standing rather than the one that is about to lapse.
+///
 /// Cheap when irrelevant (house style §4): an empty table does no per-waiver work
 /// at all, the same early return [`apply`] takes, because this is evaluated on
 /// the hottest path in the binary.
 #[must_use]
-pub fn live(waivers: &[Waiver], today: Date) -> BTreeSet<String> {
+pub fn live(waivers: &[Waiver], today: Date) -> Live {
     if waivers.is_empty() {
-        return BTreeSet::new();
+        return Live::new();
     }
-    waivers
+    let mut live = Live::new();
+    for waiver in waivers
         .iter()
         .filter(|waiver| waiver.path.is_none() && !waiver.lapsed(today))
-        .map(|waiver| waiver.rule.clone())
-        .collect()
+    {
+        live.entry(waiver.rule.clone())
+            .and_modify(|expires| {
+                if waiver.expires > *expires {
+                    expires.clone_from(&waiver.expires);
+                }
+            })
+            .or_insert_with(|| waiver.expires.clone());
+    }
+    live
+}
+
+/// One mediated-call suppression, as an audit record (CLOUD-610).
+///
+/// [`Applied`]'s counterpart for the channel that has no findings. It carries the
+/// rule and the expiry and **nothing else**, which is not an abridgement of
+/// `Applied` but the whole of what this surface honestly knows: a mediated call
+/// has no path and no line, and the one other thing available — the command that
+/// was about to be refused — is exactly the content non-negotiable rule 4 keeps
+/// out of output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suppressed {
+    /// The rule whose deny was suppressed.
+    pub rule: String,
+    /// The expiry the applied waiver carried.
+    pub expires: String,
+}
+
+impl Suppressed {
+    /// The audit line this suppression renders as, without a trailing newline:
+    /// `waived <rule> (expires <date>)`.
+    ///
+    /// [`Applied::line_text`]'s shape with the pointer absent rather than
+    /// invented, so a reader who greps `check` output for `waived ` finds this
+    /// too — which is the point of keeping one verdict word across both channels.
+    #[must_use]
+    pub fn line_text(&self) -> String {
+        format!("waived {} (expires {})", self.rule, self.expires)
+    }
 }
 
 /// Whether a waiver can reach findings of `kind` (CLOUD-293).
@@ -458,19 +522,24 @@ pub fn live(waivers: &[Waiver], today: Date) -> BTreeSet<String> {
 /// finding at all?** A kind that cannot is a kind a waiver over it suppresses
 /// nothing of, whatever the waiver says.
 ///
-/// Two independent reasons put a kind outside, and keeping them distinct is what
-/// stops this from reading as an arbitrary list:
+/// One reason now puts a kind outside, and it is not the mediated call
+/// (CLOUD-610). Until [`crate::hook::adjudicate`] consulted [`live`] a waiver
+/// over a `shape` row genuinely suppressed nothing, so this answered `false` for
+/// every mediated kind and `waiver-unreachable-kind` said so truthfully. That
+/// channel now honours a waiver, and the three kinds [`RuleKind::scopes`] pairs
+/// with [`crate::rules::RuleScope::MediatedCall`] — `shape`, `receipt`,
+/// `pipeline` — move across **with** the consumption rather than before it.
 ///
-/// * **The mediated call.** [`RuleKind::scopes`] pairs `shape` and `receipt`
-///   with [`crate::rules::RuleScope::MediatedCall`] alone, and `run_rule` returns
-///   `RuleSkipped` for any scope but `Tree`. Those rows are adjudicated by
-///   [`crate::hook::adjudicate`], which returns a `Decision` rather than a
-///   [`Finding`].
-/// * **The advisory kind.** `judge` is tree-scoped and still cannot mint one:
-///   [`crate::rules::Rule::severity`] is `Allow` for a row carrying no
-///   `severity` column, and a judge row is refused that column — so `run_rule`
-///   skips it as configured off. [`RuleKind::Judge`]'s own docs put it as
-///   "blocking is not forbidden here, it is unrepresentable".
+/// What remains outside is **the advisory kind**, and for a reason no
+/// implementation can retire: `judge` is tree-scoped and still cannot mint a
+/// finding. [`crate::rules::Rule::severity`] is `Allow` for a row carrying no
+/// `severity` column, and a judge row is refused that column — so `run_rule`
+/// skips it as configured off. [`RuleKind::Judge`]'s own docs put it as
+/// "blocking is not forbidden here, it is unrepresentable", and a waiver over
+/// something unrepresentable suppresses nothing whatever the channel does.
+///
+/// So the question this answers is unchanged — **can a waiver over this kind
+/// suppress anything at all?** — and only the mediated channel's answer moved.
 ///
 /// The `match` is exhaustive with no wildcard arm on purpose: a new
 /// [`RuleKind`] fails to compile until it is classified here, which is a
@@ -479,8 +548,14 @@ pub fn live(waivers: &[Waiver], today: Date) -> BTreeSet<String> {
 #[must_use]
 pub const fn reaches(kind: RuleKind) -> bool {
     match kind {
-        RuleKind::Forbid | RuleKind::Command | RuleKind::Ratchet | RuleKind::Secrets => true,
-        RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline | RuleKind::Judge => false,
+        RuleKind::Forbid
+        | RuleKind::Command
+        | RuleKind::Ratchet
+        | RuleKind::Secrets
+        | RuleKind::Shape
+        | RuleKind::Receipt
+        | RuleKind::Pipeline => true,
+        RuleKind::Judge => false,
     }
 }
 
@@ -758,9 +833,9 @@ mod tests {
         assert_eq!(Date::from_unix_seconds(951_782_400).text(), "2000-02-29");
     }
 
-    /// The projection as a sorted vector, so a case reads as a list.
+    /// The projection's KEYS as a sorted vector, so a case reads as a list.
     fn live_rules(waivers: &[Waiver], today: Date) -> Vec<String> {
-        live(waivers, today).into_iter().collect()
+        live(waivers, today).into_keys().collect()
     }
 
     #[test]
@@ -802,6 +877,62 @@ mod tests {
     }
 
     #[test]
+    fn the_projection_carries_the_expiry_the_audit_line_names() {
+        // The reason `live` is a map (CLOUD-610): the suppression owes a record,
+        // and §5 fixes that record's content as the rule and its expiry. A set
+        // would answer the predicate and leave the audit to a second lookup.
+        assert_eq!(
+            live(&[waiver("r", "2099-01-01")], TODAY).get("r").unwrap(),
+            "2099-01-01"
+        );
+    }
+
+    #[test]
+    fn two_live_waivers_over_one_rule_collapse_to_the_later_claim() {
+        // Both are live, so the call is suppressed either way and the predicate
+        // is not in question. What the record should name is the claim still
+        // standing, not the one about to lapse.
+        let rows = [waiver("r", "2099-01-01"), waiver("r", "2199-01-01")];
+        assert_eq!(live(&rows, TODAY).get("r").unwrap(), "2199-01-01");
+        // Declaration order must not decide it — the same table read backwards
+        // gives the same answer.
+        let reversed = [waiver("r", "2199-01-01"), waiver("r", "2099-01-01")];
+        assert_eq!(live(&reversed, TODAY).get("r").unwrap(), "2199-01-01");
+    }
+
+    #[test]
+    fn a_lapsed_waiver_does_not_shadow_a_live_one_over_the_same_rule() {
+        // The fail-closed direction has a matching fail-open one: a rule carrying
+        // one dead waiver and one live waiver is waived, and the record names the
+        // live claim rather than the dead date.
+        let rows = [waiver("r", "2020-01-01"), waiver("r", "2099-01-01")];
+        assert_eq!(live(&rows, TODAY).get("r").unwrap(), "2099-01-01");
+    }
+
+    #[test]
+    fn the_audit_line_is_the_tree_shape_without_the_pointer_it_does_not_have() {
+        let line = Suppressed {
+            rule: "no-merge".to_owned(),
+            expires: "2099-01-01".to_owned(),
+        }
+        .line_text();
+        assert_eq!(line, "waived no-merge (expires 2099-01-01)");
+        // One verdict word across both channels, so a reader who greps `check`
+        // output for a suppression finds a mediated one too.
+        assert!(line.starts_with("waived "));
+        assert!(
+            Applied {
+                path: "src/a.rs".to_owned(),
+                line: None,
+                rule: "no-merge".to_owned(),
+                expires: "2099-01-01".to_owned(),
+            }
+            .line_text()
+            .starts_with("waived ")
+        );
+    }
+
+    #[test]
     fn both_consumers_of_lapsed_agree_on_the_same_inputs() {
         // `covers` and `live` ask one question through one predicate. Swept
         // across the boundary day so the agreement is checked where it is
@@ -809,7 +940,7 @@ mod tests {
         for expires in ["2020-01-01", "2026-08-09", "2026-08-10", "2099-01-01"] {
             let row = waiver("r", expires);
             let by_filter = row.covers(&finding("r", "src/a.rs"), TODAY);
-            let by_boundary = live(std::slice::from_ref(&row), TODAY).contains("r");
+            let by_boundary = live(std::slice::from_ref(&row), TODAY).contains_key("r");
             assert_eq!(
                 by_filter, by_boundary,
                 "{expires}: the tree filter and the mediation boundary disagreed"
@@ -818,31 +949,26 @@ mod tests {
     }
 
     #[test]
-    fn the_mediated_kinds_are_still_out_of_reach_until_the_hook_consumes_the_facts() {
-        // CLOUD-606's sequencing, pinned rather than left to be rediscovered.
-        // `live` exists, but `hook::adjudicate` does not yet read it, so a waiver
-        // over a `shape` row STILL suppresses nothing — which is what keeps
-        // CLOUD-293's `waiver-unreachable-kind` smell true. Flip these with the
-        // change that lands the consumption, not before.
-        assert!(!reaches(RuleKind::Shape));
-        assert!(!reaches(RuleKind::Receipt));
-    }
-
-    #[test]
-    fn every_mediated_call_kind_is_out_of_a_waivers_reach() {
-        // Derived rather than listed: whichever kinds `rules` scopes to the
-        // mediated call are the kinds `apply` never sees, because `run_rule`
-        // skips every scope but `Tree`. Written this way so the day a kind moves
-        // scope, this test moves with it instead of pinning a stale spelling.
+    fn every_mediated_call_kind_is_now_within_a_waivers_reach() {
+        // The inversion CLOUD-610 lands, and the pairing is what makes it a
+        // decision rather than a relaxation: `hook::adjudicate` consults `live`
+        // over EVERY deny it renders, so a waiver over any mediated-call row
+        // suppresses something. Derived rather than listed, so a kind that
+        // changes scope moves this assertion with it.
         for &kind in RuleKind::ALL {
             if kind.scopes() == [crate::rules::RuleScope::MediatedCall] {
                 assert!(
-                    !reaches(kind),
-                    "{}: adjudicated to a Decision, so no Finding exists to waive",
+                    reaches(kind),
+                    "{}: the hook consults `live` on every deny, so a waiver reaches this",
                     kind.as_str()
                 );
             }
         }
+        // Named too, because "every mediated kind" would hold vacuously if the
+        // scope pairing were ever emptied.
+        assert!(reaches(RuleKind::Shape));
+        assert!(reaches(RuleKind::Receipt));
+        assert!(reaches(RuleKind::Pipeline));
     }
 
     #[test]
@@ -856,16 +982,18 @@ mod tests {
     }
 
     #[test]
-    fn the_unreachable_set_is_exactly_the_kinds_that_mint_no_finding() {
+    fn the_unreachable_set_is_exactly_the_kind_that_can_decide_nothing() {
         let unreachable: Vec<&str> = RuleKind::ALL
             .iter()
             .filter(|&&kind| !reaches(kind))
             .map(|kind| kind.as_str())
             .collect();
-        // `pipeline` joins the mediated-call kinds with CLOUD-443, for their
-        // reason exactly: it returns a `Decision`, never a `Finding`, so there is
-        // nothing for a waiver to suppress.
-        assert_eq!(unreachable, ["shape", "receipt", "pipeline", "judge"]);
+        // `judge` alone, and for the one reason no implementation can retire:
+        // it cannot mint a finding at all. The mediated kinds left this list with
+        // CLOUD-610, when the channel that adjudicates them started honouring a
+        // waiver — so what remains is unreachability that is structural rather
+        // than merely unbuilt.
+        assert_eq!(unreachable, ["judge"]);
         // And the other direction, so the predicate cannot degenerate into
         // "false everywhere" and take the smell down to noise with it.
         assert!(
