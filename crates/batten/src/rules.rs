@@ -1874,6 +1874,65 @@ pub(crate) fn batches<'a>(matched: &[&'a String]) -> Vec<Vec<&'a str>> {
     batches
 }
 
+/// The interpreter a `#!` line names, resolved to something PATH can find.
+///
+/// CLOUD-617. `CreateProcess` runs PE images and does not read `#!`, so a
+/// checker written as a shell script — the ordinary shape for the extension
+/// surface CLOUD-88 calls universal — cannot be spawned on Windows at all. The
+/// kernel does this for us on Unix; this is that resolution, done by hand, for
+/// the platform whose loader will not.
+///
+/// Returns the interpreter and any single argument the shebang carries, e.g.
+/// `#!/usr/bin/awk -f` -> `["awk", "-f"]`. Two rules, both deliberate:
+///
+///   * **By basename.** `/bin/sh` is not a path that can exist on Windows, so
+///     resolving the literal string is guaranteed to fail; the basename is the
+///     part PATH can answer for.
+///   * **`env` is unwrapped, never run.** `#!/usr/bin/env python3` names
+///     `python3`; `env` is the indirection being resolved, not the program.
+///
+/// `None` for anything that is not a shebang — no `#!`, unreadable, or a binary
+/// whose first bytes merely look like text. The caller must then report the
+/// original spawn error unchanged: this may only ever turn a failure into a
+/// success, never one failure into a different one.
+fn shebang_interpreter(path: &Path) -> Option<Vec<String>> {
+    // Two bytes of prefix, then a bounded line. A binary file is not read into
+    // memory to discover it is binary.
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut head = [0u8; 256];
+    let read = std::io::Read::read(&mut file, &mut head).ok()?;
+    let head = head.get(..read)?;
+    let line = head.split(|b| *b == b'\n').next()?;
+    let line = std::str::from_utf8(line).ok()?;
+    // `trim_end` and not just `trim_end_matches('\r')`: a CRLF checkout is the
+    // reason this file's own gates had to be fixed (CLOUD-612), and a trailing
+    // `\r` welded to the interpreter name resolves as "not on PATH", which is
+    // the same failure wearing a misleading message.
+    let line = line.strip_prefix("#!")?.trim();
+    let mut words = line.split_whitespace();
+    let first = words.next()?;
+    let program = Path::new(first).file_name()?.to_str()?;
+    let mut resolved = Vec::new();
+    if program == "env" {
+        // `env` with no program after it names nothing to run.
+        resolved.push(words.next()?.to_owned());
+    } else {
+        resolved.push(program.to_owned());
+    }
+    resolved.extend(words.map(str::to_owned));
+    Some(resolved)
+}
+
+/// Whether an OS spawn error means "this file is not an executable image",
+/// which is the one failure a shebang can rescue.
+///
+/// Raw codes rather than [`std::io::ErrorKind`]: both of these still map to
+/// `Uncategorized` on stable, which is not matchable.
+fn is_not_an_executable_image(err: &std::io::Error) -> bool {
+    // 193 = ERROR_BAD_EXE_FORMAT (Windows), 8 = ENOEXEC (Unix).
+    matches!(err.raw_os_error(), Some(193 | 8))
+}
+
 /// Spawn one invocation, substituting `files` for [`FILES_PLACEHOLDER`], and
 /// record a finding if it exits non-zero.
 ///
@@ -1897,15 +1956,42 @@ fn run_once(
         }
     }
 
-    let status = std::process::Command::new(program)
-        .args(&expanded)
-        .current_dir(root)
-        // The predicate is the exit code alone; the command's own streams are
-        // not parsed for meaning (CLOUD-93) and are not surfaced here — a
-        // bounded, pointer-only drain is the advisory subsystem's job (CLOUD-82).
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
+    // The predicate is the exit code alone; the command's own streams are not
+    // parsed for meaning (CLOUD-93) and are not surfaced here — a bounded,
+    // pointer-only drain is the advisory subsystem's job (CLOUD-82).
+    let spawn = |program: &str, args: &[&str], extra: &[&str]| {
+        std::process::Command::new(program)
+            .args(extra)
+            .args(args)
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+    };
+
+    let mut status = spawn(program, &expanded, &[]);
+
+    // CLOUD-617: the direct spawn said "not an executable image", so this may be
+    // a script the OS loader will not read a `#!` for. Resolve the interpreter
+    // and run it through that instead. Scoped to a program that resolves to a
+    // real file under the root — a bare name off PATH has nothing to read — and
+    // the ORIGINAL error survives every way this can fail, because a fallback
+    // that reports its own failure hides the one the operator has to act on.
+    if let Err(err) = &status {
+        if is_not_an_executable_image(err) {
+            let script = root.join(program);
+            if let Some((interpreter, leading)) = shebang_interpreter(&script)
+                .as_deref()
+                .and_then(<[String]>::split_first)
+            {
+                let mut extra: Vec<&str> = leading.iter().map(String::as_str).collect();
+                extra.push(program);
+                if let Ok(rescued) = spawn(interpreter, &expanded, &extra) {
+                    status = Ok(rescued);
+                }
+            }
+        }
+    }
 
     let status = match status {
         Ok(status) => status,
@@ -3986,5 +4072,90 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         let config = crate::config::parse("version = 1\nscope = [\"!\"]\n", "test").unwrap();
         let err = Sets::from_config(&config).unwrap_err();
         assert!(err.downcast_ref::<UsageError>().is_some());
+    }
+
+    // --- CLOUD-617: the shebang the Windows loader will not read --------------
+    //
+    // The composition — that a `#!/bin/sh` checker actually runs a rule to a
+    // verdict — is asserted by the `windows` job over the acceptance corpus,
+    // which is where this defect was found and which is a required check. What
+    // is worth unit-testing is the parsing, because that is where the decisions
+    // are: the cases below are the ones that would each fail differently.
+
+    /// Write a program file and ask what interpreter, if any, it names.
+    fn interpreter_of(name: &str, contents: &str) -> Option<Vec<String>> {
+        let dir = temp_dir(&format!("shebang-{name}"));
+        write(&dir, "prog", contents);
+        shebang_interpreter(&dir.join("prog"))
+    }
+
+    #[test]
+    fn a_shebang_resolves_to_the_interpreters_basename() {
+        // `/bin/sh` cannot exist on Windows, so the literal path is the one
+        // string guaranteed not to resolve. The basename is what PATH answers.
+        assert_eq!(
+            interpreter_of("absolute", "#!/bin/sh\nexit 0\n"),
+            Some(vec!["sh".to_owned()])
+        );
+    }
+
+    #[test]
+    fn env_is_unwrapped_rather_than_run() {
+        // `env` is the indirection being resolved. Running `env` itself on
+        // Windows would fail exactly as the script did.
+        assert_eq!(
+            interpreter_of("env", "#!/usr/bin/env python3\n"),
+            Some(vec!["python3".to_owned()])
+        );
+    }
+
+    #[test]
+    fn an_interpreter_argument_is_carried() {
+        assert_eq!(
+            interpreter_of("arg", "#!/usr/bin/awk -f\n"),
+            Some(vec!["awk".to_owned(), "-f".to_owned()])
+        );
+    }
+
+    #[test]
+    fn a_carriage_return_does_not_weld_itself_to_the_interpreter() {
+        // A clone without `.gitattributes` hands us `#!/bin/sh\r`, and `sh\r` is
+        // "not on PATH" — the same failure wearing a message that sends the
+        // reader looking for a missing shell (CLOUD-612's line-ending shape,
+        // one layer down).
+        assert_eq!(
+            interpreter_of("crlf", "#!/bin/sh\r\nexit 0\r\n"),
+            Some(vec!["sh".to_owned()])
+        );
+    }
+
+    #[test]
+    fn what_is_not_a_shebang_resolves_to_nothing() {
+        // Each of these must leave the caller reporting the ORIGINAL spawn
+        // error: the fallback may turn a failure into a success, never one
+        // failure into a different one.
+        assert_eq!(interpreter_of("none", "exit 0\n"), None);
+        assert_eq!(interpreter_of("empty", ""), None);
+        assert_eq!(interpreter_of("bang-only", "#!\n"), None);
+        assert_eq!(interpreter_of("env-alone", "#!/usr/bin/env\n"), None);
+        // A PE image's first bytes are `MZ`, not `#!`.
+        assert_eq!(interpreter_of("binary", "MZ\u{0}\u{0}\u{1}"), None);
+        assert!(shebang_interpreter(Path::new("no/such/program")).is_none());
+    }
+
+    #[test]
+    fn only_a_bad_executable_image_is_rescued() {
+        // The trigger is narrow on purpose. A missing program is a real config
+        // error and must keep reporting as one rather than being re-tried as a
+        // script that does not exist either.
+        use std::io::{Error, ErrorKind};
+        assert!(is_not_an_executable_image(&Error::from_raw_os_error(193)));
+        assert!(is_not_an_executable_image(&Error::from_raw_os_error(8)));
+        assert!(!is_not_an_executable_image(&Error::from(
+            ErrorKind::NotFound
+        )));
+        assert!(!is_not_an_executable_image(&Error::from(
+            ErrorKind::PermissionDenied
+        )));
     }
 }
