@@ -348,6 +348,24 @@ local gate = new Mapping<String, Step> {
     glob = List("release-plz.toml", ".github/workflows/*")
     check = "mise run publish-credential-check"
   }
+  // The release job publishes a tag; this is what keeps it telling Linear so
+  // (CLOUD-618). Both invocations must be present, SHA-pinned, and bound to the
+  // one resolved tag output, over a checkout deep enough to carry the commit
+  // range the action reads — each of those failing produces a GREEN job and
+  // either no release record or one with no issues attached, which is why prose
+  // could not hold it. Wiring it here rather than as a CI-only step is what puts
+  // it in `mise run ci` -> `verify` -> CI, so `ci-local-parity`'s "every task CI
+  // runs is one `verify` runs" keeps holding.
+  //
+  // Globbed on the workflow it JUDGES as well as the script that decides, for
+  // the reason the timeout budget below states: a gate that does not re-run when
+  // its subject is edited stops running for exactly the commits it exists to
+  // judge. The batten.toml row's glob names only the script — that one is the
+  // rule's subject, and `batten-glob-check` must be able to prove it covered.
+  ["release-tracking-check"] {
+    glob = List(".github/workflows/release-plz.yml", "mise-tasks/release-tracking-check")
+    check = "mise run release-tracking-check"
+  }
   // An MCP allow rule that matches no tool name grants nothing and says nothing
   // about it — the only symptom is an approval prompt on every call, which
   // reads as harness behaviour rather than as a settings bug. This repo shipped

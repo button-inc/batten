@@ -79,6 +79,67 @@ jobs:
         run: git config --global url."https://x-access-token:${GH_PAT}@github.com/".insteadOf "https://github.com/"
       - run: mise run release
       - run: mise run release-pr
+      # CLOUD-618. WHICH TAG DID THIS PUSH SHIP, COMPUTED IN EXACTLY ONE PLACE.
+      # The expression below used to live inline in the summary step; both it and
+      # the two tracking steps read it now, so the answer cannot differ between
+      # what Linear records and what the run summary prints. Git stays the source
+      # of truth for what shipped — Linear receives a projection, never a second
+      # list.
+      #
+      # NO `shell:` KEY, deliberately. The default is `bash -e {0}` and an
+      # explicit `shell: bash` would add `-o pipefail`, under which the empty case
+      # — no tag at HEAD, so `grep` exits 1 — would kill the step instead of
+      # yielding the empty string every consumer below is written to handle.
+      - name: Resolve the release tag this push shipped
+        id: release-tag
+        run: echo "tag=$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1)" >>"$GITHUB_OUTPUT"
+      # An empty secret must FAIL a tagged push, never skip tracking quietly. The
+      # silent form is the one that costs a release: the job stays green, the
+      # summary still prints its list, and nothing anywhere says the release was
+      # never recorded. `LINEAR_ACCESS_KEY` is asserted to exist; nothing in this
+      # tree can confirm it, so this step is where a wrong assertion surfaces.
+      - name: Release tracking requires its credential
+        if: steps.release-tag.outputs.tag != ''
+        env:
+          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
+        run: |
+          if [ -z "$LINEAR_ACCESS_KEY" ]; then
+            echo "::error:: LINEAR_ACCESS_KEY is empty, so this tagged push would ship untracked. Set the secret; do not remove this guard." >&2
+            exit 1
+          fi
+      # TWO INVOCATIONS, AND THE SECOND IS NOT OPTIONAL. `sync` records the
+      # release object and attaches the `CLOUD-*` issues whose identifiers appear
+      # in the tag's commit range. The `batten` pipeline is `type: scheduled`, so
+      # `sync` alone leaves the release STARTED and it never reaches Released;
+      # `complete` is what marks it done. A continuous pipeline would not need the
+      # second step, and ours is not one.
+      #
+      # `github_token` is deliberately not passed — the action defaults it to
+      # `${{ github.token }}`, and the job's existing `contents: write` already
+      # covers the `contents: read` it wants. `id-token: write` is NOT added here
+      # for the reason this file's header gives: a permission no step uses is a
+      # zizmor excessive-permissions finding, not a security posture.
+      #
+      # Both are SHA-pinned with the trailing version comment every other `uses:`
+      # in this repo carries — zizmor's `unpinned-uses` reds on the floating `@v0`
+      # upstream publishes, and dependabot's `github-actions` ecosystem needs the
+      # comment to track the pin. `mise run release-tracking-check` holds all of
+      # this shape, so dropping either invocation fails the gate rather than
+      # silently shipping an untracked release.
+      - name: Record the release in Linear
+        if: steps.release-tag.outputs.tag != ''
+        uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          command: sync
+          version: ${{ steps.release-tag.outputs.tag }}
+      - name: Complete the Linear release
+        if: steps.release-tag.outputs.tag != ''
+        uses: linear/linear-release-action@17b8c24f8ceb2b98cabaf1965ff83c55dd596fac # v0.15.1
+        with:
+          access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
+          command: complete
+          version: ${{ steps.release-tag.outputs.tag }}
       # CLOUD-174. `Done` on this board means released, and Linear's GitHub
       # integration cannot supply that transition — it triggers on PR events, and
       # "a tag now contains this commit" is not one. So the list of issues a
@@ -105,8 +166,16 @@ jobs:
       # Tags are available because the checkout above is fetch-depth 0. A default
       # checkout has none, and every tag would look absent.
       - name: Report which issues this release shipped
+        env:
+          # CLOUD-618 replaced this step's inline `git tag --points-at` copy with
+          # the shared output, so the summary and the Linear release record can
+          # never disagree about which tag shipped. Read through `env:` rather
+          # than interpolated into the body: an expression expanded into a `run:`
+          # is zizmor's template-injection finding, and the step above this one
+          # already carries the same shape for the same reason.
+          TAG: ${{ steps.release-tag.outputs.tag }}
         run: |
-          tag="$(git tag --points-at HEAD | grep -E '^v[0-9]' | head -n1)"
+          tag="$TAG"
           if [ -z "$tag" ]; then
             echo "No release tag at HEAD — this push shipped nothing." >>"$GITHUB_STEP_SUMMARY"
             exit 0

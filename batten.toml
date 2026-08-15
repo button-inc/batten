@@ -1244,6 +1244,46 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply GH_TOKEN; neither is a change to this tree's content"
 
+# CLOUD-618. `release-plz.yml` publishes a tag; this row is what keeps the tag
+# reaching Linear's `batten` pipeline rather than only the run summary.
+#
+# `command` AND NOT `forbid`, which is the whole reason this is a row plus a
+# script rather than a declarative rule. Every other shape gate here asserts an
+# ABSENCE — a token that must not appear, a path that must not be tracked — and
+# absence is what a pattern over a file can express. This asserts PRESENCE: two
+# action invocations, pinned, bound to one resolved tag output, over a checkout
+# that is not shallow. No rule kind can address a node in a document, so there is
+# nothing declarative to write. That gap is `relatedTo` CLOUD-452, and it does
+# not block: `command` is the sanctioned form until a kind exists that closes it,
+# at which point this row collapses into that kind and the script goes away.
+#
+# THE GLOB IS THE ROW'S OWN MECHANISM, the discipline
+# `release-attestation-precondition` above establishes, and both halves of it
+# bind here too. It must be a path `batten-glob-check` can prove covered — that
+# gate accepts a verbatim match or a `P/**` prefix against hk.pkl's
+# `batten-check` list, and `mise-tasks/**` is in it, while a lone
+# `.github/workflows/release-plz.yml` is not provable. And it must not match
+# inside a FIXTURE tree: a `check` spelled `mise run` resolves only where a
+# mise.toml is findable, so a row matching a fixture reports the launcher rather
+# than the tree — `tests/prebuilt-lint.bats` copies the workflows into its
+# fixture, which is exactly the wider spelling that would have caught this one.
+# Naming the file the row exists to run keeps the trigger and the mechanism the
+# same object. The workflow it JUDGES is globbed on the hk step instead, where a
+# glob is a re-run trigger rather than a rule's subject.
+#
+# `deny` is safe because the check is offline and local: it reads one tracked
+# file, makes no network call, and needs no credential — so it cannot block on
+# ambient environment the way an earlier `attestation-check` did inside fixture
+# repositories. The only way it reds is the workflow actually losing its wiring.
+[[rule]]
+id = "release-tracking-check"
+kind = "command"
+glob = "mise-tasks/release-tracking-check"
+check = "mise run release-tracking-check"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "the missing node is in the workflow, not in this file; add the invocation, the pin, or the fetch-depth the finding names"
+
 # The one legitimate reduction this ratchet has seen, taken through the hatch its
 # own `no_fix_reason` names — "restore the tests, or waive the reduction
 # deliberately; which of the two is the whole question." Restoring is not an
