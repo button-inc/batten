@@ -65,19 +65,19 @@ you run them yourself, and they halt you by _failing_, not by needing a blessing
   branch, never author on `main`, and carry the whole lifecycle without stopping
   between steps to report and wait — that waiting is the defect.
 
-**When you SHOULD still stop** (real exceptions, not an escape hatch for ordinary
-caution): a gate fails and the fix is genuinely ambiguous; a rebase conflict needs
-a human decision; the change is outside the scope you were asked — the gates
-authorize the STEPS of agreed work, never whether it is agreed, so `claim-check`
-refuses an unrefined or same-session claim and `verify` a receiptless branch
-(CLOUD-431, bypass `BATTEN_CLAIM_CHECK_BYPASS`); or an action is destructive and _not_ gated (force-pushing `main`, deleting history, an
-out-of-band release). **Each stops the fix, never the record** — what you decline
-to fix, you file; out of scope is why a defect becomes a ticket, never why it
-evaporates into chat. **A punt is any deferral you could have closed**, a
-predicate not a list: a block reported as a decision (a block is a bug); "that's
-your call" on what your evidence settles; offering an action you are already
-authorized to take; awaiting an unbuilt mechanism instead of doing the instance in
-hand; sparing your own landed work. Can do it, do it; can't, file it.
+**When you SHOULD still stop** (real exceptions, not an escape hatch): a gate
+fails and the fix is genuinely ambiguous; a rebase conflict needs a human
+decision; the change is outside the scope you were asked — the gates authorize the
+STEPS of agreed work, never whether it is agreed (CLOUD-431, bypass
+`BATTEN_CLAIM_CHECK_BYPASS`); or an action is destructive and _not_ gated
+(force-pushing `main`, deleting history, an out-of-band release). **Each stops the
+fix, never the record**: what you decline to fix, you file. **A WRONGLY refusing
+gate is a defect, not an answer** — repair it and carry on this session; ticketing
+one is the punt below in gate's clothing (CLOUD-597/615). **A punt is any deferral
+you could have closed**, a predicate not a list: a block reported as a decision (a
+block is a bug); "that's your call" on what your evidence settles; offering an
+action you are already authorized to take; awaiting an unbuilt mechanism instead
+of doing the instance in hand; sparing your own landed work. Can do it, do it; can't, file it.
 
 ## Output posture: a message is a channel with no retention
 
