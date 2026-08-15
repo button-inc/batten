@@ -189,10 +189,10 @@ still runnable, and `run-shape-guard`'s three verdict-discarding shapes
 `issue-guard`'s **naming** half as of CLOUD-446 — a `requires_key` modifier on
 the two `gh pr create`/`ready` shape rows — and structurally cannot carry its
 duplicate-claim half, which needs `gh pr list` plus a `gh pr view` per
-competitor; that lands as a `tree`-scoped `command` rule under `batten enforce`,
-which is why the guard still exists. It does **not** carry
+competitor; that became the `tree`-scoped `claim-not-raced` row instead, so
+`issue-guard` is **deleted** rather than still runnable. It does **not** carry
 `contract-drift` — a linked capability gap on
-CLOUD-312 — and both of those guards still run by hand (`mise run <guard>`,
+CLOUD-312 — and that guard still runs by hand (`mise run contract-drift`,
 payload on stdin). The bullets below describe every
 guard's predicate; which of them a hook actually fires is the settings file's
 answer, not this list's.
@@ -234,45 +234,45 @@ means it is mediating.
   the bash guard's `|| exit 0`. The one source the port drops is `gh pr view`:
   a PR body typed by hand and never echoed into the branch or a commit is no
   longer evidence, because a network round trip cannot fit the ≤100ms budget.
-  The guard below is what is left.
-- `issue-guard` now carries only its **duplicate-claim** half, which the engine
-  structurally cannot: since CLOUD-230 it also refuses a key already claimed by a
-  different **open** PR
-  **claiming** the key is refused, because CLOUD-49 was implemented twice in one
-  cycle and one side was thrown away. Claiming, never merely naming — both sides
-  of that comparison go through `claimed-keys`, which is what the key is checked
-  against; the competitor's branch, title and `Refs:` trailers are
-  self-declarations, its body counts only through a closing keyword. Applying
-  the narrowing to one side and not the other made a PR citing the key as
-  evidence read as racing it (CLOUD-378). GitHub is the source for that lookup,
-  not the tracker, and it fails open when `gh` is absent or failing — and that
-  network call is exactly why the half cannot move: `RuleKind::scopes` pairs
-  every spawning kind with `RuleScope::Tree` alone, and a round trip on every
-  mediated tool call is disqualifying against the ≤100ms budget besides. It is the _earliest_ computable moment, not an early one:
-  no artifact exists at pull time for a hook to inspect, so opening the draft PR
-  before the work is what makes the refusal cheap. The
-  board rule was prose, and prose is feedforward only: a session followed every
-  gated discipline and skipped every ungated one, landing three PRs with no
-  issue moved and an existing issue (carrying measurements that contradicted the
-  fix) never read. You cannot name an issue you have not looked up, so the gate
-  that blocks landing is what forces the search. It does NOT gate whether
-  outstanding items reach the issue: nothing in the **tree** carries that, and
-  its compensating control is that a durable home always exists by then.
-  **Half of that is now gated after all** — the claim used to read "not
-  computable over any artifact the repo can see", and the PR body is an artifact
-  `gh` can see. `deferral-check` reads it (CLOUD-323). Bypass:
-  `BATTEN_ISSUE_GUARD_BYPASS=1`, for a PR that genuinely precedes its issue.
+  The other half is the row below, and `issue-guard` is **deleted**.
+- **`claim-race-check` is the duplicate-claim half** (CLOUD-446), and it is a
+  `tree`-scoped `command` row — `claim-not-raced` — run by `batten check` under
+  `verify`, never on a mediated call. Since CLOUD-230 the predicate refuses a key
+  already **claimed** by a different open PR, because CLOUD-49 was implemented
+  twice in one cycle and one side, already written and verified, was thrown away.
+  Claiming, never merely naming: both sides of the comparison go through
+  `claimed-keys`, which is the one authority on the distinction — the
+  competitor's branch, title and `Refs:` trailers are self-declarations, its body
+  counts only through a closing keyword. Applying the narrowing to one side and
+  not the other made a PR citing the key as evidence read as racing it
+  (CLOUD-378). GitHub is the source, not the tracker, and every failure to reach
+  it — no `gh`, no network, an unparseable answer, no resolvable claim — allows.
+  **It cannot live on the mediated call**: `RuleKind::scopes` pairs every
+  spawning kind with `RuleScope::Tree` alone, pinned by
+  `rules::tests::no_mediated_call_kind_spawns_a_process`, and a round trip on
+  every tool call is disqualifying against the ≤100ms budget besides. The cost of
+  the move, stated rather than absorbed: it catches the race at `verify` where
+  the guard caught it at `gh pr create`. Both are later than pull time, which is
+  what CLOUD-230 wanted and which no candidate restores. `glob` names the check's
+  own file so the trigger and the mechanism are one object, which is also what
+  keeps it out of every fixture (CLOUD-614). Bypass:
+  `BATTEN_CLAIM_RACE_BYPASS=1`, when a second PR against one issue is deliberate.
+  What neither half gates is whether outstanding items reach the issue: nothing
+  in the **tree** carries that, and the compensating control is that a durable
+  home always exists by then — `deferral-check` reads the PR body for the rest
+  (CLOUD-323).
 - `deferral-check` is the finish-side half of that pair (CLOUD-323): `land`
   pipes the PR body in before readying, and a paragraph containing `judgement
 call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   decisions had landed on `main` with a PR paragraph as their only record, and
   the board showed a clean Done. Paragraph-local is the whole design — measured
   over 60 merged PRs, "a deferral phrase and no key in the BODY" fires on zero,
-  because `issue-guard` already forces a key onto every one. `worth checking`
+  because the key rule already forces a key onto every one (`issue-guard`
+  when that was measured; the engine's `pr-names-an-issue` since CLOUD-446). `worth checking`
   (2 firings, both review prompts) and `deliberate` (16) were measured and
   dropped; one shape survived, firing once, correctly.
-- **`claim-guard` is retired** (CLOUD-444); the pull-time half of the pair
-  `issue-guard` finishes (CLOUD-272) is now the `claim-needs-receipt` row in
+- **`claim-guard` is retired** (CLOUD-444); the pull-time half of the pair the
+  key rule finishes (CLOUD-272) is now the `claim-needs-receipt` row in
   `batten.toml` — a `receipt` rule with `trigger = "write"` and `key = "branch"`.
   It denies a write whose target is **inside the repo and not git-ignored** when
   the current branch carries no claim receipt. `claim-check` still mints that

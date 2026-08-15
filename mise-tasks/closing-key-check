@@ -69,8 +69,12 @@ named=$(grep -oiE '(^|[^0-9A-Za-z-])CLOUD-[0-9]+([^0-9]|$)' <<<"$body" |
 	grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | sort -u | sort -t- -k2,2n || true)
 
 if [ -z "$named" ]; then
-	# issue-guard's question, answered earlier and elsewhere.
-	echo "closing-key-check: the body names no CLOUD key — issue-guard owns that case"
+	# Not this gate's question, and it is answered earlier and elsewhere: the
+	# engine's `pr-names-an-issue` row refuses `gh pr create` on work naming no
+	# key at all (CLOUD-446). Named as the rule rather than as `issue-guard`,
+	# which that change retired — a pointer at a deleted program is a second
+	# authority that no longer exists.
+	echo "closing-key-check: the body names no CLOUD key — the pr-names-an-issue rule owns that case"
 	exit 0
 fi
 

@@ -1283,6 +1283,38 @@ check = "mise run release-tracking-check"
 severity = "deny"
 scope = "tree"
 no_fix_reason = "the missing node is in the workflow, not in this file; add the invocation, the pin, or the fetch-depth the finding names"
+# `issue-guard`'s duplicate-claim half, and the change that retires that file
+# (CLOUD-446). The naming half is the engine's, two rows above as
+# `pr-names-an-issue`/`ready-names-an-issue`; this is what could not follow it.
+#
+# WHY IT IS A `tree` ROW rather than a mediated one, which is the issue's whole
+# decision: the predicate needs `gh pr list` plus a `gh pr view` per competitor,
+# and `RuleKind::scopes` pairs every spawning kind with `RuleScope::Tree` alone —
+# pinned by `rules::tests::no_mediated_call_kind_spawns_a_process`, an invariant
+# worth more than this predicate. A network round trip on every mediated tool
+# call is also disqualifying against the published <=100ms budget. So it runs
+# where spawning is already legal, under `verify`, which sits on every path to a
+# published PR because `land` is the only readier.
+#
+# The cost, stated rather than absorbed: this catches the race at `verify` where
+# `issue-guard` caught it at `gh pr create`. Both are later than pull time, which
+# is what CLOUD-230 wanted and which no candidate restores.
+#
+# `glob` NAMES THE CHECK'S OWN FILE, for the reason
+# `release-attestation-precondition` spells out above:
+# a `mise run` check resolves only where a mise.toml is findable, so a row
+# matching inside a fixture reports the launcher rather than the tree
+# (CLOUD-614). Naming the program the row exists to run makes the trigger and the
+# mechanism the same object, and keeps this out of every fixture that does not
+# carry it.
+[[rule]]
+id = "claim-not-raced"
+kind = "command"
+glob = "mise-tasks/claim-race-check"
+check = "mise run claim-race-check"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "a raced claim is resolved on the board, not in this tree: take the frontier from `mise run graph-check`, and close the competing PR if it is stale rather than racing it"
 
 # The one legitimate reduction this ratchet has seen, taken through the hatch its
 # own `no_fix_reason` names — "restore the tests, or waive the reduction
@@ -1319,7 +1351,7 @@ expires = "2026-11-14"
 
 [[waiver]]
 rule = "bats-tests-not-deleted"
-reason = "Two retirements, both deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, CLOUD-444 retires `claim-guard` once a receipt row can be branch-keyed and write-triggered, and CLOUD-443 moves `run-shape-guard`'s three verdict-discarding shapes into a `pipeline` row, shrinking that suite to the two families the engine cannot express. Each takes its bats suite with it and each corpus moves to a Rust one (`crates/batten/tests/mediated_verbs.rs`, `crates/batten/tests/claim_receipt.rs`), so what falls is the bats count, not the coverage."
+reason = "Retirements, all deletions of suites whose subject is gone: CLOUD-515 removed plan-hold (1600 -> 1552), CLOUD-442 retires `memory-guard` once its whole write-shape table is expressible in `[[verb]]`, CLOUD-444 retires `claim-guard` once a receipt row can be branch-keyed and write-triggered, CLOUD-443 moves `run-shape-guard`'s three verdict-discarding shapes into a `pipeline` row, shrinking that suite to the two families the engine cannot express, and CLOUD-446 retires `issue-guard` — its naming half to a `requires_key` shape row and its duplicate-claim half to `claim-race-check`, which brings its own suite. Each takes its bats suite with it and each corpus moves to a Rust one (`crates/batten/tests/mediated_verbs.rs`, `crates/batten/tests/claim_receipt.rs`, `crates/batten/tests/issue_key.rs`) or to the successor gate's, so what falls is the bats count, not the coverage."
 expires = "2026-09-13"
 
 [ci]

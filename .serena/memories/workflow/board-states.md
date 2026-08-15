@@ -109,9 +109,12 @@ What it cost when nobody did: CLOUD-49 went In Progress at 04:29:34 and a second
 session started writing it ~6 minutes later, having read the issue at startup
 while it was still Todo and never re-read it. Both implementations were
 complete; one was discarded. `mise run claim-check` is that re-read, with an
-exit code (`not-todo` / `assigned` / `has-pr`), and `issue-guard` now refuses
-`gh pr create` when another open PR already claims the key — the earliest
-computable moment, since no artifact exists at pull time for a hook to inspect.
+exit code (`not-todo` / `assigned` / `has-pr`), and `claim-race-check` refuses
+`verify` when another open PR already claims the key. That is later than the `gh
+pr create` the retired `issue-guard` fired on, and later still than pull time,
+which is what this wanted: the predicate needs a network call, and no rule kind
+can make one on a mediated call (CLOUD-446). `verify` is the earliest surface
+that still sits on every path to a published PR.
 
 For the transitions the automation _does_ perform, an agent hand-moving the
 board is doing work that is already automated, and doing it the fragile way. A state change is a tracker write, and a write can be
@@ -127,7 +130,10 @@ pr ready` unless a `CLOUD-<n>` appears in the branch, a commit on
 call the hook cannot read a checkout for allows too. What no longer counts is a
 key that appears ONLY in a PR body typed by hand — the port dropped the `gh pr
 view` read, because a network call cannot fit the mediated path's latency
-budget. `mise run issue-guard` still decides the duplicate-claim half by hand.
+budget. The duplicate-claim half is `claim-race-check`, a `tree`-scoped
+`command` row (`claim-not-raced`) that `batten check` runs under `verify`; it
+refuses a key already claimed by a different open PR, and `mise-tasks/issue-guard`
+is deleted.
 
 ### This applies to transitions ONLY — never to issue content
 
@@ -183,7 +189,7 @@ Two things this does NOT cover, both observed rather than assumed:
 
   **Write `Closes <key>` in the PR body**, and `closing-key-check` refuses a body
   that names its issue without it. Every PR here named its issue and none closed
-  it, because `issue-guard` requires the key and nothing required the form — the
+  it, because the key rule requires the key and nothing required the form — the
   convention was satisfied and the outcome still wrong. Use `DO-NOT-CLOSE` when a
   PR deliberately does not complete its issue, which under trunk-based
   development is the several-PRs-per-issue case (CLOUD-186); closing on the first
