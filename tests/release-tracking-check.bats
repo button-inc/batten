@@ -94,6 +94,21 @@ replace_line() { # replace_line <extended-regex> <replacement-line>
 	[ "$status" -eq 0 ]
 }
 
+# THE REGRESSION THIS SUITE EXISTS FOR AS MUCH AS THE TABLE BELOW. The row is
+# `deny` + `scope = "tree"`, so the check runs on every gate invocation —
+# including a `batten hook` mediated call, whose CWD is the caller's, not this
+# tree's root. Reading the workflow relative to that CWD made the gate answer
+# "could not look" from anywhere else, and a deny row that cannot look denies:
+# CI refused an unrelated `gh pr ready` under this rule's name instead of the
+# receipt row's, failing `the_committed_policy_gates_ready_on_receipts_rather_
+# than_banning_it`. Asserted from a subdirectory, which is the shape a hook's
+# CWD actually takes.
+@test "the committed workflow is judged from any directory in the tree" {
+	cd "$BATS_TEST_DIRNAME/.." || return 1
+	run env -u BATTEN_RELEASE_WORKFLOW sh -c "cd crates && exec '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
 @test "a dropped sync invocation is a violation" {
 	drop_step "Record the release in Linear"
 	run "$GATE"

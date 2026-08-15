@@ -56,6 +56,22 @@
 # inside the invocation it belongs to, never anywhere in the file.
 set -euo pipefail
 
+# THE ROW IS `deny` + `scope = "tree"`, SO THIS RUNS ON EVERY GATE INVOCATION —
+# including a `batten hook` mediated call, whose working directory is whatever
+# the caller happened to be in rather than this tree's root. Reading the workflow
+# relative to that CWD is a gate that answers "could not look" wherever it is not
+# launched from the top, and a `deny` row that cannot look denies: measured in CI
+# on `the_committed_policy_gates_ready_on_receipts_rather_than_banning_it`, where
+# an unrelated `gh pr ready` was refused under THIS rule's name instead of the
+# receipt row's — the exact confusion that case exists to catch.
+#
+# `attestation-check` opens with the same line for the same reason; it is the
+# half of that model that is invisible until a caller runs from elsewhere. The
+# override is the `BATTEN_BIN` idiom, so the suite can drive a fixture root.
+if root="${RELEASE_TRACKING_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null)}" && [ -n "$root" ]; then
+	cd "$root"
+fi
+
 WORKFLOW="${BATTEN_RELEASE_WORKFLOW:-.github/workflows/release-plz.yml}"
 
 if [ ! -f "$WORKFLOW" ] || [ ! -r "$WORKFLOW" ]; then
