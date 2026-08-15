@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.78](https://github.com/button-inc/batten/compare/v0.0.77...v0.0.78) - 2026-08-15
+
+### Added
+
+- *(hook)* [**breaking**] adjudicate consumes the boundary-resolved waiver facts
+- *(hook)* [**breaking**] refuse publishing work that names no tracker key
+
+### Fixed
+
+- *(hook)* a shallow clone cannot answer the key question, so it allows
+
 ## [0.0.77](https://github.com/button-inc/batten/compare/v0.0.76...v0.0.77) - 2026-08-14
 
 ### Added
