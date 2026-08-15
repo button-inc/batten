@@ -97,6 +97,19 @@ main() {
 		usage
 		return 0
 		;;
+	# The stem, without building. `mise-tasks/sbom-binary` names its asset from
+	# this rather than re-spelling `archive_stem`, so the naming contract
+	# CLOUD-65's install path reads stays decided in one place — the same reason
+	# `sbom --names` exists for the platform-independent documents.
+	--stem)
+		if [ -z "${2:-}" ]; then
+			usage
+			return 1
+		fi
+		archive_stem "$(crate_version)" "$2"
+		printf '\n'
+		return 0
+		;;
 	"")
 		usage
 		return 1
@@ -117,10 +130,25 @@ main() {
 	# --locked so a release build resolves the exact dependency versions the
 	# lockfile pins; a release that silently floated a dependency is not the
 	# artifact CI tested.
+	# `cargo auditable` on the two wrappers it is PROVEN to compose with, and not
+	# on `cross` (CLOUD-263). It embeds the resolved dependency graph in a `dep-v0`
+	# linker section, which is the only reason a syft scan of the shipped binary
+	# recovers anything at all — measured, a plain build yields zero rust-crate
+	# packages and an auditable one 85, through `strip = true`.
+	#
+	# THE `cross` LEGS ARE DELIBERATELY UNWRAPPED. Composition there is unmeasured,
+	# not refuted: `cross` compiles inside a container carrying its own toolchain,
+	# and no Docker daemon was available to probe it. This matrix shipped six
+	# consecutive releases with zero binaries (CLOUD-258), so an unproven build
+	# wrapper does not enter it on inference — `mise-tasks/sbom-binary` is only
+	# asked for the legs that are proven, and the DoD's "every archive whose leg
+	# composes" is what absorbs the narrowing.
 	case "$BUILD_TOOL" in
-	# cargo-zigbuild replaces the `build` verb rather than wrapping it.
-	zigbuild) cargo zigbuild --locked --profile dist --target "$target" --bin "$BIN" >&2 ;;
-	cargo | cross) "$BUILD_TOOL" build --locked --profile dist --target "$target" --bin "$BIN" >&2 ;;
+	# cargo-zigbuild replaces the `build` verb rather than wrapping it; `auditable`
+	# wraps rustc rather than the subcommand, so the two compose.
+	zigbuild) cargo auditable zigbuild --locked --profile dist --target "$target" --bin "$BIN" >&2 ;;
+	cargo) cargo auditable build --locked --profile dist --target "$target" --bin "$BIN" >&2 ;;
+	cross) cross build --locked --profile dist --target "$target" --bin "$BIN" >&2 ;;
 	*)
 		echo "dist: DIST_BUILD_TOOL must be cargo, cross, or zigbuild, got '${BUILD_TOOL}'" >&2
 		return 1

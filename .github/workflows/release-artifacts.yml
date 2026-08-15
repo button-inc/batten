@@ -173,6 +173,33 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.tag || github.event.release.tag_name }}
         run: gh release upload "$TAG" "${{ steps.dist.outputs.archive }}" --clobber
+      # The binary-level inventory (CLOUD-263), AFTER the upload for CLOUD-258's
+      # reason: the archive is already published, so nothing this step does can
+      # suppress a binary. It is a step rather than a job — a job costs a billed
+      # minute and this costs none — and it runs inside the leg that built the
+      # binary because that is the only place the bytes exist.
+      #
+      # SKIPPED ON `cross`, and that is a measured narrowing rather than an
+      # oversight: `cargo auditable` composes with `cargo` and with
+      # `cargo-zigbuild` (proven, 85 rust-crate packages recovered from a stripped
+      # `dist` binary against 0 from an unwrapped one), and could not be probed
+      # against `cross` because that wrapper needs a Docker daemon the probe
+      # container had none of. `mise-tasks/dist` wraps exactly the same two, so a
+      # `cross` leg would produce a document cataloging nothing — which
+      # `sbom-binary` correctly refuses. The five container legs join when someone
+      # runs the same local probe where Docker exists.
+      - name: Inventory the built binary
+        if: matrix.build-tool != 'cross'
+        id: sbom
+        shell: bash
+        run: mise run sbom-binary "${{ steps.dist.outputs.binary }}" "${{ matrix.target }}" >>"$GITHUB_OUTPUT"
+      - name: Upload the binary SBOM to the release
+        if: matrix.build-tool != 'cross'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: gh release upload "$TAG" "${{ steps.sbom.outputs.sbom }}" --clobber
       # Attest the BINARY rather than the archive: the provenance should bind to
       # the executable a user runs, so repackaging cannot launder it (§12 — a
       # trust engine must exceed the ordinary distribution bar, not match it).

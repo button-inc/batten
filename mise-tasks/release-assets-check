@@ -60,6 +60,16 @@ if [ -z "$targets" ]; then
 	exit 2
 fi
 
+# The legs that also publish a binary-level SBOM (CLOUD-263) — the ones whose
+# `build-tool` is not `cross`. Read from the matrix rather than listed, so a leg
+# that changes wrapper is covered by that edit alone: the pair of lines is
+# `- target: <triple>` followed by `build-tool: <tool>`, so the tool is the next
+# `build-tool:` after each target.
+composed=$(awk '
+	/^[[:space:]]*-[[:space:]]+target:[[:space:]]*/ { t = $NF; next }
+	/^[[:space:]]*build-tool:[[:space:]]*/ { if (t != "" && $NF != "cross") print t; t = "" }
+' "$WORKFLOW" | sort -u)
+
 # The platform-independent assets, from the places that decide them. `|| true`
 # on the scrape because an empty result is a real answer the guard below judges,
 # not a failure. Basenames, because a release asset is named by its basename.
@@ -78,6 +88,17 @@ if [ -x "$SBOM" ]; then
 fi
 if [ -x "$RENDER_CLI" ]; then
 	derived=$(printf '%s\n%s\n' "$derived" "$("$RENDER_CLI" --names | sed -nE 's/^reference=//p' || true)")
+fi
+# The per-target documents, one per composed leg, named by the task that writes
+# them so this file never re-derives the stem (CLOUD-263). They are PER-TARGET and
+# therefore not "extras": they join the same exact-name set below, because a
+# missing one is exactly the failure this clause exists to name.
+SBOM_BINARY="$TASKS/sbom-binary"
+if [ -x "$SBOM_BINARY" ] && [ -n "$composed" ]; then
+	while IFS= read -r leg; do
+		[ -n "$leg" ] || continue
+		derived=$(printf '%s\n%s\n' "$derived" "$("$SBOM_BINARY" --names "$leg" | sed -nE 's/^sbom=//p' || true)")
+	done <<<"$composed"
 fi
 # shellcheck disable=SC2086 # both are newline-separated lists, not one word
 extras=$(printf '%s\n%s\n' "$literal" "$derived" | sed 's#^.*/##' | sed '/^$/d' | sort -u)
@@ -110,7 +131,11 @@ missing=0
 present=0
 while IFS= read -r target; do
 	[ -n "$target" ] || continue
-	if grep -qF -- "$target" <<<"$assets"; then
+	# Matched against the ARCHIVE extensions, not the bare triple: since CLOUD-263
+	# a composed leg also uploads `<stem>.spdx.json`, whose name contains the same
+	# triple, and a bare substring test would let that document stand in for the
+	# binary it describes — the archive missing, the gate green.
+	if grep -qE -- "$target.*[.](tar[.]gz|zip)$" <<<"$assets"; then
 		present=$((present + 1))
 		continue
 	fi

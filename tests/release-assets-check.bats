@@ -86,6 +86,14 @@ add_manifest_entry() {
 	printf '%064d  %s\n' 0 "$1" >>"$RELEASE/SHA256SUMS"
 }
 
+# The per-target binary SBOM one composed leg publishes (CLOUD-263), DERIVED the
+# way the gate derives it rather than spelled out: the name carries the crate
+# version, so a literal here would rot at the next release bump — the same reason
+# the matrix above is read from the workflow instead of restated.
+binary_sbom() { # $1 = target
+	"$BATS_TEST_DIRNAME/../mise-tasks/sbom-binary" --names "$1" | sed -nE 's#^sbom=.*/##p'
+}
+
 complete() {
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
@@ -93,7 +101,9 @@ complete() {
 		batten.local.schema.json \
 		batten.spdx.json \
 		batten.cdx.json \
-		batten-cli-reference.md
+		batten-cli-reference.md \
+		"$(binary_sbom x86_64-unknown-linux-gnu)" \
+		"$(binary_sbom aarch64-apple-darwin)"
 	add_manifest
 }
 
@@ -135,12 +145,14 @@ complete() {
 	stub_gh batten-9.9.9-x86_64-unknown-linux-gnu.tar.gz \
 		batten-9.9.9-aarch64-apple-darwin.tar.gz \
 		batten.schema.json \
-		batten.local.schema.json
+		batten.local.schema.json \
+		"$(binary_sbom x86_64-unknown-linux-gnu)" \
+		"$(binary_sbom aarch64-apple-darwin)"
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.spdx.json"* ]]
 	[[ "$output" == *"batten.cdx.json"* ]]
-	[[ "$output" == *"3 of 5 non-target assets"* ]]
+	[[ "$output" == *"3 of 7 non-target assets"* ]]
 	# The per-target half must stay clean — the two failures are independent.
 	[[ "$output" != *"targets have no asset"* ]]
 }
@@ -161,7 +173,7 @@ complete() {
 	[[ "$output" == *"batten.local.schema.json"* ]]
 	[[ "$output" == *"batten.spdx.json"* ]]
 	[[ "$output" == *"batten-cli-reference.md"* ]]
-	[[ "$output" == *"5 of 5 non-target assets"* ]]
+	[[ "$output" == *"7 of 7 non-target assets"* ]]
 }
 
 @test "an upload line the parser cannot read exits 2 rather than covering nothing" {
@@ -200,11 +212,13 @@ complete() {
 		batten.schema.json \
 		batten.spdx.json \
 		batten.cdx.json \
-		batten-cli-reference.md
+		batten-cli-reference.md \
+		"$(binary_sbom x86_64-unknown-linux-gnu)" \
+		"$(binary_sbom aarch64-apple-darwin)"
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.local.schema.json"* ]]
-	[[ "$output" == *"1 of 5 non-target assets"* ]]
+	[[ "$output" == *"1 of 7 non-target assets"* ]]
 }
 
 @test "the real workflow publishes the non-target assets this gate derives" {
@@ -263,7 +277,7 @@ complete() {
 	complete
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"manifest covering all 7 asset(s) (sha256 verified)"* ]]
+	[[ "$output" == *"manifest covering all 9 asset(s) (sha256 verified)"* ]]
 }
 
 @test "THE CLOUD-278 GAP: every asset present but no manifest fails" {
@@ -276,7 +290,9 @@ complete() {
 		batten.local.schema.json \
 		batten.spdx.json \
 		batten.cdx.json \
-		batten-cli-reference.md
+		batten-cli-reference.md \
+		"$(binary_sbom x86_64-unknown-linux-gnu)" \
+		"$(binary_sbom aarch64-apple-darwin)"
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"SHA256SUMS checksums-missing"* ]]
@@ -294,7 +310,9 @@ complete() {
 		batten.local.schema.json \
 		batten.spdx.json \
 		batten.cdx.json \
-		batten-cli-reference.md
+		batten-cli-reference.md \
+		"$(binary_sbom x86_64-unknown-linux-gnu)" \
+		"$(binary_sbom aarch64-apple-darwin)"
 	run "$CHECK" v9.9.9
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"batten.schema.json checksums-omits"* ]]
