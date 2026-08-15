@@ -1451,8 +1451,20 @@ fn run_hook(
 /// `None`. `base` failing to resolve is a failure, because with no range there
 /// is no commit evidence at all and the branch name alone would be a narrowing
 /// nobody wrote.
+///
+/// **A shallow clone is the same failure, and it is the one that was measured.**
+/// Truncated history means the range holds a suffix of the work rather than the
+/// work, so "no commit names a key" is a statement about what was fetched. CI
+/// takes its base with `git fetch --depth=1` and its head at the same depth, and
+/// the first version of this refused every PR there — a gate that fired on the
+/// one checkout its predicate cannot be evaluated in. It is checked before the
+/// range is read rather than after, because a truncated range answers
+/// confidently and wrongly.
 fn key_facts(base: &str) -> hook::KeyFacts {
     let repo = git::repo_root(Path::new(".")).ok()?;
+    if git::is_shallow(&repo).ok()? {
+        return None;
+    }
     let messages = git::log_messages(&repo, base).ok()??;
     let mut evidence = vec![messages];
     evidence.extend(git::current_branch(&repo).ok().flatten());

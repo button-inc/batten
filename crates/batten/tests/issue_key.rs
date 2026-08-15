@@ -251,6 +251,49 @@ fn a_detached_head_still_reads_its_commits() {
 }
 
 #[test]
+fn a_shallow_clone_cannot_answer_and_therefore_allows() {
+    // THE CASE CI MEASURED, and the reason it is a regression test rather than a
+    // completeness case. `ci.yml` fetches its ratchet base with `git fetch
+    // --depth=1 origin main` and `actions/checkout` takes the head at the same
+    // depth, so `origin/main..HEAD` there holds a synthetic commit and none of
+    // the branch's own. The first version of this rule read that view as "the
+    // work names no key" and refused every PR in CI — a confident answer from a
+    // partial fetch, which is the failure mode the whole `None` = could-not-look
+    // posture exists to prevent.
+    //
+    // The source repository is deliberately keyless AND its clone shallow, so a
+    // rule that lost only the truncation check would still deny here.
+    let source = repo("key-shallow-source", "user/some-slug", "chore: tidy up");
+    let dir = scratch_outside_tree("batten-issue-key", "shallow");
+    std::fs::remove_dir_all(&dir).expect("clear the clone target");
+    let url = format!("file://{}", source.to_str().expect("utf-8 fixture path"));
+    git_in(
+        source.parent().expect("fixture has a parent"),
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            &url,
+            dir.to_str().expect("utf-8 clone path"),
+        ],
+    );
+    // The base has to resolve, or the allow would come from the unresolvable-base
+    // path and prove nothing about truncation.
+    git_in(&dir, &["fetch", "-q", "--depth", "1", "origin", "main"]);
+    git_in(
+        &dir,
+        &["update-ref", "refs/remotes/origin/main", "FETCH_HEAD"],
+    );
+    assert_eq!(
+        git_in(&dir, &["rev-parse", "--is-shallow-repository"]).trim(),
+        "true",
+        "the fixture must actually be shallow, or this asserts nothing"
+    );
+    assert_allowed(&dir, "gh pr create --title 'tidy' --body 'no key'");
+}
+
+#[test]
 fn the_refusal_names_the_route_and_leaks_no_evidence() {
     let dir = repo(
         "key-refusal",

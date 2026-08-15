@@ -989,6 +989,32 @@ pub fn current_branch(dir: &Path) -> Result<Option<String>> {
     Ok((name != "HEAD").then_some(name))
 }
 
+/// Whether this checkout's history is truncated (CLOUD-446).
+///
+/// The one question that separates "the work names no key" from "I cannot see
+/// the work". A shallow clone holds a suffix of history — often a single
+/// grafted commit — so a predicate over *the commits on this branch* reads a
+/// partial view, and answering "none of them" from it is inferring absence from
+/// what was not fetched.
+///
+/// Measured, not hypothesised: `ci.yml` fetches its ratchet base with `git fetch
+/// --depth=1 origin main`, and `actions/checkout` takes the PR head at the same
+/// depth, so a `git log origin/main..HEAD` there sees a synthetic merge commit
+/// and none of the branch's own. A key check that trusted that view refused
+/// every PR in CI.
+///
+/// # Errors
+///
+/// Raises when `git` cannot be run at all, or its output is not UTF-8. A
+/// non-zero exit is not expected here — `--is-shallow-repository` answers for
+/// any repository — so it is read as the conservative `true`: unable to
+/// establish that history is complete is not the same as establishing that it
+/// is.
+pub fn is_shallow(dir: &Path) -> Result<bool> {
+    let answer = query_optional(dir, &["rev-parse", "--is-shallow-repository"])?;
+    Ok(answer.is_none_or(|answer| answer.trim() != "false"))
+}
+
 /// The commit messages on `base..HEAD`, as one blob (CLOUD-446).
 ///
 /// One string rather than a list because every caller asks the same question of
