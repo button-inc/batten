@@ -142,13 +142,24 @@ run_check() {
 }
 
 @test "no gh at all is could-not-look, never a verdict" {
-	# The stub is removed AND the path narrowed, because `gh` is a pinned tool
-	# here: deleting the stub alone falls through to mise's shim and the case
-	# would assert nothing. `/usr/bin:/bin` still supplies git, jq and the
-	# coreutils the gate needs, and carries no `gh`.
-	rm -f "$STUB/gh"
+	# ABSENCE IS CONSTRUCTED, NOT ASSUMED. Deleting the stub falls through to
+	# mise's pinned `gh`, and narrowing to `/usr/bin:/bin` only works where that
+	# happens to carry none — measured: it does here and does NOT on a GitHub
+	# runner, where `gh` is in `/usr/bin` and this case silently asserted
+	# nothing. So the PATH is built from exactly the two programs the gate needs
+	# before it asks for `gh`: `dirname`, for its own directory, and `git`, for
+	# the checkout test. Anything the gate reaches for after that point is
+	# unreachable by construction, which is the whole condition under test.
+	local only="$BATS_TEST_TMPDIR/no-gh"
+	mkdir -p "$only"
+	# `bash` too: the gate's `#!/usr/bin/env bash` shebang resolves the
+	# interpreter through PATH, so a dir without it is exit 127 rather than the
+	# condition under test.
+	ln -s "$(command -v bash)" "$only/bash"
+	ln -s "$(command -v git)" "$only/git"
+	ln -s "$(command -v dirname)" "$only/dirname"
 	echo "306 user/cloud-49-someone-else" >"$BATS_TEST_TMPDIR/others"
-	run bash -c "cd '$ROOT' && PATH=/usr/bin:/bin '$CHECK'"
+	run env -i PATH="$only" HOME="$HOME" bash -c "cd '$ROOT' && '$CHECK'"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"could not look"* ]]
 }
