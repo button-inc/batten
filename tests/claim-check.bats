@@ -241,6 +241,23 @@ UNREFINED='## Why
 
 Something is broken and someone should fix it.'
 
+# A refined body that `ready-lint` accepts, spelled at file scope so a case can
+# both PASS it as the payload and HASH it for the baseline receipt — the two
+# sides of the CLOUD-597/CLOUD-615 comparison have to be the same bytes.
+#
+# NO APOSTROPHE anywhere in here. Cases reach the helper through
+# `bash -c "... payload ... '$REFINED' ..."`, so the outer shell expands this
+# into a single-quoted argument; one apostrophe closes that quote and the
+# payload arrives truncated. `UNREFINED` above has none for the same reason.
+REFINED='**Refinement — Ready**
+
+* **Source of truth (§1).** The fixture body, which is all this case reads.
+* **Mechanism as a computable predicate (§2).** A gate resolves it to an exit code.
+* **Output & exit (§5).** Pointer-only, byte-stable.
+* **Commit / bump (§6).** `fix(fixture)` → **patch** until `0.1.0`.
+* **Test obligation (§7).** The bats case below.
+* **Blockers (§8).** None.'
+
 # `updatedAt` in the future relative to the stamp — i.e. refined AFTER this
 # session started, which is the incident's shape.
 refined_after_the_stamp() {
@@ -285,6 +302,59 @@ refined_after_the_stamp() {
 	run bash -c "$(declare -f payload); payload CLOUD-1 Todo '' '' '$UNREFINED' | (cd '$REPO' && $CHECK)"
 	[[ "$output" != *"Something is broken"* ]]
 	[[ "$output" != *"someone should fix it"* ]]
+}
+
+# --- the body baseline (CLOUD-597, CLOUD-615) --------------------------------
+#
+# Both readings of one root cause: the rule compared a clock to a clock, and
+# neither clock means "did this agent refine this story". `issue-read-check`
+# records a hash of the body, and these two cases are the measured incidents.
+
+# Record what `issue-read-check` records: the read receipt whose fourth field is
+# the body hash this clone saw.
+baseline_for() { # baseline_for <key> <body>
+	local receipt="$REPO/$(git -C "$REPO" rev-parse --git-dir)/batten-receipts/issue-read.$1"
+	mkdir -p "$(dirname "$receipt")"
+	printf '%s %s %s %s\n' "$1" - "$(date -u +%s)" \
+		"$(printf '%s\n' "$2" | git hash-object --stdin)" >"$receipt"
+}
+
+@test "CLOUD-597 REPLAY: a row whose updatedAt moved but whose BODY did not is pullable" {
+	# Measured 2026-08-14: creating one issue wrote a reciprocal relation onto
+	# another, moving its `updatedAt` past the session stamp. Nobody refined it,
+	# and the claim was refused. Any write to the row does this — a label, an
+	# assignee, a bulk board touch.
+	setup_repo
+	local later
+	later=$(refined_after_the_stamp)
+	baseline_for CLOUD-391 "$REFINED"
+	run bash -c "$(declare -f payload); payload CLOUD-391 Todo '' '' '$REFINED' '$later' | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"refined-this-session"* ]]
+	[ -f "$RECEIPT" ]
+}
+
+@test "CLOUD-615 REPLAY: a body rewritten under this clone is refused even when the stamp is NEWER" {
+	# The opposite direction, and the dangerous one because it fails open and
+	# always in the agent's favour. The stamp is truncated on every SessionStart,
+	# so a container replaced mid-work mints a stamp LATER than the refinement it
+	# is supposed to catch. Here the stamp is fresh and `updatedAt` is old — the
+	# clock pair says "pullable" — and the baseline says the body changed.
+	setup_repo
+	baseline_for CLOUD-610 "$UNREFINED"
+	: >"$STAMP" # the restart: a stamp newer than everything
+	run bash -c "$(declare -f payload); payload CLOUD-610 Todo '' '' '$REFINED' '2020-01-01T00:00:00.000Z' | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-610 refined-this-session"* ]]
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "the baseline refusal is pointer-only — never a line of the body it compared" {
+	setup_repo
+	baseline_for CLOUD-610 "$UNREFINED"
+	run bash -c "$(declare -f payload); payload CLOUD-610 Todo '' '' '$REFINED' '2020-01-01T00:00:00.000Z' | (cd '$REPO' && $CHECK)"
+	[[ "$output" != *"Something is broken"* ]]
+	[[ "$output" != *"Source of truth"* ]]
 }
 
 @test "a missing session stamp REFUSES rather than passing" {

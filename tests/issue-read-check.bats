@@ -53,6 +53,39 @@ payload() {
 	[[ "$stamp" =~ ^[0-9]+$ ]]
 }
 
+# Field 4 is the BODY BASELINE `claim-check` compares against (CLOUD-597,
+# CLOUD-615). The contract between the two files is that it moves when the body
+# moves and holds still when anything else about the row changes — which is the
+# whole reason it exists, since `updatedAt` cannot tell those apart.
+@test "the receipt records a body hash that tracks the body and nothing else" {
+	local with_body
+	with_body() { # with_body <key> <updatedAt> <description>
+		jq -nc --arg id "$1" --arg u "$2" --arg d "$3" \
+			'{id: $id, updatedAt: $u, status: "Todo", description: $d}'
+	}
+	field4() { awk 'NR==1{print $4}' "$RECEIPTS/issue-read.$1"; }
+
+	with_body CLOUD-597 "2026-08-13T03:00:00.000Z" "the body" | "$CHECK" >/dev/null
+	local first
+	first=$(field4 CLOUD-597)
+	[[ "$first" =~ ^[0-9a-f]{40}$ ]]
+
+	# The CLOUD-597 shape: the row was touched, the body was not.
+	with_body CLOUD-597 "2026-08-14T09:99:00.000Z" "the body" | "$CHECK" >/dev/null
+	[ "$(field4 CLOUD-597)" = "$first" ]
+
+	# And the shape the rule must still catch: the body itself changed.
+	with_body CLOUD-597 "2026-08-13T03:00:00.000Z" "the body, refined" | "$CHECK" >/dev/null
+	[ "$(field4 CLOUD-597)" != "$first" ]
+}
+
+@test "a payload with no description still mints, so the baseline is never a lie" {
+	# An absent body hashes the empty string rather than being omitted: a missing
+	# field would send `claim-check` down its fallback path silently.
+	payload CLOUD-3 | "$CHECK" >/dev/null
+	[[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-3")" =~ ^[0-9a-f]{40}$ ]]
+}
+
 # Pointer-only, non-negotiable 4. A receipt is read by a human debugging a
 # refusal, and an issue body can carry anything.
 @test "the receipt carries no title and no body" {

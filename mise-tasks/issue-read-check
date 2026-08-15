@@ -96,11 +96,33 @@ mkdir -p "$git_dir/batten-receipts" 2>/dev/null || {
 # exactly, which is why both files name it in one place each and nowhere else.
 receipt="$git_dir/batten-receipts/issue-read.$key"
 
+# THE BODY BASELINE, a fourth field (CLOUD-597, CLOUD-615). `claim-check`'s
+# `refined-this-session` rule used to compare two clocks — the row's `updatedAt`
+# against the container's session stamp — and NEITHER measures "did this agent
+# refine this story". Every write to the row moves the first (a label, an
+# assignee, a reciprocal relation written by another issue's creation), and every
+# container restart resets the second. So the rule refused claims nobody had
+# refined and passed self-refinements laundered by a restart, in the same hour.
+#
+# Recording what the body WAS when this clone read it turns the question into
+# content against content: "did the body change under this clone". A relation
+# write does not move it; writing a Ready block does. It survives a restart
+# because it lives in the clone, not in the container.
+#
+# This is the natural place for it and not an extra step: `issue-read-guard`
+# already denies `save_issue` without a fresh receipt from here, so refining an
+# issue REQUIRES first recording what it looked like beforehand.
+#
+# `git hash-object` rather than `sha256sum`: git is already required in this
+# file, and `sha256sum` does not exist on macOS, which `cross-check` covers.
+body_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || body_hash="-"
+[ -n "$body_hash" ] || body_hash="-"
+
 # TRUNCATED, never appended, unlike `issue-search-check`'s. A search receipt
 # accumulates what the author has seen; this one answers "how old is the newest
 # read", and an append would leave the guard reading whichever line it happened
 # to parse first — the freshest read must overwrite the stalest.
-printf '%s %s %s\n' "$key" "$seen" "$read_at" >"$receipt" 2>/dev/null || {
+printf '%s %s %s %s\n' "$key" "$seen" "$read_at" "$body_hash" >"$receipt" 2>/dev/null || {
 	echo "::error:: issue-read-check: cannot write $receipt" >&2
 	exit 2
 }

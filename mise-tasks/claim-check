@@ -51,9 +51,13 @@
 #
 #   not-ready              the payload's Ready block fails `ready-lint`, so the
 #                          receipt would name a story nothing has refined.
-#   refined-this-session   the Ready block's `updatedAt` is newer than this
-#                          clone's session-start stamp. Refinement must PREDATE
-#                          the session that implements it.
+#   refined-this-session   the body changed since this clone recorded reading it
+#                          (`issue-read-check`'s baseline). Refinement must
+#                          PREDATE the session that implements it. Where no
+#                          baseline exists this falls back to the older reading —
+#                          `updatedAt` newer than the session-start stamp — which
+#                          is wrong in both directions and is why the baseline
+#                          exists (CLOUD-597, CLOUD-615).
 #
 # WHY THE TIMESTAMP IS THE FORGERY-RESISTANT HALF. The payload is agent-supplied,
 # so any CONTENT claim in it can be authored by the thing being checked —
@@ -90,6 +94,10 @@
 # The mutation drops the stamp comparison, so an issue refined seconds ago reads
 # as refined long ago and the incident replay mints a receipt again.
 #MUTANT claim-ignores-the-stamp|s/\[ "\$updated_epoch" -gt "\$stamp_epoch" \]/false/|THE INCIDENT REPLAY
+# And the same for the baseline, which is the path that actually answers now
+# (CLOUD-615): drop the body comparison and a Ready block this clone wrote reads
+# as untouched, which is the incident laundered through a container restart.
+#MUTANT claim-ignores-the-body|s/\[ "\$now_hash" != "\$baseline" \]/false/|a body rewritten under this clone is refused even when the stamp is newer
 # The takeover must stay OPT-IN. Unset, the refusal is the answer; a mutation that
 # takes over unconditionally turns every collision into a silent claim, which is
 # the failure this gate exists to prevent.
@@ -241,6 +249,40 @@ while read -r id; do
 		report "$id" "no-session-stamp (run .claude/hooks/session-start.sh, or set BATTEN_CLAIM_CHECK_BYPASS)"
 		continue
 	fi
+	# THE BODY BASELINE FIRST, and the clocks only when there is none to read
+	# (CLOUD-597, CLOUD-615). `issue-read-check` records a hash of the body when
+	# this clone reads an issue, and `issue-read-guard` will not let a
+	# `save_issue` through without that receipt — so refining an issue always
+	# lays down what it looked like beforehand. Comparing the body now against
+	# that baseline asks the question this rule is named for: did the body change
+	# UNDER THIS CLONE. A reciprocal relation, a label or a bulk board touch does
+	# not move it; writing a Ready block does.
+	#
+	# It replaces the clock pair rather than supplementing it because both clocks
+	# were wrong in opposite directions and each hid the other: `updatedAt` moves
+	# on any write to the row, so the rule refused claims nobody had refined
+	# (CLOUD-597), and the stamp is truncated on every SessionStart, so a
+	# container restart laundered a self-refinement into a pass (CLOUD-615). The
+	# baseline lives under `.git/`, so a restart cannot reset it.
+	#
+	# THE HONEST LIMIT, stated here because the next author will otherwise
+	# rediscover it by hitting it: a FRESH CLONE has no baseline, and neither had
+	# the stamp — an agent that refines in one container and implements in a new
+	# clone is invisible to both readings. Closing that needs an identity the
+	# harness supplies, which does not exist (CLOUD-615's third candidate).
+	baseline=$(awk 'NR==1{print $4}' "$stamp_dir/batten-receipts/issue-read.$id" 2>/dev/null) || baseline=""
+	if [ -n "$baseline" ] && [ "$baseline" != "-" ]; then
+		now_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || now_hash=""
+		if [ -z "$now_hash" ]; then
+			echo "::error:: claim-check: could not hash $id's body to compare against the read this clone recorded" >&2
+			exit 2
+		fi
+		if [ "$now_hash" != "$baseline" ]; then
+			report "$id" "refined-this-session (the body changed since this clone read it)"
+		fi
+		continue
+	fi
+
 	updated=$(jq -r '.updatedAt // ""' <<<"$payload")
 	if [ -z "$updated" ]; then
 		report "$id" "no-updated-at (the payload cannot date its own refinement)"
