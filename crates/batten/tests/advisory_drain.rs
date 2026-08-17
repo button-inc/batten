@@ -63,11 +63,10 @@ fn hook(dir: &Path, home: &Path, payload: &str) -> Output {
 /// distinction is §2's whole predicate.
 fn hook_as(dir: &Path, home: &Path, harness: &str, payload: &str) -> Output {
     let mut command = batten();
+    state_home(&mut command, home);
     command
         .args(["hook", "--harness", harness])
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
