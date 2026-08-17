@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.79](https://github.com/button-inc/batten/compare/v0.0.78...v0.0.79) - 2026-08-17
+
+### Added
+
+- *(hook)* ride the batch event where the host emits one
+
 ## [0.0.78](https://github.com/button-inc/batten/compare/v0.0.77...v0.0.78) - 2026-08-15
 
 ### Added
