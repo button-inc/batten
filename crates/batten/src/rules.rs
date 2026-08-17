@@ -1923,17 +1923,44 @@ pub(crate) fn shebang_interpreter(path: &Path) -> Option<Vec<String>> {
     Some(resolved)
 }
 
-/// The first entry on `PATH` that is `program`, spelled exactly, as a file.
+/// The first entry on `PATH` that is `program`, bare or under an executable
+/// extension.
 ///
-/// Deliberately verbatim: this exists for the name `CreateProcess` will not try
-/// (CLOUD-617), so appending the extensions it already appends would find only
-/// what it has found. A `program` that carries a separator is not a PATH lookup
-/// at all and is left alone.
+/// **The bare name and the extensions, not one or the other**, and the reason is
+/// a correction rather than a preference. This started as a verbatim lookup on
+/// the theory that mise installs extensionless binaries, which the tenth Windows
+/// run of CLOUD-113 disproved: `where.exe hk` resolved
+/// `…\installs\hk\1.54.0\hk.exe`, a proper `.exe`, so a verbatim search could
+/// never have found it and the fallback could never have fired. A lookup written
+/// for one spelling is a lookup that answers only when that guess was right.
 ///
-/// `None` for anything not found, which leaves the caller reporting the original
-/// spawn error — the same one-way discipline the shebang fallback keeps.
+/// So it tries both, which also makes the function answer the question its
+/// caller actually has — *is this program on PATH under any name Windows would
+/// run* — instead of a narrower one that happens to be cheap.
+///
+/// A `program` carrying a separator is not a PATH lookup at all and is left
+/// alone. `None` leaves the caller reporting the original spawn error, the
+/// one-way discipline the shebang fallback keeps.
 fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
     lookup_verbatim(program, &std::env::var_os("PATH")?)
+}
+
+/// The executable extensions to try after the bare name, lowercase and without
+/// the leading dot handling `PATHEXT` would need.
+///
+/// Read from `PATHEXT` when it is set, because a host may add to it; the default
+/// is what Windows ships. Empty on Unix by construction — the variable is unset
+/// there, and the bare name is the only spelling — so this costs a lookup that
+/// finds what a direct spawn already would.
+fn executable_extensions() -> Vec<String> {
+    let Some(raw) = std::env::var_os("PATHEXT") else {
+        return Vec::new();
+    };
+    raw.to_string_lossy()
+        .split(';')
+        .map(|ext| ext.trim().to_owned())
+        .filter(|ext| !ext.is_empty())
+        .collect()
 }
 
 /// [`on_path_verbatim`] over a supplied `PATH`, which is the whole of its
@@ -1945,12 +1972,42 @@ fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
 /// `markers::scannable` shape the Rust rules prescribe — test the decision, not
 /// a conclusion drawn over a precondition the suite cannot create.
 fn lookup_verbatim(program: &str, path: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+    lookup_on(program, path, &executable_extensions())
+}
+
+/// [`lookup_verbatim`] over a supplied extension list too, so the Windows
+/// spelling is exercised on any host.
+///
+/// Directory-major: every spelling is tried in one PATH entry before moving to
+/// the next, which is the order Windows itself resolves in. Trying the bare name
+/// across all of PATH first would let a distant `hk` shadow a near `hk.exe`.
+fn lookup_on(
+    program: &str,
+    path: &std::ffi::OsStr,
+    extensions: &[String],
+) -> Option<std::path::PathBuf> {
     if program.contains('/') || program.contains('\\') {
         return None;
     }
-    std::env::split_paths(path)
-        .map(|dir| dir.join(program))
-        .find(|candidate| candidate.is_file())
+    for dir in std::env::split_paths(path) {
+        let bare = dir.join(program);
+        if bare.is_file() {
+            return Some(bare);
+        }
+        for extension in extensions {
+            // LOWERCASED, and that is what makes this testable rather than a
+            // Windows-only article of faith. `PATHEXT` ships uppercase
+            // (`.COM;.EXE;.BAT;.CMD`) while the file is `hk.exe`; Windows folds
+            // case so either spelling matches there, and a case-sensitive
+            // filesystem matches neither unless one is chosen. Choosing the
+            // lower one costs nothing on Windows and lets the case run on Linux.
+            let candidate = dir.join(format!("{program}{}", extension.to_lowercase()));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 /// Whether an OS spawn error means "this file is not an executable image",
@@ -4203,21 +4260,51 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         // The Windows case this exists for is reproducible here, because the
         // lookup is the part that differs, not the file: a name `CreateProcess`
         // would only try as `name.exe` is found by this as `name`.
-        let dir = temp_dir("on-path-verbatim");
-        write(&dir, "hk", "#!/bin/sh\nexit 0\n");
-        let path = std::env::join_paths([dir.as_path()]).unwrap();
+        let windows = [".COM".to_owned(), ".EXE".to_owned(), ".CMD".to_owned()];
+
+        // THE CASE THAT WAS MISSED. `where.exe` resolved `hk.exe` on the runner
+        // while batten reported `hk` not found, and the first version of this
+        // lookup searched only the bare name — so it could not have rescued the
+        // one spelling the failure was actually about.
+        let exe = temp_dir("on-path-exe");
+        write(&exe, "hk.exe", "MZ\u{0}");
+        let exe_path = std::env::join_paths([exe.as_path()]).unwrap();
+        assert_eq!(
+            lookup_on("hk", &exe_path, &windows).as_deref(),
+            Some(exe.join("hk.exe").as_path()),
+            "the name is `hk`; the file Windows would run is `hk.exe`"
+        );
+
+        // The bare name still resolves, so widening did not trade one spelling
+        // for the other.
+        let bare = temp_dir("on-path-bare");
+        write(&bare, "hk", "#!/bin/sh\nexit 0\n");
+        let bare_path = std::env::join_paths([bare.as_path()]).unwrap();
+        assert_eq!(
+            lookup_on("hk", &bare_path, &windows).as_deref(),
+            Some(bare.join("hk").as_path())
+        );
+
+        // Directory-major: a nearer `hk.exe` wins over a further bare `hk`,
+        // which is the order Windows resolves in.
+        let both = std::env::join_paths([exe.as_path(), bare.as_path()]).unwrap();
+        assert_eq!(
+            lookup_on("hk", &both, &windows).as_deref(),
+            Some(exe.join("hk.exe").as_path()),
+            "the first PATH entry decides, across every spelling"
+        );
 
         assert_eq!(
-            lookup_verbatim("hk", &path).as_deref(),
-            Some(dir.join("hk").as_path()),
-            "an extensionless file is exactly what CreateProcess will not try"
+            lookup_on("no-such-program-anywhere", &bare_path, &windows),
+            None
         );
-        assert_eq!(lookup_verbatim("no-such-program-anywhere", &path), None);
         assert_eq!(
-            lookup_verbatim("./hk", &path),
+            lookup_on("./hk", &bare_path, &windows),
             None,
             "a separator means it is not a PATH lookup"
         );
+        // With no extensions — the Unix case — only the bare name is tried.
+        assert_eq!(lookup_on("hk", &exe_path, &[]), None);
     }
 
     #[test]
