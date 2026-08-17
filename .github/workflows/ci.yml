@@ -727,6 +727,16 @@ jobs:
             echo "$tool -> $resolved"
           done
           hk --version
+          # The BASH view above is not the one that matters. `CreateProcess` is
+          # what batten's spawn goes through, and it reads the Windows PATH and
+          # appends `.exe` — so a tool bash resolves can still be invisible to
+          # it. Print both views and the directory itself, because the three
+          # candidate causes (a file with no extension, a PATH that lost the
+          # entry, a lookup that never tried) are indistinguishable from the
+          # bash line alone, and each costs a CI round trip to guess at.
+          echo "--- windows view ---"
+          where.exe hk || echo "where.exe: hk unresolved"
+          ls -l "$(dirname "$(command -v hk)")"
 
       - run: mise run test:cargo
 
