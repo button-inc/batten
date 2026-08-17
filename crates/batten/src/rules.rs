@@ -1923,6 +1923,36 @@ pub(crate) fn shebang_interpreter(path: &Path) -> Option<Vec<String>> {
     Some(resolved)
 }
 
+/// The first entry on `PATH` that is `program`, spelled exactly, as a file.
+///
+/// Deliberately verbatim: this exists for the name `CreateProcess` will not try
+/// (CLOUD-617), so appending the extensions it already appends would find only
+/// what it has found. A `program` that carries a separator is not a PATH lookup
+/// at all and is left alone.
+///
+/// `None` for anything not found, which leaves the caller reporting the original
+/// spawn error — the same one-way discipline the shebang fallback keeps.
+fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
+    lookup_verbatim(program, &std::env::var_os("PATH")?)
+}
+
+/// [`on_path_verbatim`] over a supplied `PATH`, which is the whole of its
+/// decision.
+///
+/// Split out so the case can be tested without mutating the process
+/// environment: `unsafe` is forbidden here and `set_var` is unsafe, so a test
+/// that reached for the real variable could not be written at all. This is the
+/// `markers::scannable` shape the Rust rules prescribe — test the decision, not
+/// a conclusion drawn over a precondition the suite cannot create.
+fn lookup_verbatim(program: &str, path: &std::ffi::OsStr) -> Option<std::path::PathBuf> {
+    if program.contains('/') || program.contains('\\') {
+        return None;
+    }
+    std::env::split_paths(path)
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
 /// Whether an OS spawn error means "this file is not an executable image",
 /// which is the one failure a shebang can rescue.
 ///
@@ -1970,6 +2000,31 @@ fn run_once(
     };
 
     let mut status = spawn(program, &expanded, &[]);
+
+    // CLOUD-617, the second half: "not found on PATH" can be false on Windows.
+    //
+    // `CreateProcess` appends `.exe` when it searches PATH and never tries the
+    // bare name, so an EXTENSIONLESS executable is invisible to it — while a
+    // shell finds and runs the same file, because MSYS reads the PE header
+    // rather than the extension. That is not an exotic layout: it is how mise
+    // installs every tool. Measured on the tenth Windows run of CLOUD-113, with
+    // the job's own preflight resolving `hk ->
+    // …/mise/installs/hk/1.54.0/hk` and `hk --version` printing, while batten
+    // reported `cannot run hk: not found on PATH` in the same job.
+    //
+    // So: search PATH ourselves for the literal name and spawn by absolute
+    // path, which `CreateProcess` accepts without appending anything. Only on
+    // the NotFound path, so a program that really is absent still reports as
+    // absent, and on Unix the search finds nothing a direct spawn would not.
+    if let Some(err) = status.as_ref().err() {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            if let Some(found) = on_path_verbatim(program) {
+                if let Some(found) = found.to_str() {
+                    status = spawn(found, &expanded, &[]);
+                }
+            }
+        }
+    }
 
     // CLOUD-617: the direct spawn said "not an executable image", so this may be
     // a script the OS loader will not read a `#!` for. Resolve the interpreter
@@ -4141,6 +4196,28 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         // A PE image's first bytes are `MZ`, not `#!`.
         assert_eq!(interpreter_of("binary", "MZ\u{0}\u{0}\u{1}"), None);
         assert!(shebang_interpreter(Path::new("no/such/program")).is_none());
+    }
+
+    #[test]
+    fn path_is_searched_for_the_name_verbatim() {
+        // The Windows case this exists for is reproducible here, because the
+        // lookup is the part that differs, not the file: a name `CreateProcess`
+        // would only try as `name.exe` is found by this as `name`.
+        let dir = temp_dir("on-path-verbatim");
+        write(&dir, "hk", "#!/bin/sh\nexit 0\n");
+        let path = std::env::join_paths([dir.as_path()]).unwrap();
+
+        assert_eq!(
+            lookup_verbatim("hk", &path).as_deref(),
+            Some(dir.join("hk").as_path()),
+            "an extensionless file is exactly what CreateProcess will not try"
+        );
+        assert_eq!(lookup_verbatim("no-such-program-anywhere", &path), None);
+        assert_eq!(
+            lookup_verbatim("./hk", &path),
+            None,
+            "a separator means it is not a PATH lookup"
+        );
     }
 
     #[test]
