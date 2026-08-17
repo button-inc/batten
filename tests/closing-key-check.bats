@@ -96,6 +96,30 @@ setup() {
 	[[ "$output" != *"declines to complete"* ]]
 }
 
+@test "the marker may name the issue it declines to close" {
+	# The marker ENDS IN THE CLOSING VERB, so `DO-NOT-CLOSE CLOUD-192` matched
+	# `clos(e)` followed by the key and was reported as CLOSING it — the opt-out
+	# unusable in its most natural form, failing as the inverse of the author's
+	# intent rather than as a refusal. Naming the issue beside the marker is what
+	# a reader of the body needs, so it has to be expressible.
+	run bash -c "printf 'DO-NOT-CLOSE CLOUD-192 — part 1 of 3.\n' | $GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"declines to complete"* ]]
+	[[ "$output" != *"the merge will move the board"* ]]
+}
+
+@test "a hyphen-prefixed verb is still not a close, wherever it appears" {
+	# The boundary that fixes the marker is the same one the key scan already
+	# uses, and it is not marker-specific: any hyphenated compound ending in a
+	# closing verb is a word, not the tracker's keyword.
+	# The marker carries the body, so this is well-formed either way; what is
+	# asserted is that the hyphenated compound did not supply a close.
+	run bash -c "printf 'DO-NOT-CLOSE\n\nauto-closes CLOUD-192 is not what this does.\n' | $GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"declines to complete"* ]]
+	[[ "$output" != *"the merge will move the board"* ]]
+}
+
 @test "an indented marker still opts out — leading whitespace is not a mention" {
 	run bash -c "printf 'Part 1 of 3.\n\n  DO-NOT-CLOSE\n\nRefs: CLOUD-192\n' | $GATE"
 	[ "$status" -eq 0 ]

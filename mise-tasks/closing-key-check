@@ -82,7 +82,20 @@ fi
 # actually parses: `Closes CLOUD-192`, optionally through a `:` or `#`. A body
 # with the word "fixes" in one paragraph and a key in another does not close
 # anything, and must not read as though it does.
-closing=$(grep -oiE "($CLOSING_VERBS)[[:space:]]*:?[[:space:]]*#?CLOUD-[0-9]+" <<<"$body" |
+# LEFT-BOUNDED, and the boundary excludes `-` for one specific reason: the hold
+# marker this file defines ENDS IN THE CLOSING VERB. `DO-NOT-CLOSE CLOUD-388` —
+# the marker used in its most natural form, naming the issue it declines to
+# close — matched `clos(e)` followed by the key and was reported as CLOSING that
+# issue. The opt-out was unusable exactly when it was written correctly, and it
+# failed as the inverse of the author's intent rather than as a refusal, which
+# is the silent direction.
+#
+# `[^0-9A-Za-z-]` is the same bounded-match idiom the `named` scan above already
+# uses, so this is that file convention applied rather than a new one. It keeps
+# the #404 case intact: `Closes CLOUD-192` after a line start or a space still
+# matches, and a body that merely DISCUSSES the marker still cannot excuse a
+# real close.
+closing=$(grep -oiE "(^|[^0-9A-Za-z-])($CLOSING_VERBS)[[:space:]]*:?[[:space:]]*#?CLOUD-[0-9]+" <<<"$body" |
 	grep -oiE 'CLOUD-[0-9]+' | tr '[:lower:]' '[:upper:]' | sort -u | sort -t- -k2,2n || true)
 
 # CLOSING IS TESTED FIRST, and the order is a fix rather than a preference. An
