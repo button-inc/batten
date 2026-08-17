@@ -387,3 +387,171 @@ credential, so for a secret-class finding the primary key carries the payload th
 finding exists to avoid printing — rule 4 violated by the key rather than by the
 output line, and the key is the more durable of the two. **The best thing a
 survey finds is often not their feature but our bug.**
+
+## A worked survey: a logic engine as a predicate substrate (CLOUD-623)
+
+The reference instance of a **substrate** question — "should a different engine
+evaluate what we already decide" — and of reaching for the wrong instrument.
+Scryer Prolog was the candidate. The rejection holds, on supply-chain grounds
+alone; the argument that carried most of the weight was **circular**, and that
+correction is the durable part of this entry.
+
+**Separate the displacement question from the capability question. They take
+different instruments, and one of them cannot be counted.**
+
+- _Displacement_ — "would this replace code we have?" — is answered by counting
+  the code it would replace. Valid; CLOUD-310 is the worked case.
+- _Capability_ — "would this let us express what we currently cannot?" — **can
+  never be answered that way.** Counting current uses of a primitive the system
+  has no way to express returns zero by construction. That zero is the constraint
+  measuring itself.
+
+CLOUD-623 applied the displacement instrument to a capability question. It
+measured a flat `for rule in rules` loop, no fixpoint, no rule consuming
+another's verdict, under 60 relational lines across the board gates — and read
+that as evidence relational reasoning was not wanted here. It is evidence of
+nothing but the engine forbidding it. **This file already carried the corrective
+three sections above** — _absence of evidence is a claim about your instrument
+before it is a claim about the world_ — and the section that violated it was
+written directly underneath. Third recurrence of _a fix applied to one paragraph
+is not applied to the document_.
+
+**The instrument for a capability question is demand, and demand is countable.**
+Not usage — the _workarounds usage was forced into_: invariants asserted in prose
+because nothing can decide them, one predicate split across artifacts that must
+be hand-kept in step, bespoke pairwise checkers, filed capability gaps, and
+defects whose root cause is a missing cross-entity check. Measured here after the
+verdict, and not marginal: **29 prose-asserted cross-row invariants**; **seven
+`mise-tasks` whose entire purpose is asserting two artifacts agree** (`ci-drift`,
+`ci-local-parity`, `contract-drift`, `hook-latency-drift`, `mise-pin-agreement`,
+`rules-drift`, `timeout-drift`); **nine independently re-derived copies of one
+issue-key regex**, already diverged in case-sensitivity; and `validate`
+(`rules.rs:1445`) carrying exactly **two** cross-row checks beside a comment
+conceding a third class it "cannot see". Three of these are shipped defects
+rather than risk: two parallel config views drifted until `config lint` refused
+valid configs; two restated constants drifted, one by 4x; and a `batten.toml`
+comment still names a task file the tree no longer has.
+
+**The cheapest tell is the author working around the gap in their own words.**
+_`forbid` cannot express "agrees with"._ _Two rows would let one be deleted while
+the gate still looked whole._ _The per-row `validate` cannot see the collision._
+When the codebase already argues for a capability in its comments, a usage count
+saying otherwise is measuring the wrong thing — and those comments are a grep
+away, which makes this instrument practical rather than aspirational.
+
+**A re-open predicate can be unsatisfiable by construction, which is a permanent
+"no" wearing an escape hatch.** CLOUD-623's was "re-open when the in-tree
+relational core exceeds 200 code lines" — a threshold the rejection itself
+guarantees can never be crossed, since nothing can write relational code. Check a
+re-open predicate against the world the rejection creates, not the world that
+proposed it. The repaired form counts demand, which _does_ move: prose-asserted
+cross-row invariants, drift-checker tasks, and defects of that class.
+
+**The expensive half of a gate here is turning prose into facts, and no
+substrate improves it.** `ready-lint` is ~95 code lines of markdown-dialect regex
+feeding ~23 lines of predicate; `claim-race-check` is ~6 lines of predicate
+inside ~50 of fetching. This one survives, with its scope stated: it prices a
+candidate offering a better _decision_ step, and says nothing about one offering
+a decision we cannot currently make at all.
+
+**Delegating to an exact tool already installed beats hosting an engine — for
+the predicates that tool actually decides.** Cycle detection over one graph is
+`tsort`; ancestry is `git merge-base --is-ancestor`; the released split is `git
+log --not --tags`. Each is decidable, pinned and free. The over-reach to avoid is
+concluding that because three delegations hold, a fourth predicate has one:
+`tsort` decides a graph handed to it and nothing assembles the rule set into a
+graph to hand over.
+
+**A `read` classification is a structural promise, so no embedded evaluator of
+config-supplied code can sit behind one.** house-style §5 derives the agent
+allowlist from `effect == read` and requires a `read` verb to be _incapable_ of
+reaching user-supplied code rather than trusted not to. A clause database
+supplied by config **is** user-supplied code, so every logic-backed rule would
+land in `enforce` — off the mediation path, which is where the value was supposed
+to be. This is the test for any proposal that embeds an interpreter, it
+generalises past whichever one is on offer, and it is decided before performance
+or licensing. The measured bound alongside it: the `hook` path is budgeted at
+100ms p95 and pays that on every mediated tool call.
+
+**The layer that decides a dependency question is the resolved closure, and it is
+the one layer nobody documents.** Asking per layer rather than per vendor is
+already the rule above; this sharpens where the layers are. Resolved against this
+workspace: the engine's own license is BSD-3-Clause and its MSRV is 1.85, both
+clean — and its closure adds **211 packages to our 183** at default features, or
+**104** with `default-features = false`, four of which are MPL-2.0 and therefore
+outside `deny.toml`'s permissive allow-list. Those four survive the minimal
+build: they arrive through an HTML scraper the engine does not feature-gate, as
+does a dynamic-library loader. **A feature flag narrows a blast radius, never a
+closure** — the crate page is not the artifact, and the only honest read is
+`cargo metadata` against a throwaway manifest.
+
+**A substrate question and an authoring-surface question are different questions,
+and the narrowness rule answers only the second.** Non-negotiable rule 6 rejected
+a general-purpose policy language as the surface a consumer _writes_. An engine
+behind an unchanged typed rule table adds no config surface at all, so rule 6
+does not reach it — and saying so is what made the rest of the verdict
+falsifiable instead of foregone. **Concede the objection that does not apply**; it
+is how the ones that do apply get believed.
+
+**Rule 4 governs what is EMITTED, not what is computed** — and CLOUD-623 got
+this wrong in the strict direction. Its verdict read "a derivation trace is a
+payload" as disqualifying any engine whose value involves one. It does not: an
+engine may derive freely so long as what reaches stdout is a pointer, and a
+conflict diagnostic naming two rule sites is already pointer-shaped. **Ask what
+the surface emits, never what the engine computes to get there** — the strict
+reading refuses tools on a constraint they do not violate, which is the same
+error as adopting one on a constraint it only appears to satisfy.
+
+**Price the distribution shape first; it is cheap and it decides more candidates
+than behaviour does.** The sidecar shape lost on our own toolchain rules before
+any of the above mattered — no registry entry to resolve, `lock-complete`
+requiring `linux-x64`, `linux-arm64` and `macos-arm64`, and the remaining install
+route a source build `no-source-built-tool` denies by literal match. That is the
+third candidate disqualified on exactly this, after the two recorded in
+`mise.toml`.
+
+**"The general seam already ships" is only an answer if the seam reaches the
+thing being asked for.** CLOUD-623 answered "where would we integrate X" with the
+`command` rule kind, the universal extension surface (house-style §9) — correct
+for _running_ an external checker, and **irrelevant to anything cross-row**: a
+`command` row is invoked per row and sees one row's world, so no arrangement of
+them decides a property of the set. Check the seam against the shape of the ask
+before offering it; a general surface at the wrong altitude reads as a complete
+answer and is not one.
+
+**A rejection needs a re-open predicate, and the predicate needs checking against
+the world the rejection creates** — see the unsatisfiable-by-construction trap
+above. CLOUD-623's surviving half is the registry entry that lets
+`lock-complete` exit 0 for the required platforms; its second half was replaced,
+because the original counted a thing the rejection guaranteed would stay at zero.
+
+Three findings from running it, none inferable and each cheap to repeat:
+
+- **A measurement pointed at the wrong tree reports success.** The first
+  dependency probe resolved this workspace instead of the throwaway manifest — a
+  directory override outranked the `cd` — and exited 0 with a plausible package
+  count. It was caught only because two runs that must have differed came back
+  byte-identical. **Build the discriminator in**: run the variant whose answer is
+  required to differ, and read equal outputs as an instrument fault before a
+  finding. This is the canary rule applied to a measurement rather than a corpus.
+- **`claim-check` mints its receipt against the branch you are standing on**
+  (`claim.<branch>`), so claiming before branching keys the receipt to `main` and
+  the mediated gate refuses the first edit on the real branch. **Branch first,
+  then claim** — the loop as usually written states the two in the other order,
+  and the refusal it produces looks like a missing claim rather than a misplaced
+  one.
+- The survey's own bug, per the standing pattern: the counting exposed
+  `graph-check`'s joins as unindexed — a whole-payload reparse per node lookup
+  called from three loops, a linear rescan of the edge list per node, and a
+  `ready-lint` fork per Todo id. An indexing defect, fixable in place, filed as
+  CLOUD-634. The substrate was never what made it slow.
+- **The reviewer who overturned this was right on method, and the method is what
+  transferred.** The objection was one sentence — an absence you cannot express
+  is not an absence you can measure — and it invalidated the load-bearing count
+  without touching a fact in it. **A verdict whose evidence is a count is refuted
+  by attacking the denominator, not the arithmetic**, so state what the count
+  would look like if the hypothesis were false _before_ running it. Here it would
+  have looked identical, which is the definition of a measurement that decides
+  nothing. Nothing gates this: a `PreToolUse` hook sees tool calls, not a
+  reasoning step, the same limit CLOUD-200 records. Written down so the next
+  survey inherits the question rather than the error.
