@@ -25,46 +25,99 @@ The adoption test, in order:
 Where a survey's _reasoning_ lives: this file, or the memory for the subsystem it
 touched. Not in the issue, not in the code, not in a commit message.
 
-## The corpus a prose literal may be measured over
+## The corpus a prose literal is measured over
 
 No literal over prose ships until it is measured over a real corpus, counting
-firings **and** true positives among them. That method has one corpus it cannot
-have, and the gap is measured rather than argued: **session transcripts do not
-accumulate.** They are written inside the session's own ephemeral container and
+firings **and** true positives among them. One corpus that method needs does not
+exist yet, and the gap is measured rather than argued: **session transcripts do
+not accumulate on their own.** They are written inside the session's own ephemeral container and
 destroyed with it. `/root/.claude/projects/` held exactly one `.jsonl` on
 2026-08-11, and one again on 2026-08-17 — a different container six days later —
 and both times it was the session doing the measuring. Every session starts at
 N=1, its own, and ends at N=0.
 
-So the rule, which is narrower than "no predicates over prose":
+That measurement stands. **The rule first written from it did not**, and the
+correction is the useful part of this entry.
 
-> A predicate over assistant prose may not derive its literals from a mined
-> session-transcript corpus. An admissible literal is either **witnessed** — an
-> instance recorded on an issue, which is durable — or **measured over a durable
-> artifact**: PR bodies, commit messages, issue comments.
+The rule said: a predicate over assistant prose may not derive its literals from
+a mined session-transcript corpus, so an admissible literal must be _witnessed_
+or measured over a durable artifact. It read as though the constraint were
+physical. It was not — it was a policy choice about what may leave the container,
+asserted inside an issue body, and the owner lifted it on 2026-08-17. Raw session
+transcripts may be collected to a **private** durable store. The corpus is being
+built rather than ruled out, and `mise run transcript-corpus-check` changes from
+a monument to a progress reading: it reports whether the corpus has accumulated
+yet.
 
-Reading prose **in session** is untouched and already ships: `stop-posture-check`
+Reading prose **in session** was never affected either way: `stop-posture-check`
 reads the turn's final message and `finding-sink-check` reads the live transcript
-at the Stop boundary. Neither needs another session's transcript in order to run.
-What is impossible is cross-session accumulation, and therefore _mining_.
+at the Stop boundary. Neither needs another session's transcript to run.
 
-`mise run transcript-corpus-check` is the rule's exit code — the corpus condition
-as a command rather than a paragraph. It counts independent sessions under the
-host transcript root and refuses below the threshold, which is what it has done
-on every container it has run on. An issue whose unblock condition reads "N
-independent transcripts" is waiting on that command, not on time.
+### Two ways this got argued wrong, both worth keeping
 
-**Accumulating a corpus anyway was costed and refused** (CLOUD-388). The
-transport was never the obstacle — a series in `refs/notes/perf` and a lease on
-`refs/heads` already make a durable remote routine here. The payload is what
-refuses it. The work such a corpus would unblock is candidate _discovery_:
-n-grams, co-occurrence, correlation, window selection. Every one of those is a
-function of the token stream, so a per-turn phrase-hit vector presupposes the
-phrase and cannot discover one, while a token or n-gram inventory reconstructs
-the prose it came from — and a transcript is the richest source of secrets the
-engine can be pointed at. There is no third shape, and that is what decides it
-rather than any judgement about how sensitive a digest feels. The one residue
-inside that ceiling, re-measuring a literal **already shipped**, is CLOUD-633.
+The verdict that refused collection was reached by two moves that look like
+reasoning and are not. Neither is specific to transcripts.
+
+**Impossibility asserted from an enumeration.** The refusal ran: a derived
+per-turn payload is either a phrase-hit vector (presupposes the phrase, so it
+cannot discover one) or a token/n-gram inventory (reconstructs the prose), _and
+there is no third shape_. There are third shapes. A hashed n-gram sketch
+presupposes no phrase, since any candidate is queried against it afterwards — it
+is answerable on invertibility instead, natural-language trigrams being an
+enumerable space. Differentially private counts are answerable on utility, the
+counts here being sparse enough that noise at any useful epsilon is the same
+order as the signal. An argument that says "no other shape exists" collapses the
+moment someone produces one; an argument that prices the shapes it found survives
+a fourth being proposed. Write the second kind.
+
+**A null result from a circular measurement.** The shipped literal set was run
+over the durable artifacts, returned almost nothing, and that was read as
+evidence against adopting a _discovery_ method. But the corpus was searched for
+hand-authored strings, which can only match themselves — and hand-authoring the
+strings is the defect the discovery method exists to fix. A method proposed to
+replace enumeration cannot be evaluated by asking whether the enumeration already
+covers the ground. The same shape appears as "no witnessed miss needs it": the
+witnessed misses are exactly what the current matcher was able to surface.
+
+The general form, since both instances cost a verdict: **an absence supports
+"this sample cannot answer the question" far more often than "the question has no
+answer"**, and the slide between them is tempting precisely because a null result
+is cheap to obtain. Before writing "cannot", check whether the measurement's own
+construction guaranteed the zero — if it did, the finding is about the
+measurement.
+
+One residue that is real either way: nothing re-measures a literal **already
+shipped**, which is CLOUD-633.
+
+### The durable artifacts, measured, and what they are good for
+
+Measured 2026-08-17 (CLOUD-624). The shipped hedged-flag set plus two candidate
+expansions, over every durable artifact this repo has:
+
+| artifact              | volume | firings | true |
+| --------------------- | ------ | ------- | ---- |
+| 60 merged PR bodies   | 223 KB | 0       | 0    |
+| 100 issue/PR comments | 262 KB | 0       | 0    |
+| 400 commit messages   | 615 KB | 7       | 0    |
+
+All seven are non-instances: three are a commit message naming a pattern it is
+fixing, four are commits quoting the literals as data.
+
+Read narrowly, that is a fact about **register**: this repo's PR bodies and
+commit messages are terse, in the style its own issue hygiene prescribes, so the
+phrasing that shows up in chat barely appears in them. It is a reason the corpus
+this work needs is a **transcript** corpus, not a verdict about the method — see
+the two wrong moves above for how it was briefly read as one.
+
+Two things that follow and are worth keeping:
+
+- Zero firings over a corpus containing almost none of the phrasing is an
+  **uninformative sample**, never a clean bill. Do not cite it as evidence that a
+  literal expansion is safe.
+- The durable artifacts are still the right corpus for predicates over **their
+  own** register — `deferral-check` was measured over 60 PR bodies precisely
+  because a PR body is what it reads. Match the corpus to the artifact the
+  predicate consumes, rather than to whichever corpus is easiest to fetch.
 
 ## The attribution rule
 
