@@ -15,26 +15,25 @@
 #                measuring. Independent sessions: 0.
 #   2026-08-17   one .jsonl, a different container. Independent sessions: 0.
 #
-# So waiting accumulates nothing: every session starts at N=1, its own, and ends
-# at N=0. CLOUD-326's §8.1 states its unblock condition as "N independent session
-# transcripts … from sessions this issue did not arise from", and a block written
-# as prose is a block no gate reads. THIS FILE IS THAT CONDITION AS A COMMAND AND
-# AN EXIT CODE, which is the whole of why it exists — not to make the corpus
-# appear, but to stop the wait for it being unfalsifiable.
+# Nothing accumulates a corpus BY ITSELF: every session starts at N=1, its own,
+# and ends at N=0. CLOUD-326's §8.1 states its unblock condition as "N independent
+# session transcripts … from sessions this issue did not arise from", and a block
+# written as prose is a block no gate reads. THIS FILE IS THAT CONDITION AS A
+# COMMAND AND AN EXIT CODE, which is the whole of why it exists.
 #
-# THE RULE IT SERVES, whose reasoning lives in `mem:prior-art-and-issue-hygiene`
-# and is not restated here: a predicate over assistant prose may not derive its
-# literals from a mined session-transcript corpus. An admissible literal is
-# WITNESSED — an instance recorded on an issue, which is durable — or MEASURED
-# OVER A DURABLE ARTIFACT: PR bodies, commit messages, issue comments.
+# WHAT THE READING MEANS, and this changed once (CLOUD-651). The first version of
+# this header called the corpus impossible and told the reader that waiting raises
+# nothing, because CLOUD-388's verdict had ruled transcript egress out of scope.
+# That was a POLICY choice about what may leave the container, not a fact about
+# the world, and the owner lifted it: transcripts are collected to the Batten
+# service. So a refusal here is a PROGRESS READING — the collector has not landed,
+# or has not yet reached this host — rather than a permanent state of affairs, and
+# the number is expected to rise. Do not re-derive the old rule from a low count.
 #
 # WHAT IT DOES NOT DO, deliberately. It captures nothing, pushes nothing, and
-# writes nothing. Route 2 of CLOUD-388 — a derived per-turn digest pushed to a
-# durable ref — was refused there rather than deferred, because the corpus work
-# it would unblock is candidate DISCOVERY, and discovery is a function of the
-# token stream. A token or n-gram inventory reconstructs the prose it came from,
-# and the transcript is (per `crates/batten/src/transcript.rs`) the single
-# richest source of secrets the engine can be pointed at.
+# writes nothing — the collector is CLOUD-651's, this is only the reading. Keeping
+# the sensor and the collector apart is what lets the corpus condition be checked
+# on a host that has never run the collector at all.
 #
 # Usage: mise run transcript-corpus-check [min] [exclude-session-id]
 #
@@ -173,8 +172,10 @@ printf 'transcript-corpus independent=%s min=%s\n' "$independent" "$min"
 
 [ "$independent" -ge "$min" ] && exit 0
 
-# The refusal names the PRACTICE rather than the count. A reader who is told
-# only "0 < 2" will go looking for a way to raise the number, and there is none
-# — the corpus does not accumulate, which is the finding.
-echo "::error:: transcript-corpus-check: $independent independent session transcript(s), $min needed. This corpus does not accumulate — a container reclaim destroys it (CLOUD-388), so waiting raises nothing. A prose literal must be WITNESSED (an instance recorded on an issue) or measured over a durable artifact: PR bodies, commit messages, issue comments. See mem:prior-art-and-issue-hygiene." >&2
+# The refusal names WHAT WOULD RAISE THE NUMBER, not just the arithmetic. A
+# reader told only "0 < 2" has nowhere to go; a reader told which mechanism feeds
+# this reading can check whether it ran. The earlier wording said the count could
+# never rise, which was the retired rule speaking (see the header) and would send
+# a reader to work around a gate rather than to the collector.
+echo "::error:: transcript-corpus-check: $independent independent session transcript(s), $min needed. A container reclaim destroys the transcripts it holds (CLOUD-388), so the corpus accumulates only where the collector (CLOUD-651) has run. Check that it is landed and reaching this host before treating a prose corpus as unavailable; a literal derived from one session is fitted to its only example. See mem:prior-art-and-issue-hygiene." >&2
 exit 1

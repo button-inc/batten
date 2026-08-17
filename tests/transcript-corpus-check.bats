@@ -174,11 +174,22 @@ session() { # session <file> <session-id>
 	[[ "$output" != *"$ROOT"* ]]
 }
 
-@test "the refusal names the practice, not just the arithmetic" {
-	# "0 < 2" sends a reader looking for a way to raise the number, and there is
-	# none. What they need is the admissible-provenance rule.
+@test "the refusal names what would raise the number, not just the arithmetic" {
+	# "0 < 2" sends a reader looking for a way around the gate. What they need is
+	# the mechanism that feeds this reading, so they can check whether it ran.
 	run "$CHECK"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"WITNESSED"* ]]
+	[[ "$output" == *"collector"* ]]
 	[[ "$output" == *"mem:prior-art-and-issue-hygiene"* ]]
+}
+
+@test "the refusal does not tell the reader the count can never rise" {
+	# The retired rule (CLOUD-388's first verdict) said transcript egress was out
+	# of scope, so the corpus could never accumulate. That was policy, not
+	# physics, and it was lifted — a refusal that still says "waiting raises
+	# nothing" would send the next reader to re-derive a rule nobody holds.
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"waiting raises nothing"* ]]
+	[[ "$output" != *"does not accumulate"* ]]
 }
