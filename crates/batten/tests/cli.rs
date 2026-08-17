@@ -3912,7 +3912,8 @@ fn the_committed_repo_config_gates_a_repository() {
     assert_eq!(
         output.status.code(),
         Some(2),
-        "the committed rule must fire on the shape it names"
+        "the committed rule must fire on the shape it names: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -4065,7 +4066,8 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     assert_eq!(
         output.status.code(),
         Some(2),
-        "a banned consumer shape under crates/ is a policy violation"
+        "a banned consumer shape under crates/ is a policy violation: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
@@ -4272,7 +4274,8 @@ fn the_committed_example_config_loads_over_the_binary() {
     assert_eq!(
         output.status.code(),
         Some(2),
-        "the example's shipped rule must fire on the shape it names"
+        "the example's shipped rule must fire on the shape it names: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
