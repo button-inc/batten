@@ -25,6 +25,47 @@ The adoption test, in order:
 Where a survey's _reasoning_ lives: this file, or the memory for the subsystem it
 touched. Not in the issue, not in the code, not in a commit message.
 
+## The corpus a prose literal may be measured over
+
+No literal over prose ships until it is measured over a real corpus, counting
+firings **and** true positives among them. That method has one corpus it cannot
+have, and the gap is measured rather than argued: **session transcripts do not
+accumulate.** They are written inside the session's own ephemeral container and
+destroyed with it. `/root/.claude/projects/` held exactly one `.jsonl` on
+2026-08-11, and one again on 2026-08-17 — a different container six days later —
+and both times it was the session doing the measuring. Every session starts at
+N=1, its own, and ends at N=0.
+
+So the rule, which is narrower than "no predicates over prose":
+
+> A predicate over assistant prose may not derive its literals from a mined
+> session-transcript corpus. An admissible literal is either **witnessed** — an
+> instance recorded on an issue, which is durable — or **measured over a durable
+> artifact**: PR bodies, commit messages, issue comments.
+
+Reading prose **in session** is untouched and already ships: `stop-posture-check`
+reads the turn's final message and `finding-sink-check` reads the live transcript
+at the Stop boundary. Neither needs another session's transcript in order to run.
+What is impossible is cross-session accumulation, and therefore _mining_.
+
+`mise run transcript-corpus-check` is the rule's exit code — the corpus condition
+as a command rather than a paragraph. It counts independent sessions under the
+host transcript root and refuses below the threshold, which is what it has done
+on every container it has run on. An issue whose unblock condition reads "N
+independent transcripts" is waiting on that command, not on time.
+
+**Accumulating a corpus anyway was costed and refused** (CLOUD-388). The
+transport was never the obstacle — a series in `refs/notes/perf` and a lease on
+`refs/heads` already make a durable remote routine here. The payload is what
+refuses it. The work such a corpus would unblock is candidate _discovery_:
+n-grams, co-occurrence, correlation, window selection. Every one of those is a
+function of the token stream, so a per-turn phrase-hit vector presupposes the
+phrase and cannot discover one, while a token or n-gram inventory reconstructs
+the prose it came from — and a transcript is the richest source of secrets the
+engine can be pointed at. There is no third shape, and that is what decides it
+rather than any judgement about how sensitive a digest feels. The one residue
+inside that ceiling, re-measuring a literal **already shipped**, is CLOUD-633.
+
 ## The attribution rule
 
 Once adopted, the practice is ours and is justified on our terms. **Do not leave
