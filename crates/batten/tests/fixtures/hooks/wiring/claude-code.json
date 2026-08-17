@@ -58,5 +58,15 @@
         }
       ]
     }
+  ],
+  "PostToolBatch": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "batten hook --harness claude-code"
+        }
+      ]
+    }
   ]
 }

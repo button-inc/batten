@@ -1356,14 +1356,24 @@ fn run_hook(
         output::message(mode, Verbosity::Verbose, err, &note)?;
         return Ok(ExitCode::Success);
     }
-    // The advisory drain rides this surface at the post-tool event (CLOUD-79).
+    // The advisory drain rides the BATCH boundary (CLOUD-79), and which event
+    // that is on this host is the capability table's answer rather than a literal
+    // here (CLOUD-389). `degrade` hands back `PostToolBatch` where the host emits
+    // it and `PostTool` where it does not, so the exact boundary is used wherever
+    // it exists and the coalescing window stays the fallback for the four
+    // surveyed hosts that offer none.
+    //
+    // Asking through `degrade` rather than testing two events is what keeps the
+    // rule in one place: a second `||` here would be a copy of the table that
+    // could disagree with it, and the drain would then own a fact about hosts.
+    //
     // It is not part of adjudication and cannot become part of it: `adjudicate`
     // stays a pure function of config plus argv, this is a side effect at the
-    // boundary, and it returns nothing the decision reads. The post-tool event
-    // is where it belongs precisely because no host offers a deny channel there
+    // boundary, and it returns nothing the decision reads. This boundary is where
+    // it belongs precisely because no host offers a deny channel at either event
     // — an advisory surface at an event that cannot refuse anything is
     // structurally unable to block (house-style §0.3).
-    if envelope.event == hook::Event::PostTool {
+    if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(&envelope, overrides, mode, err)?;
     }
     // Only now is config touched. Ordering the cheap refusals first is §4's

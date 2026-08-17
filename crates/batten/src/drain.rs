@@ -6,27 +6,36 @@
 //! agent**. Before it, findings accumulated and nothing surfaced them —
 //! `NotShown::DrainSuppressed` was a variant with no producer.
 //!
-//! # The batch boundary is a window, not an event
+//! # The batch boundary is received where it exists and inferred where it does not
 //!
-//! [`crate::hook::Event`] carries no batch variant, so the envelope this rides
-//! delivers one `PostToolUse` per tool call: N verifiers in one batch are N
-//! separate processes, and a drain per process is exactly the once-per-verifier
-//! behaviour this issue exists to remove.
-//!
-//! **Claude Code does emit a batch event** — CLOUD-187 wires a hook on
+//! **Claude Code emits a batch event** — CLOUD-187 wired a hook on
 //! `PostToolBatch` and measured it firing — and four of the five surveyed hosts
-//! do not. So the vocabulary gap is real for most hosts and closable for one;
-//! riding it where it exists is CLOUD-389, and it changes delivery rather than
-//! the invariant, for the reason below.
+//! do not. Since CLOUD-389 both paths exist: [`crate::hook::Event::PostToolBatch`]
+//! is in Claude Code's capability row, and
+//! [`crate::hook::Capabilities::degrade`] hands the boundary-seeking caller that
+//! event where the host declares it and `PostToolUse` where it does not. Which
+//! one wakes the drain is therefore a fact about the host, read off the declared
+//! table, and this module states none of it.
 //!
-//! So the boundary is **inferred by a coalescing window** rather than received.
-//! The first wake past the window drains; every wake inside it is
+//! Where the event is absent the envelope delivers one `PostToolUse` per tool
+//! call: N verifiers in one batch are N separate processes, and a drain per
+//! process is exactly the once-per-verifier behaviour this module exists to
+//! remove.
+//!
+//! So for those hosts the boundary is **inferred by a coalescing window** rather
+//! than received. The first wake past the window drains; every wake inside it is
 //! [`Wake::Coalesced`] and records that a follow-up is owed. Two batches
 //! arriving against one window therefore produce **one** follow-up, not two,
 //! which is what makes the mask rather than the event the thing that enforces
-//! once-per-batch. That inversion is deliberate: it means a host that never
-//! grows a batch event still gets batch behaviour, and one that does can hand
-//! the boundary in later without changing what the state machine promises.
+//! once-per-batch. That inversion is what let CLOUD-389 be pure delivery: the
+//! state machine promises the same thing either way, so handing the real
+//! boundary in changed which event wakes it and nothing about what it does.
+//!
+//! On the batch event the window still applies and has nothing to coalesce —
+//! one wake, one drain. It is not bypassed there, deliberately: a window that
+//! only some paths honour would be two state machines, and the second batch
+//! arriving inside one interval is a case the mask should still fold whether the
+//! host named the boundary or not.
 //!
 //! Because each wake is its own process, the window's state cannot live in
 //! memory. It is persisted per session under the bound store, beside the cursors

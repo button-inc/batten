@@ -1427,6 +1427,17 @@ const EVENTS: &[EventRow] = &[
         adjudicated: false,
         state_decided: false,
     },
+    // Claude-only too, and added by CLOUD-389 because this census is TOTAL over
+    // `Event::ALL` — a variant with no row here ships with its decision
+    // unexercised, which is the whole point of the assertion below. The advisory
+    // drain rides this boundary; the command matcher does not adjudicate at it,
+    // and no host offers a deny channel there.
+    EventRow {
+        event: batten::hook::Event::PostToolBatch,
+        spelling: "PostToolBatch",
+        adjudicated: false,
+        state_decided: false,
+    },
     EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",

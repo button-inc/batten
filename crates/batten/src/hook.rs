@@ -577,13 +577,20 @@ impl Capabilities {
 
     /// The event a policy keyed on `event` should actually watch on this host.
     ///
-    /// `None` when nothing here stands in for it. The one substitution is the
-    /// load-bearing case the survey named: a policy keyed on `TaskCompleted`
-    /// degrades to the Stop family, which every surveyed host has. Degrading is
-    /// not equivalence — Stop cannot veto anywhere — so a caller still has to
-    /// read [`Capabilities::stop_vetoes_completion`] before assuming it can
-    /// block. What the substitution buys is *observing* the moment, not
-    /// refusing it.
+    /// `None` when nothing here stands in for it. Two substitutions, both named
+    /// by the survey: a policy keyed on `TaskCompleted` degrades to the Stop
+    /// family, which every surveyed host has, and one keyed on `PostToolBatch`
+    /// degrades to `PostTool`. Degrading is not equivalence — Stop cannot veto
+    /// anywhere, so a caller still has to read
+    /// [`Capabilities::stop_vetoes_completion`] before assuming it can block.
+    /// What a substitution buys is *observing* the moment, not refusing it.
+    ///
+    /// The batch substitution is what makes the wake event a property of this
+    /// table rather than of the caller (CLOUD-389): the drain asks for the batch
+    /// boundary and is handed the exact event or the per-call one, so no consumer
+    /// carries a second rule about which host has what. It is coarser rather than
+    /// weaker — N `PostTool` wakes stand in for one batch, and the coalescing
+    /// window is what turns them back into one drain.
     #[must_use]
     pub fn degrade(&self, event: Event) -> Option<Event> {
         if self.emits(event) {
@@ -591,6 +598,7 @@ impl Capabilities {
         }
         match event {
             Event::TaskCompleted if self.emits(Event::Stop) => Some(Event::Stop),
+            Event::PostToolBatch if self.emits(Event::PostTool) => Some(Event::PostTool),
             _ => None,
         }
     }
@@ -664,6 +672,12 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     (Event::SessionStart, "SessionStart"),
     (Event::TaskCompleted, "TaskCompleted"),
     (Event::ConfigChange, "ConfigChange"),
+    // Safe to share even though only Claude emits it, and the reason is the
+    // distinction this table's doc comment draws: a spelling is a NAME, not a
+    // registration. `Wiring::registrations` intersects these names with what the
+    // harness declares it emits, so Codex and Copilot — which ship Claude's
+    // spellings — register nothing for an event their own rows do not list.
+    (Event::PostToolBatch, "PostToolBatch"),
 ];
 
 /// The command a host's registration invokes.
@@ -775,7 +789,7 @@ const UNSURVEYED_ATTRIBUTION: AttributionCapabilities = AttributionCapabilities 
     config_surface: Declaration::Unknown,
 };
 
-/// Claude Code's set: the converged core plus the two it alone offers.
+/// Claude Code's set: the converged core plus the three it alone offers.
 const CLAUDE_EVENTS: &[Event] = &[
     Event::PreTool,
     Event::PostTool,
@@ -783,6 +797,12 @@ const CLAUDE_EVENTS: &[Event] = &[
     Event::SessionStart,
     Event::TaskCompleted,
     Event::ConfigChange,
+    // CLOUD-389. Measured rather than inferred from the docs: CLOUD-187 wired a
+    // hook on it and watched it fire inside the session that added it. It is
+    // here and nowhere else because this table is the one authority on which
+    // events a host emits, and claiming it for the converged core would be
+    // claiming something about hosts nobody surveyed.
+    Event::PostToolBatch,
 ];
 
 impl Harness {
@@ -936,6 +956,30 @@ pub enum Event {
     /// absent one: absent means nobody said, this means somebody said something
     /// we do not know, and the two must not collapse.
     Unrecognized,
+    // DECLARED AFTER the catch-all on purpose, which reads oddly and is the
+    // cheaper of two honest options. This enum is field-less and carries no
+    // `repr`, so a consumer may write `Event::Unrecognized as u8` and inserting
+    // ahead of it shifts that value — `cargo semver-checks` calls it
+    // `enum_no_repr_variant_discriminant_changed`. Appending keeps the change
+    // patch-compatible instead of putting a break in the changelog for a
+    // discriminant nothing observes. Reading order lives in `Event::ALL`, which
+    // is what every census and the wiring emitter iterate, so nothing but this
+    // declaration is affected.
+    /// Every tool call in a batch has resolved, before the next model request
+    /// (CLOUD-389). **Claude-only** across the surveyed hosts.
+    ///
+    /// The batch boundary [`crate::drain`] wants and, until this variant existed,
+    /// inferred with a coalescing window on every host including the one that
+    /// emits it. The window is not replaced — four of five surveyed hosts offer
+    /// no batch event, and CLOUD-79 puts the once-per-batch guarantee in the mask
+    /// rather than in any event — so this is the exact path where one exists and
+    /// the window is the fallback it was designed as. A policy keyed on it
+    /// degrades to [`Event::PostTool`] elsewhere (see [`Capabilities::degrade`]).
+    ///
+    /// No deny channel, and that is structural rather than a choice: a boundary
+    /// between batches is not a decision point, and [`adjudicate`] allows every
+    /// non-pre-tool event before any rule is consulted.
+    PostToolBatch,
 }
 
 impl Event {
@@ -947,6 +991,7 @@ impl Event {
         Event::SessionStart,
         Event::TaskCompleted,
         Event::ConfigChange,
+        Event::PostToolBatch,
         Event::Unrecognized,
     ];
 
@@ -962,6 +1007,7 @@ impl Event {
             Event::SessionStart => "session-start",
             Event::TaskCompleted => "task-completed",
             Event::ConfigChange => "config-change",
+            Event::PostToolBatch => "post-tool-batch",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -982,6 +1028,7 @@ impl Event {
             "SessionStart" => Event::SessionStart,
             "TaskCompleted" => Event::TaskCompleted,
             "ConfigChange" => Event::ConfigChange,
+            "PostToolBatch" => Event::PostToolBatch,
             _ => Event::Unrecognized,
         }
     }
