@@ -53,6 +53,7 @@ fn batten_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
         .current_dir(dir)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten")

@@ -722,6 +722,7 @@ fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
         .current_dir(&corpus.repo)
         .env("HOME", &corpus.home)
         .env("XDG_DATA_HOME", corpus.home.join("data"))
+        .env("APPDATA", corpus.home.join("data"))
         .env("XDG_CACHE_HOME", corpus.home.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

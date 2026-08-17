@@ -72,6 +72,7 @@ impl Env {
             .current_dir(&self.repo)
             .env("HOME", &self.home)
             .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("APPDATA", self.home.join("data"))
             .output()
             .expect("run batten")
     }

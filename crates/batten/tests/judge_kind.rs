@@ -108,6 +108,7 @@ fn judge_cmd(repo: &Path, home: &Path, args: &[&str], with_stub: bool) -> Output
         .current_dir(repo)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env("PATH", path)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()

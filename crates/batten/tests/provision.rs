@@ -70,6 +70,7 @@ impl Env {
             .current_dir(&self.repo)
             .env("HOME", &self.home)
             .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("APPDATA", self.home.join("data"))
             .output()
             .expect("run batten")
     }
@@ -472,6 +473,7 @@ fn an_https_fetch_honours_the_hosts_ca_configuration() {
         .current_dir(&env.repo)
         .env("HOME", &env.home)
         .env("XDG_DATA_HOME", env.home.join("data"))
+        .env("APPDATA", env.home.join("data"))
         .env("CURL_CA_BUNDLE", tls.join("cert.pem"))
         .output()
         .expect("run batten");

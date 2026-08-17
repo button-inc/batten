@@ -85,6 +85,7 @@ fn run(repo: &Path, home: &Path, args: &[&str]) -> (i32, String, String) {
         .current_dir(repo)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_LOG_LEVEL")

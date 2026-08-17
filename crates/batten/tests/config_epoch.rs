@@ -352,7 +352,11 @@ fn this_repositorys_own_epoch_is_computable() {
 fn epoch_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = batten();
     command.args(["config", "epoch"]).args(args);
+    // APPDATA mirrors it exactly — this suite points the data dir at `home`
+    // itself rather than at `home/data`, and the Windows strategy must resolve
+    // to the same place or the cache lands in the real roaming profile.
     command.env("XDG_DATA_HOME", home);
+    command.env("APPDATA", home);
     command
         .current_dir(dir)
         .output()

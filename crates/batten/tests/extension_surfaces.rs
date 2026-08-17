@@ -81,6 +81,7 @@ fn run(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (i32, S
         .current_dir(repo)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
         .expect("run batten");

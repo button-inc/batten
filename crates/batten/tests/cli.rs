@@ -2582,6 +2582,7 @@ fn exec_cmd(name: &str, args: &[&str]) -> (Output, PathBuf) {
         .args(args)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .output()
         .expect("run batten exec");
     (output, home)
@@ -2820,6 +2821,7 @@ fn a_capture_is_content_addressed_so_an_identical_rerun_adds_nothing() {
             .args(argv)
             .env("HOME", &home)
             .env("XDG_DATA_HOME", home.join("data"))
+            .env("APPDATA", home.join("data"))
             .output()
             .expect("run batten exec")
     };
@@ -2847,6 +2849,7 @@ fn different_output_is_a_different_capture() {
             .args(["exec", "--", script.to_str().expect("utf-8")])
             .env("HOME", &home)
             .env("XDG_DATA_HOME", home.join("data"))
+            .env("APPDATA", home.join("data"))
             .output()
             .expect("run batten exec");
     }
@@ -2966,6 +2969,7 @@ fn run_exec(repo: &std::path::Path, home: &std::path::Path, script: &str) -> Out
         .current_dir(repo)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
         .expect("run batten exec")
@@ -3075,6 +3079,7 @@ fn exec_still_runs_where_no_authority_is_configured() {
         .current_dir(&elsewhere)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .output()
         .expect("run batten exec");
     assert_eq!(output.status.code(), Some(0));
@@ -3445,6 +3450,7 @@ fn receipt_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> 
         .current_dir(dir)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten receipt")
@@ -3899,6 +3905,7 @@ fn the_committed_repo_config_gates_a_repository() {
         .current_dir(&dir)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .output()
         .expect("run batten enforce");
@@ -3932,6 +3939,7 @@ fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
         .current_dir(&dir)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .output()
         .expect("run batten check");
@@ -3971,6 +3979,7 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
         .current_dir(&dir)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4048,6 +4057,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         .current_dir(&dirty)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4086,6 +4096,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
         .current_dir(&clean)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4162,6 +4173,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
         .current_dir(&dirty)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4210,6 +4222,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
         .current_dir(&clean)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -5628,6 +5641,7 @@ fn store_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Ou
         .current_dir(dir)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten state")
@@ -6296,6 +6310,7 @@ fn session_cmd(
         .current_dir(dir)
         .env("HOME", home)
         .env("XDG_DATA_HOME", home.join("data"))
+        .env("APPDATA", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("BATTEN_SESSION", session);
     match parent {
