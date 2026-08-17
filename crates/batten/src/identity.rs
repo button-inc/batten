@@ -422,6 +422,22 @@ pub fn checkout_fingerprint(repo_root: &std::path::Path) -> anyhow::Result<Finge
         .to_str()
         .ok_or_else(|| UsageError::raise(format!("checkout root is not UTF-8: {repo_root:?}")))?;
     let slashed = raw.replace('\\', "/");
+    // Windows' extended-length prefix is a SPELLING of a path, not a different
+    // path, and dropping it belongs to the same rule as dropping a trailing
+    // separator below: one checkout, one fingerprint. `fs::canonicalize` returns
+    // `\\?\C:\x` where git and the shell both say `C:\x`, and `\\?\UNC\srv\share`
+    // for `\\srv\share`. CLOUD-113's Windows job measured the consequence — a
+    // caller that canonicalized and one that did not addressed two different
+    // state roots for one repository, and four cases failed reading a directory
+    // nothing had created. Still no filesystem access: this is string
+    // normalization, exactly like the NFC pass.
+    let slashed = match slashed.strip_prefix("//?/") {
+        Some(rest) => match rest.strip_prefix("UNC/") {
+            Some(share) => format!("//{share}"),
+            None => rest.to_owned(),
+        },
+        None => slashed,
+    };
     let trimmed = slashed.trim_end_matches('/');
     if trimmed.is_empty() {
         return Err(UsageError::raise("checkout root is empty"));
@@ -1194,6 +1210,22 @@ mod tests {
         }
         // A Windows drive-absolute root is absolute, so it is accepted.
         assert!(checkout_fingerprint(Path::new("C:\\repo\\batten")).is_ok());
+
+        // ...and the extended-length prefix is one more spelling, not one more
+        // tree (CLOUD-113). `fs::canonicalize` returns it on Windows where git
+        // and the shell do not, so a caller that canonicalized and one that did
+        // not must still address one state root. Measured as four cases reading
+        // a directory nothing had created.
+        assert_eq!(
+            checkout_fingerprint(Path::new("C:\\repo\\batten")).unwrap(),
+            checkout_fingerprint(Path::new("\\\\?\\C:\\repo\\batten")).unwrap(),
+            "the extended-length prefix names the same checkout"
+        );
+        assert_eq!(
+            checkout_fingerprint(Path::new("\\\\srv\\share\\batten")).unwrap(),
+            checkout_fingerprint(Path::new("\\\\?\\UNC\\srv\\share\\batten")).unwrap(),
+            "and so does its UNC form"
+        );
     }
 
     // -- The kind discriminator prevents cross-kind collisions. --

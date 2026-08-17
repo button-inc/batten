@@ -637,6 +637,12 @@ jobs:
       # covers the whole exposure. The one-authority alternative, if a second
       # Windows caller ever appears, is `shell = "bash -c"` on the task itself.
       MISE_WINDOWS_DEFAULT_INLINE_SHELL_ARGS: bash -c
+      # And the FILE-task shell, which is a separate setting with the same
+      # `cmd /c` default. `batten.toml`'s command rules spawn `mise run
+      # ntia-check` and three siblings, every one of them a bash program under
+      # `mise-tasks/`, so a job that set only the inline shell would still hand
+      # those to cmd.
+      MISE_WINDOWS_DEFAULT_FILE_SHELL_ARGS: bash -c
     steps:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
@@ -676,9 +682,20 @@ jobs:
           submodules: true
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
-          # `cargo test` is all this job invokes; rust is the only tool it
-          # touches. See the ci job for why these lists are narrow.
-          install_args: rust
+          # NOT rust alone, which is what this job shipped with and what the
+          # sixth Windows run disproved. `cargo test` is the command, but the
+          # suite SPAWNS: `tests/cli.rs` materializes fixtures carrying this
+          # repository's own `batten.toml`, whose `no-conflict-markers` rule is
+          # `hk util check-merge-conflict`. A fixture loading that config cannot
+          # evaluate ANY rule without hk — so five cases reported an exit code
+          # about a missing tool while naming the rule they meant to test, and
+          # `jq` is read at runtime by the mise tasks three more command rules
+          # invoke.
+          #
+          # `ci-tools-check` keeps these names honest against mise.toml but
+          # cannot know which a job needs; that is what this comment and the
+          # `windows` job's own red run are for. See the ci job for the rest.
+          install_args: rust hk aqua:jqlang/jq
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A distinct key: this job's target dir is built by a different host
