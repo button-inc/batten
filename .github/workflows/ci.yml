@@ -738,7 +738,30 @@ jobs:
           where.exe hk || echo "where.exe: hk unresolved"
           ls -l "$(dirname "$(command -v hk)")"
 
-      - run: mise run test:cargo
+      # `mise exec`, NOT `mise run test:cargo`, and the difference is the whole
+      # of why the last four runs were red.
+      #
+      # `[tasks."test:cargo"]`'s body is bash, so running it here needs mise's
+      # Windows task shell pointed at bash — which puts Git Bash in the chain
+      # pwsh -> mise -> bash -> cargo -> the test -> batten. MSYS rewrites PATH
+      # into POSIX form crossing that boundary and back again on the way out,
+      # and mise's install directories did not survive the round trip: the
+      # preflight above resolves `hk` and prints its version, `where.exe` finds
+      # `…\installs\hk\1.54.0\hk.exe`, and batten three processes down still
+      # reports `cannot run hk: not found on PATH`.
+      #
+      # `mise exec` activates the same pinned toolchain and runs cargo directly,
+      # so there is no shell translating the environment on the way through. The
+      # task's own body buys nothing here anyway: its receipt short-circuit is
+      # disabled under CI by construction, leaving `cargo test --workspace`.
+      #
+      # Property 3 of `ci-local-parity` does not object — this job's runner is
+      # known-foreign and exempt (CLOUD-394) — but the parity it gives up is
+      # real and is the reason this comment is long: the command here is no
+      # longer literally the one `verify` runs. What it runs is that task's only
+      # effective statement, and the alternative was a green job nobody could
+      # trust or a red one nobody could land.
+      - run: mise exec -- cargo test --workspace
 
   # Single fan-in status. Point branch protection at `final` instead of
   # enumerating every leg, so adding a job never requires a ruleset change.
