@@ -702,6 +702,32 @@ jobs:
           # toolchain than every other job's, so sharing an entry would thrash
           # it — the same reason msrv, semver and perf carry their own.
           key: windows
+      # A JOB THAT DECLARES A TOOL MUST BE ABLE TO REACH IT, asserted before the
+      # suite rather than discovered inside it. `ci-tools-check` holds these
+      # names against `mise.toml`, which is a different question: it cannot know
+      # whether the runner actually resolves one.
+      #
+      # This exists because the alternative was measured and is expensive. The
+      # committed `batten.toml` delegates to `hk`, so a fixture that loads it
+      # reports `cannot run hk` as an exit code deep inside `tests/cli.rs` —
+      # three cases, none of them about hk, each costing a CI round trip to
+      # attribute. `hk.exe` is at the root of the pinned zip and mise puts its
+      # install directory on PATH, so the interesting case is the one where both
+      # are true and the spawn still fails; this names which half is missing.
+      - name: Assert the declared tools resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "PATH=$PATH"
+          for tool in hk jq cargo; do
+            if ! resolved=$(command -v "$tool"); then
+              echo "::error::$tool is declared in install_args but does not resolve on PATH" >&2
+              exit 1
+            fi
+            echo "$tool -> $resolved"
+          done
+          hk --version
+
       - run: mise run test:cargo
 
   # Single fan-in status. Point branch protection at `final` instead of
