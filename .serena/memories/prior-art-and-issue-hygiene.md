@@ -439,6 +439,28 @@ When the codebase already argues for a capability in its comments, a usage count
 saying otherwise is measuring the wrong thing — and those comments are a grep
 away, which makes this instrument practical rather than aspirational.
 
+**A heterogeneous count is not a denominator. Classify by INPUT SHAPE before
+dividing by it.** The demand count above is a tally of one symptom, not of one
+problem, and the instant it was used to ask "would moving these to an engine
+help?" it had to be split — because the classes have different answers and the
+aggregate has none. The split that decided it: invariants whose hard part is
+**extraction** (two files must agree, but one side's value has to be parsed out
+of markdown, bash, pkl or yaml) are unreachable by any engine that decides over
+structured facts — it replaces a two-line comparison and leaves everything
+expensive, then adds materialization. Invariants over **already-typed data** (the
+parsed rule table) are the reachable class. Invariants over **Rust source** are
+tests and always were. And duplication of one literal in nine places wants **one
+authority**, not reasoning — the engine is simply the wrong tool, and reaching
+for it there is how a good instrument gets discredited.
+
+So the sequence is: count the symptom, then classify by what the decision would
+have to read, then divide only within a class. Skipping the middle step produces
+a number that looks like evidence for every option at once. This is the same
+error as the displacement/capability one, one level up — there the instrument was
+wrong for the question, here the population is wrong for the instrument — and the
+file's own standing lesson applies: a fix applied to one paragraph is not applied
+to the document.
+
 **A re-open predicate can be unsatisfiable by construction, which is a permanent
 "no" wearing an escape hatch.** CLOUD-623's was "re-open when the in-tree
 relational core exceeds 200 code lines" — a threshold the rejection itself
