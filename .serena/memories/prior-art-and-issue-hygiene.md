@@ -534,12 +534,17 @@ Three findings from running it, none inferable and each cheap to repeat:
   byte-identical. **Build the discriminator in**: run the variant whose answer is
   required to differ, and read equal outputs as an instrument fault before a
   finding. This is the canary rule applied to a measurement rather than a corpus.
-- **`claim-check` mints its receipt against the branch you are standing on**
-  (`claim.<branch>`), so claiming before branching keys the receipt to `main` and
-  the mediated gate refuses the first edit on the real branch. **Branch first,
+- **`claim-check`'s receipt is branch-keyed (`claim.<branch>`), so branch first,
   then claim** — the loop as usually written states the two in the other order,
-  and the refusal it produces looks like a missing claim rather than a misplaced
-  one.
+  and the refusal it produces reads as a missing claim rather than a misplaced
+  one. What was actually _observed_ is worse than misplacement and is stated as
+  measured rather than inferred: run on `main`, the task reported `pullable` and
+  exit 0 and wrote **no receipt on any key**, `claim.main` included. So the
+  ordering rule is the safe practice; the defect underneath it is CLOUD-377,
+  which had recorded this only for a detached HEAD and now carries the attached
+  case too. **A gate's exit code that does not depend on whether it produced the
+  artifact its own downstream gate requires** is the shape to watch for; this one
+  swallows the write with `2>/dev/null || true`.
 - The survey's own bug, per the standing pattern: the counting exposed
   `graph-check`'s joins as unindexed — a whole-payload reparse per node lookup
   called from three loops, a linear rescan of the edge list per node, and a
