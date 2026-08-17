@@ -1161,18 +1161,47 @@ fn resolve_scanner(provisions: &[Provision], root: &Path) -> Result<PathBuf> {
 
 /// One scanner invocation over one batch of paths.
 fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<Vec<Match>> {
-    let output = std::process::Command::new(binary)
-        .args(SCANNER_FLAGS)
-        .args(batch)
-        .current_dir(root)
-        // Both streams are captured and NEITHER is forwarded. stdout carries the
-        // matched bytes and is parsed here; stderr can carry a path the tool
-        // failed to read, and echoing a child's stream would put output Batten
-        // never shaped onto Batten's own (§6).
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .with_context(|| format!("rule {}: run the pinned secret scanner", rule.id))?;
+    // Both streams are captured and NEITHER is forwarded. stdout carries the
+    // matched bytes and is parsed here; stderr can carry a path the tool
+    // failed to read, and echoing a child's stream would put output Batten
+    // never shaped onto Batten's own (§6).
+    let spawn = |program: &std::ffi::OsStr, leading: &[String]| {
+        std::process::Command::new(program)
+            .args(leading)
+            .args(SCANNER_FLAGS)
+            .args(batch)
+            .current_dir(root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    };
+
+    let mut result = spawn(binary.as_os_str(), &[]);
+
+    // THE SAME RESOLUTION `command` RULES GOT (CLOUD-617), and here for the same
+    // reason: a provisioned scanner is a program someone else built, so Batten
+    // does not get to assume it is a PE image. `CreateProcess` does not read
+    // `#!`, and the failure surfaces as an internal error rather than as a
+    // verdict — five cases in `tests/cli.rs` reported exit 3 over a stub scanner
+    // that was a shell script, none of them about secrets at all. One-way, as
+    // there: every failure inside the fallback leaves the original error.
+    if let Err(err) = &result {
+        if crate::rules::is_not_an_executable_image(err) {
+            if let Some((interpreter, leading)) = crate::rules::shebang_interpreter(binary)
+                .as_deref()
+                .and_then(<[String]>::split_first)
+            {
+                let mut extra = leading.to_vec();
+                extra.push(binary.to_string_lossy().into_owned());
+                if let Ok(rescued) = spawn(std::ffi::OsStr::new(interpreter), &extra) {
+                    result = Ok(rescued);
+                }
+            }
+        }
+    }
+
+    let output =
+        result.with_context(|| format!("rule {}: run the pinned secret scanner", rule.id))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut parsed = Vec::new();

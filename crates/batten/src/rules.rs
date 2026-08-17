@@ -1895,7 +1895,7 @@ pub(crate) fn batches<'a>(matched: &[&'a String]) -> Vec<Vec<&'a str>> {
 /// whose first bytes merely look like text. The caller must then report the
 /// original spawn error unchanged: this may only ever turn a failure into a
 /// success, never one failure into a different one.
-fn shebang_interpreter(path: &Path) -> Option<Vec<String>> {
+pub(crate) fn shebang_interpreter(path: &Path) -> Option<Vec<String>> {
     // Two bytes of prefix, then a bounded line. A binary file is not read into
     // memory to discover it is binary.
     let mut file = std::fs::File::open(path).ok()?;
@@ -1928,7 +1928,7 @@ fn shebang_interpreter(path: &Path) -> Option<Vec<String>> {
 ///
 /// Raw codes rather than [`std::io::ErrorKind`]: both of these still map to
 /// `Uncategorized` on stable, which is not matchable.
-fn is_not_an_executable_image(err: &std::io::Error) -> bool {
+pub(crate) fn is_not_an_executable_image(err: &std::io::Error) -> bool {
     // 193 = ERROR_BAD_EXE_FORMAT (Windows), 8 = ENOEXEC (Unix).
     matches!(err.raw_os_error(), Some(193 | 8))
 }
