@@ -1414,3 +1414,110 @@ fn every_state_dir_override_is_mirrored_for_windows() {
          audit with it rather than leaving behind a check that cannot fail"
     );
 }
+
+/// The needle, assembled so this audit is invisible to itself.
+fn path_env_needle() -> String {
+    [".env(\"PA", "TH\""].concat()
+}
+
+/// The audit's own fixtures. `__PATH__` stands in for the needle.
+const JOINS_PORTABLY: &str = r#"    fn t() {
+        let path = std::env::join_paths(entries).expect("join");
+        cmd.__PATH__, path);
+    }
+"#;
+const INTERPOLATES_A_SEPARATOR: &str = r#"    fn t() {
+        let path = format!("{bin}:{inherited}");
+        cmd.__PATH__, path);
+    }
+"#;
+const SETS_ONE_ENTRY: &str = r#"    fn t() {
+        cmd.__PATH__, bin.display().to_string());
+    }
+"#;
+
+/// Whether the `PATH` override at `at` builds its value portably.
+///
+/// A function that composes a `PATH` at all must do it with `join_paths`; one
+/// that sets a single entry composes nothing and is left alone.
+fn path_joined_portably(body: &str) -> Result<(), &'static str> {
+    // COMMENTS STRIPPED FIRST, because a mention is not a use — and this audit
+    // caught itself on exactly that: the comment written beside the fix names
+    // `join_paths`, so the reverted defect underneath it still read as compliant
+    // and the gate passed over a real regression. The same distinction
+    // `closing-key-check` draws for its own hold marker. Line-initial `//` is
+    // exact for a rustfmt'd tree, which `lint:fmt` guarantees.
+    let code: String = body
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if code.contains("join_paths") || !code.contains("format!") {
+        return Ok(());
+    }
+    Err(
+        "this `PATH` is composed with `format!` rather than `std::env::join_paths` — the \
+         separator is `;` on Windows and a path there begins `D:\\`, so an interpolated `:` does \
+         not merely fail to separate, it yields a PATH whose first entry is a drive letter and \
+         whose second swallows everything after it",
+    )
+}
+
+#[test]
+fn every_path_override_is_composed_with_join_paths() {
+    // CLOUD-617/CLOUD-113. `judge_kind` built `format!("{bin}:{inherited}")`, so
+    // on Windows the fixture's stub was not on PATH at all and seven of fourteen
+    // cases reported `cannot run judge program` in place of the verdict
+    // discipline they exist to assert. The misattribution is the expensive part:
+    // it read as a defect in the engine's PATH lookup, which was correct
+    // throughout — `lookup_on` has always used `split_paths`.
+    //
+    // Sited here rather than as a lint because the property is about the test
+    // tree's own fixtures: production code resolves PATH through `split_paths`
+    // and never composes one.
+    let needle = path_env_needle();
+
+    // (a) Exercise the audit first, including the case that must NOT fire: a
+    // single-entry PATH composes nothing and needs no join.
+    for (label, fixture, holds) in [
+        ("joins portably", JOINS_PORTABLY, true),
+        ("interpolates a separator", INTERPOLATES_A_SEPARATOR, false),
+        ("sets one entry", SETS_ONE_ENTRY, true),
+    ] {
+        let source = fixture.replace("__PATH__", &needle);
+        let at = source.find(&needle).expect("the fixture sets PATH");
+        let (body, _) = enclosing_fn(&source, at);
+        let verdict = path_joined_portably(body);
+        assert_eq!(
+            verdict.is_ok(),
+            holds,
+            "the audit's own {label} fixture is judged wrong: {verdict:?}"
+        );
+    }
+
+    // (b) The real sites.
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut sites = 0;
+    for path in rust_sources(&crate_dir.join("tests")) {
+        let source = fs::read_to_string(&path).expect("read source");
+        let mut from = 0;
+        while let Some(rel) = source[from..].find(&needle) {
+            let at = from + rel;
+            from = at + needle.len();
+            sites += 1;
+            let (body, _) = enclosing_fn(&source, at);
+            if let Err(why) = path_joined_portably(body) {
+                panic!(
+                    "{}:{}: {why} (CLOUD-617)",
+                    path.display(),
+                    line_of(&source, at)
+                );
+            }
+        }
+    }
+    assert!(
+        sites > 0,
+        "the audit found no PATH override to judge — if the last one went away, remove the audit \
+         with it rather than leaving behind a check that cannot fail"
+    );
+}

@@ -91,15 +91,20 @@ fn make_executable(_path: &Path) {}
 /// `PATH`" is one of the acceptance bullets, and the only honest way to build
 /// that case is to run the very same fixture without its `bin/`.
 fn judge_cmd(repo: &Path, home: &Path, args: &[&str], with_stub: bool) -> Output {
-    let bin = repo
-        .parent()
-        .expect("the fixture root")
-        .join("bin")
-        .display()
-        .to_string();
-    let inherited = std::env::var("PATH").unwrap_or_default();
+    let bin = repo.parent().expect("the fixture root").join("bin");
+    let inherited = std::env::var_os("PATH").unwrap_or_default();
+    // `join_paths`, never a hardcoded `:`. The separator is `;` on Windows and a
+    // path there begins `D:\`, so the interpolated form did not merely fail to
+    // separate — it produced a PATH whose first entry was `D` and whose second
+    // swallowed the rest, leaving the stub unreachable and every case that needs
+    // it reporting `cannot run judge program` in place of its subject. Seven of
+    // fourteen, on CLOUD-113's twentieth Windows run, and the misattribution cost
+    // a round trip: the engine's own PATH lookup was correct throughout, because
+    // it has always used `split_paths`.
     let path = if with_stub {
-        format!("{bin}:{inherited}")
+        let mut entries = vec![bin.into_os_string()];
+        entries.extend(std::env::split_paths(&inherited).map(PathBuf::into_os_string));
+        std::env::join_paths(entries).expect("join the fixture bin onto PATH")
     } else {
         inherited
     };
