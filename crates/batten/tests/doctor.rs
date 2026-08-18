@@ -204,10 +204,17 @@ fn the_probe_never_executes_the_program_it_checks() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
+    // A TOML *literal* string for the path, and that is not style. A basic
+    // string processes escapes, so a Windows path interpolated into one —
+    // `D:\a\batten\…` — reads `\a` and `\b` as control characters and rejects
+    // `\U` outright. The config then fails to parse, `doctor` reports
+    // `config-invalid`, and this case fails having never reached the probe it
+    // is about (CLOUD-113's Windows job). Literal strings process nothing,
+    // which is what a path wants.
     fs::write(
         dir.join("batten.toml"),
         format!(
-            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             check = \"{}\"\nseverity = \"deny\"\n",
+            "version = 1\n\n[[rule]]\nid = \"r\"\nkind = \"command\"\nglob = \"**/*.rs\"\n             check = '{}'\nseverity = \"deny\"\n",
             script.display()
         ),
     )
