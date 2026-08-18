@@ -46,14 +46,27 @@
 # failure code. Never a log line — these carry the server's stderr, which is
 # arbitrary content this repo does not control.
 #
-# The mutation restores the early exit that predicate 2 was originally written
-# behind. It is the vacuity CLOUD-418 exists to refuse, and it is declared here
-# because it HAPPENED: with the exit in place, the four new rows below ran the
-# gate over fixtures whose `enabledMcpjsonServers` is empty, so the gate returned
-# before reaching the predicate and every one of them reported green while
-# checking nothing. A suite that passes on code where the check never executes is
-# indistinguishable from one that passes on code where it does.
-#MUTANT grant-check-skipped-when-no-enabled-server|s/^\techo "mcp-attach-check: no enabled .mcp.json servers to check for attachment"$/\texit 0/|a rule misspelling a registered server's separators is refused
+# THE LOG TREE CANNOT ANSWER "IS THIS PERMISSION RULE'S SERVER NAME RIGHT?", and
+# this note exists because a session convinced itself otherwise and shipped it
+# (CLOUD-665, reverted the same day).
+#
+# `mcp-logs-<server>` SANITIZES: every non-alphanumeric run in the server name
+# becomes a hyphen. The connectors prove it — `Apollo.io` logs as
+# `mcp-logs-Apollo-io`, `Google Drive` as `mcp-logs-Google-Drive`, `Microsoft
+# 365` as `mcp-logs-Microsoft-365` — and no directory in the tree contains an
+# underscore at all. The transform is lossy and not invertible.
+#
+# So `mcp-logs-Claude-Code-Remote` is the sanitized form of `Claude_Code_Remote`,
+# whose live tool is `mcp__Claude_Code_Remote__list_sessions`. A predicate
+# comparing an allow rule's server segment against these directory names reads
+# the CORRECT underscore spelling as a misspelling of a name that does not exist.
+# It fired, was read as confirmation, and the "fix" broke five working allow
+# rules and both deny rules — including the two carrying AGENTS.md's ban on
+# babysitting timers, which the change silently switched off.
+#
+# The question is worth answering and needs a source that PRESERVES the name:
+# the tool names the session actually exposes, or the injected MCP config. Not
+# this directory listing. Do not re-derive it from here.
 #
 # The declared exemption `hook-pin-check` honours, beside the assertion it
 # describes rather than in a list that could drift from it.
@@ -115,15 +128,9 @@ if ! servers=$(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" the
 	echo "::error:: $settings is not readable JSON" >&2
 	exit 2
 fi
-# NOT an early exit, since CLOUD-178's predicate below was added. The two
-# predicates read the same two inputs and are otherwise independent: one asks
-# whether an ENABLED server attached, the other whether a GRANTED name is
-# spelled the way the session registered it. A repo enabling no `.mcp.json`
-# server still has permission rules, and returning here skipped every one of
-# them — which is how the second predicate's first four rows passed green while
-# checking nothing.
 if [ -z "$servers" ]; then
-	echo "mcp-attach-check: no enabled .mcp.json servers to check for attachment"
+	echo "mcp-attach-check: no enabled .mcp.json servers — nothing to check"
+	exit 0
 fi
 
 # FAIL OPEN on a missing log ROOT, and only there. No root at all means this is
@@ -181,79 +188,5 @@ while IFS= read -r server; do
 	esac
 done <<<"$servers"
 
-# --- predicate 2: a grant that names no server this session registered --------
-#
-# CLOUD-178, and the defect that cost two sessions. `.claude/settings.json`
-# granted `mcp__Claude_Code_Remote__*` — UNDERSCORES — for its whole life. The
-# server registers as `Claude-Code-Remote`, with HYPHENS. The rule therefore
-# matched nothing in any episode, `create_session` prompted on every dispatch,
-# and two separate sessions diagnosed it as CLOUD-178's UUID name-flip and built
-# increasingly large machinery around that reading.
-#
-# WHAT MADE THE MISREADING SURVIVE, because a gate over the settings file alone
-# cannot catch it and `mcp-allow-check` is exactly that. The evidence looked like
-# a flip: Linear worked, Claude-Code-Remote did not, and both were exposed under
-# UUID names at the time. The difference is that **a claude.ai connector is not
-# governed by this allowlist at all** — it is authorised at the connector layer,
-# which is why Linear kept working under a name no rule here spells, and why the
-# one non-connector in the file was the only casualty. Same observation, opposite
-# causes, and only the log tree can tell them apart.
-#
-# So the predicate is the cheap one nobody ran, and the log tree is the register:
-# it is keyed by the exact name the CLI used, which is the name a rule has to
-# equal. The question asked is NOT "does this server exist" — that would be wrong
-# here, and getting it wrong is what nearly made this gate unshippable on its
-# first run.
-#
-# THE NARROWING, AND WHY THE OBVIOUS PREDICATE IS THE WRONG ONE. A settings file
-# is shared across hosts. `mcp__claude_ai_Linear__*` is the LOCAL-CLI spelling of
-# a connector and registers nothing in a web session — legitimately absent, not a
-# typo. A gate that fails on every absent name reports the portable entries as
-# defects on every run, which is how a gate gets switched off. Measured: the
-# first version fired on exactly that rule.
-#
-# The defect is a NEAR MISS — a rule naming a server that IS here, under a
-# spelling that differs only in separators or case. That is what happened, it is
-# never intentional, and it cannot be confused with a cross-host entry: strip the
-# separators and lowercase, and `Claude_Code_Remote` collides with the registered
-# `Claude-Code-Remote` while `claude_ai_Linear` collides with nothing.
-#
-# Deny rules are checked too, and for a sharper reason than allow rules: a deny
-# that names nothing is a prohibition that is not in force. AGENTS.md bans
-# babysitting timers, and both `send_later` and `create_trigger` were denied
-# under the misspelling — so the ban was decorative for as long as the typo was.
-#
-# Pointer-only per non-negotiable rule 4: the two spellings and nothing else.
-fold_name() { printf '%s' "$1" | tr -d '_-' | tr '[:upper:]' '[:lower:]'; }
-
-registered=$(find "$logroot" -maxdepth 1 -type d -name 'mcp-logs-*' -printf '%f\n' 2>/dev/null | sed 's/^mcp-logs-//')
-if [ -n "$registered" ]; then
-	# The SERVER SEGMENTS, uniqued in jq rather than the rules themselves. One
-	# misspelling is one defect, and the settings file carried seven rules under
-	# it — an unduped loop reported the same finding seven times, which buries the
-	# `serena` line beside it and reads as seven problems.
-	while IFS= read -r rule_server; do
-		[ -n "$rule_server" ] || continue
-		# A glob in the server segment is `mcp-allow-check`'s finding, not this
-		# one; reporting it here too would double a single defect.
-		case "$rule_server" in
-		*'*'*) continue ;;
-		esac
-
-		folded=$(fold_name "$rule_server")
-		while IFS= read -r have; do
-			[ -n "$have" ] || continue
-			[ "$have" = "$rule_server" ] && break
-			if [ "$(fold_name "$have")" = "$folded" ]; then
-				report "$rule_server misspelled — the server registered as $have, so this rule matches no tool and grants or denies NOTHING"
-				break
-			fi
-		done <<<"$registered"
-	done < <(jq -r '[.permissions.allow // [], .permissions.deny // [] | .[]]
-		| map(select(type == "string") | select(startswith("mcp__"))
-		      | ltrimstr("mcp__") | split("__")[0])
-		| map(select(length > 0)) | unique | .[]' "$settings" 2>/dev/null)
-fi
-
-[ "$fail" = 0 ] && echo "mcp-attach-check: every enabled MCP server attached this session, and every permission rule names one that registered"
+[ "$fail" = 0 ] && echo "mcp-attach-check: every enabled MCP server attached this session"
 exit "$fail"
