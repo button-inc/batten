@@ -365,6 +365,9 @@ mod tests {
         for settled in crate::findings::Disposition::ALL {
             assert!(!settled.as_str().is_empty(), "{settled:?} has a token");
         }
-        assert!(crate::findings::Disposition::RejectedByDesign.as_str() == "rejected-by-design");
+        assert_eq!(
+            crate::findings::Disposition::RejectedByDesign.as_str(),
+            "rejected-by-design"
+        );
     }
 }

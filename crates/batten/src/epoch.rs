@@ -134,12 +134,12 @@ pub fn describe_cached(dir: &Path, base_ref: Option<&str>) -> Result<(String, Ve
     // shortcut rather than by a skip.
     let stamps = stamp_tracked(dir, &tracked);
 
-    if let Some(stamps) = stamps.as_ref() {
-        if let Some(cached) = read_cache(dir) {
-            if cached.schema == CACHE_SCHEMA && cached.tracked == *stamps {
-                return Ok((cached.epoch, tracked));
-            }
-        }
+    if let Some(stamps) = stamps.as_ref()
+        && let Some(cached) = read_cache(dir)
+        && cached.schema == CACHE_SCHEMA
+        && cached.tracked == *stamps
+    {
+        return Ok((cached.epoch, tracked));
     }
 
     let (epoch, tracked) = describe(dir, base_ref)?;

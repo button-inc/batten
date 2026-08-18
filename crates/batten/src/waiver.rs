@@ -164,7 +164,7 @@ const fn days_in_month(year: u64, month: u64) -> u64 {
         // a leap year and 2000 was, and a parser that accepted 1900-02-29 would
         // accept an expiry that never arrives.
         _ => {
-            if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+            if year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400)) {
                 29
             } else {
                 28

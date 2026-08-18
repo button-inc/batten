@@ -1710,17 +1710,16 @@ fn adjudicated(
     // row whose mutation is qualified by a flag or a subcommand cannot fire here.
     // A write tool names one path and no argv, so there is nothing a qualifier
     // could be satisfied by — firing anyway would deny on a condition never met.
-    if let Some(path) = envelope.writes.as_deref() {
-        if let Some(verb) = crate::verbs::classify(&policy.verbs, &envelope.tool) {
-            if policy.protected.contains(normalise(path)) {
-                return Decision::Deny(protected_refusal(&Target {
-                    program: &envelope.tool,
-                    subcommand: None,
-                    path,
-                    verb,
-                }));
-            }
-        }
+    if let Some(path) = envelope.writes.as_deref()
+        && let Some(verb) = crate::verbs::classify(&policy.verbs, &envelope.tool)
+        && policy.protected.contains(normalise(path))
+    {
+        return Decision::Deny(protected_refusal(&Target {
+            program: &envelope.tool,
+            subcommand: None,
+            path,
+            verb,
+        }));
     }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
@@ -1888,10 +1887,10 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             {
                 continue;
             }
-            if let Some(contains) = rule.contains.as_deref() {
-                if !segment.raw.contains(contains) {
-                    continue;
-                }
+            if let Some(contains) = rule.contains.as_deref()
+                && !segment.raw.contains(contains)
+            {
+                continue;
             }
             // A command with several segments can match one row twice; the row
             // is still one obligation.
@@ -2006,7 +2005,7 @@ fn pipeline_rules(policy: &Policy, command: &str) -> Decision {
             // detach it performs has to be read off the raw span rather than off
             // the resolved program — otherwise the wrapper that orphans the run
             // is the one token the parser hides.
-            let detached_here = tokens.iter().any(|token| *token == "nohup");
+            let detached_here = tokens.contains(&"nohup");
             let words: Vec<&str> = tokens[program_index + 1..]
                 .iter()
                 .copied()
@@ -2182,10 +2181,10 @@ fn matching_shape_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
             // The extra literal is matched against the segment as written,
             // because the thing it looks for lives inside a quoted argument and
             // so is not one of the words above.
-            if let Some(needle) = rule.contains.as_deref() {
-                if !segment.raw.contains(needle) {
-                    continue;
-                }
+            if let Some(needle) = rule.contains.as_deref()
+                && !segment.raw.contains(needle)
+            {
+                continue;
             }
             matched.push(rule);
         }
@@ -2530,20 +2529,16 @@ fn segments(command: &str) -> Vec<Segment> {
                         break;
                     }
                     // Inside single quotes a backslash is literal; inside double
-                    // quotes it escapes only this handful. Written without a
-                    // let-chain: those are unstable at the crate's 1.85 MSRV,
-                    // and a newer local toolchain compiles them happily while
-                    // `cross-check` does not.
+                    // quotes it escapes only this handful.
                     if quote == '"'
                         && inner == '\\'
                         && chars
                             .peek()
                             .is_some_and(|next| matches!(*next, '"' | '\\' | '$' | '`'))
+                        && let Some(next) = chars.next()
                     {
-                        if let Some(next) = chars.next() {
-                            raw.push(next);
-                            word.push(next);
-                        }
+                        raw.push(next);
+                        word.push(next);
                         continue;
                     }
                     word.push(inner);

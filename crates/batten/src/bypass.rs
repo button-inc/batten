@@ -240,26 +240,26 @@ pub fn scan(stream: &Stream) -> Vec<Detection> {
                     // neither be refused-and-matched nor count as a retry.
                     continue;
                 };
-                if disables_enforcement(input) {
-                    if let Some(&(denied_line, refusal)) = refused.get(&operation) {
-                        found
-                            .entry(operation.clone())
-                            .and_modify(|detection| detection.retries += 1)
-                            .or_insert(Detection {
-                                denied_line,
-                                retry_line: record.line,
-                                refusal,
-                                retries: 1,
-                                identity: StoredIdentity::new(
-                                    FindingKind::Sequence,
-                                    sequence_fingerprint(
-                                        RULE_ID,
-                                        &operation.pattern_key(),
-                                        stream.session.as_deref(),
-                                    ),
+                if disables_enforcement(input)
+                    && let Some(&(denied_line, refusal)) = refused.get(&operation)
+                {
+                    found
+                        .entry(operation.clone())
+                        .and_modify(|detection| detection.retries += 1)
+                        .or_insert(Detection {
+                            denied_line,
+                            retry_line: record.line,
+                            refusal,
+                            retries: 1,
+                            identity: StoredIdentity::new(
+                                FindingKind::Sequence,
+                                sequence_fingerprint(
+                                    RULE_ID,
+                                    &operation.pattern_key(),
+                                    stream.session.as_deref(),
                                 ),
-                            });
-                    }
+                            ),
+                        });
                 }
                 calls.insert(id.as_str(), operation);
             }

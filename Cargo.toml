@@ -5,7 +5,15 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.80"
 edition = "2024"
-rust-version = "1.85"
+# A DERIVED COPY of `mise.toml [tools] rust`, not a compatibility promise
+# (CLOUD-593). Batten ships compiled binaries and its source is public so the
+# community can maintain those binaries; nobody consumes the crate as a library
+# and nobody obtains it by compiling, so there is no consumer audience for a
+# floor to protect. What the declaration still does is feed Cargo's MSRV-aware
+# resolution, keeping the graph inside what we actually build with — self-
+# protection, and the honest value for that is the compiler we actually use.
+# `msrv-pin-agreement` holds it equal to the pin; raise the pin, not this.
+rust-version = "1.97"
 license = "Apache-2.0"
 repository = "https://github.com/button-inc/batten"
 homepage = "https://github.com/button-inc/batten"
@@ -92,23 +100,24 @@ fs4 = "1.1"
 # what keeps `tree_files` byte-stable without a merge step, and no measurement
 # yet asks for threads over a few hundred files.
 #
-# The upper bound is an MSRV pin, and it is explicit because Cargo's MSRV-aware
-# resolution cannot see this one: `ignore` 0.4.30 uses `let` chains (Rust 1.88)
-# while declaring NO `rust-version`, so the resolver picks it happily and the
-# build fails inside a vendored crate. 0.4.31+ declare 1.88 honestly and are
-# skipped on their own. Lift both bounds together when `rust-version` moves off
-# 1.85 — `mise run msrv` is the gate that will say so.
-ignore = { version = ">=0.4.23, <0.4.30", default-features = false }
+# UNCAPPED SINCE CLOUD-593. It carried `<0.4.30` because 0.4.30 uses `let` chains
+# (Rust 1.88) while declaring NO `rust-version`, so MSRV-aware resolution took it
+# happily and the build failed inside the vendored crate — a cap Cargo could not
+# derive, so it had to be written. At a floor equal to a current pin nothing in
+# the graph is excluded and the cap has nothing left to exclude. `cap-drift` is
+# the ratchet that keeps this in step with `.github/dependabot.yml` if one ever
+# comes back.
+ignore = { version = ">=0.4.23", default-features = false }
 # The glob matcher the same lineage ships (CLOUD-214), replacing a hand-rolled
 # recursive matcher with exponential worst-case behaviour and no character
 # classes, braces or negation. Compiled once per pattern rather than re-parsed
 # per path, which is what makes the selection cost linear in the tree.
 #
-# Bounded below 0.4.20 for the MSRV reason stated on `ignore` above — that is
-# where this crate's line also starts declaring Rust 1.88. Unlike `ignore`'s, the
-# declaration here is honest, so the bound is belt-and-braces rather than
-# load-bearing; they move together.
-globset = { version = ">=0.4.15, <0.4.20", default-features = false }
+# Uncapped with `ignore` above (CLOUD-593). Its bound was belt-and-braces rather
+# than load-bearing — this crate's 0.4.20 declares Rust 1.88 honestly, so MSRV
+# resolution would have skipped it unaided — and the pair moved together because
+# they are one lineage.
+globset = { version = ">=0.4.15", default-features = false }
 # `RuleKind::Forbid`'s `regex`/`exclude` columns (CLOUD-283), `RuleKind::Shape`'s
 # `requires_key` (CLOUD-446), and deliberately nowhere else. `outputs.rs`
 # recorded the standing deferral — "adding a regex engine is a decision about the

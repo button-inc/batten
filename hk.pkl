@@ -56,6 +56,31 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json", "mise-tasks/mcp-timeout-budget")
     check = "mise run mcp-timeout-budget"
   }
+  // The floor is a derived copy of the toolchain pin (CLOUD-593), so the two
+  // must agree. This REPLACES the `msrv` job, which answered the same question
+  // by compiling the workspace a second time at a second toolchain — right while
+  // the numbers were independent, and pure cost once they are coupled. Note what
+  // the old gate could not catch: it was green through all twelve releases the
+  // pin sat stale, because the two numbers agreed. Agreeing on a stale number is
+  // what it was built to confirm.
+  ["msrv-pin-agreement"] {
+    glob = List("Cargo.toml", "mise.toml")
+    check = "mise run msrv-pin-agreement"
+  }
+  // An MSRV cap lives in two files — the manifest bound and the dependabot
+  // `ignore:` entry that mirrors it, because the bot cannot read a manifest cap.
+  // Lift only the manifest side and everything passes while the crate stays
+  // frozen: the bot keeps withholding a version the manifest now admits, and
+  // nothing is red. That half-lift is the direction with no symptom, and it is
+  // why the row is set equality both ways rather than a one-sided check.
+  //
+  // Both sets are empty as of CLOUD-593, and the row is still load-bearing: it
+  // is a ratchet on the next cap added to either file. A gate that only worked
+  // while a list was non-empty would have been deleted with the list.
+  ["cap-drift"] {
+    glob = List("Cargo.toml", ".github/dependabot.yml")
+    check = "mise run cap-drift"
+  }
   // `coverage` and `scorecard` emit a number for a human and must never gate a
   // branch — a coverage threshold rewards line-touching, and scorecard scores
   // deliberate design decisions (trunk-based review, the landing lease's

@@ -2015,19 +2015,35 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
 /// all. Asserted through the refusal's identity rather than its verdict, so the
 /// case is a statement about the committed policy and not about whether this
 /// checkout happens to have run `verify`.
+///
+/// TWO ROWS CAN REFUSE, AND BOTH ARE PRECONDITIONS — which is the assertion,
+/// rather than a widening of it. `ready-needs-receipts` refuses until `verify`
+/// has run; `ready-names-an-issue` is a `shape` row carrying `requires_key`,
+/// which the rules file describes as narrowing the deny "from *this command is
+/// banned* to *this command is banned unless the work is keyed*". Neither is the
+/// outright ban this case exists to refuse, and which one fires first is a
+/// property of the checkout.
+///
+/// Naming only the receipt row made that a hidden dependency on the branch
+/// NAME. A branch carrying no `CLOUD-*` key trips the key row before the receipt
+/// row is ever reached — and a keyless branch is not an oddity here, it is what
+/// `mem:workflow/board-states` REQUIRES of a PR closing several keys, because
+/// branch-name precedence otherwise moves one issue and strands the rest. So the
+/// committed shape of a multi-key bundle reddened this case, on a branch that
+/// was correct (CLOUD-661). The fix is to assert what the case means.
 #[test]
 fn the_committed_policy_gates_ready_on_receipts_rather_than_banning_it() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = run_hook_in(&root, "exit-code", &claude_payload("gh pr ready 42"), false);
     let stderr = String::from_utf8_lossy(&output.stderr);
     match output.status.code() {
-        // Receipts are valid in this checkout: allowed, which is the point.
+        // Preconditions satisfied in this checkout: allowed, which is the point.
         Some(0) => {}
-        // Refused — and it must be the receipt row that did it, naming a
-        // receipt, never one of the `gh` lifecycle bans.
+        // Refused — and it must be a PRECONDITION row that did it, never one of
+        // the `gh` lifecycle bans, which refuse the command outright.
         Some(2) => assert!(
-            stderr.contains("ready-needs-receipts"),
-            "a refused `gh pr ready` must come from the receipt row, got: {stderr}"
+            stderr.contains("ready-needs-receipts") || stderr.contains("ready-names-an-issue"),
+            "a refused `gh pr ready` must come from a precondition row, got: {stderr}"
         ),
         other => panic!("unexpected exit {other:?}: {stderr}"),
     }

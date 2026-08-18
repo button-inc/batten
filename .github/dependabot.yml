@@ -45,19 +45,15 @@ updates:
     commit-message:
       prefix: "build(deps)"
       prefix-development: "build(deps-dev)"
-    # Two crates are capped in Cargo.toml because they need a compiler newer than
-    # the declared rust-version, and one of them declares no rust-version at all —
-    # so nothing the bot can read tells it the cap is an MSRV pin. Proposing them
-    # asks a question the manifest has already answered, and because the batch is
-    # one commit, the unbuildable member takes every other bump down with it: six
-    # bumps, five red jobs, one verdict, every week (CLOUD-344). The bounds below
-    # restate the caps deliberately; CLOUD-593 is where the floor moves and both
-    # ends lift together.
-    ignore:
-      - dependency-name: ignore
-        versions: [">= 0.4.30"]
-      - dependency-name: globset
-        versions: [">= 0.4.20"]
+    # No `ignore:` entries, and their absence is now gated rather than incidental.
+    # Two crates were listed here to mirror MSRV caps in Cargo.toml — the bot
+    # cannot read a cap, so proposing them asked a question the manifest had
+    # already answered, and one unbuildable member reddened the whole grouped
+    # batch (CLOUD-344). CLOUD-593 removed both caps by raising the floor to the
+    # toolchain pin, so both entries went with them. `cap-drift` holds the two
+    # files equal in BOTH directions, which is the half-lift this pair could
+    # otherwise land silently: lifting the manifest cap alone leaves the bot
+    # withholding a crate the manifest now admits, and nothing goes red.
     groups:
       cargo:
         patterns: ["*"]

@@ -295,13 +295,13 @@ pub fn gate(repo: &Path, declared: &Defects) -> Result<Vec<Finding>> {
     for base in bases(repo)? {
         // Absent at the base: there is no history to preserve, so every row is
         // an append. This is the first-commit case, not a skipped check.
-        if let Some(text) = at_rev(repo, &base, &declared.path)? {
-            if let Some(line) = first_divergence(&text, &working) {
-                problems.push(Problem {
-                    line,
-                    id: NOT_APPEND_ONLY,
-                });
-            }
+        if let Some(text) = at_rev(repo, &base, &declared.path)?
+            && let Some(line) = first_divergence(&text, &working)
+        {
+            problems.push(Problem {
+                line,
+                id: NOT_APPEND_ONLY,
+            });
         }
     }
 

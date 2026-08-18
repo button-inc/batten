@@ -2513,13 +2513,11 @@ fn reconcile_secret_custody(repo: &Path, store_dir: &Path, err: &mut dyn Write) 
             record.identity.is_secret()
                 && !joined_new.contains(&record.identity.fingerprint.to_hex())
         });
-        if !outstanding {
-            if let Some(key_id) = secrets::retire(&key_file)? {
-                writeln!(
-                    err,
-                    "batten: secret-identity rotation complete: key {key_id} retired"
-                )?;
-            }
+        if !outstanding && let Some(key_id) = secrets::retire(&key_file)? {
+            writeln!(
+                err,
+                "batten: secret-identity rotation complete: key {key_id} retired"
+            )?;
         }
     }
     Ok(())

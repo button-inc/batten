@@ -7,7 +7,17 @@
 #   mise run ci        # everything CI runs, locally
 
 [tools]
-rust = { version = "1.85.0", components = "rustfmt,clippy" }
+# The compiler this repo builds with, and — since CLOUD-593 — the authority
+# `Cargo.toml`'s `rust-version` is a derived copy of. `msrv-pin-agreement`
+# holds the two together; moving this number is what moves the floor, so raise
+# it here and run that gate rather than editing the manifest.
+#
+# It sat at 1.85.0 for twelve releases, not by decision but because nothing
+# watched it: Dependabot has no `package-ecosystem` that can read this file
+# (CLOUD-655), so `[tools]` was the one dependency surface with no update lane
+# at all. The floor was pinned to it, so the stale pin froze two crates and
+# rejected a third.
+rust = { version = "1.97.1", components = "rustfmt,clippy" }
 hk = "1.54.0"                                                # git-hook runner (see hk.pkl)
 "aqua:cli/cli" = "2.97"                                      # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
 "aqua:EmbarkStudios/cargo-deny" = "0.20"                     # dependency license/advisory policy (deny.toml)
@@ -27,14 +37,14 @@ hk = "1.54.0"                                                # git-hook runner (
 # on. Deliberately NOT in ci.yml's install lists: nothing on the landing path
 # measures (see .github/workflows/perf.yml for why measurement is scheduled).
 "aqua:sharkdp/hyperfine" = "1.20.0"
-# NOTE: the MSRV gate (`mise run msrv`) deliberately pins NO tool. cargo-msrv
-# would be the obvious choice and cannot be used: upstream ships no
-# aarch64-unknown-linux binary in ANY release, so a release-asset backend locks
-# no `linux-arm64` entry and `mise run lock-complete` rejects it — correctly,
-# since an arm64 sandbox could then not provision at all. Its `cargo:` backend
-# sidesteps that rule but source-builds a large tree (it pulls the AWS SDK):
-# measured 318s here, uncached, on every run. The gate reads the declared floor
-# from `cargo metadata` and drives rustup directly instead.
+# NOTE: no cargo-msrv pin, and since CLOUD-593 no MSRV gate needs one. It was
+# already unpinnable — upstream ships no aarch64-unknown-linux binary in ANY
+# release, so a release-asset backend locks no `linux-arm64` entry and `mise run
+# lock-complete` rejects it, correctly, since an arm64 sandbox could then not
+# provision at all; its `cargo:` backend sidesteps that rule but source-builds a
+# large tree (it pulls the AWS SDK), measured 318s here, uncached, per run. The
+# retired `msrv` task read the floor from `cargo metadata` and drove rustup
+# directly to avoid all of that. Its replacement compares two strings.
 # Coverage as a REPORT, never a gate (CLOUD-111): `mise run coverage`, surfaced
 # by a scheduled workflow, deliberately absent from `verify` and from `final`.
 # Unlike cargo-msrv above, this one ships aarch64-unknown-linux-gnu, so a
@@ -66,7 +76,7 @@ hk = "1.54.0"                                                # git-hook runner (
 # reached. So there is no `[tools]` entry that can express this tool, and the
 # task provisions it under the nightly libFuzzer needs anyway, pinned and only
 # when missing — off the landing path entirely, like `[tasks.coverage]`'s
-# component and `[tasks.msrv]`'s toolchain.
+# component and, until CLOUD-593 retired it, `[tasks.msrv]`'s toolchain.
 # The semver verifier (`mise run semver`, CLOUD-102): does the API delta match the
 # bump release-plz will infer? `github:`, not `ubi:` — same upstream assets, but
 # the github backend locks a url and a per-platform checksum and verifies GitHub
@@ -78,7 +88,8 @@ hk = "1.54.0"                                                # git-hook runner (
 # The task runs it under a rustup-fetched toolchain rather than the pin above:
 # 0.50.0 refuses under 1.85.0 (needs >=1.93), and the 1.85-era release cannot
 # resolve this crate's dependencies. That is a property of the TOOL, not of the
-# crate — `mise run msrv` remains the authority on the 1.85 floor. Reasoning in
+# crate, not of the floor — and since CLOUD-593 the floor tracks the pin above,
+# so this tool's own requirement is the only number in play. Reasoning in
 # `mise-tasks/semver`.
 "github:obi1kenobi/cargo-semver-checks" = "0.50.0"
 # mise-tasks/ holds real bash programs, so they get the same lint+format
@@ -198,7 +209,7 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
 # on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
 # matches no job, or if a `pull_request` job is missing from here.
-CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),msrv,semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
 # has not registered yet. Exactly two WORKFLOWS earn it, and each earns it twice
@@ -274,7 +285,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check"
+MUTANT_GATES = "msrv-pin-agreement,cap-drift,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -426,7 +437,7 @@ shell = "bash -c"
 # `llvm-tools-preview` is NOT added to the `rust` pin's `components` above: that
 # would make every CI job download it for a tool only this task uses. Installed
 # here, on demand, and only when missing — the same "don't mutate the toolchain
-# on the common path" reasoning as `[tasks.msrv]`.
+# on the common path" reasoning the retired `[tasks.msrv]` used (CLOUD-593).
 #
 # Task bodies do not run under `set -e`, and a report built from a half-run
 # suite is a misleading number rather than a missing one, so the body opts in.
@@ -503,7 +514,7 @@ shell = "bash -c"
 # Nightly is not a preference: libFuzzer needs `-Z sanitizer`, which stable does
 # not accept. Installed on demand and only when missing — the same "don't mutate
 # the toolchain on the common path" reasoning as `[tasks.coverage]` and
-# `[tasks.msrv]`, both of which drive rustup directly for their own documented
+# the retired `[tasks.msrv]` (CLOUD-593), which drove rustup directly for its own documented
 # reasons.
 #
 # Body opts into `set -e`: a search that half-ran is a misleading all-clear
@@ -563,58 +574,20 @@ if ! cargo test --workspace; then exit 1; fi
 ./mise-tasks/step-receipt record test:cargo || true
 '''
 
-[tasks.msrv]
-description = "Gate: the workspace still builds on the `rust-version` it declares"
-shell = "bash -c"
-# VERIFY the declared floor, never SEARCH for the true one. A search (what
-# `cargo msrv find` does) is a compile per candidate version and answers a
-# question about the world; this asks the one question that is a property of
-# this commit — does the number we publish still hold.
+# `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by
+# `mise-tasks/msrv-pin-agreement`.
 #
-# WHY THIS IS NOT ALREADY COVERED by the `ci` job's `cargo check`. The pinned
-# toolchain equals the declared MSRV *today*, which makes the coverage look
-# redundant. They are two independent numbers: bump `[tools] rust` to 1.95 and
-# leave `rust-version = "1.85"`, and every other gate compiles happily on 1.95
-# while the published claim quietly becomes false. That is CLOUD-271's shape
-# exactly. This task reads the DECLARED number and builds with THAT compiler, so
-# the two can never silently diverge.
+# It compiled the whole workspace a second time, at a second toolchain, to
+# answer "do the floor and the pin disagree?" — ~32-50s per PR plus a rustup
+# fetch. That was the right shape while the two numbers were deliberately
+# INDEPENDENT: a floor below the pin is a claim about a compiler nothing here
+# runs, and only running it verifies such a claim.
 #
-# Read via `cargo metadata`, not by grepping a manifest: the crate inherits with
-# `rust-version.workspace = true`, so its own file does not carry the number and
-# the root is a virtual workspace. `sort -V | tail -n1` takes the highest
-# declared floor, which is the workspace's effective one.
-#
-# Task bodies do not run under `set -e` (.claude/rules/toolchain.md), and every
-# line here changes the verdict, so the body opts in explicitly.
-run = '''
-set -euo pipefail
-# Receipt-gated (CLOUD-424): the declared floor lives in Cargo.toml and the
-# host toolchain is in the key, so a bump to either re-derives.
-if ./mise-tasks/step-receipt check msrv; then exit 0; fi
-msrv=$(cargo metadata --format-version 1 --no-deps |
-	jq -r '[.packages[].rust_version | select(. != null)] | unique | .[]' |
-	sort -V | tail -n1)
-if [ -z "$msrv" ]; then
-	echo "::error:: msrv: no package declares rust-version, so there is no floor to verify." >&2
-	exit 1
-fi
-# Install only when absent. rustup has no cross-process lock (CLOUD-220), and
-# the cheapest way not to race one is not to mutate the toolchain dir on the
-# common path — where the declared floor equals the pinned toolchain, this is a
-# no-op. `--profile minimal` because a type-check needs no docs or clippy.
-if ! rustup toolchain list | grep -qE "^${msrv}(\.|-)"; then
-	if ! rustup toolchain install "$msrv" --profile minimal; then
-		echo "::error:: msrv: could not install the declared toolchain $msrv, so the floor is unverified." >&2
-		exit 1
-	fi
-fi
-# The shipped surface (lib + bins), which is what an MSRV claim is *about*: a
-# consumer on the floor compiles our crate, not our test harness. `--all-targets`
-# would drag dev-dependencies' own floors into a claim we do not make about them.
-cargo "+$msrv" check --workspace
-./mise-tasks/step-receipt record msrv || true
-echo "msrv: the workspace builds on its declared rust-version ($msrv)"
-'''
+# CLOUD-593 removed the independence. The floor is now a derived copy of the
+# pin, so the predicate is a text equality and the second compile buys nothing
+# it does not. Note what the old gate could never catch: it was green for the
+# entire twelve releases the pin sat stale, because the two numbers agreed —
+# agreeing on a stale number is exactly what it was built to confirm.
 
 [tasks.deny]
 description = "cargo-deny: licenses, advisories, sources"
@@ -1082,7 +1055,7 @@ shell = "bash -c"
 # window, the same shape `linear-check` already has in `verify` and
 # `ready-guard`. It is deliberately NOT an hk step: `pre-commit` runs over a
 # tree that is dirty by definition.
-depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "msrv", "semver"]
+depends = ["tree-clean", "ci", "cross-check", "darwin-link", "zizmor", "semver"]
 run = '''
 # A task body does not run under `set -e` (see .claude/rules/toolchain.md), so
 # every step whose failure changes the verdict is guarded by hand.

@@ -212,16 +212,14 @@ pub fn smells(
         (located.unlanded.as_ref(), EMPTY_UNLANDED_SET),
         (located.scope.as_ref(), EMPTY_SCOPE_SET),
     ] {
-        // A `let`-chain would read better, but it is unstable before 1.88 and
-        // this crate pins 1.85.
-        let Some(spanned) = declared else { continue };
-        if !spanned.get_ref().is_empty() {
-            continue;
+        if let Some(spanned) = declared
+            && spanned.get_ref().is_empty()
+        {
+            found.push(Smell {
+                at: Where::Line(line_of(text, spanned.span().start)),
+                id,
+            });
         }
-        found.push(Smell {
-            at: Where::Line(line_of(text, spanned.span().start)),
-            id,
-        });
     }
 
     // A rule at `allow` is configured off (CLOUD-61): it reads as a gate in the

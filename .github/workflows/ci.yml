@@ -164,7 +164,7 @@ jobs:
       # This is the only job that reaches hk — `hooks` (`hk check --all`) is a
       # dependency of `mise run ci` and of nothing else; `cross-check` and
       # `darwin-link` reach `doctor`, whose hook probe is skipped under CI, and
-      # `msrv`/`semver` run neither. So one cache step covers the whole exposure
+      # `semver` runs neither. So one cache step covers the whole exposure
       # this repository controls.
       #
       # Keyed on `hk.pkl` itself, because the `amends` url lives in that file: a
@@ -361,75 +361,6 @@ jobs:
           # the Windows std that cross-check's own job owns.
           DOCTOR_TARGETS: ${{ matrix.target }}
 
-  # `rust-version` is a claim this repo publishes, and the other jobs cannot
-  # check it: they compile with the toolchain mise pins, which is a different
-  # number that merely happens to match today. A dependency bump that raises the
-  # required compiler leaves every job above green and the declared floor false.
-  # Its own job rather than a step in `ci` because it drives a second toolchain
-  # through rustup and would otherwise serialize behind that job's cargo chain.
-  msrv:
-    name: msrv
-    if: ${{ github.event.pull_request.draft == false }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15 # budget: grandfathered measured=2026-08-11
-    # `actions: write` is here for one call and one only: cancelling THIS run
-    # when the landing lease does not authorise this branch (CLOUD-420). A job
-    # that could not cancel itself would have to fail instead, and a failed job
-    # makes the run conclude `failure` rather than `cancelled` — which reds
-    # `final` and makes `land` re-draft a healthy PR.
-    permissions:
-      contents: read
-      actions: write
-    steps:
-      # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
-      # First step, before any checkout or toolchain install, because a run this
-      # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
-      # justification lives there; it is fetched from `main` rather than from
-      # this head, so a clone carrying stale rules cannot dodge the predicate by
-      # carrying a stale copy of it. An unreadable body runs — fail open, which
-      # is the whole posture: waving one matrix through costs one matrix, while
-      # a predicate that cannot read itself would stop the fleet.
-      - name: Landing lease precondition
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          LEASE_HEAD_REF: ${{ github.head_ref }}
-          # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land` whenever this
-          # head did not touch it — and the staleness row reads exactly that file.
-          LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          LEASE_RUN_ID: ${{ github.run_id }}
-        run: |
-          body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
-          # `|| exit 0` on BOTH lines, and the second is the one that was missing
-          # (CLOUD-420). A fetch that fails is handled; a fetch that SUCCEEDS with
-          # something that is not shell was not — a truncated body, a proxy error
-          # page returned 200, or a bad edit to the trunk copy makes this a syntax
-          # error in the FIRST step of every job. The step reds under the runner's
-          # default `bash -e {0}`, `final` fails its `needs:` assertion under
-          # `always()`, and `land` re-drafts a healthy PR — fleet-wide, from one bad
-          # response. The precondition's own header promises it never exits
-          # non-zero; this is what makes that true at the call site too.
-          bash -c "$body" || exit 0
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
-        with:
-          # rust supplies the cargo, the rustup that fetches the declared
-          # toolchain, and the compiler itself; jq reads `rust-version` out of
-          # `cargo metadata`. Nothing else is invoked, and no MSRV tool is pinned
-          # — see the note above `[tasks.msrv]` in mise.toml for why cargo-msrv
-          # is not usable here. See the ci job for why these lists are narrow.
-          install_args: rust aqua:jqlang/jq
-      # A distinct key: this job's target dir is built by a different rustc than
-      # every other job's, so sharing an entry would thrash it.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: msrv
-      - run: mise run msrv
-
   semver:
     name: semver
     if: ${{ github.event.pull_request.draft == false }}
@@ -497,7 +428,7 @@ jobs:
           # are narrow.
           install_args: rust github:obi1kenobi/cargo-semver-checks
       # A distinct key: this job builds rustdoc with a different rustc than every
-      # other job's, so sharing an entry would thrash it — the same reason msrv
+      # other job's, so sharing an entry would thrash it — the same reason
       # carries its own.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -579,7 +510,7 @@ jobs:
           install_args: rust aqua:sharkdp/hyperfine aqua:jqlang/jq
       # A distinct key: this job builds `--release`, where every other cargo job
       # here builds debug, so sharing an entry would thrash it — the same reason
-      # msrv and semver carry their own.
+      # semver carries its own.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: perf
@@ -723,7 +654,7 @@ jobs:
         with:
           # A distinct key: this job's target dir is built by a different host
           # toolchain than every other job's, so sharing an entry would thrash
-          # it — the same reason msrv, semver and perf carry their own.
+          # it — the same reason semver and perf carry their own.
           key: windows
       # A JOB THAT DECLARES A TOOL MUST BE ABLE TO REACH IT, asserted before the
       # suite rather than discovered inside it. `ci-tools-check` holds these
@@ -827,7 +758,7 @@ jobs:
     # carries the reason it cannot change, so the next reader who notices that a
     # stopped run reds `final` does not re-derive the skip and ship it.
     if: ${{ always() && github.event.pull_request.draft == false }}
-    needs: [ci, cross, darwin-link, msrv, semver, perf, windows]
+    needs: [ci, cross, darwin-link, semver, perf, windows]
     runs-on: ubuntu-latest
     # `checks: read` is the whole reason this job now needs a permission at all:
     # the analyzer's verdict is a check-run on the head commit.
@@ -837,8 +768,8 @@ jobs:
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:
       # Asserted over `needs.*`, never over an enumeration of it. The enumerated
-      # form listed three of the four dependencies — `msrv` was added to `needs:`
-      # and never to the assertion — so a red `msrv` produced a green `final`,
+      # form listed three of the four dependencies — one was added to `needs:`
+      # and never to the assertion — so that red job produced a green `final`,
       # which is the only check the host requires (CLOUD-351). A fan-in whose
       # assertion is a hand-written restatement of its own `needs:` has two
       # authorities for one fact, and only the restatement decides. This form has

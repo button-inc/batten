@@ -810,13 +810,33 @@ mod tests {
         .finding();
 
         // Permissive reports and never fails, whatever it found.
-        assert!(!blocks(&[violation.clone()], Strictness::Permissive, false));
-        assert!(!blocks(&[violation.clone()], Strictness::Permissive, true));
+        assert!(!blocks(
+            std::slice::from_ref(&violation),
+            Strictness::Permissive,
+            false
+        ));
+        assert!(!blocks(
+            std::slice::from_ref(&violation),
+            Strictness::Permissive,
+            true
+        ));
         // Standard fails on a violation and not on an advisory…
-        assert!(blocks(&[violation.clone()], Strictness::Standard, false));
-        assert!(!blocks(&[advisory.clone()], Strictness::Standard, false));
+        assert!(blocks(
+            std::slice::from_ref(&violation),
+            Strictness::Standard,
+            false
+        ));
+        assert!(!blocks(
+            std::slice::from_ref(&advisory),
+            Strictness::Standard,
+            false
+        ));
         // …unless `--fail-on-warning` promotes it, the existing machinery.
-        assert!(blocks(&[advisory.clone()], Strictness::Standard, true));
+        assert!(blocks(
+            std::slice::from_ref(&advisory),
+            Strictness::Standard,
+            true
+        ));
         // Strict is Standard plus anything advisory, with no flag.
         assert!(blocks(&[advisory], Strictness::Strict, false));
         assert!(blocks(&[violation], Strictness::Strict, false));

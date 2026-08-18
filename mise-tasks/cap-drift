@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+#MISE description="Gate: an MSRV cap in Cargo.toml and its dependabot `ignore:` entry exist together or not at all (CLOUD-593)"
+#
+# THE HALF-LIFT, which is the one failure mode in this change that lands GREEN.
+#
+# An MSRV cap lives in two files and nothing kept them in step. `Cargo.toml`
+# carries the upper bound; `.github/dependabot.yml` restates it as an `ignore:`
+# entry, because the bot cannot read a manifest cap and would otherwise propose a
+# bump the manifest has already refused — one unbuildable member reddening a
+# whole grouped batch (CLOUD-344).
+#
+# Lift only the manifest side and everything passes. The manifest now admits
+# 0.4.33, the bot still withholds it, nothing proposes it ever again, and no
+# check anywhere is red. The freeze survives the change that was supposed to end
+# it, and the issue closes. That is worse than the original defect, because the
+# original had a symptom.
+#
+# So the predicate is set equality, in BOTH directions, and both directions are
+# real:
+#
+#   cap-without-ignore     the manifest refuses a version the bot will propose,
+#                          so the batch goes red the way CLOUD-344 measured.
+#   ignore-without-cap     the bot withholds a version the manifest admits, so
+#                          the crate silently never advances. This is the half-
+#                          lift, and it is the direction with no symptom.
+#
+# STILL LOAD-BEARING WITH BOTH SETS EMPTY, which is the state CLOUD-593 leaves
+# them in. It is a ratchet: the next cap added to either file has to be added to
+# the other, and the gate says so at the commit that adds it rather than at the
+# release that notices the freeze. A gate that only functions while a list is
+# non-empty would have been deleted with the list.
+#
+# WHAT COUNTS AS A CAP, and the narrowness is deliberate. Only an upper bound on
+# a `[workspace.dependencies]` entry — `<`, `<=`, or a `,`-joined range carrying
+# one. A bare `"0.4"` is a caret requirement, which bounds the major and is not
+# an MSRV decision; treating it as one would demand a dependabot entry for every
+# dependency in the file and the gate would be switched off within a day.
+#
+# Pointer-only per non-negotiable rule 4: the crate name and which file its
+# counterpart is missing from. Never a version range, never a manifest line.
+#
+# Exit 0 the two sets agree / 1 they differ / 2 could not look.
+#
+# The mutation drops the second direction, leaving only cap-without-ignore. That
+# is the direction that already has a symptom — CI goes red on its own — so the
+# suite still passes every row except the half-lift, which is the row this gate
+# exists for and the only one that lands green unaided.
+#MUTANT only-checks-cap-without-ignore|s/^for crate in \$ignored; do$/for crate in ; do/|THE HALF-LIFT: an ignore entry with no cap is refused, and named
+#PIN-OK: jq
+set -uo pipefail
+
+manifest="${CAP_DRIFT_MANIFEST:-Cargo.toml}"
+bot="${CAP_DRIFT_DEPENDABOT:-.github/dependabot.yml}"
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--manifest)
+		manifest="${2:-}"
+		shift 2
+		;;
+	--dependabot)
+		bot="${2:-}"
+		shift 2
+		;;
+	*)
+		echo "usage: cap-drift [--manifest <file>] [--dependabot <file>]" >&2
+		exit 2
+		;;
+	esac
+done
+
+for f in "$manifest" "$bot"; do
+	if [ ! -r "$f" ]; then
+		echo "::error:: cap-drift: cannot read $f — a gate that cannot look must not report agreement" >&2
+		exit 2
+	fi
+done
+
+# Capped crates: a `[workspace.dependencies]` line whose version requirement
+# carries a `<`. Read from the section alone, so a `<` in a comment or in another
+# table cannot mint a phantom cap.
+capped=$(awk '
+	/^\[workspace\.dependencies\]/ { in_deps = 1; next }
+	/^\[/ { in_deps = 0 }
+	in_deps && /^[a-zA-Z0-9_-]+[[:space:]]*=/ {
+		name = $1
+		line = $0
+		if (line ~ /version[[:space:]]*=[[:space:]]*"[^"]*<[^"]*"/ || line ~ /^[a-zA-Z0-9_-]+[[:space:]]*=[[:space:]]*"[^"]*<[^"]*"/) {
+			print name
+		}
+	}
+' "$manifest" | sort -u)
+
+# Ignored crates: `- dependency-name: <crate>` under an `ignore:` block. Scoped
+# to the block so a `dependency-name` under `groups:` or `allow:` is not read as
+# a cap mirror.
+ignored=$(awk '
+	/^[[:space:]]*ignore:[[:space:]]*$/ { in_ignore = 1; next }
+	/^[[:space:]]*[a-z-]+:[[:space:]]*$/ && !/dependency-name/ { if (in_ignore && $0 !~ /^[[:space:]]*-/) in_ignore = 0 }
+	in_ignore && /dependency-name:/ {
+		sub(/.*dependency-name:[[:space:]]*/, "")
+		gsub(/[",]/, "")
+		print $1
+	}
+' "$bot" | sort -u)
+
+violations=0
+report() {
+	echo "::error:: cap-drift: $1" >&2
+	violations=$((violations + 1))
+}
+
+for crate in $capped; do
+	grep -qx -- "$crate" <<<"$ignored" ||
+		report "$crate is capped in $manifest and has no ignore: entry in $bot — the bot will propose a version the manifest refuses, and one unbuildable member reddens the whole grouped batch (CLOUD-344)"
+done
+
+for crate in $ignored; do
+	grep -qx -- "$crate" <<<"$capped" ||
+		report "$crate has an ignore: entry in $bot and no cap in $manifest — the bot withholds a version the manifest admits, so it silently never advances and nothing goes red. This is the half-lift (CLOUD-593)"
+done
+
+if [ "$violations" != 0 ]; then
+	exit 1
+fi
+
+n=0
+[ -n "$capped" ] && n=$(grep -c . <<<"$capped")
+echo "cap-drift: $n MSRV cap(s) in $manifest, each mirrored in $bot"
+exit 0

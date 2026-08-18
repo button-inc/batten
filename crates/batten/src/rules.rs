@@ -2113,16 +2113,15 @@ fn spawn_resolving_on<T>(
     // one `CreateProcess` could not resolve.
     let mut found = None;
     let mut latest = first;
-    if latest.kind() == std::io::ErrorKind::NotFound {
-        if let Some(path) = path.and_then(|path| lookup_on(program, path, extensions)) {
-            if let Some(as_str) = path.to_str() {
-                match spawn(as_str, &[]) {
-                    Ok(ok) => return Ok(ok),
-                    Err(err) => {
-                        found = Some(path.clone());
-                        latest = err;
-                    }
-                }
+    if latest.kind() == std::io::ErrorKind::NotFound
+        && let Some(path) = path.and_then(|path| lookup_on(program, path, extensions))
+        && let Some(as_str) = path.to_str()
+    {
+        match spawn(as_str, &[]) {
+            Ok(ok) => return Ok(ok),
+            Err(err) => {
+                found = Some(path.clone());
+                latest = err;
             }
         }
     }
@@ -2151,18 +2150,16 @@ fn spawn_resolving_on<T>(
             None if as_path.is_absolute() => Some(as_path.to_owned()),
             None => root.map(|root| root.join(program)),
         };
-        if let Some(script) = script {
-            if let Some((interpreter, leading)) = shebang_interpreter(&script)
+        if let Some(script) = script
+            && let Some((interpreter, leading)) = shebang_interpreter(&script)
                 .as_deref()
                 .and_then(<[String]>::split_first)
-            {
-                if let Some(script) = script.to_str() {
-                    let mut extra: Vec<&str> = leading.iter().map(String::as_str).collect();
-                    extra.push(script);
-                    if let Ok(ok) = spawn(interpreter, &extra) {
-                        return Ok(ok);
-                    }
-                }
+            && let Some(script) = script.to_str()
+        {
+            let mut extra: Vec<&str> = leading.iter().map(String::as_str).collect();
+            extra.push(script);
+            if let Ok(ok) = spawn(interpreter, &extra) {
+                return Ok(ok);
             }
         }
     }

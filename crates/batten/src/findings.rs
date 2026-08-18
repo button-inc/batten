@@ -663,7 +663,7 @@ pub fn load_all(store_dir: &Path) -> Result<Vec<FindingRecord>> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
         .filter_map(|path| read_record(&path))
         .collect();
-    found.sort_by(|a, b| a.identity.fingerprint.cmp(&b.identity.fingerprint));
+    found.sort_by_key(|a| a.identity.fingerprint);
     Ok(found)
 }
 

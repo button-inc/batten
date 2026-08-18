@@ -369,7 +369,7 @@ mod tests {
             action("x", "stop", &[]),
             action("x", "stop", &[""]),
         ] {
-            let err = validate(&[bad.clone()]).unwrap_err();
+            let err = validate(std::slice::from_ref(&bad)).unwrap_err();
             assert!(is_usage_error(&err), "{bad:?} is bad input, not a failure");
         }
         validate(&[action("x", "stop", &["true"])]).expect("a well-formed row loads");
