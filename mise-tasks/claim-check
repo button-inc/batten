@@ -97,7 +97,7 @@
 # And the same for the baseline, which is the path that actually answers now
 # (CLOUD-615): drop the body comparison and a Ready block this clone wrote reads
 # as untouched, which is the incident laundered through a container restart.
-#MUTANT claim-ignores-the-body|s/\[ "\$now_hash" != "\$baseline" \]/false/|a body rewritten under this clone is refused even when the stamp is newer
+#MUTANT claim-ignores-the-body|s/\[ "\$now_hash" != "\$baseline" \]/false/|CLOUD-615 REPLAY: a body rewritten under this clone is refused even when the stamp is NEWER
 # The takeover must stay OPT-IN. Unset, the refusal is the answer; a mutation that
 # takes over unconditionally turns every collision into a silent claim, which is
 # the failure this gate exists to prevent.
