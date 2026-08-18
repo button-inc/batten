@@ -561,6 +561,21 @@ because the original counted a thing the rejection guaranteed would stay at zero
 
 Three findings from running it, none inferable and each cheap to repeat:
 
+- **Before calling a red check a base-branch failure, confirm the failing code
+  is on the base.** Measured the hard way: a branch's `windows` job failed on
+  three tests its own one-file diff could not touch, so the failure was reported
+  — on the PR and on the owning issue — as inherited from `main`. It was not.
+  The branch had picked up **eight commits from another bundle** through the
+  landing loop's rebase, and the Windows test job existed **only there**:
+  `git show origin/main:.github/workflows/ci.yml | grep -c windows` returned 1
+  against the branch's 9. One diff of the implicated file between `origin/main`
+  and `HEAD` settles it, and costs nothing. **A clean diff is not a clean
+  branch** — a long-lived branch through a rebase loop can be carrying work
+  nobody attributed to it, and "it fails on `main` too" is the most comfortable
+  wrong answer available precisely when your own change looks innocent. The
+  second cost is larger than the misdiagnosis: landing it would have shipped a
+  `feat` change and a CI workflow as a side effect of a docs commit, so **check
+  the commit list, not just the diff, before landing anything that has lapped.**
 - **A measurement pointed at the wrong tree reports success.** The first
   dependency probe resolved this workspace instead of the throwaway manifest — a
   directory override outranked the `cd` — and exited 0 with a plausible package
