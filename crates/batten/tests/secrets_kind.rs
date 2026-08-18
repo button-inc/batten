@@ -107,6 +107,11 @@ impl Env {
     }
 
     fn config(&self, url: &str, sha: &str) {
+        // A TOML *literal* string for the url, because it carries a filesystem
+        // path: `file://D:\a\batten\...` in a basic string reads `\a` as a
+        // control character and rejects `\U`, so the config fails to parse and
+        // every case here dies on its own fixture rather than on its subject
+        // (CLOUD-113's Windows job). Literal strings process no escapes.
         self.file(
             "batten.toml",
             &format!(
@@ -114,7 +119,7 @@ impl Env {
                  [[provision]]\n\
                  name = \"ripsecrets\"\n\
                  version = \"0.0.0-stub\"\n\
-                 url = \"{url}\"\n\
+                 url = '{url}'\n\
                  sha256 = \"{sha}\"\n\
                  binary = \"ripsecrets\"\n\n\
                  [[rule]]\n\

@@ -371,12 +371,17 @@ fn stub(path: &str, line: usize) -> String {
 /// A config carrying the provisioned stub and a `secrets` rule beside the static
 /// one, so a run produces both classes of record.
 fn secrets_config(url: &str, sha: &str) -> String {
+    // A TOML *literal* string for the url, because it carries a filesystem
+    // path: `file://D:\a\batten\...` in a basic string reads `\a` as a
+    // control character and rejects `\U`, so the config fails to parse and
+    // every case here dies on its own fixture rather than on its subject
+    // (CLOUD-113's Windows job). Literal strings process no escapes.
     format!(
         "{}\n\
          [[provision]]\n\
          name = \"ripsecrets\"\n\
          version = \"0.0.0-stub\"\n\
-         url = \"{url}\"\n\
+         url = '{url}'\n\
          sha256 = \"{sha}\"\n\
          binary = \"ripsecrets\"\n\n\
          [[rule]]\n\
