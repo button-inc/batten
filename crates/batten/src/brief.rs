@@ -330,6 +330,8 @@ pub fn problems(text: &str) -> Report {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     /// A brief satisfying every row of `SCHEMA`, built *from* the schema so the
@@ -338,7 +340,8 @@ mod tests {
         let mut text = String::new();
         for section in SCHEMA {
             let label = section.labels[0];
-            text.push_str(&format!("## {label}\n\nsome prose\n\n"));
+            // Infallible into a String; discarded like `render.rs` does.
+            let _ = write!(text, "## {label}\n\nsome prose\n\n");
             if section.runnable {
                 text.push_str("```\nmise run verify\n```\n\n");
             }

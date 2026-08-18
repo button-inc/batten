@@ -418,9 +418,12 @@ pub fn canonical_repo_path(path: &str) -> anyhow::Result<String> {
 /// Returns a [`UsageError`] for a relative or empty root — the exact refusal
 /// [`canonical_repo_path`] makes for an absolute one.
 pub fn checkout_fingerprint(repo_root: &std::path::Path) -> anyhow::Result<Fingerprint> {
-    let raw = repo_root
-        .to_str()
-        .ok_or_else(|| UsageError::raise(format!("checkout root is not UTF-8: {repo_root:?}")))?;
+    let raw = repo_root.to_str().ok_or_else(|| {
+        UsageError::raise(format!(
+            "checkout root is not UTF-8: {}",
+            repo_root.display()
+        ))
+    })?;
     let slashed = raw.replace('\\', "/");
     // Windows' extended-length prefix is a SPELLING of a path, not a different
     // path, and dropping it belongs to the same rule as dropping a trailing

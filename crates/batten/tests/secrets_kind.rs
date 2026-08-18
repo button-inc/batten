@@ -31,6 +31,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
@@ -198,19 +199,21 @@ fn shell_token(parts: [&str; 5]) -> String {
 /// scanner cannot be asked to contradict itself.
 fn stub(matches: &[(&str, usize, Option<[&str; 5]>)], exit: i32) -> String {
     let mut script = String::from("#!/bin/sh\n");
+    // `writeln!` into a String is infallible; the results are discarded rather
+    // than propagated, as `render.rs` does for the same reason.
     for (index, (path, line, parts)) in matches.iter().enumerate() {
         if let Some(parts) = parts {
-            script.push_str(&format!("T{index}={}\n", shell_token(*parts)));
-            script.push_str(&format!("printf '%s\\n' \"{path}:{line}:$T{index}\"\n"));
+            let _ = writeln!(script, "T{index}={}", shell_token(*parts));
+            let _ = writeln!(script, "printf '%s\\n' \"{path}:{line}:$T{index}\"");
         } else {
             // A shape this build cannot parse, still carrying a token: the
             // hazard is that an unparseable line is one the scanner emitted
             // BECAUSE it found a secret in it.
-            script.push_str(&format!("T{index}={}\n", shell_token(TOKEN_PARTS)));
-            script.push_str(&format!("printf '%s\\n' \"!! unexpected $T{index}\"\n"));
+            let _ = writeln!(script, "T{index}={}", shell_token(TOKEN_PARTS));
+            let _ = writeln!(script, "printf '%s\\n' \"!! unexpected $T{index}\"");
         }
     }
-    script.push_str(&format!("exit {exit}\n"));
+    let _ = writeln!(script, "exit {exit}");
     script
 }
 

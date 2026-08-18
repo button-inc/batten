@@ -61,6 +61,7 @@
 //! "advisory" costs.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 
 use anyhow::Result;
 use schemars::JsonSchema;
@@ -336,7 +337,9 @@ impl Problem {
     pub fn line_text(&self) -> String {
         let mut text = format!("{STREAM}:{} {} claim={}", self.line, self.id, self.claim);
         if let Some(first) = self.first {
-            text.push_str(&format!(" first={STREAM}:{first}"));
+            // `write!` into a String is infallible; the result is discarded
+            // rather than propagated, as `render.rs` does for the same reason.
+            let _ = write!(text, " first={STREAM}:{first}");
         }
         text
     }

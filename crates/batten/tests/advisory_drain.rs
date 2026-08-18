@@ -21,6 +21,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -614,7 +615,8 @@ fn a_session_less_payload_degrades_without_draining_or_failing() {
 fn spread_fixture(name: &str, drain_table: &str, spans: usize) -> (PathBuf, PathBuf) {
     let mut body = String::from("fn main() {}\n");
     for index in 0..spans {
-        body.push_str(&format!("// TODO number {index}\n"));
+        // Infallible into a String; discarded like `render.rs` does.
+        let _ = writeln!(body, "// TODO number {index}");
     }
     marked_fixture(name, drain_table, &body)
 }

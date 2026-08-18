@@ -9,6 +9,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -3243,7 +3244,8 @@ const CENSUS_POSITIONALS: &[(&str, &str)] = &[
 fn census_brief() -> String {
     let mut text = String::new();
     for section in batten::brief::SCHEMA {
-        text.push_str(&format!("## {}\n\ncensus fixture\n\n", section.labels[0]));
+        // Infallible into a String; discarded like `render.rs` does.
+        let _ = write!(text, "## {}\n\ncensus fixture\n\n", section.labels[0]);
         if section.runnable {
             text.push_str("```\nmise run verify\n```\n\n");
         }
