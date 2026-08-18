@@ -149,6 +149,16 @@
 #      file, so it can never be double-covered and its absence is CLOUD-655's
 #      whole subject rather than a drift this property could catch.
 #
+#      AND WHAT IT READS ON THE DEPENDABOT SIDE IS A VERSION-UPDATE LANE, NOT AN
+#      ENTRY (CLOUD-658). `cargo` survives there at `open-pull-requests-limit: 0`
+#      — GitHub's shape for "security updates only" — because Dependabot security
+#      updates are a repository SETTING that keeps running with or without the
+#      file, and without it they revert to a `Bump X from A to B` subject
+#      `commit-lint` rejects. So the shim is not a second updater and must not
+#      read as one; equally, raising that number puts the ecosystem under two
+#      bots again, which is the same refusal from the other side. One predicate
+#      covers both, which is why there is no separate assertion about the shim.
+#
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
 # release workflow is not on the landing path and they do not apply to it. 8, 9,
 # 10, 11 and 12 are the exceptions — a workflow racing itself, colliding with its
@@ -636,11 +646,31 @@ else
 			inlist && index($0, "]") { exit }
 			END { sub(/^[^[]*\[/, "", buf); sub(/\].*$/, "", buf); gsub(/["\x27[:space:]]/, "", buf); print buf }
 		' <<<"$renovate_body" | tr ',' '\n' | sed '/^$/d' | sort -u)
-		dependabot_ecos=$(sed 's/[[:space:]]*#.*$//' "$dependabot" |
-			awk '/^[[:space:]]*-[[:space:]]*package-ecosystem:/ {
-				sub(/^[^:]*:[[:space:]]*/, ""); gsub(/["\x27]/, ""); sub(/[[:space:]]+$/, "")
-				if ($0 != "") print
-			}' | sort -u)
+		# A VERSION-UPDATE lane, not merely an entry (CLOUD-658). `cargo` survives
+		# in `.github/dependabot.yml` at `open-pull-requests-limit: 0` — GitHub's
+		# documented shape for "security updates only" — because Dependabot
+		# security updates are a repository setting that keeps running whether or
+		# not the file exists, and without the file they revert to a `Bump X from
+		# A to B` subject `commit-lint` rejects. That shim is not a second
+		# updater, so reading it as one would refuse the correct tree.
+		#
+		# An entry with any OTHER limit, or with none at all, counts: the missing
+		# key is already property 12's refusal, and counting it here too fails in
+		# the safe direction rather than exempting an entry nobody bounded.
+		dependabot_ecos=$(sed 's/[[:space:]]*#.*$//' "$dependabot" | awk '
+			function flush() {
+				if (eco != "" && !silenced) print eco
+			}
+			/^[[:space:]]*-[[:space:]]*package-ecosystem:/ {
+				flush()
+				eco = $0
+				sub(/^[^:]*:[[:space:]]*/, "", eco); gsub(/["\x27]/, "", eco); sub(/[[:space:]]+$/, "", eco)
+				silenced = 0
+				next
+			}
+			/^[[:space:]]*open-pull-requests-limit:[[:space:]]*0[[:space:]]*$/ { silenced = 1 }
+			END { flush() }
+		' | sort -u)
 		# Hand-maintained, and named here rather than derived: see the header for
 		# why an absence is only answerable against a closed set.
 		for eco in cargo github-actions; do
@@ -651,9 +681,9 @@ else
 			# Pointer-only: the ecosystem name and the two file names. Never an
 			# entry's body, which carries version ranges and package names.
 			if [ "$in_renovate" = 1 ] && [ "$in_dependabot" = 1 ]; then
-				problem "$eco is declared in BOTH $renovate and $dependabot — two bots proposing the same updates doubles the lane and every PR it opens. Remove it from one, in the commit that adds it to the other (CLOUD-657)."
+				problem "$eco runs version updates in BOTH $renovate and $dependabot — two bots proposing the same updates doubles the lane and every PR it opens. Remove it from one in the commit that adds it to the other, or, if the Dependabot entry is meant to be the security-only shim, set its \`open-pull-requests-limit: 0\` (CLOUD-657, CLOUD-658)."
 			elif [ "$in_renovate" = 0 ] && [ "$in_dependabot" = 0 ]; then
-				problem "$eco is declared in NEITHER $renovate nor $dependabot — that ecosystem is unmaintained, and nothing else is red about it. A handover removes it from one config in the same commit that adds it to the other (CLOUD-657)."
+				problem "$eco runs version updates in NEITHER $renovate nor $dependabot — that ecosystem is unmaintained, and nothing else is red about it. A handover removes it from one config in the same commit that adds it to the other; a Dependabot entry left at \`open-pull-requests-limit: 0\` is a security shim and does not count (CLOUD-657, CLOUD-658)."
 			fi
 		done
 	fi

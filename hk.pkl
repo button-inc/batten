@@ -64,7 +64,7 @@ local gate = new Mapping<String, Step> {
   // pin sat stale, because the two numbers agreed. Agreeing on a stale number is
   // what it was built to confirm.
   ["msrv-pin-agreement"] {
-    glob = List("Cargo.toml", "mise.toml")
+    glob = List("Cargo.toml", "mise.toml", "renovate.json5")
     check = "mise run msrv-pin-agreement"
   }
   // An MSRV cap lives in two files — the manifest bound and the dependabot

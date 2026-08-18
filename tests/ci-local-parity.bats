@@ -606,7 +606,12 @@ dependabot() {
 		yes) printf '    rebase-strategy: disabled\n' ;;
 		wrong) printf '    rebase-strategy: auto\n' ;;
 		esac
-		[ "$limit" = yes ] && printf '    open-pull-requests-limit: 1\n'
+		case "$limit" in
+		yes) printf '    open-pull-requests-limit: 1\n' ;;
+		# `zero` is the security-only shim CLOUD-658 leaves behind: property 12
+		# still sees the key, property 14 must not see a version-update lane.
+		zero) printf '    open-pull-requests-limit: 0\n' ;;
+		esac
 		printf '    # a comment inside the entry, as the real file carries\n'
 		printf '    ignore:\n      - dependency-name: ignore\n        versions: [">= 0.4.30"]\n'
 		if [ "$second" != none ]; then
@@ -782,8 +787,8 @@ renovate() {
 	renovate yes yes yes yes '"mise", "github-actions"'
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"github-actions is declared in BOTH"* ]]
-	[[ "$output" != *"cargo is declared in BOTH"* ]]
+	[[ "$output" == *"github-actions runs version updates in BOTH"* ]]
+	[[ "$output" != *"cargo runs version updates in BOTH"* ]]
 }
 
 @test "an ecosystem declared in neither config is refused, and named" {
@@ -793,7 +798,7 @@ renovate() {
 	dependabot cargo yes yes yes yes none
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"github-actions is declared in NEITHER"* ]]
+	[[ "$output" == *"github-actions runs version updates in NEITHER"* ]]
 }
 
 @test "a manager list broken across lines reads the same as one on a single line" {
@@ -806,13 +811,58 @@ renovate() {
 	[ "$status" -eq 0 ]
 }
 
+@test "a dependabot entry at open-pull-requests-limit: 0 is a security shim, not a second lane" {
+	# CLOUD-658's landing state: `cargo` version updates belong to Renovate, and
+	# the Dependabot entry survives only to give a SECURITY PR a subject
+	# commit-lint accepts. Reading that shim as a second updater would refuse the
+	# correct tree.
+	workflow ci
+	dependabot cargo yes zero yes yes none
+	renovate yes yes yes yes '"mise", "cargo", "github-actions"'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the shim raising its limit is a second version-update lane, and is refused" {
+	# The direction that matters: nothing else would go red, and `cargo` would
+	# quietly be proposed by two bots at once.
+	workflow ci
+	dependabot cargo yes yes yes yes none
+	renovate yes yes yes yes '"mise", "cargo", "github-actions"'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"cargo runs version updates in BOTH"* ]]
+}
+
+@test "a dependabot entry with no limit at all counts as a lane — fail closed" {
+	# The missing key is already property 12's refusal; counting it here too fails
+	# in the safe direction rather than exempting an entry nobody bounded.
+	workflow ci
+	dependabot cargo yes no yes yes none
+	renovate yes yes yes yes '"mise", "cargo", "github-actions"'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"cargo runs version updates in BOTH"* ]]
+}
+
+@test "an ecosystem left only as a shim, and owned by neither bot, is refused" {
+	# A shim is not coverage: if Renovate never gained the manager, silencing the
+	# Dependabot entry leaves the ecosystem unmaintained with nothing else red.
+	workflow ci
+	dependabot cargo yes zero yes yes none
+	renovate yes yes yes yes '"mise", "github-actions"'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"cargo runs version updates in NEITHER"* ]]
+}
+
 @test "mise is not judged by property 14 — no dependabot ecosystem can read that file" {
 	# It can never be double-covered, and its absence from dependabot.yml is
 	# CLOUD-655's whole subject rather than a drift this property could catch.
 	workflow ci
 	run "$GATE"
 	[ "$status" -eq 0 ]
-	[[ "$output" != *"mise is declared in NEITHER"* ]]
+	[[ "$output" != *"mise runs version updates in NEITHER"* ]]
 }
 
 # --- property 11: reading check status means deciding through checks-green ----

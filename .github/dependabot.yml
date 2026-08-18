@@ -1,58 +1,48 @@
 version: 2
 
-# Grouped, unhurried dependency updates. A 7-day cooldown lets churny releases
-# settle before a PR opens. Keep updates MSRV-compatible rather than forcing an
-# MSRV bump.
+# THIS FILE IS A SHIM NOW, AND IT HAS EXACTLY ONE JOB (CLOUD-658): give a
+# Dependabot SECURITY pull request a subject `commit-lint` will accept. Every
+# version-update lane it used to run has been handed to Renovate — `mise.toml`,
+# which Dependabot has no `package-ecosystem` for at any setting (CLOUD-655);
+# `github-actions` (CLOUD-657); and `cargo`, in this commit. What remains is one
+# entry at `open-pull-requests-limit: 0`, which is GitHub's documented shape for
+# "security updates only".
 #
-# THIS FILE IS BEING EMPTIED, ONE ECOSYSTEM AT A TIME (CLOUD-656). Dependabot has
-# no `package-ecosystem` that can read `mise.toml` at any setting, so Renovate was
-# adopted for that table (CLOUD-655) and the ecosystems both bots can serve then
-# follow it: `github-actions` has already gone (CLOUD-657, see below), `cargo` is
-# CLOUD-658. What is written here is what Dependabot still owns, and
-# `ci-local-parity`'s property 14 is what decides that — an ecosystem covered by
-# both bots or by neither fails the gate.
+# WHY THE FILE SURVIVES AT ALL, since it now proposes no version bump. Dependabot
+# security updates are a REPOSITORY SETTING and keep running whether or not this
+# file exists. Without it they revert to the default `Bump X from A to B`
+# subject, which carries no type prefix, fails the commit-lint gate
+# (CONVENTIONAL_RE in mise.toml), and could therefore never land — every commit
+# here lands by fast-forward through that gate. `commit-message.prefix` is the
+# whole remaining mechanism.
 #
-# Every commit in this repo must be Conventional Commits (the commit-lint gate,
-# CONVENTIONAL_RE in mise.toml) because PRs land by fast-forward. Dependabot's
-# default "Bump X from A to B" subject has no type prefix and would fail that
-# gate — so a bot PR could never land. The commit-message.prefix setting below
-# makes Dependabot emit "build(deps): ..." so its PRs pass commit-lint and are
-# fast-forwardable like any other.
+# Deleting it is a different and more dangerous act than emptying it, which is
+# why it is a different issue: CLOUD-659 proves Renovate's vulnerability lane
+# actually opens a PR that lands, and only then does CLOUD-660 switch Dependabot
+# off and delete this file.
 #
-# AND NOTHING HERE CAN OPEN A DRAFT, WHICH IS WHY THE TWO KEYS BELOW EXIST
-# (CLOUD-596). Every `pull_request` workflow gates on `draft == false`, so every
-# other lane iterates free until it is deliberately readied; release-plz has
-# `pr_draft` and `ci-local-parity` property 4 senses it. Dependabot's schema has no
-# equivalent, so every head it proposes opens Ready and buys a full matrix on
-# arrival — measured over `dependabot/*` since 2026-08-06: 13 `ci.yml` runs, 13
-# `commit-lint`, 3 `zizmor`, and not one skip among them.
-#
-# The cost is the churn, not the schedule. On this weekly interval the cargo group
-# PR was superseded five times in seventeen hours — each recreation a fresh Ready
-# head buying a fresh full matrix, each earlier one closed unlanded, and one of
-# them taking three `ci.yml` runs by itself. `rebase-strategy: disabled` is the
-# lever: the default force-pushes a rebase whenever the base moves, and on a Ready
-# PR each force-push is a `synchronize` and another matrix. With rebasing off a
-# stale PR could instead be joined by a sibling proposing the same group, doubling
-# the floor, so `open-pull-requests-limit: 1` bounds the lane to one open PR per
-# ecosystem. `auto-dependabot-land.yml` asks for the one rebase deliberately, when
-# a green head is no longer a fast-forward.
-#
-# What this does NOT buy: the floor is one full matrix per SHA Dependabot proposes.
-# It removes the repeated ones, not the first.
+# `ci-local-parity`'s property 14 is what keeps the shim a shim. It reads an
+# entry with a non-zero limit as a VERSION-UPDATE lane, so raising the number
+# below puts `cargo` under two bots at once and reds the gate — the shim cannot
+# quietly become a second updater.
 updates:
   - package-ecosystem: cargo
     directory: "/"
+    # Zero is the whole shim: no version-update PR is ever opened, and security
+    # PRs are unaffected because they do not come from this file.
+    open-pull-requests-limit: 0
+    # Kept although nothing here proposes a version any more. `rebase-strategy`
+    # governs any PR on a `dependabot/*` head, security ones included, and the
+    # default force-pushes a rebase on every base move — which on a Ready head is
+    # a `synchronize` and another full matrix (CLOUD-596). A security PR is
+    # exactly the head we least want re-proposed while someone reviews it.
     rebase-strategy: disabled
-    open-pull-requests-limit: 1
     schedule:
       interval: weekly
-    cooldown:
-      default-days: 7
     commit-message:
       prefix: "build(deps)"
       prefix-development: "build(deps-dev)"
-    # No `ignore:` entries, and their absence is now gated rather than incidental.
+    # No `ignore:` entries, and their absence is gated rather than incidental.
     # Two crates were listed here to mirror MSRV caps in Cargo.toml — the bot
     # cannot read a cap, so proposing them asked a question the manifest had
     # already answered, and one unbuildable member reddened the whole grouped
@@ -61,21 +51,15 @@ updates:
     # files equal in BOTH directions, which is the half-lift this pair could
     # otherwise land silently: lifting the manifest cap alone leaves the bot
     # withholding a crate the manifest now admits, and nothing goes red.
-    groups:
-      cargo:
-        patterns: ["*"]
 
-# THE `github-actions` ENTRY IS GONE, AND IT WENT TO RENOVATE (CLOUD-657). It is
-# declared in `renovate.json5`'s `enabledManagers` as of the same commit that
-# deleted it here, so no revision of this tree has that ecosystem covered by two
-# bots or by none — and `ci-local-parity`'s property 14 decides that rather than
-# trusting this comment, in both directions.
-#
-# It moved first for being boring: `github-actions` touches no manifest encoding
-# the MSRV floor, so the handover procedure got proven on the one lane where the
-# only thing that can go wrong is the handover itself. What the move buys is the
-# floor the header above records and could not remove — Renovate's `draftPR`
-# opens every head as a draft, and every `pull_request` workflow here gates on
-# `draft == false`, so the "one full matrix per SHA the bot proposes" that
-# CLOUD-596 measured on THIS lane goes to zero. Grouping and the 7-day cooldown
-# crossed with it, as `groupName: "actions"` and `minimumReleaseAge`.
+# WHAT THE MOVED LANES TOOK WITH THEM, so nothing reads as dropped. Grouping
+# (`groups: cargo/actions: patterns: ["*"]`) is `groupName` in
+# `renovate.json5`'s `packageRules`; the 7-day cooldown is `minimumReleaseAge`;
+# `open-pull-requests-limit: 1` is `prConcurrentLimit`; `rebase-strategy:
+# disabled` is `rebaseWhen: "never"`. And one thing arrives that could not be
+# bought here at any price: `draftPR`. Dependabot's schema has no draft knob, so
+# every head it proposed opened Ready and bought a full matrix on arrival —
+# measured over `dependabot/*` since 2026-08-06 at 13 `ci.yml` runs, 13
+# `commit-lint`, 3 `zizmor`, and not one skip among them (CLOUD-596). Every
+# `pull_request` workflow here gates on `draft == false`, so that floor is now
+# zero.

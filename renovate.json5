@@ -31,18 +31,33 @@
 
   // THE SCOPE FENCE, and it is load-bearing rather than tidy. `config:recommended`
   // enables every manager Renovate ships with, which would silently make this a
-  // SECOND updater for `cargo`, which Dependabot still owns at this commit.
-  // `enabledManagers` is an allowlist, so what is named here is the whole of
-  // what this bot touches, and `ci-local-parity`'s property 14 decides the
-  // disjointness rather than trusting this comment.
+  // SECOND updater for something Dependabot already covers. `enabledManagers` is
+  // an allowlist, so what is named here is the whole of what this bot touches,
+  // and `ci-local-parity`'s property 14 decides the disjointness rather than
+  // trusting this comment.
   //
-  // `github-actions` joined in CLOUD-657 — in the SAME commit that removed it
-  // from `.github/dependabot.yml`, so no revision of the tree has that ecosystem
-  // covered twice or not at all. It went first for being boring: it touches no
-  // manifest encoding the MSRV floor, so the handover procedure got proven on
-  // the one lane where the only thing that can go wrong is the handover.
-  // CLOUD-658 adds `cargo` on the same terms.
-  enabledManagers: ["mise", "github-actions"],
+  // Each name arrived in the SAME commit that took the ecosystem out of
+  // `.github/dependabot.yml`'s version-update lane, so no revision of the tree
+  // has one covered twice or not at all: `github-actions` in CLOUD-657, which
+  // went first for touching no manifest that encodes the MSRV floor, and `cargo`
+  // in CLOUD-658, which is the lane that does.
+  enabledManagers: ["mise", "github-actions", "cargo"],
+
+  // THE THIRD COPY OF THE FLOOR, AND IT IS GATED (CLOUD-658). Dependabot's cargo
+  // updater reads `rust-version` from the manifest natively; Renovate's does not
+  // (`renovatebot/renovate#26314`, open, no implementation), so the number has to
+  // be written here by hand for MSRV-aware resolution to survive the handover.
+  //
+  // A copy is not the defect — an UNGATED copy is. CLOUD-593 already put the
+  // floor in two files and shipped `msrv-pin-agreement` to hold them equal, so
+  // this is one more path in the same check rather than a new hazard:
+  // `mise.toml [tools] rust` is the authority, and `Cargo.toml`'s `rust-version`
+  // and this value are both derived copies that must agree with it. Major.minor,
+  // because that is what `rust-version` carries.
+  //
+  // Raise the pin, then run `mise run msrv-pin-agreement`, which names every file
+  // that disagrees.
+  constraints: { rust: "1.97" },
 
   // --- the four keys `ci-local-parity` holds ---------------------------------
   //
@@ -89,6 +104,15 @@
       // one at a time behind each other rather than merely being noisy.
       matchManagers: ["github-actions"],
       groupName: "actions",
+    },
+    {
+      // The same, for `groups: cargo: patterns: ["*"]` (CLOUD-658). CLOUD-344's
+      // finding travels with it and is not repaired by the move: a grouped batch
+      // is all-or-nothing, so one member that will not build holds the whole
+      // set. What changes is where that is discovered — on a draft PR that
+      // bought no matrix, rather than on a Ready head that bought one.
+      matchManagers: ["cargo"],
+      groupName: "cargo",
     },
   ],
 }

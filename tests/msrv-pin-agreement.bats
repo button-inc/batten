@@ -16,11 +16,19 @@ setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/msrv-pin-agreement"
 	MANIFEST="$BATS_TEST_TMPDIR/Cargo.toml"
 	TOOLS="$BATS_TEST_TMPDIR/mise.toml"
+	RENOVATE="$BATS_TEST_TMPDIR/renovate.json5"
+	# The third path (CLOUD-658) is written by default, for the reason the fixture
+	# pairs above are: every row not about it must satisfy it, so only its own
+	# rows overwrite this.
+	renovate 1.97
 }
 
 manifest() { printf '[workspace.package]\nrust-version = "%s"\n' "$1" >"$MANIFEST"; }
 tools() { printf '[tools]\nrust = { version = "%s", components = "rustfmt,clippy" }\n' "$1" >"$TOOLS"; }
-gate() { "$GATE" --manifest "$MANIFEST" --tools "$TOOLS"; }
+renovate() {
+	printf '{\n  $schema: "https://docs.renovatebot.com/renovate-schema.json",\n  enabledManagers: ["mise", "cargo"],\n  constraints: { rust: "%s" },\n}\n' "$1" >"$RENOVATE"
+}
+gate() { "$GATE" --manifest "$MANIFEST" --tools "$TOOLS" --renovate "$RENOVATE"; }
 
 @test "the floor and the pin agreeing passes" {
 	manifest 1.97
@@ -92,13 +100,89 @@ gate() { "$GATE" --manifest "$MANIFEST" --tools "$TOOLS"; }
 
 @test "an unreadable file is exit 2 — a gate that cannot look must not report agreement" {
 	manifest 1.97
-	run "$GATE" --manifest "$MANIFEST" --tools "$BATS_TEST_TMPDIR/absent.toml"
+	run "$GATE" --manifest "$MANIFEST" --tools "$BATS_TEST_TMPDIR/absent.toml" --renovate "$RENOVATE"
+	[ "$status" -eq 2 ]
+}
+
+# --- the third path: Renovate's hand-written constraint (CLOUD-658) -----------
+#
+# Renovate's cargo updater does not read `rust-version` (renovatebot/renovate
+# #26314, open), so handing `cargo` to it means writing the floor a third time.
+# CLOUD-593's argument is what makes that safe: a copy is not the defect, an
+# UNGATED copy is. These rows are the gate.
+
+@test "all three agreeing passes" {
+	manifest 1.97
+	tools 1.97.1
+	renovate 1.97
+	run gate
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"constraints.rust"* ]]
+}
+
+@test "a Renovate constraint naming a different compiler is refused" {
+	# The row the third path exists for: the manifest and the pin agree, so every
+	# check that predates CLOUD-658 is green, and MSRV-aware resolution is
+	# nonetheless pinned to a compiler this repo stopped building with.
+	manifest 1.97
+	tools 1.97.1
+	renovate 1.85
+	run gate
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"1.85"* ]]
+	[[ "$output" == *"1.97.1"* ]]
+}
+
+@test "a constraint ahead of the pin is refused too — equality, not a bound" {
+	manifest 1.97
+	tools 1.97.1
+	renovate 1.99
+	run gate
+	[ "$status" -eq 1 ]
+}
+
+@test "a patch component in the constraint is agreement, not drift" {
+	# Same reasoning as the manifest row: the comparison is major.minor.
+	manifest 1.97
+	tools 1.97.1
+	renovate 1.97.4
+	run gate
+	[ "$status" -eq 0 ]
+}
+
+@test "a rust key outside the constraints block cannot answer for it" {
+	# The Renovate config discusses the pin at length in its comments, and names
+	# other `rust`-ish keys nowhere else. Reading the file at large would let a
+	# comment satisfy the gate, which is satisfying it by deleting the value.
+	manifest 1.97
+	tools 1.97.1
+	printf '{\n  // constraints: { rust: "1.97" } was here once\n  enabledManagers: ["cargo"],\n  packageRules: [{ matchManagers: ["cargo"], rust: "1.97" }],\n}\n' >"$RENOVATE"
+	run gate
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"no constraints.rust"* ]]
+}
+
+@test "a missing constraints.rust is exit 2, never a silent pass" {
+	# An absent constraint is MSRV-aware resolution switched off, not a neutral
+	# omission — Renovate has nothing else to read it from.
+	manifest 1.97
+	tools 1.97.1
+	printf '{\n  enabledManagers: ["mise", "cargo"],\n}\n' >"$RENOVATE"
+	run gate
+	[ "$status" -eq 2 ]
+}
+
+@test "an unreadable renovate config is exit 2 on the same terms as the other two" {
+	manifest 1.97
+	tools 1.97.1
+	run "$GATE" --manifest "$MANIFEST" --tools "$TOOLS" --renovate "$BATS_TEST_TMPDIR/absent.json5"
 	[ "$status" -eq 2 ]
 }
 
 @test "the real tree agrees" {
 	# The one row that reads the committed files. It is the acceptance criterion
-	# stated as a test: whatever the pin is, the floor tracks it.
-	run "$GATE" --manifest "$BATS_TEST_DIRNAME/../Cargo.toml" --tools "$BATS_TEST_DIRNAME/../mise.toml"
+	# stated as a test: whatever the pin is, both derived copies track it.
+	run "$GATE" --manifest "$BATS_TEST_DIRNAME/../Cargo.toml" --tools "$BATS_TEST_DIRNAME/../mise.toml" \
+		--renovate "$BATS_TEST_DIRNAME/../renovate.json5"
 	[ "$status" -eq 0 ]
 }
