@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.80](https://github.com/button-inc/batten/compare/v0.0.79...v0.0.80) - 2026-08-18
+
+### Added
+
+- *(rules)* run a shebang program through its interpreter
+
+### Fixed
+
+- *(gates)* keep the PATH audit's own fixtures inside the gates it runs beside
+- *(tests)* compose the judge fixture's PATH with join_paths, not an interpolated colon
+- *(spawn)* read an absolute program's shebang from the program itself
+- *(spawn)* one resolution ladder for every kind that spawns a program
+- *(doctor)* probe PATH the way the spawn does, not with a second answer
+- *(rules)* look up a program under PATHEXT, not only its bare name
+- *(rules)* find a program PATH holds under a bare, extensionless name
+- *(secrets)* resolve a shebang scanner the way command rules do
+- *(identity)* one checkout, one fingerprint, however the path is spelled
+
+### Other
+
+- *(harness)* route every suite's state isolation through one helper
+- *(gates)* a path-valued TOML key is interpolated as a literal string, and a gate says so
+- *(gates)* a state-dir override must be mirrored for Windows, or it isolates nothing
+- *(tests)* interpolate the provisioned url as a TOML literal string
+- *(doctor)* interpolate the script path as a TOML literal string
+- *(cli)* name the cause when a committed-config case fails
+- *(harness)* mirror every XDG_DATA_HOME with APPDATA
+- *(harness)* isolate the capability-table hook helper too
+- *(harness)* point the state root at the fixture on every platform
+- *(gates)* bound the source-introspection slice instead of widening it
+
 ## [0.0.79](https://github.com/button-inc/batten/compare/v0.0.78...v0.0.79) - 2026-08-17
 
 ### Added
