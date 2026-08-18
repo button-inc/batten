@@ -19,11 +19,16 @@
 // than trusting the comment: an ecosystem covered by both bots, or by neither,
 // fails the gate.
 //
-// THIS LANE PROPOSES NOTHING UNTIL SOMEONE INSTALLS RENOVATE. The config is
-// inert without the Renovate GitHub App on the `button-inc` org (or Renovate
-// self-hosted as a scheduled Actions run with a token that can open PRs). That
-// is an owner action and deliberately not a code change; the config and its gate
-// land regardless, so the day the app arrives there is nothing left to write.
+// THE APP IS INSTALLED; THE LANE IS SET TO SILENT. Observed on the Mend
+// dashboard for `button-inc/batten` 2026-08-17: Renovate 44.29.5, Community
+// (Free) plan, a job already queued against this repo — so Renovate runs and
+// reads this file. What it will not do is open anything: Repo Engine Settings
+// has `Dependency Updates (Renovate): Silent`, which computes updates and
+// creates no pull requests or issues.
+//
+// So the remaining owner action is a SETTING, not an install: take that lane off
+// Silent. Everything below is what it will do the moment someone does, and the
+// gates hold the config to it in the meantime.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
 
