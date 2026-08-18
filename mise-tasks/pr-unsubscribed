@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+#MISE description="Gate: this session has dropped the PR's webhook subscription (records unsubscribe_pr_activity's answer, then decides) — CLOUD-518"
+#
+# CLOUD-518. AGENTS.md bans PR-webhook babysitting twice over — `land` drives the
+# landing loop "no timeout, no cap, **never the PR webhook**", and no heartbeat
+# may babysit a PR — and the harness arms a subscription on every PR this repo
+# opens anyway. Measured on #397, #402 and #489, three occurrences in five days,
+# and on two of them a `subscription.created` arrived seconds after the PR existed
+# with **no `subscribe_pr_activity` call behind it**. So a `permissions.deny` row
+# on the tool is a placebo: it closes only the path nobody used. What the repo had
+# instead was prose telling an agent to remember, which is feedforward only and
+# exactly the half-change non-negotiable rule 2 refuses. It was missed once and
+# caught by hand twice in a single session, and the human noticed by reading pages
+# of raw `<wake …>` envelopes.
+#
+# WHAT THE STREAM COSTS, measured on #489: ~two dozen wakes in 13 minutes carrying
+# ONE CI verdict. A review bot re-delivers its entire walkthrough comment on every
+# edit, so the price per event is the size of the largest comment on the PR.
+#
+# THE ACTOR DESIGN IS BLOCKED, AND THIS IS NOT IT (CLOUD-673). The obvious
+# mechanism is for `land` to make the call itself: `unsubscribe_pr_activity` is a
+# tool on the session's toolbox MCP server, an `http` endpoint under
+# `/v2/ccr-sessions/` carrying no bearer token, so a JSON-RPC `tools/call` looks
+# like a plain POST a task could make. It cannot. Measured 2026-08-18, that POST
+# is answered `401 authentication required` — at the toolbox endpoint and at the
+# `github` one, with the injected config's own header values, and identically when
+# forced through `$HTTPS_PROXY`. `no_proxy` carries `anthropic.com`, so requests to
+# that host bypass the agent proxy entirely and nothing injects a credential; the
+# two headers are routing identifiers, not authorization. A first cut of this
+# change shipped that POST anyway, behind a fail-open, and it removed exactly zero
+# subscriptions while its suite stayed green against a stubbed `curl` — a mechanism
+# that reads as coverage and is not, which is CLOUD-418's defect rebuilt by hand.
+#
+# SO THIS IS `claim-check`'s INVERSION, borrowed wholesale from
+# `issue-search-check` which borrowed it first: **the agent can do what the task
+# cannot.** The session's own tool call succeeds — that is how #397, #402 and #489
+# were each remedied — so the agent unsubscribes, this records that it happened
+# for THIS pull request in THIS session, and `land` refuses to spend a runner
+# until the record exists. The rule stops being prose and becomes an exit code,
+# without pretending to an effect nothing here can produce.
+#
+# THE HONEST LIMIT, stated because it will occur to every reader: this proves the
+# CALL WAS MADE for this PR, not that GitHub's subscription state is now empty.
+# Only the API can answer the latter and reaching it is CLOUD-673. The claim
+# receipt has the identical property — it attests that a read happened, not that
+# it was understood — and that was accepted there deliberately. The threat model
+# is honest error, not fabrication (AGENTS.md): an agent that pastes invented text
+# defeats this, and is outside it. What the gate forces is the ACTION, and the
+# action is the whole failure mode.
+#
+# WHY IT FAILS OPEN OFF-HARNESS, and why that is the design rather than a caveat.
+# No injected client config means no session, therefore no subscription, therefore
+# nothing to drop — a local CLI clone, a CI runner, a maintainer's laptop. A gate
+# that cannot look must never become a gate that blocks everything
+# (`mem:workflow/landing-loop`), and here "cannot look" and "nothing to look at"
+# are the same reading. The config is consulted for PRESENCE only; that needs no
+# credential, which is the one thing this can still do with it.
+#
+# Keyed by SESSION and PR, not by branch. A subscription belongs to a
+# (session, pull request) pair — the harness arms one per PR and delivers it to
+# one session — so a receipt from a previous container attests to nothing about
+# this one, and a receipt for #489 attests to nothing about #490. Both halves are
+# in the filename, and the session half is why a fresh clone correctly refuses.
+#
+# Usage:
+#   mise run pr-unsubscribed record <pr>   # unsubscribe_pr_activity's answer on stdin
+#   mise run pr-unsubscribed check <pr>
+#
+# Exit 0 dropped (or nothing to drop) / 1 not dropped / 2 could not look —
+# matching `claim-check` so these compose in one pipeline.
+#
+# Output is pointer-only per non-negotiable rule 4: the PR number, and a digest of
+# the answer. Never the answer itself, and never an event body — reprinting one
+# here would emit the very payload the stream is being cut to stop. The receipt
+# obeys the same rule, so a human debugging a refusal reads a hash, not a message.
+#
+# The mutation makes `check` pass with no receipt, which is the whole gate: with it
+# gone a session that never unsubscribed lands exactly as before and only prose
+# objects.
+#MUTANT check-always-passes|s/^\tif ! receipt_present "\$pr"; then$/\tif false; then/|a PR this session never unsubscribed is refused
+# And `record` must bind the answer to THIS pull request. Without it yesterday's
+# answer, or another PR's, mints today's receipt — the honest-error case this is
+# built for rather than a hypothetical.
+#MUTANT record-ignores-the-pr|s/^if ! answer_names_pr; then$/if false; then/|an answer that does not name this PR is refused
+# And the off-harness path must stay OPEN. A mutation that refuses where there is
+# no session turns a nuisance into a wedge on every clone that never had a
+# subscription — the fail-closed inversion the landing loop's gates all refuse.
+#MUTANT off-harness-blocks|s/^\tif \[ -z "\$session" \]; then$/\tif false; then/|a clone with no session has nothing to drop
+set -uo pipefail
+
+fail_input() {
+	echo "::error:: pr-unsubscribed: $*" >&2
+	exit 2
+}
+
+verb="${1:-}"
+pr="${2:-}"
+
+case "$verb" in
+record | check) ;;
+*) fail_input "usage: pr-unsubscribed record|check <pr>" ;;
+esac
+
+case "$pr" in
+'' | *[!0-9]*) fail_input "\"$pr\" is not a pull request number" ;;
+esac
+
+git_dir=$(git rev-parse --git-dir 2>/dev/null) ||
+	fail_input "not a git repository — cannot read or write a receipt"
+
+# THE SESSION, BY PRESENCE OF THE INJECTED CONFIG. The directory is overridable so
+# the suite can supply one without ever reading a real session's, and the FILENAME
+# shape is the anchor — CLOUD-191's endpoint-anchoring pattern, reduced to the one
+# question that needs no credential: is there a session here at all.
+#
+# Returns non-zero when there is none, which both verbs read as "nothing to drop".
+session_id() {
+	local candidate base session=
+	for candidate in "${BATTEN_MCP_CONFIG_DIR:-/tmp}"/mcp-config-cse_*.json; do
+		[ -f "$candidate" ] || continue
+		base=${candidate##*/}
+		base=${base#mcp-config-}
+		session=${base%.json}
+	done
+	if [ -z "$session" ]; then
+		return 1
+	fi
+	printf '%s' "$session"
+}
+
+receipt_path() {
+	printf '%s' "$git_dir/batten-receipts/pr-unsubscribed.$1.$2"
+}
+
+# Present for THIS session and THIS pr. A session that cannot be identified has no
+# subscription to have dropped, so the absence of one is not a missing receipt.
+receipt_present() {
+	local session
+	session=$(session_id) || return 0
+	[ -f "$(receipt_path "$session" "$1")" ]
+}
+
+if [ "$verb" = check ]; then
+	# The two passing readings are DIFFERENT FACTS and must not share a sentence.
+	# "Nothing to drop here" is not "this was dropped", and a gate that reports the
+	# second when it means the first is a false completion signal in miniature.
+	if ! checked_session=$(session_id); then
+		echo "pr-unsubscribed: no injected client config, so this clone has no session and no webhook subscription on #$pr"
+		exit 0
+	fi
+	if ! receipt_present "$pr"; then
+		echo "::error:: pr-unsubscribed: #$pr carries no unsubscribe receipt for this session. The harness arms a webhook subscription on every PR this repo opens and AGENTS.md forbids babysitting one, so this must be dropped before a runner is spent. Do: call \`unsubscribe_pr_activity\` for this PR, then pipe its answer to \`mise run pr-unsubscribed record $pr\`." >&2
+		exit 1
+	fi
+	echo "pr-unsubscribed: #$pr — session $checked_session has dropped its webhook subscription"
+	exit 0
+fi
+
+# --- record ------------------------------------------------------------------
+
+session=$(session_id) || session=
+# A `record` off-harness is a caller doing the right thing in a place where there
+# was nothing to do. Silent success, for the same reason `check` passes there: a
+# gate that scolds the honest case teaches its own bypass.
+[ -n "$session" ] || {
+	echo "pr-unsubscribed: no injected client config, so this clone has no session and no subscription — nothing to record for #$pr"
+	exit 0
+}
+
+# THE ANSWER MUST NAME THIS PULL REQUEST, as a named predicate so the mutation
+# that removes it is a one-line substitution carrying no pipe. The declaration
+# grammar is three pipe-separated fields, so a script containing one is parsed as a
+# fourth and truncated — measured on this file: three rows came back
+# `unappliable-mutation` and `names-no-case` because their scripts matched lines
+# written with `||`.
+#
+# `case` rather than a regex: the only question is whether `#<pr>` appears, and a
+# pattern would invite exactly the prose-judging this refuses below.
+answer_names_pr() {
+	case "$answer" in
+	*"#$pr"*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+answer=$(cat 2>/dev/null) || fail_input "could not read the answer on stdin"
+[ -n "${answer//[[:space:]]/}" ] ||
+	fail_input "stdin is empty; pipe \`unsubscribe_pr_activity\`'s answer for #$pr"
+
+# THE ANSWER MUST NAME THIS PULL REQUEST. Both observed shapes carry it — the
+# no-active-subscription reading names `<owner>/<repo>#<n>` — and requiring it is
+# what stops the honest error this is built for: pasting the answer from the
+# previous PR, on a branch name the harness reuses for a whole engagement.
+#
+# It deliberately does NOT judge the answer's prose beyond that. Matching phrasing
+# would be a gate estimating an outcome from wording (non-negotiable 3), and the
+# outcome it would be guessing at is the one only CLOUD-673 can observe.
+if ! answer_names_pr; then
+	echo "::error:: pr-unsubscribed: that answer does not name #$pr, so it is not evidence about this pull request. Call \`unsubscribe_pr_activity\` for #$pr and pipe what it returns." >&2
+	exit 1
+fi
+
+mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
+	fail_input "cannot create the receipt store"
+
+digest=$(printf '%s' "$answer" | sha256sum 2>/dev/null | cut -c1-12) || digest=unhashed
+
+# Pointer-only, in the receipt as well as on stdout: what was recorded, for which
+# PR, in which session, and a digest of the answer — never the answer, which is a
+# message about a webhook stream and has no business being stored here.
+{
+	echo "pr $pr"
+	echo "session $session"
+	echo "answer-sha256 $digest"
+	echo "answer-bytes ${#answer}"
+} >"$(receipt_path "$session" "$pr")" 2>/dev/null ||
+	fail_input "cannot write the receipt for #$pr"
+
+echo "pr-unsubscribed: recorded the drop of #$pr's webhook subscription (answer $digest)"

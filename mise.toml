@@ -306,7 +306,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "msrv-pin-agreement,cap-drift,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check"
+MUTANT_GATES = "msrv-pin-agreement,cap-drift,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check,pr-unsubscribed"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.

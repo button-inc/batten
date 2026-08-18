@@ -971,6 +971,32 @@ set -m
 
 [ "$branch" != "main" ] || die "refusing to land from main — work happens on a short-lived branch."
 
+# --- the webhook subscription this repo's contract forbids (CLOUD-518) --------
+#
+# AGENTS.md bans PR-webhook babysitting twice over — this loop runs on "no
+# timeout, no cap, **never the PR webhook**", and no heartbeat may babysit a PR —
+# and the harness arms a subscription on every PR this repo opens anyway. Measured
+# on #397, #402 and #489, and on two of those with no `subscribe_pr_activity` call
+# behind it, which is why a deny rule on the tool closes only the path nobody
+# used. The remedy was an agent remembering, which is prose and therefore
+# feedforward only.
+#
+# The drop itself cannot happen here: the tool lives on the session's MCP endpoint
+# and a POST from a task is answered 401 (CLOUD-673). The AGENT can make that call
+# and does. So this is the `claim-check` inversion — the gate refuses to spend a
+# runner until the call has been made and recorded for THIS pull request — and it
+# sits here, before the singleton and the lease, so a refusal costs nothing at all
+# and the fix is one tool call away. Off harness there is no session and no
+# subscription, and `pr-unsubscribed` passes silently; that fail-open is why this
+# is safe to put on the critical path.
+#
+# The gate's own words reach the operator (CLOUD-407): it names the command that
+# mints the receipt, so this `die` adds only the landing's context.
+#MUTANT subscription-unenforced|s/^if ! mise run pr-unsubscribed check "\$pr"; then$/if false; then/|a session that has not dropped the subscription cannot land
+if ! mise run pr-unsubscribed check "$pr"; then
+	die "#$pr's webhook subscription has not been dropped, and the refusal above says how. Nothing has been spent — do that, then run land again."
+fi
+
 lap=0
 lease_waits=0
 answer_unknowns=0

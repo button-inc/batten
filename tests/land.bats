@@ -1834,8 +1834,12 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# each caller dies at top level, because a `die` inside the `$( )` every
 	# caller wraps it in would exit only the subshell (CLOUD-467, measured again
 	# here). Both are exercised below.
-	[ "$stops" -eq 27 ] || {
-		echo "land has $stops stopping conditions; this suite covers 27."
+	# 28 since CLOUD-518: a PR whose webhook subscription this session has not
+	# dropped. It is the FIRST stop in the run, before the singleton and the lease,
+	# so a refusal costs no CI at all — and this counter caught it the moment it
+	# was added, which is what it is for. Exercised below.
+	[ "$stops" -eq 28 ] || {
+		echo "land has $stops stopping conditions; this suite covers 28."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -2650,4 +2654,66 @@ EOF
 	# pass by the races having been deleted.
 	run grep -c 'await_first' "$REAL_LAND"
 	[ "$output" -ge 2 ]
+}
+
+# --- CLOUD-518: the webhook subscription the harness arms on every PR ----------
+#
+# `land` cannot drop it — the tool lives on the session's MCP endpoint and a POST
+# from a task is answered 401 (CLOUD-673) — so it refuses to spend a runner until
+# the agent has dropped it and `pr-unsubscribed` has recorded that for this PR.
+# The gate's own suite (tests/pr-unsubscribed.bats) covers the recording; these
+# rows are about the LANDING: that the refusal stops the lap before anything is
+# spent, and that a recorded drop is what lets a landing proceed.
+#
+# Every other case in this file leaves `pr-unsubscribed` passing, which is both
+# the off-harness reading and the ordinary one — so nothing else in the suite is
+# perturbed by putting a gate on the critical path.
+
+@test "CLOUD-518: a session that has not dropped the subscription cannot land" {
+	# The refusal the whole change exists to produce. It must arrive BEFORE any
+	# spend: no ready, no push, no comment, and no CI.
+	#
+	# THE WORLD IS TERMINAL AND THE RUN IS BOUNDED, both so that the MUTATION
+	# fails this row instead of hanging it. With the check disabled the lap runs
+	# on, and `main-watch` never answers by default — so a row written as a bare
+	# `run "$LAND"` blocks forever rather than going red, which is a mutation
+	# reported as caught by a case that never finished. Measured: wedged for 100
+	# minutes inside `mise run mutant`. `pr_state MERGED` gives the un-gated path
+	# a fast, wrong ending; `run_timeout` is the backstop if it finds another way
+	# to stall.
+	task_fails pr-unsubscribed
+	pr_state MERGED
+	local out="$BATS_TEST_TMPDIR/land.out" rc=0
+	run_timeout -k 1 20 "$LAND" >"$out" 2>&1 || rc=$?
+	output=$(cat "$out")
+	status=$rc
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"webhook subscription has not been dropped"* ]]
+	# Nothing was spent: the PR was never readied, nothing was pushed, and the
+	# fast-forward was never asked for.
+	[ -z "$(ready_calls)" ]
+	[[ "$(call_order)" != *push* ]]
+	[ "$(comments)" -eq 0 ]
+	# Not even the verify receipt was consulted — the stop is the first thing.
+	[ "$(verify_calls)" -eq 0 ]
+}
+
+@test "CLOUD-518: the check runs against THIS PR, not some other" {
+	# A receipt for the wrong pull request is the honest error the gate is built
+	# for, so `land` has to hand it the PR it is actually landing.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	run grep -c '^run pr-unsubscribed check 150$' "$BATS_TEST_TMPDIR/misecalls"
+	[ "$output" -ge 1 ]
+}
+
+@test "CLOUD-518: a dropped subscription lets the landing proceed untouched" {
+	# The gate passing must change nothing else about a lap — the same merge, the
+	# same single fast-forward comment.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"is MERGED"* ]]
+	[ "$(comments)" -eq 1 ]
 }
