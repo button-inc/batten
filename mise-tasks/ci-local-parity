@@ -118,6 +118,20 @@
 #      joined by a sibling proposing the same group. Both keys or neither works:
 #      the second is what keeps the first from doubling the floor it lowers.
 #
+#  13. THE RENOVATE CONFIG KEEPS THE FOUR KEYS THAT BOUND WHAT ITS LANE SPENDS.
+#      Property 12's question asked of the second bot, and the keys differ
+#      because the schemas do. `mise.toml [tools]` is the one dependency surface
+#      Dependabot has no `package-ecosystem` for at any setting — a capability
+#      gap, not a config omission — so a second bot exists at all only for that
+#      table (CLOUD-655). Renovate's `draftPR` is the knob Dependabot's schema
+#      lacks, and it takes property 12's irreducible floor ("one full matrix per
+#      SHA the bot proposes") to zero, because every `pull_request` workflow here
+#      gates on `draft == false`. `rebaseWhen: "never"` and `prConcurrentLimit`
+#      are the same pairing property 12 asks of each Dependabot entry, and
+#      `minimumReleaseAge` is the cooldown. All four are the mechanism rather
+#      than a preference, so dropping any one must red — which is the whole
+#      reason CLOUD-596 shipped property 12 rather than trusting a comment.
+#
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
 # release workflow is not on the landing path and they do not apply to it. 8, 9,
 # 10, 11 and 12 are the exceptions — a workflow racing itself, colliding with its
@@ -130,6 +144,7 @@ workflows="${PARITY_WORKFLOWS:-.github/workflows}"
 manifest="${PARITY_MANIFEST:-mise.toml}"
 release_plz="${PARITY_RELEASE_PLZ:-release-plz.toml}"
 dependabot="${PARITY_DEPENDABOT:-.github/dependabot.yml}"
+renovate="${PARITY_RENOVATE:-renovate.json5}"
 fail=0
 
 problem() {
@@ -559,6 +574,36 @@ else
 		[ -n "$eco" ] || continue
 		problem "$dependabot's $eco entry does not declare \`$key\` — the bot re-proposes a head on every base move, and each one opens Ready and buys a full matrix (five superseded PRs in seventeen hours, measured; CLOUD-596)."
 	done <<<"$unbounded"
+fi
+
+# Property 13. Committed text, like everything else here — and `//` comments are
+# stripped FIRST, because that file argues for each of its keys at length and a
+# gate a comment can satisfy is a gate satisfied by deleting the key the comment
+# explains. The strip requires the `//` at line start or after whitespace, so the
+# `https://` inside `$schema` is not mistaken for one.
+#
+# Each key is matched with its VALUE, for property 4's reason: a key set to
+# anything but the fix is the same defect as the key absent. `prConcurrentLimit`
+# is the one where that bites hardest — Renovate reads `0` as *unlimited*, so the
+# bound and its own negation differ by a single character.
+if [ ! -f "$renovate" ]; then
+	problem "no $renovate, so nothing bounds what the Renovate lane spends — and \`mise.toml\` is the one dependency surface Dependabot has no ecosystem for at all (CLOUD-655)."
+else
+	renovate_body=$(sed -e 's|^//.*$||' -e 's|[[:space:]]//.*$||' "$renovate")
+	# Pointer-only per non-negotiable rule 4: the key, the file, and the repair.
+	# Never a line of the config, which carries URLs and could carry a host.
+	renovate_key() {
+		grep -Eq "^[[:space:]]*[\"']?$1[\"']?[[:space:]]*:[[:space:]]*$2[[:space:]]*,?[[:space:]]*\$" <<<"$renovate_body" ||
+			problem "$renovate does not declare \`$1\` as $3 — $4 (CLOUD-655)."
+	}
+	renovate_key draftPR 'true' 'true' \
+		"every pull_request workflow here gates on draft == false, so a draft head buys no runner minutes; without this key every head the lane proposes opens Ready and buys a full matrix on arrival, which is the floor CLOUD-596 measured on the Dependabot lane and could not remove"
+	renovate_key rebaseWhen '"never"' '"never"' \
+		"the default force-pushes a rebase whenever the base moves, and on a readied PR every force-push is a synchronize and another matrix — on a trunk that advances constantly, that is a matrix per landing by anyone"
+	renovate_key prConcurrentLimit '[1-9][0-9]*' 'a positive integer' \
+		"with rebasing off, a stale PR can be joined by a sibling proposing the same update, doubling the floor rebaseWhen lowers; note that Renovate reads 0 as unlimited, so the bound and its negation differ by one character"
+	renovate_key minimumReleaseAge '"[^"]+"' 'a non-empty duration' \
+		"a churny release must settle before a PR opens — the cooldown CLOUD-105 already bought on the Dependabot lanes"
 fi
 
 # Property 11. Judged over the whole workflow set rather than the landing path,

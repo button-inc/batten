@@ -296,6 +296,16 @@ local gate = new Mapping<String, Step> {
     glob = List("batten.toml", "crates/batten/src/lint.rs", "crates/batten/src/trust.rs")
     check = "mise run config-lint"
   }
+  // The same question asked of the other committed policy config (CLOUD-655).
+  // `ci-local-parity` decides that Renovate's four CI-cost keys are present with
+  // the values that make them work; only upstream's own validator decides that
+  // the file around them is one Renovate will accept. A config it rejects is a
+  // lane proposing nothing, silently — which is the shape that let `[tools] rust`
+  // sit twelve releases stale under a green weekly `lock-currency`.
+  ["renovate-config-validator"] {
+    glob = List("renovate.json5")
+    check = "mise run renovate-config-validator"
+  }
   // Every module the derived schemas are reachable from, or the step does not
   // fire on the commit that moved them. `provision.rs` and `waiver.rs` were
   // absent while both were already reachable from `Config` (CLOUD-59): a commit

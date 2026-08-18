@@ -114,7 +114,28 @@ pkl = "0.32.1"                    # evaluates hk.pkl as a check, not only when h
 # npm tool here, so node comes with it and nothing else depends on either.
 node = "24"
 "npm:prettier" = "3.6.2"
-zig = "0.16"             # the linker for the macOS release build and the darwin-link gate: zig carries Darwin linker support, so Linux emits a Mach-O with no Apple SDK
+# The validator for `renovate.json5` (CLOUD-655), wired into the hk `gate` as
+# `mise run renovate-config-validator`. It ships inside the `renovate` package
+# itself — there is no smaller distribution of it — which is why the one npm tool
+# above is now two.
+#
+# TWO TRUST EXEMPTIONS, AND THEY ARE NARROW BY VERSION RATHER THAN BY NAME.
+# mise's `no-downgrade` trust policy refuses this graph: `@yarnpkg/core` 4.4.0 and
+# `@yarnpkg/libzip` 3.2.0 carry SLSA provenance from the `yarnbot` publisher, and
+# 4.4.4 / 3.2.2 carry none. Reviewed against npmjs.org on 2026-08-18 before
+# excluding, as the refusal instructs: both were published manually by `arcanis`,
+# Yarn's lead maintainer, and both report the SAME `gitHead`
+# (`2eb9830716136d3b92c8db25065575a4d34378a3`) — one manual publish batch out of
+# the Berry monorepo, which is the benign case the policy names ("a maintainer
+# manually publishes"). A bare package name would exempt every future version;
+# these pin the two releases actually reviewed, so the next one is refused again
+# until someone looks. `npm.shell_out=true` would have switched the whole check
+# off and is not used.
+"npm:renovate" = { version = "41.173.1", trust_policy_excludes = [
+  "@yarnpkg/core@4.4.4",
+  "@yarnpkg/libzip@3.2.2",
+] }
+zig = "0.16" # the linker for the macOS release build and the darwin-link gate: zig carries Darwin linker support, so Linux emits a Mach-O with no Apple SDK
 # github:, not ubi: — same upstream release assets, but the github backend locks
 # a url and a per-platform checksum where ubi locked a bare version and nothing
 # else, which made this the one tool installed from an unverified download
@@ -285,7 +306,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "msrv-pin-agreement,cap-drift,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check"
+MUTANT_GATES = "msrv-pin-agreement,cap-drift,renovate-config-validator,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.

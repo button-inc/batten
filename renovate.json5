@@ -1,0 +1,76 @@
+// Renovate — the update lane for `mise.toml [tools]`, the one dependency surface
+// no other bot can read (CLOUD-655).
+//
+// JSON5 rather than JSON so the reasoning lives beside the keys it explains. The
+// keys here are not preferences: four of them are the whole CI-cost mechanism,
+// and `mise run ci-local-parity` refuses this file if any of the four is dropped.
+//
+// WHY A SECOND BOT AT ALL. Dependabot's `package-ecosystem` values are a fixed
+// published list with no `mise`, no asdf `.tool-versions` and no
+// `rust-toolchain`, so `.github/dependabot.yml` cannot cover this repo's tool
+// table at any setting. That is a capability gap, not a config omission, and its
+// cost was measured: `[tools] rust` sat at 1.85.0 against a stable of 1.97.1 —
+// twelve releases — freezing two crates and rejecting a third, with `mise run
+// lock-check` green throughout because it asks a different currency question
+// (have the artifacts for the versions we ALREADY pinned changed).
+//
+// TWO BOTS OVER DISJOINT MANIFESTS IS NOT TWO AUTHORITIES FOR ONE FACT. Each
+// manifest gets exactly one updater, and `ci-local-parity` decides that rather
+// than trusting the comment: an ecosystem covered by both bots, or by neither,
+// fails the gate.
+//
+// THIS LANE PROPOSES NOTHING UNTIL SOMEONE INSTALLS RENOVATE. The config is
+// inert without the Renovate GitHub App on the `button-inc` org (or Renovate
+// self-hosted as a scheduled Actions run with a token that can open PRs). That
+// is an owner action and deliberately not a code change; the config and its gate
+// land regardless, so the day the app arrives there is nothing left to write.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  extends: ["config:recommended"],
+
+  // THE SCOPE FENCE, and it is load-bearing rather than tidy. `config:recommended`
+  // enables every manager Renovate ships with, which would silently make this a
+  // SECOND updater for `cargo` and for the workflows — both of which Dependabot
+  // owns at this commit. `enabledManagers` is an allowlist, so naming `mise`
+  // alone is what keeps the disjointness above true by construction.
+  // CLOUD-657 and CLOUD-658 add the other two here, each in the same commit that
+  // removes them from `.github/dependabot.yml`.
+  enabledManagers: ["mise"],
+
+  // --- the four keys `ci-local-parity` holds ---------------------------------
+  //
+  // Every `pull_request` workflow in this repo gates on `draft == false`, so a
+  // draft head buys zero runner minutes. Dependabot's schema has no equivalent
+  // knob, which is why its lane was measured at 13 `ci.yml` runs and zero skips
+  // over eight days (CLOUD-596) — a full matrix per SHA it proposes. CLOUD-596
+  // priced the workaround (a new workflow and a PAT-driven ready) and declined
+  // it. This is one key.
+  draftPR: true,
+
+  // The default force-pushes a rebase whenever the base moves, and on a readied
+  // PR each force-push is a `synchronize` and another matrix. `main` advances
+  // constantly here, so that default is a matrix per landing by anyone.
+  rebaseWhen: "never",
+
+  // With rebasing off, a stale PR can be joined by a sibling proposing the same
+  // update — doubling the floor the key above lowers. Both keys or neither
+  // works, which is the same pairing `.github/dependabot.yml` carries.
+  prConcurrentLimit: 1,
+
+  // Renovate's spelling of the 7-day cooldown CLOUD-105 bought on the Dependabot
+  // lanes: let a churny release settle before a PR opens.
+  minimumReleaseAge: "7 days",
+
+  // --- and the key without which none of the above can ever land -------------
+  //
+  // Every commit here must satisfy `CONVENTIONAL_RE` (the `commit-lint` gate),
+  // because PRs land by fast-forward. Renovate's default subject carries no type
+  // prefix, so its PRs would fail commit-lint and could never land — the same
+  // defect `.github/dependabot.yml`'s `commit-message.prefix` settings exist to
+  // avoid. `ci` rather than `build`: this table pins the toolchain CI and the
+  // hooks run, not the crate's dependency graph.
+  semanticCommits: "enabled",
+  semanticCommitType: "ci",
+  semanticCommitScope: "deps",
+}

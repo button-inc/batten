@@ -15,14 +15,17 @@ setup() {
 	MANIFEST="$BATS_TEST_TMPDIR/mise.toml"
 	RELEASE_PLZ="$BATS_TEST_TMPDIR/release-plz.toml"
 	DEPENDABOT="$BATS_TEST_TMPDIR/dependabot.yml"
+	RENOVATE="$BATS_TEST_TMPDIR/renovate.json5"
 	mkdir -p "$WF"
 	export PARITY_WORKFLOWS="$WF" PARITY_MANIFEST="$MANIFEST" PARITY_RELEASE_PLZ="$RELEASE_PLZ" \
-		PARITY_DEPENDABOT="$DEPENDABOT"
+		PARITY_DEPENDABOT="$DEPENDABOT" PARITY_RENOVATE="$RENOVATE"
 	printf '[workspace]\npr_draft = true\n' >"$RELEASE_PLZ"
 	# The passing fixture, written by default for the same reason `pr_draft = true`
 	# is: every case unrelated to property 12 must satisfy it, so only its own cases
 	# overwrite this.
 	dependabot cargo yes yes
+	# Same, for property 13.
+	renovate
 	cat >"$MANIFEST" <<-'EOF'
 		CI_REQUIRED_CHECKS = "ci"
 
@@ -377,7 +380,7 @@ fanin() {
 
 @test "this repository's real workflows pass" {
 	# The assertion that catches the gate drifting from what it guards.
-	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ PARITY_DEPENDABOT
+	unset PARITY_WORKFLOWS PARITY_MANIFEST PARITY_RELEASE_PLZ PARITY_DEPENDABOT PARITY_RENOVATE
 	cd "$BATS_TEST_DIRNAME/.."
 	run "$GATE"
 	[ "$status" -eq 0 ]
@@ -655,6 +658,106 @@ dependabot() {
 	dependabot cargo yes yes yes yes
 	run "$GATE"
 	[ "$status" -eq 0 ]
+}
+
+# --- property 13: the Renovate config keeps its four CI-cost keys -------------
+
+# A minimal well-formed Renovate config. Each argument toggles one of the four
+# keys: `yes`, `no`, or `wrong` for the key present with a value that is not the
+# fix. `$schema` is always written, because its `https://` is the thing the
+# comment strip must not mistake for a comment.
+renovate() {
+	local draft="${1:-yes}" rebase="${2:-yes}" limit="${3:-yes}" age="${4:-yes}"
+	{
+		printf '// the lane for mise.toml [tools], which no other bot can read\n{\n'
+		printf '  $schema: "https://docs.renovatebot.com/renovate-schema.json",\n'
+		printf '  enabledManagers: ["mise"],\n'
+		case "$draft" in
+		yes) printf '  draftPR: true,\n' ;;
+		wrong) printf '  draftPR: false,\n' ;;
+		esac
+		case "$rebase" in
+		yes) printf '  rebaseWhen: "never",\n' ;;
+		wrong) printf '  rebaseWhen: "behind-base-branch",\n' ;;
+		esac
+		case "$limit" in
+		yes) printf '  prConcurrentLimit: 1,\n' ;;
+		wrong) printf '  prConcurrentLimit: 0,\n' ;;
+		esac
+		case "$age" in
+		yes) printf '  minimumReleaseAge: "7 days",\n' ;;
+		wrong) printf '  minimumReleaseAge: "",\n' ;;
+		esac
+		printf '}\n'
+	} >"$RENOVATE"
+	return 0
+}
+
+@test "a renovate config carrying all four keys passes" {
+	workflow ci
+	renovate
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "each of the four keys missing is refused, and named" {
+	# One case per direction, as property 4's cases are written: the four keys are
+	# the whole CI-cost mechanism, so each must red on its own rather than the set
+	# being checked as a lump.
+	workflow ci
+
+	renovate no yes yes yes
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'does not declare `draftPR`'* ]]
+
+	renovate yes no yes yes
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'does not declare `rebaseWhen`'* ]]
+
+	renovate yes yes no yes
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'does not declare `prConcurrentLimit`'* ]]
+
+	renovate yes yes yes no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'does not declare `minimumReleaseAge`'* ]]
+}
+
+@test "a key present with a value that is not the fix is the same defect" {
+	# `prConcurrentLimit: 0` is the sharp one: Renovate reads 0 as UNLIMITED, so
+	# the bound and its own negation differ by a single character, and a gate
+	# matching the key alone would pass the config that removed the bound.
+	workflow ci
+	renovate wrong wrong wrong wrong
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'does not declare `draftPR`'* ]]
+	[[ "$output" == *'does not declare `rebaseWhen`'* ]]
+	[[ "$output" == *'does not declare `prConcurrentLimit`'* ]]
+	[[ "$output" == *'does not declare `minimumReleaseAge`'* ]]
+}
+
+@test "a key named only in a comment does not satisfy the property" {
+	# That file argues for each of its keys at length. A gate a comment can
+	# satisfy is a gate satisfied by deleting the key the comment explains.
+	workflow ci
+	renovate no yes yes yes
+	sed_i 's|^  enabledManagers.*$|  // draftPR: true,|' "$RENOVATE"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'does not declare `draftPR`'* ]]
+}
+
+@test "a missing renovate config is a failure, not a pass" {
+	workflow ci
+	rm -f "$RENOVATE"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"nothing bounds what the Renovate lane spends"* ]]
 }
 
 # --- property 11: reading check status means deciding through checks-green ----

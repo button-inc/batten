@@ -151,7 +151,7 @@ jobs:
           # lists, and a single-line scalar is unambiguous to parse, where a
           # YAML block scalar's continuation lines are not (several tool names
           # here begin with `aqua:` and read as new keys).
-          install_args: rust hk aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush pkl node npm:prettier uv pipx:ntia-conformance-checker
+          install_args: rust hk aqua:EmbarkStudios/cargo-deny aqua:koalaman/shellcheck aqua:mvdan/sh aqua:tamasfe/taplo aqua:rhysd/actionlint aqua:jqlang/jq aqua:anchore/syft aqua:shenwei356/rush pkl node npm:prettier npm:renovate uv pipx:ntia-conformance-checker
       # CLOUD-406. `hk.pkl:14` amends a pkl PACKAGE uri, and pkl resolves it over
       # the network on every evaluation — a second dependency beside the `hk`
       # binary `mise.lock` pins, and unpinned at runtime. Measured on run

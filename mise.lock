@@ -713,6 +713,13 @@ url = "https://nodejs.org/dist/v24.19.0/node-v24.19.0-win-x64.zip"
 version = "3.6.2"
 backend = "npm:prettier"
 
+[[tools."npm:renovate"]]
+version = "41.173.1"
+backend = "npm:renovate"
+
+[tools."npm:renovate".options]
+trust_policy_excludes = '["@yarnpkg/core@4.4.4", "@yarnpkg/libzip@3.2.2"]'
+
 [[tools."pipx:ntia-conformance-checker"]]
 version = "5.0.3"
 backend = "pipx:ntia-conformance-checker"
