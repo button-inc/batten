@@ -678,7 +678,7 @@ dependabot() {
 # comment strip must not mistake for a comment.
 renovate() {
 	local draft="${1:-yes}" rebase="${2:-yes}" limit="${3:-yes}" age="${4:-yes}"
-	local managers="${5:-\"mise\"}"
+	local managers="${5:-\"mise\"}" type="${6:-rules}"
 	{
 		printf '// the lane for mise.toml [tools], which no other bot can read\n{\n'
 		printf '  $schema: "https://docs.renovatebot.com/renovate-schema.json",\n'
@@ -699,7 +699,17 @@ renovate() {
 		yes) printf '  minimumReleaseAge: "7 days",\n' ;;
 		wrong) printf '  minimumReleaseAge: "",\n' ;;
 		esac
-		printf '}\n'
+		# `rules` puts the commit type where it survives a preset's catch-all;
+		# `toplevel` is the spelling that silently does nothing; `no` omits it.
+		case "$type" in
+		toplevel) printf '  semanticCommitType: "ci",\n' ;;
+		esac
+		printf '  packageRules: [\n'
+		case "$type" in
+		rules) printf '    { matchManagers: ["mise"], semanticCommitType: "ci" },\n' ;;
+		esac
+		printf '    { matchManagers: ["mise"], groupName: "tools" },\n'
+		printf '  ],\n}\n'
 	} >"$RENOVATE"
 	return 0
 }
@@ -1001,4 +1011,53 @@ on_runner() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"ci.yml"* ]]
 	[[ "$output" != *"win.yml runs"* ]]
+}
+
+# --- property 13, fifth key: the commit type must outrank the preset ---------
+#
+# CLOUD-676. `extends: ["config:recommended"]` expands to include
+# `:semanticPrefixFixDepsChoreOthers`, whose first rule is the catch-all
+# `{ matchPackageNames: ["*"], semanticCommitType: "chore" }`. packageRules
+# outrank top-level config, so a top-level `semanticCommitType` is set and then
+# immediately overwritten — measured on the lane's first run, where every subject
+# came out `chore(deps)` while the config said `ci` and every other key in it was
+# demonstrably in effect.
+
+@test "a commit type inside packageRules passes" {
+	workflow ci
+	renovate yes yes yes yes '"mise"' rules
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "no commit type anywhere is refused" {
+	# Without one, the lane's subjects carry no Conventional type at all and
+	# commit-lint refuses every PR it opens — they could never land.
+	workflow ci
+	renovate yes yes yes yes '"mise"' no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'sets no `semanticCommitType` inside `packageRules`'* ]]
+}
+
+@test "THE MEASURED DEFECT: a top-level commit type is refused, because a preset outranks it" {
+	# The case this property exists for. The key is present, spelled correctly,
+	# and does nothing — which is why asserting mere presence would have passed
+	# the exact config that failed.
+	workflow ci
+	renovate yes yes yes yes '"mise"' toplevel
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'sets no `semanticCommitType` inside `packageRules`'* ]]
+	[[ "$output" == *"outranked"* ]]
+}
+
+@test "a config with no packageRules at all is refused, and says why" {
+	workflow ci
+	renovate
+	sed_i '/packageRules/,$d' "$RENOVATE"
+	printf '}\n' >>"$RENOVATE"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'declares no `packageRules`'* ]]
 }

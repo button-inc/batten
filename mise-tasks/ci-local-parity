@@ -132,6 +132,23 @@
 #      than a preference, so dropping any one must red — which is the whole
 #      reason CLOUD-596 shipped property 12 rather than trusting a comment.
 #
+#      A FIFTH KEY, AND IT IS ASSERTED WHERE IT MUST BE WRITTEN RATHER THAN
+#      MERELY PRESENT (CLOUD-676). Every commit here lands by fast-forward
+#      through `commit-lint`, so a bot subject with no Conventional type can
+#      never land at all — `semanticCommitType` is that type. It cannot be
+#      asserted as a top-level key, because a top-level key is exactly where it
+#      DOES NOT WORK: `config:recommended` expands to include
+#      `:semanticPrefixFixDepsChoreOthers`, whose first rule is the catch-all
+#      `{ matchPackageNames: ["*"], semanticCommitType: "chore" }`, and
+#      `packageRules` outrank top-level config. Measured on the lane's first run
+#      — every subject `chore(deps)` while the config said `ci`, with every other
+#      key in that file demonstrably in effect. So the property asks for it
+#      inside `packageRules`, which are appended after the preset's and win.
+#
+#      `chore` would have landed too, so this is not a broken lane; it is a
+#      committed config asserting an intent the tool silently overrode, which is
+#      the CLOUD-198 class and the one a reader cannot detect from the file.
+#
 #  14. EVERY ECOSYSTEM BOTH BOTS CAN SERVE IS SERVED BY EXACTLY ONE. Two bots
 #      now read this tree, and `.github/dependabot.yml` is being emptied into
 #      `renovate.json5` one ecosystem at a time (CLOUD-656). Every such move has
@@ -632,6 +649,24 @@ else
 	renovate_key minimumReleaseAge '"[^"]+"' 'a non-empty duration' \
 		"a churny release must settle before a PR opens — the cooldown CLOUD-105 already bought on the Dependabot lanes"
 
+	# The fifth key. Asserted INSIDE `packageRules` rather than anywhere in the
+	# file, because a top-level `semanticCommitType` is the spelling that silently
+	# does nothing — see the header. The `packageRules` block is taken from its key
+	# to end of file: it is the last member of this config by construction, and a
+	# brace-counting parser for JSON5 would be a second authority on a format the
+	# validator already decides.
+	rules_block=$(awk '/^[[:space:]]*packageRules[[:space:]]*:/ { p = 1 } p { print }' <<<"$renovate_body")
+	if [ -z "$rules_block" ]; then
+		problem "$renovate declares no \`packageRules\`, so it has nowhere to set a commit type that survives \`config:recommended\`'s catch-all \`chore\` (CLOUD-676)."
+	# NOT anchored to line start: a rule may be written inline
+	# (`{ matchManagers: [...], semanticCommitType: "ci" }`) or spread over lines,
+	# and a formatter's choice between them must not change the verdict. Comments
+	# are already stripped from `$renovate_body`, so a key named in prose inside
+	# this block cannot answer for one that is set.
+	elif ! grep -Eq '["'"'"']?semanticCommitType["'"'"']?[[:space:]]*:[[:space:]]*["'"'"'][a-z]+["'"'"']' <<<"$rules_block"; then
+		problem "$renovate sets no \`semanticCommitType\` inside \`packageRules\` — every commit here lands by fast-forward through commit-lint, and a top-level \`semanticCommitType\` is silently outranked by \`config:recommended\`'s \`{ matchPackageNames: [\"*\"], semanticCommitType: \"chore\" }\` (CLOUD-676)."
+	fi
+
 	# Property 14. Both sides are read as committed text, and BOTH must be
 	# readable for the question to have an answer: a missing dependabot file is
 	# already property 12's refusal above, and a missing Renovate config is this
@@ -715,4 +750,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; every dependabot ecosystem bounds its re-proposals, the Renovate config keeps the four keys that bound what its lane spends, and every ecosystem both bots can serve is served by exactly one"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; every dependabot ecosystem bounds its re-proposals, the Renovate config keeps the four keys that bound what its lane spends and sets its commit type where a preset cannot outrank it, and every ecosystem both bots can serve is served by exactly one"

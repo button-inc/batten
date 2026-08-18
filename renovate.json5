@@ -2,8 +2,10 @@
 // no other bot can read (CLOUD-655).
 //
 // JSON5 rather than JSON so the reasoning lives beside the keys it explains. The
-// keys here are not preferences: four of them are the whole CI-cost mechanism,
-// and `mise run ci-local-parity` refuses this file if any of the four is dropped.
+// keys here are not preferences: four of them are the whole CI-cost mechanism and
+// a fifth is what lets the lane's commits land at all, and `mise run
+// ci-local-parity` refuses this file if any of the five is dropped or moved
+// somewhere a preset outranks.
 //
 // WHY A SECOND BOT AT ALL. Dependabot's `package-ecosystem` values are a fixed
 // published list with no `mise`, no asdf `.tool-versions` and no
@@ -94,30 +96,65 @@
   // because PRs land by fast-forward. Renovate's default subject carries no type
   // prefix, so its PRs would fail commit-lint and could never land — the same
   // defect `.github/dependabot.yml`'s `commit-message.prefix` settings exist to
-  // avoid. `ci` rather than `build`: this table pins the toolchain CI and the
-  // hooks run, not the crate's dependency graph.
+  // avoid.
+  //
+  // THE TYPE CANNOT LIVE UP HERE, AND THAT IS MEASURED RATHER THAN STYLISTIC
+  // (CLOUD-676). `extends: ["config:recommended"]` above pulls in
+  // `:semanticPrefixFixDepsChoreOthers`, whose FIRST rule is a catch-all:
+  //
+  //     { matchPackageNames: ["*"], semanticCommitType: "chore" }
+  //
+  // `packageRules` outrank top-level config, so a `semanticCommitType` written
+  // here is set and then immediately overwritten for every package. Observed on
+  // the lane's first run: every subject came out `chore(deps)` while this file
+  // said `ci`, with every other key in it demonstrably in effect. The type
+  // therefore lives in `packageRules` below, which are appended AFTER the
+  // preset's and so win. `ci-local-parity` refuses a config that moves it back.
+  //
+  // `semanticCommitScope` is safe up here: no preset rule sets it.
   semanticCommits: "enabled",
-  semanticCommitType: "ci",
   semanticCommitScope: "deps",
 
   packageRules: [
     {
-      // What `.github/dependabot.yml`'s `groups: actions: patterns: ["*"]` bought
-      // on this lane, kept across the handover (CLOUD-657): a week's action bumps
-      // arrive as ONE pull request. It matters more here than it did there,
-      // because `prConcurrentLimit: 1` above means ungrouped updates would queue
-      // one at a time behind each other rather than merely being noisy.
-      matchManagers: ["github-actions"],
-      groupName: "actions",
+      // The commit type, placed here rather than top-level for the reason above:
+      // this rule is appended after `config:recommended`'s catch-all `chore` and
+      // therefore beats it.
+      //
+      // `ci` for the two managers that describe how this repo BUILDS AND TESTS
+      // itself rather than what it links against — the toolchain table and the
+      // workflows.
+      matchManagers: ["mise", "github-actions"],
+      semanticCommitType: "ci",
     },
     {
-      // The same, for `groups: cargo: patterns: ["*"]` (CLOUD-658). CLOUD-344's
-      // finding travels with it and is not repaired by the move: a grouped batch
-      // is all-or-nothing, so one member that will not build holds the whole
-      // set. What changes is where that is discovered — on a draft PR that
-      // bought no matrix, rather than on a Ready head that bought one.
+      // `build` for cargo, and the difference is not cosmetic: this manager
+      // moves `Cargo.toml` and `Cargo.lock`, which is the crate's own dependency
+      // graph. It is also what `.github/dependabot.yml`'s surviving security
+      // shim still emits (`commit-message.prefix: "build(deps)"`), so a cargo
+      // subject does not change type depending on which bot proposed it — and
+      // the security lane is precisely where that inconsistency would be read as
+      // a signal.
       matchManagers: ["cargo"],
+      semanticCommitType: "build",
+      // What `.github/dependabot.yml`'s `groups: cargo: patterns: ["*"]` bought
+      // (CLOUD-658). CLOUD-344's finding travels with it and is not repaired by
+      // the move: a grouped batch is all-or-nothing, so one member that will not
+      // build holds the whole set. What changes is where that is discovered — on
+      // a draft PR that bought no matrix, rather than on a Ready head that
+      // bought one.
       groupName: "cargo",
+    },
+    {
+      // What `groups: actions: patterns: ["*"]` bought on this lane, kept across
+      // the handover (CLOUD-657): a week's action bumps arrive as ONE pull
+      // request. It matters more here than it did there, because
+      // `prConcurrentLimit: 1` above means ungrouped updates would queue one at
+      // a time behind each other rather than merely being noisy.
+      //
+      // This rule sets only `groupName`, so the `ci` above survives it.
+      matchManagers: ["github-actions"],
+      groupName: "actions",
     },
   ],
 }
