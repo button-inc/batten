@@ -14,7 +14,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 
-use common::{Fixture, batten, git_in, scratch, scratch_outside_tree, stderr, stdout};
+use common::{Fixture, StateHome, batten, git_in, scratch, scratch_outside_tree, stderr, stdout};
 
 /// Run `batten hook --harness <harness>` with `payload` piped to stdin.
 ///
@@ -2580,9 +2580,7 @@ fn exec_cmd(name: &str, args: &[&str]) -> (Output, PathBuf) {
     fs::create_dir_all(&home).expect("create home");
     let output = batten()
         .args(args)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .output()
         .expect("run batten exec");
     (output, home)
@@ -2819,9 +2817,7 @@ fn a_capture_is_content_addressed_so_an_identical_rerun_adds_nothing() {
     let run_once = || {
         batten()
             .args(argv)
-            .env("HOME", &home)
-            .env("XDG_DATA_HOME", home.join("data"))
-            .env("APPDATA", home.join("data"))
+            .state_home(&home)
             .output()
             .expect("run batten exec")
     };
@@ -2847,9 +2843,7 @@ fn different_output_is_a_different_capture() {
         let script = child_script(&format!("capture-differs-{}", body.len()), body);
         batten()
             .args(["exec", "--", script.to_str().expect("utf-8")])
-            .env("HOME", &home)
-            .env("XDG_DATA_HOME", home.join("data"))
-            .env("APPDATA", home.join("data"))
+            .state_home(&home)
             .output()
             .expect("run batten exec");
     }
@@ -2967,9 +2961,7 @@ fn run_exec(repo: &std::path::Path, home: &std::path::Path, script: &str) -> Out
     batten()
         .args(["exec", "--", "sh", "-c", script])
         .current_dir(repo)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
         .expect("run batten exec")
@@ -3077,9 +3069,7 @@ fn exec_still_runs_where_no_authority_is_configured() {
     let output = batten()
         .args(["exec", "--", "sh", "-c", "echo fine"])
         .current_dir(&elsewhere)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .output()
         .expect("run batten exec");
     assert_eq!(output.status.code(), Some(0));
@@ -3448,9 +3438,7 @@ fn receipt_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> 
     batten()
         .args(args)
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(home)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten receipt")
@@ -3903,9 +3891,7 @@ fn the_committed_repo_config_gates_a_repository() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .output()
         .expect("run batten enforce");
@@ -3938,9 +3924,7 @@ fn the_committed_delegating_rule_is_refused_by_the_read_only_verb() {
     let output = batten()
         .arg("check")
         .current_dir(&dir)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .output()
         .expect("run batten check");
@@ -3978,9 +3962,7 @@ fn the_committed_delegating_rule_spawns_nothing_when_its_glob_misses() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dir)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4056,9 +4038,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dirty)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4096,9 +4076,7 @@ fn the_committed_repo_agnosticism_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&clean)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4173,9 +4151,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&dirty)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -4222,9 +4198,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let output = batten()
         .arg("enforce")
         .current_dir(&clean)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(&home)
         .env_remove("BATTEN_STRICTNESS")
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
@@ -5642,9 +5616,7 @@ fn store_cmd(dir: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Ou
     batten()
         .args(args)
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(home)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten state")
@@ -6311,9 +6283,7 @@ fn session_cmd(
     command
         .args(args)
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
+        .state_home(home)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env("BATTEN_SESSION", session);
     match parent {

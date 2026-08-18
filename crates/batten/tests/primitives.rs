@@ -1280,138 +1280,63 @@ fn every_permission_drop_asserts_its_own_premise() {
 /// The needle, assembled rather than written, so this audit is invisible to
 /// itself — the same reason [`drop_needle`] is built from halves.
 fn xdg_needle() -> String {
-    ["\"XDG_DATA", "_HOME\""].concat()
-}
-
-/// The Windows mirror of the needle above.
-fn roaming_needle() -> String {
-    ["\"APP", "DATA\""].concat()
-}
-
-/// The audit's own fixtures. `__XDG__`/`__APP__` stand in for the needles so the
-/// scan over the real tree cannot see them.
-const MIRRORS_THE_STATE_DIR: &str = r#"    fn t() {
-        Command::cargo_bin("batten")
-            .env(__XDG__, home.join("data"))
-            .env(__APP__, home.join("data"))
-            .assert();
-    }
-"#;
-const NO_MIRROR: &str = r#"    fn t() {
-        Command::cargo_bin("batten")
-            .env(__XDG__, home.join("data"))
-            .assert();
-    }
-"#;
-const MIRROR_POINTS_ELSEWHERE: &str = r#"    fn t() {
-        Command::cargo_bin("batten")
-            .env(__XDG__, home.join("data"))
-            .env(__APP__, home.join("other"))
-            .assert();
-    }
-"#;
-
-/// Whether the state-dir override at `xdg_at` is mirrored for Windows, at the
-/// same value, within the same function.
-///
-/// The value is compared as the rest of the `.env(…)` line, which is exact for
-/// rustfmt'd source: both calls are one line each, and `lint:fmt` is in the gate.
-fn state_dir_mirrored(body: &str, xdg_at: usize, app: &str) -> Result<(), String> {
-    // Exactly one closing paren — the `.env(` call's own. Stripping every
-    // trailing one would make `f(a)` and `f(a))` compare equal, which is a
-    // comparison that cannot tell two different values apart.
-    let value_at = |from: usize| {
-        let end = body[from..].find('\n').map_or(body.len(), |rel| from + rel);
-        body[from..end].split_once(',').map(|(_, rest)| {
-            let rest = rest.trim();
-            rest.strip_suffix(')').unwrap_or(rest).trim()
-        })
-    };
-    let value = value_at(xdg_at).ok_or_else(|| "the override names no value".to_owned())?;
-
-    let mut from = 0;
-    while let Some(rel) = body[from..].find(app) {
-        let at = from + rel;
-        if value_at(at) == Some(value) {
-            return Ok(());
-        }
-        from = at + app.len();
-    }
-    Err(format!(
-        "the state-dir override is not mirrored to the Windows roaming variable at the same \
-         value ({value}) — `etcetera` reads the roaming known folder there, so this child writes \
-         to the developer's REAL profile and the case asserts over state it does not own"
-    ))
+    ["XDG_DATA", "_HOME"].concat()
 }
 
 #[test]
-fn every_state_dir_override_is_mirrored_for_windows() {
-    // CLOUD-619. `state::root` resolves through `etcetera`'s base strategy, which
-    // is XDG on Linux and macOS and the roaming known folder on Windows. A case
-    // that isolates the store by pointing the XDG variable at a scratch dir
-    // therefore isolates NOTHING on Windows: the child reads the real profile,
-    // so it sees another case's leftovers, writes where nothing cleans up, and
-    // its assertions are about a store it never controlled.
+fn no_suite_sets_the_state_dir_variables_itself() {
+    // CLOUD-619. `state::root` resolves through `etcetera`'s base strategy — XDG
+    // on Linux and macOS, the roaming known folder on Windows — so a case that
+    // isolates the store by exporting the XDG variable alone isolates NOTHING
+    // there: the child reads the developer's real profile, sees another case's
+    // leftovers, writes where nothing cleans up, and asserts about a store it
+    // never controlled. One test noticed; the isolation had failed everywhere.
     //
-    // Not a hypothetical — CLOUD-113's Windows job is the first thing that ever
-    // ran these suites, and it is why the mirroring exists at all. This is the
-    // other half of that fix: the 27 sites were repaired by hand, and a repair
-    // with no gate is one new `.env` call away from being undone silently, on a
-    // platform whose CI failure will name a store instead of the omission.
+    // THE FIX IS ONE AUTHORITY, NOT N CORRECT COPIES. An earlier version of this
+    // audit allowed a site to keep its own `.env` calls so long as it mirrored
+    // the Windows variable at the same value. That holds the property but keeps
+    // fourteen copies of it, which is the shape CLOUD-63 built `common/` to end
+    // and the shape that drifted here in the first place. So the rule is the one
+    // the issue specifies: no suite names the variable at all — they call
+    // `StateHome::state_home`, or `state_dir` when their root is not `<home>/data`.
     //
-    // A pair-and-value predicate rather than a bare presence one, because a
-    // mirror pointing somewhere else is the same defect wearing the fix's shape.
-    let xdg = xdg_needle();
-    let app = roaming_needle();
-
-    // (a) Exercise the audit before trusting it — the sibling gate above makes
-    // the same demand of itself, and for the same reason.
-    for (label, fixture, holds) in [
-        ("mirrored at the same value", MIRRORS_THE_STATE_DIR, true),
-        ("no mirror at all", NO_MIRROR, false),
-        ("mirror pointing elsewhere", MIRROR_POINTS_ELSEWHERE, false),
-    ] {
-        let source = fixture.replace("__XDG__", &xdg).replace("__APP__", &app);
-        let at = source.find(&xdg).expect("the fixture carries an override");
-        let (body, xdg_at) = enclosing_fn(&source, at);
-        let verdict = state_dir_mirrored(body, xdg_at, &app);
-        assert_eq!(
-            verdict.is_ok(),
-            holds,
-            "the audit's own {label} fixture is judged wrong: {verdict:?}"
-        );
-    }
-
-    // (b) The real sites. `tests` only: `src` never spawns the binary under a
-    // fixture's environment, so an override there would be a different thing.
+    // A TOKEN, NOT A CALL, is what this scans for, and the direction is what
+    // makes that sound: it cannot mistake a correct site for a violation, only
+    // fail to notice a suite that isolates nothing at all. That second case is
+    // exactly what the `windows` job is a required check for.
+    let needle = xdg_needle();
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut sites = 0;
+    let mut offenders = Vec::new();
     for path in rust_sources(&crate_dir.join("tests")) {
+        // `common/` is where the one authority lives, so it is the one place the
+        // variable is named — the carve-out IS the rule.
+        if path.ends_with("common/mod.rs") {
+            continue;
+        }
         let source = fs::read_to_string(&path).expect("read source");
         let mut from = 0;
-        while let Some(rel) = source[from..].find(&xdg) {
+        while let Some(rel) = source[from..].find(&needle) {
             let at = from + rel;
-            from = at + xdg.len();
-            // Only a real override is judged. The token also appears in prose
-            // explaining the rule, and a doc comment sets no environment.
-            if !source[at..].starts_with(&format!("{xdg}, ")) {
+            from = at + needle.len();
+            // Prose may name the variable — several module headers explain the
+            // very rule this enforces. Only a site that SETS it is a violation,
+            // and a doc comment sets nothing.
+            let line_start = source[..at].rfind('\n').map_or(0, |nl| nl + 1);
+            let line = &source[line_start..at];
+            if line.trim_start().starts_with("//") {
                 continue;
             }
-            sites += 1;
-            let (body, xdg_at) = enclosing_fn(&source, at);
-            if let Err(why) = state_dir_mirrored(body, xdg_at, &app) {
-                panic!(
-                    "{}:{}: {why} (CLOUD-619)",
-                    path.display(),
-                    line_of(&source, at)
-                );
-            }
+            offenders.push(format!("{}:{}", path.display(), line_of(&source, at)));
         }
     }
     assert!(
-        sites > 0,
-        "the audit found no state-dir override to judge — if the last one went away, remove the \
-         audit with it rather than leaving behind a check that cannot fail"
+        offenders.is_empty(),
+        "a suite sets the state-dir variable itself. On Windows that redirects nothing — \
+         `etcetera` reads the roaming known folder there — so the child writes to the real user \
+         profile and every assertion about the store is about someone else's. Call \
+         `state_home(<home>)`, or `state_dir(<dir>)` when the root is not `<home>/data` \
+         (CLOUD-619):\n  {}",
+        offenders.join("\n  ")
     );
 }
 

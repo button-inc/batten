@@ -26,7 +26,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{Fixture, at_root, batten, scratch};
+use common::{Fixture, StateHome, at_root, batten, scratch};
 
 /// The README section these examples are drawn from.
 const SECTION: &str = "## Extending Batten: three surfaces, and which to reach for";
@@ -77,11 +77,9 @@ fn repo_with(name: &str, config: &str) -> (PathBuf, PathBuf) {
 
 fn run(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (i32, String, String) {
     let output = batten()
+        .state_home(home)
         .args(args)
         .current_dir(repo)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
         .expect("run batten");

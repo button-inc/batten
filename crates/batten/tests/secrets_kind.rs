@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use batten::provision::digest;
-use common::{Fixture, batten, git_in, scratch};
+use common::{Fixture, StateHome, batten, git_in, scratch};
 
 /// A repository, an isolated `HOME`/`XDG_DATA_HOME`, and a place to write stub
 /// artifacts — the shape `tests/provision.rs` already uses, for the same reason:
@@ -68,11 +68,9 @@ impl Env {
 
     fn run(&self, args: &[&str]) -> Output {
         batten()
+            .state_home(&self.home)
             .args(args)
             .current_dir(&self.repo)
-            .env("HOME", &self.home)
-            .env("XDG_DATA_HOME", self.home.join("data"))
-            .env("APPDATA", self.home.join("data"))
             .output()
             .expect("run batten")
     }

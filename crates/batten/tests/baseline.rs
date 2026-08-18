@@ -33,7 +33,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, batten, git_in, scratch, write};
+use common::{Fixture, StateHome, batten, git_in, scratch, write};
 
 /// A `forbid` rule at `deny` over the fixture's Rust files.
 ///
@@ -81,11 +81,9 @@ fn repo(name: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
 /// loudly rather than resolving the real checkout.
 fn run(repo: &Path, home: &Path, args: &[&str]) -> (i32, String, String) {
     let output = batten()
+        .state_home(home)
         .args(args)
         .current_dir(repo)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_LOG_LEVEL")

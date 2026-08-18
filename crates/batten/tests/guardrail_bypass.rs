@@ -25,7 +25,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stderr, stdout};
+use common::{Fixture, StateHome, batten, scratch, stderr, stdout};
 
 /// Every sentinel the fixture transcripts carry: a prompt, a command line, a
 /// deny reason, a write target and its body, a tool result, and a summary.
@@ -53,11 +53,9 @@ fn transcript(name: &str) -> String {
 /// Run any `batten` subcommand against the fixture's own state home.
 fn batten_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     batten()
+        .state_home(home)
         .args(args)
         .current_dir(dir)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()
         .expect("run batten")

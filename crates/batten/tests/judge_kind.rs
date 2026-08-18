@@ -20,7 +20,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, scratch, stderr, stdout, write};
+use common::{Fixture, StateHome, batten, scratch, stderr, stdout, write};
 
 /// The rule id every fixture below declares, so assertions can name it.
 const RULE: &str = "reads-intentional";
@@ -109,11 +109,9 @@ fn judge_cmd(repo: &Path, home: &Path, args: &[&str], with_stub: bool) -> Output
         inherited
     };
     batten()
+        .state_home(home)
         .args(args)
         .current_dir(repo)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
         .env("PATH", path)
         .env("GIT_CEILING_DIRECTORIES", env!("CARGO_TARGET_TMPDIR"))
         .output()

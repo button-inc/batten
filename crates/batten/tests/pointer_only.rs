@@ -56,7 +56,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 
 use batten::surface::SURFACE;
-use common::{Fixture, batten, scratch};
+use common::{Fixture, StateHome, batten, scratch};
 
 // -- The canaries ------------------------------------------------------------
 
@@ -718,11 +718,9 @@ impl Run {
 fn run_in(corpus: &Corpus, args: &[&str], stdin: Stdin) -> Run {
     let mut command = batten();
     command
+        .state_home(&corpus.home)
         .args(args)
         .current_dir(&corpus.repo)
-        .env("HOME", &corpus.home)
-        .env("XDG_DATA_HOME", corpus.home.join("data"))
-        .env("APPDATA", corpus.home.join("data"))
         .env("XDG_CACHE_HOME", corpus.home.join("cache"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

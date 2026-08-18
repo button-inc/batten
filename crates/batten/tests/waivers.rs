@@ -23,7 +23,7 @@ mod common;
 
 use std::path::PathBuf;
 
-use common::{Fixture, batten, run_with_stdin, scratch, stderr};
+use common::{Fixture, StateHome, batten, run_with_stdin, scratch, stderr};
 
 /// A `forbid` rule at `deny` over the fixture's one Rust file.
 const RULE: &str = "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n\
@@ -94,11 +94,9 @@ fn repo(name: &str, extra: &str) -> (PathBuf, PathBuf) {
 
 fn run(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> (i32, String, String) {
     let output = batten()
+        .state_home(home)
         .args(args)
         .current_dir(repo)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
-        .env("APPDATA", home.join("data"))
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .env_remove("BATTEN_LOG_LEVEL")
         .output()

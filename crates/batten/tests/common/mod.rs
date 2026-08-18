@@ -119,12 +119,56 @@ pub(crate) fn run(dir: &Path, args: &[&str]) -> Output {
 ///
 /// [`state_root`]: ../../src/state.rs
 pub(crate) fn state_home<'a>(command: &'a mut Command, home: &Path) -> &'a mut Command {
-    let data = home.join("data");
+    state_dir(command, &home.join("data")).env("HOME", home)
+}
+
+/// [`state_home`] and [`state_dir`] as chainable methods.
+///
+/// A trait rather than only the free functions above, because the free form does
+/// not compose with the builder chains every suite already writes: `Command`'s
+/// setters return `&mut Self`, so a helper taking `&mut Command` has to be
+/// hoisted out into its own statement and the chain restructured around it. That
+/// is a rewrite of fourteen call sites to move three lines, and a rewrite is
+/// where a site quietly loses its isolation — which is the very defect
+/// (CLOUD-619) this helper exists to prevent.
+///
+/// As a method it is a drop-in: the three `.env(…)` lines become one
+/// `.state_home(…)` and nothing else about the site moves.
+pub(crate) trait StateHome {
+    /// Point the resolved state root at `<home>/data` on every platform, and set
+    /// `HOME` to `home`.
+    fn state_home(&mut self, home: &Path) -> &mut Self;
+    /// Point the resolved state root at `dir` itself, setting no `HOME`.
+    fn state_dir(&mut self, dir: &Path) -> &mut Self;
+}
+
+impl StateHome for Command {
+    fn state_home(&mut self, home: &Path) -> &mut Self {
+        state_home(self, home)
+    }
+
+    fn state_dir(&mut self, dir: &Path) -> &mut Self {
+        state_dir(self, dir)
+    }
+}
+
+/// [`state_home`] for a suite whose state root is a directory it names outright,
+/// rather than `<home>/data`.
+///
+/// `config_epoch`'s fixtures point the data dir at the home itself, so the
+/// `/data` join `state_home` performs would send them somewhere nothing writes.
+/// Split rather than parameterised with a flag: both callers then say which
+/// directory they mean, and neither has to know what the other assumed.
+///
+/// `HOME` is deliberately NOT set here — it is a fact about the user, not about
+/// where state goes, and a helper that set it would be answering a question its
+/// caller did not ask. [`state_home`] sets it because a home is exactly what it
+/// takes.
+pub(crate) fn state_dir<'a>(command: &'a mut Command, dir: &Path) -> &'a mut Command {
     command
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", &data)
-        .env("APPDATA", &data)
-        .env("LOCALAPPDATA", home.join("cache"))
+        .env("XDG_DATA_HOME", dir)
+        .env("APPDATA", dir)
+        .env("LOCALAPPDATA", dir.join("cache"))
 }
 
 /// Run `batten` with `args` in `dir`, feeding `input` on stdin.

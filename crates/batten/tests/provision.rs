@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, git_in, scratch};
+use common::{Fixture, StateHome, batten, git_in, scratch};
 
 /// The SHA-256 of `bytes` as lowercase hex, computed the way the manifest pins
 /// it — through the binary's own helper, so a fixture cannot pin a digest the
@@ -66,11 +66,9 @@ impl Env {
 
     fn run(&self, args: &[&str]) -> Output {
         batten()
+            .state_home(&self.home)
             .args(args)
             .current_dir(&self.repo)
-            .env("HOME", &self.home)
-            .env("XDG_DATA_HOME", self.home.join("data"))
-            .env("APPDATA", self.home.join("data"))
             .output()
             .expect("run batten")
     }
@@ -475,11 +473,9 @@ fn an_https_fetch_honours_the_hosts_ca_configuration() {
     // prove nothing about trust, only that something answered.
     let untrusted = env.run(&["provision", "apply"]);
     let trusted = batten()
+        .state_home(&env.home)
         .args(["provision", "apply"])
         .current_dir(&env.repo)
-        .env("HOME", &env.home)
-        .env("XDG_DATA_HOME", env.home.join("data"))
-        .env("APPDATA", env.home.join("data"))
         .env("CURL_CA_BUNDLE", tls.join("cert.pem"))
         .output()
         .expect("run batten");

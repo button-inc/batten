@@ -23,7 +23,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use common::{Fixture, batten};
+use common::{Fixture, StateHome, batten};
 
 /// A scratch repository containing `batten.toml` plus any extra files.
 fn repo(name: &str, config: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -343,7 +343,7 @@ fn this_repositorys_own_epoch_is_computable() {
 // is fast and wrong is strictly worse than no cache, and the failure would be
 // silent exactly when attribution mattered.
 //
-// Every case runs with `XDG_DATA_HOME` pointed at scratch. The cache lives in
+// Every case runs with the state root pointed at scratch. The cache lives in
 // the OS data directory by design (never in the checkout), and a suite that
 // wrote into the developer's real one would both pollute it and let two tests
 // collide through it.
@@ -352,18 +352,17 @@ fn this_repositorys_own_epoch_is_computable() {
 fn epoch_in(dir: &Path, home: &Path, args: &[&str]) -> Output {
     let mut command = batten();
     command.args(["config", "epoch"]).args(args);
-    // APPDATA mirrors it exactly — this suite points the data dir at `home`
-    // itself rather than at `home/data`, and the Windows strategy must resolve
-    // to the same place or the cache lands in the real roaming profile.
-    command.env("XDG_DATA_HOME", home);
-    command.env("APPDATA", home);
+    // `state_dir`, not `state_home`: this suite points the data dir at `home`
+    // ITSELF rather than at `home/data`, so the join the other helper performs
+    // would send it somewhere nothing writes.
     command
+        .state_dir(home)
         .current_dir(dir)
         .output()
         .expect("run batten config epoch")
 }
 
-/// A scratch `XDG_DATA_HOME`, wiped so each test starts with no cache.
+/// A scratch state root, wiped so each test starts with no cache.
 fn cache_home(name: &str) -> PathBuf {
     let home = std::env::temp_dir().join("batten-epoch-cache").join(name);
     let _ = fs::remove_dir_all(&home);
