@@ -53,6 +53,15 @@ setup() {
 	STUB
 	chmod +x "$BIN/cargo-semver-checks"
 
+	# The toolchain the comparison runs under is derived from the compiler on
+	# PATH (CLOUD-593), so it is part of the stub environment rather than
+	# something a case reaches out of the sandbox for.
+	cat >"$BIN/rustc" <<-'STUB'
+		#!/usr/bin/env bash
+		echo "rustc 1.97.1 (8bab26f4f 2026-07-14)"
+	STUB
+	chmod +x "$BIN/rustc"
+
 	export STUB_REPORT="$BATS_TEST_TMPDIR/report"
 	export STUB_RC="$BATS_TEST_TMPDIR/rc"
 	export SEMVER_ROOT="$REPO"
@@ -173,4 +182,63 @@ BREAKING CHANGE: the enum is now non_exhaustive"
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" != *"SECRET_RUSTDOC_PAYLOAD"* ]]
+}
+
+# --- the toolchain the comparison runs under (CLOUD-593, CLOUD-654) -----------
+#
+# It used to default to a floating rustup `stable`, on the premise that the
+# pinned toolchain was too old for cargo-semver-checks. CLOUD-593 coupled the
+# floor to the pin and inverted that: with `rust-version` at 1.97, a `stable`
+# channel resolving 1.94.1 aborts the run with "requires rustc 1.97", exit 101 —
+# "could not look", which `verify` correctly refuses. These rows hold the gate to
+# asking the compiler that is actually on PATH.
+
+@test "the toolchain defaults to the one on PATH, not to a floating channel" {
+	# A version no channel would produce, so a pass cannot come from the ambient
+	# toolchain happening to match.
+	cat >"$BIN/rustc" <<-'STUB'
+		#!/usr/bin/env bash
+		echo "rustc 9.9.9 (deadbeef 2026-01-01)"
+	STUB
+	chmod +x "$BIN/rustc"
+	# The stub cargo records the toolchain selector it was invoked with.
+	cat >"$BIN/cargo" <<-'STUB'
+		#!/usr/bin/env bash
+		echo "$1" >"$STUB_SELECTOR"
+		cat "$STUB_REPORT" 2>/dev/null
+		exit "$(cat "$STUB_RC" 2>/dev/null || echo 0)"
+	STUB
+	chmod +x "$BIN/cargo"
+	export STUB_SELECTOR="$BATS_TEST_TMPDIR/selector"
+	graded 223
+	commit_with "fix(x): a compatible change"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$STUB_SELECTOR")" = "+9.9.9" ]
+}
+
+@test "SEMVER_TOOLCHAIN still overrides, so the suite can drive another claim" {
+	cat >"$BIN/cargo" <<-'STUB'
+		#!/usr/bin/env bash
+		echo "$1" >"$STUB_SELECTOR"
+		cat "$STUB_REPORT" 2>/dev/null
+		exit "$(cat "$STUB_RC" 2>/dev/null || echo 0)"
+	STUB
+	chmod +x "$BIN/cargo"
+	export STUB_SELECTOR="$BATS_TEST_TMPDIR/selector"
+	graded 223
+	commit_with "fix(x): a compatible change"
+	SEMVER_TOOLCHAIN=1.2.3 run "$GATE"
+	[ "$status" -eq 0 ]
+	[ "$(cat "$STUB_SELECTOR")" = "+1.2.3" ]
+}
+
+@test "no rustc at all is exit 2, never a fall back to a floating channel" {
+	# Falling back to `stable` here is the defect this replaced: it is the one
+	# answer that looks like a verdict and is not.
+	rm "$BIN/rustc"
+	graded 223
+	PATH="$BIN:/usr/bin:/bin" run "$GATE"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"no rustc on PATH"* ]]
 }

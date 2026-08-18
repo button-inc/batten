@@ -25,15 +25,26 @@
 # bumps the patch whatever the commit type says (.claude/rules/commits.md), so
 # patch-compatibility is exactly what the next release will assert.
 #
-# THE TOOLCHAIN IS NOT THE PINNED ONE, and cannot be. cargo-semver-checks 0.50.0
-# refuses under 1.85.0 ("rustc version is not high enough: >=1.93.0 needed"), and
-# downgrading is not an escape — 0.40.0, the 1.85-era release, instead dies
-# resolving this crate's own dependency tree (`home@0.5.12 requires rustc 1.88`).
-# So the rustdoc JSON both sides are compared through is built by a newer
-# toolchain, obtained through rustup the way `[tasks.coverage]` fetches
-# llvm-tools-preview and `[tasks.msrv]` drives rustup directly. This says nothing
-# about the crate's floor: `mise run msrv` remains the sole authority on 1.85, and
-# it is what would fail if the floor were really broken.
+# THE TOOLCHAIN IS THE PINNED ONE, AND THAT IS NEW (CLOUD-593, CLOUD-654). It
+# used to be a floating rustup `stable`, and the reason was real while it lasted:
+# cargo-semver-checks 0.50.0 refuses under 1.85.0 ("rustc version is not high
+# enough: >=1.93.0 needed"), and downgrading was not an escape — 0.40.0, the
+# 1.85-era release, instead dies resolving this crate's own dependency tree
+# (`home@0.5.12 requires rustc 1.88`). So the rustdoc JSON was built by whatever
+# `stable` happened to be.
+#
+# CLOUD-593 coupled the floor to the pin and moved the pin to current stable,
+# which removed that premise and then INVERTED it. `rust-version` became 1.97, and
+# a rustup `stable` channel resolving anything older now aborts the run outright:
+# measured here at rustc 1.94.1, "batten@0.0.80 requires rustc 1.97", exit 101 —
+# not a verdict, so `verify` correctly refused rather than passing. A floating
+# channel could break this gate again on any given day, in either direction; the
+# pin cannot, because it is the compiler the crate is actually built with.
+#
+# Read from `rustc --version` rather than parsed out of `mise.toml`, deliberately:
+# mise puts the pinned toolchain on PATH, so asking the compiler that is actually
+# active is a READ of the one authority instead of a fourth COPY of the number —
+# the copies are exactly what `msrv-pin-agreement` exists to hold together.
 #
 # Exit 0 compatible (or a declared break) / 1 an undeclared break / 2 could not
 # look — matching the other `*-check` programs, so a caller can tell "this branch
@@ -53,7 +64,16 @@ readonly RELEASE_TYPE="${SEMVER_RELEASE_TYPE:-patch}"
 #
 # Guarded by hand, because a task body does not run under `set -e` and a gate that
 # could not build its own inputs must never report on them.
-toolchain="${SEMVER_TOOLCHAIN:-stable}"
+toolchain="${SEMVER_TOOLCHAIN:-}"
+if [ -z "$toolchain" ]; then
+	# `rustc 1.97.1 (8bab26f4f 2026-07-14)` -> `1.97.1`, which is also the name
+	# rustup gives the toolchain mise installed, so `cargo +1.97.1` resolves it.
+	toolchain=$(rustc --version 2>/dev/null | awk '{print $2}')
+fi
+if [ -z "$toolchain" ]; then
+	echo "::error:: semver: no rustc on PATH, so the toolchain the comparison must run under could not be determined. This is a checkout problem, not a verdict — run \`mise install\`." >&2
+	exit 2
+fi
 # Read into a variable and match with `<<<` rather than piping into `grep -q`:
 # under `pipefail` an early-exiting grep SIGPIPEs its producer, so a MATCH
 # reports failure (mem:toolchain-and-hooks). `pipefail-grep-check` gates it.
