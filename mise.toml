@@ -109,9 +109,9 @@ hk = "1.54.0"                                                # git-hook runner (
 # Go binary with per-platform release assets, so `lock-complete` can hold every
 # platform this repo installs on.
 "aqua:shenwei356/rush" = "0.9.0"
-"aqua:rhysd/actionlint" = "1.7.7" # workflow mistakes (zizmor covers workflow security)
-"aqua:tamasfe/taplo" = "0.10.0"   # TOML lint + format — mise.toml is edited constantly
-pkl = "0.32.1"                    # evaluates hk.pkl as a check, not only when hk runs it
+"aqua:rhysd/actionlint" = "1.7.12" # workflow mistakes (zizmor covers workflow security)
+"aqua:tamasfe/taplo" = "0.10.0"    # TOML lint + format — mise.toml is edited constantly
+pkl = "0.32.1"                     # evaluates hk.pkl as a check, not only when hk runs it
 # prettier formats the Markdown (AGENTS.md, CONTRIBUTING.md). It is the one
 # npm tool here, so node comes with it and nothing else depends on either.
 node = "24"
