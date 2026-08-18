@@ -1941,7 +1941,7 @@ pub(crate) fn shebang_interpreter(path: &Path) -> Option<Vec<String>> {
 /// A `program` carrying a separator is not a PATH lookup at all and is left
 /// alone. `None` leaves the caller reporting the original spawn error, the
 /// one-way discipline the shebang fallback keeps.
-fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn on_path_verbatim(program: &str) -> Option<std::path::PathBuf> {
     lookup_verbatim(program, &std::env::var_os("PATH")?)
 }
 

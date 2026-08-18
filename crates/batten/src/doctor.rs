@@ -143,12 +143,17 @@ const COMMAND_PROGRAMS: &str = "command-programs";
 /// user-supplied code from the read-only surface. A path-bearing token
 /// (`./bin/tool`) is checked where it points; a bare name is looked up across
 /// `PATH` entries.
+/// **One lookup, shared with the spawn path.** This carried its own copy, and
+/// the copy searched only the verbatim name — so on Windows it reported
+/// `program-not-on-path` for `sh` while `sh.exe` sat on PATH, and this
+/// repository failed its own `doctor` (CLOUD-617). Two answers to "is this
+/// program on PATH" is one too many: the probe must agree with the spawn it is
+/// predicting, or it diagnoses a run that would have worked.
 fn on_path(program: &str) -> bool {
     if program.contains(std::path::MAIN_SEPARATOR) || program.contains('/') {
         return Path::new(program).is_file();
     }
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
+    crate::rules::on_path_verbatim(program).is_some()
 }
 
 /// Diagnose the repository rooted at `dir`.
