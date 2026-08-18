@@ -2127,13 +2127,28 @@ fn spawn_resolving_on<T>(
         }
     }
 
-    // Rung 3, over whichever path is known to point at the file: what rung 2
-    // resolved, or the program read relative to `root`. A bare name that rung 2
-    // could not find has nothing to read a shebang from, and joining it to
-    // `root` anyway would be reading a file the spawn never referred to.
+    // Rung 3, over whichever path is known to point at the file — which is
+    // exactly the path the spawn referred to, and never a guess at one:
+    //
+    //   * what rung 2 resolved, when it resolved something;
+    //   * the program itself, when it is already absolute — `secrets` spawns the
+    //     provision cache's binary that way, and reading anything else would be
+    //     reading a different file;
+    //   * the program under `root`, when it is relative and a root is known.
+    //
+    // A bare name rung 2 could not find falls through with nothing, because
+    // joining it to `root` would name a file the spawn never referred to.
+    //
+    // The absolute arm is not hypothetical: it was missing for one run, and the
+    // whole of `secrets` went with it — CLOUD-113's nineteenth Windows run had
+    // four `cli.rs` cases reporting `%1 is not a valid Win32 application` over
+    // the fixture's seeded `#!/bin/sh` stub scanner, a file the ladder had every
+    // means to run and no path to read.
     if is_not_an_executable_image(&latest) {
+        let as_path = Path::new(program);
         let script = match &found {
             Some(path) => Some(path.clone()),
+            None if as_path.is_absolute() => Some(as_path.to_owned()),
             None => root.map(|root| root.join(program)),
         };
         if let Some(script) = script {
@@ -4553,6 +4568,41 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         )
         .expect_err("it is not there");
         assert_eq!(absent.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn an_absolute_script_is_read_from_itself_rather_than_from_a_root() {
+        // THE `secrets` SHAPE, and the one the first ladder dropped. A
+        // provisioned scanner is spawned by the absolute path `provision`
+        // resolved, so there is no relative name and the caller passes no root —
+        // and for one run that meant rung 3 had nothing to read, while the file
+        // it needed was the program itself. Four `cli.rs` cases reported `%1 is
+        // not a valid Win32 application` over a `#!/bin/sh` stub the ladder could
+        // have run.
+        let cache = temp_dir("ladder-absolute-script");
+        write(&cache, "ripsecrets", "#!/bin/sh\nexit 0\n");
+        with_shell(&cache);
+        let scanner = cache.join("ripsecrets");
+        let dirs = vec![cache.clone()];
+
+        let log = std::cell::RefCell::new(Vec::new());
+        let out = spawn_resolving_on(
+            Some(std::ffi::OsStr::new("")),
+            None,
+            &scanner.display().to_string(),
+            &[".EXE".to_owned()],
+            windows_like_spawn(Path::new("/nowhere"), &dirs, &log),
+        );
+
+        assert!(out.is_ok(), "the stub is runnable through its interpreter");
+        assert_eq!(
+            log.into_inner(),
+            vec![
+                (scanner.display().to_string(), vec![]),
+                ("sh".to_owned(), vec![scanner.display().to_string()]),
+            ],
+            "no PATH rung for a path-bearing program — straight from the refusal to its shebang"
+        );
     }
 
     #[test]
