@@ -99,6 +99,26 @@ jobs_body() {
 	[[ "$output" == *"verdict=1"* ]]
 }
 
+@test "a job that failed in a mise EXEC step rendered a verdict too" {
+	# THE SECOND SPELLING, and the case whose absence cost four Windows jobs in
+	# one lap. `windows` runs `mise exec -- cargo test --workspace` rather than a
+	# task, for the Git Bash reason its own comment measures — so seven
+	# reproducibly failing tests classified as a provisioning transient, and
+	# `land` re-ran the job until its budget stopped it while reporting that the
+	# provisioning path was broken.
+	stub_gh
+	response runs.last 'W/"r1"' "$(runs_list 905)"
+	response jobs.last 'W/"j1"' "$(jobs_body windows 'Run mise exec -- cargo test --workspace')"
+	# The roster gains the job under test rather than the case borrowing a name
+	# already in it: which job it is decides nothing here, but a case whose
+	# subject is filtered out before the predicate runs would pass on nothing.
+	CI_REQUIRED_CHECKS="ci,cross,msrv,windows,final" run "$SCAN"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"verdict"*"run=905"*"job=windows"* ]]
+	[[ "$output" == *"nonverdict=0"* ]]
+	[[ "$output" == *"verdict=1"* ]]
+}
+
 @test "THE FAN-IN IS EXCLUDED: final's needs-assertion is not a non-verdict failure" {
 	# Measured on run 31637881076: `final` failed at `Assert all required jobs
 	# passed`, a bare run: step. Counted naively it would fire on every genuinely

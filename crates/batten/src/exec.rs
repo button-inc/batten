@@ -180,11 +180,20 @@ pub fn run_in_with(
         ));
     };
 
-    let spawned = Command::new(OsString::from(program))
-        .args(args.iter().map(OsString::from))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+    // THE SAME RESOLUTION EVERY SPAWNING KIND GETS (CLOUD-617). `exec` runs
+    // whatever a consumer names, which on Windows is the widest exposure to the
+    // two refusals of the lot: an extensionless binary `CreateProcess` will not
+    // find, and a shell script it will not read a `#!` for. `.` is the directory
+    // this spawn resolves a relative name against, since it inherits the working
+    // directory rather than setting one.
+    let spawned = crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+        Command::new(OsString::from(program))
+            .args(extra.iter().map(OsString::from))
+            .args(args.iter().map(OsString::from))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    });
 
     let mut child = match spawned {
         Ok(child) => child,

@@ -49,6 +49,7 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 use schemars::JsonSchema;
@@ -284,12 +285,22 @@ pub fn fire(actions: &[Action], event: Event, facts: Facts<'_>, err: &mut dyn Wr
         let Some((program, args)) = expanded.split_first() else {
             continue;
         };
-        let status = Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // THE SAME RESOLUTION EVERY SPAWNING KIND GETS (CLOUD-617). An action is
+        // a program a config names, so it meets Windows' two refusals as a
+        // `command` checker does — and a "could not spawn" line below is the
+        // only trace, on a path that by construction cannot fail the call, so an
+        // unresolved action would be the quietest of the lot. `.` is where this
+        // spawn resolves a relative name, no `current_dir` being set.
+        let status =
+            crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+                Command::new(program)
+                    .args(extra)
+                    .args(args)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+            });
         // Pointer-only, and each outcome distinguishable: a command that could
         // not be spawned at all is a different thing to fix than one that ran
         // and failed, and reporting both as "failed" sends the reader to the

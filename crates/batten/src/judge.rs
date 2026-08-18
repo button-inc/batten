@@ -88,6 +88,7 @@
 //! see a judge outcome. The advisory surface is unable to block by type rather
 //! than by policy.
 
+use std::path::Path;
 use std::process::Command;
 
 use schemars::JsonSchema;
@@ -271,12 +272,24 @@ pub fn invoke(rule: &str, argv: &[String], payload: &[u8]) -> anyhow::Result<Ver
             "rule {rule}: `[judge].run` resolved to no program"
         )));
     };
-    let mut child = Command::new(program)
-        .args(arguments)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+    // THE SAME RESOLUTION EVERY SPAWNING KIND GETS (CLOUD-617). A judge is a
+    // program a config names, so it meets Windows' two refusals exactly as a
+    // `command` checker does — and this site had none of the recovery, so on the
+    // eighteenth Windows run of CLOUD-113 seven of `judge_kind`'s fourteen cases
+    // reported `cannot run judge program 'judge-stub'` in place of the verdict
+    // discipline each was written to assert. `invoke` sets no `current_dir`, so
+    // `.` is where its own spawn resolves a relative program name and therefore
+    // where rung 3 must read one from.
+    let mut child =
+        crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
+            Command::new(program)
+                .args(extra)
+                .args(arguments)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        })
         .map_err(|err| {
             UsageError::raise(format!(
                 "rule {rule}: cannot run judge program `{program}`: {err}"

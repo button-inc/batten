@@ -2020,6 +2020,141 @@ pub(crate) fn is_not_an_executable_image(err: &std::io::Error) -> bool {
     matches!(err.raw_os_error(), Some(193 | 8))
 }
 
+/// Spawn `program`, resolving the two ways Windows refuses a program a shell
+/// would have run.
+///
+/// **One ladder, shared by every spawning kind** (CLOUD-617). `command`,
+/// `secrets` and `judge` each spawn a program a config names, so each meets the
+/// same two refusals, and three copies of the recovery is three chances for one
+/// of them to be a step short. This is that recovery, once:
+///
+///   1. **Spawn it directly.** On Unix this is the whole function — the kernel
+///      resolves `PATH` and reads `#!` itself, so neither rung below fires for a
+///      well-formed program.
+///   2. **`NotFound` → look `PATH` up by hand.** `CreateProcess` appends the
+///      `PATHEXT` extensions and never tries the bare name, so an extensionless
+///      executable is invisible to it while a shell finds it. Spawn what the
+///      lookup found, by absolute path, which `CreateProcess` takes as given.
+///   3. **Not an executable image → read the `#!`.** `CreateProcess` runs PE
+///      images and does not read a shebang, so a shell-script checker — the
+///      ordinary shape for the extension surface CLOUD-88 calls universal —
+///      cannot be spawned at all. Resolve the interpreter and pass the script to
+///      it as an argument.
+///
+/// **Rungs 2 and 3 compose, and that is the fix rather than a tidy-up.** They
+/// were written as two independent `if`s over one program string, so each could
+/// only rescue what it saw first: a *root-relative* script reached rung 3 and a
+/// *`PATH`* binary reached rung 2, while a bare name resolving on `PATH` to an
+/// extensionless script — `#!/bin/sh` with no suffix, which is what a stub
+/// installed into a `bin/` on `PATH` looks like — needed both and got neither.
+/// Rung 2 found the file, rung 3 then looked for a shebang at `root/<program>`,
+/// where nothing was. Measured on the eighteenth Windows run of CLOUD-113:
+/// `judge_kind` failed 7 of 14 with `cannot run judge program 'judge-stub'`,
+/// every case reporting a plumbing failure in place of its subject. Threading
+/// the resolved path from 2 into 3 is what makes the ladder a ladder.
+///
+/// `root` is **the directory a relative program name resolves against**, which
+/// is what rung 3 reads the `#!` from when rung 2 found nothing. A caller that
+/// sets `current_dir` passes that; one that inherits the working directory
+/// passes `Path::new(".")`, since that is where its own spawn will look. `None`
+/// is for a caller whose program is already absolute, where a relative name
+/// cannot arise — never a shrug, because a wrong directory here means reading a
+/// shebang out of a file the spawn never referred to.
+///
+/// `spawn` receives the program to run and a prefix of arguments to place before
+/// the caller's own — the interpreter's flags and the script path, when rung 3
+/// fires, and empty otherwise.
+///
+/// **A rung's own failure is never what gets reported.** Rung 3 reports nothing
+/// of its own — an unreadable script, no `#!`, an interpreter that is itself
+/// missing all leave the refusal that reached it standing — because `sh: not
+/// found` in place of `judge-stub: not found` sends the reader to the wrong
+/// missing program. Rung 2 is the one place the error advances, and only because
+/// it advances toward the file: once the lookup has found `<dir>/judge-stub`,
+/// "not an executable image" is a truer account of that path than "not found on
+/// PATH", which is now false.
+pub(crate) fn spawn_resolving<T>(
+    root: Option<&Path>,
+    program: &str,
+    spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    spawn_resolving_on(
+        std::env::var_os("PATH").as_deref(),
+        root,
+        program,
+        &executable_extensions(),
+        spawn,
+    )
+}
+
+/// [`spawn_resolving`] over a supplied `PATH` and extension list.
+///
+/// The same seam, and for the same reason, as [`lookup_verbatim`] under
+/// [`on_path_verbatim`]: `unsafe` is forbidden here and `set_var` is unsafe, so
+/// a test that reached for the real environment could not be written at all.
+/// What this exposes is the part that decides — *which rung fires, in what
+/// order, over which path* — which is exactly the composition that was missing
+/// when the two rungs were independent `if`s. Testing it here means the Windows
+/// ladder is falsifiable on a Linux host rather than only on a runner.
+fn spawn_resolving_on<T>(
+    path: Option<&std::ffi::OsStr>,
+    root: Option<&Path>,
+    program: &str,
+    extensions: &[String],
+    mut spawn: impl FnMut(&str, &[&str]) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let first = match spawn(program, &[]) {
+        Ok(ok) => return Ok(ok),
+        Err(err) => err,
+    };
+
+    // Rung 2. The resolved path is kept rather than discarded on failure: it is
+    // the only handle rung 3 has on the file, since the name that reached us is
+    // one `CreateProcess` could not resolve.
+    let mut found = None;
+    let mut latest = first;
+    if latest.kind() == std::io::ErrorKind::NotFound {
+        if let Some(path) = path.and_then(|path| lookup_on(program, path, extensions)) {
+            if let Some(as_str) = path.to_str() {
+                match spawn(as_str, &[]) {
+                    Ok(ok) => return Ok(ok),
+                    Err(err) => {
+                        found = Some(path.clone());
+                        latest = err;
+                    }
+                }
+            }
+        }
+    }
+
+    // Rung 3, over whichever path is known to point at the file: what rung 2
+    // resolved, or the program read relative to `root`. A bare name that rung 2
+    // could not find has nothing to read a shebang from, and joining it to
+    // `root` anyway would be reading a file the spawn never referred to.
+    if is_not_an_executable_image(&latest) {
+        let script = match &found {
+            Some(path) => Some(path.clone()),
+            None => root.map(|root| root.join(program)),
+        };
+        if let Some(script) = script {
+            if let Some((interpreter, leading)) = shebang_interpreter(&script)
+                .as_deref()
+                .and_then(<[String]>::split_first)
+            {
+                if let Some(script) = script.to_str() {
+                    let mut extra: Vec<&str> = leading.iter().map(String::as_str).collect();
+                    extra.push(script);
+                    if let Ok(ok) = spawn(interpreter, &extra) {
+                        return Ok(ok);
+                    }
+                }
+            }
+        }
+    }
+
+    Err(latest)
+}
+
 /// Spawn one invocation, substituting `files` for [`FILES_PLACEHOLDER`], and
 /// record a finding if it exits non-zero.
 ///
@@ -2056,54 +2191,12 @@ fn run_once(
             .status()
     };
 
-    let mut status = spawn(program, &expanded, &[]);
-
-    // CLOUD-617, the second half: "not found on PATH" can be false on Windows.
-    //
-    // `CreateProcess` appends `.exe` when it searches PATH and never tries the
-    // bare name, so an EXTENSIONLESS executable is invisible to it — while a
-    // shell finds and runs the same file, because MSYS reads the PE header
-    // rather than the extension. That is not an exotic layout: it is how mise
-    // installs every tool. Measured on the tenth Windows run of CLOUD-113, with
-    // the job's own preflight resolving `hk ->
-    // …/mise/installs/hk/1.54.0/hk` and `hk --version` printing, while batten
-    // reported `cannot run hk: not found on PATH` in the same job.
-    //
-    // So: search PATH ourselves for the literal name and spawn by absolute
-    // path, which `CreateProcess` accepts without appending anything. Only on
-    // the NotFound path, so a program that really is absent still reports as
-    // absent, and on Unix the search finds nothing a direct spawn would not.
-    if let Some(err) = status.as_ref().err() {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            if let Some(found) = on_path_verbatim(program) {
-                if let Some(found) = found.to_str() {
-                    status = spawn(found, &expanded, &[]);
-                }
-            }
-        }
-    }
-
-    // CLOUD-617: the direct spawn said "not an executable image", so this may be
-    // a script the OS loader will not read a `#!` for. Resolve the interpreter
-    // and run it through that instead. Scoped to a program that resolves to a
-    // real file under the root — a bare name off PATH has nothing to read — and
-    // the ORIGINAL error survives every way this can fail, because a fallback
-    // that reports its own failure hides the one the operator has to act on.
-    if let Err(err) = &status {
-        if is_not_an_executable_image(err) {
-            let script = root.join(program);
-            if let Some((interpreter, leading)) = shebang_interpreter(&script)
-                .as_deref()
-                .and_then(<[String]>::split_first)
-            {
-                let mut extra: Vec<&str> = leading.iter().map(String::as_str).collect();
-                extra.push(program);
-                if let Ok(rescued) = spawn(interpreter, &expanded, &extra) {
-                    status = Ok(rescued);
-                }
-            }
-        }
-    }
+    // CLOUD-617's whole resolution, shared with `secrets` and `judge` rather
+    // than restated here — the two Windows refusals and the order they compose
+    // in are one decision, and this kind is not the one that gets to own it.
+    let status = spawn_resolving(Some(root), program, |program, extra| {
+        spawn(program, &expanded, extra)
+    });
 
     let status = match status {
         Ok(status) => status,
@@ -4321,5 +4414,170 @@ unlanded = [\"src/draft.rs\", \"src/generated/**\"]
         assert!(!is_not_an_executable_image(&Error::from(
             ErrorKind::PermissionDenied
         )));
+    }
+
+    /// A spawn that answers the way `CreateProcess` does, so the ladder can be
+    /// driven on a host whose loader is more forgiving than the one it is for.
+    ///
+    /// Three rules, each one a thing the real loader does:
+    ///
+    ///   * **A bare name resolves only as `<name>.exe`**, searched across `dirs`.
+    ///     That is the refusal rung 2 exists for — and it is why the interpreter
+    ///     rung 3 names still runs: `sh` is invisible, `sh.exe` is not.
+    ///   * **A path to a file with no `MZ` header is `ERROR_BAD_EXE_FORMAT`.**
+    ///     No shebang is read; that is the refusal rung 3 exists for.
+    ///   * Anything else runs.
+    ///
+    /// Every call is recorded, because *which programs were tried, in what
+    /// order* is the property — a ladder that reached the right answer by a wrong
+    /// route would pass a bare assertion on the outcome.
+    fn windows_like_spawn<'a>(
+        cwd: &'a Path,
+        dirs: &'a [std::path::PathBuf],
+        log: &'a std::cell::RefCell<Vec<(String, Vec<String>)>>,
+    ) -> impl FnMut(&str, &[&str]) -> std::io::Result<&'static str> + 'a {
+        move |program, extra| {
+            log.borrow_mut().push((
+                program.to_owned(),
+                extra.iter().map(|arg| (*arg).to_owned()).collect(),
+            ));
+            let bare = !program.contains('/') && !program.contains('\\');
+            // A relative program name resolves against the working directory the
+            // caller set, which is the `root` it hands the ladder — the fact that
+            // makes rung 3's choice of directory the right one to assert.
+            let resolved = if bare {
+                dirs.iter()
+                    .map(|dir| dir.join(format!("{program}.exe")))
+                    .find(|candidate| candidate.is_file())
+            } else {
+                Some(cwd.join(program))
+            };
+            let Some(resolved) = resolved else {
+                return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+            };
+            if !resolved.is_file() {
+                return Err(std::io::Error::from(std::io::ErrorKind::NotFound));
+            }
+            if !std::fs::read(&resolved)
+                .unwrap_or_default()
+                .starts_with(b"MZ")
+            {
+                return Err(std::io::Error::from_raw_os_error(193));
+            }
+            Ok("ran")
+        }
+    }
+
+    /// A directory holding a stub `sh.exe` the fake loader will run, so rung 3
+    /// has an interpreter to reach — the Git Bash `sh.exe` a real runner has.
+    fn with_shell(dir: &Path) {
+        write(dir, "sh.exe", "MZ\u{0}");
+    }
+
+    #[test]
+    fn a_path_resolved_script_needs_both_rungs_and_gets_them() {
+        // THE CASE THE INDEPENDENT `if`s COULD NOT REACH, and the one that failed
+        // seven of `judge_kind`'s fourteen cases on the eighteenth Windows run:
+        // a bare name that resolves on PATH to an EXTENSIONLESS SHELL SCRIPT.
+        // Rung 2 alone finds the file and still cannot execute it; rung 3 alone
+        // has no path to read a `#!` from, because the name never resolved. Only
+        // the composition answers, which is why this asserts the whole route.
+        let bin = temp_dir("ladder-path-script");
+        write(&bin, "judge-stub", "#!/bin/sh\nexit 0\n");
+        with_shell(&bin);
+        let path = std::env::join_paths([bin.as_path()]).unwrap();
+        let script = bin.join("judge-stub");
+        let dirs = vec![bin.clone()];
+
+        let log = std::cell::RefCell::new(Vec::new());
+        let out = spawn_resolving_on(
+            Some(path.as_os_str()),
+            Some(Path::new("/nowhere")),
+            "judge-stub",
+            &[".EXE".to_owned()],
+            windows_like_spawn(Path::new("/nowhere"), &dirs, &log),
+        );
+
+        assert!(
+            out.is_ok(),
+            "the script is runnable through its interpreter"
+        );
+        let calls = log.into_inner();
+        assert_eq!(
+            calls,
+            vec![
+                ("judge-stub".to_owned(), vec![]),
+                (script.display().to_string(), vec![]),
+                ("sh".to_owned(), vec![script.display().to_string()],),
+            ],
+            "direct, then the PATH-resolved absolute path, then its interpreter \
+             handed THAT path — not the bare name, which no interpreter could open"
+        );
+    }
+
+    #[test]
+    fn a_rescue_that_cannot_help_leaves_the_refusal_it_found() {
+        // The one-way discipline, at the rung most able to break it: a script
+        // whose interpreter is itself missing must still report the script's own
+        // failure. Reporting `no-such-interpreter: not found` would send the
+        // reader to a program their config never named.
+        let bin = temp_dir("ladder-missing-interpreter");
+        write(&bin, "stub", "#!/nope/no-such-interpreter\nexit 0\n");
+        let path = std::env::join_paths([bin.as_path()]).unwrap();
+        let dirs = vec![bin.clone()];
+
+        let log = std::cell::RefCell::new(Vec::new());
+        let err = spawn_resolving_on(
+            Some(path.as_os_str()),
+            None,
+            "stub",
+            &[".EXE".to_owned()],
+            windows_like_spawn(&bin, &dirs, &log),
+        )
+        .expect_err("nothing here can run it");
+        assert_eq!(
+            err.raw_os_error(),
+            Some(193),
+            "the file was found and is not an executable image — which is truer \
+             than the `not found` the first rung reported"
+        );
+
+        // A program that is genuinely absent keeps reporting as absent: the
+        // lookup finds nothing, so the error never advances past rung 1.
+        let absent = spawn_resolving_on(
+            Some(path.as_os_str()),
+            None,
+            "no-such-program-anywhere",
+            &[".EXE".to_owned()],
+            windows_like_spawn(&bin, &dirs, &std::cell::RefCell::new(Vec::new())),
+        )
+        .expect_err("it is not there");
+        assert_eq!(absent.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn a_root_relative_script_still_resolves_without_the_path_rung() {
+        // The `acceptance_corpus` shape — `bin/checker` under the repo root —
+        // which reaches rung 3 directly, since a name carrying a separator is
+        // not a PATH lookup at all. Kept as its own case so collapsing the two
+        // rungs into one ladder cannot silently drop the one that already worked.
+        let root = temp_dir("ladder-root-relative");
+        write(&root.join("bin"), "checker", "#!/bin/sh\nexit 0\n");
+        with_shell(&root);
+        let dirs = vec![root.clone()];
+
+        let log = std::cell::RefCell::new(Vec::new());
+        let out = spawn_resolving_on(
+            Some(std::ffi::OsStr::new("")),
+            Some(root.as_path()),
+            "bin/checker",
+            &[".EXE".to_owned()],
+            windows_like_spawn(&root, &dirs, &log),
+        );
+        assert!(out.is_ok());
+        assert_eq!(
+            log.into_inner().last().map(|(program, _)| program.clone()),
+            Some("sh".to_owned())
+        );
     }
 }

@@ -1165,7 +1165,7 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
     // matched bytes and is parsed here; stderr can carry a path the tool
     // failed to read, and echoing a child's stream would put output Batten
     // never shaped onto Batten's own (§6).
-    let spawn = |program: &std::ffi::OsStr, leading: &[String]| {
+    let spawn = |program: &str, leading: &[&str]| {
         std::process::Command::new(program)
             .args(leading)
             .args(SCANNER_FLAGS)
@@ -1176,29 +1176,30 @@ fn run_once(rule: &Rule, binary: &Path, root: &Path, batch: &[&str]) -> Result<V
             .output()
     };
 
-    let mut result = spawn(binary.as_os_str(), &[]);
-
-    // THE SAME RESOLUTION `command` RULES GOT (CLOUD-617), and here for the same
-    // reason: a provisioned scanner is a program someone else built, so Batten
-    // does not get to assume it is a PE image. `CreateProcess` does not read
-    // `#!`, and the failure surfaces as an internal error rather than as a
+    // THE SAME RESOLUTION EVERY SPAWNING KIND GETS (CLOUD-617), and here for the
+    // same reason: a provisioned scanner is a program someone else built, so
+    // Batten does not get to assume it is a PE image. `CreateProcess` does not
+    // read `#!`, and the failure surfaces as an internal error rather than as a
     // verdict — five cases in `tests/cli.rs` reported exit 3 over a stub scanner
-    // that was a shell script, none of them about secrets at all. One-way, as
-    // there: every failure inside the fallback leaves the original error.
-    if let Err(err) = &result {
-        if crate::rules::is_not_an_executable_image(err) {
-            if let Some((interpreter, leading)) = crate::rules::shebang_interpreter(binary)
-                .as_deref()
-                .and_then(<[String]>::split_first)
-            {
-                let mut extra = leading.to_vec();
-                extra.push(binary.to_string_lossy().into_owned());
-                if let Ok(rescued) = spawn(std::ffi::OsStr::new(interpreter), &extra) {
-                    result = Ok(rescued);
-                }
-            }
-        }
-    }
+    // that was a shell script, none of them about secrets at all.
+    //
+    // `root` is `None` because `binary` is the absolute path `provision` resolved:
+    // there is no relative name to read against a directory, and the PATH rung
+    // leaves a path-bearing program alone by construction.
+    let result = match binary.to_str() {
+        Some(program) => crate::rules::spawn_resolving(None, program, spawn),
+        // A non-UTF-8 install path is not a reason to skip the scan: spawn it as
+        // the `OsStr` it is and forgo a resolution whose two rungs both need a
+        // `str`. Unreachable in practice — `provision` builds this path from the
+        // config's own text — and a silent skip would be the worse failure.
+        None => std::process::Command::new(binary)
+            .args(SCANNER_FLAGS)
+            .args(batch)
+            .current_dir(root)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output(),
+    };
 
     let output =
         result.with_context(|| format!("rule {}: run the pinned secret scanner", rule.id))?;

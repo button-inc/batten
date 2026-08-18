@@ -9,12 +9,31 @@
 #
 # ## The predicate, and why it is CLOSED
 #
-# CI runs this repo's work only as `Run mise run <task>` steps, and
-# `mise run ci-local-parity` already gates that invariant ("every task CI runs is
-# one `verify` runs"). So:
+# CI runs this repo's work through the pinned toolchain and nothing else runs it,
+# which `mise run ci-local-parity` gates ("every task CI runs is one `verify`
+# runs"). So:
 #
 #   a failed job rendered a VERDICT iff one of its failed steps is named
-#   `Run mise run <task>`; otherwise it failed WITHOUT reaching a verdict.
+#   `Run mise run <task>` or `Run mise exec -- <command>`; otherwise it failed
+#   WITHOUT reaching a verdict.
+#
+# `mise exec` IS THE SECOND SPELLING, added after the first cost four jobs in one
+# lap (CLOUD-113). This read `Run mise run <task>` alone, on the stated premise
+# that it is the only way our work reaches a runner — and the `windows` job broke
+# that premise for a measured reason: its task body is bash, so `mise run` puts
+# Git Bash between the runner and cargo, MSYS rewrites PATH across that boundary,
+# and the toolchain the preflight just resolved is invisible three processes down.
+# It runs `mise exec -- cargo test --workspace` instead, which the job's own
+# comment justifies at length.
+#
+# The consequence nobody costed: seven genuinely failing tests then classified as
+# a PROVISIONING TRANSIENT, so `land` re-ran the job four times, absorbed four
+# real verdicts, and reported "the provisioning path is broken" about a suite that
+# was reproducibly red. A predicate whose premise has gone false does not fail
+# loudly — it answers confidently and wrongly, in the direction that spends money.
+#
+# Still CLOSED, which is the property that mattered: this names the two ways a
+# verdict is rendered, not the growing set of ways a prelude can fail.
 #
 # Verified against run 31637905084, whose steps are exactly:
 #
@@ -227,7 +246,7 @@ while IFS= read -r run; do
 			| .[]
 			| . as $job
 			| ([$job.steps[]? | select(.conclusion == "failure")] | sort_by(.number)) as $failed
-			| ([$failed[] | select(.name | startswith("Run mise run "))] | first) as $task
+			| ([$failed[] | select(.name | startswith("Run mise run ") or startswith("Run mise exec -- "))] | first) as $task
 			| if $task
 			  then [$job.name, "verdict", $task.name]
 			  else [$job.name, "nonverdict", (($failed | first | .name) // "unknown")]
