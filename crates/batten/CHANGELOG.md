@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.81](https://github.com/button-inc/batten/compare/v0.0.80...v0.0.81) - 2026-08-18
+
+### Fixed
+
+- *(lint)* the crate satisfies the clippy the raised pin brings with it
+
+### Other
+
+- *(deps)* the MSRV floor tracks the toolchain pin, and two gates hold it
+
 ## [0.0.80](https://github.com/button-inc/batten/compare/v0.0.79...v0.0.80) - 2026-08-18
 
 ### Added
