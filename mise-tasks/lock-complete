@@ -57,6 +57,13 @@
 # bytes a commit would carry, identical in CI and in a sandbox, immune to
 # whatever an installer wrote afterwards. An explicit path still wins, which is
 # how the bats suite drives fixtures.
+#
+# The mutation drops the component boundary from the stale-lock comparison, so a
+# pin of `1.9` reads as satisfied by a locked `1.97.1`. That is the plausible
+# wrong spelling of "the lock extends the pin" — it is what a plain prefix test
+# gives you — and it silently accepts exactly the pin `mise install --locked`
+# would reject, which is the whole failure the clause was added for.
+#MUTANT stale-lock-prefix-not-boundary|s/{locked#"\$wantversion".}/{locked#"\$wantversion"}/|the extension must be at a component boundary, not a string prefix
 set -euo pipefail
 
 # `label` is what the pointers name; `lockfile` is where the bytes are read from.
@@ -211,6 +218,14 @@ parsed=$(awk '
 		print "BACK\t" tool "\t" line
 		next
 	}
+	# `version` sits in the tool header table, beside `backend`; a platform table
+	# carries checksum/url/url_api and never this key.
+	/^version = / && platform == "" && tool != "" {
+		line = $0
+		sub(/^version = /, "", line); gsub(/"/, "", line)
+		print "VERS\t" tool "\t" line
+		next
+	}
 	/^url = / && platform != "" { print "URL\t" tool "\t" platform }
 	END { if (tool != "") print "END\t" tool }
 ' "$lockfile")
@@ -238,6 +253,11 @@ if [ "$#" -eq 0 ]; then
 	# carried through for the pointer. The two are not merged: that one reads the
 	# WORKTREE (it is answering a question about a workflow file beside it) and
 	# needs no line numbers, and a shared parser would have to serve both.
+	# The pinned VERSION travels with the key, for the stale-lock clause below.
+	# Two spellings, both in this table today: a bare string (`hk = "1.54.0"`) and
+	# an inline table (`rust = { version = "1.97.1", components = "..." }`). The
+	# inline form's `version` is on the key's own line even when the table spans
+	# several, which is what makes a line-oriented read of it correct.
 	declared=$(printf '%s\n' "$toml" | awk '
 		/^\[tools\]/ { in_tools = 1; next }
 		/^\[/        { in_tools = 0 }
@@ -247,12 +267,23 @@ if [ "$#" -eq 0 ]; then
 			key = substr($0, 1, eq - 1)
 			gsub(/^[ \t]+|[ \t]+$/, "", key)
 			gsub(/^"|"$/, "", key)
-			if (key != "") print key "\t" NR
+			if (key == "") next
+			rest = substr($0, eq + 1)
+			version = ""
+			if (match(rest, /version[ \t]*=[ \t]*"[^"]*"/)) {
+				version = substr(rest, RSTART, RLENGTH)
+				sub(/^version[ \t]*=[ \t]*"/, "", version); sub(/"$/, "", version)
+			} else if (match(rest, /^[ \t]*"[^"]*"/)) {
+				version = substr(rest, RSTART, RLENGTH)
+				gsub(/[ \t"]/, "", version)
+			}
+			print key "\t" NR "\t" version
 		}
 	')
 
 	reported_unlocked=0
-	while IFS=$'\t' read -r want wantline; do
+	reported_stale=0
+	while IFS=$'\t' read -r want wantline wantversion; do
 		[ -n "$want" ] || continue
 		# There is no lockfile entry to read a `backend` from — that absence is
 		# the whole finding — so the backend comes from the KEY, which is how mise
@@ -288,6 +319,48 @@ if [ "$#" -eq 0 ]; then
 			# reads it as this gate fetching. That assertion is a string match on
 			# purpose — coarse, and worth keeping coarse.
 			echo "  mise.toml:$wantline: $want — declared in [tools] with no $label entry; regenerate with \`mise run lock-check\` and commit the result" >&2
+			fail=1
+			continue
+		fi
+
+		# stale-lock: the entry EXISTS and names a different version from the
+		# pin. `unlocked-tool` above cannot see this — it asks whether a row is
+		# there — and the row being there is exactly what makes this invisible:
+		# `[settings] lockfile = false` means no local install ever passes
+		# `--locked`, so a stale row installs fine here forever while CI, which
+		# does pass it, dies at the install step in EVERY job before a gate runs.
+		#
+		# Measured on this branch: `[tools] rust` moved to 1.97.1, `mise.lock`
+		# still said 1.85.0, `mise run verify` was fully green, and all nine
+		# required checks went red on `Failed to install core:rust@1.97.1:
+		# rust@1.97.1 is not in the lockfile`. Same shape as CLOUD-333's
+		# omission, one field along.
+		#
+		# SATISFACTION, NOT EQUALITY, and the difference is what most pins here
+		# are: `node = "24"` locks 24.19.0 and `"aqua:cli/cli" = "2.97"` locks
+		# 2.97.0, so a raw comparison would refuse this repo's own tree on the
+		# majority of its table. The locked version satisfies the pin when it IS
+		# the pin or extends it at a component boundary.
+		#
+		# A pin that is not a plain dotted version — a range, a channel name — is
+		# skipped rather than guessed at. That is the same lenience the backend
+		# exemption above takes, and for the same reason: a false negative here
+		# is smaller than a gate that refuses a spelling it does not understand,
+		# and there is no such pin in this table today.
+		locked=$(awk -F'\t' -v t="$want" '$1=="VERS" && $2==t {print $3; exit}' <<<"$parsed")
+		[ -n "$locked" ] || continue
+		[ -n "$wantversion" ] || continue
+		case $wantversion in
+		'' | *[!0-9.]*) continue ;;
+		esac
+		if [ "$locked" != "$wantversion" ] && [ "${locked#"$wantversion".}" = "$locked" ]; then
+			if [ "$reported_stale" = 0 ]; then
+				echo "::error:: a [tools] pin names a version its $label entry does not, so \`mise install --locked\` fails in every CI job before any gate runs (CLOUD-593):" >&2
+				reported_stale=1
+			fi
+			# Pointer-only: the tool, both versions, and where the pin was
+			# declared. Never a checksum, a url, or any other lockfile byte.
+			echo "  mise.toml:$wantline: $want — pinned $wantversion, $label has $locked; regenerate with \`mise run lock-check\` and commit the result" >&2
 			fail=1
 		fi
 	done <<<"$declared"

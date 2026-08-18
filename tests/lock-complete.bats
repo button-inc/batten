@@ -395,3 +395,101 @@ stage_tools() {
 	run bash -c "cd '$REPO' && '$GATE'"
 	[ "$status" -eq 0 ]
 }
+
+# --- stale-lock (CLOUD-593) ------------------------------------------------
+#
+# `unlocked-tool` above asks whether a row is THERE. This asks whether it says
+# the same thing as the pin, which is the only question `mise install --locked`
+# actually answers — and the row being present is exactly what makes a stale one
+# invisible: `[settings] lockfile = false` means nothing local ever installs
+# `--locked`, so it installs fine here forever.
+#
+# Measured on the branch that added this clause: `[tools] rust` moved to 1.97.1,
+# `mise.lock` still said 1.85.0, `mise run verify` was fully green, and all nine
+# required checks went red at the install step on `rust@1.97.1 is not in the
+# lockfile` — every job, not only the ones that use rust, because `--locked`
+# validates the whole file.
+
+# A mise.toml pinning one tool at a stated version, against scratch_repo's
+# lockfile row for `t` at 1.0.0.
+stage_pin() {
+	{
+		printf '[settings]\nlockfile = false\n\n[tools]\n'
+		printf '"t" = "%s"\n' "$1"
+	} >"$REPO/mise.toml"
+	git -C "$REPO" add mise.toml
+}
+
+@test "a pin naming a version its lock entry does not is caught, and both are named" {
+	scratch_repo
+	stage_pin 2.0.0
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"pinned 2.0.0"* ]]
+	[[ "$output" == *"has 1.0.0"* ]]
+	[[ "$output" == *"mise.toml:5:"* ]]
+}
+
+@test "a partial pin the lock EXTENDS passes — satisfaction, not equality" {
+	# The majority of this repo's table: `node = "24"` locks 24.19.0 and
+	# `"aqua:cli/cli" = "2.97"` locks 2.97.0. A raw comparison would refuse the
+	# real tree on most of its own pins.
+	scratch_repo
+	stage_pin 1.0
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
+@test "the extension must be at a component boundary, not a string prefix" {
+	# `1.9` must not be satisfied by `1.97.1`. Without the trailing dot this is
+	# the plausible wrong spelling, and it silently accepts a pin the installer
+	# would reject.
+	scratch_repo
+	printf '[[tools.t]]\nversion = "1.97.1"\nbackend = "aqua:x/t"\n\n' >"$LOCK"
+	printf '[tools.t."platforms.linux-x64-t"]\nchecksum = "sha256:abc"\nurl = "https://example.invalid/linux-x64"\n\n' >>"$LOCK"
+	printf '[tools.t."platforms.linux-arm64-t"]\nchecksum = "sha256:abc"\nurl = "https://example.invalid/linux-arm64"\n\n' >>"$LOCK"
+	printf '[tools.t."platforms.macos-arm64-t"]\nchecksum = "sha256:abc"\nurl = "https://example.invalid/macos-arm64"\n\n' >>"$LOCK"
+	git -C "$REPO" add mise.lock
+	stage_pin 1.9
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"pinned 1.9"* ]]
+}
+
+@test "an inline-table pin is read, not only the bare-string form" {
+	# `rust = { version = "1.97.1", components = "..." }` is the spelling the
+	# measured defect was written in, and the one a bare-string reader misses.
+	scratch_repo
+	{
+		printf '[settings]\nlockfile = false\n\n[tools]\n'
+		printf '"t" = { version = "2.0.0", components = "clippy" }\n'
+	} >"$REPO/mise.toml"
+	git -C "$REPO" add mise.toml
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"pinned 2.0.0"* ]]
+}
+
+@test "a pin that is not a plain dotted version is skipped rather than guessed at" {
+	# A range or a channel name is not comparable by this rule, and refusing a
+	# spelling the gate does not understand is the larger of the two errors.
+	scratch_repo
+	stage_pin "latest"
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 0 ]
+}
+
+@test "stale-lock output is a pointer — no checksum, no url" {
+	scratch_repo
+	stage_pin 2.0.0
+
+	run bash -c "cd '$REPO' && '$GATE'"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"sha256:"* ]]
+	[[ "$output" != *"example.invalid"* ]]
+}
