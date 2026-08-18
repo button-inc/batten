@@ -132,6 +132,23 @@
 #      than a preference, so dropping any one must red — which is the whole
 #      reason CLOUD-596 shipped property 12 rather than trusting a comment.
 #
+#  14. EVERY ECOSYSTEM BOTH BOTS CAN SERVE IS SERVED BY EXACTLY ONE. Two bots
+#      now read this tree, and `.github/dependabot.yml` is being emptied into
+#      `renovate.json5` one ecosystem at a time (CLOUD-656). Every such move has
+#      two failure modes and BOTH are silent: an ecosystem left in both configs
+#      doubles the lane and every PR it opens, and an ecosystem removed from one
+#      before being added to the other goes unmaintained with nothing red. Each
+#      is one careless commit away, and neither shows up as a failure anywhere —
+#      the second is precisely the shape that let `[tools] rust` sit twelve
+#      releases stale under a green weekly `lock-currency`.
+#
+#      THE SET IS DATA AND SMALL ON PURPOSE. It names the ecosystems this repo
+#      actually maintains that both bots CAN serve, so "covered by neither" is
+#      answerable at all — an absence cannot be detected against an open world.
+#      `mise` is deliberately not in it: no Dependabot ecosystem can read that
+#      file, so it can never be double-covered and its absence is CLOUD-655's
+#      whole subject rather than a drift this property could catch.
+#
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
 # release workflow is not on the landing path and they do not apply to it. 8, 9,
 # 10, 11 and 12 are the exceptions — a workflow racing itself, colliding with its
@@ -604,6 +621,42 @@ else
 		"with rebasing off, a stale PR can be joined by a sibling proposing the same update, doubling the floor rebaseWhen lowers; note that Renovate reads 0 as unlimited, so the bound and its negation differ by one character"
 	renovate_key minimumReleaseAge '"[^"]+"' 'a non-empty duration' \
 		"a churny release must settle before a PR opens — the cooldown CLOUD-105 already bought on the Dependabot lanes"
+
+	# Property 14. Both sides are read as committed text, and BOTH must be
+	# readable for the question to have an answer: a missing dependabot file is
+	# already property 12's refusal above, and a missing Renovate config is this
+	# block's own. Neither is reachable here with only one of them present.
+	if [ -f "$dependabot" ]; then
+		# The allowlist is what this bot touches at all. Captured from the key to
+		# the closing bracket so a list broken across lines reads the same as one
+		# on a single line — a formatter's choice must not change a verdict.
+		renovate_managers=$(awk '
+			/enabledManagers/ { inlist = 1 }
+			inlist { buf = buf $0 }
+			inlist && index($0, "]") { exit }
+			END { sub(/^[^[]*\[/, "", buf); sub(/\].*$/, "", buf); gsub(/["\x27[:space:]]/, "", buf); print buf }
+		' <<<"$renovate_body" | tr ',' '\n' | sed '/^$/d' | sort -u)
+		dependabot_ecos=$(sed 's/[[:space:]]*#.*$//' "$dependabot" |
+			awk '/^[[:space:]]*-[[:space:]]*package-ecosystem:/ {
+				sub(/^[^:]*:[[:space:]]*/, ""); gsub(/["\x27]/, ""); sub(/[[:space:]]+$/, "")
+				if ($0 != "") print
+			}' | sort -u)
+		# Hand-maintained, and named here rather than derived: see the header for
+		# why an absence is only answerable against a closed set.
+		for eco in cargo github-actions; do
+			in_renovate=0
+			in_dependabot=0
+			grep -qxF "$eco" <<<"$renovate_managers" && in_renovate=1
+			grep -qxF "$eco" <<<"$dependabot_ecos" && in_dependabot=1
+			# Pointer-only: the ecosystem name and the two file names. Never an
+			# entry's body, which carries version ranges and package names.
+			if [ "$in_renovate" = 1 ] && [ "$in_dependabot" = 1 ]; then
+				problem "$eco is declared in BOTH $renovate and $dependabot — two bots proposing the same updates doubles the lane and every PR it opens. Remove it from one, in the commit that adds it to the other (CLOUD-657)."
+			elif [ "$in_renovate" = 0 ] && [ "$in_dependabot" = 0 ]; then
+				problem "$eco is declared in NEITHER $renovate nor $dependabot — that ecosystem is unmaintained, and nothing else is red about it. A handover removes it from one config in the same commit that adds it to the other (CLOUD-657)."
+			fi
+		done
+	fi
 fi
 
 # Property 11. Judged over the whole workflow set rather than the landing path,
@@ -632,4 +685,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; every dependabot ecosystem bounds its re-proposals"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; every dependabot ecosystem bounds its re-proposals, the Renovate config keeps the four keys that bound what its lane spends, and every ecosystem both bots can serve is served by exactly one"

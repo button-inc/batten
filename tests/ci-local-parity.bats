@@ -596,6 +596,9 @@ triggered() {
 dependabot() {
 	local first="${1:-cargo}" rebase="${2:-yes}" limit="${3:-yes}"
 	local second_rebase="${4:-yes}" second_limit="${5:-yes}"
+	# `none` drops the second entry entirely — the shape a handover leaves behind,
+	# which property 14 reads and property 12 must stay silent about.
+	local second="${6:-github-actions}"
 	{
 		printf 'version: 2\nupdates:\n'
 		printf '  - package-ecosystem: %s\n    directory: "/"\n' "$first"
@@ -606,13 +609,15 @@ dependabot() {
 		[ "$limit" = yes ] && printf '    open-pull-requests-limit: 1\n'
 		printf '    # a comment inside the entry, as the real file carries\n'
 		printf '    ignore:\n      - dependency-name: ignore\n        versions: [">= 0.4.30"]\n'
-		printf '\n  - package-ecosystem: github-actions\n    directory: "/"\n'
-		case "$second_rebase" in
-		yes) printf '    rebase-strategy: disabled\n' ;;
-		wrong) printf '    rebase-strategy: auto\n' ;;
-		esac
-		[ "$second_limit" = yes ] && printf '    open-pull-requests-limit: 1\n'
-		printf '    schedule:\n      interval: weekly\n'
+		if [ "$second" != none ]; then
+			printf '\n  - package-ecosystem: %s\n    directory: "/"\n' "$second"
+			case "$second_rebase" in
+			yes) printf '    rebase-strategy: disabled\n' ;;
+			wrong) printf '    rebase-strategy: auto\n' ;;
+			esac
+			[ "$second_limit" = yes ] && printf '    open-pull-requests-limit: 1\n'
+			printf '    schedule:\n      interval: weekly\n'
+		fi
 	} >"$DEPENDABOT"
 	return 0
 }
@@ -668,10 +673,11 @@ dependabot() {
 # comment strip must not mistake for a comment.
 renovate() {
 	local draft="${1:-yes}" rebase="${2:-yes}" limit="${3:-yes}" age="${4:-yes}"
+	local managers="${5:-\"mise\"}"
 	{
 		printf '// the lane for mise.toml [tools], which no other bot can read\n{\n'
 		printf '  $schema: "https://docs.renovatebot.com/renovate-schema.json",\n'
-		printf '  enabledManagers: ["mise"],\n'
+		printf '  enabledManagers: [%s],\n' "$managers"
 		case "$draft" in
 		yes) printf '  draftPR: true,\n' ;;
 		wrong) printf '  draftPR: false,\n' ;;
@@ -758,6 +764,55 @@ renovate() {
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"nothing bounds what the Renovate lane spends"* ]]
+}
+
+# --- property 14: exactly one bot per ecosystem both can serve ----------------
+
+@test "an ecosystem in the renovate config only passes — that is the handover's landing state" {
+	workflow ci
+	dependabot cargo yes yes yes yes none
+	renovate yes yes yes yes '"mise", "github-actions"'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "an ecosystem declared in both configs is refused, and named" {
+	# Two bots proposing the same updates doubles the lane and every PR it opens.
+	workflow ci
+	renovate yes yes yes yes '"mise", "github-actions"'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"github-actions is declared in BOTH"* ]]
+	[[ "$output" != *"cargo is declared in BOTH"* ]]
+}
+
+@test "an ecosystem declared in neither config is refused, and named" {
+	# The direction with no other symptom: removed from one config and never added
+	# to the other, the ecosystem is unmaintained and nothing anywhere is red.
+	workflow ci
+	dependabot cargo yes yes yes yes none
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"github-actions is declared in NEITHER"* ]]
+}
+
+@test "a manager list broken across lines reads the same as one on a single line" {
+	# A formatter's choice must not change a verdict.
+	workflow ci
+	dependabot cargo yes yes yes yes none
+	renovate
+	sed_i 's|^  enabledManagers.*$|  enabledManagers: [\n    "mise",\n    "github-actions",\n  ],|' "$RENOVATE"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "mise is not judged by property 14 — no dependabot ecosystem can read that file" {
+	# It can never be double-covered, and its absence from dependabot.yml is
+	# CLOUD-655's whole subject rather than a drift this property could catch.
+	workflow ci
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"mise is declared in NEITHER"* ]]
 }
 
 # --- property 11: reading check status means deciding through checks-green ----

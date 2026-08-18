@@ -31,12 +31,18 @@
 
   // THE SCOPE FENCE, and it is load-bearing rather than tidy. `config:recommended`
   // enables every manager Renovate ships with, which would silently make this a
-  // SECOND updater for `cargo` and for the workflows — both of which Dependabot
-  // owns at this commit. `enabledManagers` is an allowlist, so naming `mise`
-  // alone is what keeps the disjointness above true by construction.
-  // CLOUD-657 and CLOUD-658 add the other two here, each in the same commit that
-  // removes them from `.github/dependabot.yml`.
-  enabledManagers: ["mise"],
+  // SECOND updater for `cargo`, which Dependabot still owns at this commit.
+  // `enabledManagers` is an allowlist, so what is named here is the whole of
+  // what this bot touches, and `ci-local-parity`'s property 14 decides the
+  // disjointness rather than trusting this comment.
+  //
+  // `github-actions` joined in CLOUD-657 — in the SAME commit that removed it
+  // from `.github/dependabot.yml`, so no revision of the tree has that ecosystem
+  // covered twice or not at all. It went first for being boring: it touches no
+  // manifest encoding the MSRV floor, so the handover procedure got proven on
+  // the one lane where the only thing that can go wrong is the handover.
+  // CLOUD-658 adds `cargo` on the same terms.
+  enabledManagers: ["mise", "github-actions"],
 
   // --- the four keys `ci-local-parity` holds ---------------------------------
   //
@@ -73,4 +79,16 @@
   semanticCommits: "enabled",
   semanticCommitType: "ci",
   semanticCommitScope: "deps",
+
+  packageRules: [
+    {
+      // What `.github/dependabot.yml`'s `groups: actions: patterns: ["*"]` bought
+      // on this lane, kept across the handover (CLOUD-657): a week's action bumps
+      // arrive as ONE pull request. It matters more here than it did there,
+      // because `prConcurrentLimit: 1` above means ungrouped updates would queue
+      // one at a time behind each other rather than merely being noisy.
+      matchManagers: ["github-actions"],
+      groupName: "actions",
+    },
+  ],
 }
