@@ -1276,3 +1276,141 @@ fn every_permission_drop_asserts_its_own_premise() {
          audit with it rather than leaving behind a check that cannot fail"
     );
 }
+
+/// The needle, assembled rather than written, so this audit is invisible to
+/// itself — the same reason [`drop_needle`] is built from halves.
+fn xdg_needle() -> String {
+    ["\"XDG_DATA", "_HOME\""].concat()
+}
+
+/// The Windows mirror of the needle above.
+fn roaming_needle() -> String {
+    ["\"APP", "DATA\""].concat()
+}
+
+/// The audit's own fixtures. `__XDG__`/`__APP__` stand in for the needles so the
+/// scan over the real tree cannot see them.
+const MIRRORS_THE_STATE_DIR: &str = r#"    fn t() {
+        Command::cargo_bin("batten")
+            .env(__XDG__, home.join("data"))
+            .env(__APP__, home.join("data"))
+            .assert();
+    }
+"#;
+const NO_MIRROR: &str = r#"    fn t() {
+        Command::cargo_bin("batten")
+            .env(__XDG__, home.join("data"))
+            .assert();
+    }
+"#;
+const MIRROR_POINTS_ELSEWHERE: &str = r#"    fn t() {
+        Command::cargo_bin("batten")
+            .env(__XDG__, home.join("data"))
+            .env(__APP__, home.join("other"))
+            .assert();
+    }
+"#;
+
+/// Whether the state-dir override at `xdg_at` is mirrored for Windows, at the
+/// same value, within the same function.
+///
+/// The value is compared as the rest of the `.env(…)` line, which is exact for
+/// rustfmt'd source: both calls are one line each, and `lint:fmt` is in the gate.
+fn state_dir_mirrored(body: &str, xdg_at: usize, app: &str) -> Result<(), String> {
+    // Exactly one closing paren — the `.env(` call's own. Stripping every
+    // trailing one would make `f(a)` and `f(a))` compare equal, which is a
+    // comparison that cannot tell two different values apart.
+    let value_at = |from: usize| {
+        let end = body[from..].find('\n').map_or(body.len(), |rel| from + rel);
+        body[from..end].split_once(',').map(|(_, rest)| {
+            let rest = rest.trim();
+            rest.strip_suffix(')').unwrap_or(rest).trim()
+        })
+    };
+    let value = value_at(xdg_at).ok_or_else(|| "the override names no value".to_owned())?;
+
+    let mut from = 0;
+    while let Some(rel) = body[from..].find(app) {
+        let at = from + rel;
+        if value_at(at) == Some(value) {
+            return Ok(());
+        }
+        from = at + app.len();
+    }
+    Err(format!(
+        "the state-dir override is not mirrored to the Windows roaming variable at the same \
+         value ({value}) — `etcetera` reads the roaming known folder there, so this child writes \
+         to the developer's REAL profile and the case asserts over state it does not own"
+    ))
+}
+
+#[test]
+fn every_state_dir_override_is_mirrored_for_windows() {
+    // CLOUD-619. `state::root` resolves through `etcetera`'s base strategy, which
+    // is XDG on Linux and macOS and the roaming known folder on Windows. A case
+    // that isolates the store by pointing the XDG variable at a scratch dir
+    // therefore isolates NOTHING on Windows: the child reads the real profile,
+    // so it sees another case's leftovers, writes where nothing cleans up, and
+    // its assertions are about a store it never controlled.
+    //
+    // Not a hypothetical — CLOUD-113's Windows job is the first thing that ever
+    // ran these suites, and it is why the mirroring exists at all. This is the
+    // other half of that fix: the 27 sites were repaired by hand, and a repair
+    // with no gate is one new `.env` call away from being undone silently, on a
+    // platform whose CI failure will name a store instead of the omission.
+    //
+    // A pair-and-value predicate rather than a bare presence one, because a
+    // mirror pointing somewhere else is the same defect wearing the fix's shape.
+    let xdg = xdg_needle();
+    let app = roaming_needle();
+
+    // (a) Exercise the audit before trusting it — the sibling gate above makes
+    // the same demand of itself, and for the same reason.
+    for (label, fixture, holds) in [
+        ("mirrored at the same value", MIRRORS_THE_STATE_DIR, true),
+        ("no mirror at all", NO_MIRROR, false),
+        ("mirror pointing elsewhere", MIRROR_POINTS_ELSEWHERE, false),
+    ] {
+        let source = fixture.replace("__XDG__", &xdg).replace("__APP__", &app);
+        let at = source.find(&xdg).expect("the fixture carries an override");
+        let (body, xdg_at) = enclosing_fn(&source, at);
+        let verdict = state_dir_mirrored(body, xdg_at, &app);
+        assert_eq!(
+            verdict.is_ok(),
+            holds,
+            "the audit's own {label} fixture is judged wrong: {verdict:?}"
+        );
+    }
+
+    // (b) The real sites. `tests` only: `src` never spawns the binary under a
+    // fixture's environment, so an override there would be a different thing.
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut sites = 0;
+    for path in rust_sources(&crate_dir.join("tests")) {
+        let source = fs::read_to_string(&path).expect("read source");
+        let mut from = 0;
+        while let Some(rel) = source[from..].find(&xdg) {
+            let at = from + rel;
+            from = at + xdg.len();
+            // Only a real override is judged. The token also appears in prose
+            // explaining the rule, and a doc comment sets no environment.
+            if !source[at..].starts_with(&format!("{xdg}, ")) {
+                continue;
+            }
+            sites += 1;
+            let (body, xdg_at) = enclosing_fn(&source, at);
+            if let Err(why) = state_dir_mirrored(body, xdg_at, &app) {
+                panic!(
+                    "{}:{}: {why} (CLOUD-619)",
+                    path.display(),
+                    line_of(&source, at)
+                );
+            }
+        }
+    }
+    assert!(
+        sites > 0,
+        "the audit found no state-dir override to judge — if the last one went away, remove the \
+         audit with it rather than leaving behind a check that cannot fail"
+    );
+}
