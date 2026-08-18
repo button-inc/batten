@@ -15,7 +15,10 @@ setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/signing-posture"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
-	git -C "$REPO" init --quiet
+	# `main` from the start, so no row has to force a branch into place later:
+	# `no-branch-f-main` forbids that shape in a suite, and rightly — a `branch -f`
+	# that escaped the fixture would move the real trunk.
+	git -C "$REPO" init --quiet --initial-branch=main
 	# Per fixture, never inherited: a CI runner carries no global identity.
 	git -C "$REPO" config user.email t@example.com
 	git -C "$REPO" config user.name t
@@ -27,7 +30,6 @@ setup() {
 	git -C "$REPO" config user.signingkey "$BATS_TEST_TMPDIR/good.pub"
 	git -C "$REPO" config gpg.ssh.program /usr/bin/ssh-keygen
 	git -C "$REPO" commit -q --allow-empty -m base
-	git -C "$REPO" branch -f main
 	cd "$REPO" || return 1
 	BASE=$(git rev-parse HEAD)
 }
