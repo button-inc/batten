@@ -4783,7 +4783,7 @@ fn frontmatter_and_comment_bytes_alone_never_cross_the_budget() {
 fn embedded_config(path: &str, key: &str, max_tokens: usize) -> String {
     format!(
         "version = 1\n[budget.instructions]\nfiles = [\"AGENTS.md\"]\nmax_tokens = \
-         {max_tokens}\n\n[[budget.instructions.embedded]]\npath = \"{path}\"\nkey = \"{key}\"\n"
+         {max_tokens}\n\n[[budget.instructions.embedded]]\npath = '{path}'\nkey = \"{key}\"\n"
     )
 }
 

@@ -125,8 +125,14 @@ fn collect(root: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>)>) {
 
 /// A one-entry manifest over `url`/`sha`.
 fn manifest(url: &str, sha: &str) -> String {
+    // A TOML *literal* string for the url, because it carries a filesystem path:
+    // `file://D:\a\batten\...` in a basic string reads `\a` as a control
+    // character and rejects `\U`, so nine of this suite's ten cases died on
+    // their own fixture rather than on provisioning. Literal strings process no
+    // escapes, which is what a path wants — the rule
+    // `every_path_valued_toml_key_uses_a_literal_string` now holds every site.
     format!(
-        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\nurl = \"{url}\"\n\
+        "version = 1\n\n[[provision]]\nname = \"demo\"\nversion = \"1.2.3\"\nurl = '{url}'\n\
          sha256 = \"{sha}\"\nbinary = \"demo\"\n"
     )
 }

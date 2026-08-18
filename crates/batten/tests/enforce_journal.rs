@@ -198,7 +198,7 @@ fn with_command(check: &str) -> String {
          id = \"gate\"\n\
          kind = \"command\"\n\
          glob = \"**/*.rs\"\n\
-         check = \"{check}\"\n\
+         check = '{check}'\n\
          severity = \"deny\"\n\
          no_fix_reason = \"fix what the gate names\"\n",
         forbid_only()

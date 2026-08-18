@@ -1521,3 +1521,69 @@ fn every_path_override_is_composed_with_join_paths() {
          with it rather than leaving behind a check that cannot fail"
     );
 }
+
+/// The path-valued TOML keys a fixture writes. Each names a filesystem location
+/// or a `file://` URL over one, which is what makes the string form decide
+/// whether the config parses at all on Windows.
+const PATH_VALUED_KEYS: [&str; 5] = ["url", "path", "check", "binary", "script"];
+
+/// The offending shape, assembled so this audit is invisible to itself.
+fn basic_string_interpolation(key: &str) -> String {
+    [key, " = \\\"{"].concat()
+}
+
+#[test]
+fn every_path_valued_toml_key_uses_a_literal_string() {
+    // CLOUD-113, found three separate times on three separate Windows runs, each
+    // costing a round trip and each looking like a defect in the subject rather
+    // than in the fixture:
+    //
+    //   doctor           `check = "…"`  -> the rule's own script path
+    //   enforce_journal  `url = "…"`    -> `file://` over the artifacts dir
+    //   secrets_kind     `url = "…"`    -> the same
+    //   provision        `url = "…"`    -> the same, nine of ten cases
+    //
+    // A TOML *basic* string processes escapes. A Windows path interpolated into
+    // one reads `\a` as a control character and rejects `\U` outright, so the
+    // config never parses and every case in the suite reports a config error in
+    // place of the behaviour it asserts. A *literal* string processes nothing.
+    //
+    // KEYED ON THE KEY, NOT ON THE VALUE, and that is the whole point. Twice I
+    // scanned this class by asking "can this value be a path?", and twice the
+    // answer was wrong — `provision.rs` was read as safe one run before it
+    // failed nine cases. Whether a value is a path is a judgement; which key it
+    // sits under is a fact. Keys whose values are never paths are left alone
+    // rather than swept in, so the rule stays about the thing that bites.
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // Collected rather than panicked on at the first hit: this class arrives in
+    // batches — nine cases in one suite, four in another — and a gate that names
+    // one offender per run turns one fix into one CI round trip each.
+    let mut offenders = Vec::new();
+    for path in rust_sources(&crate_dir.join("tests")) {
+        let source = fs::read_to_string(&path).expect("read source");
+        for key in PATH_VALUED_KEYS {
+            let needle = basic_string_interpolation(key);
+            let mut from = 0;
+            while let Some(rel) = source[from..].find(&needle) {
+                let at = from + rel;
+                from = at + needle.len();
+                offenders.push(format!(
+                    "{}:{}: `{key}` interpolated into a basic string; write `{key} = '{{…}}'`",
+                    path.display(),
+                    line_of(&source, at)
+                ));
+            }
+        }
+    }
+    // Zero is the passing state, so unlike the audits above there is no
+    // population floor to assert. What keeps it honest is the negative run:
+    // reverting any of the four sites it was written for makes it fire.
+    assert!(
+        offenders.is_empty(),
+        "a path-valued TOML key is interpolated into a BASIC string, where a Windows path reads \
+         `\\a` as a control character and `\\U` is rejected outright — the config then fails to \
+         parse and every case dies on its own fixture rather than on its subject. A literal \
+         string processes no escapes (CLOUD-113):\n  {}",
+        offenders.join("\n  ")
+    );
+}
