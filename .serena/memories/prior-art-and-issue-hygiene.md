@@ -559,7 +559,9 @@ above. CLOUD-623's surviving half is the registry entry that lets
 `lock-complete` exit 0 for the required platforms; its second half was replaced,
 because the original counted a thing the rejection guaranteed would stay at zero.
 
-Three findings from running it, none inferable and each cheap to repeat:
+Findings from running it, none inferable and each cheap to repeat — deliberately
+uncounted, because the list keeps growing and a numeral in front of it is one
+more hand-maintained thing to drift:
 
 - **Before calling a red check a base-branch failure, confirm the failing code
   is on the base.** Measured the hard way: a branch's `windows` job failed on
@@ -583,6 +585,34 @@ Three findings from running it, none inferable and each cheap to repeat:
   byte-identical. **Build the discriminator in**: run the variant whose answer is
   required to differ, and read equal outputs as an instrument fault before a
   finding. This is the canary rule applied to a measurement rather than a corpus.
+- **A probe built with the ambient toolchain is not a measurement of a pinned
+  repo** — the same rule one layer up, where the instrument is the compiler
+  rather than the tree. A candidate engine's probe ran clean, and its detection
+  behaviour went onto the issue as evidence; rebuilt through the pinned
+  toolchain it **did not compile at all**, because the crate's own source uses a
+  method in a `const fn` that the pin predates. The container's ambient compiler
+  was nine minor versions ahead and nothing in the probe's output named it.
+  **A probe lives outside the workspace, so the local verify gate never sees
+  it** — the usual backstop for building against the wrong compiler does not
+  exist here, and the wrong answer lands as a durable verdict on the tracker,
+  where nothing re-runs it. Say in the record which toolchain produced the
+  numbers. Two corollaries, each separately load-bearing: an MSRV gate that
+  reads _declared_ floors from package metadata cannot see a dependency that
+  declares none, so only a build finds the floor; and narrowing a feature set
+  narrows the dependency closure but never reaches a crate's own source, so
+  "minimal features fixes the floor" is a hypothesis to test, not a conclusion.
+- **Mechanizing an invariant retires no prose, so counting comment lines as a
+  saving overstates the case for adopting a tool.** A survey priced 13
+  hand-maintained cross-row invariants at ~117 comment lines and read that as
+  the cost a mechanism would remove. Translating two of them measured what those
+  lines are: **rationale** — why two rows rather than one, why a conjunction is
+  packed into one row — which survives any mechanism, so nothing was retired in
+  either direction. What a check buys is a claim moving from **undecided to
+  decided**, which is worth more than a line count and is not one. **Price a
+  candidate on the capability only it has**: the marginal cost of a general tool
+  and of a bespoke check converge, and the general tool starts behind by
+  whatever materializing its facts costs — measured at 38 lines the in-process
+  route did not pay at all, because it already held the parsed rows.
 - **`claim-check`'s receipt is branch-keyed (`claim.<branch>`), so branch first,
   then claim** — the loop as usually written states the two in the other order,
   and the refusal it produces reads as a missing claim rather than a misplaced
