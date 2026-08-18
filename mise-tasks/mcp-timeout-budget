@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the MCP startup budget is declared and is a measured budget, not the host default (CLOUD-668)"
+#
+# CLOUD-266's rule — "timeouts are uniform boilerplate, not measured budgets, so
+# they bound nothing" — applied to the one budget nobody had looked at.
+#
+# Nothing in this repo set the MCP server startup budget, so it was the host's
+# default 30000 ms. Serena is the only server it governs; the rest are HTTP
+# connectors the host manages itself.
+#
+# WHAT EXCEEDING IT COSTS, which is why the margin has to be generous rather than
+# tight. It is not a retry. Serena is absent for the WHOLE session, and the
+# failure is legible only as "the known Serena flakiness":
+#
+#   * `mcp-attach-check` reports `serena CONNECT_TIMEOUT` truthfully, and a
+#     session reads that and moves on. Measured: five times in one session.
+#   * Serena owns `.serena/memories/**` through the protected-path gate, so an
+#     absent Serena makes the memory tree unwritable for the rest of the session.
+#     CLOUD-663 was opened to build a second write surface for exactly that, and
+#     is Canceled as a workaround for this.
+#   * The symbol tools go with it and navigation silently degrades to grep.
+#
+# THE MEASUREMENT, 2026-08-18. Full handshake as the client performs it —
+# initialize, initialized, tools/list, prompts/list, resources/list:
+#
+#   warm, idle                              4.01s
+#   under `mise run ci`, load avg 2.0-2.8   3.21s / 3.83s / 4.47s
+#   host log, warm reconnect                5.39s
+#   host log, COLD SESSION START           16.65s   <- worst observed SUCCESS
+#   host log, re-registration x2          >30s, CONNECT_TIMEOUT
+#
+# `initialize` is the entire cost; the three list calls are 0.00-0.03s each.
+#
+# WHY 120000 AND NOT 30000. The worst observed success is 16.65s, so the host
+# default gave 1.8x headroom — and it came up short twice in one session. The
+# cost function is deeply asymmetric: an over-long budget is paid only when the
+# server is genuinely failing, once, at startup, whereas an under-set one costs
+# every tool Serena owns for the rest of the session. 120000 is ~7x the worst
+# observed success, which is margin for a cold container that is also running
+# `mise install`, a cargo build and a first-time rust-analyzer index.
+#
+# The FLOOR is 60000 rather than 120000 so the declared value can be tuned down
+# on evidence without editing this gate, while still refusing a return to the
+# host default. Lowering the floor itself should require a new measurement in
+# this header.
+#
+# NOT `.mcp.json`'s per-server `env`: that is passed to the CHILD, and this
+# budget governs the PARENT's wait. `.claude/settings.json`'s `env` block is the
+# one surface that reaches the CLI's own environment.
+#
+# Pointer-only per non-negotiable rule 4: the declared value and the floor.
+#
+# Exit 0 declared and at or above the floor / 1 absent or below it / 2 could not
+# look.
+#
+# The mutation accepts any declared value, dropping the floor comparison. The
+# host default 30000 is a declared value, so a gate that only checks presence
+# passes the exact state CLOUD-668 was filed about.
+#MUTANT presence-is-not-a-budget|s/\[ "\$declared" -ge "\$FLOOR" \]/[ -n "$declared" ]/|a value below the floor is refused, and both numbers are named
+#PIN-OK: jq
+set -uo pipefail
+
+# The measured floor. Raising the declared value is free; lowering this needs a
+# new row in the measurement table above.
+FLOOR=60000
+
+settings="${MCP_TIMEOUT_SETTINGS:-.claude/settings.json}"
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--settings)
+		settings="${2:-}"
+		shift 2
+		;;
+	*)
+		echo "usage: mcp-timeout-budget [--settings <file>]" >&2
+		exit 2
+		;;
+	esac
+done
+
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: mcp-timeout-budget: no jq on PATH — cannot read $settings, and a gate that cannot look must not report a budget it did not check" >&2
+	exit 2
+fi
+if [ ! -r "$settings" ]; then
+	echo "::error:: mcp-timeout-budget: cannot read $settings" >&2
+	exit 2
+fi
+
+declared=$(jq -r '.env.MCP_TIMEOUT // empty' "$settings" 2>/dev/null) || {
+	echo "::error:: mcp-timeout-budget: $settings is not readable JSON" >&2
+	exit 2
+}
+
+if [ -z "$declared" ]; then
+	echo "::error:: mcp-timeout-budget: no env.MCP_TIMEOUT in $settings — the budget is the host default, which is not a measured budget (CLOUD-266, CLOUD-668)" >&2
+	echo "  floor $FLOOR" >&2
+	exit 1
+fi
+
+case "$declared" in
+'' | *[!0-9]*)
+	echo "::error:: mcp-timeout-budget: env.MCP_TIMEOUT in $settings is not a whole number of milliseconds" >&2
+	exit 1
+	;;
+esac
+
+if [ "$declared" -ge "$FLOOR" ]; then
+	echo "mcp-timeout-budget: MCP_TIMEOUT $declared ms, at or above the measured floor $FLOOR ms"
+	exit 0
+fi
+
+echo "::error:: mcp-timeout-budget: the MCP startup budget is below its measured floor" >&2
+echo "  $settings env.MCP_TIMEOUT $declared" >&2
+echo "  floor $FLOOR" >&2
+echo "  Serena's worst observed successful connect is 16650 ms on a cold container. A budget that close to it loses the whole session's Serena when it is missed — see this task's header for the measurement table." >&2
+exit 1

@@ -46,6 +46,16 @@ local gate = new Mapping<String, Step> {
     glob = List(".github/workflows/ci.yml", "mise.toml")
     check = "mise run ci-tools-check"
   }
+  // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
+  // The MCP startup budget was the host's 30000ms default, never measured, and
+  // Serena's worst observed SUCCESSFUL connect is 16650ms — 1.8x headroom, which
+  // came up short twice in one session. Exceeding it is not a retry: Serena is
+  // absent for the whole session, which takes `.serena/memories/**` with it.
+  // The measurement table lives in the task's own header.
+  ["mcp-timeout-budget"] {
+    glob = List(".claude/settings.json", "mise-tasks/mcp-timeout-budget")
+    check = "mise run mcp-timeout-budget"
+  }
   // `coverage` and `scorecard` emit a number for a human and must never gate a
   // branch — a coverage threshold rewards line-touching, and scorecard scores
   // deliberate design decisions (trunk-based review, the landing lease's
