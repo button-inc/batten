@@ -220,6 +220,11 @@ The dispatcher does not need perfect dependency knowledge. Every child runs
 `claim-check` per ticket and skips what is not pullable, so a mis-sequenced
 bundle degrades to a skip rather than a collision.
 
+**A bundle's PR shape is a second choice, and the procedure owns it**
+(CLOUD-661): `.claude/commands/plan-fleet.md` step 3b, "Choose the bundle's PR
+shape". The amortisation argument above is what it extends — from the rebase
+cost to the CI matrix — so it is not restated here.
+
 Three things about the harness that the procedure encodes because they are
 invisible until they bite:
 

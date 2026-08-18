@@ -54,6 +54,47 @@ rather than engineer around one.
 Report what you held back and why. A silently dropped ticket reads as "the queue
 was empty" when it was not.
 
+## 3b. Choose the bundle's PR shape, and say which in the prompt
+
+Two shapes are sanctioned. The per-ticket loop below is the default; **one PR
+for the whole bundle** is the other, and it is practised here rather than
+hypothetical — PR #385 landed CLOUD-494 → 493 → 492 as one PR, three commits,
+one land, and the dependency-automation bundle (CLOUD-593 → 655 → 657 → 658 → 661) is the second instance. Until CLOUD-661 neither this file nor
+`mem:workflow/agent-fanout` admitted the second shape existed, so every time it
+was chosen it read as a child going off-script and the next dispatch re-derived
+the reasoning from nothing.
+
+**The criterion, so the choice is not taste.** CI matrices scale with readied
+heads: one PR is one matrix, N PRs are N.
+
+- **One PR per bundle** when the bundle is a single unit of build work — its
+  tickets share a file domain, each one's gate or config is what the next one
+  extends, and none of them is worth landing without the others. `agent-fanout`
+  already argues this for the rebase cost ("amortises several commits over one
+  rebase cost instead of paying that cost per ticket"); the matrix is the same
+  argument one step further, and CLOUD-596 measured what a readied head costs
+  here.
+- **One PR per ticket** when the tickets are independently useful — each is
+  worth landing alone, and holding one back behind another's failure buys
+  nothing.
+
+**Three costs of the one-PR shape, none of them a reason not to choose it and
+all of them things a child must be told:**
+
+1. **The board reports N units of work for one contender.** `graph-check` counts
+   issues In Progress, so a five-ticket bundle reads WIP 5 against a cap of 6.
+   Nothing in tree binds a ceiling to that count, so it is a reporting artifact
+   rather than a refusal — CLOUD-502 measured it, and is Canceled, so a reader
+   who meets the artifact finds no explanation unless it is here.
+2. **The branch must be KEYLESS, and nothing checks that it is.**
+   `closing-key-check` passes on the first closing key it finds (CLOUD-527), and
+   `mem:workflow/board-states` measured branch-name precedence beating the PR
+   body — a branch naming one issue moved that issue and left the others
+   untouched. So name the branch for the domain (`claude/<domain>-bundle`), close
+   every key in the body, and check the board after the merge.
+3. **One failure holds the batch.** CLOUD-344's finding about grouped Dependabot
+   PRs applies unchanged: a red on any commit holds the whole set.
+
 ## 4. One `create_session` per bundle
 
 Call the Claude Code Remote `create_session` tool with
@@ -81,7 +122,12 @@ Each prompt is standalone — the child starts from nothing — and carries:
    and any house-style section that governs the surface it touches.
 4. **The per-ticket loop**, verbatim in shape: `claim-check` → claim → plan
    **this ticket only** and wait for approval → build, `verify`, `linear-check`,
-   draft PR, `land` backgrounded → next ticket.
+   draft PR, `land` backgrounded → next ticket. For a bundle dispatched under
+   the one-PR shape (step 3b), the loop is `claim-check` → claim → plan **this
+   ticket only** → build → commit → next ticket, with the draft PR, `verify`,
+   `linear-check` and `land` run once, after the last commit — and the three
+   costs above stated in the prompt, since a child that has not been told about
+   the keyless branch will name the branch for one ticket and strand the rest.
 5. **The instruction not to plan ahead.** A later ticket's shape depends on what
    the earlier one lands; planning the whole bundle up front is planning against
    a tree that does not exist.
@@ -112,6 +158,7 @@ Three costs are real, and each has its own control:
 | ------------------------------------- | --------------------------------------------------- |
 | a rebase **conflict** (needs a human) | file-domain partitioning — step 3                   |
 | **CI minutes** on a run `main` voids  | the `land-lock` lease — `mem:workflow/landing-loop` |
+| **CI minutes** per readied head       | the bundle's PR shape — step 3b                     |
 | **tokens**                            | bundles, and `land` lapping without a model turn    |
 
 So the objective is pace of landed work per token, not collision avoidance.
