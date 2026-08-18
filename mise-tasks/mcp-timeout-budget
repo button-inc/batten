@@ -67,8 +67,16 @@ FLOOR=60000
 settings="${MCP_TIMEOUT_SETTINGS:-.claude/settings.json}"
 while [ $# -gt 0 ]; do
 	case "$1" in
+	# `shift 2` on a single remaining argument SHIFTS NOTHING and returns
+	# non-zero, and `errexit` is off in this file — so `--settings` with no value
+	# left `$1` unchanged and spun the loop forever. A gate that hangs is worse
+	# than one that fails: `ci-wait` and the hk gate both wait on it.
 	--settings)
-		settings="${2:-}"
+		if [ $# -lt 2 ] || [ -z "$2" ]; then
+			echo "::error:: mcp-timeout-budget: --settings needs a file" >&2
+			exit 2
+		fi
+		settings="$2"
 		shift 2
 		;;
 	*)

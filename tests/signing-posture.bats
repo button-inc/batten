@@ -77,6 +77,23 @@ sign_head() {
 	[ "$status" -eq 0 ]
 }
 
+# THE ROW THAT WAS MISSING, and its absence hid a contradicted predicate. The row
+# above commits with `--no-gpg-sign`, so it produces no `gpgsig` header and never
+# reaches the commit scan at all — it could not have caught a scan that refused
+# every signature regardless of signer, which is what the scan did. This one puts
+# a real header in front of it with the signer left verifiable.
+@test "a commit signed by a VERIFIABLE signer is left alone, header and all" {
+	git config --local commit.gpgsign true
+	# `--no-gpg-sign` then `sign_head`, never a real signer: the fixture's
+	# `gpg.ssh.program` is a path that need not exist, and driving a genuine one
+	# would need a private key this suite must not create. `sign_head` writes the
+	# header the gate actually reads, which is the whole point of the helper.
+	git commit -q --allow-empty -m work --no-gpg-sign
+	sign_head
+	run "$GATE" --base "$BASE" --head HEAD
+	[ "$status" -eq 0 ]
+}
+
 @test "--repair leaves a verifiable signer alone rather than switching signing off" {
 	git config --local commit.gpgsign true
 	run "$GATE" --repair
@@ -93,6 +110,48 @@ sign_head() {
 	[[ "$output" == *"empty file"* ]]
 }
 
+# The three shapes a bare `-s` accepted. A directory and an unreadable file both
+# have a non-zero size, so `-s` alone called them healthy while the public half
+# stayed unreadable — the condition the predicate exists to name.
+@test "a signing key that is a directory is unverifiable" {
+	mkdir -p "$BATS_TEST_TMPDIR/keydir"
+	git config --local user.signingkey "$BATS_TEST_TMPDIR/keydir"
+	git config --local commit.gpgsign true
+	run "$GATE" --base "$BASE" --head HEAD
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"not a regular file"* ]]
+}
+
+@test "a signing key this checkout cannot read is unverifiable" {
+	if [ "$(id -u)" = 0 ]; then skip "root reads regardless of mode"; fi
+	printf 'ssh-ed25519 AAAAfake fixture\n' >"$BATS_TEST_TMPDIR/locked.pub"
+	chmod 000 "$BATS_TEST_TMPDIR/locked.pub"
+	git config --local user.signingkey "$BATS_TEST_TMPDIR/locked.pub"
+	git config --local commit.gpgsign true
+	run "$GATE" --base "$BASE" --head HEAD
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"cannot read"* ]]
+}
+
+@test "a signing key naming a path that does not exist is unverifiable" {
+	git config --local user.signingkey "$BATS_TEST_TMPDIR/absent.pub"
+	git config --local commit.gpgsign true
+	run "$GATE" --base "$BASE" --head HEAD
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"does not exist"* ]]
+}
+
+# THE FALSE POSITIVE THE FILE TESTS WOULD OTHERWISE CREATE. `gpg.format ssh`
+# accepts the public key inline, and a literal IS the public half — the most
+# publishable form there is. Testing it as a filename would report the healthiest
+# configuration possible as broken.
+@test "an inline public key is a literal, not a path, and is verifiable" {
+	git config --local user.signingkey "ssh-ed25519 AAAAfake fixture"
+	git config --local commit.gpgsign true
+	run "$GATE" --base "$BASE" --head HEAD
+	[ "$status" -eq 0 ]
+}
+
 @test "a signer under /tmp is unverifiable because the container reclaims it" {
 	break_signer_ephemeral_program
 	git config --local commit.gpgsign true
@@ -102,6 +161,7 @@ sign_head() {
 }
 
 @test "a signed commit in range is refused, and named by short sha" {
+	break_signer_ephemeral_program
 	git commit -q --allow-empty -m work
 	sign_head
 	run "$GATE" --base "$BASE" --head HEAD
@@ -114,6 +174,7 @@ sign_head() {
 # commit was written still carries that signed commit, and it is the commit that
 # reaches `main`.
 @test "repairing the config does not excuse a commit already signed" {
+	break_signer_ephemeral_program
 	git commit -q --allow-empty -m work
 	sign_head
 	git config --local commit.gpgsign false
@@ -184,14 +245,19 @@ sign_head() {
 	[ "$(git config --global --get commit.gpgsign 2>/dev/null || echo unset)" = "$before" ]
 }
 
+# The excluded base is SIGNED and the signer is broken, so every ingredient of a
+# refusal is present except being in range. Previously both commits here were
+# unsigned, which passed whether or not the scan honoured `--base` at all.
 @test "history before the range is never judged" {
-	# The base commit itself signed: out of range, so it must not be reported.
+	break_signer_ephemeral_program
 	git commit -q --allow-empty -m work
+	sign_head
 	local newbase
 	newbase=$(git rev-parse HEAD)
 	git commit -q --allow-empty -m later
 	run "$GATE" --base "$newbase" --head HEAD
 	[ "$status" -eq 0 ]
+	[[ "$output" != *"carries a gpgsig"* ]]
 }
 
 @test "outside a git repository it is exit 2, never a silent pass" {
@@ -205,6 +271,7 @@ sign_head() {
 # Pointer-only (non-negotiable 4): a signature is a credential artefact this repo
 # does not control, so no part of one may reach the output.
 @test "the refusal echoes no part of the signature block" {
+	break_signer_ephemeral_program
 	git commit -q --allow-empty -m work
 	sign_head
 	run "$GATE" --base "$BASE" --head HEAD

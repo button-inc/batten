@@ -76,3 +76,19 @@ declare_timeout() { # declare_timeout <value>
 	[[ "$output" != *"tok-must-not-appear"* ]]
 	[[ "$output" != *"SECRET_TOKEN"* ]]
 }
+
+# THE HANG. `shift 2` on a single remaining argument shifts nothing and returns
+# non-zero, and this gate runs without `errexit` — so `--settings` with no value
+# spun the argument loop forever. `timeout` is the assertion: a gate that hangs
+# never reports, and both `verify` and the hk gate wait on this one. Caught in
+# review on PR #489.
+@test "--settings with no value is refused, and does not hang" {
+	run timeout 10s "$GATE" --settings
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"needs a file"* ]]
+}
+
+@test "--settings with an empty value is refused rather than silently defaulted" {
+	run timeout 10s "$GATE" --settings ""
+	[ "$status" -eq 2 ]
+}

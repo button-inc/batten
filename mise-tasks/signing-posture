@@ -109,10 +109,36 @@ broken_reason() {
 		return
 		;;
 	esac
-	if [ -n "$key" ] && [ ! -s "$key" ]; then
-		printf 'user.signingkey names an empty file, so the public half cannot be read or published'
-		return
-	fi
+	# A LITERAL KEY IS NOT A PATH. With `gpg.format ssh`, git accepts the public
+	# key inline (`ssh-ed25519 AAAA...`) or via a `key::` prefix as well as a
+	# filename. A literal is the MOST publishable form there is — it is already
+	# the public half — so testing it as a file would report the healthiest
+	# possible configuration as broken.
+	case "$key" in
+	'' | ssh-* | key::* | sk-ssh-* | sk-ecdsa-*) ;;
+	*)
+		# `-s` alone was the test here, and it is true for anything non-empty
+		# that `stat` can size — an unreadable file, or a DIRECTORY. Both leave
+		# the public half unreadable, which is the condition this is trying to
+		# name, so all three tests are needed and each names its own reason.
+		if [ ! -e "$key" ]; then
+			printf 'user.signingkey names a path that does not exist, so the public half cannot be read or published'
+			return
+		fi
+		if [ ! -f "$key" ]; then
+			printf 'user.signingkey names something that is not a regular file, so the public half cannot be read or published'
+			return
+		fi
+		if [ ! -r "$key" ]; then
+			printf 'user.signingkey names a file this checkout cannot read, so the public half cannot be read or published'
+			return
+		fi
+		if [ ! -s "$key" ]; then
+			printf 'user.signingkey names an empty file, so the public half cannot be read or published'
+			return
+		fi
+		;;
+	esac
 	printf ''
 }
 broken_signer() {
@@ -166,13 +192,31 @@ fi
 
 # The commits themselves. Config can be repaired after a commit was written, so
 # the config check alone is not the predicate — that is this gate's declared
-# mutation.
+# mutation. `--repair` clears the config arm above and leaves this one firing on
+# whatever was already written, which is what keeps the two arms distinct.
+#
+# SCOPED TO A BROKEN SIGNER, and this was a real defect rather than a
+# refinement. The scan reported EVERY `gpgsig` in range, with no reference to
+# whether the key behind it is verifiable — so it refused the exact end state
+# this file's header promises to leave alone, and the row asserting that promise
+# passed only because it commits with `--no-gpg-sign` and never produces a
+# header for the scan to see. A vacuous row over a contradicted predicate
+# (CLOUD-418); caught in review on PR #489.
+#
+# The signer configuration is the only evidence available about which key signed
+# these commits, and it is honest evidence: a checkout whose signer is broken
+# produced them with that broken signer. Verifying a signature properly needs an
+# `allowed_signers` file this repository does not have, and PUBLISHING one is
+# precisely CLOUD-591's deliverable — so this gate reads the configuration and
+# says so, rather than pretending to a cryptographic check it cannot perform.
 if [ -z "$base" ]; then
 	base=$(git rev-parse --verify --quiet origin/main) || base=""
 fi
 [ -n "$head" ] || head=$(git rev-parse --verify --quiet HEAD) || head=""
 
-if [ -n "$base" ] && [ -n "$head" ]; then
+if [ "$(broken_signer)" = "no" ]; then
+	echo "signing-posture: signer is verifiable — commits in range not judged"
+elif [ -n "$base" ] && [ -n "$head" ]; then
 	range=$(git rev-list --no-merges "$base..$head" 2>/dev/null || true)
 	for sha in $range; do
 		# Captured, then matched in the shell. NOT `... | grep -q '^gpgsig'`:
