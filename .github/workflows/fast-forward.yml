@@ -65,7 +65,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:
-      - uses: sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979 # v1
+      # `# v1.0.0`, NOT `# v1`, and the difference is load-bearing rather than
+      # pedantic (CLOUD-676). Upstream publishes exactly one tag — `v1.0.0` —
+      # with no floating major, unlike `actions/checkout` and
+      # `taiki-e/install-action` elsewhere in this tree. Renovate's `github-tags`
+      # datasource reads the version from this comment, so `# v1` named nothing
+      # it could resolve: "Could not determine new digest for update". The pin
+      # was correct throughout; the comment was what made it INVISIBLE to the
+      # update lane, permanently, on the one action that lands every PR here.
+      - uses: sequoia-pgp/fast-forward@ea7628bedcb0b0b96e94383ada458d812fca4979 # v1.0.0
         with:
           merge: true
           # Push main with the PAT, not GITHUB_TOKEN: a push made with
