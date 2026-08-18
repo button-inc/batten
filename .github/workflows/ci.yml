@@ -615,7 +615,19 @@ jobs:
     name: windows
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: windows-latest
-    timeout-minutes: 20 # budget: grandfathered measured=2026-08-14
+    # MEASURED AT LAST, and the delay was the point rather than an oversight.
+    # This shipped `grandfathered` because no run had ever finished the suite:
+    # cargo stops at the first failing target, so the 279s and 377s the early
+    # runs reported are durations of a TRUNCATED suite, and a budget derived
+    # from one would have pinned the ceiling to how far the job got before it
+    # broke. Run 32096486179 is the first to complete it — 03:43:25 to 03:51:21,
+    # 476s — and that is the number below.
+    #
+    # ONE SAMPLE, NOT A DISTRIBUTION, said plainly: a p95 over n=1 is the sample.
+    # The x3 repo constant is what absorbs that, and is why the grammar carries a
+    # multiplier at all rather than a hand-picked ceiling. Re-derive once there
+    # are enough green Windows runs to take a real quantile over.
+    timeout-minutes: 24 # budget: p95=476s x3 measured=2026-08-18
     # `actions: write` is here for one call and one only: cancelling THIS run
     # when the landing lease does not authorise this branch (CLOUD-420). A job
     # that could not cancel itself would have to fail instead, and a failed job
