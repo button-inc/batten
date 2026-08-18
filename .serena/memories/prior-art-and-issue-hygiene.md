@@ -410,11 +410,23 @@ CLOUD-623 applied the displacement instrument to a capability question. It
 measured a flat `for rule in rules` loop, no fixpoint, no rule consuming
 another's verdict, under 60 relational lines across the board gates — and read
 that as evidence relational reasoning was not wanted here. It is evidence of
-nothing but the engine forbidding it. **This file already carried the corrective
-three sections above** — _absence of evidence is a claim about your instrument
-before it is a claim about the world_ — and the section that violated it was
-written directly underneath. Third recurrence of _a fix applied to one paragraph
-is not applied to the document_.
+nothing but the engine forbidding it. **This file already carried the
+corrective** — _absence of evidence is a claim about your instrument before it is
+a claim about the world_, in the canary entry — and the section that violated it
+was written below it anyway. Another recurrence of _a fix applied to one
+paragraph is not applied to the document_.
+
+**Two sessions reached this rule independently in one week, and that is the
+strongest thing about it.** The corpus entry near the top of this file states the
+same rule from the other direction — a discovery method cannot be evaluated by
+asking whether the enumeration it would replace already covers the ground, and
+_an absence supports "this sample cannot answer the question" far more often than
+"the question has no answer"_. That was reached on a prose-literal corpus;
+this one on a rule engine's missing primitive. Same error, unrelated tickets,
+neither author having read the other. Treat the two as one rule with two worked
+instances rather than two rules: the corpus entry owns the general form, and this
+entry owns the displacement/capability split that tells you _which_ instrument
+the question wanted.
 
 **The instrument for a capability question is demand, and demand is countable.**
 Not usage — the _workarounds usage was forced into_: invariants asserted in prose
