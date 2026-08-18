@@ -274,7 +274,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check"
+MUTANT_GATES = "signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,reclaim-census,done-pr-check,claim-check"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1183,8 +1183,12 @@ description = "Validate every commit in BASE_SHA..HEAD_SHA is Conventional Commi
 # lights up the local pre-flight and the CI backstop at once, with no second
 # definition of which commits are in scope. It also fails closed for free: mise
 # stops before this body runs, so the no-`set -e` trap does not apply (CLOUD-274).
-depends = ["commit-attribution"]
-shell = "bash -c"                # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
+# `signing-posture` rides the same contract for the same reason, and it is the
+# signature half of what `commit-attribution` does for the identity half
+# (CLOUD-669): both judge BASE_SHA..HEAD_SHA, so neither needs a second call
+# site and `ci-local-parity` stays satisfied without editing a workflow.
+depends = ["commit-attribution", "signing-posture"]
+shell = "bash -c"                                   # uses ${sha:0:8}; mise defaults tasks to /bin/sh (dash)
 # The SERVER-SIDE half of CLOUD-431. The claim receipt lives in `.git/` and never
 # leaves the clone, so no reviewer and no workflow can see it; what a server CAN
 # see is whether each commit names the issue it serves. `verify` holds the

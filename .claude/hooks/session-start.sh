@@ -193,6 +193,22 @@ step git-hooks install_git_hooks
 # repositories. An identity a contributor set accountably is left exactly alone.
 step attribution-identity mise run attribution-identity
 
+# The not-signing posture, put into force in the same window and for the same
+# reason (CLOUD-669). CLOUD-591 decided it — "the interim posture is not to
+# sign" — and shipped no mechanism, so it was never once in force: the launcher
+# writes `commit.gpgsign true` --global every session, and local beats global
+# only if something writes local.
+#
+# The identity repair above and this are the same defect on two fields. The
+# author field was gated and repaired; the SIGNATURE was neither, so every
+# commit carried the environment's own key — one this repo does not hold, cannot
+# publish, and which GitHub reports as `unknown_key`. `Attribution` has no
+# signature field, so `identity_deny` structurally cannot see it.
+#
+# Before any commit is written, for the reason stated above: a repair that lands
+# after the fact leaves signed commits that only a rebase can unwind.
+step signing-posture mise run signing-posture --repair
+
 # `hk install` is deliberately NOT run here, though AGENTS.md lists it as a
 # per-clone step. The hook it generates is `exec hk run pre-commit`, calling
 # `hk` bare — which resolves only where mise's shims are on PATH. In this
