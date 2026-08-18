@@ -1431,10 +1431,10 @@ const INTERPOLATES_A_SEPARATOR: &str = r#"    fn t() {
         cmd.__PATH__, path);
     }
 "#;
-const SETS_ONE_ENTRY: &str = r#"    fn t() {
+const SETS_ONE_ENTRY: &str = r"    fn t() {
         cmd.__PATH__, bin.display().to_string());
     }
-"#;
+";
 
 /// Whether the `PATH` override at `at` builds its value portably.
 ///
@@ -1443,8 +1443,8 @@ const SETS_ONE_ENTRY: &str = r#"    fn t() {
 fn path_joined_portably(body: &str) -> Result<(), &'static str> {
     // COMMENTS STRIPPED FIRST, because a mention is not a use — and this audit
     // caught itself on exactly that: the comment written beside the fix names
-    // `join_paths`, so the reverted defect underneath it still read as compliant
-    // and the gate passed over a real regression. The same distinction
+    // `join_paths`, so the reverted defect underneath it still read as though it
+    // held, and the gate passed over a real regression. The same distinction
     // `closing-key-check` draws for its own hold marker. Line-initial `//` is
     // exact for a rustfmt'd tree, which `lint:fmt` guarantees.
     let code: String = body
