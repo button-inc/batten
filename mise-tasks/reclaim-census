@@ -12,7 +12,15 @@
 # occupies nothing. Its whole job is to make one question answerable, because
 # answering it decides whether a mechanism is worth building at all:
 #
-#   When a container is replaced, was active work running at the time?
+#   When a container is replaced, was a LANDING in flight at the time?
+#
+# **That is narrower than CLOUD-451's question, and the gap is stated rather than
+# glossed** (CLOUD-696). This writes only while `land-lock hold` has the lease, so
+# it sees landings and nothing else. A container that recorded nothing was not
+# necessarily idle — it may simply have had no landing to observe — so absence
+# answers `unobserved` (exit 2) and never `idle`. Reporting a coverage gap as
+# idleness is evidence manufactured from silence, and it biases toward exactly the
+# conclusion that would license a mechanism.
 #
 # Two events are on record and they point opposite ways. 2026-08-13 06:18:54: a
 # container replaced with ZERO tracked tasks after ~14 minutes idle, disk
@@ -39,17 +47,22 @@
 # it does not matter: the tail of any heartbeat is lost exactly when a sensor
 # needs it, so `last_beat >= btime - interval` reads minutes stale at the moment
 # it is asked. So there is no clock in the predicate. `h` per beat, `x` only
-# where something CHOSE to stop, and the verdict is the LAST LINE's kind. A loop
-# killed by the container going down cannot write an `x`, so an `h` in final
-# position IS the evidence.
+# where something CHOSE to stop, and the verdict is the kind of the last record
+# written UNDER THE BOOT BEING JUDGED — not the newest line in the file, which
+# belongs to whichever container wrote last. A loop killed by the container going
+# down cannot write an `x`, so an `h` in final position under that boot IS the
+# evidence.
 #
 # Usage: reclaim-census note h                — a beat happened
 #        reclaim-census note x <reason>       — something chose to stop
 #        reclaim-census record-boot           — note this boot, so a later report
 #                                               can tell a preserved disk from a
 #                                               fresh one
-#        reclaim-census report                — the verdict about the last
-#                                               container replacement
+#        reclaim-census report                — the verdict about the ONE
+#                                               transition that just happened
+#        reclaim-census tally                 — classify every transition this
+#                                               disk records, so counting is
+#                                               derived rather than accumulated
 #        reclaim-census log-path | boot       — accessors, so no caller
 #                                               re-derives a path or a btime
 #
@@ -62,7 +75,7 @@
 # out. Rewriting the intentional-exit record as a beat makes a loop that stopped
 # on purpose indistinguishable from one the container killed — the false positive
 # that would license exactly the mechanism this exists to test the need for.
-#MUTANT kind-discrimination-collapses|s/if \[ "$kind" = "x" \]; then/if false; then/|an x is a stop on purpose
+#MUTANT active-discrimination-collapses|s/if \[ "$verdict" = "active" \]; then/if false; then/|a landing in flight when the container was replaced
 #MUTANT terminal-record-collapses|s/^	x) kind=x ;;$/	x) kind=h ;;/|stops on purpose leaves the matching x
 set -uo pipefail
 
@@ -179,9 +192,9 @@ record-boot)
 	[ "$last" = "$boot" ] || printf '%s\n' "$boot" >>"$boots" 2>/dev/null || true
 	exit 0
 	;;
-report) ;;
+report | tally) ;;
 *)
-	echo "::error:: reclaim-census: unknown mode \"$mode\" (want: report | note | record-boot | log-path | boot)" >&2
+	echo "::error:: reclaim-census: unknown mode \"$mode\" (want: report | tally | note | record-boot | log-path | boot)" >&2
 	exit 2
 	;;
 esac
@@ -195,61 +208,117 @@ d=$(git_dir) || {
 	exit 2
 }
 log="$d/batten-reclaim-log"
+boots="$d/batten-boots"
 
-# `-s`, so an empty file reads as absence rather than as a corrupt record. A loop
-# that started and died before its first beat leaves exactly that.
-if [ ! -s "$log" ]; then
-	prior=""
-	boots="$d/batten-boots"
-	if [ -r "$boots" ]; then
-		while IFS= read -r recorded; do
-			case "$recorded" in
-			'' | *[!0-9]*) continue ;;
+# THE READING IS PER TRANSITION, NEVER PER FILE, and that is the correction this
+# verb exists in its current form to make (CLOUD-696).
+#
+# The first version asked "what is the newest line in the log, and is its boot
+# different from mine?" — which re-answered from ONE record forever. Measured on
+# this clone: eight boots recorded, seven replacements, and log records under
+# exactly ONE of them. Every session start after that boot returned the same
+# verdict about the same six-boots-ago event, so a decision rule that counts
+# readings would have reached its threshold from a single observation, on the
+# idle side. That is the shape CLOUD-515 deleted `plan-hold` for — a conclusion
+# licensed by evidence that was not there — arriving through the instrument built
+# to prevent it.
+#
+# So a verdict is about ONE boundary: the container recorded immediately before
+# this one, and only the records written under THAT boot. Repeated calls about the
+# same boundary give the same answer, and `tally` derives the whole history in one
+# pass, so counting cannot accumulate duplicates.
+
+# The last record written under one boot, or nothing when that container recorded
+# none. `awk` over the whole log rather than `tail`, because the newest line
+# overall may belong to a different container entirely — precisely the conflation
+# above.
+kind_under() {
+	awk -v b="$1" '
+		($1 == "h" || $1 == "x") && $3 == b { k = $1; e = $2 }
+		END { if (k != "") printf "%s %s\n", k, e }
+	' "$log" 2>/dev/null
+}
+
+# Every recorded boot, oldest first. Malformed lines are dropped rather than
+# guessed at: a boots file is append-only and numeric, so anything else is damage.
+boot_list() {
+	[ -r "$boots" ] || return 0
+	awk '/^[0-9]+$/ { print }' "$boots" 2>/dev/null
+}
+
+# WHAT ABSENCE MEANS, and it is the other half of the correction. A container that
+# recorded nothing is UNOBSERVED, never "idle". The sensor only writes while a
+# `land` holds the lease, so silence means no landing was running — which is not
+# the same claim as the container being idle, and reporting it as idleness is
+# evidence manufactured from a gap in coverage. Exit 2, the cannot-look code.
+classify() { # classify <boot> -> prints: active|idle|unobserved [epoch]
+	local k e
+	read -r k e <<<"$(kind_under "$1")"
+	case "$k" in
+	h) printf 'active %s\n' "$e" ;;
+	x) printf 'idle %s\n' "$e" ;;
+	*) printf 'unobserved\n' ;;
+	esac
+}
+
+if [ "$mode" = tally ]; then
+	prev=
+	transitions=0
+	active=0
+	idle=0
+	unobserved=0
+	while IFS= read -r b; do
+		[ -n "$b" ] || continue
+		if [ -n "$prev" ]; then
+			transitions=$((transitions + 1))
+			read -r verdict _rest <<<"$(classify "$prev")"
+			case "$verdict" in
+			active) active=$((active + 1)) ;;
+			idle) idle=$((idle + 1)) ;;
+			*) unobserved=$((unobserved + 1)) ;;
 			esac
-			[ "$recorded" = "$boot" ] || prior="$recorded"
-		done <"$boots"
+		fi
+		prev="$b"
+	done <<<"$(boot_list)"
+	if [ "$transitions" -eq 0 ]; then
+		echo "::error:: reclaim-census: this disk records no container replacement — nothing to tally" >&2
+		exit 2
 	fi
-	if [ -n "$prior" ]; then
-		echo "reclaim-census: no work has ever been recorded in this clone (boot $boot, disk carries boot $prior)"
-		exit 1
-	fi
-	# No log AND no boot but this one: nothing that ran here left a trace, which
-	# is what a fresh disk looks like. Reporting "nothing was live" would be a
-	# claim the evidence cannot support, and it is the claim that would wrongly
-	# credit occupancy.
-	echo "::error:: reclaim-census: no record predates boot $boot — this container's disk carries no evidence either way" >&2
+	# Pointer-only: four counts. The decision rule reads these rather than
+	# accumulating session-start lines, which is what made double counting
+	# possible at all.
+	echo "reclaim-census: $transitions replacement(s) recorded — $active with a landing in flight, $idle idle of landings, $unobserved unobserved"
+	exit 0
+fi
+
+# `report`: the one boundary that just happened. The previous container is the
+# newest recorded boot that is not this one — which is the second-to-last entry
+# once `record-boot` has run, and still correct if it has not.
+prev=
+while IFS= read -r b; do
+	[ -n "$b" ] || continue
+	[ "$b" = "$boot" ] && continue
+	prev="$b"
+done <<<"$(boot_list)"
+
+if [ -z "$prev" ]; then
+	# No boot but this one: a fresh disk, where no local evidence can exist.
+	# Saying "nothing was live" would be a claim the evidence cannot support.
+	echo "::error:: reclaim-census: no boot predates $boot — this container's disk carries no evidence either way" >&2
 	exit 2
 fi
 
-last=$(tail -n 1 -- "$log" 2>/dev/null) || last=""
-# Fields, never a regex: `read` splits on IFS and the shapes above are a fixed
-# arity, so there is nothing for a pattern to get subtly wrong.
-read -r kind epoch recorded _rest <<<"$last"
-case "$kind" in
-h | x) ;;
-*)
-	echo "::error:: reclaim-census: the last record is unreadable — cannot say what the last replacement interrupted" >&2
-	exit 2
-	;;
-esac
-case "$epoch$recorded" in
-'' | *[!0-9]*)
-	echo "::error:: reclaim-census: the last record carries no usable timestamps — cannot say what the last replacement interrupted" >&2
-	exit 2
-	;;
-esac
-
-# THE WHOLE PREDICATE, and there is no clock in it. An `x` is written only where
-# something chose to stop, so its presence in final position settles the
-# question; a record from this boot never spanned anything; and an `h` left in
-# final position by a PREVIOUS boot is a loop that never got to write its `x`.
-if [ "$kind" = "x" ]; then
-	echo "reclaim-census: the last work stopped on purpose at $epoch — the container was idle when it was replaced"
+read -r verdict epoch <<<"$(classify "$prev")"
+# The discrimination, and the only place it happens. Mutating it away leaves the
+# active case reported as something else, which is the reading that would let a
+# reclaim of live work pass as a reclaim of an idle container.
+if [ "$verdict" = "active" ]; then
+	echo "reclaim-census: A LANDING WAS IN FLIGHT when this container replaced the last one (last beat $epoch under boot $prev, now $boot)"
+	exit 0
+fi
+if [ "$verdict" = "idle" ]; then
+	echo "reclaim-census: the last landing stopped on purpose at $epoch — no landing was in flight when boot $prev was replaced"
 	exit 1
 fi
-if [ "$recorded" = "$boot" ]; then
-	echo "reclaim-census: the last beat is from this boot ($boot) — nothing spanned a replacement"
-	exit 1
-fi
-echo "reclaim-census: ACTIVE WORK was live when this container replaced the last one (last beat $epoch under boot $recorded, now $boot)"
-exit 0
+echo "::error:: reclaim-census: boot $prev recorded nothing — UNOBSERVED, not idle; this sensor only sees landings and none ran there" >&2
+exit 2
