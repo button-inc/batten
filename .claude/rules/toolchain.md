@@ -271,6 +271,25 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   when that was measured; the engine's `pr-names-an-issue` since CLOUD-446). `worth checking`
   (2 firings, both review prompts) and `deliberate` (16) were measured and
   dropped; one shape survived, firing once, correctly.
+- `filed-here-check` is that stop's sibling, and the second half of CLOUD-514:
+  `deferral-check` prices a decision left with no home, this prices a home opened
+  instead of a fix. `board-write-record` (a `PostToolUse` body) records every row
+  this branch put on the board — kind, id, the tracker's `updatedAt`, and the
+  `ready-lint` verdict over the body the **tracker returned** — and `land` calls
+  this beside `deferral-check`, refusing when a row this branch CREATED was stored
+  `unready`. Three states rather than two: `ready` passes, `unready` refuses, and
+  `-` — the recorder could not lint — passes, because reading "not answered" as
+  "refused" turns a verdict about the environment into one about the row.
+  Comments are recorded and never gated: a comment on the row that already owns a
+  finding is the honest common case, and pricing it pushes the pressure toward
+  silence, which is the failure `finding-sink-check` exists to catch. The verdict
+  is unforgeable by the author for the reason the receipt pattern usually is not —
+  `ready-lint` over a payload the caller assembles was measured green three times
+  against text in a local file, once under an id no row carried. Fails open on an
+  absent record, and a branch predating the recorder can never have one: the store
+  lives under `$GIT_DIR`, is never committed, and dies with the container — which
+  is also why no fleet-wide firing rate is measurable. Bypass:
+  `BATTEN_FILED_HERE_BYPASS=1`.
 - **`claim-guard` is retired** (CLOUD-444); the pull-time half of the pair the
   key rule finishes (CLOUD-272) is now the `claim-needs-receipt` row in
   `batten.toml` — a `receipt` rule with `trigger = "write"` and `key = "branch"`.
