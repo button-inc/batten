@@ -110,6 +110,11 @@
 # change nothing shows can fail, which is exactly what shipped unproven before.
 #MUTANT has-pr-ignores-liveness|s/(\$s != "merged" and \$s != "closed")/(true)/|CLOUD-520 clause a — a MERGED pull request is a predecessor, not a competitor
 #MUTANT takeover-unrecorded|s/^\t\tif \[ "\$takeover" -ne 0 \]; then$/\t\tif false; then/|NAMES the refusals it overrode
+# And it must record the BASE it was claimed against (CLOUD-516). Drop that one
+# line and the receipt goes back to being a bare file whose existence
+# authorises every edit — which is how a claim naming CLOUD-230 sat on a
+# restarted branch through four unrelated stories, reporting nothing.
+#MUTANT claim-records-no-base|s/^\t\techo "base .*$/\t\t:/|the receipt records the origin/main it was claimed against
 set -euo pipefail
 
 # The one escape hatch, and it is deliberately not shared with the mediated
@@ -420,6 +425,28 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 		fi
 		echo "claimed-at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 		jq -r '[.[] | "updated-at \(.id) \(.updatedAt // "-")"] | .[]' <<<"$issues"
+		# THE BASE THIS CLAIM WAS MADE AGAINST (CLOUD-516). A branch NAME outlives
+		# the branch it described: `git checkout -B <name> origin/main` is the
+		# documented remedy after a PR merges, and it discards the commits that
+		# were the branch while this file, keyed by the name, survives. A receipt
+		# recording nothing cannot notice, so the guard passed on a claim for an
+		# unrelated issue through four stories.
+		#
+		# Recorded, not derived later: the reader needs what was true AT CLAIM
+		# TIME, and no amount of looking at the repository afterwards recovers it.
+		# Same shape as `linear-check`'s receipt, which records the `origin/main`
+		# it was linear against for the same reason.
+		#
+		# Emitted last and read by KEY, never by line number, so line 1 stays the
+		# id list every existing reader parses. `-` when origin/main does not
+		# resolve, which the reader treats as void rather than as agreement: a
+		# claim whose base could not be read is exactly as unproven as one that
+		# recorded none.
+		# `--verify --quiet`, not a bare rev-parse: an unresolvable ref makes
+		# rev-parse print the REF ITSELF to stdout before failing, so the
+		# fallback would append to it and record a two-line "origin/main\n-".
+		# Measured, not guessed.
+		echo "base $(git rev-parse --verify --quiet origin/main || echo -)"
 	} >"$git_dir/batten-receipts/claim.${branch//\//-}" 2>/dev/null || true
 fi
 

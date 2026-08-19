@@ -428,6 +428,37 @@ baseline_for() { # baseline_for <key> <body>
 	[[ "$body" != *"Refinement"* ]]
 }
 
+@test "the receipt records the origin/main it was claimed against" {
+	# CLOUD-516. A branch NAME outlives the branch it described — `git checkout -B
+	# <name> origin/main` is the documented remedy after a PR merges, and it
+	# discards the commits while this file, keyed by the name, survives. The
+	# engine's claim row voids a receipt whose base moved while the branch carries
+	# nothing of its own, and it can only do that if the base is recorded here.
+	#
+	# Measured before the fix: a receipt naming CLOUD-230 authorised every edit
+	# behind four unrelated stories and reported nothing.
+	setup_repo
+	git -C "$REPO" update-ref refs/remotes/origin/main HEAD
+	local main
+	main=$(git -C "$REPO" rev-parse origin/main)
+	run bash -c "$(declare -f payload); payload CLOUD-516 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$RECEIPT")" == *"base $main"* ]]
+	# Pointer-only: a sha, never a ref body.
+	[[ "$(cat "$RECEIPT")" != *"seed"* ]]
+}
+
+@test "a clone with no origin/main records the base as absent, never as agreement" {
+	# The fixture repo has no remote, which is the honest case: `-` is the task's
+	# spelling for "origin/main did not resolve", and the engine reads it as void.
+	# Recording nothing at all, or a bare empty value, would let the reader treat
+	# it as a base that happens to match — the direction that fails toward Valid.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-516 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$RECEIPT")" == *"base -"* ]]
+}
+
 @test "a bypassed claim says so IN the receipt, not only on stderr" {
 	# stderr is not retained; the receipt is. A claim taken under the hatch must
 	# still be auditable weeks later.

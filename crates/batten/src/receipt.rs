@@ -468,6 +468,14 @@ pub(crate) fn verdicts(
     } else {
         None
     };
+    // Resolved once, and only when a branch-keyed row asked for it — same
+    // laziness as `branch` above, for the same reason: a head-keyed caller must
+    // not pay two extra git invocations for a question it never asks.
+    let own = if branch.is_some() {
+        Some(own_commit_count(&facts.main)?)
+    } else {
+        None
+    };
     Some(
         checks
             .iter()
@@ -479,14 +487,44 @@ pub(crate) fn verdicts(
                             .and_then(|path| load_statement(&path));
                         validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir)
                     }
-                    ReceiptKey::Branch => branch.as_deref().map_or(Validity::Missing, |branch| {
-                        branch_validity(&facts.git_dir, check, branch)
-                    }),
+                    ReceiptKey::Branch => {
+                        branch
+                            .as_deref()
+                            .zip(own)
+                            .map_or(Validity::Missing, |(branch, own)| {
+                                branch_validity(&facts.git_dir, check, branch, &facts.head, own)
+                            })
+                    }
                 };
                 (check.clone(), verdict)
             })
             .collect(),
     )
+}
+
+/// How many commits this branch carries that `origin/main` does not, or `None`
+/// for "could not look".
+///
+/// Resolved separately from [`RepoFacts`] because a head-keyed receipt never
+/// needs it and it costs a git invocation on the mediated hot path. `None`
+/// propagates to the fail-open posture `verdicts` documents: a gate that cannot
+/// see the repository must not become a gate that denies everything.
+///
+/// **A range, not a reachability verdict.** CLOUD-36 forbids deciding anything
+/// by ancestry — a rebased landing is invisible to it — and leaves range forms
+/// legal precisely because selecting which commits to count is a different act
+/// from concluding one commit contains another. This counts; it concludes
+/// nothing about whether the branch landed.
+fn own_commit_count(main: &str) -> Option<usize> {
+    git::query(
+        Path::new("."),
+        &["rev-list", "--count", &format!("{main}..HEAD")],
+        "the branch's own commits cannot be counted, so a restart cannot be told from a lap",
+    )
+    .ok()?
+    .trim()
+    .parse()
+    .ok()
 }
 
 /// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
@@ -503,27 +541,86 @@ fn branch_receipt_name(check: &str, branch: &str) -> String {
     format!("{check}.{}", branch.replace('/', "-"))
 }
 
-/// Whether a branch-keyed receipt exists for `check` on `branch`.
+/// Whether a branch-keyed receipt for `check` on `branch` still describes this
+/// branch.
 ///
-/// Existence **is** the verdict, and only two of the four [`Validity`] states are
-/// reachable: a branch-keyed receipt attests to a decision about the work rather
-/// than to a set of bytes, so neither a new commit ([`Validity::StaleHead`]) nor a
-/// moved trunk ([`Validity::StaleMain`]) can invalidate it. That asymmetry is the
-/// whole reason the second keying exists — a SHA-keyed claim would demand a
-/// re-claim per commit, which is the false-positive rate that gets a guard
-/// bypassed.
+/// A new commit cannot invalidate it ([`Validity::StaleHead`] stays unreachable):
+/// a branch-keyed receipt attests to a decision about the *work* rather than to a
+/// set of bytes, and a SHA-keyed claim would demand a re-claim per commit — the
+/// false-positive rate that gets a guard bypassed. That asymmetry is the whole
+/// reason the second keying exists.
+///
+/// **But existence alone is not the verdict, and CLOUD-516 is why.** A branch NAME
+/// outlives the branch it described: `git checkout -B <name> origin/main` is the
+/// documented remedy once a PR merges, and it repoints the name at a new base and
+/// discards the old commits while this file, keyed by the name, survives. Measured
+/// 2026-08-13 — a receipt naming CLOUD-230 authorised every edit behind four
+/// unrelated stories, and reported nothing. A gate passing on evidence that
+/// expired is the silent false green this repository treats as worse than no gate.
+///
+/// So the receipt records the `origin/main` it was minted against, and is void
+/// ([`Validity::StaleMain`]) when **both** halves hold:
+///
+/// ```text
+/// situation                                      base moved   own commits   verdict
+/// ---------------------------------------------------------------------------------
+/// claim, then work                               no           0 -> n        valid
+/// a lap rebases onto newer main                  yes          >=1           VALID
+/// main moves, branch untouched                   yes          >=1           valid
+/// checkout -B <name> origin/main after a merge   yes          0             VOID
+/// ```
+///
+/// **The own-commits half is what makes this safe to ship.** The obvious rule —
+/// void it whenever the base moves — fires on every `land` lap, because a lap
+/// rebases onto the current `origin/main` and that is the loop working, not a
+/// fault. A restart is the one state with a moved base and nothing of its own,
+/// because the restart discarded the commits that were the branch. No timestamps,
+/// no reflog, no heuristics.
+///
+/// **"Base moved" is read off HEAD, not off a merge base**, and the two are the
+/// same commit in the only case that reaches the comparison: with no commits of
+/// its own the branch sits at or below `origin/main`, so where it forks *is*
+/// HEAD. That equivalence is what keeps CLOUD-36 satisfied — nothing here decides
+/// anything by reachability — and it drops a git invocation from the mediated hot
+/// path, since HEAD is already resolved for the head-keyed rows.
+///
+/// A receipt carrying no `base` line is void rather than valid, so receipts
+/// predating this change do not grandfather themselves in.
 ///
 /// Read from `--git-dir`, so it resolves per worktree and one worktree's claim
 /// cannot vouch for another's.
-fn branch_validity(git_dir: &str, check: &str, branch: &str) -> Validity {
+fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: usize) -> Validity {
     let path = Path::new(git_dir)
         .join("batten-receipts")
         .join(branch_receipt_name(check, branch));
-    if path.is_file() {
-        Validity::Valid
-    } else {
-        Validity::Missing
+    let Ok(body) = std::fs::read_to_string(&path) else {
+        return Validity::Missing;
+    };
+    let recorded = recorded_base(&body);
+    // Absent, unreadable, or `-`: the claim cannot say what it was made against,
+    // which is exactly as unproven as one made against something that moved.
+    let Some(recorded) = recorded else {
+        return Validity::StaleMain;
+    };
+    if own == 0 && recorded != head {
+        return Validity::StaleMain;
     }
+    Validity::Valid
+}
+
+/// The `base <sha>` line a claim receipt carries, or `None` when it carries none.
+///
+/// Matched by KEY rather than by line number: `mise-tasks/claim-check` writes the
+/// id list on line 1 and has already grown two more fields under it (CLOUD-431),
+/// so a positional reader would break on the next one. `-` is the task's own
+/// spelling for "origin/main did not resolve when I minted this" and reads as
+/// absent here, never as a base that happens to match nothing.
+fn recorded_base(body: &str) -> Option<String> {
+    body.lines()
+        .find_map(|line| line.strip_prefix("base "))
+        .map(str::trim)
+        .filter(|base| !base.is_empty() && *base != "-")
+        .map(str::to_owned)
 }
 
 /// Resolve `.` and `..` without touching the filesystem.
@@ -1125,6 +1222,140 @@ mod tests {
         assert_eq!(branch_receipt_name("claim", "main"), "claim.main");
     }
 
+    /// A receipt body in the shape `mise-tasks/claim-check` mints, so the reader
+    /// is exercised against the real format rather than a convenient one.
+    fn minted(base: Option<&str>) -> String {
+        let mut body = String::from(
+            "CLOUD-516\nready-lint pass\nclaimed-at 2026-08-13T14:13:03Z\nupdated-at CLOUD-516 2026-08-13T07:37:37Z\n",
+        );
+        if let Some(base) = base {
+            body.push_str(&format!("base {base}\n"));
+        }
+        body
+    }
+
+    fn judge(case: &str, body: &str, head: &str, own: usize) -> Validity {
+        let dir = tempdir(case);
+        let receipts = dir.join("batten-receipts");
+        std::fs::create_dir_all(&receipts).expect("create the store");
+        std::fs::write(receipts.join("claim.branch"), body).expect("mint");
+        branch_validity(
+            dir.to_str().expect("utf-8 scratch path"),
+            "claim",
+            "branch",
+            head,
+            own,
+        )
+    }
+
+    #[test]
+    fn a_restarted_branch_carries_no_usable_claim() {
+        // CLOUD-516's whole point, and the row that was silently green: the base
+        // moved AND the branch carries nothing of its own, which is what
+        // `git checkout -B <name> origin/main` after a merge produces and what
+        // nothing else produces.
+        assert_eq!(
+            judge("restart", &minted(Some("aaa")), "bbb", 0),
+            Validity::StaleMain
+        );
+    }
+
+    #[test]
+    fn a_rebase_lap_is_never_asked_to_re_claim() {
+        // THE ROW A CARELESS FIX BREAKS. `land` rebases onto the current
+        // origin/main every lap, so the base moves every lap — voiding on that
+        // alone would demand a re-claim per lap, which is the false-positive rate
+        // that gets a guard bypassed and would be reverted within a day.
+        assert_eq!(
+            judge("lap", &minted(Some("aaa")), "bbb", 1),
+            Validity::Valid
+        );
+        assert_eq!(
+            judge("lap2", &minted(Some("aaa")), "ccc", 7),
+            Validity::Valid
+        );
+    }
+
+    #[test]
+    fn an_unmoved_base_is_valid_with_or_without_work() {
+        // Claim, then work: the ordinary case, before and after the first commit.
+        assert_eq!(
+            judge("unmoved", &minted(Some("aaa")), "aaa", 0),
+            Validity::Valid
+        );
+        assert_eq!(
+            judge("unmoved2", &minted(Some("aaa")), "aaa", 3),
+            Validity::Valid
+        );
+    }
+
+    #[test]
+    fn a_receipt_predating_this_change_does_not_grandfather_itself_in() {
+        // The fourth acceptance clause. A receipt with no `base` line cannot say
+        // what it was made against, and reading that as agreement would leave
+        // every receipt minted before this change permanently authoritative —
+        // including the six-day-old one this branch was carrying.
+        assert_eq!(
+            judge("nobase", &minted(None), "bbb", 0),
+            Validity::StaleMain
+        );
+        assert_eq!(
+            judge("nobase2", "CLOUD-516\n", "bbb", 0),
+            Validity::StaleMain
+        );
+        // `-` is the task's spelling for "origin/main did not resolve at mint
+        // time" and must read as absent, never as a base that matches nothing.
+        assert_eq!(
+            judge("nobase3", &minted(Some("-")), "bbb", 0),
+            Validity::StaleMain
+        );
+    }
+
+    #[test]
+    fn an_absent_receipt_is_missing_not_void() {
+        // The two verdicts carry different remedies — mint one, versus mint one
+        // again — so collapsing them would cost the reader the distinction.
+        let dir = tempdir("absent");
+        assert_eq!(
+            branch_validity(
+                dir.to_str().expect("utf-8 scratch path"),
+                "claim",
+                "branch",
+                "aaa",
+                0,
+            ),
+            Validity::Missing
+        );
+    }
+
+    #[test]
+    fn the_base_line_is_read_by_key_not_by_position() {
+        // `claim-check` has already grown two fields under line 1 (CLOUD-431) and
+        // will grow more; a positional reader would break on the next one, and it
+        // would break toward Valid.
+        assert_eq!(recorded_base("base aaa\n").as_deref(), Some("aaa"));
+        assert_eq!(recorded_base(&minted(Some("aaa"))).as_deref(), Some("aaa"));
+        assert_eq!(recorded_base("CLOUD-1\nbased on nothing\n"), None);
+        assert_eq!(recorded_base("base \n"), None);
+    }
+
+    #[test]
+    fn the_base_line_matches_what_the_minting_task_writes() {
+        // The other half of the crate↔task contract
+        // `the_branch_receipt_filename_matches_the_minting_task` pins: this reader
+        // and that writer must agree on the key, or the guard reads every receipt
+        // as baseless and denies every edit.
+        let task = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../mise-tasks/claim-check"
+        ))
+        .expect("read the minting task");
+        assert!(
+            task.contains(r#"echo "base $(git rev-parse --verify --quiet origin/main"#),
+            "claim-check no longer records the base this module reads"
+        );
+    }
+
     #[test]
     fn a_traversal_is_resolved_before_the_containment_test() {
         // The defect this closes, found by the end-to-end suite rather than by
@@ -1153,47 +1384,67 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_keyed_verdict_is_existence_and_nothing_else() {
-        // Only two of the four states are reachable under a branch key: a claim
-        // attests to a decision about the work, so neither a new commit nor a
-        // moved trunk can invalidate it. That is the whole reason for the second
-        // keying — a SHA-keyed claim would demand a re-claim per commit.
-        let dir = tempdir();
+    fn a_branch_keyed_receipt_answers_for_its_own_branch_and_check_only() {
+        // WAS `a_branch_keyed_verdict_is_existence_and_nothing_else`, and the old
+        // name was the defect stated as a contract: it wrote a receipt with no
+        // base and asserted Valid, which is exactly the state CLOUD-516 measured
+        // authorising four unrelated stories. The addressing assertions below are
+        // the half that was always right and are kept verbatim.
+        let dir = tempdir("addressing");
         let git_dir = dir.to_str().expect("utf-8 scratch path");
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature"),
+            branch_validity(git_dir, "claim", "feature", "aaa", 0),
             Validity::Missing
         );
         let receipts = dir.join("batten-receipts");
         std::fs::create_dir_all(&receipts).expect("create the store");
-        std::fs::write(receipts.join("claim.feature"), "CLOUD-444\n").expect("mint");
+        std::fs::write(receipts.join("claim.feature"), "CLOUD-444\nbase aaa\n").expect("mint");
         assert_eq!(
-            branch_validity(git_dir, "claim", "feature"),
+            branch_validity(git_dir, "claim", "feature", "aaa", 0),
+            Validity::Valid
+        );
+        // A new commit still cannot invalidate it — the asymmetry the second
+        // keying exists for, and the one thing CLOUD-516 did not change.
+        assert_eq!(
+            branch_validity(git_dir, "claim", "feature", "aaa", 12),
             Validity::Valid
         );
         // A receipt for another branch does not vouch for this one.
         assert_eq!(
-            branch_validity(git_dir, "claim", "other"),
+            branch_validity(git_dir, "claim", "other", "aaa", 0),
             Validity::Missing
         );
         // Nor does another check's receipt on the same branch.
         assert_eq!(
-            branch_validity(git_dir, "verify", "feature"),
+            branch_validity(git_dir, "verify", "feature", "aaa", 0),
             Validity::Missing
         );
-        // A directory at the path is not a receipt: `is_file` is what makes the
-        // store's own parent directory unable to answer for a check called
+        // A directory at the path is not a receipt: reading it fails, which is
+        // what makes the store's own parent unable to answer for a check called
         // nothing.
         std::fs::create_dir_all(receipts.join("claim.dir")).expect("create a directory");
-        assert_eq!(branch_validity(git_dir, "claim", "dir"), Validity::Missing);
+        assert_eq!(
+            branch_validity(git_dir, "claim", "dir", "aaa", 0),
+            Validity::Missing
+        );
     }
 
-    /// A per-process scratch directory, in this crate's unit-test idiom
+    /// A per-process, per-CASE scratch directory, in this crate's unit-test idiom
     /// (`drain`, `findings`): `CARGO_TARGET_TMPDIR` is integration-only, and a
     /// pid-suffixed name keeps concurrent test binaries from sharing one.
-    fn tempdir() -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("batten-branch-receipt-{}", std::process::id()));
+    ///
+    /// **`case` is not decoration.** This wipes the directory on entry, and the
+    /// harness runs cases in parallel threads of one process — so a pid alone had
+    /// every case in this module sharing one path, and a second case calling it
+    /// deleted the first's receipt mid-assertion. That was survivable while
+    /// exactly one case used it and became a flake the moment CLOUD-516 added
+    /// more: it fails as `Missing`, which is the direction that reads as a real
+    /// verdict rather than as a broken fixture.
+    fn tempdir(case: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "batten-branch-receipt-{}-{case}",
+            std::process::id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create the scratch dir");
         dir
