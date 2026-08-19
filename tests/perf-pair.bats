@@ -28,9 +28,37 @@ setup() {
 }
 
 @test "every arm is measured in the pinned fixture repo" {
-	# Three paths, each pointing at the same materialised fixture.
-	run bash -c "grep -cE '^pair [a-z]+ \"\\\$check_repo\"' '$TASK'"
-	[ "$output" -eq 3 ]
+	# Four paths, each pointing at the same materialised fixture. `wired` joins
+	# them (CLOUD-697): its two arms differ in which LAUNCHER runs, not in the
+	# directory hyperfine is invoked from.
+	run bash -c "grep -cE '^pair [a-z]+ .*\\\$check_repo' '$TASK'"
+	[ "$output" -eq 4 ]
+}
+
+# THE GAP THIS CLOSES (CLOUD-697). `perf-assert` budgets four paths; this task
+# measured three, so `perf-compare` was blind to `wired` — the entry point
+# `.claude/settings.json` actually invokes, and the number an agent waits on.
+# Asserted as a COUNT against the budgeted set rather than by name, so a fifth
+# path added to `perf-assert` and forgotten here fails this case instead of
+# shipping another silent hole.
+@test "every path perf-assert budgets is paired here" {
+	# Read the BUDGETS block itself rather than grepping for names: the first
+	# entry shares its line with the assignment, so a name-anchored count silently
+	# loses it — which this case caught on its first run.
+	budgeted=$(sed -n "/^BUDGETS='/,/'$/p" "$BATS_TEST_DIRNAME/../mise-tasks/perf-assert" |
+		tr -d "'" | sed 's/^BUDGETS=//' | grep -cE '^[a-z]+ [0-9]+$')
+	paired=$(grep -cE '^pair (noop|check|hook|wired) ' "$TASK")
+	# perf-assert budgets the gated paths only; `check` is measured and ungated,
+	# so the paired set is the budgeted set plus it.
+	[ "$paired" -eq $((budgeted + 1)) ]
+}
+
+# The wired arms must pin their binary rather than inherit whatever the tree has
+# in `target/`. `$BATTEN_BIN` is the launcher's first resolution candidate, which
+# is the only reason this is expressible without touching the launcher.
+@test "the wired arms pin their binary per arm, not by resolution order" {
+	run bash -c "grep -cE 'BATTEN_BIN=\\\$(base|head)_bin' '$TASK'"
+	[ "$output" -eq 2 ]
 }
 
 # hyperfine aborts on a non-zero exit unless `-i` is passed, and that is
@@ -46,6 +74,17 @@ setup() {
 # to what can actually change the binary.
 @test "the skip is keyed to the paths that can change the binary" {
 	run grep -c 'crates/\|Cargo\.lock\|Cargo\.toml' "$TASK"
+	[ "$output" -gt 0 ]
+}
+
+# THE LOAD-BEARING HALF (CLOUD-697). Once `wired` is measured the object is the
+# binary PLUS its wiring, so a commit touching only the launcher changes the
+# measured cost. Keyed to the old set, such a commit skipped the very gate it
+# needed — an arm that never runs on the commits it exists to judge.
+@test "the skip also sees the wiring, not only the binary" {
+	run grep -c '\.claude/hooks/' "$TASK"
+	[ "$output" -gt 0 ]
+	run grep -c '\.claude/settings\.json' "$TASK"
 	[ "$output" -gt 0 ]
 }
 

@@ -21,12 +21,19 @@
 # inner loop of every landing lap, and `mem:workflow/agent-fanout` measures that
 # shortening `verify` buys more parallelism than adding sessions — two release
 # builds on every lap would be a throughput tax on the whole fleet. But the
-# reason it is safe to skip is not the cost: a commit that changes no Rust
-# source, no manifest and no lockfile cannot change the binary, and a binary
-# that is byte-identical cannot have got slower. So the skip is sound where it
-# applies and absent where it does not, which is the shape CLOUD-224 gives the
-# gate steps one level down. Task-layer, workflow and documentation changes —
-# most of this repository's traffic — pay a `git diff --name-only`.
+# reason it is safe to skip is not the cost: a commit that cannot change what
+# gets INVOKED cannot have made the invocation slower.
+#
+# WHAT "WHAT GETS INVOKED" MEANS WIDENED WHEN `wired` JOINED THE PAIR
+# (CLOUD-697). For the three binary paths the object is the binary, so Rust
+# source, the manifests and the lockfile bound it. `wired` measures the binary
+# PLUS the launcher `.claude/settings.json` names — so a commit touching only
+# `.claude/hooks/batten-hook.sh` changes the measured cost while touching
+# nothing in the old set, and would have skipped the very gate it needed. The
+# predicate below carries both halves, or the sentence above is false.
+#
+# Documentation, the task layer and workflows — most of this repository's
+# traffic — still pay only a `git diff --name-only`.
 #
 # `--null` measures HEAD against ITSELF: a comparison of a binary with its own
 # copy, whose ratio is by construction 1.0 plus pure noise. That is how
@@ -82,9 +89,9 @@ if [ "$null" = 0 ]; then
 	# Literal grep patterns, and `-c` rather than `-q`: an early-exiting `grep -q`
 	# under `pipefail` can report failure ON A MATCH when the producer is still
 	# writing (`mise run pipefail-grep-check`).
-	touching="$(grep -cE '^(crates/|Cargo\.lock$|Cargo\.toml$)' <<<"$changed" || true)"
+	touching="$(grep -cE '^(crates/|Cargo\.lock$|Cargo\.toml$|\.claude/hooks/|\.claude/settings\.json$)' <<<"$changed" || true)"
 	if [ "$touching" = 0 ]; then
-		echo "perf-pair: no change to crates/, Cargo.toml or Cargo.lock between ${base_sha:0:8} and ${head_sha:0:8} — the binary is unchanged, so its latency is too. Nothing measured."
+		echo "perf-pair: no change to crates/, Cargo.toml, Cargo.lock, .claude/hooks/ or .claude/settings.json between ${base_sha:0:8} and ${head_sha:0:8} — neither the binary nor its wiring changed, so their latency did not either. Nothing measured."
 		exit 0
 	fi
 fi
@@ -110,6 +117,10 @@ if [ "$null" = 1 ]; then
 	base_bin="$OUT_DIR/batten-null"
 	cp "$head_bin" "$base_bin"
 	base_sha="$head_sha"
+	# No worktree in the null experiment, so the wired arm's "base tree" is this
+	# one. Both arms then run the same launcher over byte-identical binaries,
+	# which is exactly what a null comparison of the wired path should be.
+	base_tree="$PWD"
 else
 	# The base binary, built from a detached worktree at the merge base. Its own
 	# CARGO_TARGET_DIR: sharing the main one would make the two builds evict each
@@ -142,6 +153,9 @@ else
 		exit 2
 	fi
 	base_bin="$OUT_DIR/base-target/release/batten"
+	# The wired arm runs the BASE tree's launcher, so the worktree is the base
+	# tree for that path as well as the source of the base binary.
+	base_tree="$worktree"
 fi
 
 if [ ! -x "$base_bin" ] || [ ! -x "$head_bin" ]; then
@@ -163,7 +177,12 @@ cp "$FIXTURE_REPO/lib.rs.in" "$check_repo/lib.rs"
 # measured back to back rather than in separate runs. `results[0]` is base and
 # `results[1]` is head, in the order they are passed.
 pair() {
-	local id="$1" dir="$2" args="$3"
+	# EXPLICIT PER-ARM COMMANDS (CLOUD-697), not one shared argument string. The
+	# three binary paths differ between arms only in which binary runs, but `wired`
+	# runs a different LAUNCHER per arm — each tree's own — so a `$base_bin $args` /
+	# `$head_bin $args` shape cannot express it. Passing both commands in full costs
+	# a little repetition at the call sites and removes the coupling entirely.
+	local id="$1" dir="$2" base_cmd="$3" head_cmd="$4"
 	local json="$OUT_DIR/$id.json"
 	local -a flags=(
 		--warmup "$WARMUP"
@@ -172,11 +191,13 @@ pair() {
 		--export-json "$json"
 		--style none
 	)
-	if [ "$id" = hook ]; then
-		flags+=(--input "$FIXTURE_HOOK")
-	fi
+	# Both adjudicating paths read an envelope on stdin. Same grouping as
+	# `mise-tasks/perf`, which already treats them as one class.
+	case "$id" in
+	hook | wired) flags+=(--input "$FIXTURE_HOOK") ;;
+	esac
 
-	if ! (cd "$dir" && hyperfine "${flags[@]}" "$base_bin $args" "$head_bin $args" >/dev/null 2>"$OUT_DIR/$id.err"); then
+	if ! (cd "$dir" && hyperfine "${flags[@]}" "$base_cmd" "$head_cmd" >/dev/null 2>"$OUT_DIR/$id.err"); then
 		echo "::error:: perf-pair: measuring the $id pair failed — see $OUT_DIR/$id.err. No measurement." >&2
 		exit 2
 	fi
@@ -211,6 +232,34 @@ pair() {
 # the comparison is between the BINARIES rather than between two configs. It
 # also makes the number reproducible: measuring against this repository's live
 # config would move the baseline every time the config changed.
-pair noop "$check_repo" "--help"
-pair check "$check_repo" "check"
-pair hook "$check_repo" "hook --harness claude-code"
+pair noop "$check_repo" "$base_bin --help" "$head_bin --help"
+pair check "$check_repo" "$base_bin check" "$head_bin check"
+pair hook "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook --harness claude-code"
+
+# THE WIRED PATH (CLOUD-697): what `.claude/settings.json` actually invokes,
+# launcher included — the number an agent waits on, and the one `perf-assert`
+# budgets but no paired arm covered.
+#
+# Each arm runs ITS OWN tree's launcher against its own binary, unlike the three
+# above which share the pinned fixture. That is the correct reading here and not
+# an inconsistency: `wired` measures what the installed wiring costs, and each
+# arm's wiring is its own. It also cannot reintroduce the config mismatch fixed
+# earlier — the base launcher `cd`s to the base tree and reads the base
+# `batten.toml`, which the base binary can load by construction.
+#
+# `env` rather than a generated shim: `--shell=none` runs argv directly, so this
+# is how per-arm environment is supplied at all. The extra exec is identical on
+# both arms and therefore divides out of the ratio, which is the only thing
+# `perf-compare` reads.
+#
+# `$BATTEN_BIN` is the launcher's FIRST resolution candidate, ahead of
+# `target/release/batten` — so this pins each arm to the binary built for it
+# rather than to whatever the tree happens to have lying in `target/`.
+readonly LAUNCHER=".claude/hooks/batten-hook.sh"
+if [ ! -x "$base_tree/$LAUNCHER" ] || [ ! -x "$PWD/$LAUNCHER" ]; then
+	echo "::error:: perf-pair: $LAUNCHER is missing or not executable in one of the two trees, so the wired pair cannot be measured. No measurement." >&2
+	exit 2
+fi
+pair wired "$check_repo" \
+	"env CLAUDE_PROJECT_DIR=$base_tree BATTEN_BIN=$base_bin $base_tree/$LAUNCHER" \
+	"env CLAUDE_PROJECT_DIR=$PWD BATTEN_BIN=$head_bin $PWD/$LAUNCHER"
