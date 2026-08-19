@@ -1485,12 +1485,16 @@ _batten() {
             return 0
             ;;
         batten__subcmd__exec)
-            opts="-q -v -y -h --capture-only --tee --format --style --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --capture-only --tee --jobs --continue-on-error --format --style --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --jobs)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 --format)
                     COMPREPLY=($(compgen -W "human json jsonl" -- "${cur}"))
                     return 0

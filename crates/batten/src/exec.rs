@@ -85,6 +85,33 @@
 //! as a side effect of making one wrapper token-kind is how a rule stops meaning
 //! what it says. It gets its own change or it stays as it is.
 //!
+//! ## One call, N commands, and a capture you can read while it is still open
+//! (CLOUD-430)
+//!
+//! Two requirements that turn out to be one mechanism.
+//!
+//! **Bundling adopts mise's `:::`** ([`BUNDLE_SEPARATOR`]) rather than inventing
+//! a separator, and it needed no parser change at all: the tail is already every
+//! token after `--`, so a bundle is a property of the tokens. `--jobs` is the
+//! width and `--continue-on-error` the failure policy, both mise's names for
+//! mise's meanings. **The bundle's code is the FIRST non-zero in declaration
+//! order** — never whichever child finished last, which `--jobs` would otherwise
+//! make a property of the scheduler rather than of the bundle.
+//!
+//! **A live capture is a spool with a committed-length watermark**
+//! ([`capture::Spool`]), and that shape is forced rather than chosen: the digest
+//! hashes the *complete* output, so it cannot be the key while the stream is
+//! open. Readers read only as far as the watermark; the spool seals into the
+//! ordinary content-addressed record at exit, byte-identical to what the same
+//! command run on its own would have stored. Bundling must not change a
+//! capture's identity, or every receipt keyed to one breaks.
+//!
+//! The lock is `fs4`, not an async runtime, and the reason is the failure this
+//! substrate has to survive rather than a dependency count: an OS advisory lock
+//! is released by the kernel when its holder dies, so a supervisor `SIGKILL`ed
+//! mid-write (the case the section below is about) leaves a reader a defined
+//! prefix instead of a lock nobody can release.
+//!
 //! ## Whose tree is it, and who is already managing it (CLOUD-427)
 //!
 //! A dispatched tree outlives the dispatcher by default: a `SIGTERM` to Batten
@@ -294,7 +321,7 @@ impl OutputStyle {
 /// a conservative default chosen for taste — it is the *only* value that leaves
 /// the process topology byte-for-byte what it was, which is what an existing
 /// consumer's orchestrator is already built against.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecConfig {
     /// Whether Batten may put a dispatched command in its own process group and
@@ -322,6 +349,35 @@ pub struct ExecConfig {
     /// (mise's axis).
     #[serde(default)]
     pub style: OutputStyle,
+    /// How many of a `:::` bundle's commands run at once — mise's `--jobs`.
+    ///
+    /// `1` by default, which is stricter than mise's own default and chosen
+    /// rather than inherited: a bundle's commands share one working tree, and
+    /// widening concurrency a caller did not ask for is how two of them start
+    /// writing the same file. Zero is read as one.
+    #[serde(default = "one")]
+    pub jobs: usize,
+    /// Whether a bundle keeps going past a command that failed — mise's
+    /// `--continue-on-error`.
+    #[serde(default)]
+    pub continue_on_error: bool,
+}
+
+/// The `jobs` default, as a function because `serde` needs one.
+const fn one() -> usize {
+    1
+}
+
+impl Default for ExecConfig {
+    /// [`ExecConfig::DEFAULT`], and derived from it rather than derived by the
+    /// compiler.
+    ///
+    /// `#[derive(Default)]` reads each field's *type* default, so `jobs` would be
+    /// `0` — a width nobody can mean, and one `serde`'s own `#[serde(default)]`
+    /// already disagrees with. Two defaults for one key is the drift this closes.
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 impl ExecConfig {
@@ -335,6 +391,8 @@ impl ExecConfig {
         tee: false,
         format: OutputFormat::Human,
         style: OutputStyle::Interleave,
+        jobs: 1,
+        continue_on_error: false,
     };
 }
 
@@ -435,7 +493,12 @@ fn signal_group(pgid: rustix::process::Pid, signal: rustix::process::Signal) {
 /// completes, so a deadline over a returned `Vec` could only ever store nothing.
 /// Appended under the lock per chunk, which is the same granularity the write to
 /// `sink` already has.
-fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W, seen: &Mutex<Vec<u8>>) -> Result<()> {
+fn tee<R: Read, W: Write>(
+    mut pipe: R,
+    mut sink: W,
+    seen: &Mutex<Vec<u8>>,
+    spool: &Mutex<capture::Spool>,
+) -> Result<()> {
     let mut chunk = [0_u8; 8192];
     loop {
         let read = pipe.read(&mut chunk)?;
@@ -445,6 +508,14 @@ fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W, seen: &Mutex<Vec<u8>>) -> Re
         let bytes = chunk.get(..read).unwrap_or(&[]);
         sink.write_all(bytes)?;
         sink.flush()?;
+        // Committed to the spool BEFORE the in-memory copy, because the spool is
+        // the only one another process can read (CLOUD-430) — a chunk that
+        // reached the caller and not the spool would be output a concurrent
+        // reader can never catch up to.
+        match spool.lock() {
+            Ok(mut held) => held.commit(bytes)?,
+            Err(_) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
+        }
         match seen.lock() {
             Ok(mut held) => held.extend_from_slice(bytes),
             // A poisoned lock means the other end panicked mid-append. The bytes
@@ -462,25 +533,34 @@ struct Drain {
     outcome: mpsc::Receiver<Result<()>>,
     /// Everything written through so far.
     seen: Arc<Mutex<Vec<u8>>>,
+    /// The live capture this stream is spooling into, shared with the tee thread
+    /// so a drain that times out can still be sealed by the caller.
+    spool: Arc<Mutex<capture::Spool>>,
 }
 
 impl Drain {
     /// Spawn a tee of `pipe` into `sink`.
-    fn spawn<R, W>(pipe: R, sink: W) -> Self
+    fn spawn<R, W>(pipe: R, sink: W, spool: capture::Spool) -> Self
     where
         R: Read + Send + 'static,
         W: Write + Send + 'static,
     {
         let seen = Arc::new(Mutex::new(Vec::new()));
+        let spool = Arc::new(Mutex::new(spool));
         let (tx, outcome) = mpsc::channel();
         let buffer = Arc::clone(&seen);
+        let spooling = Arc::clone(&spool);
         // Detached on purpose. A thread blocked on a pipe a grandchild holds open
         // cannot be joined, and there is nothing to join it *for*: its bytes are
         // in `seen` already, and the process is on its way out.
         drop(std::thread::spawn(move || {
-            drop(tx.send(tee(pipe, sink, &buffer)));
+            drop(tx.send(tee(pipe, sink, &buffer, &spooling)));
         }));
-        Self { outcome, seen }
+        Self {
+            outcome,
+            seen,
+            spool,
+        }
     }
 
     /// Wait up to [`PIPE_DRAIN_TIMEOUT`] for EOF, then take what arrived.
@@ -489,7 +569,7 @@ impl Drain {
     /// an error: the child's exit code is still the caller's answer, and refusing
     /// to report it because bookkeeping ran long would turn a leaked grandchild
     /// into a failed build.
-    fn collect(self, stream: Stream, report: &mut dyn Write) -> Result<Vec<u8>> {
+    fn collect(self, stream: Stream, report: &mut dyn Write) -> Result<(Vec<u8>, capture::Spool)> {
         self.collect_within(PIPE_DRAIN_TIMEOUT, stream, report)
     }
 
@@ -503,7 +583,7 @@ impl Drain {
         deadline: Duration,
         stream: Stream,
         report: &mut dyn Write,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<(Vec<u8>, capture::Spool)> {
         let timed_out = match self.outcome.recv_timeout(deadline) {
             Ok(result) => {
                 result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
@@ -532,7 +612,22 @@ impl Drain {
                 bytes.len()
             )?;
         }
-        Ok(bytes)
+        // The spool comes back with the bytes, because sealing is the caller's:
+        // a timed-out drain leaves the tee thread alive and holding its `Arc`,
+        // and reclaiming the `Spool` by value would either block on that thread
+        // or race it. `try_unwrap` succeeding is the ordinary case (the tee has
+        // exited); the fallback reopens the same paths, which is safe because the
+        // spool's identity is its handle rather than its file descriptor.
+        let spool = match Arc::try_unwrap(self.spool) {
+            Ok(held) => held
+                .into_inner()
+                .map_err(|_| anyhow::anyhow!("exec: the spool was poisoned"))?,
+            Err(shared) => match shared.lock() {
+                Ok(held) => held.reopen()?,
+                Err(_) => return Err(anyhow::anyhow!("exec: the spool was poisoned")),
+            },
+        };
+        Ok((bytes, spool))
     }
 }
 
@@ -616,6 +711,40 @@ impl Write for ChildSink {
     }
 }
 
+/// One dispatched command's whole result, before anything is reported.
+///
+/// Carried rather than reported as it happens, for a reason `--jobs` makes
+/// unavoidable: with several children in flight, the order things *finish* in is
+/// a property of the machine, and Batten's output has to be a property of the
+/// bundle. So every command's bytes, captures, code and deferred notices come
+/// back here and are rendered in DECLARATION order.
+#[derive(Debug)]
+struct Outcome {
+    /// Position in the bundle, zero-based, as declared.
+    index: usize,
+    /// The code this command reported.
+    exit: i32,
+    /// Everything the command wrote to stdout.
+    out_bytes: Vec<u8>,
+    /// Everything the command wrote to stderr.
+    err_bytes: Vec<u8>,
+    /// The sealed pointer per stream, stdout first.
+    captures: [capture::Capture; 2],
+    /// Anything the drain had to say, held back so it lands in bundle order.
+    notices: Vec<u8>,
+}
+
+/// One command's line in the record: pointers, and nothing that is not a pointer.
+#[derive(Debug, Serialize)]
+struct CommandRecord<'a> {
+    /// Position in the bundle, zero-based.
+    index: usize,
+    /// The code this command reported.
+    exit: i32,
+    /// One pointer per stream, in a fixed order.
+    captures: &'a [capture::Capture],
+}
+
 /// What `exec` says about a run whose bytes it did not print.
 ///
 /// Every field is a fact **about** the output and none of them is the output: an
@@ -632,14 +761,21 @@ impl Write for ChildSink {
 /// exactly that question — whether Batten's report adds a copy of the child's
 /// bytes — so a preview would be the one thing the census is watching for. The
 /// routes to the bytes are `--tee` and the capture the handle addresses.
+///
+/// **A one-command bundle renders exactly as a bare command always did**
+/// (CLOUD-430). Every receipt and every reader keyed to those lines predates
+/// bundling, so a per-command index that appeared unconditionally would be a
+/// byte-stability break dressed as a feature.
 #[derive(Debug, Serialize)]
 struct Record<'a> {
     /// The verb, so one line of `jsonl` is self-describing among others.
     verb: &'static str,
-    /// The code the caller is about to receive.
+    /// The code the caller is about to receive — the bundle's, not a child's.
     exit: i32,
-    /// One pointer per stream, in a fixed order.
-    captures: &'a [capture::Capture],
+    /// How many commands the bundle DECLARED, which is not how many ran.
+    declared: usize,
+    /// One entry per command that ran, in declaration order.
+    commands: Vec<CommandRecord<'a>>,
 }
 
 impl Record<'_> {
@@ -648,18 +784,42 @@ impl Record<'_> {
     /// Byte-stable across every format/style pair (§6): nothing here is a clock,
     /// a duration, a path or a map iteration order.
     fn emit(&self, format: OutputFormat, report: &mut dyn Write) -> Result<()> {
+        // The index is written only for a real bundle. See the type's docs: a
+        // bare command's lines are a published shape.
+        let bundled = self.declared > 1;
         match format {
             OutputFormat::Human => {
-                writeln!(report, "exec: exit {}", self.exit)?;
-                for capture in self.captures {
+                for command in &self.commands {
+                    let tag = if bundled {
+                        format!("[{}] ", command.index)
+                    } else {
+                        String::new()
+                    };
+                    if bundled {
+                        writeln!(report, "exec: {tag}exit {}", command.exit)?;
+                    }
+                    for capture in command.captures {
+                        writeln!(
+                            report,
+                            "exec: {tag}{} {} byte(s) {}",
+                            capture.stream,
+                            capture.bytes,
+                            capture.handle()
+                        )?;
+                    }
+                }
+                if bundled && self.commands.len() < self.declared {
+                    // Said out loud rather than left to be inferred from a short
+                    // list: a bundle that stopped early and one that ran clean
+                    // must not look alike.
                     writeln!(
                         report,
-                        "exec: {} {} byte(s) {}",
-                        capture.stream,
-                        capture.bytes,
-                        capture.handle()
+                        "exec: {} of {} command(s) ran",
+                        self.commands.len(),
+                        self.declared
                     )?;
                 }
+                writeln!(report, "exec: exit {}", self.exit)?;
             }
             OutputFormat::Json => {
                 writeln!(report, "{}", serde_json::to_string_pretty(self)?)?;
@@ -674,20 +834,26 @@ impl Record<'_> {
                         "verb": self.verb,
                         "record": "exit",
                         "exit": self.exit,
+                        "declared": self.declared,
+                        "ran": self.commands.len(),
                     }))?
                 )?;
-                for capture in self.captures {
-                    writeln!(
-                        report,
-                        "{}",
-                        serde_json::to_string(&serde_json::json!({
-                            "verb": self.verb,
-                            "record": "capture",
-                            "stream": capture.stream,
-                            "bytes": capture.bytes,
-                            "digest": capture.digest,
-                        }))?
-                    )?;
+                for command in &self.commands {
+                    for capture in command.captures {
+                        writeln!(
+                            report,
+                            "{}",
+                            serde_json::to_string(&serde_json::json!({
+                                "verb": self.verb,
+                                "record": "capture",
+                                "index": command.index,
+                                "exit": command.exit,
+                                "stream": capture.stream,
+                                "bytes": capture.bytes,
+                                "digest": capture.digest,
+                            }))?
+                        )?;
+                    }
                 }
             }
         }
@@ -986,10 +1152,131 @@ pub fn run_in_with(
     settings: &ExecConfig,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let Some((program, args)) = command.split_first() else {
+    let bundle = split_bundle(command)?;
+    let outcomes = dispatch(repo_root, &bundle, settings, next_run())?;
+    report_bundle(&bundle, &outcomes, patterns, settings, report)
+}
+
+/// This process's next dispatch number, for the live-capture key.
+///
+/// The key has to name a *run*, not just a command: through the CLI there is
+/// exactly one dispatch per process and the pid would be enough, but a library
+/// caller running two bundles at once — or a test binary running several cases in
+/// parallel — would otherwise give both the same spool. Starting at zero keeps
+/// the CLI's handle derivable by the caller that spawned it, which is what makes
+/// a live capture addressable at all without printing a pid.
+fn next_run() -> u64 {
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// mise's bundle separator, spelled as it is upstream.
+///
+/// Adopted rather than invented: `mise run task1 a b ::: task2 a b` is a shape a
+/// caller already knows, and a second separator meaning the same thing is a
+/// second vocabulary to learn for nothing.
+pub const BUNDLE_SEPARATOR: &str = ":::";
+
+/// Split a trailing argv into the commands it declares.
+///
+/// No clap change was needed for this and that is worth stating: the tail is
+/// already a `Vec<String>` of every token after `--`, so a bundle is a property
+/// of the tokens rather than of the parser.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] when the argv declares no command, or declares an
+/// empty one — `a ::: ::: b` is a typo, and running two commands where three
+/// were written is exactly the silent narrowing a gate must not do.
+fn split_bundle(command: &[String]) -> Result<Vec<&[String]>> {
+    if command.is_empty() {
         // Unreachable through the CLI: `num_args(1..)` makes clap refuse an empty
         // tail. Kept total because the workspace lints forbid panicking on a
         // reachable path, and a library caller can construct one.
+        return Err(UsageError::raise(
+            "exec: no command given — write `batten exec -- <cmd> [args…]`",
+        ));
+    }
+    let bundle: Vec<&[String]> = command.split(|token| token == BUNDLE_SEPARATOR).collect();
+    if let Some(index) = bundle.iter().position(|segment| segment.is_empty()) {
+        return Err(UsageError::raise(format!(
+            "exec: command {index} of the `{BUNDLE_SEPARATOR}` bundle is empty"
+        )));
+    }
+    Ok(bundle)
+}
+
+/// Run every command in `bundle`, in declaration order, up to `jobs` at a time.
+///
+/// Returns the outcomes of the commands that RAN. A short list is not an error:
+/// without `continue_on_error` a bundle stops at the first failure, and the
+/// record says how many of how many ran.
+fn dispatch(
+    repo_root: &Path,
+    bundle: &[&[String]],
+    settings: &ExecConfig,
+    run: u64,
+) -> Result<Vec<Outcome>> {
+    let jobs = settings.jobs.max(1);
+    let mut done: Vec<Outcome> = Vec::with_capacity(bundle.len());
+    // Waves rather than a work-stealing pool: `jobs` is a width, the bundle is
+    // short, and a wave boundary is exactly where "stop at the first failure" can
+    // be answered without cancelling a child already running. A pool would buy
+    // throughput on a workload nobody has.
+    for wave in bundle.chunks(jobs) {
+        let first = done.len();
+        let mut results: Vec<Result<Outcome>> = if wave.len() == 1 {
+            // The single-command path stays a plain call, so a bare `batten exec`
+            // spawns no thread it does not need — and so the ordinary case is not
+            // paying for the bundle case.
+            vec![run_one(repo_root, run, first, wave[0], settings)]
+        } else {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = wave
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, command)| {
+                        scope.spawn(move || {
+                            run_one(repo_root, run, first + offset, command, settings)
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|_| Err(anyhow::anyhow!("exec: a dispatch panicked")))
+                    })
+                    .collect()
+            })
+        };
+        // Drained in order, so an error from command 2 is reported before one
+        // from command 3 even when 3 failed first.
+        for result in results.drain(..) {
+            done.push(result?);
+        }
+        if !settings.continue_on_error && done.iter().any(|outcome| outcome.exit != 0) {
+            break;
+        }
+    }
+    Ok(done)
+}
+
+/// Run one command: spawn it, tee it, capture it, and report nothing.
+///
+/// Everything that used to be the whole of `run_in_with`, minus the reporting.
+/// The split is what `--jobs` forces: with several children in flight nothing may
+/// write to a shared stream on the completion path, or the bundle's own output
+/// would be ordered by the machine.
+fn run_one(
+    repo_root: &Path,
+    run: u64,
+    index: usize,
+    command: &[String],
+    settings: &ExecConfig,
+) -> Result<Outcome> {
+    let Some((program, args)) = command.split_first() else {
         return Err(UsageError::raise(
             "exec: no command given — write `batten exec -- <cmd> [args…]`",
         ));
@@ -1005,7 +1292,11 @@ pub fn run_in_with(
     // ONE OBSERVATION, READ TWICE (CLOUD-427). Computed here and carried as a
     // value to the teardown below; see `GroupDecision` for why re-asking is the
     // bug rather than the tidier spelling.
-    let decision = GroupDecision::observe(settings.manage_process_group);
+    //
+    // AND DECLINED OUTRIGHT ABOVE ONE JOB. Batten reports `128 + the signal it
+    // received`, which is one answer; owning N groups at once would make it N,
+    // and a supervisor that cannot say what it tore down is not one.
+    let decision = GroupDecision::observe(settings.manage_process_group && settings.jobs <= 1);
     let spawned = crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
         let mut builder = Command::new(OsString::from(program));
         builder
@@ -1040,44 +1331,86 @@ pub fn run_in_with(
         ));
     };
 
+    // The live-capture key (CLOUD-430): this process, this dispatch, and this
+    // command's position. Through the CLI the dispatch is always `0`, so the
+    // whole key is derivable by the caller that spawned Batten — which is the
+    // point, since printing it would put a pid in Batten's output and §6
+    // byte-stability forbids a field that differs between identical runs.
+    let key = format!("{}.{run}.{index}", std::process::id());
+
     // One thread per pipe. See the module docs: draining them in sequence
     // deadlocks as soon as a child fills the one not being read.
-    let out_drain = Drain::spawn(out_pipe, ChildSink::of(settings, program, Stream::Stdout));
-    let err_drain = Drain::spawn(err_pipe, ChildSink::of(settings, program, Stream::Stderr));
+    let out_drain = Drain::spawn(
+        out_pipe,
+        ChildSink::of(settings, program, Stream::Stdout),
+        capture::Spool::open(repo_root, Stream::Stdout, &key)?,
+    );
+    let err_drain = Drain::spawn(
+        err_pipe,
+        ChildSink::of(settings, program, Stream::Stderr),
+        capture::Spool::open(repo_root, Stream::Stderr, &key)?,
+    );
 
     // Forwarding is installed only for a group Batten owns, so an invocation
     // with the opt-in off has the dispositions it has always had.
     let forwarding = Forwarding::install(decision, child.id())?;
-    let record = GroupRecord::write(repo_root, decision, child.id())?;
+    let group = GroupRecord::write(repo_root, decision, child.id())?;
 
     let status = child.wait().context("wait for the wrapped command")?;
     let received = forwarding.finish();
-    record.clear();
+    group.clear();
 
     // Deadline-bounded (see the module docs). A grandchild that inherited the
     // write end keeps the pipe open past the child's own death, and a bare
-    // `join()` on that is a hang with no upper bound.
-    let out_bytes = out_drain.collect(Stream::Stdout, report)?;
-    let err_bytes = err_drain.collect(Stream::Stderr, report)?;
+    // `join()` on that is a hang with no upper bound. The notices are BUFFERED
+    // rather than written, so a bundle's diagnostics land in declaration order.
+    let mut notices = Vec::new();
+    let (out_bytes, out_spool) = out_drain.collect(Stream::Stdout, &mut notices)?;
+    let (err_bytes, err_spool) = err_drain.collect(Stream::Stderr, &mut notices)?;
 
     // Both streams are stored, including an empty one: zero bytes is the real
     // answer "the command said nothing", and it must be distinguishable from a run
     // that was never captured at all. The handles are addressable, never printed —
     // emitting them here would put Batten's bookkeeping on a channel this verb
     // promises is the child's (CLOUD-121 owns the verbs that read them).
+    //
+    // Sealing is `capture::store` unchanged, which is what makes a bundled
+    // command's record byte-identical to the same command run on its own.
     let captures = [
-        capture::store(repo_root, Stream::Stdout, &out_bytes)?,
-        capture::store(repo_root, Stream::Stderr, &err_bytes)?,
+        out_spool.seal(repo_root, Stream::Stdout, &out_bytes)?,
+        err_spool.seal(repo_root, Stream::Stderr, &err_bytes)?,
     ];
 
     // A signal Batten was SENT outranks whatever the child died of. A child that
     // ignored TERM and fell to the escalated KILL must not report `137` to a
     // caller that sent `15` — the caller's question is what happened to the
     // command it asked for, and the answer is "the signal you sent stopped it".
-    let code = match received {
+    let exit = match received {
         Some(signal) => 128 + signal,
         None => status.code().unwrap_or_else(|| signal_code(status)),
     };
+
+    Ok(Outcome {
+        index,
+        exit,
+        out_bytes,
+        err_bytes,
+        captures,
+        notices,
+    })
+}
+
+/// Render everything the bundle has to say, and decide its exit code.
+fn report_bundle(
+    bundle: &[&[String]],
+    outcomes: &[Outcome],
+    patterns: &[OutputPattern],
+    settings: &ExecConfig,
+    report: &mut dyn Write,
+) -> Result<ExitCode> {
+    for outcome in outcomes {
+        report.write_all(&outcome.notices)?;
+    }
 
     // `keep-order` is the one style that cannot be rendered as the bytes arrive:
     // its whole claim is that each stream appears WHOLE, so nothing may be
@@ -1087,11 +1420,25 @@ pub fn run_in_with(
         && !settings.style.suppresses_child()
         && settings.style.style_only() == OutputStyle::KeepOrder
     {
-        std::io::stdout().write_all(&out_bytes)?;
-        std::io::stdout().flush()?;
-        std::io::stderr().write_all(&err_bytes)?;
-        std::io::stderr().flush()?;
+        for outcome in outcomes {
+            std::io::stdout().write_all(&outcome.out_bytes)?;
+            std::io::stdout().flush()?;
+            std::io::stderr().write_all(&outcome.err_bytes)?;
+            std::io::stderr().flush()?;
+        }
     }
+
+    // THE BUNDLE'S CODE IS THE FIRST NON-ZERO IN DECLARATION ORDER (CLOUD-430),
+    // never whichever child happened to finish last. A bundle where command 2 of
+    // 3 failed and command 3 succeeded must not report `0`; and reading the
+    // FIRST failure rather than the last keeps the answer a property of the
+    // bundle rather than of the scheduler, which `--jobs` would otherwise make
+    // non-deterministic.
+    let code = outcomes
+        .iter()
+        .map(|outcome| outcome.exit)
+        .find(|exit| *exit != 0)
+        .unwrap_or(0);
 
     // CLOUD-429: the record IS the default answer, and it is emitted before the
     // passthrough below because a non-zero child must not lose it. On `report`,
@@ -1101,7 +1448,15 @@ pub fn run_in_with(
         Record {
             verb: "exec",
             exit: code,
-            captures: &captures,
+            declared: bundle.len(),
+            commands: outcomes
+                .iter()
+                .map(|outcome| CommandRecord {
+                    index: outcome.index,
+                    exit: outcome.exit,
+                    captures: &outcome.captures,
+                })
+                .collect(),
         }
         .emit(settings.format, report)?;
     }
@@ -1114,8 +1469,11 @@ pub fn run_in_with(
     }
 
     // Only `0` is promotable, and only a declared pattern promotes it.
-    let mut found: Vec<Hit> = outputs::hits(patterns, Stream::Stdout, &out_bytes);
-    found.extend(outputs::hits(patterns, Stream::Stderr, &err_bytes));
+    let mut found: Vec<Hit> = Vec::new();
+    for outcome in outcomes {
+        found.extend(outputs::hits(patterns, Stream::Stdout, &outcome.out_bytes));
+        found.extend(outputs::hits(patterns, Stream::Stderr, &outcome.err_bytes));
+    }
     if found.is_empty() {
         return Ok(ExitCode::Success);
     }
@@ -1211,7 +1569,7 @@ mod tests {
 
     #[test]
     fn the_default_is_a_record_and_the_bytes_are_opt_in() {
-        assert!(!ExecConfig::DEFAULT.tee);
+        const { assert!(!ExecConfig::DEFAULT.tee) };
         assert_eq!(ExecConfig::DEFAULT.format, OutputFormat::Human);
         assert_eq!(ExecConfig::DEFAULT.style, OutputStyle::Interleave);
     }
@@ -1263,7 +1621,12 @@ mod tests {
         let record = Record {
             verb: "exec",
             exit: 7,
-            captures: &captures,
+            declared: 1,
+            commands: vec![CommandRecord {
+                index: 0,
+                exit: 7,
+                captures: &captures,
+            }],
         };
         for format in [OutputFormat::Human, OutputFormat::Json, OutputFormat::Jsonl] {
             let mut said = Vec::new();
@@ -1440,6 +1803,15 @@ mod tests {
         assert!(record.path.is_none());
     }
 
+    /// A spool under this process's own scratch directory.
+    ///
+    /// `Spool::open_in` rather than `Spool::open`: resolving the state root reads
+    /// the OS data directory, and a unit test must not write into a developer's.
+    fn scratch_spool(name: &str, stream: Stream) -> capture::Spool {
+        let dir = std::env::temp_dir().join(format!("batten-exec-unit-{}", std::process::id()));
+        capture::Spool::open_in(&dir, stream, name).expect("open a scratch spool")
+    }
+
     #[test]
     fn the_drain_reports_what_arrived_when_the_pipe_never_closes() {
         // The live hang CLOUD-162 introduced and this issue bounds: EOF arrives
@@ -1466,14 +1838,18 @@ mod tests {
             }
         }
 
-        let drain = Drain::spawn(NeverEnds { spoken: false }, std::io::sink());
+        let drain = Drain::spawn(
+            NeverEnds { spoken: false },
+            std::io::sink(),
+            scratch_spool("never-ends", Stream::Stdout),
+        );
         // Wait for the one chunk to land, so the case asserts "kept what arrived"
         // rather than accidentally asserting "gave up before anything did".
         while drain.seen.lock().map_or(true, |held| held.is_empty()) {
             std::thread::sleep(Duration::from_millis(10));
         }
         let mut report = Vec::new();
-        let bytes = drain
+        let (bytes, _spool) = drain
             .collect_within(Duration::from_millis(200), Stream::Stdout, &mut report)
             .expect("a drain that timed out is not a failed command");
         assert_eq!(
@@ -1496,9 +1872,13 @@ mod tests {
         // The other half, and the one that runs on every ordinary command: no
         // notice on the happy path, or `exec` would be writing on a channel it
         // promises is the child's.
-        let drain = Drain::spawn(&b"hello"[..], std::io::sink());
+        let drain = Drain::spawn(
+            &b"hello"[..],
+            std::io::sink(),
+            scratch_spool("clean-eof", Stream::Stdout),
+        );
         let mut report = Vec::new();
-        let bytes = drain
+        let (bytes, _spool) = drain
             .collect(Stream::Stdout, &mut report)
             .expect("clean EOF");
         assert_eq!(bytes, b"hello");

@@ -76,29 +76,8 @@ pub enum Command {
         /// The chosen sub-verb.
         command: GenerateCommand,
     },
-    /// Run a command, passing its streams and exit code through unchanged.
-    Exec {
-        /// The command and its arguments, exactly as the caller wrote them.
-        command: Vec<String>,
-        /// Store the child's streams and report their handles instead of
-        /// passing the bytes through.
-        ///
-        /// Kept, and now the DEFAULT rather than the opt-in (CLOUD-429): it
-        /// survives as the inverse spelling of `--tee`, so a caller who learned
-        /// it is not told a flag disappeared. Both may be typed; `--tee` wins,
-        /// because asking for the bytes is the specific request.
-        capture_only: bool,
-        /// Whether to copy the child's streams onto Batten's own (CLOUD-429).
-        tee: bool,
-        /// How Batten's own record is encoded — hk's axis.
-        ///
-        /// `None` means the caller did not ask, which is **not** the same as
-        /// asking for the default: the `[exec]` table sets the default, and a
-        /// flag that always answered would overwrite it on every call.
-        format: Option<crate::exec::OutputFormat>,
-        /// How a teed child's bytes are presented — mise's axis. `None` as above.
-        style: Option<crate::exec::OutputStyle>,
-    },
+    /// Run a command — or a `:::` bundle — and report a pointer to what it wrote.
+    Exec(ExecRequest),
     /// Captured command output, and the verbs that navigate it.
     Capture {
         /// The chosen sub-verb.
@@ -195,6 +174,46 @@ pub enum Command {
         /// The chosen sub-verb.
         command: CommitCommand,
     },
+}
+
+/// Everything `batten exec` was asked for, as one value.
+///
+/// A struct rather than six variant fields, and the reason is a readability one
+/// a lint happens to enforce: [`crate::run`]'s dispatch is a table of one line
+/// per verb, and a verb whose arm is eighteen lines of field-shuffling stops
+/// being readable as a table. The fields are the same either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ExecRequest {
+    /// The command and its arguments, exactly as the caller wrote them,
+    /// including any `:::` separators (CLOUD-430).
+    pub command: Vec<String>,
+    /// Store the child's streams and report their handles instead of passing
+    /// the bytes through.
+    ///
+    /// Kept, and now what happens by DEFAULT rather than the opt-in it was
+    /// (CLOUD-429): it survives as the inverse spelling of `--tee`, so a caller
+    /// who learned it is not told a flag disappeared. Both may be typed; `--tee`
+    /// wins, because asking for the bytes is the specific request.
+    pub capture_only: bool,
+    /// Whether to copy the child's streams onto Batten's own (CLOUD-429).
+    pub tee: bool,
+    /// How Batten's own record is encoded — hk's axis.
+    ///
+    /// `None` means the caller did not ask, which is **not** the same as asking
+    /// for the default: the `[exec]` table sets the default, and a flag that
+    /// always answered would overwrite it on every call.
+    pub format: Option<crate::exec::OutputFormat>,
+    /// How a teed child's bytes are presented — mise's axis. `None` as above.
+    pub style: Option<crate::exec::OutputStyle>,
+    /// How many of a `:::` bundle's commands run at once, as the caller typed
+    /// it. Unparsed on purpose: a bad value must reach a `UsageError` naming
+    /// what was wrong, and silently reading it as the default would run a bundle
+    /// at a width nobody asked for.
+    pub jobs: Option<String>,
+    /// Whether a bundle keeps going past a failure. `false` when unasked, which
+    /// the committed table may still turn on.
+    pub continue_on_error: bool,
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -790,7 +809,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             if command.is_empty() {
                 None
             } else {
-                Some(Command::Exec {
+                Some(Command::Exec(ExecRequest {
                     command,
                     capture_only: flag(matches, "capture_only"),
                     tee: matches.get_flag("tee"),
@@ -800,7 +819,9 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                     // call by a flag nobody typed.
                     format: supplied(matches, "format").copied(),
                     style: supplied(matches, "style").copied(),
-                })
+                    jobs: matches.get_one::<String>("jobs").cloned(),
+                    continue_on_error: matches.get_flag("continue_on_error"),
+                }))
             }
         }
         "capture" => capture_of(matches).map(|command| Command::Capture { command }),

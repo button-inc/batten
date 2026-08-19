@@ -578,6 +578,40 @@ const TEE: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--jobs` on `exec` (CLOUD-430), with mise's name and mise's meaning.
+///
+/// Declared with no default so "the caller did not ask" stays distinguishable
+/// from "the caller asked for one" — the committed `[exec]` table sets the
+/// default, and a flag clap filled in would outrank it on every call.
+const JOBS: FlagDecl = FlagDecl {
+    id: "jobs",
+    long: Some("jobs"),
+    short: None,
+    help: "How many of a `:::` bundle's commands run at once",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--continue-on-error` on `exec` (CLOUD-430), likewise mise's.
+const CONTINUE_ON_ERROR: FlagDecl = FlagDecl {
+    id: "continue_on_error",
+    long: Some("continue-on-error"),
+    short: None,
+    help: "Run the rest of a `:::` bundle after a command fails",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `--no-cache` on `config epoch` (CLOUD-232).
 ///
 /// The escape from the stat-based revalidation, and the reference oracle the
@@ -982,7 +1016,7 @@ pub const SURFACE: &[CommandDecl] = &[
     // `2` here, which is the property fail-open actually depends on.
     CommandDecl {
         path: "exec",
-        about: "Run a command, passing its streams and its exit code through unchanged",
+        about: "Run a command — or a `:::` bundle — and report a pointer to what it wrote",
         // The child owns stdout, so Batten must not interleave a document of its
         // own with the child's bytes. The pointer surface over captured output is
         // CLOUD-162's, on stderr.
@@ -998,6 +1032,8 @@ pub const SURFACE: &[CommandDecl] = &[
             // learned it should not be told a flag disappeared.
             CAPTURE_ONLY,
             TEE,
+            JOBS,
+            CONTINUE_ON_ERROR,
             FlagDecl::defaulted_enum(
                 "format",
                 "format",

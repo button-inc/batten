@@ -112,6 +112,7 @@ trace\:"Add everything"))' \
 ;;
 (exec)
 _arguments "${_arguments_options[@]}" : \
+'--jobs=[How many of a \`\:\:\:\` bundle'\''s commands run at once]: :_default' \
 '--format=[How Batten'\''s own record is encoded (hk'\''s axis)]: :((human\:"Pointer lines, one per fact"
 json\:"One JSON document"
 jsonl\:"One JSON record per line"))' \
@@ -134,6 +135,7 @@ debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '--capture-only[Store the child'\''s streams and report their handles instead of passing the bytes through]' \
 '--tee[Copy the child'\''s streams onto Batten'\''s own, as well as capturing them]' \
+'--continue-on-error[Run the rest of a \`\:\:\:\` bundle after a command fails]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \
@@ -2597,7 +2599,7 @@ _batten_commands() {
     local commands; commands=(
 'check:Run the applicable read-only gates against the repository' \
 'enforce:Run every configured rule, including kinds that execute a configured command' \
-'exec:Run a command, passing its streams and its exit code through unchanged' \
+'exec:Run a command — or a \`\:\:\:\` bundle — and report a pointer to what it wrote' \
 'capture:Captured command output\: navigate what \`exec\` already ran, without running it again' \
 'config:Inspect configuration' \
 'lint:Lint an artifact against a declared schema' \
@@ -2988,7 +2990,7 @@ _batten__subcmd__help_commands() {
     local commands; commands=(
 'check:Run the applicable read-only gates against the repository' \
 'enforce:Run every configured rule, including kinds that execute a configured command' \
-'exec:Run a command, passing its streams and its exit code through unchanged' \
+'exec:Run a command — or a \`\:\:\:\` bundle — and report a pointer to what it wrote' \
 'capture:Captured command output\: navigate what \`exec\` already ran, without running it again' \
 'config:Inspect configuration' \
 'lint:Lint an artifact against a declared schema' \

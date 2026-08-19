@@ -47,7 +47,7 @@ complete -c batten -n "__fish_batten_needs_command" -s h -l help -d 'Print help 
 complete -c batten -n "__fish_batten_needs_command" -s V -l version -d 'Print version'
 complete -c batten -n "__fish_batten_needs_command" -f -a "check" -d 'Run the applicable read-only gates against the repository'
 complete -c batten -n "__fish_batten_needs_command" -f -a "enforce" -d 'Run every configured rule, including kinds that execute a configured command'
-complete -c batten -n "__fish_batten_needs_command" -f -a "exec" -d 'Run a command, passing its streams and its exit code through unchanged'
+complete -c batten -n "__fish_batten_needs_command" -f -a "exec" -d 'Run a command — or a `:::` bundle — and report a pointer to what it wrote'
 complete -c batten -n "__fish_batten_needs_command" -f -a "capture" -d 'Captured command output: navigate what `exec` already ran, without running it again'
 complete -c batten -n "__fish_batten_needs_command" -f -a "config" -d 'Inspect configuration'
 complete -c batten -n "__fish_batten_needs_command" -f -a "lint" -d 'Lint an artifact against a declared schema'
@@ -110,6 +110,7 @@ complete -c batten -n "__fish_batten_using_subcommand enforce" -l no-color -d 'N
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand exec" -l jobs -d 'How many of a `:::` bundle\'s commands run at once' -r
 complete -c batten -n "__fish_batten_using_subcommand exec" -l format -d 'How Batten\'s own record is encoded (hk\'s axis)' -r -f -a "human\t'Pointer lines, one per fact'
 json\t'One JSON document'
 jsonl\t'One JSON record per line'"
@@ -132,6 +133,7 @@ debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand exec" -l capture-only -d 'Store the child\'s streams and report their handles instead of passing the bytes through'
 complete -c batten -n "__fish_batten_using_subcommand exec" -l tee -d 'Copy the child\'s streams onto Batten\'s own, as well as capturing them'
+complete -c batten -n "__fish_batten_using_subcommand exec" -l continue-on-error -d 'Run the rest of a `:::` bundle after a command fails'
 complete -c batten -n "__fish_batten_using_subcommand exec" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand exec" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand exec" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
@@ -1286,7 +1288,7 @@ complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_sub
 complete -c batten -n "__fish_batten_using_subcommand state; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce exec capture config lint spec doctor init baseline generate policy commit attribution worktree provision hook payload receipt defects design state help" -f -a "check" -d 'Run the applicable read-only gates against the repository'
 complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce exec capture config lint spec doctor init baseline generate policy commit attribution worktree provision hook payload receipt defects design state help" -f -a "enforce" -d 'Run every configured rule, including kinds that execute a configured command'
-complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce exec capture config lint spec doctor init baseline generate policy commit attribution worktree provision hook payload receipt defects design state help" -f -a "exec" -d 'Run a command, passing its streams and its exit code through unchanged'
+complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce exec capture config lint spec doctor init baseline generate policy commit attribution worktree provision hook payload receipt defects design state help" -f -a "exec" -d 'Run a command — or a `:::` bundle — and report a pointer to what it wrote'
 complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce exec capture config lint spec doctor init baseline generate policy commit attribution worktree provision hook payload receipt defects design state help" -f -a "capture" -d 'Captured command output: navigate what `exec` already ran, without running it again'
 complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce exec capture config lint spec doctor init baseline generate policy commit attribution worktree provision hook payload receipt defects design state help" -f -a "config" -d 'Inspect configuration'
 complete -c batten -n "__fish_batten_using_subcommand help; and not __fish_seen_subcommand_from check enforce exec capture config lint spec doctor init baseline generate policy commit attribution worktree provision hook payload receipt defects design state help" -f -a "lint" -d 'Lint an artifact against a declared schema'

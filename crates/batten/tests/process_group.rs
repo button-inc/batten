@@ -62,6 +62,15 @@ fn script(dir: &Path, body: &str) -> PathBuf {
     path
 }
 
+/// Say why a case was skipped.
+///
+/// Not `eprintln!`: the workspace denies the print macros because Batten's own
+/// output is a byte-stable contract, and a test target inherits the lint.
+fn skipped(reason: &str) {
+    use std::io::Write as _;
+    drop(writeln!(std::io::stderr(), "{reason}"));
+}
+
 /// Whether `pid` still names a live process.
 ///
 /// `kill -0` rather than `/proc`: the question is POSIX and `/proc` is Linux's
@@ -242,9 +251,9 @@ fn an_owned_child_leads_its_own_group_and_carries_the_marker() {
     // Batten's killpg reaches mise rather than the leaves.
     let dir = repo("pgroup-topology", true);
     let home = scratch("pgroup-topology-home");
-    let (pid, pgid, marker) = topology(&dir, &home, &[]);
+    let (own, group, marker) = topology(&dir, &home, &[]);
     assert_eq!(
-        pid, pgid,
+        own, group,
         "an owned child leads the group Batten made for it"
     );
     assert_eq!(marker, "1", "and a nested manager is told to stand down");
@@ -258,9 +267,9 @@ fn an_ancestors_marker_makes_batten_decline() {
     // inner manager and leaks the leaves.
     let dir = repo("pgroup-marked", true);
     let home = scratch("pgroup-marked-home");
-    let (pid, pgid, _) = topology(&dir, &home, &[("MISE_TASK_PGID_MANAGED", "1")]);
+    let (own, group, _) = topology(&dir, &home, &[("MISE_TASK_PGID_MANAGED", "1")]);
     assert_ne!(
-        pid, pgid,
+        own, group,
         "with an ancestor managing, the child stays in the group it inherited"
     );
 }
@@ -281,9 +290,9 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
         .expect("probe for setsid")
         .success()
     {
-        eprintln!(
+        skipped(
             "process_group: `setsid` is not installed, so the session-leader rule's LIVE \
-             reading is skipped; the predicate itself is covered in exec.rs's unit tests"
+             reading is skipped; the predicate itself is covered in exec.rs's unit tests",
         );
         return;
     }
@@ -310,10 +319,10 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
 
     let seen = await_file(&note);
     let mut fields = seen.split_whitespace();
-    let pid = fields.next().expect("a pid");
-    let pgid = fields.next().expect("a pgid");
+    let own = fields.next().expect("a pid");
+    let group = fields.next().expect("a pgid");
     assert_ne!(
-        pid, pgid,
+        own, group,
         "a session leader declines, so the child keeps the inherited group"
     );
 }

@@ -3412,8 +3412,12 @@ fn different_output_is_a_different_capture() {
     // The other direction: content addressing is only useful if it discriminates.
     let home = scratch("capture-differs-home");
     fs::create_dir_all(&home).expect("create home");
-    for body in ["echo one", "echo two"] {
-        let script = child_script(&format!("capture-differs-{}", body.len()), body);
+    // Named by INDEX, not by `body.len()`: "echo one" and "echo two" are both
+    // eight bytes, so the old name put both scripts in one fixture directory
+    // that `child_script` wipes on entry. Sequentially it happened to work; it is
+    // a latent collision of exactly the kind CLOUD-412 was chasing.
+    for (index, body) in ["echo one", "echo two"].iter().enumerate() {
+        let script = child_script(&format!("capture-differs-{index}"), body);
         batten()
             .args(["exec", "--", script.to_str().expect("utf-8")])
             .state_home(&home)

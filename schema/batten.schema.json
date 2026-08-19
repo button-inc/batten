@@ -608,10 +608,22 @@
       "description": "The `[exec]` table: how `batten exec` owns what it dispatched.\n\nOne key today, and it is an opt-in rather than a tuning knob. `false` is not\na conservative default chosen for taste — it is the *only* value that leaves\nthe process topology byte-for-byte what it was, which is what an existing\nconsumer's orchestrator is already built against.",
       "type": "object",
       "properties": {
+        "continue_on_error": {
+          "description": "Whether a bundle keeps going past a command that failed — mise's\n`--continue-on-error`.",
+          "type": "boolean",
+          "default": false
+        },
         "format": {
           "description": "How Batten's own record is encoded (hk's axis).",
           "$ref": "#/$defs/OutputFormat",
           "default": "human"
+        },
+        "jobs": {
+          "description": "How many of a `:::` bundle's commands run at once — mise's `--jobs`.\n\n`1` by default, which is stricter than mise's own default and chosen\nrather than inherited: a bundle's commands share one working tree, and\nwidening concurrency a caller did not ask for is how two of them start\nwriting the same file. Zero is read as one.",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
         },
         "manage_process_group": {
           "description": "Whether Batten may put a dispatched command in its own process group and\ntake responsibility for tearing that group down.\n\nDeclared rather than inferred, because the residual case is not\nobservable: an orchestrator two levels up intending to `kill(-pgid)` looks\nexactly like one that is not. Even when this is `true`, Batten still\ndeclines whenever mise's own two rules say an ancestor is already\nmanaging — see [`GroupDecision`].",

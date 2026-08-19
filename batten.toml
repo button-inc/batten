@@ -1035,9 +1035,16 @@ redirect = "change the file through the surface that owns it"
 # `exec` in this repository runs UNDER `mise run`, so the marker is already set
 # and Batten would decline regardless. Declaring `true` here would state an
 # intent that never fires, which is worse than stating nothing.
+# `jobs` and `continue_on_error` are mise's own names for a `:::` bundle's width
+# and its failure policy (CLOUD-430). Both are stated at their conservative
+# values rather than left implicit, for the reason above: a reader should not
+# have to open the crate to learn that this repository runs a bundle one command
+# at a time and stops at the first failure.
 [exec]
 format = "human"
 style = "interleave"
+jobs = 1
+continue_on_error = false
 
 [budget.instructions]
 files = ["AGENTS.md"]
