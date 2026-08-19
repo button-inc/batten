@@ -76,6 +76,15 @@
             "command": "$CLAUDE_PROJECT_DIR/mise-tasks/connector-verb-guard"
           }
         ]
+      },
+      {
+        "matcher": "Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/mise-tasks/fanout-guard"
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -315,6 +315,17 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   message** spends the whole gate first, because `githooks(5)` runs `pre-commit`
   before git asks for one; its predicate is over heredoc binding. Retiring both
   into the engine is CLOUD-613. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.
+- `fanout-guard` is the one entry on `Task` (CLOUD-287): a subagent spawn was the
+  only unmediated call in the wiring, and the workflow contract's "a subagent
+  spawn above all" had no mechanism behind it. Two conjuncts over the spawn
+  prompt, both pure functions of the envelope — the deduped artifacts it names,
+  and its own size. The manifest is the term worth capping: fleet width is the
+  multiplier, but the reading list inside each prompt is the multiplicand and it
+  dominates. A named artifact counts only if it is TRACKED, so `origin/main` and
+  a URL drop out by construction rather than by an allowlist somebody has to
+  tune. It reads the payload through `payload-field`, never `jq`, because it is
+  registered by path (`hook-pin-check`), and it is blind by construction to what
+  an agent reads on its own initiative. Bypass: `BATTEN_FANOUT_GUARD_BYPASS=1`.
 - `contract-drift` is not `PreToolUse`, and it cannot
   be: that event's model-facing channel is exit 2, which _blocks_ the call, and
   CLOUD-97 and CLOUD-219 each ruled a deny out independently. So it runs on
