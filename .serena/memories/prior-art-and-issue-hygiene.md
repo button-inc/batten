@@ -162,6 +162,22 @@ decisions the work forces and who must make them.
 Same discipline for PR bodies: what changed, why it mattered _here_, what a
 reviewer should look at. Not how the work unfolded.
 
+### The tracker eats markdown tables on save
+
+A table in an issue body does not round-trip. `save_issue` normalises it and
+strips the leading characters of every cell — measured on CLOUD-75, where
+`CLOUD-240` became `OUD-240`, `203` became `3`, `212` became `2`, `257` became
+`7`, a lone `2` emptied, and the `| --- |` separator was rewritten in the same
+pass. It is silent: no error, exit 0, visible only by reading the save response
+back.
+
+It lands worst where it is least visible. A Ready block is the one artifact a
+successor trusts without re-deriving, and that run published four wrong latency
+measurements into one. **Use a list** — lists round-trip byte-exact.
+
+The hazard is the tracker's, not markdown's: a table in a memory or in
+`AGENTS.md` is a file on disk and is safe (this page carries several).
+
 ## Sorting rule
 
 Five destinations, no overlap:

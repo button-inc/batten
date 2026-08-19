@@ -40,6 +40,12 @@ holder that stopped **beating**; these notice one that stopped **landing** — t
 case liveness cannot see, where the lease renews forever and `status` reports a
 healthy hold. A deadline on the whole wait would still be the banned thing.
 
+`land`'s closing `could not delete origin/<branch>` is **expected output, not a
+failure.** GitHub's auto-delete-on-merge wins the race, so the branch is already
+absent by the time `land` asks. Observed on four consecutive lands, each merged
+with the branch gone (`git ls-remote` confirms). There is nothing to repair here
+— a `land` that deleted successfully would be the one doing redundant work.
+
 ## The lease
 
 `land-lock` is a compare-and-swap on `refs/heads/batten-land-lock` — one
