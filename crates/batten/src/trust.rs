@@ -619,6 +619,20 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
     // order. Which keys are compared at all is no longer a matter of what
     // occurred to an author: `CENSUS` records a verdict for every field and its
     // test fails on any field carrying none.
+    found.extend(entry_weakenings(base, working));
+    found.extend(scalar_weakenings(base, working));
+
+    found.sort();
+    found
+}
+
+/// Keys whose entries are a set: an entry gone is a gate that stops firing.
+///
+/// Split out of [`weakenings`] because the comparison is now over a
+/// twenty-eight-key struct rather than six keys, and a function long enough to
+/// scroll is one a reader checks by sampling.
+fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
 
     found.extend(min_version_weakening(base, working));
 
@@ -659,6 +673,16 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         "provision",
     ));
 
+    found
+}
+
+/// Keys whose weakening is a threshold, a presence, or a table's own contents.
+///
+/// The sibling of [`entry_weakenings`], and the half where direction is the
+/// subtle part: a ceiling inverts, an absent `[judge]` is the tightest setting
+/// there is, and a dropped table means different things to different gates.
+fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
+    let mut found = Vec::new();
     // The escape hatch's second direction (CLOUD-721): the key pairs the two
     // files, and the expiry inside it is what the pairing was blind to.
     found.extend(waiver_expiry_weakenings(&base.waivers, &working.waivers));
@@ -741,7 +765,6 @@ pub fn weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         ));
     }
 
-    found.sort();
     found
 }
 
