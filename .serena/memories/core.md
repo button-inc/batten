@@ -623,6 +623,31 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   crate↔config contract, hence the constant. Stated limits: no `cwd`, so an
   absolute or `..` path is compared as written, and expansion/substitution hide
   operands. Both under-deny, the sanctioned direction.
+- `redirect.rs` — the per-path-class redirect table (CLOUD-280): what to run
+  instead, keyed by **what is protected** rather than by the verb reaching for
+  it. `[[redirect]]` is `{glob, mutation}`, and `hook::protected_refusal`
+  consults it BEFORE the verb's own `redirect` — three tiers, table then verb
+  then `Fix::None`, where the last two are CLOUD-96's behaviour untouched, so the
+  floor is structural rather than careful (`Fix::declared(Option<&str>)` was
+  built for this seam). Matching is `rules::glob_match` — one glob semantics for
+  the engine — over the SAME normalised path `protected.contains` was asked
+  about, or the two tables would disagree about which path is under discussion.
+  **Declaration order decides, first match wins**, the tie-break `shape_rules`
+  already uses and for its stated reason: a reviewer reads a table top to bottom,
+  and any cleverer precedence is a rule about rules the config does not state.
+  A **sibling** table rather than a wider `protected`, which keeps `Vec<String>`
+  so `trust::removed_entries`'s `protected[<entry>]` weakening keys are
+  byte-identical (asserted). Not policy-bearing — it changes what a refusal says,
+  never whether it fires — so no raise-only clamp applies; the local layer may
+  add a class and may not redefine a committed one, and since local rows append
+  after committed ones, first-match-wins means an uncommitted file can never
+  change what a committed row says. **The boundary worth knowing**: consumer #1
+  declares `.github/workflows/**` and `batten.toml`, and deliberately NOT
+  `.serena/memories/**` — that class's remedy depends on the ACTION
+  (`write_memory` / `edit_memory` / `rename_memory` / `delete_memory`), so a path
+  row would override four correct per-verb answers with one weaker sentence.
+  Per-path beats per-verb only where the path fact dominates. It makes a message
+  specific; it does not make the named surface reachable (CLOUD-663).
 - `refusal.rs` — the refusal contract (CLOUD-122): ONE `Refusal` value —
   `{rule, reason, fix}` — constructed at every deny site and projected onto
   whatever channel a host reads, so the shape is never re-typed per harness.
