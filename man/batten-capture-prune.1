@@ -1,0 +1,16 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-capture-prune 1  batten 
+.SH NAME
+batten\-capture\-prune \- Remove this repository\*(Aqs captures — the one removal path; captures never expire on their own
+.SH SYNOPSIS
+\fBbatten capture prune\fR [\fB\-n\fR|\fB\-\-dry\-run\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+Remove this repository\*(Aqs captures — the one removal path; captures never expire on their own
+.SH OPTIONS
+.TP
+\fB\-n\fR, \fB\-\-dry\-run\fR
+Preview what would be applied, writing nothing
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

@@ -1,0 +1,26 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-capture 1  batten 
+.SH NAME
+batten\-capture \- Captured command output: navigate what `exec` already ran, without running it again
+.SH SYNOPSIS
+\fBbatten capture\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIsubcommands\fR>
+.SH DESCRIPTION
+Captured command output: navigate what `exec` already ran, without running it again
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.SH SUBCOMMANDS
+.TP
+batten\-capture\-show(1)
+Print a capture\*(Aqs pointer, or the lines a selection asks for, with no second run
+.TP
+batten\-capture\-list(1)
+List this repository\*(Aqs captures as handles, in a fixed order
+.TP
+batten\-capture\-prune(1)
+Remove this repository\*(Aqs captures — the one removal path; captures never expire on their own
+.TP
+batten\-capture\-help(1)
+Print this message or the help of the given subcommand(s)

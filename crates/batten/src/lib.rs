@@ -160,20 +160,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Exec {
             command,
             capture_only,
-        }) => {
-            let patterns = load_exec_patterns(&overrides)?;
-            let exec_mode = if capture_only {
-                exec::Mode::CaptureOnly
-            } else {
-                exec::Mode::Tee
-            };
-            // The report goes to the ERROR channel, never `out`: stdout belongs to
-            // the wrapped command (CLOUD-285), so a pointer line there would
-            // corrupt a document the caller may be parsing. That holds under
-            // `--capture-only` too — the caller gets no child bytes on stdout, but
-            // the channel is still the child's and Batten does not claim it.
-            exec::run_with(&command, &patterns, exec_mode, err)
-        }
+        }) => run_exec(&command, capture_only, &overrides, err),
         Some(Command::Capture { command }) => run_capture(&command, mode, out, err),
         Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
@@ -1011,6 +998,38 @@ fn run_state_migrate(err: &mut dyn Write) -> Result<ExitCode> {
         )?;
     }
     Ok(ExitCode::Success)
+}
+
+/// Run a command through the passthrough verb (CLOUD-285, CLOUD-121).
+///
+/// Its own function rather than an arm, because the dispatcher above is at the
+/// workspace's function-length limit and a match arm that grows is the wrong
+/// thing to grow.
+///
+/// The report goes to the ERROR channel, never `out`: stdout belongs to the
+/// wrapped command, so a pointer line there would corrupt a document the caller
+/// may be parsing. That holds under `--capture-only` too — the caller gets no
+/// child bytes on stdout, but the channel is still the child's and Batten does
+/// not claim it.
+///
+/// # Errors
+///
+/// As [`exec::run_with`]; the config read is the output predicates' and an
+/// unreadable authority is a usage error, since a pattern table nobody could read
+/// is a gate that silently did not run.
+fn run_exec(
+    command: &[String],
+    capture_only: bool,
+    overrides: &Overrides,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let patterns = load_exec_patterns(overrides)?;
+    let mode = if capture_only {
+        exec::Mode::CaptureOnly
+    } else {
+        exec::Mode::Tee
+    };
+    exec::run_with(command, &patterns, mode, err)
 }
 
 /// Navigate a frozen capture (CLOUD-121).

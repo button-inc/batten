@@ -1,0 +1,25 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-capture-show 1  batten 
+.SH NAME
+batten\-capture\-show \- Print a capture\*(Aqs pointer, or the lines a selection asks for, with no second run
+.SH SYNOPSIS
+\fBbatten capture show\fR [\fB\-\-lines\fR] [\fB\-\-grep\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIhandle\fR> 
+.SH DESCRIPTION
+Print a capture\*(Aqs pointer, or the lines a selection asks for, with no second run
+.SH OPTIONS
+.TP
+\fB\-\-lines\fR
+A 1\-indexed inclusive line range, `FROM:TO`, clamped to the capture
+.TP
+\fB\-\-grep\fR
+Only lines containing this literal substring
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fIhandle\fR>
+The `<stream>:<digest>` handle to read

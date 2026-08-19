@@ -1,0 +1,19 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-capture-list 1  batten 
+.SH NAME
+batten\-capture\-list \- List this repository\*(Aqs captures as handles, in a fixed order
+.SH SYNOPSIS
+\fBbatten capture list\fR [\fB\-\-stream\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+.SH DESCRIPTION
+List this repository\*(Aqs captures as handles, in a fixed order
+.SH OPTIONS
+.TP
+\fB\-\-stream\fR
+Only captures of this stream
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help

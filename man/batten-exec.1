@@ -4,10 +4,13 @@
 .SH NAME
 batten\-exec \- Run a command, passing its streams and its exit code through unchanged
 .SH SYNOPSIS
-\fBbatten exec\fR [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
+\fBbatten exec\fR [\fB\-\-capture\-only\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
 .SH DESCRIPTION
 Run a command, passing its streams and its exit code through unchanged
 .SH OPTIONS
+.TP
+\fB\-\-capture\-only\fR
+Store the child\*(Aqs streams and report their handles instead of passing the bytes through
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help

@@ -418,6 +418,41 @@ const CENSUS: &[Verb] = &[
              caller's own bytes appear but whether Batten's report adds a copy of them",
         ),
     },
+    // `exec`'s reader, and it inherits `exec`'s answer for the same reason
+    // (CLOUD-121). Handing back bytes the caller's own command already wrote IS
+    // the job: the alternative way to see them is re-running that command, which
+    // is the cost this verb exists to delete. So `Passthrough`, held to a count —
+    // Batten adding a copy of its own still fails.
+    //
+    // **What this corpus does NOT exercise, stated rather than implied:** the
+    // sweep's fixture holds no capture, so `show` answers exit 1 here and the
+    // count is 0 against 0. The count that matters is asserted where a capture
+    // exists — `widening_the_window_costs_no_second_run_of_the_command` and its
+    // siblings in `tests/cli.rs`. This row is the classification, not its proof.
+    Verb {
+        path: "capture show",
+        args: &["stdout:00"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::Passthrough(
+            "it hands back the bytes the caller's own command wrote, which is the whole point of \
+             a handle — the other way to see them is to run that command again",
+        ),
+    },
+    // The pointer half of the same noun: handles and byte counts, never a byte of
+    // what was captured.
+    Verb {
+        path: "capture list",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
+    // Emits a count of what it removed.
+    Verb {
+        path: "capture prune",
+        args: &["-n"],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         path: "config show",
         args: &[],
