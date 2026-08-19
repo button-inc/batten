@@ -71,9 +71,11 @@ hk = "1.54.0"                                                # git-hook runner (
 # lock-complete` rejects it. The `cargo:` backend that would sidestep that is
 # refused by `no-source-built-tool` AND does not work regardless: mise builds a
 # `cargo:` tool with the pinned stable toolchain, and cargo-fuzz 0.13.2's own
-# dependencies require rustc 1.91 (measured — `cargo-platform@0.3.3 requires
-# rustc 1.91`), so the install fails at 1.85.0 before any policy question is
-# reached. So there is no `[tools]` entry that can express this tool, and the
+# dependencies once required a newer rustc than the pin (measured at the 1.85
+# floor — `cargo-platform@0.3.3 requires rustc 1.91`). Since CLOUD-593 the floor
+# tracks the pin, so that second reason no longer holds and the FIRST one carries
+# the verdict alone: `no-source-built-tool` denies the backend outright. So there
+# is no `[tools]` entry that can express this tool, and the
 # task provisions it under the nightly libFuzzer needs anyway, pinned and only
 # when missing — off the landing path entirely, like `[tasks.coverage]`'s
 # component and, until CLOUD-593 retired it, `[tasks.msrv]`'s toolchain.
@@ -139,8 +141,9 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # github:, not ubi: — same upstream release assets, but the github backend locks
 # a url and a per-platform checksum where ubi locked a bare version and nothing
 # else, which made this the one tool installed from an unverified download
-# (CLOUD-281). Prebuilt either way, so its own MSRV (1.88) never constrains this
-# repo's pinned 1.85.
+# (CLOUD-281). Prebuilt either way, so its own MSRV never constrains this repo's
+# pin — the property is that nothing here builds it from source, which held at
+# the old 1.85 floor and holds unchanged at the pin the floor now tracks.
 "github:rust-cross/cargo-zigbuild" = "0.23"
 # The binary-level SBOM's producer (CLOUD-263). `mise-tasks/sbom` inventories the
 # repository at the tag; syft against a plain Rust binary recovers ZERO
@@ -227,9 +230,16 @@ CONVENTIONAL_RE = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|tes
 # which every check that builds this repository was `skipped`. That landed #261
 # on a SHA no CI run of ours ever judged (CLOUD-327).
 #
-# Hand-maintained until CLOUD-54's derived `[ci].required_checks` lands, and NOT
-# on the honour system meanwhile: `mise run ci-local-parity` fails if a name here
-# matches no job, or if a `pull_request` job is missing from here.
+# Hand-maintained, and NOT on the honour system: `mise run ci-local-parity` fails
+# if a name here matches no job, or if a `pull_request` job is missing from here.
+#
+# This is NOT superseded by `batten.toml`'s `[ci].required_checks`, which an
+# earlier revision of this comment named as its eventual replacement. CLOUD-54
+# landed that table and it answers a different question: `ci::derive` reads the
+# host rules API and records what BRANCH PROTECTION requires, which is `final`
+# alone — the fan-in. This roster is what `ci-wait` WAITS ON before landing, and
+# waiting only on `final` would strand every landing on a check that fans in from
+# eighteen. Two sets, two purposes; neither derives the other.
 CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-darwin),semver,perf,windows,final,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The subset of that roster for which ABSENCE — no check-run at all, as opposed
 # to one that graded `skipped` — is a legitimate reading rather than a name that
