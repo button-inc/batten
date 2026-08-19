@@ -427,6 +427,7 @@ fn the_override_schema_describes_only_keys_the_loader_honours() {
             "fail_on_warning",
             "min_batten_version",
             "protected",
+            "redirect",
             "rule",
             "scope",
             "strictness",

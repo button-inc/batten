@@ -32,6 +32,13 @@
         "type": "string"
       }
     },
+    "redirect": {
+      "description": "Redirects this file **adds**. A duplicate glob is refused.\n\nNeeds no raise-only clamp, and that is a decision rather than an\noversight: a redirect changes what a refusal *says*, never whether it\nfires, so there is no bar here to lower. Refusing a redefinition is\ncoherence with the other append-only tables.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Redirect"
+      }
+    },
     "rule": {
       "description": "Rules this file **adds**. Redefining a committed id is refused.",
       "type": "array",
@@ -175,6 +182,25 @@
           "type": "string",
           "const": "write"
         }
+      ]
+    },
+    "Redirect": {
+      "description": "One declared path class and the mutation sanctioned for it.",
+      "type": "object",
+      "properties": {
+        "glob": {
+          "description": "The path class this redirect speaks for, in the engine's one glob\ndialect.\n\nDeliberately independent of `protected`: this table answers \"what should\nthey run instead\", never \"is this guarded\". A glob here matching a path\nno `protected` entry covers simply never comes up, which is the harmless\ndirection — the alternative, deriving protection from a redirect, is the\nset-collapsing CLOUD-37 exists to prevent.",
+          "type": "string"
+        },
+        "mutation": {
+          "description": "The sanctioned mutation for that class — the \"run this instead\" a deny\ncarries.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "glob",
+        "mutation"
       ]
     },
     "Rule": {

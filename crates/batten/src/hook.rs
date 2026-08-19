@@ -1750,12 +1750,15 @@ fn adjudicated(
         && let Some(verb) = crate::verbs::classify(&policy.verbs, &envelope.tool)
         && policy.protected.contains(normalise(path))
     {
-        return Decision::Deny(protected_refusal(&policy.redirects, &Target {
-            program: &envelope.tool,
-            subcommand: None,
-            path,
-            verb,
-        }));
+        return Decision::Deny(protected_refusal(
+            &policy.redirects,
+            &Target {
+                program: &envelope.tool,
+                subcommand: None,
+                path,
+                verb,
+            },
+        ));
     }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
@@ -4418,10 +4421,7 @@ mod tests {
     fn guarded_with(redirects: Vec<Redirect>, command: &str) -> Decision {
         adjudicate(
             &protected_policy_with(
-                vec![
-                    verb("rm", Some("restore it with git")),
-                    verb("mv", None),
-                ],
+                vec![verb("rm", Some("restore it with git")), verb("mv", None)],
                 redirects,
             ),
             &envelope(command),
@@ -4464,7 +4464,10 @@ mod tests {
         // table declared but silent about this path, the answer is exactly what
         // CLOUD-96 shipped.
         let refusal = denial(guarded_with(
-            vec![redirect_row(".serena/memories/**", "use the memory surface")],
+            vec![redirect_row(
+                ".serena/memories/**",
+                "use the memory surface",
+            )],
             "rm batten.toml",
         ));
         assert_eq!(

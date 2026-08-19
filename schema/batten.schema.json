@@ -174,6 +174,13 @@
         "$ref": "#/$defs/Provision"
       }
     },
+    "redirect": {
+      "description": "The per-path-class redirect table (CLOUD-280): what to run instead,\nkeyed by what is protected rather than by the verb reaching for it.\n\nConsulted before [`MutatingVerb::redirect`], which stays the fallback, so\nthe behaviour CLOUD-96 shipped is the floor rather than a regression.\nDeliberately a sibling of [`Config::protected`] rather than a widening of\nit: that set keeps its element type, so [`crate::trust`]'s\n`protected[<entry>]` weakening keys are untouched.\n\n[`MutatingVerb::redirect`]: crate::verbs::MutatingVerb::redirect",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Redirect"
+      }
+    },
     "rule": {
       "description": "The declarative rules run against the repository. Absent or empty means\n\"no rules configured\" and nothing is reported. Which of these a given\nverb admits is the §5 effect split: `check` runs only non-spawning kinds\nand refuses the rest, `enforce` runs all of them (CLOUD-170).\n\nEvery rule pins its `severity` explicitly — the key is required, with no\nimplicit fallback — and carries a separate `scope` key whose vocabulary\nnever conflates with severity's (CLOUD-61). Both disciplines are\nenforced at parse time: omission or conflation is a usage error here,\nnever a value quietly assumed.",
       "type": "array",
@@ -1022,6 +1029,25 @@
           "type": "string",
           "const": "write"
         }
+      ]
+    },
+    "Redirect": {
+      "description": "One declared path class and the mutation sanctioned for it.",
+      "type": "object",
+      "properties": {
+        "glob": {
+          "description": "The path class this redirect speaks for, in the engine's one glob\ndialect.\n\nDeliberately independent of `protected`: this table answers \"what should\nthey run instead\", never \"is this guarded\". A glob here matching a path\nno `protected` entry covers simply never comes up, which is the harmless\ndirection — the alternative, deriving protection from a redirect, is the\nset-collapsing CLOUD-37 exists to prevent.",
+          "type": "string"
+        },
+        "mutation": {
+          "description": "The sanctioned mutation for that class — the \"run this instead\" a deny\ncarries.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "glob",
+        "mutation"
       ]
     },
     "Rule": {

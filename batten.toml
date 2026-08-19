@@ -95,6 +95,36 @@ protected = [
 ]
 
 # ---------------------------------------------------------------------------
+# What to run instead, per protected path class (CLOUD-280).
+#
+# The refusal contract (CLOUD-122) is that every deny names the fix. CLOUD-96
+# put that text on the `[[verb]]` row, which is right when the VERB knows the
+# remedy and wrong when the PATH does: `rm` says "restore it with `git checkout
+# --`", which is true of most files and actively misleading for a workflow,
+# where the point is not recovering the bytes but that CI's definition of green
+# changes under review.
+#
+# Consulted BEFORE the verb's own `redirect`; a class named here answers for
+# every verb that reaches it. Declaration order decides, first match wins.
+#
+# WHY `.serena/memories/**` IS DELIBERATELY ABSENT, which is the interesting
+# boundary of this table rather than an omission. Its remedy is not a property
+# of the path alone: a write wants `write_memory`, an in-place edit wants
+# `edit_memory`, a move wants `rename_memory` (the only route that rewrites
+# `mem:` referrers), a delete wants `delete_memory`. The verb rows below already
+# name the right tool per action, and a row here would OVERRIDE all four with
+# one weaker sentence — the opposite of what this table is for. Per-path beats
+# per-verb only where the path fact dominates; where the verb fact does, the
+# fallback tier is the correct answer and not a leftover.
+[[redirect]]
+glob = ".github/workflows/**"
+mutation = "change it in a pull request — these files are CI's definition of green, so the change has to be reviewed rather than restored"
+
+[[redirect]]
+glob = "batten.toml"
+mutation = "change it in a pull request — this file is the policy authority every gate reads, and `mise run config-lint` is what checks the edit before it lands"
+
+# ---------------------------------------------------------------------------
 # The worktree pileup threshold (CLOUD-46).
 #
 # How many LINKED worktrees may sit dirty-and-unreapable before `worktree status`

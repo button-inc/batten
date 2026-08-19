@@ -1088,6 +1088,66 @@ mod tests {
         None
     }
 
+    /// A committed authority declaring one redirect class.
+    const REDIRECT_AUTHORITY: &str = "version = 1\nprotected = [\"guarded/**\"]\n\n[[redirect]]\nglob = \"guarded/**\"\nmutation = \"use the surface that owns it\"\n";
+
+    #[test]
+    fn a_local_file_may_add_a_redirect_class_the_authority_does_not_claim() {
+        // The permitted direction, and the reason it needs no clamp: a redirect
+        // changes what a refusal SAYS, never whether it fires, so an added class
+        // lowers no bar. A session gating a scratch tree can name its own remedy
+        // without touching committed policy.
+        let dir = repo(
+            "redirect-local-add",
+            REDIRECT_AUTHORITY,
+            Some(
+                "version = 1\n\n[[redirect]]\nglob = \"vendor/**\"\nmutation = \"re-run the generator\"\n",
+            ),
+        );
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert_eq!(resolved.redirects.len(), 2);
+        // Appended AFTER the committed rows, which is what makes first-match-wins
+        // safe: a local row can only ever answer for a class the authority left
+        // unclaimed.
+        assert_eq!(resolved.redirects[0].glob, "guarded/**");
+        assert_eq!(resolved.redirects[1].glob, "vendor/**");
+        assert_eq!(
+            crate::redirect::resolve(&resolved.redirects, "guarded/thing"),
+            Some("use the surface that owns it"),
+            "the committed remedy still answers for its own class"
+        );
+    }
+
+    #[test]
+    fn a_local_file_may_not_redefine_a_committed_redirect() {
+        // Not a strictness clamp — there is no bar here to lower — but a
+        // provenance one: a committed remedy must not be quietly reworded by an
+        // uncommitted file, the same refusal every other append-only table gives.
+        let dir = repo(
+            "redirect-local-redefine",
+            REDIRECT_AUTHORITY,
+            Some(
+                "version = 1\n\n[[redirect]]\nglob = \"guarded/**\"\nmutation = \"do whatever\"\n",
+            ),
+        );
+        let err = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap_err();
+        assert!(is_usage_error(&err), "got: {err}");
+        assert!(
+            err.to_string().contains("guarded/**"),
+            "the refusal names the class: {err}"
+        );
+    }
+
+    #[test]
+    fn an_authority_declaring_no_redirect_resolves_an_empty_table() {
+        // Absent is not empty-and-wrong: a repository that names no path class
+        // simply falls through to the verb's own redirect, which is CLOUD-96's
+        // behaviour and the floor this table sits on top of.
+        let dir = repo("redirect-absent", "version = 1\n", None);
+        let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
+        assert!(resolved.redirects.is_empty());
+    }
+
     fn is_usage_error(err: &anyhow::Error) -> bool {
         err.downcast_ref::<UsageError>().is_some()
     }

@@ -395,6 +395,42 @@ mod tests {
     }
 
     #[test]
+    fn the_protected_weakening_key_survives_the_redirect_table() {
+        // CLOUD-280's load-bearing non-change. The obvious way to give a
+        // protected path its own redirect is to widen `protected` to a table of
+        // `{glob, mutation}` — and that breaks THIS key, because `removed_entries`
+        // renders `format!("{key}[{entry}]")` over a list of strings. A consumer
+        // reading `protected[b]` out of a trust report, and every gate keyed on
+        // that spelling, would start seeing something else.
+        //
+        // So the redirect landed as a sibling table and `protected` kept its
+        // element type. Asserted byte-for-byte, and with a redirect declared, so
+        // the assertion is about the shape that shipped rather than about a
+        // config the feature does not exist in.
+        let base = parse(
+            "version = 1\nprotected = [\"a\", \"b\"]\n\n[[redirect]]\nglob = \"b\"\nmutation = \"use the surface that owns it\"\n",
+        );
+        let working = parse(
+            "version = 1\nprotected = [\"a\"]\n\n[[redirect]]\nglob = \"b\"\nmutation = \"use the surface that owns it\"\n",
+        );
+        let found = weakenings(&base, &working);
+        assert_eq!(found.len(), 1, "one removed path, one weakening: {found:?}");
+        assert_eq!(
+            found[0].key, "protected[b]",
+            "the key format is the signature this design preserves"
+        );
+        // And the redirect table itself contributes no weakening in either
+        // direction: it is not policy-bearing, so adding or removing a row
+        // cannot lower a bar.
+        let with_row = parse(
+            "version = 1\nprotected = [\"a\"]\n\n[[redirect]]\nglob = \"a\"\nmutation = \"x\"\n",
+        );
+        let without = parse("version = 1\nprotected = [\"a\"]\n");
+        assert!(weakenings(&with_row, &without).is_empty());
+        assert!(weakenings(&without, &with_row).is_empty());
+    }
+
+    #[test]
     fn adding_a_protected_path_is_not_a_weakening() {
         let base = parse("version = 1\nprotected = [\"a\"]\n");
         let working = parse("version = 1\nprotected = [\"a\", \"b\"]\n");

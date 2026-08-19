@@ -1349,6 +1349,61 @@ fn a_deny_with_no_safe_remedy_declares_it_rather_than_omitting_the_clause() {
     );
 }
 
+/// A gate whose protected class carries its own redirect, and a verb whose
+/// general remedy is the wrong answer for it (CLOUD-280).
+const PER_CLASS_REDIRECT_CONFIG: &str = r#"version = 1
+protected = ["guarded/**", "vendor/**"]
+
+[[redirect]]
+glob = "guarded/**"
+mutation = "change it in a pull request"
+
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with git"
+"#;
+
+#[test]
+fn a_deny_names_the_path_classs_own_mutation_over_the_verbs() {
+    // The three tiers over the compiled binary, because a refusal is a contract
+    // only where a host reads it. Same command, same verb, two paths: the class
+    // that declares a remedy gets it, and the class that does not falls back to
+    // the verb's — which is CLOUD-96's behaviour, asserted here so the floor is
+    // proven rather than assumed.
+    let dir = repo_with_config("refusal-per-class", PER_CLASS_REDIRECT_CONFIG);
+
+    let claimed = run_hook_in(
+        &dir,
+        "exit-code",
+        &claude_payload("rm guarded/thing.md"),
+        false,
+    );
+    assert_eq!(claimed.status.code(), Some(2), "the protected gate denies");
+    let stderr = String::from_utf8_lossy(&claimed.stderr);
+    assert!(
+        stderr.contains("Fix: change it in a pull request"),
+        "the declared class answers, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("restore it with git"),
+        "the verb's general remedy must not also appear, got: {stderr}"
+    );
+
+    let unclaimed = run_hook_in(
+        &dir,
+        "exit-code",
+        &claude_payload("rm vendor/thing.md"),
+        false,
+    );
+    assert_eq!(unclaimed.status.code(), Some(2), "still denied");
+    let stderr = String::from_utf8_lossy(&unclaimed.stderr);
+    assert!(
+        stderr.contains("Fix: restore it with git"),
+        "an unclaimed class leaves the verb's redirect standing, got: {stderr}"
+    );
+}
+
 // --- the normalized event census (CLOUD-43) ---------------------------------
 //
 // The envelope carried an `event` field from CLOUD-202 and never dispatched on
