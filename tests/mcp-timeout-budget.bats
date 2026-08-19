@@ -45,17 +45,17 @@ log_connection() { # log_connection <server> <observed-ms> [stamp]
 	run "$GATE" --settings "$S"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"30000"* ]]
-	[[ "$output" == *"105000"* ]]
+	[[ "$output" == *"105494"* ]]
 }
 
 @test "exactly the floor passes — the bound is inclusive" {
-	declare_timeout 105000
+	declare_timeout 105494
 	run "$GATE" --settings "$S"
 	[ "$status" -eq 0 ]
 }
 
 @test "one millisecond under the floor is refused" {
-	declare_timeout 104999
+	declare_timeout 105493
 	run "$GATE" --settings "$S"
 	[ "$status" -eq 1 ]
 }
@@ -193,4 +193,87 @@ log_connection() { # log_connection <server> <observed-ms> [stamp]
 	declare_timeout 120000
 	run "$GATE" --settings "$S" --logs
 	[ "$status" -eq 2 ]
+}
+
+# --- the floor carries its own arithmetic (CLOUD-730) ------------------------
+#
+# `timeout-check` refuses a workflow budget whose declared minutes disagree with
+# its own stated p95 x multiplier. These rows are that failure class for the one
+# budget its glob does not cover, and they exist because the drift already
+# happened: the floor moved 60000 -> 105494 on a re-measured worst success of
+# 52747 ms while the header went on justifying it with the superseded 16.65s.
+#
+# The gate parses the FLOOR line out of `$MCP_TIMEOUT_BUDGET`, defaulting to its
+# own file, so a fixture can declare every direction. The floor the parse yields
+# is the floor enforced — the number and its basis cannot be varied apart.
+
+budget_file() { # budget_file <FLOOR line>
+	local f="$BATS_TEST_TMPDIR/budget.sh"
+	printf '%s\n' "$1" >"$f"
+	printf '%s' "$f"
+}
+
+@test "a floor equal to its declared basis passes" {
+	declare_timeout 120000
+	MCP_TIMEOUT_BUDGET="$(budget_file 'FLOOR=105494 # budget: worst=52747ms x2 measured=2026-08-19')" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 0 ]
+}
+
+@test "a floor raised without moving its basis is refused, and both numbers are named" {
+	declare_timeout 120000
+	MCP_TIMEOUT_BUDGET="$(budget_file 'FLOOR=200000 # budget: worst=52747ms x2 measured=2026-08-19')" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"200000"* ]]
+	[[ "$output" == *"105494"* ]]
+	[[ "$output" == *"disagrees with the basis"* ]]
+}
+
+@test "a basis moved without the floor is refused — drift in either direction" {
+	declare_timeout 120000
+	MCP_TIMEOUT_BUDGET="$(budget_file 'FLOOR=105494 # budget: worst=90000ms x2 measured=2026-08-19')" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"disagrees with the basis"* ]]
+}
+
+@test "a floor with no budget comment is refused — a limit with no measurement" {
+	declare_timeout 120000
+	MCP_TIMEOUT_BUDGET="$(budget_file 'FLOOR=105494')" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no parsable budget comment"* ]]
+}
+
+@test "a malformed budget comment is refused rather than parsed loosely" {
+	declare_timeout 120000
+	MCP_TIMEOUT_BUDGET="$(budget_file 'FLOOR=105494 # budget: about twice the worst one')" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no parsable budget comment"* ]]
+}
+
+@test "a budget comment with no measurement date is refused" {
+	declare_timeout 120000
+	MCP_TIMEOUT_BUDGET="$(budget_file 'FLOOR=105494 # budget: worst=52747ms x2')" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no parsable budget comment"* ]]
+}
+
+@test "an unreadable budget file is exit 2, never a silent pass" {
+	declare_timeout 120000
+	MCP_TIMEOUT_BUDGET="$BATS_TEST_TMPDIR/absent-budget.sh" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 2 ]
+}
+
+# The arithmetic is checked BEFORE the declaration is compared, so a repo whose
+# floor has drifted cannot report a green budget on the strength of it.
+@test "the arithmetic is refused even when the declared budget clears the floor" {
+	declare_timeout 999999
+	MCP_TIMEOUT_BUDGET="$(budget_file 'FLOOR=1 # budget: worst=52747ms x2 measured=2026-08-19')" \
+		run "$GATE" --settings "$S"
+	[ "$status" -eq 1 ]
 }

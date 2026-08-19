@@ -49,13 +49,20 @@
 # against 1.110 s idle), but a cold launch measured against the host default in a
 # container where the declaration had not reached the client.
 #
-# WHY 120000 AND NOT 30000. The worst observed success is 16.65s, so the host
-# default gave 1.8x headroom — and it came up short twice in one session. The
-# cost function is deeply asymmetric: an over-long budget is paid only when the
-# server is genuinely failing, once, at startup, whereas an under-set one costs
-# every tool Serena owns for the rest of the session. 120000 is ~7x the worst
-# observed success, which is margin for a cold container that is also running
-# `mise install`, a cargo build and a first-time rust-analyzer index.
+# WHY 120000 AND NOT 30000. Against the worst observed SUCCESS of 52747 ms the
+# host default is not merely tight, it is BELOW the measurement: a connect that
+# did succeed would have been killed by it, which is precisely the 07:06 row
+# above. The cost function is deeply asymmetric — an over-long budget is paid
+# only when the server is genuinely failing, once, at startup, whereas an
+# under-set one costs every tool Serena owns for the rest of the session. 120000
+# is 2.3x the worst observed success, which is the margin a cold container needs
+# while it is also running `mise install`, a cargo build and a first-time
+# rust-analyzer index.
+#
+# THE 16.65s THIS SECTION USED TO CITE was the 2026-08-18 worst success, and the
+# "1.8x headroom" and "~7x" margins derived from it are superseded by the
+# re-measurement above (CLOUD-730). They were not merely stale: 1.8x described
+# the host default as tight when the later measurement shows it insufficient.
 #
 # The FLOOR sits below the declared value so it can be tuned down on evidence
 # without editing this gate, while still refusing a return to the host default.
@@ -63,21 +70,27 @@
 #
 # It was 60000, derived from a worst observed success of 16650 ms. The 2026-08-19
 # re-measurement above puts that at 52747 ms, which left the old floor at 1.14x —
-# so it moves to 105000, twice the worst observed success, keeping the declared
-# 120000 comfortably above it and the tuning slack intact.
+# so it moves to 105494, exactly twice the worst observed success, keeping the
+# declared 120000 above it and the tuning slack intact.
 #
 # NOT `.mcp.json`'s per-server `env`: that is passed to the CHILD, and this
 # budget governs the PARENT's wait.
 #
-# AND NOT `.claude/settings.json`'s `env` BLOCK EITHER, which this header used to
-# call "the one surface that reaches the CLI's own environment". Measured
-# 2026-08-19 and false (CLOUD-700): the key is declared at 120000, `echo
-# $MCP_TIMEOUT` inside the session prints 120000 — so the block does reach
-# subprocesses — and every one of the ten recorded connections still opened with
-# `Starting connection with timeout of 30000ms`. Both in-repo surfaces are
-# therefore eliminated: the budget is read by the client before or independently
-# of that layer, and only the environment the CLI is LAUNCHED with can set it,
-# which is the remote environment's configuration and outside this repository.
+# BUT `.claude/settings.json`'s `env` BLOCK IS THE SURFACE, and it does reach the
+# client — just not on every container, which is the whole reason this gate reads
+# the log instead of the file.
+#
+# CORRECTED 2026-08-19 (CLOUD-730). This header previously concluded, from ten
+# logs that all opened at `30000ms`, that the block "does not reach the MCP
+# client", that BOTH in-repo surfaces were eliminated, and therefore that only
+# the environment the CLI is launched with could set the budget — i.e. that no
+# fix could live in this repository. That conclusion is FALSE, and the sample is
+# why: every one of those ten logs predated the connection that settles it. The
+# 14:28 container opened with `Starting connection with timeout of 120000ms`.
+#
+# WHAT IS STILL OPEN is why one container picks the declaration up and another
+# does not. That question is live and this file does not answer it. Nothing here
+# should be read as retiring the settings surface.
 #
 # THAT IS WHY THIS GATE ALSO ASSERTS THE EFFECT. Checking the declaration alone
 # measures what the repo says while the failure is entirely in what the host
@@ -95,16 +108,60 @@
 # host default 30000 is a declared value, so a gate that only checks presence
 # passes the exact state CLOUD-668 was filed about.
 #MUTANT presence-is-not-a-budget|s/\[ "\$declared" -ge "\$FLOOR" \]/[ -n "$declared" ]/|a value below the floor is refused, and both numbers are named
-# The second mutation drops the effect half, leaving the declaration check that
-# passed for ten sessions while the budget was inert. Only a row that reads the
-# LOG can catch it.
+# The second mutation drops the effect half, leaving the declaration check alone
+# — which passes on any container where the client used the host default while
+# this file declared 120000, the exact 07:06 case above. Only a row that reads
+# the LOG can catch it.
 #MUTANT declaration-without-effect|s/\[ "\$observed" -lt "\$declared" \]/false/|an observed budget below the declared one is refused
+# The third mutation drops the floor's own arithmetic, so a floor may be moved
+# without moving the measurement that justifies it — the drift that let a
+# superseded "16.65s" go on justifying a number derived from 52747 ms. Only a row
+# that declares a basis disagreeing with its floor can catch it.
+#MUTANT floor-without-basis|s/\[ "\$FLOOR" -ne \$((budget_worst \* budget_multiplier)) \]/false/|a floor disagreeing with its declared basis is refused
 #PIN-OK: jq
 set -uo pipefail
 
-# The measured floor. Raising the declared value is free; lowering this needs a
-# new row in the measurement table above.
-FLOOR=105000
+# THE FLOOR AND THE MEASUREMENT THAT JUSTIFIES IT, on one line, in the form
+# `timeout-check` already uses for workflow jobs (CLOUD-266):
+#
+#   FLOOR=<ms> # budget: worst=<ms>ms x<multiplier> measured=YYYY-MM-DD
+#
+# and it is PARSED below rather than merely readable. A floor moved without its
+# basis fails, and so does a basis moved without the floor — which is exactly how
+# a "16.65s" justification outlived the number it justified (CLOUD-730). Raising
+# the declared value in settings is free; moving this needs a new row in the
+# measurement table above and the arithmetic to match it.
+#
+# 105494 rather than the 105000 that first landed: 52747 x 2 is 105494, and the
+# rounding that produced the older value is a small instance of the same drift
+# this assertion exists to refuse.
+FLOOR=105494 # budget: worst=52747ms x2 measured=2026-08-19
+
+# Parsed from the file the assignment above lives in, so a fixture can exercise
+# every direction of the check by declaring its own line. `timeout-check` is a
+# pure function of the workflows it reads; this is a pure function of one line of
+# this file.
+budget_file="${MCP_TIMEOUT_BUDGET:-${BASH_SOURCE[0]}}"
+if [ ! -r "$budget_file" ]; then
+	echo "::error:: mcp-timeout-budget: cannot read $budget_file to check the floor's own budget comment" >&2
+	exit 2
+fi
+budget_line=$(grep -m1 -E '^FLOOR=' "$budget_file")
+budget_re='^FLOOR=([0-9]+)[[:space:]]#[[:space:]]budget:[[:space:]]worst=([0-9]+)ms[[:space:]]x([0-9]+)[[:space:]]measured=[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+if [[ ! $budget_line =~ $budget_re ]]; then
+	echo "::error:: mcp-timeout-budget: the floor carries no parsable budget comment — a limit with no recorded measurement is the boilerplate CLOUD-266 refuses" >&2
+	echo "  want FLOOR=<ms> # budget: worst=<ms>ms x<n> measured=YYYY-MM-DD" >&2
+	exit 1
+fi
+FLOOR="${BASH_REMATCH[1]}"
+budget_worst="${BASH_REMATCH[2]}"
+budget_multiplier="${BASH_REMATCH[3]}"
+if [ "$FLOOR" -ne $((budget_worst * budget_multiplier)) ]; then
+	echo "::error:: mcp-timeout-budget: the floor disagrees with the basis it declares" >&2
+	echo "  floor $FLOOR" >&2
+	echo "  basis $budget_worst x$budget_multiplier = $((budget_worst * budget_multiplier))" >&2
+	exit 1
+fi
 
 settings="${MCP_TIMEOUT_SETTINGS:-.claude/settings.json}"
 logroot="${MCP_TIMEOUT_LOGS:-}"
@@ -210,7 +267,7 @@ observed_budget_holds() {
 			echo "::error:: mcp-timeout-budget: the host ignored the declared MCP startup budget" >&2
 			echo "  $server observed $observed" >&2
 			echo "  $settings env.MCP_TIMEOUT $declared" >&2
-			echo "  A declared budget the client does not use is not a budget. The settings file's env block reaches subprocesses and not the MCP client (CLOUD-700), so this has to be set in the environment the CLI is launched with — the remote environment's own configuration, not this repository." >&2
+			echo "  A declared budget the client does not use is not a budget. Why this container used a different one is OPEN (CLOUD-730): the declaration in this settings file demonstrably does reach the client on other containers, so do not 'fix' this by moving the key out of the repository. Serena had the observed budget, not the declared one, to attach in." >&2
 			return 1
 		fi
 	done <<<"$servers"
