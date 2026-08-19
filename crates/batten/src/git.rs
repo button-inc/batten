@@ -1546,13 +1546,55 @@ mod tests {
     use super::*;
 
     /// A fresh scratch directory under the system temp dir. Unit tests cannot
-    /// use `CARGO_TARGET_TMPDIR` (integration-only); per-test names keep
-    /// parallel tests apart, and the wipe clears a crashed prior run.
+    /// use `CARGO_TARGET_TMPDIR` (integration-only), and the wipe clears a
+    /// crashed prior run.
+    ///
+    /// **The process id is what keeps two RUNS apart, and the test name only
+    /// keeps two tests apart** (CLOUD-717). This used to be the name alone, and
+    /// its comment claimed "per-test names keep parallel tests apart" — true of
+    /// parallel tests inside one binary, false of parallel `cargo test`
+    /// processes, which both execute `a_snapshot_captures_a_dirty_tree_and_
+    /// nothing_else` and both resolve one path. Whichever reached
+    /// `remove_dir_all` second deleted the `.git` the first had just created,
+    /// and the red that produced points into production code with no hint that
+    /// another process is the cause. Measured twice on 2026-08-19, from both
+    /// sides of one collision, when the hk gate's `test:cargo` overlapped an
+    /// author's own run.
+    ///
+    /// `journal.rs` and `findings.rs` already build their scratch names this
+    /// way; this adopts their spelling rather than inventing a second.
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("batten-git-tests").join(name);
+        let dir = std::env::temp_dir()
+            .join("batten-git-tests")
+            .join(format!("{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn two_test_processes_do_not_share_one_fixture_directory() {
+        // CLOUD-717's premise, shown able to fail: a case pinning only that one
+        // derivation is stable passes against the defect unchanged, because the
+        // defect WAS stable — stably the same path in every process. What has to
+        // hold is that the process is in the name, so two runs cannot collide.
+        let here = scratch("collision-probe");
+        let leaf = here
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("a scratch leaf");
+        assert!(
+            leaf.starts_with("collision-probe-"),
+            "the test name still leads the leaf, so a human can find it: {leaf}"
+        );
+        assert_eq!(
+            leaf,
+            format!("collision-probe-{}", std::process::id()),
+            "the process id is the half that separates two concurrent runs"
+        );
+        // And it is still stable within one process, or every call would mint a
+        // new directory and a fixture built across two calls would vanish.
+        assert_eq!(here, scratch("collision-probe"));
     }
 
     /// Run git in `dir`, hermetically: no global or system config (a dev
