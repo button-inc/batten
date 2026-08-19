@@ -1229,7 +1229,9 @@ mod tests {
             "CLOUD-516\nready-lint pass\nclaimed-at 2026-08-13T14:13:03Z\nupdated-at CLOUD-516 2026-08-13T07:37:37Z\n",
         );
         if let Some(base) = base {
-            body.push_str(&format!("base {base}\n"));
+            body.push_str("base ");
+            body.push_str(base);
+            body.push('\n');
         }
         body
     }
