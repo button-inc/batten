@@ -116,6 +116,19 @@ which is what this wanted: the predicate needs a network call, and no rule kind
 can make one on a mediated call (CLOUD-446). `verify` is the earliest surface
 that still sits on every path to a published PR.
 
+**`claim-check` runs BEFORE the board move, not after — and the order is not
+interchangeable.** It refuses `not-todo`, so once the issue is In Progress it
+refuses the very claim you just made, and it cannot tell your own move from a
+competitor's: every agent authenticates as the same tracker user, which is why
+`assigned` deliberately does not say "assigned to someone else". Measured
+2026-08-19 on CLOUD-697 — the board was moved first, `claim-check` then answered
+`not-todo (in In Progress)`, and the receipt `verify` demands could only be
+minted with `BATTEN_CLAIM_TAKEOVER=1`, which records the refusal it overrode.
+That is the right escape once you are in the hole (reverting the column to fake
+a clean transition history would be worse), but the hole is avoidable: pipe the
+Todo payload, get the receipt, then write the state. Sequence: `claim-check` →
+board move → code.
+
 For the transitions the automation _does_ perform, an agent hand-moving the
 board is doing work that is already automated, and doing it the fragile way. A state change is a tracker write, and a write can be
 denied mid-session when the connector re-registers under a name no allow rule

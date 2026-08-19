@@ -49,7 +49,22 @@ Reading CI checks needs **Checks: read**. A fine-grained PAT cannot carry it —
 `x-accepted-github-permissions: checks=read`, off-proxy included. That's a token
 capability, not a network block. Use a **classic PAT scoped `repo`** (bundles
 checks-read, so `--watch` works) or the MCP `get_check_runs` tool (carries the
-permission via App auth). Everything else the token is scoped for works off-proxy.
+permission via App auth).
+
+**"Everything else works" is not quite true, and the second gap is `gh pr edit`.**
+Measured 2026-08-19 with a classic PAT scoped `repo,workflow`: `gh pr edit <n>
+--body-file …` fails outright with `GraphQL: Your token has not been granted the
+required scopes … The 'login' field requires one of the following scopes:
+['read:org']`. The edit itself needs nothing but `repo`; `gh` incidentally
+queries `login`/`name`/`slug` on assignees and teams while building the mutation,
+and those fields are what demand `read:org`. So the failure names a scope the
+operation does not need, which is exactly the shape that sends a reader off to
+widen a token unnecessarily.
+
+Do not widen the PAT for this. Use the MCP `update_pull_request` tool, which
+carries the permission via App auth and edits the body directly — the same
+resolution as `get_check_runs` above, for the same reason. `gh pr create` and
+`gh pr ready` are unaffected; only the edit path queries those fields.
 
 ## Provider outages — status page first, then poll for recovery
 
