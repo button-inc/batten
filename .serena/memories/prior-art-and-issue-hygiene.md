@@ -162,6 +162,29 @@ decisions the work forces and who must make them.
 Same discipline for PR bodies: what changed, why it mattered _here_, what a
 reviewer should look at. Not how the work unfolded.
 
+### The tracker silently corrupts a markdown table on save — use a list
+
+**Measured 2026-08-19 on CLOUD-75.** A Ready block written with a markdown table
+came back with the leading characters of every cell eaten: `CLOUD-240` →
+`OUD-240`, `` `09836e9` `` → `` 9836e9` ``, `203` → `3`, `212` → `2`, `257` →
+`7`, and a lone `2` to **empty**. The `| --- |` separator row was rewritten to
+`| -- |` in the same pass, which is the tell that a normalizer ran rather than
+the payload being wrong on the way in.
+
+It is **silent**: no error, no warning, exit 0. The only place the damage is
+visible is the save response, which returns the stored description.
+
+Consequence, and why this is worth a line: the block published four wrong
+latency measurements as refined ground truth, in the one artifact a successor is
+supposed to trust without re-deriving. A wrong number in a Ready block is worse
+than a missing one.
+
+- **Write anything load-bearing as a list, not a table.** The identical content
+  as `* **CLOUD-240** — … Introduced `09836e9`, caught `c14050a`: **203**
+  commits.` round-tripped byte-exact.
+- **Read the save response back** whenever the content carries figures, SHAs or
+  identifiers. The response is the stored state; the request is not.
+
 ## Sorting rule
 
 Five destinations, no overlap:
