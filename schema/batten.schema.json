@@ -37,6 +37,17 @@
         }
       ]
     },
+    "commit": {
+      "description": "The commit-subject convention this repository holds itself to\n(CLOUD-701). Absent means no convention is declared and the gate is not\nactive — which the gate reports as exit 1, never as a clean pass over\ncommits it had no rule to judge.\n\nConsumer-specific by nature (non-negotiable rule 1): which type words a\nrepository admits is that repository's business, so the core carries the\nmatcher and this table carries the answer. It lives here rather than in\nthe task runner's config because it is a rule about what a commit may be,\nnot about how a tool is run. The type and the predicate are\n[`crate::commit`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Commit"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "defects": {
       "description": "The append-only defect ledger (CLOUD-52): where it lives and what may be\nin it. Absent means this repository keeps no in-tree ledger and the gate\nis simply not active.",
       "anyOf": [
@@ -414,6 +425,20 @@
       "additionalProperties": false,
       "required": [
         "required_checks"
+      ]
+    },
+    "Commit": {
+      "description": "The `[commit]` table: what a commit subject must look like here.\n\nConsumer-specific by nature (non-negotiable rule 1): the engine holds the\nmatcher, this table holds the answer. Which type words a repository admits,\nand whether it requires a scope, are that repository's business.",
+      "type": "object",
+      "properties": {
+        "subject_pattern": {
+          "description": "The regular expression every non-merge commit's subject must match.\n\nRequired when the table is present: a `[commit]` declaring no pattern is\nthe half-change rule 2 refuses — it reads as though a convention is\nrecorded when nothing is.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "subject_pattern"
       ]
     },
     "Defects": {

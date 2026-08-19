@@ -168,6 +168,18 @@ pub enum Command {
         /// Report what would be recorded, writing nothing.
         dry_run: bool,
     },
+    /// The shape a commit must take here.
+    ///
+    /// Appended rather than placed beside `attribution`, where the surface
+    /// groups it, for the reason `Init` above states: this enum carries no
+    /// `repr`, so a variant inserted in the middle shifts every later
+    /// discriminant and `mise run semver` reads that as a break the crate would
+    /// have to declare. Declaration order here is not a contract with anything —
+    /// dispatch is an exhaustive match and the surface is `surface.rs`'s.
+    Commit {
+        /// The chosen sub-verb.
+        command: CommitCommand,
+    },
 }
 
 /// Subcommands of `lint` — one arm per *kind* of artifact, which is what the
@@ -317,6 +329,23 @@ pub enum CaptureCommand {
         yes: bool,
         /// Report what would be removed and remove nothing.
         dry_run: bool,
+    },
+}
+
+/// Subcommands of `commit`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CommitCommand {
+    /// Judge commit subjects against the `[commit]` convention.
+    Check {
+        /// Emit the findings as byte-stable JSON instead of pointer lines.
+        json: bool,
+        /// The commit range to judge. Mutually exclusive with `message`;
+        /// exactly one must be given, and neither is a usage error rather than
+        /// a vacuous pass over nothing.
+        range: Option<String>,
+        /// The pending commit-message file to judge.
+        message: Option<String>,
     },
 }
 
@@ -550,6 +579,17 @@ fn attribution_of(matches: &ArgMatches) -> Option<AttributionCommand> {
     }
 }
 
+fn commit_of(matches: &ArgMatches) -> Option<CommitCommand> {
+    match matches.subcommand()? {
+        ("check", matches) => Some(CommitCommand::Check {
+            json: flag(matches, "json"),
+            range: matches.get_one::<String>("range").cloned(),
+            message: matches.get_one::<String>("message").cloned(),
+        }),
+        _ => None,
+    }
+}
+
 fn provision_of(matches: &ArgMatches) -> Option<ProvisionCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(ProvisionCommand::Status {
@@ -702,6 +742,7 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "defects" => defects_of(matches).map(|command| Command::Defects { command }),
         "design" => design_of(matches).map(|command| Command::Design { command }),
         "attribution" => attribution_of(matches).map(|command| Command::Attribution { command }),
+        "commit" => commit_of(matches).map(|command| Command::Commit { command }),
         "worktree" => worktree_of(matches).map(|command| Command::Worktree { command }),
         "generate" => generate_of(matches).map(|command| Command::Generate { command }),
         // `get_many`, not `get_one`: the tail is an `Append` action, so every

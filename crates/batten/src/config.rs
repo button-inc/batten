@@ -299,6 +299,19 @@ pub struct Config {
     /// [`crate::attribution`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attribution: Option<crate::attribution::Attribution>,
+    /// The commit-subject convention this repository holds itself to
+    /// (CLOUD-701). Absent means no convention is declared and the gate is not
+    /// active — which the gate reports as exit 1, never as a clean pass over
+    /// commits it had no rule to judge.
+    ///
+    /// Consumer-specific by nature (non-negotiable rule 1): which type words a
+    /// repository admits is that repository's business, so the core carries the
+    /// matcher and this table carries the answer. It lives here rather than in
+    /// the task runner's config because it is a rule about what a commit may be,
+    /// not about how a tool is run. The type and the predicate are
+    /// [`crate::commit`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<crate::commit::Commit>,
 }
 
 /// The `[epoch]` table: which files govern this repository.
@@ -523,6 +536,12 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     if let Some(attribution) = &config.attribution {
         attribution.validate()?;
     }
+    // Same reason, and the same specific one: `subject_pattern` is a regular
+    // expression, so an uncompilable value is a convention that matches nothing
+    // and passes every commit silently.
+    if let Some(commit) = &config.commit {
+        commit.validate()?;
+    }
     // `[transcript]` is a table too, so the census does not reach it either; the
     // guarded failure is a `path` key present and blank, which would resolve to
     // the repository root and read as an unparseable transcript (CLOUD-95).
@@ -666,6 +685,9 @@ impl Config {
             // gate says so (exit 1) rather than passing over commits it never
             // read.
             attribution: None,
+            // And no commit convention: absent is "no rule was declared", which
+            // the gate answers 1 to rather than waving commits through.
+            commit: None,
         }
     }
 }

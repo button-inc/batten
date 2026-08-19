@@ -467,7 +467,8 @@ const RANGE: FlagDecl = FlagDecl {
     value: ValueDecl::Str,
 };
 
-/// `--message <file>` on `attribution check` (CLOUD-274).
+/// `--message <file>` on `attribution check` (CLOUD-274) and `commit check`
+/// (CLOUD-701).
 ///
 /// The commit-time seam. The message is on disk and git already resolves the
 /// identity it will stamp, so a refusal here means the offending commit is never
@@ -1285,6 +1286,33 @@ pub const SURFACE: &[CommandDecl] = &[
     // and hanging a mutating verb there would either falsify that claim or force
     // `policy` off the derived read-only allowlist, taking `policy budget` with
     // it. A separate noun keeps both claims true (CLOUD-274).
+    // The `commit` noun. Unlike `attribution` beside it, this one CAN be `read`:
+    // its whole subtree is a predicate over commit text and nothing under it
+    // writes, so the row makes the stronger claim the subtree actually satisfies.
+    //
+    // A sibling noun rather than a verb under `attribution`, deliberately. Both
+    // judge produced commits, but they answer different questions — "is this
+    // subject conventional" and "does this metadata carry vendor branding" — and
+    // one verb answering two would make a single verdict unattributable to
+    // either (CLOUD-701).
+    CommandDecl {
+        path: "commit",
+        about: "The shape a commit must take here: what its subject may say",
+        data_channel: false,
+        effect: Effect::Read,
+        flags: &[],
+    },
+    // Reads subjects through git's own read-only plumbing and matches one
+    // configured pattern against them. Nothing is spawned but that walk, and no
+    // user-supplied code is reachable, which is what the `read` structural
+    // promise requires.
+    CommandDecl {
+        path: "commit check",
+        about: "Refuse a commit subject that does not follow the configured convention",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON, RANGE, MESSAGE],
+    },
     CommandDecl {
         path: "attribution",
         about: "What produced commits may carry about the tooling that made them",

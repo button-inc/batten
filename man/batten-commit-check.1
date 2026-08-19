@@ -1,0 +1,22 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH batten-commit-check 1  batten 
+.SH NAME
+batten\-commit\-check \- Refuse a commit subject that does not follow the configured convention
+.SH SYNOPSIS
+\fBbatten commit check\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-\-message\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIrange\fR] 
+.SH DESCRIPTION
+Refuse a commit subject that does not follow the configured convention
+.SH OPTIONS
+.TP
+\fB\-J\fR, \fB\-\-json\fR
+Emit byte\-stable JSON instead of pointer lines
+.TP
+\fB\-\-message\fR
+Judge one pending commit message file, before the commit exists
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+[\fIrange\fR]
+Judge every non\-merge commit in this range (<base>..<head>)

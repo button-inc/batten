@@ -584,6 +584,16 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The subject convention, same object and same discipline (CLOUD-701). A
+    // subject carries whatever its author typed, so echoing it back is the gate
+    // republishing arbitrary content — which is exactly what the shell task this
+    // replaced did. Findings are `<sha8> subject`.
+    Verb {
+        path: "commit check",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     // The one write on this surface. It reports which repo-local identity it
     // set or left alone, never a commit's metadata.
     Verb {

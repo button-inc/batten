@@ -186,6 +186,20 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   (`<sha8> author`, `<sha8> trailer:<key>`) and never the matched text — this
   module reads exactly the content someone wanted suppressed. `set_identity` is
   the one write, repo-local only, and it leaves a compliant identity alone.
+- `commit.rs` — the commit-subject convention (CLOUD-701): one configured regex
+  over `%s`, judged across a range or over one pending message file. Lives in the
+  engine because "is this subject conventional" is a rule about what a commit may
+  BE, and this repo lands by fast-forward — every commit reaches `main` with its
+  own message and drives release-plz's semver, so each one is judged rather than
+  just the PR title. It replaced `CONVENTIONAL_RE` in `mise.toml [env]`; that file
+  configures how tools run, which is the same correction `attribution.rs` is the
+  precedent for. NOT a classifier: the vocabulary of types is `[commit]`'s, and
+  the crate carries no notion of Conventional Commits. Findings are pointers
+  (`<sha8> subject`) and never the subject text — a deliberate tightening over the
+  shell task, which printed it. `--no-merges`, because a merge subject is git's
+  wording rather than an author's. A sibling of `attribution` rather than a verb
+  under it: same object, different question, and one verdict answering both would
+  be unattributable to either.
 - `ci.rs` — the merge contract derived from the host ruleset (CLOUD-54). The HOST
   is the authority; `[ci]` in `batten.toml` is a projection a gate polices, never
   the reverse. Committed rather than fetched per run because a gate that can fail

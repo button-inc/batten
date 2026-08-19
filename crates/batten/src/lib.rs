@@ -17,6 +17,7 @@ pub mod bypass;
 pub mod capture;
 pub mod ci;
 pub mod cli;
+pub mod commit;
 pub mod completion;
 pub mod config;
 pub mod decision;
@@ -68,7 +69,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 pub use cli::{
-    AttributionCommand, Cli, Command, ConfigCommand, DefectsCommand, DesignCommand,
+    AttributionCommand, Cli, Command, CommitCommand, ConfigCommand, DefectsCommand, DesignCommand,
     GenerateCommand, LintCommand, PolicyCommand, ProvisionCommand, ReceiptCommand, SpecFormat,
     StateCommand, WorktreeCommand,
 };
@@ -190,6 +191,15 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // branch produced, and deriving it again here would be a second authority
         // for that fact.
         Some(Command::Attribution { command }) => run_attribution(command, &overrides, out, err),
+        // Same object as `attribution`, different question: the subject's shape
+        // rather than the metadata's provenance (CLOUD-701).
+        Some(Command::Commit { command }) => match command {
+            CommitCommand::Check {
+                json,
+                range,
+                message,
+            } => run_commit_check(json, range.as_deref(), message.as_deref(), &overrides, out),
+        },
         Some(Command::Worktree { command }) => match command {
             WorktreeCommand::Status { json } => run_worktree_status(json, &overrides, out),
             WorktreeCommand::Reclaim { dry_run } => {
@@ -1356,6 +1366,68 @@ struct Expectation {
     capability: &'static str,
     /// What this host declares for it: `yes`, `no`, `partial` or `unknown`.
     declares: &'static str,
+}
+
+/// Resolve the `[commit]` table, or say why the gate cannot decide.
+///
+/// An absent table is exit `1`, never a clean pass: "this repository declares no
+/// commit convention" and "these subjects are conventional" are different
+/// answers, and collapsing them would report green over a gate that never ran.
+fn commit_policy(overrides: &Overrides) -> Result<commit::Commit> {
+    let config = resolve::resolve(Path::new("."), overrides)?;
+    config.commit.clone().ok_or_else(|| {
+        UsageError::raise(format!(
+            "no [commit] in {}; there is no subject convention to judge by",
+            config::CONFIG_FILE
+        ))
+    })
+}
+
+fn run_commit_check(
+    json: bool,
+    range: Option<&str>,
+    message: Option<&str>,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    // Exactly one mode. Both is ambiguous, and neither is a run over nothing that
+    // would exit 0 — the vacuous pass a gate must never produce.
+    let subjects = match (range, message) {
+        (Some(_), Some(_)) => {
+            return Err(UsageError::raise(
+                "commit check: a range and --message name two different objects; pass one"
+                    .to_owned(),
+            ));
+        }
+        (None, None) => {
+            return Err(UsageError::raise(
+                "commit check: pass <base>..<head> or --message <file>; with neither there is \
+                 nothing to judge"
+                    .to_owned(),
+            ));
+        }
+        (Some(range), None) => {
+            let (base, head) = range.split_once("..").ok_or_else(|| {
+                UsageError::raise(format!(
+                    "commit check: `{range}` is not a <base>..<head> range"
+                ))
+            })?;
+            commit::read_range(Path::new("."), base, head)?
+        }
+        (None, Some(message)) => vec![commit::read_message(Path::new(message))?],
+    };
+
+    let findings = commit_policy(overrides)?.judge(&subjects)?;
+
+    if json {
+        // Emitted unconditionally, including for a clean run: JSON that is
+        // sometimes absent is unparseable.
+        writeln!(out, "{}", serde_json::to_string_pretty(&findings)?)?;
+    } else {
+        // Silence is the success signal on the human channel (§6).
+        write!(out, "{}", commit::report(&findings))?;
+    }
+    Ok(ExitCode::verdict(!findings.is_empty()))
 }
 
 /// Dispatch the `attribution` subtree.

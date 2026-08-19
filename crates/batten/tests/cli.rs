@@ -3530,6 +3530,10 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
             "[defects]\n",
             "path = \"defects.jsonl\"\n",
             "classes = [\"example\"]\n",
+            // `commit check`'s minimum input: a repository declaring no
+            // convention is a usage error, never an empty answer.
+            "[commit]\n",
+            "subject_pattern = \"^(feat|fix|chore): .+\"\n",
             // `attribution check`'s minimum input, for the same reason: a
             // repository declaring no attribution policy is a usage error, never
             // a clean pass over commits nobody judged.
@@ -3612,6 +3616,8 @@ const CENSUS_POSITIONALS: &[(&str, &str)] = &[
     // An empty but resolvable range: the clean answer is `[]`, which is a
     // document like any other, and it needs no commit the fixture did not make.
     ("attribution check", "HEAD..HEAD"),
+    // The same empty-but-resolvable range, for the same reason (CLOUD-701).
+    ("commit check", "HEAD..HEAD"),
     // A valid check name; `receipt status` answers `missing` for it, which is a
     // document like any other.
     ("receipt status", "verify"),

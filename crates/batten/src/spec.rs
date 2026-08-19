@@ -298,6 +298,11 @@ mod tests {
                 "capture list".to_owned(),
                 "capture show".to_owned(),
                 "check".to_owned(),
+                // Both `commit` rows, unlike attribution's. The noun IS `read`
+                // here because its whole subtree is — nothing under it writes —
+                // so it can make the claim `attribution` cannot (CLOUD-701).
+                "commit".to_owned(),
+                "commit check".to_owned(),
                 "config".to_owned(),
                 "config epoch".to_owned(),
                 "config lint".to_owned(),
@@ -451,6 +456,8 @@ mod tests {
                 "capture prune".to_owned(),
                 "capture show".to_owned(),
                 "check".to_owned(),
+                "commit".to_owned(),
+                "commit check".to_owned(),
                 "config".to_owned(),
                 "config epoch".to_owned(),
                 "config lint".to_owned(),

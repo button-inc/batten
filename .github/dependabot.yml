@@ -12,7 +12,7 @@ version: 2
 # security updates are a REPOSITORY SETTING and keep running whether or not this
 # file exists. Without it they revert to the default `Bump X from A to B`
 # subject, which carries no type prefix, fails the commit-lint gate
-# (CONVENTIONAL_RE in mise.toml), and could therefore never land — every commit
+# (`[commit].subject_pattern` in batten.toml), and could therefore never land — every commit
 # here lands by fast-forward through that gate. `commit-message.prefix` is the
 # whole remaining mechanism.
 #

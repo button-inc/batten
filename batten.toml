@@ -32,7 +32,11 @@ version = 1
 # And again for `[attribution]` (CLOUD-274), on the same reasoning: a binary that
 # predates the table cannot enforce the attribution policy, and silently ignoring
 # the key would report green over a gate that does not exist in it.
-min_batten_version = "0.0.74"
+#
+# And again for `[commit]` (CLOUD-701): a binary that predates the table cannot
+# enforce the subject convention, and silently ignoring the key would report
+# green over a gate that does not exist in it.
+min_batten_version = "0.0.82"
 
 # The ref work must land on (CLOUD-51) — the target `batten worktree status`
 # judges uncommitted, unpushed, and unlanded work against.
@@ -1356,6 +1360,26 @@ expires = "2026-09-13"
 
 [ci]
 required_checks = ["final"]
+
+# ---------------------------------------------------------------------------
+# What a commit subject must look like here (CLOUD-701).
+#
+# PRs land by fast-forward, so every commit reaches `main` with its own SHA and
+# message, and release-plz derives semver and the changelog from those messages.
+# That is why EACH commit must be conventional rather than just the PR title —
+# and why this is policy rather than a lint preference.
+#
+# It used to be `CONVENTIONAL_RE` in `mise.toml [env]`. That file configures how
+# tools are provisioned and run; a rule about what a commit may BE belongs to the
+# engine that decides it, which is the correction `[attribution]` below is the
+# worked precedent for (CLOUD-274).
+#
+# Consumer-specific by nature (non-negotiable rule 1): the vocabulary of types is
+# this repository's answer, and the crate carries only the matcher.
+#
+# https://www.conventionalcommits.org/en/v1.0.0/
+[commit]
+subject_pattern = '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)([(][a-z0-9._-]+[)])?!?: .+'
 
 # ---------------------------------------------------------------------------
 # What produced commits may carry about the tooling that made them (CLOUD-274),

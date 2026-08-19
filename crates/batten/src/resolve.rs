@@ -307,6 +307,12 @@ pub struct Resolved {
     /// "match fewer things".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attribution: Option<crate::attribution::Attribution>,
+    /// The commit-subject convention (CLOUD-701), as the authority states it.
+    /// Not layered, for the reason the neighbours above are not: the value is the
+    /// predicate itself, and a local file editing it would be *loosening* the
+    /// convention — there is no raise-only reading of "match more things".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit: Option<crate::commit::Commit>,
     /// Which layer set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
@@ -938,6 +944,7 @@ fn assemble(
         hook: repo.hook.clone(),
         transcript: repo.transcript.clone(),
         attribution: repo.attribution.clone(),
+        commit: repo.commit.clone(),
         judge: repo.judge.clone(),
         design: repo.design.clone(),
         ci: repo.ci.clone(),
@@ -994,6 +1001,7 @@ fn attribution(
         ("hook", authority_set(repo.hook.is_some())),
         ("transcript", authority_set(repo.transcript.is_some())),
         ("attribution", authority_set(repo.attribution.is_some())),
+        ("commit", authority_set(repo.commit.is_some())),
         ("judge", authority_set(repo.judge.is_some())),
         ("design", authority_set(repo.design.is_some())),
         ("ci", authority_set(repo.ci.is_some())),
