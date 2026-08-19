@@ -80,7 +80,7 @@ while :; do
 	# predicate a truncated name reads as ABSENT, so the failure mode is a
 	# stall rather than a false green; it was a false green before that landed,
 	# which is how it survived unnoticed. `checks-green`, `sonar-gate` and
-	# `auto-dependabot-land.yml` all already ask for 100 — this was the one
+	# `auto-bot-land.yml` all already ask for 100 — this was the one
 	# reader that did not.
 	args=(-i "repos/{owner}/{repo}/commits/$sha/check-runs?per_page=100")
 	[ -n "$etag" ] && args+=(-H "If-None-Match: $etag")

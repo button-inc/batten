@@ -23,7 +23,7 @@
 #   * an UNPINNED REF. Upstream publishes a floating `@v0`. zizmor's
 #     `unpinned-uses` reds on it, but only while the workflow is in zizmor's
 #     path filter; the pin also carries the trailing `# vX.Y.Z` comment every
-#     other `uses:` here carries, because dependabot's `github-actions`
+#     other `uses:` here carries, because the bot's `github-actions`
 #     ecosystem tracks the pin through that comment and not through the SHA.
 #   * a VERSION NOT BOUND TO THE RESOLVED TAG. §1 of the refinement is that
 #     "which tag did this push ship" is computed in exactly ONE place. A literal
@@ -145,7 +145,7 @@ if [ -n "$records" ]; then
 
 		# A 40-hex SHA **and** the trailing `# vX.Y.Z` comment. Either half alone
 		# is a pin nothing can track: the SHA without the comment is invisible to
-		# dependabot, and a comment without a SHA is the floating ref wearing a
+		# the bot, and a comment without a SHA is the floating ref wearing a
 		# version's name.
 		#
 		# Matched with `<<<` rather than a pipe: `grep -q` exits at its first hit,

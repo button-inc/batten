@@ -20,12 +20,16 @@ setup() {
 	export PARITY_WORKFLOWS="$WF" PARITY_MANIFEST="$MANIFEST" PARITY_RELEASE_PLZ="$RELEASE_PLZ" \
 		PARITY_DEPENDABOT="$DEPENDABOT" PARITY_RENOVATE="$RENOVATE"
 	printf '[workspace]\npr_draft = true\n' >"$RELEASE_PLZ"
-	# The passing fixture, written by default for the same reason `pr_draft = true`
-	# is: every case unrelated to property 12 must satisfy it, so only its own cases
-	# overwrite this.
-	dependabot cargo yes yes
-	# Same, for property 13.
+	# No `dependabot.yml` is written: since CLOUD-660 property 12 asserts that file
+	# is ABSENT, so the passing fixture for it is the empty directory it already
+	# has. Its own cases write one to watch the refusal.
+	#
+	# The Renovate config IS written by default, for the same reason `pr_draft =
+	# true` is: every case unrelated to property 13 must satisfy it. The lander is
+	# written for the same reason again: property 15 judges every fixture directory,
+	# and a case about draft guards must not also have to be a case about landers.
 	renovate
+	bot_lander
 	cat >"$MANIFEST" <<-'EOF'
 		CI_REQUIRED_CHECKS = "ci"
 
@@ -480,7 +484,9 @@ fanin() {
 	scheduled nightly "0 5 * * *"
 	run "$GATE"
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"all 2 workflow(s) declare a concurrency group"* ]]
+	# Three: the PR workflow, the scheduled one, and the bot lander `setup` writes
+	# so property 15 is satisfied everywhere it is not the subject.
+	[[ "$output" == *"all 3 workflow(s) declare a concurrency group"* ]]
 }
 
 # --- property 9: no two schedules collide -------------------------------------
@@ -533,6 +539,7 @@ fanin() {
 	# did-I-look-at-anything guard: reusing the pull_request counter would report
 	# a wrong reason, and reporting nothing would be a false green over an empty
 	# or mistyped path.
+	rm -f "$WF"/*.yml
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"no workflow found under"* ]]
@@ -587,98 +594,73 @@ triggered() {
 	[ "$status" -eq 0 ]
 }
 
-# --- property 12: every dependabot ecosystem bounds its re-proposals ----------
+# A minimal bot lander: a `workflow_run` workflow whose TRIGGER names both live
+# bot prefixes, which is what property 15 asks for. Written by `setup` like the
+# Renovate fixture, so property 15's own cases are the only ones that have to
+# think about it — they delete or narrow it.
+bot_lander() {
+	cat >"$WF/bot-lander.yml" <<-'EOF'
+		name: bot-lander
 
-# Two `updates` entries, because the property is per-entry and a whole-file grep
-# passes a file where one carries both keys and the other carries none. Each
-# argument toggles the keys on the entry of that name: `yes`/`no`, or `wrong` for
-# the key present with a value that is not the fix.
-dependabot() {
-	local first="${1:-cargo}" rebase="${2:-yes}" limit="${3:-yes}"
-	local second_rebase="${4:-yes}" second_limit="${5:-yes}"
-	# `none` drops the second entry entirely — the shape a handover leaves behind,
-	# which property 14 reads and property 12 must stay silent about.
-	local second="${6:-github-actions}"
-	{
-		printf 'version: 2\nupdates:\n'
-		printf '  - package-ecosystem: %s\n    directory: "/"\n' "$first"
-		case "$rebase" in
-		yes) printf '    rebase-strategy: disabled\n' ;;
-		wrong) printf '    rebase-strategy: auto\n' ;;
-		esac
-		case "$limit" in
-		yes) printf '    open-pull-requests-limit: 1\n' ;;
-		# `zero` is the security-only shim CLOUD-658 leaves behind: property 12
-		# still sees the key, property 14 must not see a version-update lane.
-		zero) printf '    open-pull-requests-limit: 0\n' ;;
-		esac
-		printf '    # a comment inside the entry, as the real file carries\n'
-		printf '    ignore:\n      - dependency-name: ignore\n        versions: [">= 0.4.30"]\n'
-		if [ "$second" != none ]; then
-			printf '\n  - package-ecosystem: %s\n    directory: "/"\n' "$second"
-			case "$second_rebase" in
-			yes) printf '    rebase-strategy: disabled\n' ;;
-			wrong) printf '    rebase-strategy: auto\n' ;;
-			esac
-			[ "$second_limit" = yes ] && printf '    open-pull-requests-limit: 1\n'
-			printf '    schedule:\n      interval: weekly\n'
-		fi
-	} >"$DEPENDABOT"
+		on:
+		  workflow_run:
+		    workflows: [ci]
+		    types: [completed]
+		    branches: ["renovate/**", "release-plz-**"]
+
+		concurrency:
+		  group: bot-lander
+		  cancel-in-progress: false
+
+		jobs:
+		  land:
+		    if: github.event.workflow_run.conclusion == 'success'
+		    runs-on: ubuntu-latest
+		    timeout-minutes: 3 # budget: grandfathered measured=2026-08-19
+		    steps:
+		      - run: ':'
+	EOF
 	return 0
 }
 
-@test "a dependabot entry declaring neither key is refused, and named" {
-	workflow ci
-	dependabot cargo no no
-	run "$GATE"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"cargo entry does not declare \`rebase-strategy: disabled\`"* ]]
-	[[ "$output" == *"cargo entry does not declare \`open-pull-requests-limit"* ]]
-}
+# --- property 12: the dependabot config is absent, and stays absent -----------
 
-@test "rebase-strategy present with a value that is not disabled is the same defect" {
-	# Property 4's reasoning: the key set to anything but the fix is the key absent.
+@test "no dependabot config is the passing state — the bot is retired (CLOUD-660)" {
 	workflow ci
-	dependabot cargo wrong yes
-	run "$GATE"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"cargo entry does not declare \`rebase-strategy: disabled\`"* ]]
-}
-
-@test "one compliant entry does not cover a second that is not" {
-	# The case a whole-file grep passes: the keys exist in the file, on one entry.
-	workflow ci
-	dependabot cargo yes yes no no
-	run "$GATE"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"github-actions entry does not declare"* ]]
-	[[ "$output" != *"cargo entry does not declare"* ]]
-}
-
-@test "a missing dependabot config is a failure, not a pass" {
-	workflow ci
-	rm -f "$DEPENDABOT"
-	run "$GATE"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"nothing bounds how often the bot re-proposes a head"* ]]
-}
-
-@test "both entries declaring both keys pass" {
-	workflow ci
-	dependabot cargo yes yes yes yes
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
 
-# --- property 13: the Renovate config keeps its four CI-cost keys -------------
+@test "a dependabot config that comes back is refused, and named" {
+	# The inversion's whole point: a re-added file puts a second bot on ecosystems
+	# Renovate already owns, and nothing else in the tree would go red about it.
+	workflow ci
+	printf 'version: 2\nupdates:\n  - package-ecosystem: cargo\n    directory: "/"\n' >"$DEPENDABOT"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Dependabot is retired"* ]]
+}
 
-# A minimal well-formed Renovate config. Each argument toggles one of the four
-# keys: `yes`, `no`, or `wrong` for the key present with a value that is not the
-# fix. `$schema` is always written, because its `https://` is the thing the
-# comment strip must not mistake for a comment.
+@test "an empty dependabot config is still a config — presence is the predicate" {
+	# There is no shape of that file this tree wants. A gate reading its contents
+	# would let an empty one back in, and the next commit fills it.
+	workflow ci
+	: >"$DEPENDABOT"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Dependabot is retired"* ]]
+}
+
+# --- property 13: the Renovate config keeps its five CI-cost-and-coverage keys -
+
+# A minimal well-formed Renovate config. Each argument toggles one of the keys:
+# `yes`, `no`, or `wrong` for the key present with a value that is not the fix.
+# `$schema` is always written, because its `https://` is the thing the comment
+# strip must not mistake for a comment.
 renovate() {
 	local draft="${1:-yes}" rebase="${2:-yes}" limit="${3:-yes}" age="${4:-yes}"
-	local managers="${5:-\"mise\"}" type="${6:-rules}"
+	local managers="${5:-\"mise\", \"cargo\", \"github-actions\"}" type="${6:-rules}"
+	local alerts="${7:-yes}"
 	{
 		printf '// the lane for mise.toml [tools], which no other bot can read\n{\n'
 		printf '  $schema: "https://docs.renovatebot.com/renovate-schema.json",\n'
@@ -687,9 +669,12 @@ renovate() {
 		yes) printf '  draftPR: true,\n' ;;
 		wrong) printf '  draftPR: false,\n' ;;
 		esac
+		# `wrong` is `"never"` on purpose: it is the value this key USED to be
+		# asserted at, so the case that would silently revert CLOUD-692 is the one
+		# the suite pins (#503 sat BEHIND main under exactly that config).
 		case "$rebase" in
-		yes) printf '  rebaseWhen: "never",\n' ;;
-		wrong) printf '  rebaseWhen: "behind-base-branch",\n' ;;
+		yes) printf '  rebaseWhen: "behind-base-branch",\n' ;;
+		wrong) printf '  rebaseWhen: "never",\n' ;;
 		esac
 		case "$limit" in
 		yes) printf '  prConcurrentLimit: 1,\n' ;;
@@ -698,6 +683,9 @@ renovate() {
 		case "$age" in
 		yes) printf '  minimumReleaseAge: "7 days",\n' ;;
 		wrong) printf '  minimumReleaseAge: "",\n' ;;
+		esac
+		case "$alerts" in
+		yes) printf '  vulnerabilityAlerts: {\n    enabled: true,\n    minimumReleaseAge: null,\n  },\n' ;;
 		esac
 		# `rules` puts the commit type where it survives a preset's catch-all;
 		# `toplevel` is the spelling that silently does nothing; `no` omits it.
@@ -714,30 +702,30 @@ renovate() {
 	return 0
 }
 
-@test "a renovate config carrying all four keys passes" {
+@test "a renovate config carrying all five keys passes" {
 	workflow ci
 	renovate
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
 
-@test "each of the four keys missing is refused, and named" {
-	# One case per direction, as property 4's cases are written: the four keys are
-	# the whole CI-cost mechanism, so each must red on its own rather than the set
-	# being checked as a lump.
+@test "each of the five keys missing is refused, and named" {
+	# One case per direction, as property 4's cases are written: the keys are the
+	# whole cost-and-coverage mechanism, so each must red on its own rather than
+	# the set being checked as a lump.
 	workflow ci
 
-	renovate no yes yes yes
+	renovate no
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *'does not declare `draftPR`'* ]]
 
-	renovate yes no yes yes
+	renovate yes no
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *'does not declare `rebaseWhen`'* ]]
 
-	renovate yes yes no yes
+	renovate yes yes no
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *'does not declare `prConcurrentLimit`'* ]]
@@ -746,6 +734,23 @@ renovate() {
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *'does not declare `minimumReleaseAge`'* ]]
+
+	renovate yes yes yes yes '"mise", "cargo", "github-actions"' rules no
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'declares no `vulnerabilityAlerts`'* ]]
+}
+
+@test "REVERTING rebaseWhen TO never IS REFUSED, because that is the regression (CLOUD-692)" {
+	# The key whose asserted VALUE changed. `never` reads as the cautious choice
+	# and is the one that stranded #503: with `draftPR: true` a rebase is free,
+	# and a head nobody rebases goes BEHIND main where no fast-forward exists.
+	workflow ci
+	renovate yes wrong
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *'does not declare `rebaseWhen`'* ]]
+	[[ "$output" == *"BEHIND main"* ]]
 }
 
 @test "a key present with a value that is not the fix is the same defect" {
@@ -766,7 +771,7 @@ renovate() {
 	# That file argues for each of its keys at length. A gate a comment can
 	# satisfy is a gate satisfied by deleting the key the comment explains.
 	workflow ci
-	renovate no yes yes yes
+	renovate no
 	sed_i 's|^  enabledManagers.*$|  // draftPR: true,|' "$RENOVATE"
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -781,98 +786,99 @@ renovate() {
 	[[ "$output" == *"nothing bounds what the Renovate lane spends"* ]]
 }
 
-# --- property 14: exactly one bot per ecosystem both can serve ----------------
+# --- property 14: every ecosystem this repo maintains is served by the one bot -
 
-@test "an ecosystem in the renovate config only passes — that is the handover's landing state" {
+@test "all three ecosystems named in the one config passes" {
 	workflow ci
-	dependabot cargo yes yes yes yes none
-	renovate yes yes yes yes '"mise", "github-actions"'
+	renovate
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
 
-@test "an ecosystem declared in both configs is refused, and named" {
-	# Two bots proposing the same updates doubles the lane and every PR it opens.
+@test "an ecosystem missing from enabledManagers is refused, and named" {
+	# The direction with no other symptom: nothing proposes updates for it, and
+	# nothing anywhere goes red about an ecosystem standing still.
 	workflow ci
-	renovate yes yes yes yes '"mise", "github-actions"'
+	renovate yes yes yes yes '"mise", "cargo"'
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"github-actions runs version updates in BOTH"* ]]
-	[[ "$output" != *"cargo runs version updates in BOTH"* ]]
+	[[ "$output" == *"github-actions is not in"* ]]
+	[[ "$output" != *"cargo is not in"* ]]
 }
 
-@test "an ecosystem declared in neither config is refused, and named" {
-	# The direction with no other symptom: removed from one config and never added
-	# to the other, the ecosystem is unmaintained and nothing anywhere is red.
+@test "mise IS judged now — the one bot can read that file, so its absence is a drift" {
+	# It was exempt only because no Dependabot ecosystem could serve it, which
+	# made "covered by neither" undetectable rather than acceptable (CLOUD-655).
 	workflow ci
-	dependabot cargo yes yes yes yes none
+	renovate yes yes yes yes '"cargo", "github-actions"'
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"github-actions runs version updates in NEITHER"* ]]
+	[[ "$output" == *"mise is not in"* ]]
 }
 
 @test "a manager list broken across lines reads the same as one on a single line" {
 	# A formatter's choice must not change a verdict.
 	workflow ci
-	dependabot cargo yes yes yes yes none
 	renovate
-	sed_i 's|^  enabledManagers.*$|  enabledManagers: [\n    "mise",\n    "github-actions",\n  ],|' "$RENOVATE"
+	sed_i 's|^  enabledManagers.*$|  enabledManagers: [\n    "mise",\n    "cargo",\n    "github-actions",\n  ],|' "$RENOVATE"
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
 
-@test "a dependabot entry at open-pull-requests-limit: 0 is a security shim, not a second lane" {
-	# CLOUD-658's landing state: `cargo` version updates belong to Renovate, and
-	# the Dependabot entry survives only to give a SECURITY PR a subject
-	# commit-lint accepts. Reading that shim as a second updater would refuse the
-	# correct tree.
+# --- property 15: a lander per live bot branch prefix -------------------------
+
+@test "a bot prefix with no workflow scoped to it is refused, and named" {
+	# CLOUD-692 measured twice: two ecosystems were handed to a bot and no lander
+	# moved with them, so #493 needed a human and #503 reproduced it 84 seconds
+	# after #493 landed. Nothing else in the tree is red while a lane proposes and
+	# never lands.
 	workflow ci
-	dependabot cargo yes zero yes yes none
-	renovate yes yes yes yes '"mise", "cargo", "github-actions"'
+	rm -f "$WF/bot-lander.yml"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"runs a bot on \`renovate/**\`"* ]]
+	[[ "$output" == *"runs a bot on \`release-plz-**\`"* ]]
+}
+
+@test "a trigger-level branches filter is what satisfies it" {
+	workflow ci
+	bot_lander
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
 
-@test "the shim raising its limit is a second version-update lane, and is refused" {
-	# The direction that matters: nothing else would go red, and `cargo` would
-	# quietly be proposed by two bots at once.
+@test "A JOB CONDITION IS NOT A SCOPE, which is property 10's finding reused" {
+	# A job `if:` is evaluated after the run exists: 1131 runs in 25 hours, 1131
+	# of them skipped (CLOUD-493). A lander scoped only in its `if:` is not scoped.
 	workflow ci
-	dependabot cargo yes yes yes yes none
-	renovate yes yes yes yes '"mise", "cargo", "github-actions"'
+	sed_i 's|^    branches: \["renovate/\*\*", "release-plz-\*\*"\]$|    branches: ["release-plz-**"]|' "$WF/bot-lander.yml"
+	sed_i "s|^    if: .*|    if: startsWith(github.event.workflow_run.head_branch, 'renovate/')|" "$WF/bot-lander.yml"
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"cargo runs version updates in BOTH"* ]]
+	[[ "$output" == *"runs a bot on \`renovate/**\`"* ]]
 }
 
-@test "a dependabot entry with no limit at all counts as a lane — fail closed" {
-	# The missing key is already property 12's refusal; counting it here too fails
-	# in the safe direction rather than exempting an entry nobody bounded.
+@test "the prefix is read from the config that owns it, not assumed" {
+	# `branchPrefix` moves the heads the bot opens; a lander still watching the
+	# default prefix watches nothing.
 	workflow ci
-	dependabot cargo yes no yes yes none
-	renovate yes yes yes yes '"mise", "cargo", "github-actions"'
+	sed_i 's|^  enabledManagers|  branchPrefix: "bot-updates/",\n  enabledManagers|' "$RENOVATE"
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"cargo runs version updates in BOTH"* ]]
+	[[ "$output" == *"runs a bot on \`bot-updates/**\`"* ]]
 }
 
-@test "an ecosystem left only as a shim, and owned by neither bot, is refused" {
-	# A shim is not coverage: if Renovate never gained the manager, silencing the
-	# Dependabot entry leaves the ecosystem unmaintained with nothing else red.
+@test "a lane whose config is absent is not asked for a watcher" {
+	# The property refuses a missing WATCHER, never a missing lane: no
+	# `release-plz.toml` means no release PRs exist to land. Property 4 refuses the
+	# missing file for its own reason, which is why this asserts what property 15
+	# does NOT say rather than an exit code it does not own.
 	workflow ci
-	dependabot cargo yes zero yes yes none
-	renovate yes yes yes yes '"mise", "github-actions"'
+	rm -f "$RELEASE_PLZ"
+	sed_i 's|^    branches: \["renovate/\*\*", "release-plz-\*\*"\]$|    branches: ["renovate/**"]|' "$WF/bot-lander.yml"
 	run "$GATE"
-	[ "$status" -eq 1 ]
-	[[ "$output" == *"cargo runs version updates in NEITHER"* ]]
-}
-
-@test "mise is not judged by property 14 — no dependabot ecosystem can read that file" {
-	# It can never be double-covered, and its absence from dependabot.yml is
-	# CLOUD-655's whole subject rather than a drift this property could catch.
-	workflow ci
-	run "$GATE"
-	[ "$status" -eq 0 ]
-	[[ "$output" != *"mise runs version updates in NEITHER"* ]]
+	[[ "$output" != *"runs a bot on \`release-plz-**\`"* ]]
+	[[ "$output" != *"runs a bot on \`renovate/**\`"* ]]
 }
 
 # --- property 11: reading check status means deciding through checks-green ----
@@ -1025,7 +1031,7 @@ on_runner() {
 
 @test "a commit type inside packageRules passes" {
 	workflow ci
-	renovate yes yes yes yes '"mise"' rules
+	renovate yes yes yes yes '"mise", "cargo", "github-actions"' rules
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }
@@ -1034,7 +1040,7 @@ on_runner() {
 	# Without one, the lane's subjects carry no Conventional type at all and
 	# commit-lint refuses every PR it opens — they could never land.
 	workflow ci
-	renovate yes yes yes yes '"mise"' no
+	renovate yes yes yes yes '"mise", "cargo", "github-actions"' no
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *'sets no `semanticCommitType` inside `packageRules`'* ]]
@@ -1045,7 +1051,7 @@ on_runner() {
 	# and does nothing — which is why asserting mere presence would have passed
 	# the exact config that failed.
 	workflow ci
-	renovate yes yes yes yes '"mise"' toplevel
+	renovate yes yes yes yes '"mise", "cargo", "github-actions"' toplevel
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *'sets no `semanticCommitType` inside `packageRules`'* ]]

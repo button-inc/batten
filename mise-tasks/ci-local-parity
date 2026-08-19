@@ -104,33 +104,50 @@
 #      spelling is what a rewrite changes and the fetch is what it cannot avoid;
 #      the copy is only reachable by reading that endpoint yourself.
 #
-#  12. EVERY DEPENDABOT ECOSYSTEM BOUNDS HOW OFTEN IT RE-PROPOSES A HEAD. This is
-#      property 4's problem on the one lane property 4 cannot reach: release-plz
-#      has `pr_draft` and Dependabot's schema has no draft knob at all, so every
-#      head it proposes opens Ready and buys a full matrix on arrival. Measured
-#      over `dependabot/*` since 2026-08-06: 13 `ci.yml` runs, 13 `commit-lint`,
-#      3 `zizmor`, not one skip — against an ordinary branch's mostly-skipped set
-#      over the same window. The churn is the cost rather than the schedule: on a
-#      weekly interval the cargo group PR was superseded five times in seventeen
-#      hours, each recreation a fresh Ready head and a fresh matrix the next one
-#      threw away (CLOUD-596). `rebase-strategy: disabled` stops the force-push
-#      on every base move; `open-pull-requests-limit` stops a stale PR being
-#      joined by a sibling proposing the same group. Both keys or neither works:
-#      the second is what keeps the first from doubling the floor it lowers.
+#  12. THE DEPENDABOT CONFIG IS ABSENT, AND STAYS ABSENT (CLOUD-660). This
+#      property INVERTED rather than being deleted, which is the whole of
+#      CLOUD-660's §2: for the length of the migration it asserted that
+#      `.github/dependabot.yml` carried the keys bounding what that lane spent,
+#      and from the commit that deletes the file it asserts the file is not
+#      there. Deleting the property with the file would leave the end state
+#      unasserted, and a re-added `dependabot.yml` would quietly resurrect a
+#      second bot on ecosystems Renovate already owns — the CLOUD-198 class, from
+#      the direction nobody watches.
 #
-#  13. THE RENOVATE CONFIG KEEPS THE FOUR KEYS THAT BOUND WHAT ITS LANE SPENDS.
-#      Property 12's question asked of the second bot, and the keys differ
-#      because the schemas do. `mise.toml [tools]` is the one dependency surface
-#      Dependabot has no `package-ecosystem` for at any setting — a capability
-#      gap, not a config omission — so a second bot exists at all only for that
-#      table (CLOUD-655). Renovate's `draftPR` is the knob Dependabot's schema
-#      lacks, and it takes property 12's irreducible floor ("one full matrix per
-#      SHA the bot proposes") to zero, because every `pull_request` workflow here
-#      gates on `draft == false`. `rebaseWhen: "never"` and `prConcurrentLimit`
-#      are the same pairing property 12 asks of each Dependabot entry, and
-#      `minimumReleaseAge` is the cooldown. All four are the mechanism rather
-#      than a preference, so dropping any one must red — which is the whole
-#      reason CLOUD-596 shipped property 12 rather than trusting a comment.
+#      WHY DELETING THE FILE WITHDREW NO COVERAGE, which is the fact the
+#      inversion rests on. The file's last job was giving Dependabot SECURITY
+#      pull requests a subject `commit-lint` accepts. That lane cannot fire:
+#      measured 2026-08-19, `GET /repos/button-inc/batten/automated-security-fixes`
+#      answered `{"enabled": false, "paused": false}`, with alerts on and zero
+#      open. So the committed file asserted a lane the repository setting does
+#      not have (CLOUD-688), and what replaces it is property 13's
+#      `vulnerabilityAlerts` — the same advisory stream, read by the bot that is
+#      actually running.
+#
+#  13. THE RENOVATE CONFIG KEEPS THE FIVE KEYS THAT DECIDE WHAT ITS LANE SPENDS
+#      AND WHAT IT COVERS. `mise.toml [tools]` is the one dependency surface
+#      Dependabot had no `package-ecosystem` for at any setting — a capability
+#      gap, not a config omission — which is why this bot exists at all
+#      (CLOUD-655), and since CLOUD-660 it is the only one. `draftPR` takes the
+#      irreducible floor Dependabot could not escape ("one full matrix per SHA
+#      the bot proposes") to zero, because every `pull_request` workflow here
+#      gates on `draft == false`. `prConcurrentLimit` bounds how many heads
+#      accumulate, `minimumReleaseAge` is the cooldown, and `vulnerabilityAlerts`
+#      is the security lane that replaced the deleted shim. All five are the
+#      mechanism rather than a preference, so dropping any one must red.
+#
+#      `rebaseWhen` IS ASSERTED AT A VALUE THAT CHANGED, AND THE CHANGE IS THE
+#      POINT (CLOUD-692). It held `"never"`, for a reason that reads correctly
+#      and was measured: a force-push on a READY head is a `synchronize` and
+#      another matrix, and `main` advances constantly here. `draftPR: true`
+#      retired that reason — a draft head grades nothing, so rebasing it is free
+#      — and left the cost the key was actually paying: `main` moves under the
+#      draft, the head goes BEHIND, and a fast-forward becomes arithmetically
+#      unavailable. #503 sat in exactly that state, holding the single
+#      concurrency slot against seven queued updates while nothing could land it.
+#      So the property still demands a bound and demands a DIFFERENT one; a
+#      config that reverts to `"never"` reds here, which is what keeps the pair
+#      of keys from being read one at a time again.
 #
 #      A FIFTH KEY, AND IT IS ASSERTED WHERE IT MUST BE WRITTEN RATHER THAN
 #      MERELY PRESENT (CLOUD-676). Every commit here lands by fast-forward
@@ -149,36 +166,49 @@
 #      committed config asserting an intent the tool silently overrode, which is
 #      the CLOUD-198 class and the one a reader cannot detect from the file.
 #
-#  14. EVERY ECOSYSTEM BOTH BOTS CAN SERVE IS SERVED BY EXACTLY ONE. Two bots
-#      now read this tree, and `.github/dependabot.yml` is being emptied into
-#      `renovate.json5` one ecosystem at a time (CLOUD-656). Every such move has
-#      two failure modes and BOTH are silent: an ecosystem left in both configs
-#      doubles the lane and every PR it opens, and an ecosystem removed from one
-#      before being added to the other goes unmaintained with nothing red. Each
-#      is one careless commit away, and neither shows up as a failure anywhere —
-#      the second is precisely the shape that let `[tools] rust` sit twelve
-#      releases stale under a green weekly `lock-currency`.
+#  14. EVERY ECOSYSTEM THIS REPOSITORY MAINTAINS IS SERVED BY THE ONE BOT. This
+#      property used to answer "covered by both, or by neither" across two
+#      configs (CLOUD-656/657/658). With Dependabot retired the first half is
+#      unreachable by construction — there is no second config to double up in —
+#      and the half that remains is the half that was always silent: an ecosystem
+#      nobody updates goes stale with nothing red anywhere. That is precisely the
+#      shape that let `[tools] rust` sit twelve releases behind under a green
+#      weekly `lock-currency`.
 #
 #      THE SET IS DATA AND SMALL ON PURPOSE. It names the ecosystems this repo
-#      actually maintains that both bots CAN serve, so "covered by neither" is
-#      answerable at all — an absence cannot be detected against an open world.
-#      `mise` is deliberately not in it: no Dependabot ecosystem can read that
-#      file, so it can never be double-covered and its absence is CLOUD-655's
-#      whole subject rather than a drift this property could catch.
+#      actually maintains, so an absence is answerable at all — absence cannot be
+#      detected against an open world. `mise` is IN it now, and its arrival is
+#      the migration finishing rather than a widening: it was excluded only
+#      because Dependabot could not serve it, so "covered by neither" could not
+#      be a drift this property caught. One bot can serve it, so its absence is
+#      now exactly as detectable as `cargo`'s.
 #
-#      AND WHAT IT READS ON THE DEPENDABOT SIDE IS A VERSION-UPDATE LANE, NOT AN
-#      ENTRY (CLOUD-658). `cargo` survives there at `open-pull-requests-limit: 0`
-#      — GitHub's shape for "security updates only" — because Dependabot security
-#      updates are a repository SETTING that keeps running with or without the
-#      file, and without it they revert to a `Bump X from A to B` subject
-#      `commit-lint` rejects. So the shim is not a second updater and must not
-#      read as one; equally, raising that number puts the ecosystem under two
-#      bots again, which is the same refusal from the other side. One predicate
-#      covers both, which is why there is no separate assertion about the shim.
+#  15. EVERY BRANCH A BOT LANDS ON HAS A WORKFLOW SCOPED TO IT AT THE TRIGGER
+#      (CLOUD-692). A bot's pull requests are not landed by an agent running
+#      `mise run land` — nothing runs on the bot's behalf unless a workflow is
+#      watching its heads. Handing an ecosystem to a bot without also pointing a
+#      lander at that bot's branch prefix is therefore a complete, silent
+#      failure: the lane proposes, the PRs accumulate, and no check anywhere is
+#      red about it. Measured, twice — #493 needed a human after CLOUD-657/658
+#      moved two ecosystems and moved no lander with them, and #503 reproduced it
+#      84 seconds after #493 was hand-landed.
+#
+#      AT THE TRIGGER, NEVER A JOB `if:`, which is property 10's finding reused
+#      rather than restated: a job condition is evaluated after the run exists,
+#      so a repository-wide trigger with a narrow `if:` inserted 1131 skipped
+#      runs in 25 hours (CLOUD-493). A lander scoped only in its `if:` is
+#      therefore not scoped, and this property reads the `on:` block alone.
+#
+#      THE PREFIXES ARE DATA, and each is read from the config that owns it
+#      rather than assumed: Renovate's `branchPrefix` (default `renovate/`) and
+#      release-plz's `pr_branch_prefix` (default `release-plz-`). A lane whose
+#      config is absent is not asked for a lander — `release-plz.toml` gone means
+#      no release PRs exist to land — so this property refuses a missing WATCHER,
+#      never a missing lane.
 #
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
 # release workflow is not on the landing path and they do not apply to it. 8, 9,
-# 10, 11 and 12 are the exceptions — a workflow racing itself, colliding with its
+# 10, 11 and 15 are the exceptions — a workflow racing itself, colliding with its
 # neighbour, buying a run it will only skip, or landing a SHA on a predicate of
 # its own are none of them properties of the landing path — so they judge every
 # workflow, and 8 and 10 sit before the `pull_request` filter for that reason.
@@ -585,39 +615,11 @@ elif ! grep -Eq '^[[:space:]]*pr_draft[[:space:]]*=[[:space:]]*true[[:space:]]*$
 	problem "$release_plz does not set \`pr_draft = true\` — release-plz would open the release PR ready, and every push to main would spend a matrix on it before the debounce is ever consulted (CLOUD-346)."
 fi
 
-# Property 12. Per ENTRY, never over the whole file: a `grep -c` would pass a file
-# where one ecosystem carries both keys and the other carries none, which is the
-# same absence-by-counting mistake the fan-in check above is written around. The
-# record delimiter is the 2-space `- package-ecosystem:`; `ignore:`'s items sit at
-# six spaces and cannot be mistaken for one, and comment lines are dropped first
-# because a comment block lives inside the first entry.
-if [ ! -f "$dependabot" ]; then
-	problem "no $dependabot, so nothing bounds how often the bot re-proposes a head — and every head it proposes opens Ready, because its schema has no draft knob (CLOUD-596)."
-else
-	unbounded=$(awk '
-		function flush() {
-			if (!inentry) return
-			if (!rebase) print eco "\trebase-strategy: disabled"
-			if (!limit) print eco "\topen-pull-requests-limit: <n>"
-		}
-		/^[[:space:]]*#/ { next }
-		/^  - package-ecosystem:/ {
-			flush()
-			eco = $0
-			sub(/^[^:]*:[[:space:]]*/, "", eco)
-			gsub(/["]/, "", eco)
-			sub(/[[:space:]]+$/, "", eco)
-			inentry = 1; rebase = 0; limit = 0
-			next
-		}
-		inentry && /^    rebase-strategy:[[:space:]]*disabled[[:space:]]*$/ { rebase = 1 }
-		inentry && /^    open-pull-requests-limit:[[:space:]]*[0-9]+[[:space:]]*$/ { limit = 1 }
-		END { flush() }
-	' "$dependabot")
-	while IFS=$'\t' read -r eco key; do
-		[ -n "$eco" ] || continue
-		problem "$dependabot's $eco entry does not declare \`$key\` — the bot re-proposes a head on every base move, and each one opens Ready and buys a full matrix (five superseded PRs in seventeen hours, measured; CLOUD-596)."
-	done <<<"$unbounded"
+# Property 12, INVERTED (CLOUD-660). The file is gone and must stay gone; the
+# assertion is one `-f` because that is the whole of what "Dependabot is retired"
+# means in this tree. Pointer-only: the path, never a line of whatever came back.
+if [ -f "$dependabot" ]; then
+	problem "$dependabot exists — Dependabot is retired (CLOUD-660): every version-update lane moved to $renovate, its security updates are off at the repository setting, and its lander is deleted. A file here puts a second bot back on ecosystems the first already owns, and nothing else in this tree would go red about it. Move whatever it declares into $renovate."
 fi
 
 # Property 13. Committed text, like everything else here — and `//` comments are
@@ -642,12 +644,19 @@ else
 	}
 	renovate_key draftPR 'true' 'true' \
 		"every pull_request workflow here gates on draft == false, so a draft head buys no runner minutes; without this key every head the lane proposes opens Ready and buys a full matrix on arrival, which is the floor CLOUD-596 measured on the Dependabot lane and could not remove"
-	renovate_key rebaseWhen '"never"' '"never"' \
-		"the default force-pushes a rebase whenever the base moves, and on a readied PR every force-push is a synchronize and another matrix — on a trunk that advances constantly, that is a matrix per landing by anyone"
+	renovate_key rebaseWhen '"behind-base-branch"' '"behind-base-branch"' \
+		"a draft head grades no checks, so rebasing it is free — and a head nobody rebases goes BEHIND main, where a fast-forward is arithmetically unavailable and the lander can do nothing with it (CLOUD-692, #503). \`never\` was right while every bot head opened Ready and is the defect once they open as drafts"
 	renovate_key prConcurrentLimit '[1-9][0-9]*' 'a positive integer' \
-		"with rebasing off, a stale PR can be joined by a sibling proposing the same update, doubling the floor rebaseWhen lowers; note that Renovate reads 0 as unlimited, so the bound and its negation differ by one character"
+		"one head in flight is what makes the lane's cost legible — at most one draft accumulating and one matrix in flight; note that Renovate reads 0 as unlimited, so the bound and its negation differ by one character"
 	renovate_key minimumReleaseAge '"[^"]+"' 'a non-empty duration' \
 		"a churny release must settle before a PR opens — the cooldown CLOUD-105 already bought on the Dependabot lanes"
+	# The security lane, asserted as a BLOCK rather than a scalar: the key takes an
+	# object, and what matters is that this file claims the lane at all. Its
+	# contents are Renovate's business; its absence is a repository with no
+	# security updater, which is what deleting the shim would otherwise have left
+	# (CLOUD-660, CLOUD-688).
+	grep -Eq "^[[:space:]]*[\"']?vulnerabilityAlerts[\"']?[[:space:]]*:" <<<"$renovate_body" ||
+		problem "$renovate declares no \`vulnerabilityAlerts\` — Dependabot's security shim is deleted and its repository setting is off, so this block is the only security updater this repository has (CLOUD-660, CLOUD-688)."
 
 	# The fifth key. Asserted INSIDE `packageRules` rather than anywhere in the
 	# file, because a top-level `semanticCommitType` is the spelling that silently
@@ -667,62 +676,61 @@ else
 		problem "$renovate sets no \`semanticCommitType\` inside \`packageRules\` — every commit here lands by fast-forward through commit-lint, and a top-level \`semanticCommitType\` is silently outranked by \`config:recommended\`'s \`{ matchPackageNames: [\"*\"], semanticCommitType: \"chore\" }\` (CLOUD-676)."
 	fi
 
-	# Property 14. Both sides are read as committed text, and BOTH must be
-	# readable for the question to have an answer: a missing dependabot file is
-	# already property 12's refusal above, and a missing Renovate config is this
-	# block's own. Neither is reachable here with only one of them present.
-	if [ -f "$dependabot" ]; then
-		# The allowlist is what this bot touches at all. Captured from the key to
-		# the closing bracket so a list broken across lines reads the same as one
-		# on a single line — a formatter's choice must not change a verdict.
-		renovate_managers=$(awk '
-			/enabledManagers/ { inlist = 1 }
-			inlist { buf = buf $0 }
-			inlist && index($0, "]") { exit }
-			END { sub(/^[^[]*\[/, "", buf); sub(/\].*$/, "", buf); gsub(/["\x27[:space:]]/, "", buf); print buf }
-		' <<<"$renovate_body" | tr ',' '\n' | sed '/^$/d' | sort -u)
-		# A VERSION-UPDATE lane, not merely an entry (CLOUD-658). `cargo` survives
-		# in `.github/dependabot.yml` at `open-pull-requests-limit: 0` — GitHub's
-		# documented shape for "security updates only" — because Dependabot
-		# security updates are a repository setting that keeps running whether or
-		# not the file exists, and without the file they revert to a `Bump X from
-		# A to B` subject `commit-lint` rejects. That shim is not a second
-		# updater, so reading it as one would refuse the correct tree.
-		#
-		# An entry with any OTHER limit, or with none at all, counts: the missing
-		# key is already property 12's refusal, and counting it here too fails in
-		# the safe direction rather than exempting an entry nobody bounded.
-		dependabot_ecos=$(sed 's/[[:space:]]*#.*$//' "$dependabot" | awk '
-			function flush() {
-				if (eco != "" && !silenced) print eco
-			}
-			/^[[:space:]]*-[[:space:]]*package-ecosystem:/ {
-				flush()
-				eco = $0
-				sub(/^[^:]*:[[:space:]]*/, "", eco); gsub(/["\x27]/, "", eco); sub(/[[:space:]]+$/, "", eco)
-				silenced = 0
-				next
-			}
-			/^[[:space:]]*open-pull-requests-limit:[[:space:]]*0[[:space:]]*$/ { silenced = 1 }
-			END { flush() }
-		' | sort -u)
-		# Hand-maintained, and named here rather than derived: see the header for
-		# why an absence is only answerable against a closed set.
-		for eco in cargo github-actions; do
-			in_renovate=0
-			in_dependabot=0
-			grep -qxF "$eco" <<<"$renovate_managers" && in_renovate=1
-			grep -qxF "$eco" <<<"$dependabot_ecos" && in_dependabot=1
-			# Pointer-only: the ecosystem name and the two file names. Never an
-			# entry's body, which carries version ranges and package names.
-			if [ "$in_renovate" = 1 ] && [ "$in_dependabot" = 1 ]; then
-				problem "$eco runs version updates in BOTH $renovate and $dependabot — two bots proposing the same updates doubles the lane and every PR it opens. Remove it from one in the commit that adds it to the other, or, if the Dependabot entry is meant to be the security-only shim, set its \`open-pull-requests-limit: 0\` (CLOUD-657, CLOUD-658)."
-			elif [ "$in_renovate" = 0 ] && [ "$in_dependabot" = 0 ]; then
-				problem "$eco runs version updates in NEITHER $renovate nor $dependabot — that ecosystem is unmaintained, and nothing else is red about it. A handover removes it from one config in the same commit that adds it to the other; a Dependabot entry left at \`open-pull-requests-limit: 0\` is a security shim and does not count (CLOUD-657, CLOUD-658)."
-			fi
-		done
-	fi
+	# Property 14. One side to read now (CLOUD-660): the ecosystems this repo
+	# maintains, against the one config that serves them.
+	#
+	# The allowlist is what this bot touches at all. Captured from the key to the
+	# closing bracket so a list broken across lines reads the same as one on a
+	# single line — a formatter's choice must not change a verdict.
+	renovate_managers=$(awk '
+		/enabledManagers/ { inlist = 1 }
+		inlist { buf = buf $0 }
+		inlist && index($0, "]") { exit }
+		END { sub(/^[^[]*\[/, "", buf); sub(/\].*$/, "", buf); gsub(/["\x27[:space:]]/, "", buf); print buf }
+	' <<<"$renovate_body" | tr ',' '\n' | sed '/^$/d' | sort -u)
+	# Hand-maintained, and named here rather than derived: see the header for why
+	# an absence is only answerable against a closed set.
+	for eco in cargo github-actions mise; do
+		# Pointer-only: the ecosystem name and the file. Never an entry's body,
+		# which carries version ranges and package names.
+		grep -qxF "$eco" <<<"$renovate_managers" ||
+			problem "$eco is not in $renovate's \`enabledManagers\` — nothing proposes updates for it, and nothing else in this tree goes red about an ecosystem standing still. That is how \`[tools] rust\` sat twelve releases stale under a green weekly lock-currency (CLOUD-655, CLOUD-660)."
+	done
 fi
+
+# Property 15. A LANDER PER LIVE BOT PREFIX (CLOUD-692), read out of the `on:`
+# block alone — a job `if:` is not a scope (property 10, CLOUD-493).
+#
+# Each row is `<config that owns the lane>|<default branch prefix>|<key that
+# overrides it>`. The config's presence is what makes a lane live: no
+# `release-plz.toml` means no release PRs, and asking for a watcher would be
+# asking for a workflow with nothing to watch.
+for lane in "$renovate|renovate/|branchPrefix" "$release_plz|release-plz-|pr_branch_prefix"; do
+	IFS='|' read -r lane_config lane_prefix lane_key <<<"$lane"
+	[ -f "$lane_config" ] || continue
+	# The prefix is read from the config that owns it rather than assumed. Both
+	# spellings are a scalar string on one line in their own format, so one
+	# pattern reads either; an absent key leaves the documented default.
+	declared=$(sed -e 's|^//.*$||' -e 's|[[:space:]]//.*$||' -e 's|[[:space:]]*#.*$||' "$lane_config" |
+		grep -Eo "[\"']?${lane_key}[\"']?[[:space:]]*[:=][[:space:]]*[\"'][^\"']+[\"']" |
+		head -n1 | sed -E "s/.*[:=][[:space:]]*[\"']([^\"']+)[\"'].*/\1/")
+	[ -n "$declared" ] && lane_prefix="$declared"
+	scoped=0
+	for wf in "$workflows"/*.yml; do
+		[ -e "$wf" ] || continue
+		# The trigger block, by the same reading property 10 uses. `branches:`
+		# entries live inside it; a prefix named anywhere else in the file — in a
+		# job condition, in a run script, in this file's own prose — is not a
+		# scope.
+		wf_triggers=$(awk '/^on:/{p=1;next} /^[a-z]/{p=0} p' "$wf")
+		branch_filters=$(grep -A 20 '^[[:space:]]*branches:' <<<"$wf_triggers" || true)
+		grep -qF "$lane_prefix" <<<"$branch_filters" && scoped=1
+	done
+	# Pointer-only: the lane's config, its prefix, and the directory that carries
+	# no watcher. Never a workflow body.
+	[ "$scoped" = 1 ] ||
+		problem "$lane_config runs a bot on \`$lane_prefix**\` and no workflow in $workflows filters on that prefix at its trigger — nothing readies, rebases or lands those heads, and the lane fails completely with nothing red. That is CLOUD-692: two ecosystems were handed over and the lander was not, so #493 needed a human and #503 reproduced it 84 seconds later."
+done
 
 # Property 11. Judged over the whole workflow set rather than the landing path,
 # because a workflow that lands a SHA is not itself on `pull_request`. Comment
@@ -750,4 +758,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; every dependabot ecosystem bounds its re-proposals, the Renovate config keeps the four keys that bound what its lane spends and sets its commit type where a preset cannot outrank it, and every ecosystem both bots can serve is served by exactly one"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger"

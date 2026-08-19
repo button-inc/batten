@@ -102,7 +102,7 @@ green_body() {
 	# rows without anything unusual happening — and nothing here fetches page 2.
 	# Under the CLOUD-337 predicate a truncated name reads as absent and stalls
 	# the poll; before it, it read as green. `checks-green`, `sonar-gate` and
-	# `auto-dependabot-land.yml` had asked for 100 all along, so this reader was
+	# `auto-bot-land.yml` had asked for 100 all along, so this reader was
 	# the sole divergence.
 	stub_gh
 	response resp.last 'W/"a"' "$(green_body)"

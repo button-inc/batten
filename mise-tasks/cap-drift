@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-#MISE description="Gate: an MSRV cap in Cargo.toml and its dependabot `ignore:` entry exist together or not at all (CLOUD-593)"
+#MISE description="Gate: an MSRV cap in Cargo.toml and its bot-side `allowedVersions` rule exist together or not at all (CLOUD-593)"
 #
 # THE HALF-LIFT, which is the one failure mode in this change that lands GREEN.
 #
 # An MSRV cap lives in two files and nothing kept them in step. `Cargo.toml`
-# carries the upper bound; `.github/dependabot.yml` restates it as an `ignore:`
-# entry, because the bot cannot read a manifest cap and would otherwise propose a
-# bump the manifest has already refused — one unbuildable member reddening a
-# whole grouped batch (CLOUD-344).
+# carries the upper bound; the bot config restates it, because the bot cannot
+# read a manifest cap and would otherwise propose a bump the manifest has already
+# refused — one unbuildable member reddening a whole grouped batch (CLOUD-344).
+#
+# THE BOT SIDE MOVED FILES, NOT MEANING (CLOUD-660). It was
+# `.github/dependabot.yml`'s `ignore: - dependency-name:` list; that file is
+# deleted with the bot it configured, and the mirror is now `renovate.json5`'s
+# `packageRules[].allowedVersions` — Renovate's spelling of the same withholding.
+# Both sets are empty at the commit that moves them, so this is a repoint with no
+# change of verdict, which is the only kind of repoint a ratchet can survive.
 #
 # Lift only the manifest side and everything passes. The manifest now admits
 # 0.4.33, the bot still withholds it, nothing proposes it ever again, and no
@@ -50,7 +56,7 @@
 set -uo pipefail
 
 manifest="${CAP_DRIFT_MANIFEST:-Cargo.toml}"
-bot="${CAP_DRIFT_DEPENDABOT:-.github/dependabot.yml}"
+bot="${CAP_DRIFT_RENOVATE:-renovate.json5}"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -58,12 +64,12 @@ while [ $# -gt 0 ]; do
 		manifest="${2:-}"
 		shift 2
 		;;
-	--dependabot)
+	--renovate)
 		bot="${2:-}"
 		shift 2
 		;;
 	*)
-		echo "usage: cap-drift [--manifest <file>] [--dependabot <file>]" >&2
+		echo "usage: cap-drift [--manifest <file>] [--renovate <file>]" >&2
 		exit 2
 		;;
 	esac
@@ -91,18 +97,48 @@ capped=$(awk '
 	}
 ' "$manifest" | sort -u)
 
-# Ignored crates: `- dependency-name: <crate>` under an `ignore:` block. Scoped
-# to the block so a `dependency-name` under `groups:` or `allow:` is not read as
-# a cap mirror.
-ignored=$(awk '
-	/^[[:space:]]*ignore:[[:space:]]*$/ { in_ignore = 1; next }
-	/^[[:space:]]*[a-z-]+:[[:space:]]*$/ && !/dependency-name/ { if (in_ignore && $0 !~ /^[[:space:]]*-/) in_ignore = 0 }
-	in_ignore && /dependency-name:/ {
-		sub(/.*dependency-name:[[:space:]]*/, "")
-		gsub(/[",]/, "")
-		print $1
+# Withheld crates: every name in a `packageRules` entry that carries
+# `allowedVersions`. Scoped to the RULE rather than to the file, so a
+# `matchPackageNames` used for grouping — which withholds nothing — is not read
+# as a cap mirror. `//` comments are stripped first, for the reason
+# `ci-local-parity` gives: that file argues for its keys at length, and a gate a
+# comment can satisfy is a gate satisfied by deleting the key the comment
+# explains. The strip requires the `//` at line start or after whitespace, so the
+# `https://` inside `$schema` survives.
+#
+# Rules are found by BRACE DEPTH inside the `packageRules` array rather than by
+# line shape, so a rule written inline and one spread over five lines read the
+# same — a formatter's choice must not change a verdict.
+ignored=$(sed -e 's|^//.*$||' -e 's|[[:space:]]//.*$||' "$bot" | awk '
+	/packageRules[[:space:]]*:/ { inrules = 1 }
+	!inrules { next }
+	{
+		line = $0
+		while (length(line) > 0) {
+			c = substr(line, 1, 1)
+			line = substr(line, 2)
+			if (c == "{") {
+				depth++
+				if (depth == 1) buf = ""
+			}
+			if (depth >= 1) buf = buf c
+			if (c == "}") {
+				depth--
+				if (depth == 0) {
+					if (buf ~ /allowedVersions/) {
+						names = buf
+						sub(/.*matchPackageNames[^[]*\[/, "", names)
+						sub(/\].*$/, "", names)
+						gsub(/["\x27[:space:]]/, "", names)
+						n = split(names, parts, ",")
+						for (i = 1; i <= n; i++) if (parts[i] != "") print parts[i]
+					}
+					buf = ""
+				}
+			}
+		}
 	}
-' "$bot" | sort -u)
+' | sort -u)
 
 violations=0
 report() {
@@ -112,12 +148,12 @@ report() {
 
 for crate in $capped; do
 	grep -qx -- "$crate" <<<"$ignored" ||
-		report "$crate is capped in $manifest and has no ignore: entry in $bot — the bot will propose a version the manifest refuses, and one unbuildable member reddens the whole grouped batch (CLOUD-344)"
+		report "$crate is capped in $manifest and has no allowedVersions rule in $bot — the bot will propose a version the manifest refuses, and one unbuildable member reddens the whole grouped batch (CLOUD-344)"
 done
 
 for crate in $ignored; do
 	grep -qx -- "$crate" <<<"$capped" ||
-		report "$crate has an ignore: entry in $bot and no cap in $manifest — the bot withholds a version the manifest admits, so it silently never advances and nothing goes red. This is the half-lift (CLOUD-593)"
+		report "$crate has an allowedVersions rule in $bot and no cap in $manifest — the bot withholds a version the manifest admits, so it silently never advances and nothing goes red. This is the half-lift (CLOUD-593)"
 done
 
 if [ "$violations" != 0 ]; then

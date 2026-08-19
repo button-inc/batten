@@ -256,19 +256,31 @@ cancels() { cat "$BATS_TEST_TMPDIR/cancels" 2>/dev/null || true; }
 }
 
 @test "a branch that lands through /fast-forward is not judged, in either row" {
-	# `auto-dependabot-land.yml` and `auto-release-land.yml` fire on
+	# `auto-bot-land.yml` and `auto-release-land.yml` fire on
 	# `workflow_run: completed`, which a CANCELLED run satisfies — they then find
 	# the checks not green and stop, and nothing retries. Cancelling those runs
 	# would defer a matrix to the next rebase rather than save one, and add a
 	# stall to a landing path that is unattended by design.
 	land_lock_exits 3
 	head_land 'echo landing without a lease'
-	for ref in dependabot/cargo/serde-1.0.2 release-plz-2026-08-12; do
+	for ref in renovate/cargo release-plz-2026-08-12; do
 		LEASE_HEAD_REF="$ref" run "$PRECOND"
 		[ "$status" -eq 0 ]
 		[[ "$output" == *"lands through /fast-forward"* ]]
 	done
 	[ -z "$(cancels)" ]
+}
+
+@test "the retired bot's prefix is judged like any other branch (CLOUD-660)" {
+	# The arm moved rather than being added: Dependabot is retired, so a
+	# `dependabot/*` head is now somebody's ordinary branch and gets the ordinary
+	# answer. An exemption left behind for a bot that no longer runs is an
+	# unauthorised matrix nobody would ever look at.
+	land_lock_exits 3
+	head_land 'echo landing without a lease'
+	LEASE_HEAD_REF=dependabot/cargo/serde-1.0.2 run "$PRECOND"
+	[ "$status" -eq 0 ]
+	[[ "$(cancels)" == *"/cancel"* ]]
 }
 
 @test "the exemption is a prefix on the landing path, not a substring anywhere in the ref" {

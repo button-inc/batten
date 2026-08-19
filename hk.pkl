@@ -67,8 +67,11 @@ local gate = new Mapping<String, Step> {
     glob = List("Cargo.toml", "mise.toml", "renovate.json5")
     check = "mise run msrv-pin-agreement"
   }
-  // An MSRV cap lives in two files — the manifest bound and the dependabot
-  // `ignore:` entry that mirrors it, because the bot cannot read a manifest cap.
+  // An MSRV cap lives in two files — the manifest bound and the bot-side
+  // `allowedVersions` rule that mirrors it, because the bot cannot read a
+  // manifest cap. That mirror moved from `.github/dependabot.yml` to
+  // `renovate.json5` with CLOUD-660, which retired the bot the old file
+  // configured; the predicate is unchanged and both sets are still empty.
   // Lift only the manifest side and everything passes while the crate stays
   // frozen: the bot keeps withholding a version the manifest now admits, and
   // nothing is red. That half-lift is the direction with no symptom, and it is
@@ -78,7 +81,7 @@ local gate = new Mapping<String, Step> {
   // is a ratchet on the next cap added to either file. A gate that only worked
   // while a list was non-empty would have been deleted with the list.
   ["cap-drift"] {
-    glob = List("Cargo.toml", ".github/dependabot.yml")
+    glob = List("Cargo.toml", "renovate.json5")
     check = "mise run cap-drift"
   }
   // `coverage` and `scorecard` emit a number for a human and must never gate a
@@ -287,8 +290,8 @@ local gate = new Mapping<String, Step> {
     check = "mise run config-lint"
   }
   // The same question asked of the other committed policy config (CLOUD-655).
-  // `ci-local-parity` decides that Renovate's four CI-cost keys are present with
-  // the values that make them work; only upstream's own validator decides that
+  // `ci-local-parity` decides that Renovate's five cost-and-coverage keys are
+  // present with the values that make them work; only upstream's own validator decides that
   // the file around them is one Renovate will accept. A config it rejects is a
   // lane proposing nothing, silently — which is the shape that let `[tools] rust`
   // sit twelve releases stale under a green weekly `lock-currency`.
@@ -489,11 +492,16 @@ local gate = new Mapping<String, Step> {
   // more. The list is the task's header; a count restated here goes stale. zizmor.yml violated the first two for its whole life,
   // which also meant re-drafting a red PR did not stop the spend (CLOUD-240).
   // The glob names every file the gate JUDGES, not only the workflows: editing
-  // dependabot.yml must re-run the gate that holds its two re-proposal bounds
-  // (CLOUD-596), for the reason the timeout budget below states — a gate that does
-  // not re-run when its subject changes enforces nothing at the moment it matters.
+  // the bot config must re-run the gate that holds its cost-and-coverage keys and
+  // its lander scope (CLOUD-596, CLOUD-692), for the reason the timeout budget
+  // below states — a gate that does not re-run when its subject changes enforces
+  // nothing at the moment it matters. `renovate.json5` was MISSING from this list
+  // while the gate judged it, so a config edit alone never re-ran it;
+  // `.github/dependabot.yml` stays named because property 12 now asserts that
+  // file is absent, and a commit re-adding it must re-run the gate that refuses
+  // it (CLOUD-660).
   ["ci-local-parity"] {
-    glob = List(".github/workflows/*.yml", ".github/dependabot.yml", "mise.toml")
+    glob = List(".github/workflows/*.yml", ".github/dependabot.yml", "renovate.json5", "mise.toml")
     check = "mise run ci-local-parity"
   }
   // Every job already declared a timeout, so the absence of a limit was never
@@ -512,8 +520,8 @@ local gate = new Mapping<String, Step> {
   // We pin an UNRELEASED toolchain-install commit —
   // uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b — because it is
   // the one that added the download retry, and that action ships its own built
-  // dist. The pin therefore no longer matches a release tag — while dependabot.yml tracks
-  // the github-actions ecosystem and auto-dependabot-land.yml lands bot bumps
+  // dist. The pin therefore no longer matches a release tag — while renovate.json5
+  // tracks the github-actions ecosystem and auto-bot-land.yml lands bot bumps
   // with no human in the loop. A bump resolving back to the pre-retry commit
   // would be a silent downgrade, auto-landed, and the next transient would read
   // as fresh. So the rule ships with its mechanism: this reds such a pin at check

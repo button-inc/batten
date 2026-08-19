@@ -51,7 +51,7 @@ workflow() {
 
 @test "THE BACKSLIDE: one reverted pin among many still fails" {
 	# The exact shape Dependabot would produce, and the one a "does any good pin
-	# exist" predicate would pass. `auto-dependabot-land` lands bot bumps with no
+	# exist" predicate would pass. `auto-bot-land` lands bot bumps with no
 	# human in the loop, so this case is the whole reason the gate exists.
 	workflow a "$WITH_RETRY"
 	workflow b "$WITH_RETRY"

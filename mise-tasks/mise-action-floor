@@ -11,8 +11,8 @@
 #
 # WHY THIS GATE EXISTS, AND IT IS NOT ABOUT HUMANS FORGETTING. We adopted an
 # UNRELEASED commit, so the pin no longer corresponds to a release tag. The pin
-# comment used to name the major version alone, and `.github/dependabot.yml`
-# tracks the `github-actions` ecosystem while `auto-dependabot-land.yml` lands bot
+# comment used to name the major version alone, and `renovate.json5`
+# tracks the `github-actions` ecosystem while `auto-bot-land.yml` lands bot
 # bumps **with no human in the loop** — every check green is the only condition.
 # A bot resolving that major back to the pre-retry commit would therefore be a
 # silent DOWNGRADE to the un-retried install, auto-landed. That is strictly worse
@@ -21,7 +21,7 @@
 #
 # So the rule "do not slide back behind the retry" ships with its mechanism
 # (non-negotiable 2): this gate reds such a pin at check time, the bot's PR
-# cannot go green, and `auto-dependabot-land` cannot land it. The accepted cost is
+# cannot go green, and `auto-bot-land` cannot land it. The accepted cost is
 # that such a PR then sits open and red until somebody closes it — stated here
 # rather than discovered later.
 #
@@ -149,7 +149,7 @@ while IFS=$'\t' read -r where sha; do
 	total=$((total + 1))
 	for bad in $PRE_RETRY_PINS; do
 		[ "$sha" = "$bad" ] || continue
-		report "mise-action-floor: $where pins $ACTION@${sha:0:9}, which predates the download retry (CLOUD-404). A bump to this commit is a silent downgrade to the un-retried install; \`auto-dependabot-land\` lands bot bumps unreviewed, which is why this is a gate and not a note."
+		report "mise-action-floor: $where pins $ACTION@${sha:0:9}, which predates the download retry (CLOUD-404). A bump to this commit is a silent downgrade to the un-retried install; \`auto-bot-land\` lands bot bumps unreviewed, which is why this is a gate and not a note."
 	done
 done <<<"$pins"
 

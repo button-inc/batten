@@ -86,7 +86,7 @@ from_ref() {
 # THE BRANCHES THAT LAND WITHOUT `land`, AND WHY STOPPING THEM WOULD COST MORE
 # THAN LETTING THEM RUN.
 #
-# `dependabot/*` and `release-plz-*` are landed by `auto-dependabot-land.yml` /
+# `renovate/*` and `release-plz-*` are landed by `auto-bot-land.yml` /
 # `auto-release-land.yml`, which fire on `workflow_run: types: [completed]` and
 # then re-check that the required set is green on the sha. A CANCELLED run is
 # `completed`, so those workflows do fire — find the checks not green, and stop.
@@ -95,21 +95,30 @@ from_ref() {
 # DEFER one and add a stall. That is the ground this carve-out rests on, and it is
 # unchanged.
 #
-# WHAT IS NO LONGER TRUE IS "DEPENDABOT PRs ARE RARE" (CLOUD-596). This paragraph
-# used to claim the overlap was small on that basis. Measured over `dependabot/*`
-# since 2026-08-06: 13 `ci.yml` runs and not one skip, five of them on a single
-# cargo group in seventeen hours as the bot re-proposed the batch on every base
-# move. `rebase-strategy: disabled` in dependabot.yml is what makes the claim
-# approximately true going forward — one head per proposal rather than one per base
-# move — so the carve-out is now affordable for a reason that is measured rather
-# than assumed. The release PR is a draft until the debounce readies it, and that
-# debounce fires on 30 minutes of quiet `main`, which is precisely when nobody
-# holds the lease.
+# THE FIRST NAME MOVED FROM `dependabot/*` TO `renovate/*` (CLOUD-660, CLOUD-692),
+# and the move is load-bearing rather than cosmetic. Dependabot is retired — its
+# config and its lander are deleted, and its security lane is off at the
+# repository setting — so a `dependabot/*` arm now authorises nothing that exists.
+# `renovate/*` is what took its place, and WITHOUT this arm the new lane cannot
+# work at all: `auto-bot-land.yml` readies a bot draft, that ready mints the one
+# matrix the whole economy is built around, and no agent holds the lease on the
+# bot's behalf. The gate would refuse the run it exists to let through.
+#
+# WHAT IS NO LONGER TRUE IS "BOT PRs ARE RARE" (CLOUD-596). This paragraph used to
+# claim the overlap was small on that basis. Measured over `dependabot/*` since
+# 2026-08-06: 13 `ci.yml` runs and not one skip, five of them on a single cargo
+# group in seventeen hours as the bot re-proposed the batch on every base move.
+# What makes the claim approximately true again is not rarity but the draft:
+# `draftPR: true` means a Renovate head grades nothing until the lander readies
+# it, so the lane's overlap with an agent's lease is one matrix per PR LANDED
+# rather than one per SHA proposed. The release PR is a draft until its debounce
+# readies it, and that debounce fires on 30 minutes of quiet `main`, which is
+# precisely when nobody holds the lease.
 #
 # This is NOT the stale-tooling exemption in disguise: these branches are cut from
 # current `main`, so their `mise-tasks/land` is current; they simply never call it.
 case "$head_ref" in
-dependabot/* | release-plz-*)
+renovate/* | release-plz-*)
 	say "$head_ref lands through /fast-forward rather than through mise run land; not judging it"
 	exit 0
 	;;

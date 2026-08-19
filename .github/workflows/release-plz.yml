@@ -122,7 +122,7 @@ jobs:
       #
       # Both are SHA-pinned with the trailing version comment every other `uses:`
       # in this repo carries — zizmor's `unpinned-uses` reds on the floating `@v0`
-      # upstream publishes, and dependabot's `github-actions` ecosystem needs the
+      # upstream publishes, and the bot's `github-actions` manager needs the
       # comment to track the pin. `mise run release-tracking-check` holds all of
       # this shape, so dropping either invocation fails the gate rather than
       # silently shipping an untracked release.

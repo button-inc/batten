@@ -1,51 +1,49 @@
-// Renovate — the update lane for `mise.toml [tools]`, the one dependency surface
-// no other bot can read (CLOUD-655).
+// Renovate — THE update lane for this repository, version updates and security
+// alike (CLOUD-655, CLOUD-660). There is no second bot: `.github/dependabot.yml`
+// is deleted, and `ci-local-parity` refuses a tree where it comes back.
 //
 // JSON5 rather than JSON so the reasoning lives beside the keys it explains. The
-// keys here are not preferences: four of them are the whole CI-cost mechanism and
-// a fifth is what lets the lane's commits land at all, and `mise run
-// ci-local-parity` refuses this file if any of the five is dropped or moved
-// somewhere a preset outranks.
+// keys here are not preferences: five of them are the whole CI-cost-and-coverage
+// mechanism and a sixth is what lets the lane's commits land at all, and `mise
+// run ci-local-parity` refuses this file if any is dropped or moved somewhere a
+// preset outranks.
 //
-// WHY A SECOND BOT AT ALL. Dependabot's `package-ecosystem` values are a fixed
-// published list with no `mise`, no asdf `.tool-versions` and no
-// `rust-toolchain`, so `.github/dependabot.yml` cannot cover this repo's tool
+// WHY THIS BOT AND NOT THE OTHER. Dependabot's `package-ecosystem` values are a
+// fixed published list with no `mise`, no asdf `.tool-versions` and no
+// `rust-toolchain`, so `.github/dependabot.yml` could not cover this repo's tool
 // table at any setting. That is a capability gap, not a config omission, and its
 // cost was measured: `[tools] rust` sat at 1.85.0 against a stable of 1.97.1 —
 // twelve releases — freezing two crates and rejecting a third, with `mise run
 // lock-check` green throughout because it asks a different currency question
 // (have the artifacts for the versions we ALREADY pinned changed).
 //
-// TWO BOTS OVER DISJOINT MANIFESTS IS NOT TWO AUTHORITIES FOR ONE FACT. Each
-// manifest gets exactly one updater, and `ci-local-parity` decides that rather
-// than trusting the comment: an ecosystem covered by both bots, or by neither,
-// fails the gate.
+// ONE UPDATER PER MANIFEST IS NOT A STYLE RULE, and with one bot left it is
+// simply "every ecosystem this repo maintains is named below". `ci-local-parity`
+// decides that rather than trusting the comment: an ecosystem this repo carries
+// and this file does not name fails the gate.
 //
-// THE APP IS INSTALLED; THE LANE IS SET TO SILENT. Observed on the Mend
-// dashboard for `button-inc/batten` 2026-08-17: Renovate 44.29.5, Community
-// (Free) plan, a job already queued against this repo — so Renovate runs and
-// reads this file. What it will not do is open anything: Repo Engine Settings
-// has `Dependency Updates (Renovate): Silent`, which computes updates and
-// creates no pull requests or issues.
-//
-// So the remaining owner action is a SETTING, not an install: take that lane off
-// Silent. Everything below is what it will do the moment someone does, and the
-// gates hold the config to it in the meantime.
+// THE LANE IS LIVE, AND HAS BEEN SINCE 2026-08-18. It opened #493 (landed) and
+// #503, so nothing below is prospective. What it could not do until CLOUD-692
+// was get anything landed: every head it proposes is a draft, and no workflow
+// was scoped to `renovate/**`. `.github/workflows/auto-bot-land.yml` is that
+// workflow, and this file's keys are written to compose with it.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
 
   extends: ["config:recommended"],
 
   // THE SCOPE FENCE, and it is load-bearing rather than tidy. `config:recommended`
-  // enables every manager Renovate ships with, which would silently make this a
-  // SECOND updater for something Dependabot already covers. `enabledManagers` is
-  // an allowlist, so what is named here is the whole of what this bot touches,
-  // and `ci-local-parity`'s property 14 decides the disjointness rather than
-  // trusting this comment.
+  // enables every manager Renovate ships with; `enabledManagers` is an allowlist,
+  // so what is named here is the whole of what this bot touches. With the second
+  // bot retired the fence changed meaning rather than lapsing: it used to keep
+  // two updaters off one manifest, and it now decides whether any manifest is
+  // updated at all. `ci-local-parity`'s property 14 reads this list against the
+  // ecosystems this repo maintains, so a name dropped here goes unmaintained
+  // loudly rather than silently.
   //
   // Each name arrived in the SAME commit that took the ecosystem out of
   // `.github/dependabot.yml`'s version-update lane, so no revision of the tree
-  // has one covered twice or not at all: `github-actions` in CLOUD-657, which
+  // had one covered twice or not at all: `github-actions` in CLOUD-657, which
   // went first for touching no manifest that encodes the MSRV floor, and `cargo`
   // in CLOUD-658, which is the lane that does.
   enabledManagers: ["mise", "github-actions", "cargo"],
@@ -66,7 +64,7 @@
   // that disagrees.
   constraints: { rust: "1.97" },
 
-  // --- the four keys `ci-local-parity` holds ---------------------------------
+  // --- the five keys `ci-local-parity` holds ---------------------------------
   //
   // Every `pull_request` workflow in this repo gates on `draft == false`, so a
   // draft head buys zero runner minutes. Dependabot's schema has no equivalent
@@ -76,27 +74,81 @@
   // it. This is one key.
   draftPR: true,
 
-  // The default force-pushes a rebase whenever the base moves, and on a readied
-  // PR each force-push is a `synchronize` and another matrix. `main` advances
-  // constantly here, so that default is a matrix per landing by anyone.
-  rebaseWhen: "never",
+  // KEPT BOUNDED, BUT NO LONGER AT "never" (CLOUD-692). The clause that made
+  // `never` right is the one above it: a force-push on a readied PR is a
+  // `synchronize` and another matrix, and `main` advances constantly here. That
+  // clause does not survive `draftPR: true`. Every `pull_request` workflow gates
+  // on `draft == false`, so while the PR is a draft a rebase grades zero checks
+  // and costs zero runner minutes — the same key that makes the head free makes
+  // rebasing it free.
+  //
+  // What `never` cost instead was the landing: `main` moves under the draft, the
+  // head goes BEHIND, and a fast-forward is arithmetically unavailable. #503 sat
+  // in exactly that state, holding the single `prConcurrentLimit` slot against
+  // seven queued updates, because nothing rebased it and nothing could land it.
+  // So this key was buying an economy on a lane that had stopped functioning.
+  //
+  // A rebase that arrives mid-CI on a head `auto-bot-land.yml` has readied is
+  // absorbed rather than paid for: `ci.yml`'s `concurrency: cancel-in-progress`
+  // cancels the run the rebase superseded, and the next one grades the head that
+  // can actually land. Freezing the branch instead (Renovate's
+  // `stopUpdatingLabel`) costs a matrix that cannot land AND a second one after
+  // the unfreeze, so it is strictly worse.
+  rebaseWhen: "behind-base-branch",
 
-  // With rebasing off, a stale PR can be joined by a sibling proposing the same
-  // update — doubling the floor the key above lowers. Both keys or neither
-  // works, which is the same pairing `.github/dependabot.yml` carries.
+  // ONE HEAD IN FLIGHT. With `rebaseWhen` no longer `never` this is no longer the
+  // second half of a pairing — it is the throttle in its own right, and it is
+  // what makes the lane's cost legible: at most one draft accumulating, at most
+  // one matrix in flight, and a queue that drains in landing order rather than a
+  // fan of siblings proposing overlapping groups.
+  //
+  // It throttles; it does NOT wedge, which was the open question and is now
+  // measured (CLOUD-692): #493 merged at 06:49:36Z and the released slot became
+  // #503 at 06:50:56Z, 80 seconds later. So the cost of holding it at 1 is
+  // latency on the tail of the queue, not a stuck queue — and the lander is what
+  // keeps that latency bounded.
   prConcurrentLimit: 1,
 
   // Renovate's spelling of the 7-day cooldown CLOUD-105 bought on the Dependabot
   // lanes: let a churny release settle before a PR opens.
   minimumReleaseAge: "7 days",
 
+  // THE SECURITY LANE, AND IT IS THE ONLY ONE THIS REPOSITORY HAS (CLOUD-660,
+  // CLOUD-688). `.github/dependabot.yml` retained a `cargo` entry so Dependabot
+  // SECURITY updates would carry a subject `commit-lint` accepts; that lane
+  // cannot fire. Measured 2026-08-19 against the live repository:
+  //
+  //     GET /repos/button-inc/batten/automated-security-fixes
+  //       -> {"enabled": false, "paused": false}
+  //     GET /repos/button-inc/batten/vulnerability-alerts   -> 204 (alerts on)
+  //     GET /repos/button-inc/batten/dependabot/alerts?state=open -> 0
+  //
+  // So the shim asserted a lane the repository setting does not have (the
+  // CLOUD-198 class), and deleting it withdraws no coverage. Renovate reads the
+  // SAME advisory stream — the one that is on — which is why this block replaces
+  // it rather than merely outliving it.
+  //
+  // `minimumReleaseAge: null` waives the seven-day cooldown above, and only
+  // here: a cooldown is right for a churny feature release and wrong for a fix
+  // to a known advisory. It is the one key in this file whose default would be
+  // actively harmful rather than merely expensive.
+  //
+  // A security PR still opens as a draft, like every other head this lane
+  // proposes. That is not a delay to landing: `auto-bot-land.yml` readies and
+  // lands on its own tick, and the draft is what keeps a bump that will be
+  // superseded from buying a matrix first.
+  vulnerabilityAlerts: {
+    enabled: true,
+    minimumReleaseAge: null,
+  },
+
   // --- and the key without which none of the above can ever land -------------
   //
   // Every commit here must satisfy `CONVENTIONAL_RE` (the `commit-lint` gate),
   // because PRs land by fast-forward. Renovate's default subject carries no type
   // prefix, so its PRs would fail commit-lint and could never land — the same
-  // defect `.github/dependabot.yml`'s `commit-message.prefix` settings exist to
-  // avoid.
+  // defect `.github/dependabot.yml`'s `commit-message.prefix` settings existed to
+  // avoid before that file was deleted (CLOUD-660).
   //
   // THE TYPE CANNOT LIVE UP HERE, AND THAT IS MEASURED RATHER THAN STYLISTIC
   // (CLOUD-676). `extends: ["config:recommended"]` above pulls in
@@ -130,11 +182,11 @@
     {
       // `build` for cargo, and the difference is not cosmetic: this manager
       // moves `Cargo.toml` and `Cargo.lock`, which is the crate's own dependency
-      // graph. It is also what `.github/dependabot.yml`'s surviving security
-      // shim still emits (`commit-message.prefix: "build(deps)"`), so a cargo
-      // subject does not change type depending on which bot proposed it — and
-      // the security lane is precisely where that inconsistency would be read as
-      // a signal.
+      // graph. It is also what the deleted security shim emitted
+      // (`commit-message.prefix: "build(deps)"`), so a cargo subject did not
+      // change type across the handover — worth keeping now that
+      // `vulnerabilityAlerts` above carries that lane, since a security bump
+      // reading differently from a version bump would be read as a signal.
       matchManagers: ["cargo"],
       semanticCommitType: "build",
       // What `.github/dependabot.yml`'s `groups: cargo: patterns: ["*"]` bought

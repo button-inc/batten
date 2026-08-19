@@ -1097,7 +1097,7 @@ mod tests {
     fn wrong_value_type_is_a_usage_error() {
         // `version` is a u32; a string must be refused rather than coerced. This
         // pins the parser's typing behaviour — the surface a `toml` bump is most
-        // likely to shift silently (see auto-dependabot-land.yml).
+        // likely to shift silently (see auto-bot-land.yml).
         let err = parse("version = \"1\"\n", "test").unwrap_err();
         assert!(is_usage_error(&err), "type mismatch must be a usage error");
     }

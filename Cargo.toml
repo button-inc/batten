@@ -124,8 +124,8 @@ signal-hook = { version = "0.4", default-features = false, features = ["iterator
 # happily and the build failed inside the vendored crate — a cap Cargo could not
 # derive, so it had to be written. At a floor equal to a current pin nothing in
 # the graph is excluded and the cap has nothing left to exclude. `cap-drift` is
-# the ratchet that keeps this in step with `.github/dependabot.yml` if one ever
-# comes back.
+# the ratchet that keeps this in step with `renovate.json5`'s `allowedVersions`
+# if a cap ever comes back.
 ignore = { version = ">=0.4.23", default-features = false }
 # The glob matcher the same lineage ships (CLOUD-214), replacing a hand-rolled
 # recursive matcher with exponential worst-case behaviour and no character

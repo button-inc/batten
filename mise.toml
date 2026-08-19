@@ -1042,11 +1042,23 @@ run = '''
 # Detached HEAD is exempt, the same carve-out the engine makes deliberately:
 # a rebase detaches, and refusing there would fail every lap of `land` for a
 # state that is not a defect.
+#
+# EITHER RECEIPT SATISFIES THIS, AND THEY ARE TWO BECAUSE THEY ATTEST TWO THINGS
+# (CLOUD-693). `claim.<branch>` says a human or agent read a refined issue and
+# checked it for a competitor. Nothing on a BOT branch can say that honestly —
+# there was no session and the row was derived rather than refined — so
+# `mise run bot-issue receipt` mints `bot.<branch>`, which attests what is
+# actually true there: an allowlisted bot opened the head, its diff touches only
+# manifests the lane owns, and its body names the row derived from that diff.
+# Widening the agent receipt to cover bots would have made it mean less
+# everywhere, which is the trust path CLOUD-431 exists to prevent.
 claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [ -n "$claim_branch" ]; then
-  claim_receipt="$(git rev-parse --git-dir)/batten-receipts/claim.${claim_branch//\//-}"
-  if [ ! -f "$claim_receipt" ]; then
-    echo "::error:: verify: this branch carries no claim receipt, so nothing attests that the work on it was pulled from a refined issue. Run \`mise run claim-check\` with the issue's get_issue payload on stdin. No receipt written." >&2
+  receipt_dir="$(git rev-parse --git-dir)/batten-receipts"
+  claim_receipt="$receipt_dir/claim.${claim_branch//\//-}"
+  bot_receipt="$receipt_dir/bot.${claim_branch//\//-}"
+  if [ ! -f "$claim_receipt" ] && [ ! -f "$bot_receipt" ]; then
+    echo "::error:: verify: this branch carries no claim receipt, so nothing attests that the work on it was pulled from a refined issue. Run \`mise run claim-check\` with the issue's get_issue payload on stdin — or, on a bot branch, \`mise run bot-issue receipt\`. No receipt written." >&2
     exit 1
   fi
 fi

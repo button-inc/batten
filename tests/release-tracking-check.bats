@@ -135,7 +135,7 @@ replace_line() { # replace_line <extended-regex> <replacement-line>
 	[[ "$output" == *"release-tracking-unpinned"* ]]
 }
 
-# A SHA with no trailing version comment is invisible to dependabot's
+# A SHA with no trailing version comment is invisible to the bot's
 # `github-actions` ecosystem, so the pin never gets proposed for update.
 @test "a SHA pin without its version comment is a violation" {
 	replace_line "uses: linear/linear-release-action@" \

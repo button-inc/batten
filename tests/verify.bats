@@ -77,6 +77,9 @@ stub_git() {
 # refusal that is not its subject.
 claim_receipt() { printf '%s\n' "$1" >"$FAKE_GIT_DIR/batten-receipts/claim.$FAKE_BRANCH"; }
 no_claim_receipt() { rm -f "$FAKE_GIT_DIR/batten-receipts/claim.$FAKE_BRANCH"; }
+# CLOUD-693's second kind, minted by `mise run bot-issue receipt` on a bot branch.
+bot_receipt() { printf '%s\n' "$1" >"$FAKE_GIT_DIR/batten-receipts/bot.$FAKE_BRANCH"; }
+no_bot_receipt() { rm -f "$FAKE_GIT_DIR/batten-receipts/bot.$FAKE_BRANCH"; }
 
 task_exits() { printf '%s\n' "$2" >"$BATS_TEST_TMPDIR/rc.$1"; }
 
@@ -224,7 +227,30 @@ called() {
 	no_claim_receipt
 	run_verify
 	[[ "$output" == *"claim-check"* ]]
+	[[ "$output" == *"bot-issue receipt"* ]]
 	[[ "$output" == *"No receipt written."* ]]
+}
+
+@test "A BOT RECEIPT SATISFIES IT TOO, and it is a SECOND kind rather than a wider one" {
+	# CLOUD-693. Nothing on a bot branch can honestly claim "an agent read a
+	# refined issue in a session that postdates the refinement" — there was no
+	# session. So the bot lane mints its own receipt attesting what IS true there,
+	# and `verify` accepts either. Widening the agent receipt to cover bots would
+	# have made it mean less on every branch, which is what CLOUD-431 exists to
+	# prevent.
+	no_claim_receipt
+	bot_receipt CLOUD-999
+	run_verify
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"no claim receipt"* ]]
+}
+
+@test "neither receipt is still a refusal — the pair is an OR, not an escape hatch" {
+	no_claim_receipt
+	no_bot_receipt
+	run_verify
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no claim receipt"* ]]
 }
 
 @test "a detached HEAD is exempt, because a rebase detaches" {
