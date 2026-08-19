@@ -8482,3 +8482,70 @@ fn the_navigation_verbs_declare_themselves_read_in_the_spec() {
     assert_eq!(effect("capture list"), "read");
     assert_eq!(effect("capture prune"), "destructive");
 }
+
+/// Run `batten payload field --harness <harness> --name <name>` over `payload`.
+fn run_payload_field(name: &str, payload: &str) -> Output {
+    let mut command = batten();
+    command
+        .current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+        .args([
+            "payload",
+            "field",
+            "--harness",
+            "claude-code",
+            "--name",
+            name,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("spawn batten payload field");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(payload.as_bytes())
+        .expect("write payload");
+    child.wait_with_output().expect("run batten payload field")
+}
+
+/// A `Task` spawn envelope, the shape `fanout-guard` is wired to (CLOUD-287).
+fn spawn_payload(prompt: &serde_json::Value) -> String {
+    serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Task",
+        "tool_input": {"description": "d", "prompt": prompt},
+    })
+    .to_string()
+}
+
+/// A spawn is not shell-shaped, so its prompt is reachable only through the
+/// allowlist's own member — `Command` is empty for exactly this payload, which
+/// is why `Field::Prompt` had to exist at all (CLOUD-287).
+#[test]
+fn a_spawn_prompt_is_readable_and_its_command_is_not() {
+    let payload = spawn_payload(&serde_json::json!("read AGENTS.md then stop"));
+
+    let out = run_payload_field("prompt", &payload);
+    assert!(out.status.success(), "status: {:?}", out.status);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim_end(),
+        "read AGENTS.md then stop"
+    );
+
+    let command = run_payload_field("command", &payload);
+    assert!(command.status.success());
+    assert!(
+        String::from_utf8_lossy(&command.stdout).trim().is_empty(),
+        "a spawn carries no shell command"
+    );
+}
+
+/// A non-string `prompt` reads as ABSENT, never as its debug rendering: a caller
+/// counting characters must never be handed `{"a":1}` and told it is a prompt.
+#[test]
+fn a_non_string_prompt_reads_as_absent() {
+    let out = run_payload_field("prompt", &spawn_payload(&serde_json::json!({"a": 1})));
+    assert!(out.status.success(), "absent is not an error");
+    assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
+}

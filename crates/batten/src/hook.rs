@@ -1146,6 +1146,24 @@ pub enum Field {
     LastAssistantMessage,
     /// The path to the session transcript.
     TranscriptPath,
+    /// The prompt a subagent spawn commits a fresh context window to.
+    ///
+    /// The second prose-bearing member, admitted on `LastAssistantMessage`'s
+    /// argument rather than a new one: this is a DECODER, and rule 4 governs
+    /// what a check reports. `fanout-guard` (CLOUD-287) reads these bytes to
+    /// count them and emits only a count, a cap and repo paths — never a byte of
+    /// the prompt.
+    ///
+    /// It is also the member that could not be served any other way. A spawn is
+    /// not shell-shaped, so `Command` is empty for it, and the prompt lives in
+    /// [`Envelope::input`] — which is exactly what this allowlist exists to keep
+    /// a caller from addressing by path. Naming this one projection is the
+    /// deliberate edit the type's own doc calls for.
+    ///
+    /// APPENDED, never inserted. `semver` reads a reordered variant as
+    /// `enum_no_repr_variant_discriminant_changed` — a break — and this addition
+    /// is patch-compatible only at the end. The order carries no meaning.
+    Prompt,
 }
 
 impl Field {
@@ -1166,6 +1184,15 @@ impl Field {
             Field::Cwd => envelope.cwd.as_ref().map(|path| path.display().to_string()),
             Field::StopHookActive => envelope.stop_active.map(|active| active.to_string()),
             Field::LastAssistantMessage => envelope.last_message.clone(),
+            // The one member read out of `input`, and only ever this key. A
+            // non-string value reads as absent rather than as its debug
+            // rendering: a caller counting characters must never be handed
+            // `{"a":1}` and told it is a prompt.
+            Field::Prompt => envelope
+                .input
+                .get("prompt")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
             Field::TranscriptPath => envelope.transcript.clone(),
         };
         value.filter(|text| !text.is_empty())
