@@ -226,8 +226,34 @@ rule() {
 	# The whole reason this is CI-only: CI is the only context that knows a PR's
 	# base. A workflow that pinned `main` here would be the `lock-check` split
 	# reintroduced one layer up — a verdict about the world wearing a CI badge.
-	run grep -rq 'CONFIG_LINT_BASE: ..{ github.event.pull_request.base.ref }' "$REPO/.github/workflows"
+	run grep -rqE 'CONFIG_LINT_BASE:.*github\.event\.pull_request\.base\.ref' \
+		"$REPO/.github/workflows"
 	[ "$status" -eq 0 ]
+}
+
+@test "the armed caller and the fetch agree on the ref namespace" {
+	# THE GATE THAT WOULD HAVE CAUGHT THE RED RUN, and the reason it has to exist
+	# at all: no local run can exercise this pairing. `verify` runs the gate
+	# UNARMED by design — arming it locally is the property-of-the-world mistake
+	# this whole issue is about — so the first execution of the armed path is on
+	# a runner, and a mismatch there costs a full matrix.
+	#
+	# `base.ref` is a bare branch NAME. The workflow fetches it into
+	# `refs/remotes/origin/<name>`, and a CI checkout has no local branch of that
+	# name — it is a detached head on the PR merge ref. So the two must agree:
+	# fetch into `origin/`, name the ref `origin/`. Shipped mismatched once, which
+	# `batten` reported as exit 1, "no such ref" — loud, correct, and still red.
+	local wf="$REPO/.github/workflows/ci.yml"
+	run grep -qE 'git fetch .*"\$BASE_REF:refs/remotes/origin/\$BASE_REF"' "$wf"
+	[ "$status" -eq 0 ] || {
+		echo "the base ref is no longer fetched into refs/remotes/origin/" >&2
+		false
+	}
+	run grep -qE 'CONFIG_LINT_BASE: origin/' "$wf"
+	[ "$status" -eq 0 ] || {
+		echo "the fetch lands the base at refs/remotes/origin/, but CONFIG_LINT_BASE does not name it there" >&2
+		false
+	}
 }
 
 @test "the base-ref smell ids match WeakeningKind exactly" {

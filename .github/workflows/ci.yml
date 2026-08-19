@@ -241,7 +241,18 @@ jobs:
           # and fail that gate; the gate is right, and this is the shape that
           # respects it. `mise-tasks/config-lint` reads the variable and adds the
           # flag; unset, it behaves exactly as the `hk` gate has always run it.
-          CONFIG_LINT_BASE: ${{ github.event.pull_request.base.ref }}
+          #
+          # `origin/`-PREFIXED, and the prefix is the whole of what a red run
+          # taught here. `base.ref` is a bare branch NAME (`main`); the fetch
+          # above lands it at `refs/remotes/origin/<name>`, and a CI checkout has
+          # no local branch of that name at all — it is a detached head on the PR
+          # merge ref. So the unprefixed spelling resolved to nothing and the gate
+          # answered exit 1, "cannot read batten.toml at main: no such ref". That
+          # is the fail-LOUD path working exactly as designed, and it is still a
+          # red run this file was responsible for. `tests/config-lint.bats` now
+          # holds the fetch and this value to the same namespace, because no local
+          # run can exercise the pairing: `verify` runs the gate unarmed on purpose.
+          CONFIG_LINT_BASE: origin/${{ github.event.pull_request.base.ref }}
           # THE NAMED BYPASS, AS A LABEL RATHER THAN A COMMITTED EDIT. Smells
           # carry no severity and there is no waiver yet, so a PR that
           # legitimately relaxes policy — retiring an obsolete rule, narrowing an
