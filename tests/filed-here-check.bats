@@ -43,6 +43,51 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 	[[ "$output" != *"filed-unrefined"* ]]
 }
 
+# THE LAST VERDICT PER ID WINS, which is what makes the third remedy this gate
+# prints reachable at all. `board-write-record` writes a fresh line when a row
+# this branch filed is groomed; reading every line instead leaves the
+# creation-time `unready` standing beside the `ready` that supersedes it, which
+# held PR #525 for its whole life with no remedy that could clear it.
+@test "a groom recorded after the create supersedes it" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready" \
+		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-unrefined"* ]]
+}
+
+# THE DISCRIMINATING DIRECTION: last, not "a `ready` anywhere in the file". A gate
+# passing on the mere presence of one green line would let a row be groomed and
+# then gutted, and could never refuse a row it had once passed.
+@test "a later unready supersedes an earlier ready" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready" \
+		"issue CLOUD-900 2026-08-19T01:00:00.000Z unready"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-unrefined"* ]]
+}
+
+@test "superseding is per id: one row groomed leaves another's refusal standing" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready" \
+		"issue CLOUD-901 2026-08-19T00:00:00.000Z unready" \
+		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-901 filed-unrefined"* ]]
+	[[ "$output" != *"CLOUD-900 filed-unrefined"* ]]
+}
+
+# The pass line reports how many rows the branch FILED, not how many times they
+# were linted — a re-lint that moved the count would make grooming look like
+# filing again, which is the arithmetic this whole pair exists to hold.
+@test "a re-lint of one row does not inflate the filed count" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready" \
+		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"1 row(s) filed"* ]]
+}
+
 @test "a recorded comment is never gated, whatever its verdict column says" {
 	record "comment CLOUD-900 2026-08-19T00:00:00.000Z -" \
 		"comment CLOUD-901 2026-08-19T00:00:00.000Z unready"

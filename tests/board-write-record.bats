@@ -141,6 +141,64 @@ comment_event() {
 	[ ! -f "$(record)" ]
 }
 
+# THE ONE EXCEPTION, and `filed-here-check`'s third remedy is unreachable without
+# it. That gate tells a branch which filed an unrefined row to groom it to Ready
+# and re-run `land` — but a groom is a `save_issue` WITH an id, so the rule above
+# skipped it and the creation-time `unready` stood forever. Measured on PR #525:
+# the row was groomed until `ready-lint` exited 0 over the tracker's own response,
+# and the refusal did not move. Remedies 1 and 2 cannot reach it either once a
+# line exists, so the only escape left was the bypass — which that gate's own
+# suite does not scrub, so exporting it turned six refusal cases green.
+@test "a groom of a row THIS branch filed is recorded" {
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'Just a sentence, no Ready block.')"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" unready" ]]
+
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue '' '' CLOUD-999)"
+	[ "$status" -eq 0 ]
+	[ "$(wc -l <"$(record)")" -eq 2 ]
+	run tail -1 "$(record)"
+	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready" ]]
+}
+
+# The exception is narrow on purpose: it grants nothing a fresh create would not
+# have granted, because the row is one this branch is already answerable for.
+# Anyone else's row is skipped exactly as it was.
+@test "a groom of a row this branch did NOT file is still skipped" {
+	run bash -c "'$REC' < $(event)"
+	[ "$status" -eq 0 ]
+	[ "$(wc -l <"$(record)")" -eq 1 ]
+
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue '' '' CLOUD-1)"
+	[ "$status" -eq 0 ]
+	[ "$(wc -l <"$(record)")" -eq 1 ]
+}
+
+# The record is matched on the whole id field, anchored both ends. An unanchored
+# read would let a create of CLOUD-999 make a groom of CLOUD-9 — a different row
+# entirely — look like this branch's own.
+@test "an id that merely PREFIXES a filed one does not count as filed here" {
+	run bash -c "'$REC' < $(event)"
+	[ "$(wc -l <"$(record)")" -eq 1 ]
+
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue '' '' CLOUD-9)"
+	[ "$status" -eq 0 ]
+	[ "$(wc -l <"$(record)")" -eq 1 ]
+}
+
+# COMMENTING ON A ROW IS NOT FILING IT. The exception is scoped to rows this
+# branch CREATED, which is the set `filed-here-check` gates; letting a comment
+# line qualify would open the update path on every row anyone commented on.
+@test "a comment on a row does not make a later update to it recordable" {
+	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment CLOUD-999)"
+	[ "$(wc -l <"$(record)")" -eq 1 ]
+
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue '' '' CLOUD-999)"
+	[ "$status" -eq 0 ]
+	[ "$(wc -l <"$(record)")" -eq 1 ]
+}
+
 # Sink 2: recorded so the create-versus-comment ratio is observable, never judged.
 #
 # THE ID IS THE ISSUE KEY, FROM THE INPUT. A `save_comment` response is the

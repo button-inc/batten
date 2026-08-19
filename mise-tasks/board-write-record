@@ -51,10 +51,14 @@
 # blocked or noised a board write would cause the failure `finding-sink-check`
 # exists to catch, which is the opposite of the point.
 #
-# The mutation collapses create and update, so every edit to an existing row is
-# recorded as a filing — which inflates the very count the gate will be specified
-# against, in the direction that makes filing look normal.
-#MUTANT update-recorded-too|s/^\t\[ -n "\$existing" \] && exit 0$/\t[ -n "$existing" ] \&\& :/|updating an existing row is never recorded
+# The mutation widens the exception below to every update, so an edit to any
+# existing row — anyone's — is recorded as a filing, which inflates the very count
+# the gate is specified against, in the direction that makes filing look normal.
+#MUTANT any-update-recorded|s/^\t\t\t\tgrep -qE .*$/\t\t\t\ttrue; then/|a groom of a row this branch did NOT file is still skipped
+# The mutation removes the one exception to that, so a groom of a row THIS branch
+# filed goes unrecorded again — which leaves the creation-time verdict standing
+# and `filed-here-check`'s third remedy unreachable, the state that held PR #525.
+#MUTANT never-records-a-groom|s/^\t\t\t\tfiled_here=1$/\t\t\t\tfiled_here=/|a groom of a row THIS branch filed is recorded
 # The mutation drops the relations synthesis, so a row whose §8 claims a blocker
 # lints as blocker-cited-without-relation and records `unready` — the false
 # refusal that would fire on the best-refined rows.
@@ -103,9 +107,40 @@ esac
 # An `id` in the INPUT means this updates a row that already exists, which is not
 # a board write this branch is answerable for. `finding-sink-check` already tells
 # the two apart this way.
+#
+# ONE EXCEPTION, AND WITHOUT IT `filed-here-check`'S THIRD REMEDY IS UNREACHABLE
+# (CLOUD-514). That gate tells a branch which filed an unrefined row to "groom
+# the row above to Ready and re-run `land`" — but a groom is a `save_issue` WITH
+# an id, so this skipped it, the record kept its creation-time `unready`, and the
+# gate refused forever. Measured 2026-08-19 on PR #525: the row was groomed until
+# `ready-lint` exited 0 over the tracker's own response, and the refusal did not
+# move. Remedies 1 and 2 fail the same way once a line exists, so the only escape
+# was the bypass — which the gate's own bats suite does not scrub, so exporting it
+# turned six refusal cases into passes.
+#
+# The exception is narrow on purpose: an update is recorded only when this
+# branch's record already carries an `issue` line for that id. That is the row
+# this branch filed and is answerable for, so re-linting it grants nothing a
+# fresh create would not have granted, and the verdict still comes from linting
+# the tracker's RESPONSE rather than from any caller's assertion. An update to
+# somebody else's row is skipped exactly as before.
 if [ "$kind" = issue ]; then
 	existing=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
-	[ -n "$existing" ] && exit 0
+	if [ -n "$existing" ]; then
+		filed_here=""
+		if here_dir=$(git rev-parse --git-dir 2>/dev/null) && [ -n "$here_dir" ] &&
+			here_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
+			[ -n "$here_branch" ]; then
+			here_record="$here_dir/batten-receipts/board-writes.${here_branch//\//-}"
+			# Anchored on the kind and the whole id field, so `CLOUD-71` never
+			# matches the `CLOUD-717` line beside it.
+			if [ -r "$here_record" ] &&
+				grep -qE "^issue ${existing} " "$here_record" 2>/dev/null; then
+				filed_here=1
+			fi
+		fi
+		[ -n "$filed_here" ] || exit 0
+	fi
 fi
 
 # The content-block envelope, per the measurement in the header. `fromjson?`

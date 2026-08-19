@@ -63,6 +63,10 @@
 # lint — mise unresolvable from the tool call's cwd, `ready-lint` exiting 2 —
 # stops the lap over the environment rather than over the row.
 #MUTANT unanswered-refused|s/^\t\*) continue ;; # not answered/\t*) ;; # not answered/|could not lint is not a refusal
+# The mutation makes the accumulator keep every reading rather than the last, so
+# a row groomed to Ready still carries its creation-time `unready` and is refused
+# for it — the state that held PR #525 with the third remedy unreachable.
+#MUTANT first-verdict-wins|s/^\trebuilt=""$/\trebuilt="\$latest"/|a groom recorded after the create supersedes it
 set -uo pipefail
 
 [ -n "${BATTEN_FILED_HERE_BYPASS:-}" ] && exit 0
@@ -92,9 +96,20 @@ report() { # pointer-only: the id, never a title or a body
 	violations=$((violations + 1))
 }
 
+# THE LAST VERDICT PER ID WINS, NOT EVERY LINE (CLOUD-514). The recorder now
+# writes a fresh line when a row this branch filed is groomed, and reading every
+# line would leave the creation-time `unready` standing beside the `ready` that
+# supersedes it — which is the state this gate refused for the whole of PR #525,
+# with the remedy it prints unreachable. A later line is a later reading of the
+# same row by the same mechanism, so it is simply the current one.
+#
+# `creates` still counts CREATE lines, so the pass line reports how many rows the
+# branch filed rather than how many times they were linted.
+#
 # `_` for the updatedAt column: it is the recorder's forgery-resistant half and
 # this gate has no use for it, and naming it `_` is what keeps the linter from
 # reading a deliberate placeholder as a dead variable.
+latest=""
 while read -r kind id _ verdict; do
 	[ -n "$kind" ] || continue
 	case "$kind" in
@@ -105,15 +120,35 @@ while read -r kind id _ verdict; do
 	issue) ;;
 	*) continue ;; # a line the recorder did not write: skip, never judge
 	esac
-	creates=$((creates + 1))
-	[ -n "$verdict" ] || continue
+	[ -n "$id" ] || continue
+	# A create is the first line for an id; anything after it is a re-lint of the
+	# same row, so the count must not move.
+	case " $latest " in
+	*" $id="*) ;;
+	*) creates=$((creates + 1)) ;;
+	esac
+	# Rebuild the accumulator with this id's entry replaced, so the last line read
+	# is the one that survives.
+	rebuilt=""
+	for entry in $latest; do
+		case "$entry" in
+		"$id="*) ;;
+		*) rebuilt="${rebuilt:+$rebuilt }$entry" ;;
+		esac
+	done
+	latest="${rebuilt:+$rebuilt }$id=${verdict:--}"
+done <"$record"
+
+for entry in $latest; do
+	id=${entry%%=*}
+	verdict=${entry#*=}
 	case "$verdict" in
 	unready) ;;
 	ready) continue ;;
 	*) continue ;; # not answered — see the three-states note above
 	esac
 	report "$id filed-unrefined"
-done <"$record"
+done
 
 if [ "$violations" -ne 0 ]; then
 	cat <<'REASON' >&2
