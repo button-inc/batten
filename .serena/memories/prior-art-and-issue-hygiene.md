@@ -388,6 +388,67 @@ finding exists to avoid printing — rule 4 violated by the key rather than by t
 output line, and the key is the more durable of the two. **The best thing a
 survey finds is often not their feature but our bug.**
 
+## A worked survey: token-normalized phrase matching (CLOUD-624)
+
+The reference instance of a survey whose candidate **survived every objection
+raised against it and was rejected anyway** — for undecidability, not on the
+merits. Rejecting a good idea because the question cannot be answered yet is a
+distinct verdict from rejecting a bad one, and it has to be written down
+differently: with a re-open predicate, and with the withdrawn objections
+preserved so nobody re-litigates them.
+
+**The two arguments that were wrong, which is the durable part.**
+
+- _"`tokenizers` is BPE, so the category is learned."_ Wrong. Deterministic
+  segmentation, lemmatization and finite-state morphology estimate nothing;
+  naming one crate does not make the category learned. A token pattern over
+  named classes is **more** explainable than a regex alternation — `these tokens
+matched this rule` is inspectable, and the edges of a hand-tuned alternation
+  are not — which is the direction the gates-decide rule points, not away from it.
+- _"No witnessed miss needs it."_ Wrong on the facts. Two are witnessed, each
+  citing a real turn on its own issue: `one thing to flag …` silent where `one
+thing I would flag …` fires (CLOUD-487), and `worth naming` silent until
+  CLOUD-387 landed one verb set across both openers. Neither was found by
+  enumeration — each was found by noticing a **sibling string** fired, which is
+  the defect, not the evidence against it.
+
+**What actually decided it: a measurement that cannot be run here.** Recall
+against a witnessed miss is not evidence about a matcher — a pattern authored
+against known strings hits them by construction, the same circularity that makes
+a hand-authored literal set the defect in the first place. What decides a
+widening is the **false-positive class it opens**, and that needs negatives in
+the register the predicate reads. This repo's durable artifacts are the wrong
+register (the 2026-08-17 run above), and `transcript-corpus-check` answers
+`independent=1 min=2` where the 1 is the asking session itself.
+
+**The generalizable rule, and it is what tonight taught:**
+
+> **When a blocker is rescoped into a first-class capability, the dependent stops
+> being blocked and becomes a consumer.** It should close with a re-open
+> predicate rather than wait, because it no longer has any claim on the
+> capability's schedule or scope.
+
+A `blockedBy` edge asserts that the blocker's completion is owed to the
+dependent. Once the blocker is scoped on its own terms — CLOUD-671 says in as
+many words that it "is not a means of unblocking CLOUD-624" — that assertion is
+false, and leaving the edge up is the board lying about who owes whom. The
+dependent's honest move is to decide now on what it can decide, and to name what
+would change the answer.
+
+**A re-open predicate is a command and an exit code, and half of one is stated
+as half.** CLOUD-624's floor is "more assistant turns than the largest
+measurement any shipped prose literal already rests on" — the 113-turn
+transcript behind `finding-sink-check`'s table, so a new verdict cannot rest on
+thinner evidence than the gates it means to improve. `transcript-corpus-check`
+counts **independent sessions**, not turns, so the session half is runnable
+today and the turn half is an obligation on the successor. Saying so beats
+inventing a turn-counting gate to make the sentence look complete.
+
+**One line of scar tissue from the same chain:** do not specify a mechanism over
+an API you have not read. A redaction design named `ripsecrets` byte spans and
+`SecretSpan` substitution; neither exists — the scanner emits matched text with
+no offsets, and the type has no route back to `&str` by design.
+
 ## A worked survey: a logic engine as a predicate substrate (CLOUD-623)
 
 The reference instance of a **substrate** question — "should a different engine
