@@ -349,8 +349,8 @@ pub fn list(repo_root: &Path) -> Result<Vec<Capture>> {
         return Ok(Vec::new());
     }
     let mut found = Vec::new();
-    for entry in
-        std::fs::read_dir(&dir).with_context(|| format!("read the capture store {}", dir.display()))?
+    for entry in std::fs::read_dir(&dir)
+        .with_context(|| format!("read the capture store {}", dir.display()))?
     {
         let entry = entry.with_context(|| format!("read the capture store {}", dir.display()))?;
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -373,7 +373,7 @@ pub fn list(repo_root: &Path) -> Result<Vec<Capture>> {
             digest: digest.to_owned(),
         });
     }
-    found.sort_by(|a, b| a.handle().cmp(&b.handle()));
+    found.sort_by_key(Capture::handle);
     Ok(found)
 }
 

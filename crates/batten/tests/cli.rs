@@ -3219,13 +3219,24 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     // — the same path a caller uses — so the census asserts about a real capture
     // and not about a file this test hand-placed in the store.
     let seeded = batten()
-        .args(["exec", "--capture-only", "--", "sh", "-c", "printf 'census\n'"])
+        .args([
+            "exec",
+            "--capture-only",
+            "--",
+            "sh",
+            "-c",
+            "printf 'census\n'",
+        ])
         .current_dir(&repo)
         .env("HOME", &home)
         .env("XDG_DATA_HOME", home.join("data"))
         .output()
         .expect("seed a capture");
-    assert_eq!(seeded.status.code(), Some(0), "the census capture was not made");
+    assert_eq!(
+        seeded.status.code(),
+        Some(0),
+        "the census capture was not made"
+    );
     let listed = batten()
         .args(["capture", "list", "--stream", "stdout"])
         .current_dir(&repo)
@@ -8018,7 +8029,11 @@ fn two_selectors_are_refused_rather_than_silently_composed() {
         &["show", &handle, "--lines", "1:2", "--grep", "alpha"],
     );
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("grep first"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("grep first"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[cfg(unix)]
@@ -8029,7 +8044,11 @@ fn a_handle_naming_nothing_is_a_usage_error_never_a_verdict() {
     let (repo, home) = capture_repo("handle-absent");
     let output = run_capture(&repo, &home, &["show", "stdout:abc123"]);
     assert_eq!(output.status.code(), Some(1));
-    assert!(stderr(&output).contains("capture list"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("capture list"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[cfg(unix)]
@@ -8064,7 +8083,11 @@ fn prune_refuses_without_confirmation_and_removes_with_it() {
 
     let preview = run_capture(&repo, &home, &["prune", "-n"]);
     assert_eq!(preview.status.code(), Some(0));
-    assert!(stderr(&preview).contains("would remove 2"), "{}", stderr(&preview));
+    assert!(
+        stderr(&preview).contains("would remove 2"),
+        "{}",
+        stderr(&preview)
+    );
     assert_eq!(
         run_capture(&repo, &home, &["list"]).stdout.len(),
         run_capture(&repo, &home, &["list"]).stdout.len(),

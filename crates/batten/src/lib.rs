@@ -1074,10 +1074,20 @@ fn run_capture(
             } else if matches!(selection, capture::Selection::Summary) {
                 // The pointer, in the `<pointer> <fact>` shape every other verb
                 // here emits, so a caller needs no second parser.
-                writeln!(out, "{} {} bytes {} lines", answer.handle, answer.bytes, answer.lines)?;
+                writeln!(
+                    out,
+                    "{} {} bytes {} lines",
+                    answer.handle, answer.bytes, answer.lines
+                )?;
             } else {
                 for line in &answer.selected {
-                    writeln!(out, "{}:{} {}", parsed.stream.as_str(), line.number, line.text)?;
+                    writeln!(
+                        out,
+                        "{}:{} {}",
+                        parsed.stream.as_str(),
+                        line.number,
+                        line.text
+                    )?;
                 }
             }
             Ok(ExitCode::Success)
