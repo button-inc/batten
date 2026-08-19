@@ -1580,7 +1580,8 @@ command\:"The command text, for shell-shaped tools"
 cwd\:"The host'\''s working directory"
 stop-hook-active\:"Whether this is a re-entered \`Stop\` hook"
 last-assistant-message\:"The assistant'\''s last message"
-transcript-path\:"The path to the session transcript"))' \
+transcript-path\:"The path to the session transcript"
+prompt\:"The prompt a subagent spawn commits a fresh context window to"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
