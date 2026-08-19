@@ -28,21 +28,10 @@ own. Where they disagree the spec wins — fix the pointer, don't fork the conte
 ## Serena memories — read the right one at the right time
 
 `.serena/memories/` is checked in: a shared surface read **on demand**, never
-auto-loaded. Read the matching one at its trigger; don't reconstruct the detail.
-
-| Memory                         | Read it when                                                                        |
-| ------------------------------ | ----------------------------------------------------------------------------------- |
-| `core`                         | navigating `crates/batten/src`; asking what a module does or where to add one       |
-| `workflow/board-states`        | starting/finishing a `CLOUD-*` issue; reasoning about what is in flight             |
-| `workflow/agent-fanout`        | spawning a subagent, or running more than one session against this repo             |
-| `workflow/landing-loop`        | landing a branch; before "repairing" `land`, the lease, the CI wait or their suites |
-| `github-access`                | any GitHub op; before claiming the toolchain/CI "can't reach GitHub"                |
-| `github-rest-etiquette`        | writing a task that calls the GitHub API; diagnosing a 403/429/abuse response       |
-| `toolchain-and-hooks`          | pinning a tool, adding a task, touching `hk.pkl` or the gate                        |
-| `serena-setup`                 | a Serena worktree/index misbehaves; changing `.serena/` config                      |
-| `prior-art-and-issue-hygiene`  | surveying outside practice; adopting a tool or pattern; writing an issue or PR body |
-| `connector-allowlist-recovery` | a connector's tools start prompting/denying, or reappear under a different name     |
-| `memory_maintenance`           | writing, renaming or splitting a memory — the shipped convention template           |
+auto-loaded. **Start at `mem:core`** — it is the graph root and carries the
+trigger for every other memory, so the routing table lives there rather than
+here (CLOUD-683: a table in this budgeted file capped how many memories could
+exist at all). Read the matching one at its trigger; don't reconstruct the detail.
 
 ## Autonomous workflow: do the work without asking
 

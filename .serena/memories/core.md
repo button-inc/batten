@@ -5,6 +5,35 @@ Single workspace crate: `crates/batten` (bin `batten` + lib `batten`). Root
 style rules (thin `main`, no `unwrap`/`expect`/`panic`, exit-code branching) —
 this memory only maps what each module does, since nothing else does.
 
+## Where the rest lives — read the right one at its trigger
+
+This memory is the graph root: every other memory is reached from here, and the
+trigger for each is stated here rather than inside it (`mem:memory_maintenance`).
+Read on demand, never all of them.
+
+- `mem:workflow/board-states` — starting or finishing a `CLOUD-*` issue;
+  reasoning about what is in flight.
+- `mem:workflow/agent-fanout` — spawning a subagent, or running more than one
+  session against this repo.
+- `mem:workflow/landing-loop` — landing a branch; before "repairing" `land`, the
+  lease, the CI wait or their suites.
+- `mem:session-transcript-access` — asked to read chat history or another
+  session; before probing a session API or credential.
+- `mem:github-access` — any GitHub op; before claiming the toolchain or CI
+  "can't reach GitHub".
+- `mem:github-rest-etiquette` — writing a task that calls the GitHub API;
+  diagnosing a 403/429/abuse response.
+- `mem:toolchain-and-hooks` — pinning a tool, adding a task, touching `hk.pkl`
+  or the gate.
+- `mem:serena-setup` — a Serena worktree or index misbehaves; changing
+  `.serena/` config.
+- `mem:prior-art-and-issue-hygiene` — surveying outside practice; adopting a
+  tool or pattern; writing an issue or PR body.
+- `mem:connector-allowlist-recovery` — a connector's tools start prompting or
+  denying, or reappear under a different name.
+- `mem:memory_maintenance` — writing, renaming or splitting a memory; the
+  shipped convention template.
+
 ## `crates/batten/src/` module map
 
 Each module carries a dense rationale doc comment (`//!` at file top) — read the

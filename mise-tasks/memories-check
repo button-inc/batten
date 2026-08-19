@@ -16,16 +16,9 @@ set -euo pipefail
 
 cd "${MEMCHECK_ROOT:-$(git rev-parse --show-toplevel)}"
 memories=".serena/memories"
-# The always-loaded surface, whose memory table is the routing table this gate
-# joins against. `batten.toml`'s `[budget.instructions]` names the same file as
-# the counted always-loaded set; naming it here too is deliberate rather than a
-# second authority — parsing TOML in shell to learn a constant would buy a
-# dependency and no accuracy.
-index="AGENTS.md"
-# The upstream convention template, exempt from BOTH the referrer scan below and
-# the index join above it, on the same ground: it is shipped by the tooling, and
-# its examples describe memories that deliberately do not exist here. Written
-# once so the two exemptions cannot come to disagree.
+# The upstream convention template, exempt from the referrer scan below: it is
+# shipped by the tooling, and its examples describe memories that deliberately do
+# not exist here.
 template="$memories/memory_maintenance.md"
 
 violations=0
@@ -40,36 +33,27 @@ report() { # pointer-only: file:line rule-id (name)
 # root is only findable by directory listing.
 [ -f "$memories/core.md" ] || report "$memories/core.md:0" "memory-root-missing"
 
-# --- routing-table membership (CLOUD-291) --------------------------------------
+# --- membership is NOT checked, deliberately (CLOUD-683) ----------------------
 #
-# The index names each memory and the trigger to read it, and a memory states no
-# trigger of its own by design — that is the referring document's job. So a memory
-# with no row has no trigger ANYWHERE and is reachable only by listing the
-# directory: `workflow/agent-fanout`, the repo's only concurrency cap, sat in
-# exactly that state while a fan-out ran with no bound.
+# CLOUD-291 required every memory to appear as a row in the always-loaded index,
+# on the premise that a memory absent from it "has no trigger anywhere, reachable
+# only by listing the directory". Serena's own documentation contradicts that:
+# "The agent receives the full memory NAME LIST up front as part of their initial
+# instructions", and "there is no required index or routing table". Discovery is
+# guaranteed every session; the index was never load-bearing for it.
 #
-# The other conjuncts check references OUT of documents. An orphan is not a broken
-# link, so none of them fires on this, and a referencedness check written against
-# `mem:` mentions could not work either — the graph root carries zero outgoing
-# references and would fail the tree it governs.
+# The requirement also cost something real. Membership demanded a row in a file
+# `[budget.instructions]` caps at 199 lines, and that file reached 199 — so memory
+# COUNT became a function of index LENGTH and no memory could be added at all.
 #
-# So the predicate is a SET DIFFERENCE, evaluated in the bijection loop below
-# rather than in a second walk that could drift from it: tracked memory names,
-# minus the index rows read here, minus the template.
+# And it aimed a gate at the wrong kind of failure. The harm CLOUD-291 measured
+# was an agent not READING a memory whose name it already had. That is judgement,
+# and non-negotiable rule 3 says a gate resolves to a command and an exit code
+# over an object it decides, never a model verdict.
 #
-# A row is a table row whose first cell is a backticked name in the reference
-# charset. The `.claude/rules/` table in the same file matches nothing (its cells
-# carry a `.`), and would be harmless if it did: a surplus name subtracts nothing
-# from the memory set.
-#
-# An absent index is REPORTED, never a silent skip — the same shape as the missing
-# graph root above. A gate that goes quiet when its input disappears is a false
-# green, and this predicate is one that goes quiet exactly when it is satisfied.
-[ -f "$index" ] || report "$index:0" "memory-index-missing"
-# `[:blank:]` and not `[:space:]`: the latter deletes the newlines too, folding
-# every row into one blob that matches no name.
-# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
-indexed=$(grep -oE '^\|[[:blank:]]*`[A-Za-z0-9_/-]+`' "$index" 2>/dev/null | tr -d '|`[:blank:]' || true)
+# So what remains are the properties upstream itself treats as integrity, and
+# which `serena memories check` reports advisorily: the root exists, every name is
+# addressable, and no reference dangles. An unreferenced memory is not a defect.
 
 # --- name bijection -----------------------------------------------------------
 #
@@ -84,15 +68,8 @@ while IFS= read -r f; do
 	case "$name" in
 	*.md) report "$f:0" "memory-name-shadowed (strips to ${name%.md})" ;;
 	esac
-	# The index join is an `elif`: a name that cannot be referenced cannot appear
-	# in the index either, so reporting it unindexed as well would say the same
-	# thing twice. The name is compared AS THE INDEX WRITES IT — `workflow/x`, not
-	# a basename — which is what keeps a memory in a subdirectory from being
-	# reported for its path shape.
 	if ! grep -qE '^[A-Za-z0-9_/-]+$' <<<"$name"; then
 		report "$f:0" "memory-name-unreferencable"
-	elif [ "$f" != "$template" ] && ! grep -qxF "$name" <<<"$indexed"; then
-		report "$f:0" "memory-unindexed ($name)"
 	fi
 done < <(git ls-files "$memories/*.md" "$memories/**/*.md" | sort -u)
 

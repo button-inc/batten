@@ -146,16 +146,6 @@ local gate = new Mapping<String, Step> {
     glob = List("hk.pkl", ".claude/hooks/git-hook")
     check = "mise run hook-profile-check"
   }
-  // The checked-in memories are a graph navigated by mem: references, and the
-  // reference tooling's own check is advisory (always exits 0) — so a memory
-  // renamed without reference propagation, however it was renamed, dangles
-  // silently. This gates the edges: every mem:NAME in tracked markdown must
-  // resolve, every memory must be addressable by its own filename, and the
-  // graph root must exist (CLOUD-183).
-  ["memories-check"] {
-    glob = List("**/*.md")
-    check = "mise run memories-check"
-  }
   // `.claude/rules/rust.md` carries no module tree — it defers to mem:core as
   // the authority kept current instead. Nothing checked that authority, so a
   // module could land with no row and leave the rule pointing at an incomplete
@@ -841,8 +831,28 @@ hooks {
     steps = gate
   }
   // Read-only variant driven by `hk check --all` (via `mise run hooks`) in CI.
+  //
+  // memories-check lives HERE ONLY, deliberately not in `gate` (CLOUD-683).
+  // It gates the memory graph's EDGES and nothing else: every mem:NAME in
+  // tracked markdown must resolve, every memory must be addressable by its own
+  // filename, and the graph root must exist (CLOUD-183). Membership is NOT
+  // asserted — Serena hands the agent every memory name up front and documents
+  // that no index or routing table is required, so an unreferenced memory is
+  // discoverable and is not a defect (CLOUD-683 supersedes CLOUD-291).
+  //
+  // Off pre-commit because a memory written in an ephemeral container is
+  // harmless and only LANDING one is destructive: blocking a local commit
+  // mid-thought cost more than it caught, and a memory that cannot be committed
+  // dies with the container. `verify` and `ci` both reach this hook, so nothing
+  // incoherent lands — the gate moved to the point in the lifecycle it protects,
+  // it did not weaken. Out of `fix` too: it carries no fixer.
   ["check"] {
-    steps = gate
+    steps = (gate) {
+      ["memories-check"] {
+        glob = List("**/*.md")
+        check = "mise run memories-check"
+      }
+    }
   }
   // `hk fix --all`, what `mise run fmt` calls: run every fixer over the tree.
   ["fix"] {
