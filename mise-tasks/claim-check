@@ -104,6 +104,11 @@
 #MUTANT takeover-always-on|s/^\tif \[ -n "\${BATTEN_CLAIM_TAKEOVER:-}" \]; then$/\tif true; then/|an occupied issue is refused when no takeover is asked for
 # And it must RECORD what it overrode: a takeover that mints a receipt
 # indistinguishable from a clean pull is a bypass wearing a better name.
+# CLOUD-520. Neutering the liveness filter restores the old behaviour — every
+# attached PR refuses, merged or not — so the case that proves a merged
+# predecessor is pullable must go RED. Without this row the narrowing is a
+# change nothing shows can fail, which is exactly what shipped unproven before.
+#MUTANT has-pr-ignores-liveness|s/(\$s != "merged" and \$s != "closed")/(true)/|CLOUD-520 clause a — a MERGED pull request is a predecessor, not a competitor
 #MUTANT takeover-unrecorded|s/^\t\tif \[ "\$takeover" -ne 0 \]; then$/\t\tif false; then/|NAMES the refusals it overrode
 set -euo pipefail
 
@@ -197,10 +202,38 @@ while read -r id; do
 
 	# An attachment whose URL is a GitHub pull request. Matched on the URL shape
 	# rather than the title, which is free text a human wrote.
-	pr=$(jq -r '[.attachments // [] | .[] | .url | select(test("github\\.com/.+/pull/[0-9]+"))]
+	#
+	# LIVE, NOT MERELY PRESENT (CLOUD-520). This rule's purpose is narrower than
+	# what it used to implement: the header says it "catches one that published
+	# before the column moved", which is a claim about an OPEN pull request. A
+	# MERGED one is the opposite signal — evidence that work finished, not that
+	# it is in flight — and refusing on it makes an issue released back to Todo
+	# permanently unpullable. Measured on CLOUD-479: `Todo`, unassigned, its own
+	# body inviting the next taker, refused on PR #376 which had merged the day
+	# before.
+	#
+	# THE STATE COMES FROM THE CALLER, and that is forced rather than chosen.
+	# This gate is a pure function of stdin — no tracker credential, no network,
+	# so it cannot hang or rate-limit and its suite runs unconditionally — and
+	# the tracker's attachment objects carry `id`, `title`, `subtitle` and `url`
+	# and no state at all (measured 2026-08-19). So the fix cannot be a lookup
+	# here; it is the shape `claimed-keys` already uses, where the caller supplies
+	# the facts about a PR this checkout did not author.
+	#
+	# ABSENT REFUSES, and that default is load-bearing. A caller that supplies
+	# nothing gets exactly today's behaviour, so this narrowing can only ever turn
+	# a false refusal into a pull — never a real competitor into a silent pass.
+	# Open refuses, malformed refuses (a parse failure must not become a pass),
+	# and only an explicit merged/closed reading stands down.
+	pr=$(jq -r '[.attachments // [] | .[]
+	             | select(.url? and (.url | test("github\\.com/.+/pull/[0-9]+")))
+	             | select(((.state // "") | ascii_downcase) as $s
+	                      | ($s != "merged" and $s != "closed")
+	                        and ((.merged // false) != true))
+	             | .url]
 	            | first // ""' <<<"$payload")
 	if [ -n "$pr" ]; then
-		report "$id" "has-pr (${pr##*/})"
+		report "$id" "has-pr (${pr##*/}) — if it is merged or closed, say so on the attachment (\"state\": \"merged\") and re-run"
 	fi
 
 	# --- is this a real, refined story? (CLOUD-431) --------------------------

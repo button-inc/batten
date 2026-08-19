@@ -499,3 +499,101 @@ baseline_for() { # baseline_for <key> <body>
 	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && BATTEN_CLAIM_TAKEOVER=1 $CHECK)"
 	[[ "$output" == *"CLOUD-407 not-todo"* ]]
 }
+
+# --- has-pr narrowed to a LIVE pull request (CLOUD-520) ----------------------
+#
+# The rule's purpose is "someone published before the column moved", which is a
+# claim about an OPEN pull request. A merged one is the opposite signal, and
+# refusing on it made an issue released back to Todo permanently unpullable —
+# measured on CLOUD-479, refused on a PR that had merged the day before.
+#
+# The state cannot come from the tracker: its attachment objects carry `id`,
+# `title`, `subtitle` and `url` and nothing else. So the caller supplies it, the
+# way `claimed-keys` already accepts the facts it cannot fetch, and the gate stays
+# a pure function of stdin.
+
+# Same as `payload`, plus a state on the attachment. Written as its own helper
+# rather than a sixth positional argument so the existing cases keep asserting
+# the SHAPE they were written for — a payload with no state at all.
+payload_pr() { # <id> <pr-url> <state-json-fragment>
+	local block
+	block=$(
+		cat <<-'MD'
+			**Refinement — Ready**
+
+			* **Source of truth (§1).** The fixture's own body, which is all this case reads.
+			* **Mechanism as a computable predicate (§2).** A gate resolves it to an exit code.
+			* **Output & exit (§5).** Pointer-only, byte-stable.
+			* **Commit / bump (§6).** `fix(fixture)` → **patch** until `0.1.0`.
+			* **Test obligation (§7).** The bats case below.
+			* **Blockers (§8).** None.
+		MD
+	)
+	jq -nc --arg id "$1" --arg pr "$2" --argjson extra "$3" --arg description "$block" \
+		'{
+      id: $id, status: "Todo", assignee: null,
+      attachments: [({url: $pr} + $extra)],
+      description: $description, updatedAt: "1970-01-01T00:00:00.000Z"
+    }'
+}
+
+@test "CLOUD-520 clause a — a MERGED pull request is a predecessor, not a competitor" {
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-479 https://github.com/button-inc/batten/pull/376 '{\"state\":\"merged\"}' | $CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"has-pr"* ]]
+}
+
+@test "CLOUD-520 clause a — the SAME payload without the state still refuses" {
+	# The pair is the point. Absent state is today's behaviour exactly, so this
+	# narrowing can only turn a false refusal into a pull — never a real
+	# competitor into a silent pass.
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-479 https://github.com/button-inc/batten/pull/376 '{}' | $CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-479 has-pr (376)"* ]]
+}
+
+@test "CLOUD-520 clause b — a CLOSED unmerged pull request does not refuse either" {
+	# Abandoned is not in flight. `merged: false` alongside it is the shape the
+	# GitHub API actually returns for a closed-unmerged PR.
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-479 https://github.com/button-inc/batten/pull/376 '{\"state\":\"closed\",\"merged\":false}' | $CHECK"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-520 clause b — the merged BOOLEAN alone is enough, without a state string" {
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-479 https://github.com/button-inc/batten/pull/376 '{\"merged\":true}' | $CHECK"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-520 clause c — an OPEN pull request still refuses — the rule is not deleted" {
+	# The case that gives every one above its meaning. A narrowing that also
+	# stopped refusing live competitors would pass (a) and (b) and be worthless.
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-49 https://github.com/button-inc/batten/pull/145 '{\"state\":\"open\"}' | $CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-49 has-pr (145)"* ]]
+}
+
+@test "CLOUD-520 clause d — a malformed state refuses rather than reading as merged" {
+	# A parse failure must never become a pass. Anything that is not an explicit
+	# merged/closed reading is treated as live.
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-49 https://github.com/button-inc/batten/pull/145 '{\"state\":\"MeRgEdish\"}' | $CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"has-pr (145)"* ]]
+}
+
+@test "CLOUD-520 clause d — the state is read case-insensitively, as the API spells it" {
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-479 https://github.com/button-inc/batten/pull/376 '{\"state\":\"MERGED\"}' | $CHECK"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-520 clause e — a non-PR attachment carrying a state is still ignored" {
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-230 https://linear.app/buttoninc/document/x '{\"state\":\"open\"}' | $CHECK"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-520 remedy — the refusal names the remedy, not merely the refusal" {
+	# A caller hitting the false positive must be told how to supply the state,
+	# or the only route it finds is skipping the gate entirely.
+	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-49 https://github.com/button-inc/batten/pull/145 '{}' | $CHECK"
+	[[ "$output" == *"state"* ]]
+	[[ "$output" == *"merged"* ]]
+}
