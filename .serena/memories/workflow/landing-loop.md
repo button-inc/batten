@@ -100,6 +100,25 @@ invisible on exactly the runs where the suite is slowest.
   default-branch tip and carries nothing else that identifies the PR. Reading it
   by timestamp alone means reading strangers' refusals as your own.
 
+## Messages that look like failure and are not
+
+`land` ends a successful land with `land: could not delete
+origin/<branch> (already gone, or the remote refused) — the PR has landed either
+way.` (`mise-tasks/land:1697`).
+
+**It is expected, and it means "already gone".** GitHub's auto-delete-on-merge
+wins the race against `land`'s own delete, so the branch is reliably absent by
+the time it asks — `git ls-remote --heads origin '<branch>'` returns nothing.
+Measured on four consecutive lands (2026-08-11): printed on every one, with the
+PR merged and the branch deleted in each case.
+
+The line reads as an error because it names a failed operation and cannot
+distinguish its two causes without an extra round trip. Do not investigate it,
+and do not "fix" the delete: the delete is already redundant, not broken. The
+only reading that would matter is the *other* half of the disjunction — a remote
+that genuinely refused — and that surfaces as a branch still present on
+`ls-remote`, which is what to check if you ever need to tell them apart.
+
 ## The gates that refuse a repair
 
 | Gate              | Refuses                                                                                        | Bypass                           |
