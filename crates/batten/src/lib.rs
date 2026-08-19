@@ -1015,17 +1015,11 @@ fn run_state_migrate(err: &mut dyn Write) -> Result<ExitCode> {
 
 /// Navigate a frozen capture (CLOUD-121).
 ///
-/// **Always [`ExitCode::Success`] on the read verbs**, for the same reason
-/// [`run_state_list`] is: these report what a past run produced, and a verdict
-/// here would put a record on the deny channel. A handle that names nothing is
-/// still a [`UsageError`] — the caller asked about a capture that is not there,
-/// which is a statement about the invocation, not a finding about the repository.
-///
-/// `--lines` and `--grep` together is refused rather than composed. Two selectors
-/// have two readings — the intersection or the union — and picking one silently
-/// would make the answer depend on a choice the caller never saw. A caller who
-/// wants both greps first and then widens around what it found, which is the
-/// navigation loop this verb exists to make possible.
+/// A dispatcher only. The three sub-verbs are separate functions rather than
+/// three arms of one match, because a single body carrying all of them crossed
+/// the workspace's own function-length lint — and the lint was right: `show`
+/// resolves a selection, `list` filters a directory, and `prune` removes, which
+/// are three jobs sharing nothing but a repository root.
 fn run_capture(
     command: &cli::CaptureCommand,
     mode: Mode,
@@ -1039,111 +1033,156 @@ fn run_capture(
             lines,
             grep,
             json,
-        } => {
-            let parsed = capture::Handle::parse(handle)?;
-            let selection = match (lines.as_deref(), grep.as_deref()) {
-                (Some(_), Some(_)) => {
-                    return Err(UsageError::raise(
-                        "capture show: --lines and --grep select differently; grep first, then \
-                         widen around the line it names",
-                    ));
-                }
-                (Some(range), None) => capture::Selection::Lines {
-                    from: parse_line(range, 0)?,
-                    to: parse_line(range, 1)?,
-                },
-                (None, Some(needle)) => capture::Selection::Grep {
-                    needle: needle.to_owned(),
-                },
-                (None, None) => capture::Selection::Summary,
-            };
-            let record = capture::Capture {
-                stream: parsed.stream.as_str(),
-                bytes: 0,
-                digest: parsed.digest.clone(),
-            };
-            let bytes = capture::read(&repo, &record).map_err(|_| {
-                UsageError::raise(format!(
-                    "capture show: no capture at {parsed} — `batten capture list` names the ones \
-                     this repository holds"
-                ))
-            })?;
-            let answer = capture::select(&parsed, &bytes, &selection);
-            if *json {
-                writeln!(out, "{}", serde_json::to_string_pretty(&answer)?)?;
-            } else if matches!(selection, capture::Selection::Summary) {
-                // The pointer, in the `<pointer> <fact>` shape every other verb
-                // here emits, so a caller needs no second parser.
-                writeln!(
-                    out,
-                    "{} {} bytes {} lines",
-                    answer.handle, answer.bytes, answer.lines
-                )?;
-            } else {
-                for line in &answer.selected {
-                    writeln!(
-                        out,
-                        "{}:{} {}",
-                        parsed.stream.as_str(),
-                        line.number,
-                        line.text
-                    )?;
-                }
-            }
-            Ok(ExitCode::Success)
-        }
+        } => run_capture_show(&repo, handle, lines.as_deref(), grep.as_deref(), *json, out),
         cli::CaptureCommand::List { stream, json } => {
-            if let Some(stream) = stream.as_deref() {
-                // Validated through the handle parser rather than a second list of
-                // stream names, so the filter cannot come to disagree with the
-                // store about what a stream is.
-                capture::Handle::parse(&format!("{stream}:00"))?;
-            }
-            let held: Vec<capture::Capture> = capture::list(&repo)?
-                .into_iter()
-                .filter(|record| stream.as_deref().is_none_or(|want| record.stream == want))
-                .collect();
-            if *json {
-                writeln!(out, "{}", serde_json::to_string_pretty(&held)?)?;
-            } else {
-                for record in &held {
-                    writeln!(out, "{} {} bytes", record.handle(), record.bytes)?;
-                }
-            }
-            Ok(ExitCode::Success)
+            run_capture_list(&repo, stream.as_deref(), *json, out)
         }
         cli::CaptureCommand::Prune { yes, dry_run } => {
-            if *dry_run {
-                let held = capture::list(&repo)?.len();
-                output::message(
-                    mode,
-                    output::Verbosity::Normal,
-                    err,
-                    &format!("capture prune: would remove {held} capture(s)"),
-                )?;
-                return Ok(ExitCode::Success);
-            }
-            if !*yes {
-                // §4's refusal, and unconditional rather than only-when-unattended
-                // on purpose: the same section says a policy engine that blocks a
-                // loop waiting for a Y/N is a dead gate, and the primary caller
-                // here is a program. Naming the flag is the whole remedy, which is
-                // what makes the refusal one hop from done rather than a wall.
-                return Err(UsageError::raise(
-                    "capture prune: removing captures is destructive and this never prompts — \
-                     pass -y, or -n to see what would go",
-                ));
-            }
-            let removed = capture::prune(&repo)?;
-            output::message(
-                mode,
-                output::Verbosity::Normal,
-                err,
-                &format!("capture prune: removed {removed} capture(s)"),
-            )?;
-            Ok(ExitCode::Success)
+            run_capture_prune(&repo, *yes, *dry_run, mode, err)
         }
     }
+}
+
+/// Read a frozen capture, with no second run of the command that made it.
+///
+/// **Always [`ExitCode::Success`]**, for the same reason [`run_state_list`] is:
+/// this reports what a past run produced, and a verdict here would put a record
+/// on the deny channel. A handle that names nothing is still a [`UsageError`] —
+/// the caller asked about a capture that is not there, which is a statement about
+/// the invocation, not a finding about the repository.
+///
+/// `--lines` and `--grep` together is refused rather than composed. Two selectors
+/// have two readings — the intersection or the union — and picking one silently
+/// would make the answer depend on a choice the caller never saw. A caller who
+/// wants both greps first and then widens around what it found, which is the
+/// navigation loop this verb exists to make possible.
+fn run_capture_show(
+    repo: &Path,
+    handle: &str,
+    lines: Option<&str>,
+    grep: Option<&str>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    let parsed = capture::Handle::parse(handle)?;
+    let selection = match (lines, grep) {
+        (Some(_), Some(_)) => {
+            return Err(UsageError::raise(
+                "capture show: --lines and --grep select differently; grep first, then widen \
+                 around the line it names",
+            ));
+        }
+        (Some(range), None) => capture::Selection::Lines {
+            from: parse_line(range, 0)?,
+            to: parse_line(range, 1)?,
+        },
+        (None, Some(needle)) => capture::Selection::Grep {
+            needle: needle.to_owned(),
+        },
+        (None, None) => capture::Selection::Summary,
+    };
+    // The byte count is the store's to know, not the caller's: this record exists
+    // only to name the file, and `select` reports the real length off the bytes.
+    let record = capture::Capture {
+        stream: parsed.stream.as_str(),
+        bytes: 0,
+        digest: parsed.digest.clone(),
+    };
+    let bytes = capture::read(repo, &record).map_err(|_| {
+        UsageError::raise(format!(
+            "capture show: no capture at {parsed} — `batten capture list` names the ones this \
+             repository holds"
+        ))
+    })?;
+    let answer = capture::select(&parsed, &bytes, &selection);
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&answer)?)?;
+    } else if matches!(selection, capture::Selection::Summary) {
+        // The pointer, in the `<pointer> <fact>` shape every other verb here
+        // emits, so a caller needs no second parser.
+        writeln!(
+            out,
+            "{} {} bytes {} lines",
+            answer.handle, answer.bytes, answer.lines
+        )?;
+    } else {
+        for line in &answer.selected {
+            writeln!(
+                out,
+                "{}:{} {}",
+                parsed.stream.as_str(),
+                line.number,
+                line.text
+            )?;
+        }
+    }
+    Ok(ExitCode::Success)
+}
+
+/// List this repository's captures as handles.
+fn run_capture_list(
+    repo: &Path,
+    stream: Option<&str>,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
+    if let Some(stream) = stream {
+        // Validated through the handle parser rather than a second list of stream
+        // names, so the filter cannot come to disagree with the store about what a
+        // stream is. The `00` is a throwaway digest: only the stream is judged.
+        capture::Handle::parse(&format!("{stream}:00"))?;
+    }
+    let held: Vec<capture::Capture> = capture::list(repo)?
+        .into_iter()
+        .filter(|record| stream.is_none_or(|want| record.stream == want))
+        .collect();
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&held)?)?;
+    } else {
+        for record in &held {
+            writeln!(out, "{} {} bytes", record.handle(), record.bytes)?;
+        }
+    }
+    Ok(ExitCode::Success)
+}
+
+/// Remove this repository's captures — the one removal path.
+fn run_capture_prune(
+    repo: &Path,
+    yes: bool,
+    dry_run: bool,
+    mode: Mode,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    if dry_run {
+        let held = capture::list(repo)?.len();
+        output::message(
+            mode,
+            output::Verbosity::Normal,
+            err,
+            &format!("capture prune: would remove {held} capture(s)"),
+        )?;
+        return Ok(ExitCode::Success);
+    }
+    if !yes {
+        // §4's refusal, and unconditional rather than only-when-unattended on
+        // purpose: the same section says a policy engine that blocks a loop
+        // waiting for a Y/N is a dead gate, and the primary caller here is a
+        // program. Naming the flag is the whole remedy, which is what makes the
+        // refusal one hop from done rather than a wall.
+        return Err(UsageError::raise(
+            "capture prune: removing captures is destructive and this never prompts — pass -y, \
+             or -n to see what would go",
+        ));
+    }
+    let removed = capture::prune(repo)?;
+    output::message(
+        mode,
+        output::Verbosity::Normal,
+        err,
+        &format!("capture prune: removed {removed} capture(s)"),
+    )?;
+    Ok(ExitCode::Success)
 }
 
 /// One half of a `FROM:TO` range, as a 1-indexed line number.
