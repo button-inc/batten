@@ -410,6 +410,32 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json")
     check = "mise run mcp-allow-check"
   }
+  // The same silence, one table over in the same file (CLOUD-471). The
+  // `PreToolUse` matcher decides which tool calls the host spawns the hook for
+  // AT ALL, so a `[[verb]]` naming a tool the matcher omits loads, validates and
+  // gates nothing — the process is never spawned, no envelope is decoded, and
+  // the symptom is an allow indistinguishable from a pass. `hooks-wiring-check`
+  // above deliberately compares only the EVENT and the COMMAND ("THE MATCHER IS
+  // NOT COMPARED"), because a matcher derived from the `Harness` enum would be
+  // the repo-agnostic core asserting a consumer's tool vocabulary; the coverage
+  // question therefore lands in a consumer gate, which is this one.
+  //
+  // Globbed on all three files that can move the verdict plus the script that
+  // decides. `crates/batten/src/hook.rs` is a genuine input, not a courtesy: the
+  // gate reads `Harness::ClaudeCode::write_tools()` there rather than restating
+  // the set, so a tool added to that arm changes which verbs need their own name
+  // in the matcher — and a gate that does not re-run when its subject moves stops
+  // running for exactly the commits it exists to judge.
+  ["hook-matcher-check"] {
+    glob =
+      List(
+        ".claude/settings.json",
+        "batten.toml",
+        "crates/batten/src/hook.rs",
+        "mise-tasks/hook-matcher-check",
+      )
+    check = "mise run hook-matcher-check"
+  }
   // .mcp.json launches Serena through a SCOPED `mise exec` — naming the tool, so
   // one unrelated tool failing to install cannot take the server down with it
   // (CLOUD-316: a bare exec provisions the whole toolchain first, and a
