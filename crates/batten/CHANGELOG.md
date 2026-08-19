@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.87](https://github.com/button-inc/batten/compare/v0.0.86...v0.0.87) - 2026-08-19
+
+### Added
+
+- *(check)* tell a first reader what a clean run just did
+
+### Other
+
+- *(check)* split the clean-run notice's write half from its decision
+
 ## [0.0.86](https://github.com/button-inc/batten/compare/v0.0.85...v0.0.86) - 2026-08-19
 
 ### Other
