@@ -388,7 +388,16 @@ period (2)` in SCHEMA order — so the report never depends on the order the aut
   expired, since the diff is a fact about two files and the lapse is the run's.
   Pointer-only `Weakening`s (key path + two verdict tokens),
   sorted so the report is byte-stable. `config lint` (CLOUD-87) reuses both
-  rather than growing a second trusted-load path.
+  rather than growing a second trusted-load path. **What is compared is a census,
+  not a habit (CLOUD-721)**: `CENSUS` carries a verdict per `Config` field —
+  compared (with its kinds), no monotone reading, or not policy-bearing, the last
+  two with the reason — and its test reads the field list off `config.rs`'s own
+  source, so a key added to the struct fails until somebody decides. `Rule`'s
+  predicate columns work the same way one level down: every column is compared as
+  a byte change (`RulePredicateChanged`, digest tokens, never a ranking of two
+  globs) unless `RULE_NON_PREDICATE` exempts it with a reason. `WaiverExpiryExtended`
+  is the pairing `Waiver::key` cannot see — same rule and path, expiry pushed out —
+  and stays date-independent by comparing one file's `expires` against the other's.
 - `resolve.rs` — house-style §8 precedence resolver: `flag > env > local file >
 repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   not hard-coded per field.

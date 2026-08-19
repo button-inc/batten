@@ -40,6 +40,22 @@
 //! key rather than of this module. Adding a `protected` path is still clean;
 //! adding a waiver is not.
 //!
+//! # Coverage is a census, not a habit (CLOUD-721)
+//!
+//! This comparison once covered six keys of a twenty-eight-key struct, and
+//! nothing noticed: `hk` re-runs `config-lint` on a diff touching *this* file
+//! and never on one that grows `config.rs` a key, so every key landed since
+//! CLOUD-31 arrived with no prompt to ask whether it has a weakening direction.
+//! For `check` that only under-reports; for `config lint` the weakening list
+//! **is** the verdict, so an uncovered key is a weakening that gate cannot see.
+//!
+//! [`CENSUS`] closes it as a mechanism rather than a longer list. Its field list
+//! is read off [`Config`]'s own source, so a field added to the struct fails the
+//! census until somebody records one of three answers — compared, no monotone
+//! reading, or not policy-bearing — with the reason beside the last two. Silence
+//! is not one of the three, which is what the first version of this module let
+//! it be.
+//!
 //! Every comparison is key-local and order-independent, so the report is a
 //! deterministic function of the two configs and nothing else.
 
@@ -991,11 +1007,16 @@ fn ci_weakenings(base: Option<&crate::ci::Ci>, working: Option<&crate::ci::Ci>) 
 
 /// Deny patterns dropped, and carve-outs added.
 ///
-/// The `identity` beneath them is not compared: which name and email a
+/// Dropping the whole table drops every pattern with it, and it is reported that
+/// way — one pointer per pattern rather than one saying `[attribution]` is gone.
+/// The per-key precision is CLOUD-233's rule: what distinguishes two weakenings
+/// belongs in the key, and "which refusals this branch dropped" is exactly what a
+/// reviewer needs. The gate refuses an absent table loudly on its own (exit 1),
+/// which is a second signal rather than a reason for this one to stay quiet.
+///
+/// The `identity` beneath the lists is not compared: which name and email a
 /// repository holds itself accountable to is that repository's own decision, and
-/// two identities cannot be ranked. Nor is the table's absence — the gate reports
-/// an absent `[attribution]` as exit 1, never as a clean pass, so removing it
-/// forgives nothing.
+/// two identities cannot be ranked.
 fn attribution_weakenings(
     base: Option<&crate::attribution::Attribution>,
     working: Option<&crate::attribution::Attribution>,
@@ -1347,6 +1368,27 @@ mod tests {
     }
 
     #[test]
+    fn removing_an_unlanded_path_is_a_weakening() {
+        // `unlanded` is evaluated independently of `protected` (CLOUD-37), so it
+        // needs its own case: the two sets must never be collapsed, and a test
+        // that only covered one would not notice if they were. That this case was
+        // missing is what `every_kind_is_exercised_by_a_case_in_this_module`
+        // found on the tree CLOUD-721 arrived at.
+        let base = parse("version = 1\nunlanded = [\"a\", \"b\"]\n");
+        let working = parse("version = 1\nunlanded = [\"a\"]\n");
+        assert_eq!(
+            weakenings(&base, &working),
+            vec![Weakening::new(
+                WeakeningKind::UnlandedRemoved,
+                "unlanded[b]",
+                "present",
+                "absent"
+            )]
+        );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    #[test]
     fn narrowing_scope_is_not_a_weakening() {
         // §8 lists "narrow scope" among the *tightening* moves: a smaller scope
         // polices less but forgives nothing inside what remains.
@@ -1645,5 +1687,563 @@ mod tests {
         let count = tokens.len();
         tokens.dedup();
         assert_eq!(tokens.len(), count, "two kinds share one token");
+    }
+
+    // --- CLOUD-721: one both-directions case per newly compared key ----------
+    //
+    // The shape the six original cases use, and the reason it is repeated per
+    // key rather than folded into a table: the *direction* is a property of the
+    // key, so a case that only proved "something is reported" would pass on a
+    // comparison wired backwards.
+
+    fn config(extra: &str) -> Config {
+        parse(&format!("version = 1\n{extra}"))
+    }
+
+    /// The single weakening a pair must produce, or a panic naming what it did.
+    fn only(base: &Config, working: &Config) -> Weakening {
+        let found = weakenings(base, working);
+        assert_eq!(found.len(), 1, "expected exactly one weakening: {found:?}");
+        found[0].clone()
+    }
+
+    #[test]
+    fn lowering_or_deleting_the_version_floor_is_a_weakening() {
+        // Below the running build in both directions, or `parse` would refuse
+        // the fixture before the comparison could see it (CLOUD-33).
+        let base = config("min_batten_version = \"0.0.10\"\n");
+        let lower = config("min_batten_version = \"0.0.5\"\n");
+        assert_eq!(
+            only(&base, &lower),
+            Weakening::new(
+                WeakeningKind::MinVersionLowered,
+                "min_batten_version",
+                "0.0.10",
+                "0.0.5",
+            )
+        );
+        // Deleting it admits every build there has ever been, so absence is the
+        // weakest value rather than "no opinion".
+        assert_eq!(only(&base, &config("")).working, "absent");
+        // The other direction, and the unchanged one.
+        assert!(weakenings(&lower, &base).is_empty());
+        assert!(weakenings(&base, &base).is_empty());
+    }
+
+    #[test]
+    fn dropping_a_tracked_epoch_path_is_a_weakening() {
+        let base = config("[epoch]\ntracked = [\"a\", \"b\"]\n");
+        let working = config("[epoch]\ntracked = [\"a\"]\n");
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::EpochPathRemoved,
+                "epoch.tracked[b]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    fn verb_row(verb: &str, subcommand: Option<&str>) -> String {
+        let qualifier =
+            subcommand.map_or_else(String::new, |sub| format!("subcommand = \"{sub}\"\n"));
+        format!("\n[[verb]]\nverb = \"{verb}\"\neffect = \"write\"\n{qualifier}")
+    }
+
+    #[test]
+    fn removing_a_mutating_verb_row_is_a_weakening() {
+        // The most consequential of the keys CLOUD-721 added: a row that is gone
+        // is a tool call nothing mediates at the `PreToolUse` boundary.
+        let base = config(&format!(
+            "{}{}",
+            verb_row("rm", None),
+            verb_row("git", Some("push"))
+        ));
+        let working = config(&verb_row("rm", None));
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::VerbRemoved,
+                "verb[git push]",
+                "present",
+                "absent",
+            ),
+            "the subcommand is part of the row's identity, so it is part of the key"
+        );
+        assert!(weakenings(&working, &base).is_empty());
+    }
+
+    #[test]
+    fn removing_a_marker_or_an_exec_pattern_or_a_provision_is_a_weakening() {
+        let marker = "\n[[marker]]\nid = \"m\"\ntoken = \"SUPPRESSED-HERE\"\n";
+        assert_eq!(
+            only(&config(marker), &config("")),
+            Weakening::new(
+                WeakeningKind::MarkerRemoved,
+                "marker[m]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &config(marker)).is_empty());
+
+        let pattern =
+            "\n[[exec_pattern]]\nid = \"p\"\npattern = \"warning\"\nreason = \"fix it\"\n";
+        assert_eq!(
+            only(&config(pattern), &config("")),
+            Weakening::new(
+                WeakeningKind::ExecPatternRemoved,
+                "exec_pattern[p]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &config(pattern)).is_empty());
+
+        let provision = concat!(
+            "\n[[provision]]\nname = \"tool\"\nversion = \"1.0.0\"\n",
+            "unpack = \"tar_gz\"\nbinary = \"tool\"\n",
+            "url = \"https://example.invalid/tool.tar.gz\"\n",
+            "sha256 = \"",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "\"\n"
+        );
+        assert_eq!(
+            only(&config(provision), &config("")),
+            Weakening::new(
+                WeakeningKind::ProvisionRemoved,
+                "provision[tool]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &config(provision)).is_empty());
+    }
+
+    fn dated_waiver(rule: &str, expires: &str) -> String {
+        format!("\n[[waiver]]\nrule = \"{rule}\"\nreason = \"tracked\"\nexpires = \"{expires}\"\n")
+    }
+
+    #[test]
+    fn extending_a_lapsed_waiver_is_a_weakening() {
+        // CLOUD-721's named case, and it was reported CLEAN before this landed:
+        // `Waiver::key` omits `expires`, so a base waiver lapsed in 2020 and a
+        // working one live until 2099 are the same key and `added_entries` sees
+        // nothing — while the second suppresses every finding of its rule and the
+        // first suppresses none.
+        let base = config(&dated_waiver("r", "2020-01-01"));
+        let working = config(&dated_waiver("r", "2099-01-01"));
+        assert_eq!(
+            only(&base, &working),
+            Weakening::new(
+                WeakeningKind::WaiverExpiryExtended,
+                "waiver[r].expires",
+                "2020-01-01",
+                "2099-01-01",
+            )
+        );
+        // Pulling an expiry IN raises the bar, and the comparison is against the
+        // other file rather than against today, so neither direction depends on
+        // the date the comparison ran (§6).
+        assert!(weakenings(&working, &base).is_empty());
+        assert!(weakenings(&working, &working).is_empty());
+    }
+
+    #[test]
+    fn a_narrowed_waiver_path_keeps_its_own_expiry_key() {
+        // Two waivers of one rule differ by their path, so the expiry pointers do
+        // too — neither may swallow the other (CLOUD-233).
+        let row = |path: &str, expires: &str| {
+            format!(
+                "\n[[waiver]]\nrule = \"r\"\nreason = \"tracked\"\nexpires = \"{expires}\"\npath = \"{path}\"\n"
+            )
+        };
+        let base = config(&format!(
+            "{}{}",
+            row("src/**", "2020-01-01"),
+            row("vendor/**", "2020-01-01")
+        ));
+        let working = config(&format!(
+            "{}{}",
+            row("src/**", "2099-01-01"),
+            row("vendor/**", "2099-01-01")
+        ));
+        let found = weakenings(&base, &working);
+        assert_eq!(found.len(), 2, "one pointer per waiver, not one per rule");
+        assert_eq!(found[0].key, "waiver[r][src/**].expires");
+        assert_eq!(found[1].key, "waiver[r][vendor/**].expires");
+    }
+
+    #[test]
+    fn narrowing_a_rules_glob_to_match_nothing_is_reported() {
+        // The other case CLOUD-721 named, also clean before this landed: the id
+        // and the severity are untouched, so the comparison called the rule
+        // unchanged while it gated nothing.
+        let base = config(&rule("r", "deny"));
+        let working = config(&rule("r", "deny").replace("**/*.rs", "nothing/here/**"));
+        let found = only(&base, &working);
+        assert_eq!(found.kind, WeakeningKind::RulePredicateChanged);
+        assert_eq!(found.key, "rule[r].glob");
+        // A pointer, never the pattern: the glob is the consumer's config, and
+        // naming which column moved does not require printing what it now says
+        // (non-negotiable rule 4).
+        assert!(
+            !found.working.contains("nothing"),
+            "the token must be a digest: {found:?}"
+        );
+        assert!(found.working.starts_with("sha256:"));
+        // Byte-stable: the same pair produces the same tokens on a second run.
+        assert_eq!(weakenings(&base, &working), weakenings(&base, &working));
+        // And a rule nobody touched reports nothing at all.
+        assert!(weakenings(&base, &base).is_empty());
+    }
+
+    #[test]
+    fn a_lowered_severity_is_not_also_reported_as_a_predicate_change() {
+        // `severity` is exempt from the predicate columns because it has a rank
+        // of its own — reporting both would be one edit with two pointers.
+        let base = config(&rule("r", "deny"));
+        let working = config(&rule("r", "warn"));
+        assert_eq!(only(&base, &working).kind, WeakeningKind::SeverityLowered);
+    }
+
+    #[test]
+    fn every_rule_column_exemption_names_a_real_column_and_a_reason() {
+        // The fail-safe direction one level down from `CENSUS`: a column added to
+        // `Rule` is compared until somebody exempts it here, so this only has to
+        // keep the exemptions honest.
+        let source = include_str!("rules.rs");
+        let start = source
+            .find("pub struct Rule {")
+            .expect("Rule is declared here");
+        let rest = &source[start..];
+        let body = &rest[..rest.find("\n}").expect("the struct closes")];
+        for (column, reason) in RULE_NON_PREDICATE {
+            assert!(
+                body.contains(&format!("pub {column}:")),
+                "`{column}` is exempted from the predicate comparison but `Rule` has no such column"
+            );
+            assert!(
+                !reason.trim().is_empty(),
+                "`{column}` is exempted without saying why"
+            );
+        }
+    }
+
+    const BUDGET: &str = "\n[budget.set]\nfiles = [\"a.md\", \"b.md\"]\nmax_tokens = 100\nmax_lines = 10\n\n[[budget.set.embedded]]\npath = \"x.toml\"\nkey = \"a.b\"\n";
+
+    #[test]
+    fn every_way_of_relaxing_a_budget_is_a_weakening() {
+        let base = config(BUDGET);
+        // The whole set gone: nothing is counted for it at all.
+        assert_eq!(
+            only(&base, &config("")),
+            Weakening::new(
+                WeakeningKind::BudgetSetRemoved,
+                "budget[set]",
+                "present",
+                "absent",
+            )
+        );
+        // A counted file gone.
+        assert_eq!(
+            only(
+                &base,
+                &config(&BUDGET.replace("\"a.md\", \"b.md\"", "\"a.md\""))
+            ),
+            Weakening::new(
+                WeakeningKind::BudgetFileRemoved,
+                "budget[set].files[b.md]",
+                "present",
+                "absent",
+            )
+        );
+        // An embedded declaration gone: a string the host always loads stops
+        // being counted (CLOUD-298).
+        let without_embedded = &BUDGET[..BUDGET.find("\n\n[[budget.set.embedded]]").unwrap()];
+        assert_eq!(
+            only(&base, &config(without_embedded)),
+            Weakening::new(
+                WeakeningKind::BudgetEmbeddedRemoved,
+                "budget[set].embedded[x.toml#a.b]",
+                "present",
+                "absent",
+            )
+        );
+        // A ceiling raised. The direction inverts for a budget: bigger forgives
+        // more, which `design::effective_cap` states in the same words.
+        assert_eq!(
+            only(
+                &base,
+                &config(&BUDGET.replace("max_tokens = 100", "max_tokens = 200"))
+            ),
+            Weakening::new(
+                WeakeningKind::BudgetLimitRaised,
+                "budget[set].max_tokens",
+                "100",
+                "200",
+            )
+        );
+        // A ceiling deleted, which is wider still: the predicate stops
+        // participating.
+        assert_eq!(
+            only(&base, &config(&BUDGET.replace("max_lines = 10\n", ""))),
+            Weakening::new(
+                WeakeningKind::BudgetLimitRaised,
+                "budget[set].max_lines",
+                "10",
+                "absent",
+            )
+        );
+        // Tightening in each direction is clean.
+        assert!(
+            weakenings(
+                &base,
+                &config(&BUDGET.replace("max_tokens = 100", "max_tokens = 50"))
+            )
+            .is_empty()
+        );
+        assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    #[test]
+    fn losing_the_landing_target_is_a_weakening() {
+        let base = config("must_land_on = \"origin/main\"\n");
+        assert_eq!(
+            only(&base, &config("")),
+            Weakening::new(
+                WeakeningKind::MustLandOnRemoved,
+                "must_land_on",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    #[test]
+    fn raising_the_pileup_threshold_is_a_weakening() {
+        // `count >= threshold`, so a higher number tolerates more (CLOUD-46).
+        let base = config("[worktree]\npileup_threshold = 3\n");
+        let raised = config("[worktree]\npileup_threshold = 5\n");
+        assert_eq!(
+            only(&base, &raised),
+            Weakening::new(
+                WeakeningKind::PileupThresholdRaised,
+                "worktree.pileup_threshold",
+                "3",
+                "5",
+            )
+        );
+        assert_eq!(only(&base, &config("")).working, "absent");
+        assert!(weakenings(&raised, &base).is_empty());
+    }
+
+    #[test]
+    fn widening_the_judges_privacy_boundary_is_a_weakening() {
+        // An absent `[judge]` is the TIGHTEST setting — pointer-only, at the
+        // engine's ceiling — so a working tree that adds one widens the boundary
+        // and both halves compare from an absent base.
+        let none = config("");
+        let raw = config("[judge]\nraw = [\"span_text\"]\n");
+        assert_eq!(
+            only(&none, &raw),
+            Weakening::new(
+                WeakeningKind::JudgeRawClassAdded,
+                "judge.raw[span_text]",
+                "absent",
+                "present",
+            )
+        );
+        assert!(weakenings(&raw, &none).is_empty());
+
+        let base = config("[judge]\nmax_payload_bytes = 100\n");
+        assert_eq!(
+            only(&base, &config("[judge]\nmax_payload_bytes = 200\n")),
+            Weakening::new(
+                WeakeningKind::JudgePayloadLimitRaised,
+                "judge.max_payload_bytes",
+                "100",
+                "200",
+            )
+        );
+        // Deleting the key is compared against the engine's default rather than
+        // read as "no change", the trap `strictness` already documents.
+        assert_eq!(
+            only(&base, &none).working,
+            crate::judge::DEFAULT_MAX_PAYLOAD_BYTES.to_string()
+        );
+    }
+
+    #[test]
+    fn raising_the_capture_ceiling_is_a_weakening() {
+        let base = config("[design]\nmax_capture_bytes = 1024\n");
+        assert_eq!(
+            only(&base, &config("[design]\nmax_capture_bytes = 2048\n")),
+            Weakening::new(
+                WeakeningKind::DesignCaptureLimitRaised,
+                "design.max_capture_bytes",
+                "1024",
+                "2048",
+            )
+        );
+        assert!(weakenings(&base, &config("[design]\nmax_capture_bytes = 512\n")).is_empty());
+    }
+
+    #[test]
+    fn relaxing_the_merge_contract_projection_is_a_weakening() {
+        let base = config(
+            "[ci]\nrequired_checks = [\"a\", \"b\"]\nallowed_merge_methods = [\"squash\"]\n",
+        );
+        let fewer =
+            config("[ci]\nrequired_checks = [\"a\"]\nallowed_merge_methods = [\"squash\"]\n");
+        assert_eq!(
+            only(&base, &fewer),
+            Weakening::new(
+                WeakeningKind::CiMergeCheckRemoved,
+                "ci.required_checks[b]",
+                "present",
+                "absent",
+            )
+        );
+        assert!(weakenings(&fewer, &base).is_empty());
+
+        let more = config(
+            "[ci]\nrequired_checks = [\"a\", \"b\"]\nallowed_merge_methods = [\"squash\", \"merge\"]\n",
+        );
+        assert_eq!(
+            only(&base, &more),
+            Weakening::new(
+                WeakeningKind::CiMergeMethodAdded,
+                "ci.allowed_merge_methods[merge]",
+                "absent",
+                "present",
+            )
+        );
+        // Losing the key entirely is unconstrained, which is wider than any list
+        // — and it carries its own pointer rather than one per method nobody
+        // listed.
+        assert_eq!(
+            only(&base, &config("[ci]\nrequired_checks = [\"a\", \"b\"]\n")),
+            Weakening::new(
+                WeakeningKind::CiMergeMethodAdded,
+                "ci.allowed_merge_methods",
+                "constrained",
+                "unconstrained",
+            )
+        );
+    }
+
+    const ATTRIBUTION: &str = "\n[attribution]\nidentity_deny = [\"vendor\", \"other\"]\ntrailer_deny = [\"Co-Made-By\"]\nbody_deny = [\"advert\"]\ntrailer_allow = [\"Signed-off-by\"]\n\n[attribution.identity]\nname = \"A Person\"\nemail = \"person@example.invalid\"\n";
+
+    #[test]
+    fn shrinking_a_deny_list_or_widening_the_carve_out_is_a_weakening() {
+        let base = config(ATTRIBUTION);
+        assert_eq!(
+            only(&base, &config(&ATTRIBUTION.replace("\"vendor\", ", ""))).key,
+            "attribution.identity_deny[vendor]"
+        );
+        assert_eq!(
+            only(
+                &base,
+                &config(&ATTRIBUTION.replace(
+                    "trailer_allow = [\"Signed-off-by\"]",
+                    "trailer_allow = [\"Signed-off-by\", \"Co-Made-By\"]"
+                ))
+            ),
+            Weakening::new(
+                WeakeningKind::AttributionAllowAdded,
+                "attribution.trailer_allow[Co-Made-By]",
+                "absent",
+                "present",
+            )
+        );
+        // Dropping the whole table drops every pattern with it, and each one
+        // keeps its own pointer rather than collapsing into "the table is gone"
+        // (CLOUD-233). Four patterns, four keys.
+        let dropped = weakenings(&base, &config(""));
+        assert_eq!(
+            dropped.len(),
+            4,
+            "one pointer per dropped pattern: {dropped:?}"
+        );
+        assert!(
+            dropped
+                .iter()
+                .all(|found| found.kind == WeakeningKind::AttributionDenyRemoved),
+            "the carve-out shrank too, and a shrinking carve-out is tightening: {dropped:?}"
+        );
+        // The other direction: declaring the table where there was none refuses
+        // more than before.
+        assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    #[test]
+    fn deactivating_the_defect_ledger_or_widening_its_classes_is_a_weakening() {
+        let base = config("[defects]\npath = \"defects.jsonl\"\nclasses = [\"a\"]\n");
+        assert_eq!(
+            only(&base, &config("")),
+            Weakening::new(
+                WeakeningKind::DefectsLedgerRemoved,
+                "defects",
+                "present",
+                "absent",
+            ),
+            "an absent [defects] is a silent deactivation, unlike [attribution]'s loud one"
+        );
+        assert_eq!(
+            only(
+                &base,
+                &config("[defects]\npath = \"defects.jsonl\"\nclasses = [\"a\", \"b\"]\n")
+            ),
+            Weakening::new(
+                WeakeningKind::DefectsClassAdded,
+                "defects.classes[b]",
+                "absent",
+                "present",
+            )
+        );
+        assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    #[test]
+    fn losing_the_transcript_path_is_a_weakening() {
+        let base = config("[transcript]\npath = \"session.jsonl\"\n");
+        assert_eq!(
+            only(&base, &config("")),
+            Weakening::new(
+                WeakeningKind::TranscriptPathRemoved,
+                "transcript.path",
+                "present",
+                "absent",
+            )
+        );
+        // Keyed on the effective path rather than the table, so blanking the key
+        // and deleting the table report the same pointer.
+        assert_eq!(
+            only(&base, &config("[transcript]\n")).key,
+            "transcript.path"
+        );
+        assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    #[test]
+    fn every_kind_is_exercised_by_a_case_in_this_module() {
+        // Rules ship with their mechanism (non-negotiable rule 2): a kind with
+        // no case is a comparison nothing shows can fire, which is how a
+        // comparison comes to report the wrong direction and pass.
+        let source = include_str!("trust.rs");
+        let tests = &source[source
+            .find("mod tests {")
+            .expect("the test module is declared here")..];
+        for kind in WeakeningKind::ALL {
+            assert!(
+                tests.contains(&format!("WeakeningKind::{kind:?}")),
+                "{} has no case in this module",
+                kind.as_str()
+            );
+        }
     }
 }

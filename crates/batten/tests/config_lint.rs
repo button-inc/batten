@@ -344,6 +344,105 @@ fn the_smell_ids_are_the_same_names_the_check_delta_uses() {
     assert!(checked.contains("batten.toml:strictness"), "got: {checked}");
 }
 
+#[test]
+fn the_keys_cloud_721_added_reach_the_lint_with_their_own_pointers() {
+    // The two cases CLOUD-721 named were reported CLEAN by a comparison that
+    // claimed to cover their key, and a third — the verb table — was not
+    // compared at all. All three arrive through the one definition of
+    // "weakened", so this asserts the whole path rather than the module's own
+    // view of it.
+    let base = concat!(
+        "version = 1\n",
+        "\n[[verb]]\nverb = \"rm\"\neffect = \"destructive\"\n",
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2020-01-01\"\n",
+    );
+    // Same rule, same severity, same waiver key: the glob is narrowed to match
+    // nothing, the lapsed waiver is extended past the decade, and the mutating
+    // verb row is deleted.
+    let working = concat!(
+        "version = 1\n",
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"nothing/here/**\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2099-01-01\"\n",
+    );
+    let repo = pr_fixture("lint-cloud-721-keys", base, working);
+
+    // Single-tree, all three are invisible: every one of them is a statement
+    // about the pair of files.
+    assert_eq!(lint(&repo, &[]).status.code(), Some(0));
+
+    let output = lint(&repo, &["--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        stdout(&output),
+        "batten.toml:rule[no-todo].glob rule-predicate-changed\n\
+         batten.toml:verb[rm] verb-removed\n\
+         batten.toml:waiver[no-todo].expires waiver-expiry-extended\n\
+         config-lint: 3 smell(s)\n",
+        "each key carries its own pointer, so none of the three can collapse \
+         into another (CLOUD-233)"
+    );
+
+    // Byte-stable across two runs over the same tree (§6), which the digest
+    // token in the rule pointer is the newest way to get wrong.
+    assert_eq!(
+        stdout(&lint(&repo, &["--config-from", "origin/main"])),
+        stdout(&output)
+    );
+
+    // Pointer-only: the narrowed glob is config content and never reaches the
+    // output (non-negotiable rule 4).
+    assert!(
+        !stdout(&output).contains("nothing/here"),
+        "got: {}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn the_reverse_edit_of_those_keys_is_clean() {
+    // The direction half, at the same boundary the verdict is taken: a widened
+    // glob, an expiry pulled in, and a verb row ADDED lower no bar.
+    let tight = concat!(
+        "version = 1\n",
+        "\n[[verb]]\nverb = \"rm\"\neffect = \"destructive\"\n",
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2020-01-01\"\n",
+    );
+    let loose = concat!(
+        "version = 1\n",
+        "\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"nothing/here/**\"\n",
+        "pattern = \"TODO\"\nseverity = \"deny\"\n",
+        "\n[[waiver]]\nrule = \"no-todo\"\nreason = \"tracked\"\nexpires = \"2099-01-01\"\n",
+    );
+    let repo = pr_fixture("lint-cloud-721-reverse", loose, tight);
+    let output = lint(&repo, &["--config-from", "origin/main"]);
+    assert_eq!(
+        stdout(&output),
+        // The lapsed waiver in the WORKING tree is a single-tree smell of its
+        // own, and it is there either way — it is what makes the pair honest:
+        // the base-ref class contributes exactly one line, the predicate change,
+        // reported as a CHANGE in both directions because ranking two globs
+        // would be a judgement.
+        "batten.toml:15 waiver-expired\n\
+         batten.toml:rule[no-todo].glob rule-predicate-changed\n\
+         config-lint: 2 smell(s)\n"
+    );
+    assert!(
+        !stdout(&output).contains("verb-removed"),
+        "adding a mediated verb row raises the bar: {}",
+        stdout(&output)
+    );
+    assert!(
+        !stdout(&output).contains("waiver-expiry-extended"),
+        "pulling an expiry IN raises the bar: {}",
+        stdout(&output)
+    );
+}
+
 // --- errors are usage errors, never verdicts ---------------------------------
 
 #[test]
