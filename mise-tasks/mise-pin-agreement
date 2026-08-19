@@ -85,6 +85,13 @@ done <<<"$pinned"
 #
 # This is the regression the issue is actually about. Checking only the versions
 # would gate the cost of the fix and not the fix.
+# Selected by ARGV, not by `command`. The command is no longer always `mise`:
+# CLOUD-714 interposes `mise-tasks/<server>-mcp`, a shim that records the spawn
+# and `exec`s `mise "$@"` with these same args. Keying on `command == "mise"`
+# would have made that shim silently exempt the scoped-exec check below — the
+# gate reporting a clean pass while the property it exists for went unchecked,
+# which is the same fail-open this file's header warns about one paragraph up.
+# `args[0] == "exec"` is what actually identifies a mise exec launch, shim or no.
 while IFS= read -r server; do
 	[ -n "$server" ] || continue
 	args=$(jq -r --arg s "$server" '[.mcpServers[$s].args // [] | .[] | select(type == "string")] | .[]' "$mcp" 2>/dev/null)
@@ -94,7 +101,7 @@ while IFS= read -r server; do
 	if [ -z "$scoped" ]; then
 		report "$server: \`mise exec\` names no tool — a bare exec provisions the whole toolchain and dies with any one of it (CLOUD-316)"
 	fi
-done < <(jq -r '[.mcpServers // {} | to_entries[] | select((.value.command // "") == "mise") | select(((.value.args // [])[0] // "") == "exec") | .key] | .[]' "$mcp" 2>/dev/null)
+done < <(jq -r '[.mcpServers // {} | to_entries[] | select(((.value.args // [])[0] // "") == "exec") | .key] | .[]' "$mcp" 2>/dev/null)
 
 [ "$fail" = 0 ] && echo "mise-pin-agreement: $checked tool reference(s) in $mcp agree with $toml, and every \`mise exec\` launch is scoped"
 exit "$fail"

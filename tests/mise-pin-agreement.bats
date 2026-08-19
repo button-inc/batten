@@ -83,3 +83,25 @@ scoped_mcp() { # scoped_mcp <version>
 	run "$GATE" "$MCP" "$BATS_TEST_TMPDIR/absent.toml"
 	[ "$status" -eq 2 ]
 }
+
+# CLOUD-714 interposes `mise-tasks/<server>-mcp`, a shim that records the spawn
+# and execs `mise "$@"` with these same args. Keying the scoped-exec check on
+# `command == "mise"` would have made every shimmed server exempt — the gate
+# green while the property it exists for went unchecked.
+@test "A SHIMMED LAUNCH IS STILL CHECKED — the selector is argv, not the command name" {
+	cat >"$MCP" <<-'EOF'
+		{"mcpServers":{"serena":{"command":"mise-tasks/serena-mcp","args":["exec","--","serena","start-mcp-server"]}}}
+	EOF
+	run "$GATE" "$MCP" "$TOML"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"names no tool"* ]]
+}
+
+@test "a shimmed launch that IS scoped passes, and its pin is still read" {
+	cat >"$MCP" <<-'EOF'
+		{"mcpServers":{"serena":{"command":"mise-tasks/serena-mcp","args":["exec","pipx:serena-agent@1.6.1","--","serena","start-mcp-server"]}}}
+	EOF
+	run "$GATE" "$MCP" "$TOML"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"1 tool reference(s)"* ]]
+}

@@ -162,3 +162,107 @@ stderr_noise() {
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"github -32000"* ]]
 }
+
+# --- did the client actually spawn it? (CLOUD-714) ---------------------------
+#
+# The three 2026-08-19 failures each burned ~28,300 ms and left no trace at all —
+# no serena log, no `Server stderr:` record. That signature has two very different
+# causes and the logs cannot separate them, so the shim's ledger is what makes the
+# distinction a file read. These rows pin it in all three directions, because
+# "no entry" is only evidence when the shim is wired.
+
+timed_out() { # a real CONNECT_TIMEOUT record, copied from 2026-08-19
+	echo '{"debug":"Connection failed after 28476ms (CONNECT_TIMEOUT): MCP server \"serena\" connection timed out after 30000ms","timestamp":"2026-08-19T07:05:45.000Z"}'
+}
+# The log NAME is the attempt's UTC start, which is the instant a spawn is matched
+# against — the same key the gate already sorts on, so no second notion of "when".
+attempt() { # attempt <file-stamp> -> epoch of that stamp
+	date -u -d "$(printf '%s' "$1" | sed -E 's/^(.{10})T(..)-(..)-(..)-.*Z$/\1T\2:\3:\4Z/')" +%s
+}
+
+@test "a timeout WITH a matching spawn record reads as spawned-and-unresponsive" {
+	stamp=2026-08-19T07-05-16-328Z
+	f=$(log_for serena "$stamp")
+	{
+		started
+		timed_out
+	} >"$f"
+	printf '%s\tserena\t4543\t2.10\t3\n' "$(attempt "$stamp")" >"$BATS_TEST_TMPDIR/spawns"
+	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/spawns"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"serena CONNECT_TIMEOUT"* ]]
+	[[ "$output" == *"the shim recorded the launch"* ]]
+}
+
+@test "a timeout with NO spawn record for that attempt reads as never-spawned" {
+	# The ledger carries an older serena launch, which is what licenses the
+	# verdict: the shim is demonstrably wired for this server, so its silence
+	# about THIS attempt means something.
+	stamp=2026-08-19T14-30-14-698Z
+	f=$(log_for serena "$stamp")
+	{
+		started
+		timed_out
+	} >"$f"
+	printf '%s\tserena\t4543\t0.30\t0\n' "$(($(attempt "$stamp") - 26000))" >"$BATS_TEST_TMPDIR/spawns"
+	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/spawns"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"never-spawned"* ]]
+	[[ "$output" == *"recorded none for this attempt"* ]]
+}
+
+@test "A TIMEOUT WITH NO LEDGER AT ALL IS UNRECORDED, NEVER never-spawned" {
+	# The boundary that keeps this from becoming a verdict computed out of
+	# nothing. A server launched directly, or a clone whose $GIT_DIR was cleaned,
+	# has no entries for an innocent reason.
+	f=$(log_for serena 2026-08-19T07-41-58-210Z)
+	{
+		started
+		timed_out
+	} >"$f"
+	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/absent"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"unrecorded"* ]]
+	[[ "$output" != *"never-spawned"* ]]
+}
+
+@test "a ledger that has never seen this server is unrecorded, not never-spawned" {
+	f=$(log_for serena 2026-08-19T07-41-58-210Z)
+	{
+		started
+		timed_out
+	} >"$f"
+	printf '%s\tgithub\t99\t0.10\t0\n' "$(date +%s)" >"$BATS_TEST_TMPDIR/spawns"
+	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/spawns"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"the shim is not wired for it"* ]]
+}
+
+@test "a healthy attach is unaffected by the ledger in either state" {
+	f=$(log_for serena 2026-08-19T15-04-19-000Z)
+	{
+		started
+		connected
+	} >"$f"
+	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/absent"
+	[ "$status" -eq 0 ]
+	printf '%s\tserena\t1\t0.10\t0\n' "$(date +%s)" >"$BATS_TEST_TMPDIR/spawns"
+	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/spawns"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"attached this session"* ]]
+}
+
+@test "the exit contract is unchanged — only the pointer detail is added" {
+	f=$(log_for serena 2026-08-19T07-05-16-328Z)
+	{
+		started
+		timed_out
+	} >"$f"
+	printf '%s\tserena\t1\t0.10\t0\n' "$(date +%s)" >"$BATS_TEST_TMPDIR/spawns"
+	run "$GATE" --settings "$SETTINGS" --logs "$LOGS" --spawns "$BATS_TEST_TMPDIR/spawns"
+	[ "$status" -eq 1 ]
+	# Pointer-only per non-negotiable 4: the verdict names a state, never a log
+	# line, and the server's stderr is content this repo does not control.
+	[[ "$output" != *"Server stderr"* ]]
+	[[ "$output" != *"connection timed out after"* ]]
+}

@@ -95,6 +95,8 @@ fi
 
 settings=".claude/settings.json"
 logroot=""
+spawns=""
+spawns_set=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--settings)
@@ -105,12 +107,25 @@ while [ $# -gt 0 ]; do
 		logroot="${2:-}"
 		shift 2
 		;;
+	--spawns)
+		spawns="${2:-}"
+		spawns_set=1
+		shift 2
+		;;
 	*)
-		echo "usage: mcp-attach-check [--settings <file>] [--logs <dir>]" >&2
+		echo "usage: mcp-attach-check [--settings <file>] [--logs <dir>] [--spawns <file>]" >&2
 		exit 2
 		;;
 	esac
 done
+
+# The spawn ledger `mise-tasks/<server>-mcp` appends to (CLOUD-714). Out of tree,
+# per clone, beside the other machinery under $GIT_DIR — the same place
+# `contract-drift` keeps its snapshots, so no new path scheme is invented.
+if [ "$spawns_set" = 0 ]; then
+	git_dir=$(git rev-parse --git-dir 2>/dev/null) || git_dir=""
+	[ -n "$git_dir" ] && spawns="$git_dir/batten-mcp-spawns"
+fi
 
 # The CLI keys its log tree by the project path with every `/` replaced by `-`,
 # so `/home/user/batten` becomes `-home-user-batten`. Derived rather than
@@ -142,6 +157,58 @@ if [ ! -d "$logroot" ]; then
 	echo "mcp-attach-check: no MCP log tree at $logroot — not a live session, nothing to check"
 	exit 0
 fi
+
+# --- did the client actually spawn it? (CLOUD-714) ---------------------------
+#
+# A `CONNECT_TIMEOUT` with no trace anywhere has two causes that look identical
+# from the logs: the client never executed the command, or it executed it and the
+# child died inside Serena's ~1.2 s of Python import, before Serena opens the log
+# file that would prove it ran. Three failures on 2026-08-19 could not be told
+# apart, which is what the shim's ledger is for.
+#
+# THE ABSENCE OF A LEDGER ENTRY IS ONLY EVIDENCE IF THE SHIM IS WIRED. A server
+# launched directly, or a clone whose ledger has been cleaned, has no entries for
+# an innocent reason — reporting `never-spawned` there would be a verdict computed
+# from nothing, which is the failure mode this whole gate's header argues against.
+# So the ledger must carry at least one record for THAT server before its silence
+# about a particular attempt is allowed to mean anything.
+#
+# The attempt's instant comes from the log's FILENAME, which is the connection
+# attempt's UTC start — already the key this gate sorts on, so no second notion of
+# "when" is introduced. A spawn is matched to it inside a tolerance spanning the
+# client's own budget: the shim records before `exec`, so it lands at the start,
+# and 5 s of slack absorbs clock granularity in both directions.
+# A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
+#MUTANT spawn-window-ignored|s@\$1 >= t - 5 && \$1 <= t + 35@1@|reads as never-spawned
+#MUTANT ledger-wiring-inverted|s@if ! grep -q@if grep -q@|reads as spawned-and-unresponsive
+spawn_verdict() { # spawn_verdict <server> <newest-log-path>
+	local server="$1" log="$2" stamp start hits
+	if [ -z "$spawns" ] || [ ! -r "$spawns" ]; then
+		echo "unrecorded (no spawn ledger; wire mise-tasks/${server}-mcp to tell a launch that never happened from one that hung)"
+		return 0
+	fi
+	if ! grep -q "$(printf '\t%s\t' "$server")" "$spawns" 2>/dev/null; then
+		echo "unrecorded (the ledger has never seen $server; the shim is not wired for it)"
+		return 0
+	fi
+	# `2026-08-11T05-41-40-873Z.jsonl` -> `2026-08-11T05:41:40Z`. The millisecond
+	# field is dropped rather than parsed: the tolerance below is seconds wide, so
+	# sub-second precision buys nothing and `date` portability costs something.
+	stamp=$(basename -- "$log" .jsonl)
+	stamp=$(printf '%s' "$stamp" | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2})T([0-9]{2})-([0-9]{2})-([0-9]{2})-[0-9]+Z$/\1T\2:\3:\4Z/')
+	if ! start=$(date -u -d "$stamp" +%s 2>/dev/null) || [ -z "$start" ]; then
+		echo "unrecorded (the log name carries no parseable attempt time)"
+		return 0
+	fi
+	hits=$(awk -F'\t' -v s="$server" -v t="$start" \
+		'$1 ~ /^[0-9]+$/ && $2 == s && $1 >= t - 5 && $1 <= t + 35 { n++ } END { print n + 0 }' \
+		"$spawns" 2>/dev/null) || hits=0
+	if [ "${hits:-0}" -gt 0 ]; then
+		echo "spawned-and-unresponsive (the shim recorded the launch; the child ran and did not answer)"
+	else
+		echo "never-spawned (the shim records every launch and recorded none for this attempt)"
+	fi
+}
 
 fail=0
 report() {
@@ -183,7 +250,7 @@ while IFS= read -r server; do
 
 	case "$outcome" in
 	ok) ;;
-	"fail "*) report "$server ${outcome#fail }" ;;
+	"fail "*) report "$server ${outcome#fail } — $(spawn_verdict "$server" "$newest")" ;;
 	*) report "$server no-outcome — its newest log records no connection result" ;;
 	esac
 done <<<"$servers"
