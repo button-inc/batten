@@ -42,8 +42,19 @@ issue() {
 		--argjson att "$att" --argjson rel "$rel" '{
 		id: $id, status: $st, attachments: $att,
 		relations: {blockedBy: $rel},
-		description: ("**Why**\nx.\n\n" + $ready)
+		description: ("**Why**\nx.\n\n" + $ready),
+		projectMilestone: {id: "m-1", name: "Phase 3"}
 	} + (if $a == "" then {} else {assigneeId: $a} end)' >>"$BOARD"
+}
+
+# The same payload with `projectMilestone` omitted — which is how Linear renders
+# an issue that has none, since it drops the key rather than nulling it. Separate
+# from `drop_key`, which strips the field from EVERY issue and so models the other
+# case entirely: a caller that projected it away (CLOUD-695).
+no_milestone() {
+	issue "$@"
+	jq -c --arg id "$1" 'if .id == $id then del(.projectMilestone) else . end' \
+		"$BOARD" >"$BOARD.2" && mv "$BOARD.2" "$BOARD"
 }
 
 check() { run bash -c "'$CHECK' <'$BOARD'"; }
@@ -477,7 +488,8 @@ CLOUD-4 (now In Progress)"
 	jq -nc --arg ready "$READY" '{
 		id: "CLOUD-1", status: "Todo",
 		attachments: [], relations: {blockedBy: []},
-		description: ("**Why**\nx.\n\n" + $ready)
+		description: ("**Why**\nx.\n\n" + $ready),
+		projectMilestone: {id: "m-1", name: "Phase 3"}
 	}' >"$BOARD"
 	jq -nc '{
 		id: "CLOUD-2", status: "In Progress", assigneeId: "someone",
@@ -585,4 +597,64 @@ CLOUD-4 (now In Progress)"
 	check
 	chmod 700 "$REPO/.git/batten-receipts"
 	[ "$status" -eq 0 ]
+}
+
+# --- todo-unmilestoned (CLOUD-695) -------------------------------------------
+#
+# Todo is the ready queue, so sitting in it claims the work is pullable — and
+# pullable work has to say which phase it advances. Nothing asked for ~340
+# issues. These four rows are the clause and its one real hazard: Linear OMITS
+# `projectMilestone` when it is null, so per-issue the field's absence cannot be
+# told from a caller who projected it away, and the discriminator is the set.
+#
+# Fixtures, never the live board: the sweep this clause exists to make permanent
+# will clean the live board, and a case reading it would go green for the wrong
+# reason and could never fail again.
+
+@test "a Todo issue carrying a milestone is clean, and still reaches the frontier" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"todo-unmilestoned"* ]]
+	[[ "$output" == *"frontier CLOUD-1"* ]]
+}
+
+@test "a Todo issue with no milestone, in a set where others carry one, is refused" {
+	issue CLOUD-1 Todo "" ""
+	no_milestone CLOUD-2 Todo "" ""
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2 todo-unmilestoned"* ]]
+	# The judgeable one is not swept up with it, and the clause must not change
+	# which issues are pullable.
+	[[ "$output" != *"CLOUD-1 todo-unmilestoned"* ]]
+	[[ "$output" == *"frontier CLOUD-1"* ]]
+	# Pointer-only: the id and the rule, never the body the fixture carries.
+	[[ "$output" != *"**Why**"* ]]
+}
+
+@test "a set with the field absent everywhere is unjudgeable, not a wall of violations" {
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Todo "" ""
+	issue CLOUD-3 Done "" ""
+	drop_key projectMilestone
+	check
+	# 2, not 1. Reporting these as violations is the CLOUD-679 shape — a finding
+	# where the gate cannot look — and it would fire on every caller who projected
+	# the field away.
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"graph unjudgeable-milestone (CLOUD-1 CLOUD-2)"* ]]
+	[[ "$output" != *"todo-unmilestoned"* ]]
+	# Only the Todo ids: a Done issue carries no milestone claim to judge.
+	[[ "$output" != *"CLOUD-3"* ]]
+}
+
+@test "a Backlog issue with no milestone is clean — filing stays free" {
+	issue CLOUD-1 Todo "" ""
+	no_milestone CLOUD-2 Backlog "" ""
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"todo-unmilestoned"* ]]
+	[[ "$output" != *"unjudgeable-milestone"* ]]
 }

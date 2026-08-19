@@ -11,6 +11,7 @@
 #   in-progress-unassigned   In Progress => assignee != null
 #   in-review-no-pr          In Review   => at least one linked GitHub PR
 #   todo-not-ready           Todo        => ready-lint over it exits 0
+#   todo-unmilestoned        Todo        => the payload carries a projectMilestone
 #   blockedby-cycle          the blockedBy relation is acyclic
 #   dangling-blocker         every blocker is present in the piped set
 #
@@ -27,16 +28,8 @@
 # because "the board is lying" is not the only thing this can find:
 #
 #   unjudgeable-blockedby        a payload carries no blockedBy key    -> exit 2
+#   unjudgeable-milestone        no payload carries projectMilestone   -> exit 2
 #   excluded (unjudgeable-ready-block)  ready-lint could not read it   -> exit 2
-#
-# DECLARED FIELD SET (CLOUD-526), stated because a gate that never writes its
-# input contract down grows one by accident: `id` and `status` for every issue,
-# `relations.blockedBy` for the graph, `description` for the §8 claim scan and
-# the Ready-block delegation, `assignee` for In Progress and `attachments` for In
-# Review. This gate is the one of the four that genuinely reads the body, so the
-# projection CLOUD-526 buys elsewhere is not available here — and that is the
-# whole reason each absence below is a NAMED exit-2 refusal rather than a rule
-# that quietly scans nothing. Sending less must never buy a cleaner verdict.
 #   excluded (blocked-by …)      a blocker has not landed              -> exit 0
 #
 # And one more predicate, CLOUD-234's: prose is not a second authority for a
@@ -45,6 +38,22 @@
 #   status-claim-disagrees       a body asserts a column that is false -> exit 1
 #   status-claim-unjudgeable     it asserts one about an unpiped id    -> exit 2
 #   unjudgeable-description      a payload carries no description key  -> exit 2
+#
+# DECLARED FIELD SET (CLOUD-526), stated because a gate that never writes its
+# input contract down grows one by accident: `id` and `status` for every issue,
+# `relations.blockedBy` for the graph, `description` for the §8 claim scan and
+# the Ready-block delegation, `assignee` for In Progress and `attachments` for In
+# Review. This gate is the one of the four that genuinely reads the body, so the
+# projection CLOUD-526 buys elsewhere is not available here — and that is the
+# whole reason each absence above is a NAMED exit-2 refusal rather than a rule
+# that quietly scans nothing. Sending less must never buy a cleaner verdict.
+# `projectMilestone` joins it with CLOUD-695, and it is the one field the tracker
+# omits rather than nulls — which is why its absence is decided over the SET.
+#
+# The mutation demotes the milestone refusal to a note, which is the reading that
+# let 174 open issues accumulate with no phase: visible in the output, invisible
+# in the exit code, and therefore invisible to `verify` and CI.
+#MUTANT milestone-refusal-is-a-note|s@^\t\treport "\$id" "todo-unmilestoned"@\t\tnote "$id" "todo-unmilestoned"@|in a set where others carry one, is refused
 #
 # "At least one linked PR attachment" is a deliberate approximation of "landed":
 # it is checkable from the payload alone. Commit containment and "all referenced
@@ -117,15 +126,65 @@ ids=$(jq -r '.[].id' <<<"$issues" | by_num)
 in_set() { grep -qxF "$1" <<<"$ids"; }
 status_of() { jq -r --arg id "$1" '.[] | select(.id == $id) | .status' <<<"$issues"; }
 
-# --- the two board predicates -------------------------------------------------
-while IFS=$'\t' read -r id status assignee prs; do
+# --- the milestone claim's anti-vacuity arm (CLOUD-695) -----------------------
+#
+# `todo-unmilestoned` below cannot be decided per issue, and that is a property of
+# the tracker rather than a softening: Linear OMITS `projectMilestone` entirely
+# when it is null, so on one payload "this issue has no milestone" and "the caller
+# projected the field away" are the same bytes. Deciding from that alone is
+# CLOUD-679's defect — a violation reported where the gate cannot look.
+#
+# The discriminator is the SET, which is how `unjudgeable-blockedby` and
+# `unjudgeable-description` already resolve the same ambiguity in this file: if no
+# issue anywhere in the piped set carries the key, the caller projected it away.
+# If any issue carries it, the connector was emitting the field, so its absence
+# elsewhere is the tracker saying "none".
+#
+# Scoped to the Todo ids, because a set holding no Todo issue has no milestone
+# claim to judge and reporting one would fire on the ordinary shape.
+#
+# THE HONEST LIMIT, stated rather than left to be met: a set in which EVERY issue
+# is genuinely unmilestoned reads as projected-away and reports unjudgeable. That
+# is the conservative direction — could-not-look, never a wrong answer — and the
+# message names the fix, which a caller can take in one re-fetch.
+milestone_judgeable=1
+todo_ids=$(jq -r '[.[] | select(.status == "Todo") | .id] | join(" ")' <<<"$issues")
+if [ -n "$todo_ids" ] && ! jq -e 'any(.[]; has("projectMilestone"))' <<<"$issues" >/dev/null 2>&1; then
+	milestone_judgeable=0
+	unjudged "graph" "unjudgeable-milestone ($(tr ' ' '\n' <<<"$todo_ids" | by_num | tr '\n' ' ' | sed 's/ $//'))"
+fi
+
+# --- the three board predicates -----------------------------------------------
+while IFS=$'\t' read -r id status assignee prs milestone; do
 	if [ "$status" = "In Progress" ] && [ "$assignee" = "null" ]; then
 		report "$id" "in-progress-unassigned"
 	fi
 	if [ "$status" = "In Review" ] && [ "$prs" = 0 ]; then
 		report "$id" "in-review-no-pr"
 	fi
-done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? | select(.url | test("github.com/.*/pull/"))] | length)] | @tsv' <<<"$issues" | by_num)
+	# CLOUD-695. Todo is the ready queue, so sitting in it is a claim that this is
+	# pullable work — and pullable work has to say which phase it advances. Nothing
+	# asked, for ~340 issues: measured 2026-08-19, 174 open issues carried no
+	# milestone, and the split was provenance rather than age. Issues authored as a
+	# plan carried one; issues DISCOVERED during work did not, because filing is one
+	# `save_issue` and no gate stood on that path.
+	#
+	# The seam is Todo and not filing, deliberately. A finding reaching the board at
+	# all is what CLOUD-505 bought, and demanding a milestone at file time would tax
+	# triage at the moment the issue is least understood. Todo already costs a Ready
+	# block (`todo-not-ready`), on exactly this argument.
+	#
+	# A REPORT, not a frontier note, for `todo-not-ready`'s reason: the column is
+	# signalling falsely rather than merely excluding itself from the queue.
+	#
+	# CLOUD-599's `child-unmilestoned` is the other quantifier over the same field —
+	# a child inherits its parent's phase — and the two compose rather than overlap:
+	# that one ranges over PARENTED issues, and most of the 174 have no parent at
+	# all, so every one of them passes it.
+	if [ "$milestone_judgeable" = 1 ] && [ "$status" = "Todo" ] && [ "$milestone" = "null" ]; then
+		report "$id" "todo-unmilestoned"
+	fi
+done < <(jq -r '.[] | [.id, .status, (.assigneeId // "null"), ([.attachments[]? | select(.url | test("github.com/.*/pull/"))] | length), (if (.projectMilestone // null) == null then "null" else "set" end)] | @tsv' <<<"$issues" | by_num)
 
 # --- graph coherence ----------------------------------------------------------
 #
