@@ -120,10 +120,110 @@ while IFS=$'\t' read -r event command; do
 	esac
 done <<<"$committed"
 
+# --- one command per PreToolUse event (CLOUD-713) ----------------------------
+#
+# The rules above judge the entries that ARE batten's. Nothing judged the ones
+# that are not, because the selector drops them — so `.claude/settings.json`
+# accreted six shell guards beside the engine and no run ever went red. Measured
+# 2026-08-19: seven commands across five matchers, one of which
+# (`connector-allow-guard`, under `^mcp__`) landed inside the twenty minutes
+# between two readings taken while this gate was being written.
+#
+# This is CLOUD-312's §2 second gate, specified in August and never built: "a
+# source-level assertion fails if any `PreToolUse` entry in the settings file
+# invokes a task that carries a decision table". The engine emits ONE
+# registration per event (`render_wiring`, and see its no-matcher note), so a
+# second command under the same event is a second authority for one decision —
+# the shape non-negotiable 1 refuses one layer down.
+#
+# `PreToolUse` ONLY, and that is a scope choice rather than an oversight. The
+# other events carry commands that are not policy: `session-start.sh` provisions,
+# `contract-drift` and `board-write-record` say out loud that they gate nothing
+# and are sensor halves, `mcp-attach-check` is a check. Sweeping those in would
+# widen this gate past what CLOUD-312 argued and would price retiring a recorder
+# the same as retiring a decision table. When the pre-tool set reaches zero, that
+# question is worth asking on its own key.
+#
+# THE MATCHER IS NOT JUDGED HERE, still. `hook-matcher-check` owns it (CLOUD-471)
+# and the reasoning above the derivation is why: a matcher compared against
+# `Harness`-derived output would be the repo-agnostic core asserting a consumer's
+# tool vocabulary. This counts COMMANDS.
+
+# What is wired today that should not be, each naming the issue that owns its
+# retirement. This is the gate going red on the state it exists to refuse — a
+# gate that shipped already-green over it would be one nothing can fail — with
+# the current violations recorded rather than tolerated silently.
+#
+# A row is `<command substring> <CLOUD-key>`. Two rules keep the list from
+# becoming a permanent exemption: a row naming no key is itself a violation, so
+# the hatch cannot be used without saying who owns the fix; and a row matching
+# nothing wired is a violation too, so a retirement that lands must delete its
+# row rather than leaving a licence behind for the next command with a similar
+# path.
+#
+# AN ARGUMENT, defaulting to the real list, for the same reason `HOOKS_WIRING_FILE`
+# is one: the decision is the part worth testing, and it only tests if the suite
+# can point it at a list that disagrees with the fixture in front of it. `${VAR-}`
+# rather than `${VAR:-}` so a deliberately EMPTY list means "nothing is declared"
+# — the state every fixture wants, and the state this repo reaches when the last
+# guard retires — instead of silently falling back to the six below.
+DECLARED="${HOOKS_WIRING_DECLARED-mise-tasks/issue-search-guard CLOUD-312
+mise-tasks/issue-read-guard CLOUD-312
+mise-tasks/board-move-guard CLOUD-312
+mise-tasks/connector-verb-guard CLOUD-312
+mise-tasks/connector-allow-guard CLOUD-312
+mise-tasks/fanout-guard CLOUD-312}"
+
+# Read with the same fail-shape as the selector above: a file that cannot be
+# parsed is exit 2 there and has already returned, so a failure here is the
+# query itself and stays "could not look" rather than becoming a verdict.
+if ! siblings=$(jq -r '
+    (.hooks.PreToolUse // [])[]? | .hooks[]?
+    | select(.command // "" | contains("batten") | not)
+    | .command
+  ' "$WIRING" 2>/dev/null); then
+	echo "::error:: hooks-wiring-check: could not read $WIRING's PreToolUse entries" >&2
+	exit 2
+fi
+
+while IFS= read -r command; do
+	[ -n "$command" ] || continue
+	# Substring rather than equality: the committed commands carry the host's
+	# `$CLAUDE_PROJECT_DIR` prefix unexpanded, and a declaration should name the
+	# task rather than restate a path the host owns.
+	declared=0
+	while read -r pattern key; do
+		[ -n "$pattern" ] || continue
+		case "$command" in
+		*"$pattern"*)
+			declared=1
+			# A declaration with no owner is worse than none: it reads as a
+			# decision someone made and records nobody to ask.
+			case "$key" in
+			CLOUD-[0-9]*) ;;
+			*) report "$WIRING:PreToolUse:$pattern" "wiring-declaration-unowned" ;;
+			esac
+			;;
+		esac
+	done <<<"$DECLARED"
+	[ "$declared" = 1 ] ||
+		report "$WIRING:PreToolUse:$command" "wiring-sibling-command"
+done <<<"$siblings"
+
+# The other direction: a declared row that matches nothing wired. Without this
+# the list only ever grows, and a retirement leaves behind a licence that the
+# next command with a similar path inherits silently.
+while read -r pattern key; do
+	[ -n "$pattern" ] || continue
+	: "$key"
+	grep -qF -- "$pattern" <<<"$siblings" ||
+		report "$WIRING:PreToolUse:$pattern" "wiring-declaration-stale"
+done <<<"$DECLARED"
+
 if [ "$violations" -ne 0 ]; then
-	echo "::error:: hooks-wiring-check: $violations registration(s) disagree with \`batten generate hooks --harness $HARNESS\`. The derivation is the authority; edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong." >&2
+	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong. For a \`wiring-sibling-command\`, the engine registers ONE command per event and adjudicates from batten.toml — retire the guard behind it (CLOUD-312), or add a declared row here naming the issue that will." >&2
 	exit 1
 fi
 
 count=$(grep -c . <<<"$committed" || true)
-echo "hooks-wiring-check: $count committed \`batten hook\` registration(s) agree with the derivation"
+echo "hooks-wiring-check: $count committed \`batten hook\` registration(s) agree with the derivation, and every PreToolUse command either reaches the engine or names the issue retiring it"
