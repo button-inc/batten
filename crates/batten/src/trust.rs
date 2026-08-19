@@ -98,6 +98,22 @@ pub enum WeakeningKind {
 }
 
 impl WeakeningKind {
+    /// Every kind, so anything ranging over the vocabulary is derived rather
+    /// than re-typed — the idiom [`crate::effect::Effect::ALL`] and
+    /// [`crate::outputs::Watched::ALL`] already use.
+    ///
+    /// [`CENSUS`] reads this: a kind added here without a field claiming it, or
+    /// claimed by two fields, fails the census rather than sitting unattributed.
+    pub const ALL: &'static [WeakeningKind] = &[
+        WeakeningKind::StrictnessLowered,
+        WeakeningKind::PromotionDisabled,
+        WeakeningKind::ProtectedRemoved,
+        WeakeningKind::UnlandedRemoved,
+        WeakeningKind::RuleRemoved,
+        WeakeningKind::SeverityLowered,
+        WeakeningKind::WaiverAdded,
+    ];
+
     /// The stable, lowercase identifier used in machine output (§6).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -112,6 +128,67 @@ impl WeakeningKind {
         }
     }
 }
+
+/// What [`weakenings`] does about one [`Config`] field.
+///
+/// Three answers and no fourth, because the fourth is silence — and silence is
+/// what let this comparison fall to six keys of a twenty-eight-key struct
+/// without anything noticing (CLOUD-721). A field is either compared, or it has
+/// no monotone reading, or it is not policy-bearing; the last two carry their
+/// reason here so the next person reads it instead of re-deriving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Coverage {
+    /// Compared, by exactly these kinds. Each kind belongs to one field.
+    Compared(&'static [WeakeningKind]),
+    /// Policy-bearing, but neither direction lowers a bar — with the reason.
+    NoMonotoneReading(&'static str),
+    /// Not policy-bearing at all: no reading of the key sets a bar to lower.
+    NotPolicyBearing(&'static str),
+}
+
+/// One [`Config`] field and what this module does about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldCoverage {
+    /// The field's name in [`Config`], exactly as the struct spells it.
+    pub field: &'static str,
+    /// The verdict.
+    pub coverage: Coverage,
+}
+
+/// The verdict for every [`Config`] field, as data.
+///
+/// **Not the source of the field list** — that is [`Config`] itself, read from
+/// its own source by [`tests::every_config_field_carries_a_verdict`]. This table
+/// only says what happens to each one, so a field added to the struct fails the
+/// census until somebody decides. A hand-kept list of *fields* would drift on the
+/// next key added, which is the defect rather than a second copy of it.
+pub const CENSUS: &[FieldCoverage] = &[
+    FieldCoverage {
+        field: "strictness",
+        coverage: Coverage::Compared(&[WeakeningKind::StrictnessLowered]),
+    },
+    FieldCoverage {
+        field: "fail_on_warning",
+        coverage: Coverage::Compared(&[WeakeningKind::PromotionDisabled]),
+    },
+    FieldCoverage {
+        field: "protected",
+        coverage: Coverage::Compared(&[WeakeningKind::ProtectedRemoved]),
+    },
+    FieldCoverage {
+        field: "unlanded",
+        coverage: Coverage::Compared(&[WeakeningKind::UnlandedRemoved]),
+    },
+    FieldCoverage {
+        field: "rules",
+        coverage: Coverage::Compared(&[WeakeningKind::RuleRemoved, WeakeningKind::SeverityLowered]),
+    },
+    FieldCoverage {
+        field: "waivers",
+        coverage: Coverage::Compared(&[WeakeningKind::WaiverAdded]),
+    },
+];
 
 /// One key the working tree weakened relative to the base ref.
 ///
@@ -602,5 +679,139 @@ mod tests {
             weakening.line(),
             "batten.toml:rule[no-todo].severity deny→warn"
         );
+    }
+
+    /// Every field [`Config`] declares, read off its own source.
+    ///
+    /// The struct-source scan `config.rs`'s own
+    /// `every_typed_config_table_has_a_validation_call_site` already performs,
+    /// for the same reason: the authority on which fields exist is the struct,
+    /// and any second list of them is the drift being fixed.
+    fn config_fields() -> Vec<&'static str> {
+        let source = include_str!("config.rs");
+        let start = source
+            .find("pub struct Config {")
+            .expect("Config is declared here");
+        let rest = &source[start..];
+        let body = &rest[..rest.find("\n}").expect("the struct closes")];
+        body.lines()
+            .filter_map(|line| line.trim().strip_prefix("pub "))
+            .filter_map(|rest| rest.split_once(':'))
+            .map(|(field, _)| field)
+            .collect()
+    }
+
+    #[test]
+    fn every_config_field_carries_a_verdict() {
+        // CLOUD-721's gate, and the reason it is written before the coverage it
+        // demands: on arrival this failed with twenty-two field names, and that
+        // list WAS the work. A key added to `Config` with a weakening direction
+        // nobody considered is how the comparison fell to six of twenty-eight,
+        // and prose asking the next author to consider it is feedforward only
+        // (non-negotiable rule 2).
+        let fields = config_fields();
+        assert!(
+            fields.len() > 10,
+            "the struct scan must actually find fields: {fields:?}"
+        );
+
+        let missing: Vec<&str> = fields
+            .iter()
+            .copied()
+            .filter(|field| !CENSUS.iter().any(|row| row.field == *field))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these `Config` fields carry no weakening verdict: {missing:?}. Say what \
+             `trust` does about each one — compared (with its kind), no monotone \
+             reading (with the reason), or not policy-bearing (with the reason). \
+             Silence is not one of the three."
+        );
+
+        for row in CENSUS {
+            assert!(
+                fields.contains(&row.field),
+                "the census names `{}`, which `Config` no longer declares",
+                row.field
+            );
+            assert_eq!(
+                CENSUS
+                    .iter()
+                    .filter(|other| other.field == row.field)
+                    .count(),
+                1,
+                "`{}` carries two verdicts; one field, one answer",
+                row.field
+            );
+            match row.coverage {
+                Coverage::Compared(kinds) => assert!(
+                    !kinds.is_empty(),
+                    "`{}` is recorded compared by no kind at all",
+                    row.field
+                ),
+                Coverage::NoMonotoneReading(reason) | Coverage::NotPolicyBearing(reason) => {
+                    assert!(
+                        !reason.trim().is_empty(),
+                        "`{}` declines to compare without saying why",
+                        row.field
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_weakening_kind_is_claimed_by_exactly_one_field() {
+        // The other half of the census: a kind nothing claims is a comparison
+        // whose key nobody can name, and a kind two fields claim makes the
+        // verdict ambiguous about which key moved.
+        for kind in WeakeningKind::ALL {
+            let claimants: Vec<&str> = CENSUS
+                .iter()
+                .filter(|row| match row.coverage {
+                    Coverage::Compared(kinds) => kinds.contains(kind),
+                    _ => false,
+                })
+                .map(|row| row.field)
+                .collect();
+            assert_eq!(
+                claimants.len(),
+                1,
+                "{} is claimed by {claimants:?}; exactly one field owns a kind",
+                kind.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn the_kind_vocabulary_is_derived_rather_than_re_typed() {
+        // `ALL` is what the census ranges over, so a variant missing from it
+        // would be a kind the census cannot see — the same hole one level down.
+        let source = include_str!("trust.rs");
+        let start = source
+            .find("pub enum WeakeningKind {")
+            .expect("the kind enum is declared here");
+        let rest = &source[start..];
+        let body = &rest[..rest.find("\n}").expect("the enum closes")];
+        let declared = body
+            .lines()
+            .filter(|line| {
+                let line = line.trim();
+                line.ends_with(',')
+                    && !line.starts_with("///")
+                    && line.starts_with(|c: char| c.is_ascii_uppercase())
+            })
+            .count();
+        assert_eq!(
+            declared,
+            WeakeningKind::ALL.len(),
+            "every variant must be in `ALL`"
+        );
+
+        let mut tokens: Vec<&str> = WeakeningKind::ALL.iter().map(|k| k.as_str()).collect();
+        tokens.sort_unstable();
+        let count = tokens.len();
+        tokens.dedup();
+        assert_eq!(tokens.len(), count, "two kinds share one token");
     }
 }
