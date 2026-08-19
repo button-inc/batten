@@ -1968,36 +1968,228 @@ fn hook_fails_open_and_loud_on_a_malformed_protected_list() {
     assert!(!output.stderr.is_empty(), "a failure is loud");
 }
 
+/// Where a census case's verdict is a property of the **commit** rather than of
+/// the world.
+///
+/// The obligation this column serves used to be a comment: every hook test above
+/// supplies its own policy, so after CLOUD-48 deleting a row from this repo's
+/// `batten.toml` would break none of them — and the guard chain in
+/// `.claude/settings.json` would silently lose a rule. The standing rule it
+/// stated is that a rule is only pinned by a case that seeds the shape it bans,
+/// and any rule landing later owes one of its own. Nothing decided it, and two
+/// of the six committed rows had no case at all (CLOUD-652).
+///
+/// **The reason they had none is this column, and it is not an exemption.** A
+/// row carrying `requires_key` resolves the key against the branch name and the
+/// commit subjects on `origin/main..HEAD`, so its verdict *against the ambient
+/// checkout* is whatever the runner's git state happens to be — measured: a
+/// branch naming its issue allows `gh pr create` here, a keyless one denies it.
+/// What that makes unavailable is the census's ambient shape, never the row
+/// itself: supplying the git state a `requires_key` row reads puts the verdict
+/// back inside the commit, and `batten.toml`'s own bytes are what the fixture
+/// then carries. So the debt was simply unpaid, and the site a row owes is
+/// DECIDED from the row (see [`census_gaps`]) rather than chosen per case.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CensusSite {
+    /// This checkout. The row bans the shape outright, so no fact about the
+    /// working tree can move the answer.
+    Checkout,
+    /// A fixture carrying the **committed** config bytes, on a branch and a
+    /// commit range naming no tracker key.
+    Keyless,
+}
+
+/// One census case: a mediated command, the committed row that must refuse it,
+/// and the site where that refusal is a property of the commit.
+struct ShapeCase {
+    /// The command line handed to the adjudicator.
+    command: &'static str,
+    /// The `batten.toml` row id whose refusal must name this case.
+    ///
+    /// Asserted rather than the exit code alone: a case denied by some *other*
+    /// row reads as coverage while the row it was written for is already dead,
+    /// which is the failure one level in from the one this census is about.
+    rule: &'static str,
+    /// Where the case runs.
+    site: CensusSite,
+}
+
+/// One case per committed `shape` row — and the pairing is decided rather than
+/// remembered by [`every_committed_shape_row_is_exercised_by_the_census`], which
+/// reads the rows out of `batten.toml` through the real loader.
+const SHAPE_CENSUS: &[ShapeCase] = &[
+    ShapeCase {
+        command: "gh pr merge 42",
+        rule: "gh-pr-merge",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        command: "gh pr comment 7 --body /fast-forward",
+        rule: "gh-pr-comment-fast-forward",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        command: "gh pr checks --watch",
+        rule: "gh-pr-checks",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        command: "gh run watch 123",
+        rule: "gh-run-watch",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        command: "gh pr create --title 'no key here'",
+        rule: "pr-names-an-issue",
+        site: CensusSite::Keyless,
+    },
+    ShapeCase {
+        command: "gh pr ready 42",
+        rule: "ready-names-an-issue",
+        site: CensusSite::Keyless,
+    },
+];
+
+/// A gap in the census: pointer-only, an id and what is wrong with it.
+///
+/// Never the row's `pattern`, which is the policy's own text (non-negotiable
+/// rule 4). The renderer adds the `batten.toml` line and nothing else.
+#[derive(Debug, PartialEq, Eq)]
+struct CensusGap {
+    /// A `batten.toml` row id, or the row id a case declares.
+    id: String,
+    /// A stable token naming the class of gap.
+    class: &'static str,
+}
+
+/// Decide the census obligation over a config's `shape` rows.
+///
+/// Pure over the config text so the falsification below can create the failing
+/// conditions the committed config must never have — `rust.md`'s rule that a
+/// test must be shown able to fail, rather than asserting a conclusion over a
+/// precondition nothing established.
+///
+/// Three classes, and the third is what keeps the site column from becoming an
+/// exemption channel: the site a row owes is a function of the row, so a
+/// `requires_key` row censused against the ambient checkout is a gap even though
+/// it would pass on this branch, and a row carrying no `requires_key` cannot
+/// claim the keyless site to avoid saying what it bans here.
+fn census_gaps(config: &str, cases: &[ShapeCase]) -> Vec<CensusGap> {
+    let parsed = batten::config::parse(config, "batten.toml").expect("parse the config");
+    let rows: Vec<&batten::rules::Rule> = parsed
+        .rules
+        .iter()
+        .filter(|rule| {
+            rule.kind == batten::rules::RuleKind::Shape
+                && rule.scope == batten::rules::RuleScope::MediatedCall
+        })
+        .collect();
+
+    let mut gaps = Vec::new();
+    for row in &rows {
+        let Some(case) = cases.iter().find(|case| case.rule == row.id) else {
+            gaps.push(CensusGap {
+                id: row.id.clone(),
+                class: "unexercised",
+            });
+            continue;
+        };
+        let owed = if row.requires_key.is_some() {
+            CensusSite::Keyless
+        } else {
+            CensusSite::Checkout
+        };
+        if case.site != owed {
+            gaps.push(CensusGap {
+                id: row.id.clone(),
+                class: "wrong-site",
+            });
+        }
+    }
+    for case in cases {
+        if !rows.iter().any(|row| row.id == case.rule) {
+            gaps.push(CensusGap {
+                id: case.rule.to_owned(),
+                class: "names-no-row",
+            });
+        }
+    }
+    gaps
+}
+
+/// The `batten.toml` line a row id is declared on, for the pointer.
+fn row_line(config: &str, id: &str) -> Option<usize> {
+    let needle = format!("id = \"{id}\"");
+    config
+        .lines()
+        .position(|line| line.trim() == needle)
+        .map(|index| index + 1)
+}
+
+/// `<row id> batten.toml:<line> <class>` per gap, and nothing else.
+fn render_gaps(config: &str, gaps: &[CensusGap]) -> String {
+    let mut report = String::new();
+    for gap in gaps {
+        let line = row_line(config, &gap.id).map_or_else(|| "-".to_owned(), |at| at.to_string());
+        let _ = writeln!(report, "{} batten.toml:{line} {}", gap.id, gap.class);
+    }
+    report
+}
+
+/// The committed authority, read once per case that needs its bytes.
+fn committed_config() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
+    fs::read_to_string(&path).expect("read the committed batten.toml")
+}
+
+/// A fixture carrying the **committed** `batten.toml`, naming no tracker key.
+///
+/// The config is copied rather than re-typed, which is the whole point: deleting
+/// a row from the authority deletes it here too, so the case fails. `Fixture`'s
+/// `git`/`base_commit` pair pins the branch to `main` and `origin/main` to the
+/// base commit, leaving `origin/main..HEAD` empty — so none of the three key
+/// sources answers, and the branch name is set rather than inherited from
+/// whatever `init.defaultBranch` the runner carries.
+fn keyless_committed_config_fixture(name: &str) -> PathBuf {
+    Fixture::new(&format!("shape-census-{name}"))
+        .config(&committed_config())
+        .git()
+        .base_commit()
+        .build()
+}
+
 #[test]
 fn the_committed_shape_rules_fire_on_every_banned_shape() {
-    // The obligation the fixture tests do not discharge. Every hook test above
-    // supplies its own policy, so after CLOUD-48 deleting a row from this repo's
-    // `batten.toml` would break none of them — and the guard chain in
-    // `.claude/settings.json` would silently lose a rule. `tests/cli.rs` states
-    // the standing rule: a rule is only pinned by a fixture that seeds the shape
-    // it bans, and any rule landing later owes one of its own.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for command in [
-        "gh pr merge 42",
-        "gh pr checks --watch",
-        "gh run watch 123",
-        "gh pr comment 7 --body /fast-forward",
-    ] {
-        let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
+    for case in SHAPE_CENSUS {
+        let dir = match case.site {
+            CensusSite::Checkout => root.clone(),
+            CensusSite::Keyless => keyless_committed_config_fixture(case.rule),
+        };
+        let output = run_hook_in(&dir, "exit-code", &claude_payload(case.command), false);
         assert_eq!(
             output.status.code(),
             Some(2),
-            "the committed policy must still refuse {command:?}"
+            "the committed policy must still refuse {:?}",
+            case.command
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("Refused by {}:", case.rule)),
+            "{:?} must be refused by {}, got: {stderr}",
+            case.command,
+            case.rule
         );
     }
     // And the reads it must not refuse, from the same committed rows.
     //
-    // `gh pr ready` has left this list and did not simply become a deny: since
-    // CLOUD-312 it is gated by the `ready-needs-receipts` row, so its verdict
-    // depends on whether THIS checkout carries valid receipts — a property of
-    // the world, not of the commit. Asserting either verdict here would make
-    // the suite pass or fail on the runner's git state. The case below pins
-    // what is actually a property of the commit: nothing bans it outright.
+    // `gh pr ready` is absent from this list and did not simply become a deny:
+    // since CLOUD-312 it is *also* gated by the `ready-needs-receipts` row, so
+    // against this checkout its verdict depends on whether the tree carries
+    // valid receipts — a property of the world, not of the commit. Its shape row
+    // is censused at the keyless site above, where the shape rows are evaluated
+    // first and the refusal therefore names `ready-names-an-issue`; the receipt
+    // row's own case is the one below this.
     for command in ["gh pr view 42", "mise run land"] {
         let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
         assert_eq!(
@@ -2006,6 +2198,152 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
             "the committed policy must allow {command:?}"
         );
     }
+}
+
+#[test]
+fn every_committed_shape_row_is_exercised_by_the_census() {
+    // The obligation, decided. The rows come from the authority through the real
+    // loader — never from this file — so a row landing with no case fails here
+    // rather than waiting for someone to remember the comment that used to state
+    // it. The load-bearing mutation runs the other way: delete a case from
+    // `SHAPE_CENSUS` and its row reads `unexercised`, which is what stops this
+    // becoming a permanent green.
+    let config = committed_config();
+    let gaps = census_gaps(&config, SHAPE_CENSUS);
+    assert!(
+        gaps.is_empty(),
+        "every committed shape row owes a census case:\n{}",
+        render_gaps(&config, &gaps)
+    );
+}
+
+/// The three ways the census can be wrong, over a config this repository's own
+/// authority must never be.
+///
+/// A fixture rather than the committed config for the reason `rust.md` gives: the
+/// failing condition cannot be created in the tree under test, so the decision is
+/// extracted and exercised directly instead of asserting a conclusion over a
+/// precondition nothing established.
+const CENSUS_FIXTURE: &str = r#"version = 1
+
+[[rule]]
+id = "banned-outright"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "banned command"
+reason = "do not"
+
+[[rule]]
+id = "banned-unless-keyed"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "keyed command"
+requires_key = 'KEY-[0-9]+'
+base = "origin/main"
+reason = "name the issue"
+"#;
+
+/// One case per fixture row, at the site each row decides.
+const FIXTURE_CENSUS: &[ShapeCase] = &[
+    ShapeCase {
+        command: "banned command now",
+        rule: "banned-outright",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        command: "keyed command now",
+        rule: "banned-unless-keyed",
+        site: CensusSite::Keyless,
+    },
+];
+
+#[test]
+fn the_census_check_refuses_a_row_with_no_case() {
+    // A row with no case at all — the shape the committed config was in.
+    assert_eq!(
+        census_gaps(CENSUS_FIXTURE, &[]),
+        vec![
+            CensusGap {
+                id: "banned-outright".to_owned(),
+                class: "unexercised",
+            },
+            CensusGap {
+                id: "banned-unless-keyed".to_owned(),
+                class: "unexercised",
+            },
+        ]
+    );
+
+    // Both rows censused at the site the row itself decides: clean.
+    assert_eq!(census_gaps(CENSUS_FIXTURE, FIXTURE_CENSUS), vec![]);
+}
+
+#[test]
+fn the_census_check_refuses_a_keyed_row_censused_against_the_ambient_checkout() {
+    // It would pass on a keyless branch and fail on a keyed one, which is the
+    // verdict a census must never depend on — and the reading under which these
+    // two rows looked uncensusable rather than uncensused.
+    assert_eq!(
+        census_gaps(
+            CENSUS_FIXTURE,
+            &[
+                ShapeCase {
+                    command: "banned command now",
+                    rule: "banned-outright",
+                    site: CensusSite::Checkout,
+                },
+                ShapeCase {
+                    command: "keyed command now",
+                    rule: "banned-unless-keyed",
+                    site: CensusSite::Checkout,
+                },
+            ]
+        ),
+        vec![CensusGap {
+            id: "banned-unless-keyed".to_owned(),
+            class: "wrong-site",
+        }]
+    );
+}
+
+#[test]
+fn the_census_check_refuses_a_case_naming_no_row() {
+    // How deleting a row is caught even where its case would still pass on its
+    // own: an id is all a case carries, so the case outlives the row visibly.
+    let gaps = census_gaps(
+        CENSUS_FIXTURE,
+        &[
+            ShapeCase {
+                command: "banned command now",
+                rule: "banned-outright",
+                site: CensusSite::Checkout,
+            },
+            ShapeCase {
+                command: "keyed command now",
+                rule: "banned-unless-keyed",
+                site: CensusSite::Keyless,
+            },
+            ShapeCase {
+                command: "retired command now",
+                rule: "retired-row",
+                site: CensusSite::Checkout,
+            },
+        ],
+    );
+    assert_eq!(
+        gaps,
+        vec![CensusGap {
+            id: "retired-row".to_owned(),
+            class: "names-no-row",
+        }]
+    );
+    // Pointer-only: an id, a line the config does not declare, and a class.
+    assert_eq!(
+        render_gaps(CENSUS_FIXTURE, &gaps),
+        "retired-row batten.toml:- names-no-row\n"
+    );
 }
 
 /// `gh pr ready` is gated by a precondition, never banned outright.
