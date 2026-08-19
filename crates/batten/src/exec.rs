@@ -221,6 +221,7 @@ pub const TASK_PGID_MANAGED_ENV: &str = "MISE_TASK_PGID_MANAGED";
 /// A grace period rather than an immediate kill, because the forwarded signal is
 /// the one a well-behaved child cleans up on; escalating instantly would throw
 /// away the orderly shutdown that forwarding exists to deliver.
+#[cfg(unix)]
 const GROUP_GRACE: Duration = Duration::from_secs(5);
 
 /// How long the pipes have to reach EOF once the child has been reaped.
@@ -434,9 +435,14 @@ impl GroupDecision {
     /// keeps the config key readable everywhere and inert where it cannot mean
     /// anything — the alternative, a parse-time refusal, would make one
     /// `batten.toml` unusable across a consumer's own matrix.
+    ///
+    /// Routed through [`Self::decide`] rather than constructing the answer, so
+    /// that one predicate is the only thing that ever says yes or no: a second
+    /// constructor here would be a second place for the two platforms to
+    /// disagree, and `cross-check` would only notice the day it did.
     #[cfg(not(unix))]
-    fn observe(_opt_in: bool) -> Self {
-        Self(false)
+    fn observe(opt_in: bool) -> Self {
+        Self::decide(opt_in, true, true)
     }
 
     /// Whether Batten groups and therefore owns the teardown.
@@ -1890,6 +1896,11 @@ mod tests {
         // truncate real captures, which is a false negative in every gate reading
         // the store. Ten seconds after the child is already reaped is a leak.
         assert!(PIPE_DRAIN_TIMEOUT >= Duration::from_secs(10));
+        // `cfg(unix)` with the mechanism it belongs to: Windows has no group to
+        // give a grace period, and `cross-check` denies warnings there, so an
+        // unconditional reference is a build failure on a platform that has
+        // nothing to assert.
+        #[cfg(unix)]
         assert!(GROUP_GRACE >= Duration::from_secs(5));
     }
 

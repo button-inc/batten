@@ -60,8 +60,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 2 | 25731 | 6433 | 12.8660 | 1.2866 | 0 |
-| batten | 1 | 17531 | 4383 | 8.7660 | 0.8766 | 1 |
-| **ratio** | | **1.47×** | **1.47×** | | | |
+| batten | 1 | 459 | 115 | 0.2300 | 0.0230 | 1 |
+| **ratio** | | **56.06×** | **55.94×** | | | |
 
 ### log-handle — capture-once handles
 
@@ -77,8 +77,8 @@ count for the task is the step count above.
 | arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | baseline | 2 | 25731 | 6433 | 12.8660 | 1.2866 | 0 |
-| batten | 3 | 877 | 220 | 0.4400 | 0.0440 | 0 |
-| **ratio** | | **29.34×** | **29.24×** | | | |
+| batten | 3 | 920 | 230 | 0.4600 | 0.0460 | 0 |
+| **ratio** | | **27.97×** | **27.97×** | | | |
 
 ## Aggregate
 
