@@ -1110,6 +1110,23 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$(comments)" -eq 0 ]
 }
 
+@test "a row this branch filed without grooming it stops before review is asked for" {
+	# CLOUD-514's stop, and the sibling of the one above: `deferral-check` prices
+	# a decision left with no home, this prices a home opened instead of a fix.
+	# The gate reads `board-write-record`'s own file rather than stdin, so there
+	# is no body to script here — the lever is the task's exit status, which is
+	# what `land` acts on.
+	#
+	# Asserted before the comment count for the reason every stop above is:
+	# stopping after asking for the merge would have already spent what the stop
+	# exists to withhold.
+	task_fails filed-here-check
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"filed a row that was never groomed to Ready"* ]]
+	[ "$(comments)" -eq 0 ]
+}
+
 @test "a body that names its issue but never closes it stops before review is asked for" {
 	# CLOUD-192's stop, and it sits beside the deferral one for the same reason:
 	# readying is the commitment to review, and the board move is what tells
@@ -1838,8 +1855,10 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# dropped. It is the FIRST stop in the run, before the singleton and the lease,
 	# so a refusal costs no CI at all — and this counter caught it the moment it
 	# was added, which is what it is for. Exercised below.
-	[ "$stops" -eq 28 ] || {
-		echo "land has $stops stopping conditions; this suite covers 28."
+	# 29 since CLOUD-514: a row this branch filed and never groomed to Ready. It
+	# sits beside the deferral stop and stops the lap the same way. Exercised below.
+	[ "$stops" -eq 29 ] || {
+		echo "land has $stops stopping conditions; this suite covers 29."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}

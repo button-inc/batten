@@ -1241,6 +1241,26 @@ $verify_tail"
 		die "#$pr defers a decision with no ticket. File it and name the issue in that paragraph, then run land again."
 	fi
 
+	# --- and a row this branch FILED must have been groomed before it landed ---
+	#
+	# CLOUD-514, and the sibling of the stop above: `deferral-check` prices a
+	# decision left with no home, this prices a home opened instead of a fix.
+	# Filing satisfies every other gate here in seconds while finishing costs a
+	# diff, a suite and a landing, so a defect in this branch's own diff is
+	# arithmetically cheaper to spin off than to close — unless the new row costs
+	# a complete Ready block.
+	#
+	# No stdin: the record is `board-write-record`'s file under `$GIT_DIR`, keyed
+	# to this branch. Reads no tracker, judges no content, and fails open on an
+	# absent record — a branch that filed nothing, or predates the recorder, is
+	# untouched. Checked per lap and before the ready block for the reason the
+	# deferral stop is: that block is conditional, and a lap that happened not to
+	# re-ready must not be a way through.
+	note_phase "filed-here-check(lap $lap)"
+	if ! mise run filed-here-check; then
+		die "#$pr filed a row that was never groomed to Ready. Fix it here and close the row, comment on the issue that already owns it, or groom the row and run land again."
+	fi
+
 	# --- and the merge must actually move the board -------------------------
 	#
 	# CLOUD-192, the FIFTH stop. The tracker's merged-event automation fires only

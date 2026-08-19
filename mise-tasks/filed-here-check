@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every row this branch put on the board was refined at creation (reads the recorder's own file; pointer-only)"
+#
+# CLOUD-514, phase 2 — the gate `board-write-record` was shipped to make
+# specifiable. That file is the sensor and gates nothing; this is the half that
+# prices the punt, and until it existed the issue was a log with no gate, which
+# non-negotiable 2 calls sensor only.
+#
+# THE ARITHMETIC IT REVERSES. Every other gate here prices FAILING to record
+# something: `finding-sink-check` fails a turn that cites evidence and writes
+# nothing, `deferral-check` fails a PR that defers without naming an issue.
+# Filing satisfies all of them in seconds while finishing costs a diff, a suite
+# and a landing — so spinning a defect in the branch's own diff out onto the
+# board is cheaper than fixing it, and the board becomes the escape hatch every
+# guardrail points at. Making the new row cost a complete Ready block is what
+# flips that, without anything judging whether a given spin-off was lazy.
+#
+# WHAT IT DOES NOT DO, because non-negotiable 3 forbids it: it does not compare
+# the row to the diff, score its prose, or decide whether it should have been
+# fixed instead. It reads four fields the recorder wrote and compares one of them
+# to a literal. No tracker read — a gate inside `land` has no credential, which
+# is `claim-check`'s "agents fetch, gates decide" split.
+#
+# THE VERDICT IS THE TRACKER'S, NOT THE AUTHOR'S. `ready-lint` over a payload the
+# caller assembles is forgeable and was measured to be — green three times over
+# text in a local file during this issue's own refinement, once under the id
+# `CLOUD-NEW` for a row that did not exist. The recorder does not have that
+# problem: it lints the tracker's RESPONSE to the create. This gate only reads
+# what that lint returned.
+#
+# THREE STATES, NOT TWO. `ready` passes, `unready` refuses, and `-` — the
+# recorder could not lint, because `ready-lint` exited 2 or could not run at all —
+# PASSES. Mapping "not answered" onto "refused" would turn a verdict about the
+# environment into a verdict about the row, which is the exact confusion the
+# recorder's own three-way status read exists to avoid.
+#
+# COMMENTS ARE RECORDED AND NEVER GATED. A comment on the row that already owns a
+# finding is sink 2, the honest common case, and pricing it would push the
+# pressure toward silence — the failure `finding-sink-check` exists to catch.
+# Deliberate friction belongs on the impulsive path only.
+#
+# FAILS OPEN on everything it cannot establish — outside a checkout, a detached
+# HEAD, no record at all. A branch that predates the recorder has no file, and
+# retrofitting one is impossible: the store lives under `$GIT_DIR`, is never
+# committed, and dies with the container.
+#
+# POINTER, NEVER PAYLOAD (rule 4): the refusal names the id and nothing else. The
+# recorder never wrote a title or a body, so there is none here to leak.
+#
+# Usage: mise run filed-here-check   (no input; the record is on disk)
+#
+# Exit 0 every filed row was refined, or nothing to check / 1 a row was filed
+# unrefined — `deferral-check`'s contract, so `land` stops the lap the same way.
+#
+# The mutation lets an unrefined row through, which is the whole gate: the toll
+# stops being payable and filing is cheap again.
+#MUTANT unready-passes|s/^\tunready) ;;$/\tunready) continue ;;/|stops the lap
+# The mutation gates comments too, so sink 2 — a durable comment on the row that
+# already owns the finding — costs the same as filing and the pressure runs
+# toward saying nothing at all.
+#MUTANT comments-gated|s/^\t\tcontinue$/\t\t:/|a recorded comment is never gated
+# The mutation reads "not answered" as a refusal, so a row the recorder could not
+# lint — mise unresolvable from the tool call's cwd, `ready-lint` exiting 2 —
+# stops the lap over the environment rather than over the row.
+#MUTANT unanswered-refused|s/^\t\*) continue ;; # not answered/\t*) ;; # not answered/|could not be linted is not a refusal
+set -uo pipefail
+
+[ -n "${BATTEN_FILED_HERE_BYPASS:-}" ] && exit 0
+
+# Outside a checkout there is no record and nothing to say. Same fail-open shape
+# as the recorder, so the pair cannot disagree about where the file lives.
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+[ -n "$git_dir" ] || exit 0
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+[ -n "$branch" ] || exit 0
+
+# Slashes are the one character a filename cannot carry; the substitution must
+# match `board-write-record`'s spelling exactly, or the gate reads a file the
+# recorder never wrote and passes everything.
+record="$git_dir/batten-receipts/board-writes.${branch//\//-}"
+
+if [ ! -r "$record" ]; then
+	echo "filed-here-check: no board writes recorded on \"$branch\""
+	exit 0
+fi
+
+violations=0
+creates=0
+comments=0
+report() { # pointer-only: the id, never a title or a body
+	echo "$1" >&2
+	violations=$((violations + 1))
+}
+
+# `_` for the updatedAt column: it is the recorder's forgery-resistant half and
+# this gate has no use for it, and naming it `_` is what keeps the linter from
+# reading a deliberate placeholder as a dead variable.
+while read -r kind id _ verdict; do
+	[ -n "$kind" ] || continue
+	case "$kind" in
+	comment)
+		comments=$((comments + 1))
+		continue
+		;;
+	issue) ;;
+	*) continue ;; # a line the recorder did not write: skip, never judge
+	esac
+	creates=$((creates + 1))
+	[ -n "$verdict" ] || continue
+	case "$verdict" in
+	unready) ;;
+	ready) continue ;;
+	*) continue ;; # not answered — see the three-states note above
+	esac
+	report "$id filed-unrefined"
+done <"$record"
+
+if [ "$violations" -ne 0 ]; then
+	cat <<'REASON' >&2
+::error:: filed-here-check: a row this branch filed was never groomed to Ready.
+
+Filing is the third sink and the most expensive one on purpose: a new row costs a
+complete Ready block — source of truth, a computable predicate, effect, output
+contract, commit type, test obligation, blockers. That price is what stops a
+defect in this branch's own diff from being cheaper to spin off than to fix.
+
+Three ways forward, cheapest first:
+
+  1. Fix it here, and close the row you filed. Nothing to record, nothing to gate.
+  2. If it belongs to a row that already exists, comment there instead — comments
+     are recorded and never gated.
+  3. Groom the row above to Ready and re-run `land`. `mise run ready-lint` is the
+     same check, run against the tracker's own response to your edit.
+
+This judges no content and reads no tracker: it compares the verdict
+`board-write-record` stored at creation to `ready`.
+REASON
+	exit 1
+fi
+
+echo "filed-here-check: $creates row(s) filed on \"$branch\", $comments comment(s) — every filed row was refined at creation"
