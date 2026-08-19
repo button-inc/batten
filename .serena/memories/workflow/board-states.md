@@ -129,6 +129,32 @@ a clean transition history would be worse), but the hole is avoidable: pipe the
 Todo payload, get the receipt, then write the state. Sequence: `claim-check` →
 board move → code.
 
+**And it happened anyway, one hatch further along — measured 2026-08-19 on
+CLOUD-430.** A session claimed over a `claim-check` refusal whose only rule was
+`assigned`, built the whole ticket, and found on its first rebase that another
+session had landed the same mechanism 31 minutes later (`03d4fa6`, PR #519). Full
+duplicate, discarded unpushed. The override was argued from three facts, all
+true: `Todo` with no In Progress in the state history, no attached PR, and no
+remote branch or open PR on GitHub naming the key.
+
+**Every one of those is a statement about what a competitor has PUBLISHED, and
+during the window a claim exists to cover, a competitor has published nothing** —
+the one here was ~30 minutes from its first push. So the three signals that look
+like evidence of an empty field are blind precisely when it matters, and
+`assigned` was the only rule that could see anything. Read with the paragraph
+above: its ambiguity is a reason to treat the row as **occupied**, not a reason
+to discount it. A board-hygiene story ("some rows just carry the owner's name")
+fits the noise reading and the true one equally well, which makes it an argument
+for whichever answer you already wanted.
+
+**So `BATTEN_CLAIM_TAKEOVER` is for a branch, not for a doubt.** Above it is the
+right escape from a board already moved; its other sanctioned case is the
+resumed branch in a fresh container, whose receipt is stranded under a `.git/`
+that no longer exists. Where there is no branch to resume and no move to undo, a
+takeover is the refusal being reasoned around. The cost is one session's build
+plus whatever the duplicate wrote elsewhere from its own vantage point (here: a
+wrong diagnosis posted on CLOUD-412, corrected after the fact).
+
 For the transitions the automation _does_ perform, an agent hand-moving the
 board is doing work that is already automated, and doing it the fragile way. A state change is a tracker write, and a write can be
 denied mid-session when the connector re-registers under a name no allow rule
