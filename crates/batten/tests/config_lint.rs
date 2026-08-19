@@ -773,3 +773,65 @@ fn lint_without_the_flag_is_unchanged() {
     assert_eq!(output.status.code(), Some(0));
     assert!(!stdout(&output).contains("ci-"), "no drift smell appears");
 }
+
+// --- the pair a CI job's pass/fail reduces to (CLOUD-236) --------------------
+
+#[test]
+fn the_armed_comparison_is_a_two_sided_verdict_over_one_tree() {
+    // CLOUD-236 arms `--config-from` in CI against the PR's own base ref, and a
+    // CI job is a boolean: it fails or it does not. So the behavioural claim the
+    // workflow rests on is a PAIR, asserted here rather than inferred from the
+    // two halves living in separate cases — a gate that only ever fails is
+    // indistinguishable from one that is stuck, and it is the passing half that
+    // says the arming has not simply broken every PR.
+    //
+    // Same base, same rule, one variable: whether the working tree lowered it.
+    let base = format!("version = 1\n{}", rule("no-todo", "deny"));
+
+    let weakened = pr_fixture(
+        "armed-weakened",
+        &base,
+        &format!("version = 1\n{}", rule("no-todo", "warn")),
+    );
+    let refused = lint(&weakened, &["--config-from", "origin/main"]);
+    assert_eq!(
+        refused.status.code(),
+        Some(2),
+        "a branch that lowers the bar it is judged by must be the policy verdict"
+    );
+    assert!(
+        stdout(&refused).contains("severity-lowered"),
+        "got: {}",
+        stdout(&refused)
+    );
+
+    let unchanged = pr_fixture("armed-unchanged", &base, &base);
+    let allowed = lint(&unchanged, &["--config-from", "origin/main"]);
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "arming the flag must not fail a branch that changed no policy"
+    );
+    assert_eq!(stdout(&allowed), "config-lint: 0 smell(s)\n");
+}
+
+#[test]
+fn the_armed_comparison_still_reports_a_single_tree_smell() {
+    // The two classes compose rather than replace each other. This is what the
+    // task-level bypass is bounded against: armed, one invocation can report a
+    // base-ref weakening AND a property of the commit, and a hatch for the first
+    // must not quietly cover the second (`mise-tasks/config-lint`).
+    let repo = pr_fixture(
+        "armed-both-classes",
+        &format!(
+            "version = 1\nprotected = [\"a\"]\n{}",
+            rule("no-todo", "deny")
+        ),
+        &format!("version = 1\nprotected = []\n{}", rule("no-todo", "warn")),
+    );
+    let output = lint(&repo, &["--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(2));
+    let seen = stdout(&output);
+    assert!(seen.contains("empty-protected-set"), "got: {seen}");
+    assert!(seen.contains("severity-lowered"), "got: {seen}");
+}

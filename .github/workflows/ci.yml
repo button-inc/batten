@@ -112,8 +112,21 @@ jobs:
       # `--depth=1` because a ratchet reads one tree, not a history: this is the
       # whole cost of the trunk comparison, and it is one commit rather than the
       # full clone `fetch-depth: 0` would pull on every run.
-      - name: Fetch the ratchet base
-        run: git fetch --depth=1 origin main:refs/remotes/origin/main
+      #
+      # CLOUD-236 adds the second base to the same step: `config lint
+      # --config-from` reads the committed authority out of the PR's OWN base
+      # ref, which is `main` for essentially every PR here and need not be.
+      # Fetched only when it differs, so the ordinary PR pays exactly the one
+      # round trip it always paid. An unresolvable base is exit 1 in that gate
+      # too — loud, and never read as "no weakening found".
+      - name: Fetch the comparison base refs
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --depth=1 origin main:refs/remotes/origin/main
+          if [ "$BASE_REF" != main ]; then
+            git fetch --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+          fi
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:
           # Install only what this job's gates actually invoke, not the whole
@@ -212,6 +225,32 @@ jobs:
           # "assert the submodule, no rust targets"; unset would take the
           # default pair.
           DOCTOR_TARGETS: ""
+          # CLOUD-236: ARMING THE CONFIG TRUST MECHANISM. `--config-from` landed
+          # with CLOUD-31 and no caller ever passed it, so house style §8's
+          # security property — policy loads out of band of the change under
+          # review, and a branch cannot lower the bar it is judged by — was held
+          # nowhere. This is the caller.
+          #
+          # An ENV VAR ON THE EXISTING STEP, not a step or job of its own, and
+          # the shape is forced by `ci-local-parity` property 3: every task CI
+          # runs must be one `verify` runs, and `verify` must NEVER run this
+          # armed — a local verdict that depends on whatever the base ref happens
+          # to be is a property of the world, which is the `lock-check` split and
+          # the whole reason the base-ref class is CI-only. A dedicated
+          # `mise run config-lint` step would name a task `verify` does not run
+          # and fail that gate; the gate is right, and this is the shape that
+          # respects it. `mise-tasks/config-lint` reads the variable and adds the
+          # flag; unset, it behaves exactly as the `hk` gate has always run it.
+          CONFIG_LINT_BASE: ${{ github.event.pull_request.base.ref }}
+          # THE NAMED BYPASS, AS A LABEL RATHER THAN A COMMITTED EDIT. Smells
+          # carry no severity and there is no waiver yet, so a PR that
+          # legitimately relaxes policy — retiring an obsolete rule, narrowing an
+          # over-broad `protected` set — would otherwise be blocked with no way
+          # through. A label is the escape hatch that leaves a record on the PR
+          # itself and needs no commit to set or unset. The gate bounds what it
+          # can waive: only base-ref weakenings, never a single-tree smell and
+          # never a "could not look" (see the task's header).
+          BATTEN_CONFIG_LINT_BASE_BYPASS: ${{ contains(github.event.pull_request.labels.*.name, 'config-weakening-ok') && '1' || '' }}
 
   cross:
     name: cross

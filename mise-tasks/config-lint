@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Gate: batten.toml carries no policy smell — a set declared and empty, a rule switched off (CLOUD-87)"
+#MISE description="Gate: batten.toml carries no policy smell — a set declared and empty, a rule switched off (CLOUD-87) — and, when the caller supplies a base ref, no weakening against it (CLOUD-236)"
 #
 # Consumer #1 in practice, not just in principle: the lint Batten ships is run
 # against the config Batten itself is gated by. A policy engine whose own policy
@@ -8,39 +8,131 @@
 # `batten check` exits 0, and every one of those is true of a rule set that has
 # been switched off.
 #
-# Deliberately the single-tree class only. The base-ref comparison smells need a
-# trusted ref, and which ref that is belongs to the *caller*; baking one in here
+# TWO CLASSES, AND THE CALLER DECIDES WHICH ONE RUNS. The single-tree class needs
+# nothing but the committed bytes, so it runs everywhere. The base-ref class needs
+# a trusted ref, and WHICH ref that is belongs to the caller — baking one in here
 # would make a local run's verdict depend on whatever `origin/main` happens to be,
-# which is a property of the world rather than of the commit — the split
-# `lock-check` had to learn.
+# which is a property of the world rather than of the commit, the split
+# `lock-check` had to learn (`.claude/rules/toolchain.md`).
 #
-# NOT ARMED YET, and this comment used to imply otherwise: it named a CI caller
-# for the flag when no caller existed anywhere. A gate's own rationale stating a
-# false fact about the system is the CLOUD-198 class, and this was the most
-# misleading place for one — a reader checking whether the base-ref class was
-# covered found a parenthetical telling them it was. The measurement and the
-# wording it replaced are recorded on CLOUD-236 rather than re-quoted here, since
-# quoting the claim is indistinguishable from making it.
+# So the ref arrives as `$CONFIG_LINT_BASE` and nothing here defaults it:
 #
-# Arming it is CLOUD-236 and needs a decision first, not just a workflow step:
-# `config lint` makes any smell a Violation (2) and smells carry no severity, so
-# a blocking CI step would fail every PR that legitimately relaxes policy — a
-# retired rule reports `rule-removed` — with no waiver to pass through.
-# `tests/config-lint.bats` holds this comment to the tree: it may not claim a
-# caller that grep cannot find.
+#   unset  -> single-tree only. This is the `hk` gate's shape, and the pre-commit
+#             verdict stays a property of the commit.
+#   set    -> `--config-from <ref>` as well, so house style §8's out-of-band load
+#             is actually exercised: policy is read from the trusted ref rather
+#             than from whatever the branch under review wrote.
+#
+# ARMED IN CI, AGAINST THE PR'S OWN BASE (CLOUD-236). `.github/workflows/ci.yml`
+# sets the variable from `github.event.pull_request.base.ref` on the step that
+# runs the gate set. CI is the only context that knows a PR's base, which is why
+# this is CI-only by SPECIFICATION rather than by omission — there is deliberately
+# no `hk` step for the base-ref class, and adding one would be the regression.
+# This header may not claim a caller `grep` cannot find; `tests/config-lint.bats`
+# holds it to that.
+#
+# EXIT CODES ARE PROPAGATED, NEVER FLATTENED. This gate used to answer 1 for
+# every non-zero the binary returned, which threw away the one distinction that
+# matters at the call site (non-negotiable rule 5, house-style §6-§7):
+#
+#   0  clean
+#   2  the policy verdict — a smell, or a weakening against the base ref
+#   1  usage: an unparseable config, an absent one, a base ref that does not
+#      resolve. "Could not look", and it must fail LOUDLY rather than reading as
+#      "no weakening found" — that fail-open reading is what the table prevents.
+#   3  internal
+#
+# THE BYPASS, AND WHY IT IS SCOPED RATHER THAN GENERAL. `config lint` has no
+# severity axis for smells and no waiver (both v0.1 backlog), so every smell is a
+# Violation. Armed and blocking, that fails every PR which legitimately relaxes
+# policy — retiring an obsolete rule reports `rule-removed`, narrowing an
+# over-broad `protected` set reports `protected-removed` — with no escape hatch at
+# all. The operator's call, taken 2026-08-19: blocking, with a named bypass.
+#
+# `BATTEN_CONFIG_LINT_BASE_BYPASS=1` downgrades the verdict to a warning, and it
+# is bounded three ways so it cannot become a general off switch:
+#
+#   - only when a base ref is armed. Unarmed, it does nothing at all, so it can
+#     never reach the `hk` gate every commit passes.
+#   - only when EVERY reported finding is a base-ref weakening. One single-tree
+#     smell in the set and the whole run still fails: those are properties of the
+#     commit, they are what the pre-commit gate exists for, and a hatch for the
+#     base-ref class must not quietly cover them.
+#   - never over exit 1 or 3. A bypass is a decision about a VERDICT; "could not
+#     look" is not a verdict, and waiving one would be the fail-open reading again.
+#
+# The weakening id set below is a crate<->task contract, held by
+# `tests/config-lint.bats` against `WeakeningKind::id` so it cannot silently go
+# stale. Its failure direction is closed: an id this file has not heard of is not
+# recognised as a weakening, so the bypass refuses to downgrade and the run fails.
 set -euo pipefail
 
 cd "${CONFIG_LINT_ROOT:-$(git rev-parse --show-toplevel)}"
 
+# Every `WeakeningKind::id` in `crates/batten/src/trust.rs`. One per line, so the
+# bats assertion can compare the two sets without parsing this file's syntax.
+base_ref_smells="\
+strictness-lowered
+promotion-disabled
+protected-removed
+unlanded-removed
+rule-removed
+severity-lowered
+waiver-added"
+
+base="${CONFIG_LINT_BASE:-}"
+args=(config lint)
+if [ -n "$base" ]; then
+	args+=(--config-from "$base")
+fi
+
 # `cargo run` rather than an installed binary, so the gate always judges the
 # working tree's engine and config together — the pair that ships.
-if ! output=$(cargo run --quiet -p batten -- config lint 2>&1); then
-	# The binary already emits pointer-only lines (`batten.toml:<line> <id>`);
-	# pass them through rather than re-deriving a message here.
-	echo "$output" >&2
-	echo "::error:: config-lint: batten.toml carries a policy smell" >&2
-	exit 1
+rc=0
+output=$(cargo run --quiet -p batten -- "${args[@]}" 2>&1) || rc=$?
+
+if [ "$rc" = 0 ]; then
+	# The binary's last line is already the `config-lint: N smell(s)` summary;
+	# echoing it verbatim keeps one wording rather than two that can disagree.
+	echo "${output##*$'\n'}"
+	exit 0
 fi
-# The binary's last line is already the `config-lint: N smell(s)` summary;
-# echoing it verbatim keeps one wording rather than two that can disagree.
-echo "${output##*$'\n'}"
+
+# The binary already emits pointer-only lines (`batten.toml:<loc> <id>`); pass
+# them through rather than re-deriving a message here.
+echo "$output" >&2
+
+if [ "$rc" != 2 ]; then
+	echo "::error:: config-lint: could not judge batten.toml (exit $rc) — this is not \"no weakening found\", it is a run that could not take a reading. Fix the config, or the base ref if one was supplied." >&2
+	exit "$rc"
+fi
+
+# --- the policy verdict, and the one hatch over it ---------------------------
+
+# Every finding line, id only. The summary line is `config-lint: N smell(s)` and
+# is excluded by requiring the `batten.toml:` prefix, which every pointer carries.
+ids=$(printf '%s\n' "$output" | sed -n 's/^batten\.toml:[^ ]* \([^ ]*\)$/\1/p')
+
+only_base_ref=0
+if [ -n "$base" ] && [ -n "$ids" ]; then
+	only_base_ref=1
+	while IFS= read -r id; do
+		[ -n "$id" ] || continue
+		grep -qxF "$id" <<<"$base_ref_smells" || only_base_ref=0
+	done <<<"$ids"
+fi
+
+if [ -n "${BATTEN_CONFIG_LINT_BASE_BYPASS:-}" ] && [ "$only_base_ref" = 1 ]; then
+	# Loud rather than silent, and pointer-only: the ids that were waived, never
+	# a line of the config they were found in (non-negotiable rule 4).
+	echo "::warning:: config-lint: BATTEN_CONFIG_LINT_BASE_BYPASS set — $(printf '%s\n' "$ids" | wc -l | tr -d ' ') base-ref weakening(s) waived against \`$base\`: $(printf '%s' "$ids" | tr '\n' ' ')" >&2
+	echo "${output##*$'\n'} (base-ref weakenings waived)"
+	exit 0
+fi
+
+if [ -n "$base" ] && [ "$only_base_ref" = 1 ]; then
+	echo "::error:: config-lint: this branch weakens policy against \`$base\` — house style §8 loads policy out of band precisely so a branch cannot lower the bar it is judged by. If the relaxation is deliberate, set BATTEN_CONFIG_LINT_BASE_BYPASS=1 on the step, which waives it loudly and by name." >&2
+else
+	echo "::error:: config-lint: batten.toml carries a policy smell" >&2
+fi
+exit 2
