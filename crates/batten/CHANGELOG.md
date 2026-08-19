@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.84](https://github.com/button-inc/batten/compare/v0.0.83...v0.0.84) - 2026-08-19
+
+### Fixed
+
+- *(claim-check)* void a claim receipt whose branch was restarted
+
+### Other
+
+- *(receipt)* build the fixture body by push, not by format-push-string
+- *(claim-receipt)* drive the restart through the real hook, not just the predicate
+
 ## [0.0.83](https://github.com/button-inc/batten/compare/v0.0.82...v0.0.83) - 2026-08-19
 
 ### Added
