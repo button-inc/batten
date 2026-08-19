@@ -117,7 +117,7 @@
 # without moving the measurement that justifies it — the drift that let a
 # superseded "16.65s" go on justifying a number derived from 52747 ms. Only a row
 # that declares a basis disagreeing with its floor can catch it.
-#MUTANT floor-without-basis|s/\[ "\$FLOOR" -ne \$((budget_worst \* budget_multiplier)) \]/false/|a floor disagreeing with its declared basis is refused
+#MUTANT floor-without-basis|s/\[ "\$FLOOR" -ne \$((budget_worst \* budget_multiplier)) \]/false/|a floor raised without moving its basis is refused, and both numbers are named
 #PIN-OK: jq
 set -uo pipefail
 
