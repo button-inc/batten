@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.85](https://github.com/button-inc/batten/compare/v0.0.84...v0.0.85) - 2026-08-19
+
+### Added
+
+- *(redirect)* declare the two path classes whose remedy the verb cannot know
+- *(redirect)* [**breaking**] key the sanctioned mutation to the protected path, not the verb
+
+### Other
+
+- *(config-lint)* arm --config-from against the PR's base ref (CLOUD-236)
+
 ## [0.0.84](https://github.com/button-inc/batten/compare/v0.0.83...v0.0.84) - 2026-08-19
 
 ### Fixed
