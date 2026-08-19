@@ -82,6 +82,21 @@ fi
 
 holder=$(printf '%s\n' "$body" | sed -n 's/^holder: //p' | head -1)
 expires=$(printf '%s\n' "$body" | sed -n 's/^expires: //p' | head -1)
+# THE ADMITTED SUCCESSOR (CLOUD-369). The lease bounds confirming runs at two —
+# the holder plus one branch `reserve` admitted — and this gate is what a human
+# runs on a wedged lease. Reporting only the holder showed half the occupancy, so
+# the one view meant to explain who is spending CI could not name the second
+# spender.
+#
+# Advisory, exactly like `branch:` and `head:`: read for the report, never for a
+# verdict. Absent on every lease minted before CLOUD-369 and on every lease
+# nobody has reserved behind, so an empty reading is the ordinary case and the
+# output is byte-identical to before whenever it is empty.
+next=$(printf '%s\n' "$body" | sed -n 's/^next: //p' | head -1)
+# Rendered once rather than at each of the four call sites below, so the four
+# cannot drift into describing the same field differently.
+behind=""
+[ -z "$next" ] || behind=", $next admitted behind it"
 
 # GARBAGE. Checked before the arithmetic, because a missing or non-numeric
 # expiry cannot be compared and `[` would report a syntax error rather than a
@@ -102,14 +117,14 @@ fi
 # hands the lease back, because a release is a declaration and needs no clock —
 # so it is reported as one rather than as an expiry 56 years in the past.
 if [ "$expires" = 0 ]; then
-	echo "land-lock: free — released by $holder"
+	echo "land-lock: free — released by $holder$behind"
 	exit 0
 fi
 
 left=$((expires - now))
 
 if [ "$left" -le 0 ]; then
-	echo "land-lock: free — lapsed by $holder ${left#-}s ago"
+	echo "land-lock: free — lapsed by $holder ${left#-}s ago$behind"
 	exit 0
 fi
 
@@ -117,9 +132,9 @@ fi
 # not come from this protocol. Reported rather than repaired: overwriting a lease
 # this gate does not understand is how a well-meant fix races a real holder.
 if [ "$left" -gt "$ttl" ]; then
-	echo "::error:: land-lock: WEDGED at $ref — held by $holder for another ${left}s, beyond the ${ttl}s any lease may claim. Landing is blocked until it expires." >&2
+	echo "::error:: land-lock: WEDGED at $ref — held by $holder$behind for another ${left}s, beyond the ${ttl}s any lease may claim. Landing is blocked until it expires." >&2
 	exit 1
 fi
 
-echo "land-lock: held by $holder, ${left}s left"
+echo "land-lock: held by $holder, ${left}s left$behind"
 exit 0

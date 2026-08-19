@@ -2229,6 +2229,13 @@ head_is_skipped_then_graded() {
 
 spec_head() { echo "$1" >"$BATS_TEST_TMPDIR/lease.branch"; }
 lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
+# A holder whose head is published AND whose CI answered green — the two facts
+# admission now requires. `checks-green` exit 0 is the only admitting answer, so
+# every other case below states the answer it is about.
+holder_is_green() {
+	echo "${1:-h01dh01dh01dh01d}" >"$BATS_TEST_TMPDIR/lease.head"
+	rm -f "$BATS_TEST_TMPDIR/rc.mise.checks-green"
+}
 
 @test "a waiter linearizes onto the HOLDER's head, not onto the main it is replacing" {
 	# Rebasing onto origin/main warms nothing: the holder is about to replace
@@ -2318,6 +2325,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	# after it, which is the ~8 minutes of idle main this closes.
 	lease_lost
 	spec_head holder-branch
+	holder_is_green
 	is_draft
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=1 run "$LAND"
@@ -2337,6 +2345,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	# which is the defect the whole issue is about.
 	lease_lost
 	spec_head holder-branch
+	holder_is_green
 	echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.reserve"
 	is_draft
 	pr_state OPEN
@@ -2351,6 +2360,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	# Re-reserving each lap would rewrite the ref to say what it already says.
 	lease_lost
 	spec_head holder-branch
+	holder_is_green
 	is_draft
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=3 run "$LAND"
@@ -2392,6 +2402,7 @@ lease_lost() { echo 1 >"$BATS_TEST_TMPDIR/rc.mise.land-lock.acquire"; }
 	# different case entirely.
 	lease_lost
 	spec_head holder-branch
+	holder_is_green
 	is_draft
 	pr_state OPEN
 	LAND_LOCK_MAX_WAITS=3 run "$LAND"
@@ -2512,6 +2523,7 @@ bet_is_dead() { echo 1 >"$BATS_TEST_TMPDIR/rc.spec_live"; }
 	# close-the-tap-before-moving-the-ref ordering the red path already uses.
 	lease_lost
 	spec_head holder-branch
+	holder_is_green
 	lease_abandons "" 3
 	is_draft
 	pr_state OPEN
@@ -2716,4 +2728,128 @@ EOF
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"is MERGED"* ]]
 	[ "$(comments)" -eq 1 ]
+}
+
+# --- admission is conditioned, not automatic (CLOUD-369) ---------------------
+#
+# The second matrix is a favourable bet BECAUSE it is conditioned. A holder that
+# is green and holds the lease will almost certainly fast-forward, so the
+# successor's run overlaps a merge that is about to happen. Bought behind a
+# holder whose CI has not answered, the same run is voided the moment that holder
+# goes red — an extra matrix spent to save nothing, which is the waste this issue
+# exists to remove reappearing inside its own fix.
+#
+# The cases below are the NEGATIVES. Their absence is precisely why the clause
+# was dropped unnoticed the first time: tests written from the implementation can
+# only confirm it, and a dropped condition has no code to write a test against.
+
+@test "CLOUD-369 clause b1-neg — a holder whose CI answers RED admits nobody" {
+	lease_lost
+	spec_head holder-branch
+	holder_is_green
+	head_verdict 1
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"has not gone green"* ]]
+	[[ "$output" != *"admitted as the successor"* ]]
+	[ "$(lock_calls reserve)" -eq 0 ]
+	[ "$(call_order)" = "" ]
+}
+
+@test "CLOUD-369 clause b1-neg — a holder whose CI has NOT ANSWERED admits nobody" {
+	# Exit 3 is "no answer yet", the commonest reading of all: the holder has
+	# only just pushed. Not yet is the safe direction — declining costs one poll.
+	lease_lost
+	spec_head holder-branch
+	holder_is_green
+	head_verdict 3
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"has not gone green"* ]]
+	[ "$(lock_calls reserve)" -eq 0 ]
+	[ "$(call_order)" = "" ]
+}
+
+@test "CLOUD-369 clause b1-neg — a holder whose CI COULD NOT BE READ admits nobody" {
+	# Exit 2 is "could not look". This gate declines rather than failing open:
+	# waving a matrix through on an unreadable answer spends money on a guess,
+	# and the cost of declining is one poll.
+	lease_lost
+	spec_head holder-branch
+	holder_is_green
+	head_verdict 2
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"has not gone green"* ]]
+	[ "$(lock_calls reserve)" -eq 0 ]
+}
+
+@test "CLOUD-369 clause b1-neg — a lease naming no head admits nobody" {
+	# Every lease minted before the `head:` field is exactly this, so during any
+	# rollout the row is not an edge case. The holder's CI cannot be read at all,
+	# which is not the same as red and is reported as its own reason.
+	lease_lost
+	spec_head holder-branch
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"names no head"* ]]
+	[ "$(lock_calls reserve)" -eq 0 ]
+	[ "$(call_order)" = "" ]
+}
+
+@test "CLOUD-369 clause b1-pos — a GREEN holder still admits exactly one waiter" {
+	# The positive the negatives give meaning to. A conditioning that also stopped
+	# admitting green holders would pass every case above and deliver nothing.
+	lease_lost
+	spec_head holder-branch
+	holder_is_green
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"admitted as the successor behind a green holder"* ]]
+	[ "$(lock_calls reserve)" -eq 1 ]
+	[[ "$(call_order)" == "ready push"* ]]
+}
+
+@test "CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted" {
+	# The conflict `speculate` already computed, now spent on the admission
+	# rather than discarded. A base that will not apply guarantees the run is
+	# voided: it grades a head the fast-forward refuses, and the rebase that
+	# follows still has to resolve the same conflict.
+	lease_lost
+	spec_head holder-branch
+	holder_is_green
+	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_rebase"
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"could never pay"* ]]
+	[[ "$output" != *"admitted as the successor"* ]]
+	[ "$(lock_calls reserve)" -eq 0 ]
+	[ "$(call_order)" = "" ]
+}
+
+@test "CLOUD-369 clause e — a waiter whose base APPLIES CLEANLY still is admitted" {
+	# The negative of the negative: a conflict arm that refused everyone would
+	# pass the case above and silently delete the whole mechanism.
+	lease_lost
+	spec_head holder-branch
+	holder_is_green
+	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_rebase"
+	is_draft
+	pr_state OPEN
+	LAND_LOCK_MAX_WAITS=1 run "$LAND"
+	[ "$status" -eq 4 ]
+	[[ "$output" == *"admitted as the successor"* ]]
+	[ "$(lock_calls reserve)" -eq 1 ]
 }

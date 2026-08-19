@@ -106,3 +106,62 @@ lease() { printf 'land-lock\nholder: %s\nexpires: %s\nnonce: deadbeef\n' "$1" "$
 	[ "$status" -eq 2 ]
 	[[ "$output" != *"absent"* ]]
 }
+
+# --- the successor the lease admits (CLOUD-369) ------------------------------
+#
+# The lease bounds confirming runs at TWO — the holder plus one branch `reserve`
+# admitted — and this gate is what a human runs on a wedged lease. Reporting only
+# the holder showed half the occupancy: the one view meant to explain who is
+# spending CI could not name the second spender.
+#
+# `next:` is advisory, exactly like `branch:` and `head:`. It is read for the
+# report and never for a verdict, so no case below changes an exit code.
+
+# The same fixture plus a successor. Kept separate from `lease` so every existing
+# case keeps asserting the shape it was written for — a body with no `next:` at
+# all, which is both the pre-CLOUD-369 lease and the ordinary unreserved one.
+lease_with_next() {
+	printf 'land-lock\nholder: %s\nexpires: %s\nnext: %s\nnonce: deadbeef\n' "$1" "$2" "$3"
+}
+
+@test "CLOUD-369 clause f — a held lease names the successor admitted behind it" {
+	LAND_LOCK_BODY="$(lease_with_next vm-1 $((NOW + 60)) feature-y)" run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"held by vm-1"* ]]
+	[[ "$output" == *"feature-y admitted behind it"* ]]
+}
+
+@test "CLOUD-369 clause f — output is BYTE-IDENTICAL when no successor is admitted" {
+	# The pair is the point: the addition must be invisible on every lease that
+	# carries no `next:`, which is every lease minted before this change and every
+	# one nobody has reserved behind.
+	LAND_LOCK_BODY="$(lease vm-1 $((NOW + 60)))" run "$CHECK"
+	with_field="$output"
+	LAND_LOCK_BODY="$(printf 'land-lock\nholder: vm-1\nexpires: %s\nnext: \nnonce: deadbeef\n' "$((NOW + 60))")" run "$CHECK"
+	[ "$status" -eq 0 ]
+	[ "$output" = "$with_field" ]
+}
+
+@test "CLOUD-369 clause f — a RELEASED lease still names who was admitted behind it" {
+	# Diagnosis does not stop at the handover: a released lease whose successor is
+	# still pushing is exactly the state a human is trying to understand.
+	LAND_LOCK_BODY="$(lease_with_next vm-1 0 feature-y)" run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"released by vm-1"* ]]
+	[[ "$output" == *"feature-y admitted behind it"* ]]
+}
+
+@test "CLOUD-369 clause f — a WEDGED lease names the successor too, and still fails" {
+	# The successor is reporting, never a verdict: the wedge is still exit 1.
+	LAND_LOCK_BODY="$(lease_with_next vm-1 $((NOW + 9999)) feature-y)" run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"WEDGED"* ]]
+	[[ "$output" == *"feature-y admitted behind it"* ]]
+}
+
+@test "CLOUD-369 clause f — a LAPSED lease names the successor it left behind" {
+	LAND_LOCK_BODY="$(lease_with_next vm-1 $((NOW - 30)) feature-y)" run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"lapsed by vm-1"* ]]
+	[[ "$output" == *"feature-y admitted behind it"* ]]
+}

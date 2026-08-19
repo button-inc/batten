@@ -92,6 +92,21 @@
 # A gate listed in $MUTANT_GATES with no row here fails `mise run mutant`.
 #MUTANT exit-codes-collapse|s/^readonly LAND_EXIT_RUNAWAY=5$/readonly LAND_EXIT_RUNAWAY=4/|CLOUD-399: the two exhaustions are told apart by CODE
 #MUTANT declined-always|s/^\t\[ \"\$rc\" = 3 \]$/\ttrue/|red CI stops the lap without asking for the merge
+# CLOUD-369. The admission predicates, each proven to discriminate rather than
+# merely to exist. Case names carry no regex metacharacters: `mutant` passes the
+# name to `bats --filter`, which reads it as a PATTERN, so a clause spelled
+# `(b1)` matches nothing and the row reports `names-no-case` instead of a verdict.
+#
+# THE CONFLICT CLAUSE TAKES TWO ROWS, not one, because it has two halves that
+# fail independently: `speculate` must RECORD the conflict it computed, and the
+# admission must READ it. One row could only ever show that the pair works, not
+# that either half does — and a half that stops discriminating is exactly how a
+# mutation survives while its case still passes (measured on CLOUD-520, where a
+# row neutering one half of a two-part predicate was caught SURVIVING).
+#MUTANT admits-without-green|s/elif ! mise run checks-green "\$holder_head" >\/dev\/null 2>&1; then/elif false; then/|CLOUD-369 clause b1-neg — a holder whose CI answers RED admits nobody
+#MUTANT admits-a-conflicting-base|s/^\t\tif \[ "\$admitted" = 0 \] \&\& \[ "\$spec_conflicts" = 1 \]; then$/\t\tif false; then/|CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted
+#MUTANT admits-with-no-head|s/if \[ -z "\$holder_head" \]; then/if false; then/|CLOUD-369 clause b1-neg — a lease naming no head admits nobody
+#MUTANT speculation-never-conflicts|s/^\t\tspec_conflicts=1$/\t\tspec_conflicts=0/|CLOUD-369 clause e — a waiter whose base CONFLICTS is not admitted
 #MUTANT verdict-first-page-only|s/\[ \"\$ff_seen\" -lt 100 \] && break/break/|fell off the first page
 
 set -uo pipefail
@@ -490,6 +505,15 @@ rate_limit_pause() {
 spec_base=
 spec_undo=
 spec_main=
+# THE CONFLICT THE PROBE ALREADY COMPUTED (CLOUD-369). `speculate` learns, for
+# free, whether the holder's base applies to this branch — and until now that
+# answer suppressed only the SPECULATION while the reservation below ran anyway.
+# A successor whose base is known to conflict is guaranteed to be voided: its run
+# grades a head the fast-forward will refuse, and the rebase that follows still
+# has to resolve the same conflict. Measured 2026-08-13 for one such admission:
+# a full CI run burned, a ~200s `verify` discarded, a hand-resolved conflict, and
+# a second run required. So the answer is kept rather than discarded.
+spec_conflicts=0
 # Set once the bet has been PUSHED. An unwind then owes the remote a correction
 # too: without one, a `die` or a spent lap budget leaves origin holding another
 # branch's commits under an open PR, which is the measured two-PRs-at-one-sha
@@ -625,9 +649,11 @@ speculate() {
 		# is free now and expensive later. Reported, not resolved — resolving
 		# another branch's conflict before it has landed would be resolving it
 		# against a base that may never exist.
+		spec_conflicts=1
 		echo "land: $head_ref conflicts with this branch; not speculating on it (the conflict is real and arrives when it lands)"
 		return 0
 	fi
+	spec_conflicts=0
 	spec_base="$base"
 	# The `main` this bet was placed against. Without it "not landed yet" and
 	# "landed something else" are the same reading, and the bet would be unwound
@@ -1282,9 +1308,45 @@ $verify_tail"
 		# pushing before the linearization would spend the matrix on a head that
 		# is already stale — buying exactly the run this design exists to stop
 		# buying.
-		if [ "$admitted" = 0 ] && mise run land-lock reserve "$branch" >/dev/null 2>&1; then
-			admitted=1
-			echo "land: lap $lap — admitted as the successor; this branch may spend the run that overlaps the merge"
+		#
+		# TWO CONDITIONS, AND BOTH ARE ABOUT WHETHER THE RUN CAN EVER PAY.
+		#
+		# GREEN. The second matrix is a favourable bet *because* it is
+		# conditioned: a holder that is green AND holds the lease will almost
+		# certainly fast-forward, so the successor's run overlaps a merge that is
+		# about to happen. Reserving the instant the lease is lost buys it behind
+		# a holder whose CI has not answered and may yet come back red — and then
+		# the merge never happens, the successor's run is voided, and the
+		# mechanism has spent an extra matrix to save nothing. That is the waste
+		# this whole issue exists to remove, reappearing inside its own fix.
+		#
+		# `checks-green` is the one definition of "is this SHA green"
+		# (CLOUD-346), asked once rather than polled: 0 green, 1 red, 2 could not
+		# look, 3 no answer yet. Only 0 admits. The three non-green answers are
+		# all "not yet", and not yet is the safe direction — a lap that declines
+		# stays linearized and verified locally and reserves on a later lap for
+		# the price of one poll.
+		#
+		# The read lives HERE and not in `land-lock`, whose suite asserts it
+		# never calls `gh`: a lease that reached for the API would become a
+		# second authority for CI state as well as for the lock.
+		#
+		# NO CONFLICT. A base known to conflict cannot pay either, for a
+		# different reason: the run is not merely likely to be voided, it is
+		# certain to be — `speculate` already declined to linearize onto it, so
+		# this branch is not on the base its run would need.
+		if [ "$admitted" = 0 ] && [ "$spec_conflicts" = 1 ]; then
+			echo "land: lap $lap — the holder's base conflicts with this branch, so a run behind it could never pay; not reserving"
+		elif [ "$admitted" = 0 ]; then
+			holder_head="$(mise run land-lock peek head 2>/dev/null || true)"
+			if [ -z "$holder_head" ]; then
+				echo "land: lap $lap — the lease names no head, so the holder's CI cannot be read; not reserving"
+			elif ! mise run checks-green "$holder_head" >/dev/null 2>&1; then
+				echo "land: lap $lap — the holder's run has not gone green, so a second matrix behind it is not yet a bet worth making"
+			elif mise run land-lock reserve "$branch" >/dev/null 2>&1; then
+				admitted=1
+				echo "land: lap $lap — admitted as the successor behind a green holder; this branch may spend the run that overlaps the merge"
+			fi
 		fi
 		# ONCE PER HEAD, not once per lap. A successor that keeps waiting laps
 		# repeatedly, and re-entering the ready/push pair each time would push an
