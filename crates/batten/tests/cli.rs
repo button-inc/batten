@@ -2997,6 +2997,12 @@ fn exec_passes_through_a_code_outside_the_table() {
         let output = batten()
             .args([
                 "exec",
+                // `quiet` is mise's "the tool says nothing of its own", which is
+                // exactly the claim below. The record CLOUD-429 made the default
+                // is Batten's output, so asserting "no output of its own" against
+                // it would be asserting that the default does not exist.
+                "--style",
+                "quiet",
                 "--",
                 script.to_str().expect("utf-8"),
                 &code.to_string(),
@@ -3025,7 +3031,13 @@ fn an_exec_two_is_the_childs_verdict_not_battens() {
     let script = child_script("exec-two", "exit 2");
     let (output, _) = exec_cmd(
         "exec-two-home",
-        &["exec", "--", script.to_str().expect("utf-8")],
+        &[
+            "exec",
+            "--style",
+            "quiet",
+            "--",
+            script.to_str().expect("utf-8"),
+        ],
     );
     assert_eq!(output.status.code(), Some(2));
     assert!(
@@ -3044,6 +3056,7 @@ fn exec_hands_the_child_its_own_argv_including_battens_own_flag_spellings() {
     let output = batten()
         .args([
             "exec",
+            "--tee",
             "--",
             script.to_str().expect("utf-8"),
             "-v",
@@ -3060,22 +3073,215 @@ fn exec_hands_the_child_its_own_argv_including_battens_own_flag_spellings() {
         "-v\n--json\n--silent\n--strictness\nstrict\n",
         "every token after `--` reaches the child verbatim"
     );
+    // Batten's own record is on stderr now (CLOUD-429), so "nothing moved the
+    // verbosity rung" is asserted as the ABSENCE of a rung's effect rather than
+    // as an empty stream: the record is there, and nothing else is.
+    let said = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.stderr.is_empty(),
-        "and none of them moved Batten's own verbosity rung"
+        said.lines().all(|line| line.starts_with("exec: ")),
+        "none of the child's flags may move Batten's own verbosity rung: {said}"
     );
 }
 
 #[cfg(unix)]
 #[test]
 fn exec_inherits_both_child_streams_unchanged() {
+    // RE-POINTED AT `--tee`, NOT DELETED (CLOUD-429). The property — asking for
+    // the child's bytes gets exactly the child's bytes, on both streams, with
+    // nothing of Batten's interleaved — is the one the module docs call the test
+    // that governs this design. What changed is that it must now be asked for;
+    // deleting the case would have retired the property along with the default.
     let script = child_script("exec-streams", "echo out; echo err >&2");
     let (output, _) = exec_cmd(
         "exec-streams-home",
-        &["exec", "--", script.to_str().expect("utf-8")],
+        &[
+            "exec",
+            "--tee",
+            "--style",
+            "quiet",
+            "--",
+            script.to_str().expect("utf-8"),
+        ],
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "err\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_default_charges_the_caller_a_record_rather_than_the_childs_bytes() {
+    // CLOUD-429's headline. The child says something distinctive on each stream;
+    // neither utterance may appear anywhere in what Batten emitted, and the
+    // record that replaces them must name the bytes without carrying them.
+    let script = child_script(
+        "exec-tokenkind",
+        "echo Q7v-stdout-x9nK; echo Q7v-stderr-x9nK >&2",
+    );
+    let (output, home) = exec_cmd(
+        "exec-tokenkind-home",
+        &["exec", "--", script.to_str().expect("utf-8")],
+    );
+    assert!(output.status.success());
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !said.contains("Q7v-stdout-x9nK") && !said.contains("Q7v-stderr-x9nK"),
+        "the default emitted the child's own bytes: {said}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "stdout belongs to the wrapped command, and the record is not the child's"
+    );
+    assert!(
+        said.contains("exec: exit 0") && said.contains("exec: stdout 16 byte(s) stdout:"),
+        "the record must name the bytes it did not print: {said}"
+    );
+    // And the bytes are still there to be read, which is what makes the record a
+    // pointer rather than a loss.
+    assert_eq!(captures_in(&home).len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn silent_suppresses_both_speakers_and_quiet_only_battens() {
+    // mise's `style_only()` distinction, which the issue is explicit must not be
+    // collapsed into one key: suppressing the TOOL's metadata is a different
+    // question from choosing a stream style, and `silent` answers both.
+    let script = child_script("exec-suppression", "echo Q7v-said-x9nK");
+
+    let (quiet, _) = exec_cmd(
+        "exec-quiet-home",
+        &[
+            "exec",
+            "--tee",
+            "--style",
+            "quiet",
+            "--",
+            script.to_str().expect("utf-8"),
+        ],
+    );
+    assert_eq!(String::from_utf8_lossy(&quiet.stdout), "Q7v-said-x9nK\n");
+    assert!(
+        quiet.stderr.is_empty(),
+        "quiet silences Batten, not the child"
+    );
+
+    let (silent, _) = exec_cmd(
+        "exec-silent-home",
+        &[
+            "exec",
+            "--tee",
+            "--style",
+            "silent",
+            "--",
+            script.to_str().expect("utf-8"),
+        ],
+    );
+    assert!(
+        silent.stdout.is_empty() && silent.stderr.is_empty(),
+        "silent silences everyone"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_prefixed_styles_dress_every_line_including_across_chunks() {
+    // A pipe splits wherever it likes, so the prefix has to be a function of
+    // where the last byte left the line rather than of where a read happened to
+    // end. Two lines is the smallest case that can tell those apart.
+    let script = child_script("exec-prefix", "printf 'one\ntwo\n'");
+    let program = script.to_str().expect("utf-8").to_owned();
+    for style in ["prefix", "replacing", "timed"] {
+        let (output, _) = exec_cmd(
+            &format!("exec-prefix-{style}-home"),
+            &["exec", "--tee", "--style", style, "--", &program],
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("{program}| one\n{program}| two\n"),
+            "`{style}` must prefix every line"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn keep_order_lays_each_stream_down_whole() {
+    // The one style that cannot render as the bytes arrive: its claim is that a
+    // stream appears WHOLE, so an interleaving is the thing it exists to refuse.
+    let script = child_script(
+        "exec-keep-order",
+        "echo out-1; echo err-1 >&2; echo out-2; echo err-2 >&2",
+    );
+    let (output, _) = exec_cmd(
+        "exec-keep-order-home",
+        &[
+            "exec",
+            "--tee",
+            "--style",
+            "keep-order",
+            "--",
+            script.to_str().expect("utf-8"),
+        ],
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "out-1\nout-2\n");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).starts_with("err-1\nerr-2\n"),
+        "stderr whole and first, before Batten's own record"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn every_format_is_byte_stable_over_the_same_run() {
+    // §6, asserted as REPETITION rather than as a shape: a record carrying a
+    // clock or a duration would pass any assertion about its fields and still
+    // print differently twice. `timed` is in the sweep on purpose — it is the
+    // style whose name promises the thing byte-stability forbids.
+    let script = child_script("exec-stable", "echo Q7v-out-x9nK; echo Q7v-err-x9nK >&2");
+    let program = script.to_str().expect("utf-8").to_owned();
+    for format in ["human", "json", "jsonl"] {
+        for style in ["interleave", "timed", "keep-order"] {
+            let mut seen = Vec::new();
+            for run in 0..2 {
+                let (output, _) = exec_cmd(
+                    &format!("exec-stable-{format}-{style}-{run}-home"),
+                    &["exec", "--format", format, "--style", style, "--", &program],
+                );
+                seen.push(String::from_utf8_lossy(&output.stderr).into_owned());
+            }
+            assert_eq!(
+                seen[0], seen[1],
+                "`--format {format} --style {style}` is not byte-stable"
+            );
+            assert!(
+                !seen[0].contains("Q7v-out-x9nK") && !seen[0].contains("Q7v-err-x9nK"),
+                "and it must still carry no child bytes: {}",
+                seen[0]
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_record_survives_a_child_that_failed() {
+    // The passthrough returns early on a non-zero code, so the record has to be
+    // emitted before it — a caller debugging a failure is exactly the caller who
+    // needs the handle, and losing it there would make the default useless in
+    // the one case it matters most.
+    let script = child_script("exec-record-fail", "echo nope >&2; exit 7");
+    let (output, _) = exec_cmd(
+        "exec-record-fail-home",
+        &["exec", "--", script.to_str().expect("utf-8")],
+    );
+    assert_eq!(output.status.code(), Some(7));
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(said.contains("exec: exit 7"), "got {said}");
+    assert!(!said.contains("nope"), "and still no child bytes: {said}");
 }
 
 #[test]
@@ -3147,7 +3353,14 @@ fn a_captured_run_still_hands_the_caller_the_childs_own_bytes() {
     let script = child_script("capture-tee", "echo out; echo err >&2; exit 5");
     let (output, home) = exec_cmd(
         "capture-tee-home",
-        &["exec", "--", script.to_str().expect("utf-8")],
+        &[
+            "exec",
+            "--tee",
+            "--style",
+            "quiet",
+            "--",
+            script.to_str().expect("utf-8"),
+        ],
     );
     assert_eq!(output.status.code(), Some(5), "the child's code survives");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
@@ -3318,8 +3531,14 @@ const ONE_PATTERN: &str = "\n[[exec_pattern]]\nid = \"lying-zero\"\n            
 
 #[cfg(unix)]
 fn run_exec(repo: &std::path::Path, home: &std::path::Path, script: &str) -> Output {
+    // `--tee --style quiet` keeps these cases about the OUTPUT PREDICATE: the
+    // child's bytes on the caller's streams, and nothing of Batten's except the
+    // refusal a match produces. CLOUD-429's record would otherwise be the only
+    // thing on stderr in the clean case and a second thing in the matched one.
     batten()
-        .args(["exec", "--", "sh", "-c", script])
+        .args([
+            "exec", "--tee", "--style", "quiet", "--", "sh", "-c", script,
+        ])
         .current_dir(repo)
         .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
@@ -3427,7 +3646,7 @@ fn exec_still_runs_where_no_authority_is_configured() {
     fs::create_dir_all(&elsewhere).expect("create dir");
     let _ = fs::remove_file(elsewhere.join("batten.toml"));
     let output = batten()
-        .args(["exec", "--", "sh", "-c", "echo fine"])
+        .args(["exec", "--tee", "--", "sh", "-c", "echo fine"])
         .current_dir(&elsewhere)
         .state_home(&home)
         .output()

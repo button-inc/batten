@@ -557,6 +557,27 @@ const JSON: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--tee` on `exec` (CLOUD-429).
+///
+/// The escape from the token-kind default, and it restores the previous
+/// behaviour **verbatim** rather than approximating it — which is why
+/// `exec_inherits_both_child_streams_unchanged` was re-pointed at this flag
+/// rather than deleted. The property it asserts still holds; it just needs
+/// asking for now.
+const TEE: FlagDecl = FlagDecl {
+    id: "tee",
+    long: Some("tee"),
+    short: None,
+    help: "Copy the child's streams onto Batten's own, as well as capturing them",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
 /// `--no-cache` on `config epoch` (CLOUD-232).
 ///
 /// The escape from the stat-based revalidation, and the reference oracle the
@@ -776,6 +797,18 @@ fn hook_field_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::hook::Field>::new())
 }
 
+/// hk's format axis, as a pointer to the type rather than a list of tokens —
+/// the discipline every parser here follows, so an accepted spelling cannot
+/// drift from the enum that receives it.
+fn exec_format_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<crate::exec::OutputFormat>::new())
+}
+
+/// mise's style axis, on the same terms.
+fn exec_style_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<crate::exec::OutputStyle>::new())
+}
+
 fn spec_format_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::cli::SpecFormat>::new())
 }
@@ -956,10 +989,29 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: false,
         effect: Effect::Unclassified,
         flags: &[
-            // Declared BEFORE the trailing arg: clap reads the tail as everything
-            // remaining, so a flag listed after it would only ever be parseable as
-            // one of the child's own arguments.
+            // Declared BEFORE the trailing argv: `trailing_var_arg` swallows
+            // everything after the first free token, so a flag listed after it
+            // would parse as one of the child's arguments.
+            //
+            // `--capture-only` is now what happens by default (CLOUD-429) and is
+            // kept as `--tee`'s inverse spelling rather than removed: a caller who
+            // learned it should not be told a flag disappeared.
             CAPTURE_ONLY,
+            TEE,
+            FlagDecl::defaulted_enum(
+                "format",
+                "format",
+                "How Batten's own record is encoded (hk's axis)",
+                exec_format_parser,
+                "human",
+            ),
+            FlagDecl::defaulted_enum(
+                "style",
+                "style",
+                "How a teed child's bytes are presented, and whose output is suppressed (mise's axis)",
+                exec_style_parser,
+                "interleave",
+            ),
             FlagDecl::trailing(
                 "command",
                 "The command to run, after `--`, with its own arguments intact",

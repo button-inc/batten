@@ -15,12 +15,13 @@
 //!   it a wrapped command's own `-v` is parsed as Batten's §3 verbosity rung, so
 //!   `batten exec -- cargo test -v` would raise Batten's log level and drop the
 //!   flag the caller meant for `cargo`.
-//! * **The child's streams.** TEED, not merely captured (CLOUD-162): each stream
-//!   is copied to the store *and* to Batten's corresponding stream, so the caller
-//!   still sees exactly the bytes the child wrote. Replacing inheritance with a
-//!   plain capture would have silently changed what every wrapped command's
-//!   caller sees, which is why `exec_inherits_both_child_streams_unchanged` is the
-//!   test that governs this design.
+//! * **The child's streams**, on request. Each stream is drained to the store
+//!   always (CLOUD-162) and copied to Batten's corresponding stream **under
+//!   `--tee`** (CLOUD-429), where the copy is byte-for-byte what the child wrote.
+//!   The default is a record instead, for the reason the next section gives; what
+//!   did not change is that asking for the bytes gets exactly the bytes, which is
+//!   why `exec_inherits_both_child_streams_unchanged` was re-pointed at the flag
+//!   rather than deleted. It is still the test that governs this design.
 //!
 //!   **The cost, stated rather than discovered:** stdout and stderr are separate
 //!   pipes, so their *relative* interleaving is no longer guaranteed to match what
@@ -53,6 +54,36 @@
 //! route [`crate::Denial`] takes for the same reason — the library never exits a
 //! process. That keeps [`ExitCode`] total over the four codes Batten *chooses*
 //! rather than widening the table to hold one it does not.
+//!
+//! ## What the caller is charged for (CLOUD-429)
+//!
+//! The tee above and the store below are the two facts this verb sits between,
+//! and for a while it did both unconditionally: the bytes were written to
+//! Batten's streams *and* stored, content-addressed, so a caller paid twice —
+//! once in tokens for output it did not ask for, once in ceremony for the
+//! redirection that avoids them. The tell that the cost was Batten's rather than
+//! the caller's is that `AGENTS.md` had to carry a redirect-to-a-file rule and a
+//! guard had to enforce it. A wrapper that is token-kind foregrounded needs no
+//! redirection backgrounded.
+//!
+//! **So the default answer is a [`Record`], and `--tee` restores the bytes.**
+//! The record is pointer-only by the shape of the type rather than by a filter:
+//! an exit code and one [`capture::Capture`] per stream, each a handle, a count
+//! and a digest. There is no field a wrapped command's secret can travel in.
+//!
+//! Two axes, both **adopted** from tools this repo already pins rather than
+//! invented here — [`OutputFormat`] is hk's and [`OutputStyle`] is mise's, down
+//! to `style_only()`'s separation of the stream style from the suppression of
+//! the tool's own metadata. A caller who knows either tool needs no second
+//! vocabulary, and a name that means one thing in a pinned tool must not mean
+//! another here. Crossing two axes is a product, which house-style §8 exists to
+//! resist; taken deliberately because they are genuinely orthogonal, with the
+//! fallback recorded on CLOUD-429 (hk's format axis alone, style fixed).
+//!
+//! **What this change does NOT do:** loosen `run-shape-guard`'s redirect rule.
+//! That guard covers every verdict-bearing command, not `exec`, and relaxing it
+//! as a side effect of making one wrapper token-kind is how a rule stops meaning
+//! what it says. It gets its own change or it stays as it is.
 //!
 //! ## Whose tree is it, and who is already managing it (CLOUD-427)
 //!
@@ -171,6 +202,92 @@ const GROUP_GRACE: Duration = Duration::from_secs(5);
 /// never arrives, so this is a deadline on a wait that otherwise has no end.
 const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// hk's format axis, adopted rather than invented.
+///
+/// `hk/src/structured_output.rs` already spells these three for a tool that
+/// reports on child processes, and a caller who knows hk must not have to learn
+/// a second vocabulary to read Batten. The names are hk's; what they range over
+/// is Batten's own record.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum OutputFormat {
+    /// Pointer lines, one per fact.
+    #[default]
+    Human,
+    /// One JSON document.
+    Json,
+    /// One JSON record per line.
+    Jsonl,
+}
+
+/// mise's style axis, adopted rather than invented.
+///
+/// `mise/src/task/task_output.rs` spells these seven, and its `style_only()`
+/// separates the stream *style* from the *suppression* of the tool's own
+/// metadata — a distinction Batten needs and would otherwise have conflated into
+/// one key. [`OutputStyle::style_only`] is that function, by that name.
+///
+/// **With one command in flight, `prefix`, `replacing` and `timed` render
+/// alike.** They are still accepted, because adopting half a vocabulary is how a
+/// caller learns that Batten's version of a name means something else; what
+/// distinguishes them is a bundle of concurrent children, which is CLOUD-430's
+/// subject and not this one's.
+///
+/// **`timed` emits no wall-clock field, and that is the byte-stability answer**
+/// §6 demands rather than a limitation. A duration in Batten's own output would
+/// make the same run print differently twice, and [`crate::capture`] already
+/// refuses a timestamp for exactly that reason.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema, clap::ValueEnum,
+)]
+#[serde(rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum OutputStyle {
+    /// Each line carries the child's program name.
+    Prefix,
+    /// The child's bytes, verbatim and as they arrive.
+    #[default]
+    Interleave,
+    /// Each stream whole, in a fixed order, after the child exits.
+    KeepOrder,
+    /// As [`OutputStyle::Prefix`]: redrawing in place needs a terminal Batten
+    /// never assumes it has.
+    Replacing,
+    /// As [`OutputStyle::Prefix`], minus the clock — see the type's docs.
+    Timed,
+    /// Batten says nothing of its own; the child still speaks.
+    Quiet,
+    /// Nobody speaks.
+    Silent,
+}
+
+impl OutputStyle {
+    /// mise's `style_only()`: the stream style with the suppression removed.
+    ///
+    /// `quiet` and `silent` are not stream styles — they are statements about
+    /// whose output is suppressed — so asking one of them how to render a line
+    /// has no answer, and the default is what mise falls back to.
+    const fn style_only(self) -> Self {
+        match self {
+            OutputStyle::Quiet | OutputStyle::Silent => OutputStyle::Interleave,
+            other => other,
+        }
+    }
+
+    /// Whether Batten's own record is suppressed.
+    const fn suppresses_batten(self) -> bool {
+        matches!(self, OutputStyle::Quiet | OutputStyle::Silent)
+    }
+
+    /// Whether the child's own bytes are suppressed even under `--tee`.
+    const fn suppresses_child(self) -> bool {
+        matches!(self, OutputStyle::Silent)
+    }
+}
+
 /// The `[exec]` table: how `batten exec` owns what it dispatched.
 ///
 /// One key today, and it is an opt-in rather than a tuning knob. `false` is not
@@ -190,6 +307,21 @@ pub struct ExecConfig {
     /// managing — see [`GroupDecision`].
     #[serde(default)]
     pub manage_process_group: bool,
+    /// Whether the child's bytes are copied onto Batten's own streams.
+    ///
+    /// `false` is the CLOUD-429 default and the whole point: the bytes are
+    /// already stored, content-addressed and addressable, so printing them again
+    /// charges the caller a second time for output the engine has. `--tee`
+    /// restores the old behaviour verbatim.
+    #[serde(default)]
+    pub tee: bool,
+    /// How Batten's own record is encoded (hk's axis).
+    #[serde(default)]
+    pub format: OutputFormat,
+    /// How a teed child's bytes are presented, and whose output is suppressed
+    /// (mise's axis).
+    #[serde(default)]
+    pub style: OutputStyle,
 }
 
 impl ExecConfig {
@@ -200,6 +332,9 @@ impl ExecConfig {
     /// and so "the default is off" is one object a reader can follow.
     pub const DEFAULT: Self = Self {
         manage_process_group: false,
+        tee: false,
+        format: OutputFormat::Human,
+        style: OutputStyle::Interleave,
     };
 }
 
@@ -398,6 +533,165 @@ impl Drain {
             )?;
         }
         Ok(bytes)
+    }
+}
+
+/// Where a teed stream's bytes go, and how they are dressed on the way.
+///
+/// One type for all four renderings, because the alternative is a `dyn Write`
+/// per style and a match at the spawn site that has to stay in step with
+/// [`OutputStyle`]. `discard` is a variant rather than an `Option<Sink>` for the
+/// same reason: the tee thread still has to run — the bytes are still captured —
+/// so "nobody sees this" is a way of writing, not an absence of one.
+struct ChildSink {
+    /// Which of Batten's own streams this copies to.
+    stream: Stream,
+    /// The per-line prefix, when the style asks for one.
+    prefix: Option<String>,
+    /// Whether the next byte starts a line, so a prefix lands in the right place
+    /// across chunk boundaries — a pipe splits wherever it likes.
+    at_line_start: bool,
+    /// Whether these bytes reach a stream at all.
+    discard: bool,
+}
+
+impl ChildSink {
+    /// The sink `stream` gets under `settings`, for a child named `program`.
+    fn of(settings: &ExecConfig, program: &str, stream: Stream) -> Self {
+        let style = settings.style;
+        let showing = settings.tee && !style.suppresses_child();
+        let prefix = match style.style_only() {
+            // Deferred until after the exit, so nothing is written as it arrives.
+            OutputStyle::KeepOrder | OutputStyle::Interleave => None,
+            _ => Some(format!("{program}| ")),
+        };
+        ChildSink {
+            stream,
+            prefix,
+            at_line_start: true,
+            discard: !showing || style.style_only() == OutputStyle::KeepOrder,
+        }
+    }
+
+    /// Write `buf` to `target`, inserting the prefix at each line start.
+    fn dress<W: Write>(&mut self, target: &mut W, buf: &[u8]) -> std::io::Result<()> {
+        let Some(prefix) = self.prefix.as_ref() else {
+            return target.write_all(buf);
+        };
+        for byte in buf {
+            if self.at_line_start {
+                target.write_all(prefix.as_bytes())?;
+                self.at_line_start = false;
+            }
+            target.write_all(std::slice::from_ref(byte))?;
+            self.at_line_start = *byte == b'\n';
+        }
+        Ok(())
+    }
+}
+
+impl Write for ChildSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.discard {
+            // Reported as written, because it was: the capture has it. Returning
+            // a short count here would make the tee loop spin on bytes it has
+            // already accounted for.
+            return Ok(buf.len());
+        }
+        match self.stream {
+            Stream::Stdout => self.dress(&mut std::io::stdout(), buf)?,
+            Stream::Stderr => self.dress(&mut std::io::stderr(), buf)?,
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.discard {
+            return Ok(());
+        }
+        match self.stream {
+            Stream::Stdout => std::io::stdout().flush(),
+            Stream::Stderr => std::io::stderr().flush(),
+        }
+    }
+}
+
+/// What `exec` says about a run whose bytes it did not print.
+///
+/// Every field is a fact **about** the output and none of them is the output: an
+/// exit code, and one [`capture::Capture`] per stream — a handle, a byte count
+/// and a digest. Pointer-only then holds by the shape of the type rather than by
+/// a filter that has to be right every time, which is the stronger claim
+/// non-negotiable rule 4 actually wants.
+///
+/// **No tail, and that is a decision rather than an omission.** CLOUD-429's
+/// acceptance offers "a bounded tail", and the same issue's own reading of
+/// Sentry's attachment model rejects the trade it implies: pointer-only must
+/// stay structural, "not become `pointer-only except when the payload is short
+/// enough to be tempting`". `tests/pointer_only.rs` classifies this verb on
+/// exactly that question — whether Batten's report adds a copy of the child's
+/// bytes — so a preview would be the one thing the census is watching for. The
+/// routes to the bytes are `--tee` and the capture the handle addresses.
+#[derive(Debug, Serialize)]
+struct Record<'a> {
+    /// The verb, so one line of `jsonl` is self-describing among others.
+    verb: &'static str,
+    /// The code the caller is about to receive.
+    exit: i32,
+    /// One pointer per stream, in a fixed order.
+    captures: &'a [capture::Capture],
+}
+
+impl Record<'_> {
+    /// Render into `report` in `format`.
+    ///
+    /// Byte-stable across every format/style pair (§6): nothing here is a clock,
+    /// a duration, a path or a map iteration order.
+    fn emit(&self, format: OutputFormat, report: &mut dyn Write) -> Result<()> {
+        match format {
+            OutputFormat::Human => {
+                writeln!(report, "exec: exit {}", self.exit)?;
+                for capture in self.captures {
+                    writeln!(
+                        report,
+                        "exec: {} {} byte(s) {}",
+                        capture.stream,
+                        capture.bytes,
+                        capture.handle()
+                    )?;
+                }
+            }
+            OutputFormat::Json => {
+                writeln!(report, "{}", serde_json::to_string_pretty(self)?)?;
+            }
+            OutputFormat::Jsonl => {
+                // One record per line, hk's shape. The exit first, because a
+                // reader tailing the stream wants the verdict before the detail.
+                writeln!(
+                    report,
+                    "{}",
+                    serde_json::to_string(&serde_json::json!({
+                        "verb": self.verb,
+                        "record": "exit",
+                        "exit": self.exit,
+                    }))?
+                )?;
+                for capture in self.captures {
+                    writeln!(
+                        report,
+                        "{}",
+                        serde_json::to_string(&serde_json::json!({
+                            "verb": self.verb,
+                            "record": "capture",
+                            "stream": capture.stream,
+                            "bytes": capture.bytes,
+                            "digest": capture.digest,
+                        }))?
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -625,30 +919,6 @@ impl Forwarding {
     }
 }
 
-/// Whether the child's bytes reach the caller, or only their handles.
-///
-/// The default is [`Mode::Tee`] and stays the default: CLOUD-285's transparency
-/// is a promise every wrapped command's caller relies on, and
-/// `exec_inherits_both_child_streams_unchanged` pins it. [`Mode::CaptureOnly`] is
-/// the caller *asking* to be given pointers instead — never inferred, because a
-/// wrapper that decided for itself when to swallow a build's output would be
-/// unpredictable in exactly the situation the caller most needs it not to be.
-///
-/// Why it exists at all is economics, and it was measured rather than assumed.
-/// The token benchmark (CLOUD-119) reports the teed path at 1.47x the raw
-/// `tail`-then-re-run baseline, and says why: the saving is only the discarded
-/// window, because the log itself is still teed in full. A handle nobody can
-/// obtain without first paying for the whole output saves nothing. This is the
-/// mode where capture-once becomes read-a-little.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub enum Mode {
-    /// Copy each stream to the store **and** to Batten's corresponding stream.
-    #[default]
-    Tee,
-    /// Copy each stream to the store only, and report the handles instead.
-    CaptureOnly,
-}
 
 /// Run `command`, teeing its streams, and report its exit code unchanged.
 ///
@@ -666,7 +936,7 @@ pub enum Mode {
 /// [`ExitCode::Violation`] of its own accord; a `2` from this verb came from the
 /// child.
 pub fn run(command: &[String]) -> Result<ExitCode> {
-    run_with(command, &[], Mode::Tee, &ExecConfig::DEFAULT, &mut std::io::sink())
+    run_with(command, &[], &ExecConfig::DEFAULT, &mut std::io::sink())
 }
 
 /// [`run`], with the output predicates to apply and where to report a hit.
@@ -677,7 +947,6 @@ pub fn run(command: &[String]) -> Result<ExitCode> {
 pub fn run_with(
     command: &[String],
     patterns: &[OutputPattern],
-    mode: Mode,
     settings: &ExecConfig,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -687,7 +956,7 @@ pub fn run_with(
     // also means a capture taken from a subdirectory lands in the same store as one
     // taken from the top, which is what makes a handle portable within a checkout.
     let root = crate::git::repo_root(Path::new("."))?;
-    run_in_with(&root, command, patterns, mode, settings, report)
+    run_in_with(&root, command, patterns, settings, report)
 }
 
 /// [`run`], with the repository root the capture is stored under.
@@ -700,7 +969,6 @@ pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
         repo_root,
         command,
         &[],
-        Mode::Tee,
         &ExecConfig::DEFAULT,
         &mut std::io::sink(),
     )
@@ -715,7 +983,6 @@ pub fn run_in_with(
     repo_root: &Path,
     command: &[String],
     patterns: &[OutputPattern],
-    mode: Mode,
     settings: &ExecConfig,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
@@ -773,20 +1040,10 @@ pub fn run_in_with(
         ));
     };
 
-    // The sinks are chosen here and nowhere else, so `Mode` changes exactly one
-    // thing: where the bytes go on their way to the store. Everything downstream —
-    // the store write, the exit code, the predicates — cannot tell the difference,
-    // which is what keeps `--capture-only` from being a second code path that can
-    // drift from the transparent one.
-    let (out_sink, err_sink): (Box<dyn Write + Send>, Box<dyn Write + Send>) = match mode {
-        Mode::Tee => (Box::new(std::io::stdout()), Box::new(std::io::stderr())),
-        Mode::CaptureOnly => (Box::new(std::io::sink()), Box::new(std::io::sink())),
-    };
-
     // One thread per pipe. See the module docs: draining them in sequence
     // deadlocks as soon as a child fills the one not being read.
-    let out_drain = Drain::spawn(out_pipe, out_sink);
-    let err_drain = Drain::spawn(err_pipe, err_sink);
+    let out_drain = Drain::spawn(out_pipe, ChildSink::of(settings, program, Stream::Stdout));
+    let err_drain = Drain::spawn(err_pipe, ChildSink::of(settings, program, Stream::Stderr));
 
     // Forwarding is installed only for a group Batten owns, so an invocation
     // with the opt-in off has the dispositions it has always had.
@@ -805,27 +1062,13 @@ pub fn run_in_with(
 
     // Both streams are stored, including an empty one: zero bytes is the real
     // answer "the command said nothing", and it must be distinguishable from a run
-    // that was never captured at all.
-    let captured = [
+    // that was never captured at all. The handles are addressable, never printed —
+    // emitting them here would put Batten's bookkeeping on a channel this verb
+    // promises is the child's (CLOUD-121 owns the verbs that read them).
+    let captures = [
         capture::store(repo_root, Stream::Stdout, &out_bytes)?,
         capture::store(repo_root, Stream::Stderr, &err_bytes)?,
     ];
-
-    // Under `Tee` the handles stay addressable and unprinted, exactly as CLOUD-162
-    // left them: emitting them would put Batten's bookkeeping on a channel this
-    // verb promises is the child's. Under `CaptureOnly` the caller has asked for
-    // the pointer *instead of* the bytes, so withholding it would leave nothing at
-    // all — and it goes on the ERROR channel for the same reason a predicate hit
-    // does, since stdout belongs to the wrapped command either way.
-    //
-    // Emitted BEFORE the exit-code branch below, deliberately: a child that failed
-    // is the case where an agent most needs to read its output, and a handle
-    // withheld on the failing path would send it straight back to the re-run.
-    if mode == Mode::CaptureOnly {
-        for record in &captured {
-            writeln!(report, "{} {} bytes", record.handle(), record.bytes)?;
-        }
-    }
 
     // A signal Batten was SENT outranks whatever the child died of. A child that
     // ignored TERM and fell to the escalated KILL must not report `137` to a
@@ -835,6 +1078,34 @@ pub fn run_in_with(
         Some(signal) => 128 + signal,
         None => status.code().unwrap_or_else(|| signal_code(status)),
     };
+
+    // `keep-order` is the one style that cannot be rendered as the bytes arrive:
+    // its whole claim is that each stream appears WHOLE, so nothing may be
+    // written until both are complete. The sinks discarded during the run and
+    // this is where the streams are laid down, in a fixed order.
+    if settings.tee
+        && !settings.style.suppresses_child()
+        && settings.style.style_only() == OutputStyle::KeepOrder
+    {
+        std::io::stdout().write_all(&out_bytes)?;
+        std::io::stdout().flush()?;
+        std::io::stderr().write_all(&err_bytes)?;
+        std::io::stderr().flush()?;
+    }
+
+    // CLOUD-429: the record IS the default answer, and it is emitted before the
+    // passthrough below because a non-zero child must not lose it. On `report`,
+    // which is stderr: stdout belongs to the wrapped command, so a document
+    // there would corrupt one the caller may be parsing.
+    if !settings.style.suppresses_batten() {
+        Record {
+            verb: "exec",
+            exit: code,
+            captures: &captures,
+        }
+        .emit(settings.format, report)?;
+    }
+
     if code != 0 {
         // Batten only ever ADDS failure (CLOUD-117). A child that already failed
         // needs no promotion, and re-deciding a failure Batten did not diagnose
@@ -934,6 +1205,109 @@ mod tests {
             128 + 15,
             "the shell's own 128 + signal convention"
         );
+    }
+
+    // --- what the caller is charged for (CLOUD-429) --------------------------
+
+    #[test]
+    fn the_default_is_a_record_and_the_bytes_are_opt_in() {
+        assert!(!ExecConfig::DEFAULT.tee);
+        assert_eq!(ExecConfig::DEFAULT.format, OutputFormat::Human);
+        assert_eq!(ExecConfig::DEFAULT.style, OutputStyle::Interleave);
+    }
+
+    #[test]
+    fn style_only_separates_the_stream_style_from_the_suppression() {
+        // mise's own function, by its own name, and the distinction the issue is
+        // explicit must not collapse into one key: `quiet` is not a way of
+        // rendering a line, it is a statement about whose lines are rendered.
+        assert_eq!(OutputStyle::Quiet.style_only(), OutputStyle::Interleave);
+        assert_eq!(OutputStyle::Silent.style_only(), OutputStyle::Interleave);
+        for style in [
+            OutputStyle::Prefix,
+            OutputStyle::Interleave,
+            OutputStyle::KeepOrder,
+            OutputStyle::Replacing,
+            OutputStyle::Timed,
+        ] {
+            assert_eq!(style.style_only(), style, "{style:?} IS a stream style");
+            assert!(!style.suppresses_batten());
+            assert!(!style.suppresses_child());
+        }
+        assert!(OutputStyle::Quiet.suppresses_batten());
+        assert!(
+            !OutputStyle::Quiet.suppresses_child(),
+            "quiet silences the tool, not the task — that is the whole point of it"
+        );
+        assert!(OutputStyle::Silent.suppresses_batten());
+        assert!(OutputStyle::Silent.suppresses_child());
+    }
+
+    #[test]
+    fn the_record_names_the_bytes_without_carrying_them() {
+        // Rule 4, asserted over the rendering rather than over the type: a field
+        // that never holds bytes cannot leak them, and this is the check that the
+        // renderer did not go looking for some anyway.
+        let captures = [
+            capture::Capture {
+                stream: "stdout",
+                bytes: 11,
+                digest: "aa".repeat(32),
+            },
+            capture::Capture {
+                stream: "stderr",
+                bytes: 0,
+                digest: "bb".repeat(32),
+            },
+        ];
+        let record = Record {
+            verb: "exec",
+            exit: 7,
+            captures: &captures,
+        };
+        for format in [OutputFormat::Human, OutputFormat::Json, OutputFormat::Jsonl] {
+            let mut said = Vec::new();
+            record.emit(format, &mut said).expect("the record renders");
+            let said = String::from_utf8(said).expect("the record is text");
+            assert!(said.contains('7'), "{format:?} dropped the exit code");
+            assert!(
+                said.contains(&"aa".repeat(32)),
+                "{format:?} dropped a digest"
+            );
+            assert!(said.contains("11"), "{format:?} dropped a byte count");
+            // Repeated rendering is identical: §6 byte-stability, and the reason
+            // `timed` may not carry a clock.
+            let mut again = Vec::new();
+            record.emit(format, &mut again).expect("the record renders");
+            assert_eq!(said.as_bytes(), again.as_slice());
+        }
+    }
+
+    #[test]
+    fn a_discarding_sink_still_accounts_for_every_byte() {
+        // The tee loop writes what it read and expects the count back. A sink
+        // that reported a short write because nobody was listening would spin on
+        // bytes the capture already has.
+        let mut sink = ChildSink::of(&ExecConfig::DEFAULT, "child", Stream::Stdout);
+        assert!(sink.discard, "the default shows the caller nothing");
+        assert_eq!(sink.write(b"hello").expect("a discard cannot fail"), 5);
+    }
+
+    #[test]
+    fn a_prefix_lands_at_every_line_start_across_chunk_boundaries() {
+        // A pipe splits wherever it likes, so the prefix has to be a function of
+        // where the last byte left the line rather than of where a read ended.
+        let settings = ExecConfig {
+            tee: true,
+            style: OutputStyle::Prefix,
+            ..ExecConfig::DEFAULT
+        };
+        let mut sink = ChildSink::of(&settings, "child", Stream::Stdout);
+        let mut said = Vec::new();
+        sink.dress(&mut said, b"on").expect("write");
+        sink.dress(&mut said, b"e\ntw").expect("write");
+        sink.dress(&mut said, b"o\n").expect("write");
+        assert_eq!(said, b"child| one\nchild| two\n");
     }
 
     // --- process-group ownership (CLOUD-427) --------------------------------

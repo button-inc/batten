@@ -161,7 +161,10 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         Some(Command::Exec {
             command,
             capture_only,
-        }) => run_exec(&command, capture_only, &overrides, err),
+            tee,
+            format,
+            style,
+        }) => run_exec(&command, ExecFlags { capture_only, tee, format, style }, &overrides, err),
         Some(Command::Capture { command }) => run_capture(&command, mode, out, err),
         Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
@@ -1027,19 +1030,58 @@ fn run_state_migrate(err: &mut dyn Write) -> Result<ExitCode> {
 /// As [`exec::run_with`]; the config read is the output predicates' and an
 /// unreadable authority is a usage error, since a pattern table nobody could read
 /// is a gate that silently did not run.
+/// What the caller typed on `exec`'s own flags, before the config is layered.
+///
+/// A bundle rather than four parameters, and the grouping is the contract: every
+/// field is a §8 layer-4 answer — the highest-precedence one — and `None`/`false`
+/// means "the caller did not speak", which is what lets the committed `[exec]`
+/// table keep its own default.
+struct ExecFlags {
+    /// `--capture-only`, kept as `--tee`'s inverse spelling (CLOUD-429).
+    capture_only: bool,
+    /// `--tee`.
+    tee: bool,
+    /// `--format`, or `None` when unasked.
+    format: Option<exec::OutputFormat>,
+    /// `--style`, or `None` when unasked.
+    style: Option<exec::OutputStyle>,
+}
+
+/// `batten exec`: layer the flags over the committed table, then dispatch.
+///
+/// # Errors
+///
+/// Returns a [`error::UsageError`] for an unreadable authority, and whatever
+/// [`exec::run_with`] returns otherwise — including the child's own code, as a
+/// [`error::Passthrough`].
 fn run_exec(
     command: &[String],
-    capture_only: bool,
+    flags: ExecFlags,
     overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let (patterns, settings) = load_exec_settings(overrides)?;
-    let mode = if capture_only {
-        exec::Mode::CaptureOnly
-    } else {
-        exec::Mode::Tee
-    };
-    exec::run_with(command, &patterns, mode, &settings, err)
+    let (patterns, mut settings) = load_exec_settings(overrides)?;
+    // §8's precedence, flag over file. The two presentation axes are plain
+    // presentation, so a flag setting them weakens nothing; `--tee` is the one
+    // that widens what reaches a channel, and it widens it towards the caller's
+    // own terminal rather than towards a gate's verdict — the same reading
+    // `--verbose` gets.
+    //
+    // `--capture-only` is the inverse spelling and loses to `--tee` when both are
+    // typed, because asking for the bytes is the specific request and a caller
+    // who typed both meant the one that says what they want rather than the one
+    // that says what they do not.
+    settings.tee = (settings.tee || flags.tee) && !(flags.capture_only && !flags.tee);
+    if let Some(format) = flags.format {
+        settings.format = format;
+    }
+    if let Some(style) = flags.style {
+        settings.style = style;
+    }
+    // The report goes to the ERROR channel, never `out`: stdout belongs to the
+    // wrapped command (CLOUD-285), so a pointer line there would corrupt a
+    // document the caller may be parsing.
+    exec::run_with(command, &patterns, &settings, err)
 }
 
 /// Navigate a frozen capture (CLOUD-121).

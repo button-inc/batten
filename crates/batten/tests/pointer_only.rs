@@ -989,9 +989,13 @@ fn a_passthrough_report_points_at_the_child_without_repeating_it() {
     let corpus = Corpus { repo, home };
 
     let script = format!("echo 'warning[duplicate] {}' >&2", canary("childerr"));
+    // `--tee` on purpose (CLOUD-429). The question is whether Batten RESTATES a
+    // line the child already wrote, so the child's line has to reach the stream
+    // for the count to mean anything — under the token-kind default it never
+    // does, and the case would pass for the wrong reason.
     let run = run_in(
         &corpus,
-        &["exec", "--", "sh", "-c", &script],
+        &["exec", "--tee", "--", "sh", "-c", &script],
         Stdin::Nothing,
     );
 

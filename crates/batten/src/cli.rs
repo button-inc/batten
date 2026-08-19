@@ -81,8 +81,23 @@ pub enum Command {
         /// The command and its arguments, exactly as the caller wrote them.
         command: Vec<String>,
         /// Store the child's streams and report their handles instead of
-        /// passing the bytes through. Opt-in: transparency is the default.
+        /// passing the bytes through.
+        ///
+        /// Kept, and now the DEFAULT rather than the opt-in (CLOUD-429): it
+        /// survives as the inverse spelling of `--tee`, so a caller who learned
+        /// it is not told a flag disappeared. Both may be typed; `--tee` wins,
+        /// because asking for the bytes is the specific request.
         capture_only: bool,
+        /// Whether to copy the child's streams onto Batten's own (CLOUD-429).
+        tee: bool,
+        /// How Batten's own record is encoded — hk's axis.
+        ///
+        /// `None` means the caller did not ask, which is **not** the same as
+        /// asking for the default: the `[exec]` table sets the default, and a
+        /// flag that always answered would overwrite it on every call.
+        format: Option<crate::exec::OutputFormat>,
+        /// How a teed child's bytes are presented — mise's axis. `None` as above.
+        style: Option<crate::exec::OutputStyle>,
     },
     /// Captured command output, and the verbs that navigate it.
     Capture {
@@ -519,6 +534,24 @@ fn flag(matches: &ArgMatches, id: &str) -> bool {
     matches.try_get_one::<bool>(id).ok().flatten() == Some(&true)
 }
 
+/// A value the caller actually typed, as distinct from one `clap` filled in.
+///
+/// [`FlagDecl::defaulted_enum`] hands `clap` a default, so `get_one` answers on
+/// every call and cannot tell "the caller chose `human`" from "nobody chose".
+/// Where a committed `[exec]` table sets the default, that difference is the
+/// whole §8 precedence chain — a flag nobody typed must not outrank the file.
+///
+/// [`FlagDecl::defaulted_enum`]: crate::surface::FlagDecl
+fn supplied<'a, T>(matches: &'a ArgMatches, id: &str) -> Option<&'a T>
+where
+    T: Clone + Send + Sync + 'static,
+{
+    match matches.value_source(id) {
+        Some(clap::parser::ValueSource::CommandLine) => matches.get_one::<T>(id),
+        _ => None,
+    }
+}
+
 /// The nesting nouns, each mapping its own sub-verb.
 ///
 /// Split out of [`command_of`] one function per noun rather than inlined as
@@ -760,6 +793,13 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
                 Some(Command::Exec {
                     command,
                     capture_only: flag(matches, "capture_only"),
+                    tee: matches.get_flag("tee"),
+                    // Read through the VALUE SOURCE, not the value: clap fills
+                    // `defaulted_enum`'s default in, so `get_one` always answers
+                    // and a config-set default would be overwritten on every
+                    // call by a flag nobody typed.
+                    format: supplied(matches, "format").copied(),
+                    style: supplied(matches, "style").copied(),
                 })
             }
         }

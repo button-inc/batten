@@ -1485,12 +1485,20 @@ _batten() {
             return 0
             ;;
         batten__subcmd__exec)
-            opts="-q -v -y -h --capture-only --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
+            opts="-q -v -y -h --capture-only --tee --format --style --strictness --fail-on-warning --config-from --silent --quiet --verbose --debug --trace --log-level --no-color --no-input --yes --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --format)
+                    COMPREPLY=($(compgen -W "human json jsonl" -- "${cur}"))
+                    return 0
+                    ;;
+                --style)
+                    COMPREPLY=($(compgen -W "prefix interleave keep-order replacing timed quiet silent" -- "${cur}"))
+                    return 0
+                    ;;
                 --strictness)
                     COMPREPLY=($(compgen -W "permissive standard strict" -- "${cur}"))
                     return 0

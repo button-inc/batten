@@ -4,7 +4,7 @@
 .SH NAME
 batten\-exec \- Run a command, passing its streams and its exit code through unchanged
 .SH SYNOPSIS
-\fBbatten exec\fR [\fB\-\-capture\-only\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
+\fBbatten exec\fR [\fB\-\-capture\-only\fR] [\fB\-\-tee\fR] [\fB\-\-format\fR] [\fB\-\-style\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcommand\fR> 
 .SH DESCRIPTION
 Run a command, passing its streams and its exit code through unchanged
 .SH OPTIONS
@@ -12,8 +12,49 @@ Run a command, passing its streams and its exit code through unchanged
 \fB\-\-capture\-only\fR
 Store the child\*(Aqs streams and report their handles instead of passing the bytes through
 .TP
+\fB\-\-tee\fR
+Copy the child\*(Aqs streams onto Batten\*(Aqs own, as well as capturing them
+.TP
+\fB\-\-format\fR [default: human]
+How Batten\*(Aqs own record is encoded (hk\*(Aqs axis)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+human: Pointer lines, one per fact
+.IP \(bu 2
+json: One JSON document
+.IP \(bu 2
+jsonl: One JSON record per line
+.RE
+.TP
+\fB\-\-style\fR [default: interleave]
+How a teed child\*(Aqs bytes are presented, and whose output is suppressed (mise\*(Aqs axis)
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+prefix: Each line carries the child\*(Aqs program name
+.IP \(bu 2
+interleave: The child\*(Aqs bytes, verbatim and as they arrive
+.IP \(bu 2
+keep\-order: Each stream whole, in a fixed order, after the child exits
+.IP \(bu 2
+replacing: As [`OutputStyle::Prefix`]: redrawing in place needs a terminal Batten never assumes it has
+.IP \(bu 2
+timed: As [`OutputStyle::Prefix`], minus the clock — see the type\*(Aqs docs
+.IP \(bu 2
+quiet: Batten says nothing of its own; the child still speaks
+.IP \(bu 2
+silent: Nobody speaks
+.RE
+.TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIcommand\fR>
 The command to run, after `\-\-`, with its own arguments intact

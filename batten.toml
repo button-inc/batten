@@ -36,6 +36,11 @@ version = 1
 # And again for `[commit]` (CLOUD-701): a binary that predates the table cannot
 # enforce the subject convention, and silently ignoring the key would report
 # green over a gate that does not exist in it.
+#
+# And again for `[exec]` (CLOUD-429), which is the first table whose absence
+# changes what a caller SEES rather than what a gate decides: a binary that
+# predates it would tee the child's whole output to a caller that declared it
+# wanted a record, and the caller would pay for bytes it asked not to be sent.
 min_batten_version = "0.0.82"
 
 # The ref work must land on (CLOUD-51) — the target `batten worktree status`
@@ -1015,6 +1020,25 @@ redirect = "change the file through the surface that owns it"
 # shell gate failed AT 200, so 199 is the same bar, not a loosening. Raising
 # either number is a visible diff in this file, pinned by a test in
 # `crates/batten/tests/cli.rs`.
+# How `batten exec` presents what it dispatched (CLOUD-429), on two axes adopted
+# from tools this repo already pins: hk's `format` and mise's `style`. Both are
+# set here rather than left implicit, because "the default" is a decision this
+# repository is making about its own callers and a reader should not have to open
+# the crate to learn what it was.
+#
+# `tee` is deliberately absent, which reads as `false`: the bytes are captured
+# and addressable, so an agent asking for `mise run test` gets a record and a
+# handle instead of a test log it did not budget for. `--tee` is how a human asks
+# for the log, and it restores the old behaviour verbatim.
+#
+# `manage_process_group` is absent for the opposite reason (CLOUD-427): every
+# `exec` in this repository runs UNDER `mise run`, so the marker is already set
+# and Batten would decline regardless. Declaring `true` here would state an
+# intent that never fires, which is worse than stating nothing.
+[exec]
+format = "human"
+style = "interleave"
+
 [budget.instructions]
 files = ["AGENTS.md"]
 max_tokens = 3500

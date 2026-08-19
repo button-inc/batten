@@ -608,8 +608,23 @@
       "description": "The `[exec]` table: how `batten exec` owns what it dispatched.\n\nOne key today, and it is an opt-in rather than a tuning knob. `false` is not\na conservative default chosen for taste — it is the *only* value that leaves\nthe process topology byte-for-byte what it was, which is what an existing\nconsumer's orchestrator is already built against.",
       "type": "object",
       "properties": {
+        "format": {
+          "description": "How Batten's own record is encoded (hk's axis).",
+          "$ref": "#/$defs/OutputFormat",
+          "default": "human"
+        },
         "manage_process_group": {
           "description": "Whether Batten may put a dispatched command in its own process group and\ntake responsibility for tearing that group down.\n\nDeclared rather than inferred, because the residual case is not\nobservable: an orchestrator two levels up intending to `kill(-pgid)` looks\nexactly like one that is not. Even when this is `true`, Batten still\ndeclines whenever mise's own two rules say an ancestor is already\nmanaging — see [`GroupDecision`].",
+          "type": "boolean",
+          "default": false
+        },
+        "style": {
+          "description": "How a teed child's bytes are presented, and whose output is suppressed\n(mise's axis).",
+          "$ref": "#/$defs/OutputStyle",
+          "default": "interleave"
+        },
+        "tee": {
+          "description": "Whether the child's bytes are copied onto Batten's own streams.\n\n`false` is the CLOUD-429 default and the whole point: the bytes are\nalready stored, content-addressed and addressable, so printing them again\ncharges the caller a second time for output the engine has. `--tee`\nrestores the old behaviour verbatim.",
           "type": "boolean",
           "default": false
         }
@@ -781,6 +796,26 @@
         }
       ]
     },
+    "OutputFormat": {
+      "description": "hk's format axis, adopted rather than invented.\n\n`hk/src/structured_output.rs` already spells these three for a tool that\nreports on child processes, and a caller who knows hk must not have to learn\na second vocabulary to read Batten. The names are hk's; what they range over\nis Batten's own record.",
+      "oneOf": [
+        {
+          "description": "Pointer lines, one per fact.",
+          "type": "string",
+          "const": "human"
+        },
+        {
+          "description": "One JSON document.",
+          "type": "string",
+          "const": "json"
+        },
+        {
+          "description": "One JSON record per line.",
+          "type": "string",
+          "const": "jsonl"
+        }
+      ]
+    },
     "OutputPattern": {
       "description": "One declared output predicate: a literal that must not appear.",
       "type": "object",
@@ -808,6 +843,46 @@
         "id",
         "pattern",
         "reason"
+      ]
+    },
+    "OutputStyle": {
+      "description": "mise's style axis, adopted rather than invented.\n\n`mise/src/task/task_output.rs` spells these seven, and its `style_only()`\nseparates the stream *style* from the *suppression* of the tool's own\nmetadata — a distinction Batten needs and would otherwise have conflated into\none key. [`OutputStyle::style_only`] is that function, by that name.\n\n**With one command in flight, `prefix`, `replacing` and `timed` render\nalike.** They are still accepted, because adopting half a vocabulary is how a\ncaller learns that Batten's version of a name means something else; what\ndistinguishes them is a bundle of concurrent children, which is CLOUD-430's\nsubject and not this one's.\n\n**`timed` emits no wall-clock field, and that is the byte-stability answer**\n§6 demands rather than a limitation. A duration in Batten's own output would\nmake the same run print differently twice, and [`crate::capture`] already\nrefuses a timestamp for exactly that reason.",
+      "oneOf": [
+        {
+          "description": "Each line carries the child's program name.",
+          "type": "string",
+          "const": "prefix"
+        },
+        {
+          "description": "The child's bytes, verbatim and as they arrive.",
+          "type": "string",
+          "const": "interleave"
+        },
+        {
+          "description": "Each stream whole, in a fixed order, after the child exits.",
+          "type": "string",
+          "const": "keep-order"
+        },
+        {
+          "description": "As [`OutputStyle::Prefix`]: redrawing in place needs a terminal Batten\nnever assumes it has.",
+          "type": "string",
+          "const": "replacing"
+        },
+        {
+          "description": "As [`OutputStyle::Prefix`], minus the clock — see the type's docs.",
+          "type": "string",
+          "const": "timed"
+        },
+        {
+          "description": "Batten says nothing of its own; the child still speaks.",
+          "type": "string",
+          "const": "quiet"
+        },
+        {
+          "description": "Nobody speaks.",
+          "type": "string",
+          "const": "silent"
+        }
       ]
     },
     "PayloadClass": {

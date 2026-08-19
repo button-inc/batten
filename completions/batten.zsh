@@ -112,6 +112,16 @@ trace\:"Add everything"))' \
 ;;
 (exec)
 _arguments "${_arguments_options[@]}" : \
+'--format=[How Batten'\''s own record is encoded (hk'\''s axis)]: :((human\:"Pointer lines, one per fact"
+json\:"One JSON document"
+jsonl\:"One JSON record per line"))' \
+'--style=[How a teed child'\''s bytes are presented, and whose output is suppressed (mise'\''s axis)]: :((prefix\:"Each line carries the child'\''s program name"
+interleave\:"The child'\''s bytes, verbatim and as they arrive"
+keep-order\:"Each stream whole, in a fixed order, after the child exits"
+replacing\:"As \[\`OutputStyle\:\:Prefix\`\]\: redrawing in place needs a terminal Batten never assumes it has"
+timed\:"As \[\`OutputStyle\:\:Prefix\`\], minus the clock — see the type'\''s docs"
+quiet\:"Batten says nothing of its own; the child still speaks"
+silent\:"Nobody speaks"))' \
 '--strictness=[Raise how strictly gates apply (an override may only tighten policy)]: :((permissive\:"Advisory\: findings are reported without failing the run"
 standard\:"The default\: a finding is a violation"
 strict\:"Everything \`Standard\` fails on, plus anything advisory"))' \
@@ -123,6 +133,7 @@ verbose\:"Explain what is being checked"
 debug\:"Add resolution detail"
 trace\:"Add everything"))' \
 '--capture-only[Store the child'\''s streams and report their handles instead of passing the bytes through]' \
+'--tee[Copy the child'\''s streams onto Batten'\''s own, as well as capturing them]' \
 '--fail-on-warning[Promote a warn-severity finding to a violation (an override may only turn this on)]' \
 '*--silent[Say nothing but a verdict or a usage error]' \
 '*-q[Suppress ordinary progress (repeatable\: -qq is silent)]' \

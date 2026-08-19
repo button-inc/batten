@@ -110,6 +110,16 @@ complete -c batten -n "__fish_batten_using_subcommand enforce" -l no-color -d 'N
 complete -c batten -n "__fish_batten_using_subcommand enforce" -l no-input -d 'Never prompt; treat the run as unattended'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s y -l yes -d 'Confirm a destructive operation that would otherwise refuse'
 complete -c batten -n "__fish_batten_using_subcommand enforce" -s h -l help -d 'Print help (see more with \'--help\')'
+complete -c batten -n "__fish_batten_using_subcommand exec" -l format -d 'How Batten\'s own record is encoded (hk\'s axis)' -r -f -a "human\t'Pointer lines, one per fact'
+json\t'One JSON document'
+jsonl\t'One JSON record per line'"
+complete -c batten -n "__fish_batten_using_subcommand exec" -l style -d 'How a teed child\'s bytes are presented, and whose output is suppressed (mise\'s axis)' -r -f -a "prefix\t'Each line carries the child\'s program name'
+interleave\t'The child\'s bytes, verbatim and as they arrive'
+keep-order\t'Each stream whole, in a fixed order, after the child exits'
+replacing\t'As [`OutputStyle::Prefix`]: redrawing in place needs a terminal Batten never assumes it has'
+timed\t'As [`OutputStyle::Prefix`], minus the clock — see the type\'s docs'
+quiet\t'Batten says nothing of its own; the child still speaks'
+silent\t'Nobody speaks'"
 complete -c batten -n "__fish_batten_using_subcommand exec" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"
@@ -121,6 +131,7 @@ verbose\t'Explain what is being checked'
 debug\t'Add resolution detail'
 trace\t'Add everything'"
 complete -c batten -n "__fish_batten_using_subcommand exec" -l capture-only -d 'Store the child\'s streams and report their handles instead of passing the bytes through'
+complete -c batten -n "__fish_batten_using_subcommand exec" -l tee -d 'Copy the child\'s streams onto Batten\'s own, as well as capturing them'
 complete -c batten -n "__fish_batten_using_subcommand exec" -l fail-on-warning -d 'Promote a warn-severity finding to a violation (an override may only turn this on)'
 complete -c batten -n "__fish_batten_using_subcommand exec" -l silent -d 'Say nothing but a verdict or a usage error'
 complete -c batten -n "__fish_batten_using_subcommand exec" -s q -l quiet -d 'Suppress ordinary progress (repeatable: -qq is silent)'
