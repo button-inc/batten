@@ -217,6 +217,116 @@ fn each_layer_is_named_by_its_token_when_it_wins() {
     assert_eq!(parsed["strictness"]["source"], "flag");
 }
 
+// --- (c2) every layer that spoke, not only the one that won (CLOUD-373) ------
+
+/// The `--json` document from a run with `BATTEN_STRICTNESS` exported, as raw
+/// bytes and parsed — the byte-stability half needs the bytes themselves.
+fn document_with_strictness_env(dir: &Path, value: &str) -> (Vec<u8>, BTreeMap<String, Value>) {
+    let output = common::batten()
+        .args(["config", "show", "--json"])
+        .current_dir(dir)
+        .env("BATTEN_STRICTNESS", value)
+        .output()
+        .expect("run batten config show");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "config show failed: {}",
+        common::stderr(&output)
+    );
+    let parsed = serde_json::from_slice(&output.stdout).expect("the document is one JSON object");
+    (output.stdout, parsed)
+}
+
+#[test]
+fn every_key_carries_its_contributors_ending_in_the_layer_that_won() {
+    // Over the parsed document rather than a key list, for section (a)'s reason:
+    // a key that starts being emitted without contributors fails here without
+    // this file being touched.
+    let dir = Fixture::new("config-show-contributors")
+        .config(EVERY_KEY)
+        .build();
+    let document = document(&dir);
+    assert!(
+        !document.is_empty(),
+        "an empty document would pass vacuously"
+    );
+
+    for (key, entry) in &document {
+        let contributors = entry
+            .get("contributors")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("{key} carries no contributors list"));
+        assert!(
+            !contributors.is_empty(),
+            "{key}: an empty list would name no layer at all"
+        );
+        for layer in contributors {
+            let token = layer
+                .as_str()
+                .unwrap_or_else(|| panic!("{key}: a contributor is not a token"));
+            assert!(
+                ["flag", "env", "local-file", "repo-config", "default"].contains(&token),
+                "{key}: {token} is not one of the five layer tokens"
+            );
+        }
+        assert_eq!(
+            contributors.last(),
+            Some(&entry["source"]),
+            "{key}: the winner must be the last, greatest contributor"
+        );
+        // `default` names "no layer spoke", so it is the whole list or absent
+        // from it — never one entry of a contest.
+        assert!(
+            contributors.len() == 1 || !contributors.contains(&Value::from("default")),
+            "{key}: `default` appears beside another layer"
+        );
+    }
+}
+
+#[test]
+fn a_contested_key_names_the_committed_layer_beside_the_override() {
+    // The §7 obligation, over the compiled binary: a repository whose committed
+    // `strictness` is being raised in a shell. `source` alone reads `env` here
+    // and reads `env` for a repository that never set the key at all, which is
+    // the diagnostic gap this closes.
+    let committed = Fixture::new("config-show-contested")
+        .config("version = 1\nstrictness = \"standard\"\n")
+        .build();
+    let (bytes, document) = document_with_strictness_env(&committed, "strict");
+    assert_eq!(document["strictness"]["value"], "strict");
+    assert_eq!(document["strictness"]["source"], "env");
+    assert_eq!(
+        document["strictness"]["contributors"],
+        serde_json::json!(["repo-config", "env"]),
+        "both layers set the key, in declared weakest-first order"
+    );
+
+    // Byte-identical across two runs: the contributor list is a set ordered by
+    // the declared precedence, so nothing about the resolver's own traversal
+    // can reach the bytes (§6).
+    let (again, _) = document_with_strictness_env(&committed, "strict");
+    assert_eq!(bytes, again, "identical input must produce identical bytes");
+
+    // The same winner with nothing underneath it — one contributor, not two.
+    let bare = Fixture::new("config-show-uncontested")
+        .config("version = 1\n")
+        .build();
+    let (_, document) = document_with_strictness_env(&bare, "strict");
+    assert_eq!(document["strictness"]["source"], "env");
+    assert_eq!(
+        document["strictness"]["contributors"],
+        serde_json::json!(["env"]),
+        "a key exactly one layer set reports exactly one contributor"
+    );
+
+    // And an authority key no override can reach reports its one layer.
+    assert_eq!(
+        document_with_strictness_env(&committed, "strict").1["version"]["contributors"],
+        serde_json::json!(["repo-config"])
+    );
+}
+
 // --- (d) byte-stability, in both forms ---------------------------------------
 
 #[test]

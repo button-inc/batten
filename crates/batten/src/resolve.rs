@@ -31,7 +31,14 @@
 //!
 //! `batten config show` prints the resolved config **with its sources**, so
 //! which layer won a key is an answer the tool gives rather than one a reader
-//! has to reconstruct.
+//! has to reconstruct — and, since CLOUD-373, **which other layers spoke** too.
+//! Naming only the winner leaves a key resolving to `env` reading identically
+//! whether the committed authority also set it or said nothing at all: a repo
+//! being overridden in a shell, and a repo that never had an opinion. Telling
+//! those apart used to mean re-running the binary with layers removed, which is
+//! the diagnostic this verb exists to spare a reader. The fold already knows
+//! every contributor, so [`Contributors`] keeps them rather than discarding
+//! them on the way out.
 //!
 //! **A repository with no authority at all resolves to layer 0** (CLOUD-70):
 //! [`config::defaults`] becomes the whole configuration and every key attributes
@@ -41,7 +48,7 @@
 //! default is missing. `--config-from` is the one exception and stays strict;
 //! [`authority`] says why.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -90,6 +97,73 @@ impl Source {
 impl Serialize for Source {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Every layer that **set** one key, weakest-first (CLOUD-373).
+///
+/// The winner is the greatest member, so "who won" and "was this key contested"
+/// are two readings of one value rather than two values that can disagree.
+/// [`Source`]'s derived `Ord` *is* §8's precedence order, which is what makes a
+/// `BTreeSet` sufficient on its own: the declared weakest-first emission order
+/// and the winner both fall out of that one ordering, so no artifact of the
+/// order the resolver happened to visit the layers in can reach the emitted
+/// document (§6). There is no second map and no parallel provenance structure
+/// to keep in step.
+///
+/// [`Source::Default`] is deliberately **not** a member. It is the name for "no
+/// layer spoke", not a layer that speaks: a key reading `[default, repo-config]`
+/// would report a contest against a value nobody wrote, and "a key exactly one
+/// layer set reports exactly one contributor" would then be false of every
+/// authority key. An empty set is that case, and both [`Contributors::winner`]
+/// and [`Contributors::layers`] answer `default` for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contributors(BTreeSet<Source>);
+
+impl Contributors {
+    /// The set for a key no layer set, which the compiled-in default answers.
+    #[must_use]
+    pub const fn unset() -> Self {
+        Contributors(BTreeSet::new())
+    }
+
+    /// The set for a key `layer` set.
+    #[must_use]
+    pub fn set_by(layer: Source) -> Self {
+        Contributors(BTreeSet::from([layer]))
+    }
+
+    /// Record that `layer` also set the key.
+    ///
+    /// Idempotent, so a layer that merely *restates* a lower layer's value —
+    /// accepted by the raise-only clamp and re-attributed to the higher layer —
+    /// appears once rather than once per pass over it.
+    pub fn also(&mut self, layer: Source) {
+        self.0.insert(layer);
+    }
+
+    /// The layer that won: the greatest that set the key, or [`Source::Default`]
+    /// when none did.
+    #[must_use]
+    pub fn winner(&self) -> Source {
+        self.0
+            .iter()
+            .next_back()
+            .copied()
+            .unwrap_or(Source::Default)
+    }
+
+    /// Every layer that set the key, weakest-first — `[default]` when none did.
+    ///
+    /// Never empty, and always ends with [`Contributors::winner`], so a reader
+    /// can take the last element as the answer §8 owes them without a special
+    /// case for the uncontested key.
+    #[must_use]
+    pub fn layers(&self) -> Vec<Source> {
+        if self.0.is_empty() {
+            return vec![Source::Default];
+        }
+        self.0.iter().copied().collect()
     }
 }
 
@@ -324,7 +398,7 @@ pub struct Resolved {
     /// convention — there is no raise-only reading of "match more things".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<crate::commit::Commit>,
-    /// Which layer set each **emitted** key.
+    /// Which layers set each **emitted** key.
     ///
     /// Keyed by the serialized key name, and total over the document rather
     /// than over [`SETTINGS`]: `SETTINGS` declares which layers *may* override a
@@ -332,13 +406,22 @@ pub struct Resolved {
     /// Pinning attribution to the overridable subset is what made the printed
     /// "effective config" structurally partial (CLOUD-30).
     ///
+    /// Every contributor, not only the winner (CLOUD-373) — the layering is an
+    /// ordered fold that already knows them all, and a key whose committed value
+    /// was overridden is a different situation from one no committed file ever
+    /// spoke to. [`Contributors`] carries both readings.
+    ///
     /// Skipped by serde so the document is exactly the config keys; the pairing
     /// happens in [`Resolved::attributed`].
     #[serde(skip_serializing)]
-    pub sources: BTreeMap<&'static str, Source>,
+    pub sources: BTreeMap<&'static str, Contributors>,
 }
 
-/// One emitted key: its value, and the layer that set it.
+/// One emitted key: its value, the layer that won it, and every layer that set
+/// it.
+///
+/// Field order is the emitted order, and it is fixed here rather than sorted,
+/// so the document's bytes are a function of the config alone (§6).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Attributed {
     /// The effective value, exactly as the key serializes.
@@ -347,10 +430,19 @@ pub struct Attributed {
     /// value, both of which would break byte-stability across machines and leak
     /// a home directory.
     pub source: Source,
+    /// Every layer that set the key, weakest-first, **including** the winner —
+    /// so [`Attributed::source`] is always this list's last element.
+    ///
+    /// Both halves are read off one [`Contributors`] set, so they cannot
+    /// disagree; keeping `source` beside them is what leaves §8's "which layer
+    /// won" answerable without a reader having to know that the last element is
+    /// the greatest one (CLOUD-373).
+    pub contributors: Vec<Source>,
 }
 
 impl Resolved {
-    /// The effective configuration as `{key: {value, source}}`, sorted.
+    /// The effective configuration as `{key: {value, source, contributors}}`,
+    /// sorted.
     ///
     /// Derived from this struct's own serialization rather than composed by
     /// hand, so the emitted key set is the struct's and cannot drift from it —
@@ -368,33 +460,47 @@ impl Resolved {
         fields
             .into_iter()
             .map(|(key, value)| {
-                let source = *self.sources.get(key.as_str()).ok_or_else(|| {
+                let contributors = self.sources.get(key.as_str()).ok_or_else(|| {
                     // Unreachable in a build that passes
                     // `tests::every_emitted_key_carries_a_source`; stated as an
                     // error rather than a panic because an unattributed key is
                     // exactly the defect this change removes.
                     anyhow::anyhow!("emitted key {key} carries no source")
                 })?;
-                Ok((key, Attributed { value, source }))
+                Ok((
+                    key,
+                    Attributed {
+                        value,
+                        source: contributors.winner(),
+                        contributors: contributors.layers(),
+                    },
+                ))
             })
             .collect()
     }
 }
 
-/// A value paired with the layer that set it, so a later layer can name both
-/// sides of a rejected weakening.
-#[derive(Debug, Clone, Copy)]
+/// A value paired with every layer that set it, so a later layer can name both
+/// sides of a rejected weakening — and so the document can name every layer
+/// that spoke, not only the one that won (CLOUD-373).
+///
+/// The winning layer is [`Contributors::winner`] rather than a field of its own:
+/// the layers are applied weakest-first, so the greatest contributor *is* the
+/// winner, and storing it twice would be two spellings of one fact.
+#[derive(Debug, Clone)]
 struct Layered<T> {
     value: T,
-    source: Source,
+    contributors: Contributors,
 }
 
 impl<T: Ord + Copy> Layered<T> {
     /// Apply a candidate from a higher layer under the raise-only clamp.
     ///
-    /// Tightening (or restating) is accepted and re-attributed to the new layer;
-    /// weakening is refused, naming the key, both layers, and both values so the
-    /// operator can see exactly which file to fix.
+    /// Tightening (or restating) is accepted and the layer is recorded as a
+    /// contributor; weakening is refused, naming the key, both layers, and both
+    /// values so the operator can see exactly which file to fix. The refusal
+    /// returns before any mutation, so a rejected override leaves neither the
+    /// value nor the attribution touched.
     ///
     /// Generic over the key's type because the clamp *is* the ordering: every
     /// policy-bearing key resolves to a value where "tighten" means `candidate >=
@@ -403,13 +509,13 @@ impl<T: Ord + Copy> Layered<T> {
     /// subtly different notion of weakening — `render` supplies the key's own
     /// token vocabulary for the message, and nothing else varies.
     fn raise(
-        self,
+        &mut self,
         candidate: T,
         source: Source,
         origin: &str,
         key: &str,
         render: fn(T) -> String,
-    ) -> Result<Self> {
+    ) -> Result<()> {
         if candidate < self.value {
             return Err(UsageError::raise(format!(
                 "{key}: {origin} would weaken policy ({} → {}); overrides may only tighten, \
@@ -418,10 +524,9 @@ impl<T: Ord + Copy> Layered<T> {
                 render(candidate),
             )));
         }
-        Ok(Layered {
-            value: candidate,
-            source,
-        })
+        self.value = candidate;
+        self.contributors.also(source);
+        Ok(())
     }
 }
 
@@ -551,17 +656,20 @@ pub fn resolve_with_env(
 ) -> Result<Resolved> {
     let (repo, present) = authority(dir, overrides.config_from.as_deref())?;
 
-    // Layer 0 — the compiled-in default, overwritten by anything above it.
+    // Layer 0 — the compiled-in default, overwritten by anything above it. It
+    // contributes NOTHING: `Contributors::unset` is "no layer spoke", which is
+    // what `default` names, so the authority below replaces the set rather than
+    // adding to it.
     let mut strictness = Layered {
         value: Strictness::default(),
-        source: Source::Default,
+        contributors: Contributors::unset(),
     };
     if let Some(value) = repo.strictness {
         // The authority sets the floor; nothing below it can weaken it, so this
         // is an assignment rather than a clamped raise.
         strictness = Layered {
             value,
-            source: Source::RepoConfig,
+            contributors: Contributors::set_by(Source::RepoConfig),
         };
     }
 
@@ -569,12 +677,12 @@ pub fn resolve_with_env(
     // clamp; `false < true` is the ordering "tighten" is defined over.
     let mut fail_on_warning = Layered {
         value: false,
-        source: Source::Default,
+        contributors: Contributors::unset(),
     };
     if let Some(value) = repo.fail_on_warning {
         fail_on_warning = Layered {
             value,
-            source: Source::RepoConfig,
+            contributors: Contributors::set_by(Source::RepoConfig),
         };
     }
 
@@ -624,19 +732,18 @@ pub fn resolve_with_env(
     // harmless empty export would fail every invocation.
     if let Some((name, raw)) = env_layer("strictness", env) {
         let value = parse_strictness(&raw, name)?;
-        strictness = strictness.raise(value, Source::Env, name, "strictness", token)?;
+        strictness.raise(value, Source::Env, name, "strictness", token)?;
     }
     if let Some((name, raw)) = env_layer("fail_on_warning", env) {
         let value = parse_bool(&raw, name, "fail_on_warning")?;
-        fail_on_warning =
-            fail_on_warning.raise(value, Source::Env, name, "fail_on_warning", bool_token)?;
+        fail_on_warning.raise(value, Source::Env, name, "fail_on_warning", bool_token)?;
     }
 
     // Layer 4 — the command line, highest precedence and still raise-only: a
     // flag may tighten a gate for one run, never disable one for it.
     if let Some(value) = overrides.strictness {
         let flag = flag_name("strictness", "--strictness");
-        strictness = strictness.raise(value, Source::Flag, flag, "strictness", token)?;
+        strictness.raise(value, Source::Flag, flag, "strictness", token)?;
     }
     if overrides.fail_on_warning {
         // Only the raising direction exists here: a bare boolean flag cannot
@@ -644,8 +751,7 @@ pub fn resolve_with_env(
         // `raise` anyway so the attribution to `flag` follows the same path as
         // every other layer rather than a bespoke assignment.
         let flag = flag_name("fail_on_warning", "--fail-on-warning");
-        fail_on_warning =
-            fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
+        fail_on_warning.raise(true, Source::Flag, flag, "fail_on_warning", bool_token)?;
     }
 
     Ok(assemble(
@@ -658,17 +764,21 @@ pub fn resolve_with_env(
     ))
 }
 
-/// Which layer a key that only the authority can set came from.
+/// Which layers a key that only the authority can set came from.
 ///
 /// One function for the whole document, so the two halves of the answer cannot
 /// drift apart: a key is `repo-config` when a committed authority exists **and**
 /// declares it, and `default` otherwise. Absence of the authority collapses the
 /// first half, which is what makes every key on an unconfigured repository read
 /// `default` (CLOUD-70) without that being written out per key.
-const fn declared_by(present: config::Authority, declared: bool) -> Source {
+///
+/// The `default` half is [`Contributors::unset`] rather than a set containing
+/// `Source::Default`, for the reason [`Contributors`] gives: a key nobody set
+/// has no contributors, and `default` is what that is called.
+fn declared_by(present: config::Authority, declared: bool) -> Contributors {
     match present {
-        config::Authority::Present if declared => Source::RepoConfig,
-        _ => Source::Default,
+        config::Authority::Present if declared => Contributors::set_by(Source::RepoConfig),
+        _ => Contributors::unset(),
     }
 }
 
@@ -680,7 +790,7 @@ const fn declared_by(present: config::Authority, declared: bool) -> Source {
 /// redefined by the local layer.
 struct Tables {
     rules: Vec<Rule>,
-    rules_source: Source,
+    rules_source: Contributors,
     exec_patterns: Vec<crate::outputs::OutputPattern>,
     redirects: Vec<crate::redirect::Redirect>,
     waivers: Vec<crate::waiver::Waiver>,
@@ -714,7 +824,7 @@ fn apply_local(
         )));
     }
     if let Some(value) = local.strictness {
-        *strictness = strictness.raise(
+        strictness.raise(
             value,
             Source::LocalFile,
             LOCAL_CONFIG_FILE,
@@ -725,7 +835,7 @@ fn apply_local(
     if let Some(value) = local.fail_on_warning {
         // The raise-only clause §8 names directly: a committed `on` cannot be
         // turned off by an uncommitted file.
-        *fail_on_warning = fail_on_warning.raise(
+        fail_on_warning.raise(
             value,
             Source::LocalFile,
             LOCAL_CONFIG_FILE,
@@ -747,7 +857,11 @@ fn apply_local(
             )));
         }
         tables.rules.push(rule);
-        tables.rules_source = Source::LocalFile;
+        // `also`, not an assignment: the committed authority still declared the
+        // rules it declared, and a table both layers contributed to is exactly
+        // the contest CLOUD-373 makes legible. Idempotent, so a local file
+        // adding several rules records its layer once.
+        tables.rules_source.also(Source::LocalFile);
     }
     merge_local_patterns(&mut tables.exec_patterns, local.exec_patterns)?;
     merge_local_redirects(&mut tables.redirects, local.redirects)?;
@@ -758,17 +872,17 @@ fn apply_local(
     // check` — and no effect. A tightening lost without a word is worse than one
     // refused, because the operator's intent vanishes.
     if merge_local_scope(&mut paths.scope, local.scope)? {
-        paths.scope_source = Source::LocalFile;
+        paths.scope_source.also(Source::LocalFile);
     }
     if !local.protected.is_empty() {
         // Union: "add protected paths" is §8's own wording, and adding to an
         // include-only set can only guard more paths.
         paths.protected.extend(local.protected);
-        paths.protected_source = Source::LocalFile;
+        paths.protected_source.also(Source::LocalFile);
     }
     if !local.unlanded.is_empty() {
         paths.unlanded.extend(local.unlanded);
-        paths.unlanded_source = Source::LocalFile;
+        paths.unlanded_source.also(Source::LocalFile);
     }
     Ok(())
 }
@@ -782,9 +896,9 @@ struct Paths {
     scope: Vec<String>,
     protected: Vec<String>,
     unlanded: Vec<String>,
-    scope_source: Source,
-    protected_source: Source,
-    unlanded_source: Source,
+    scope_source: Contributors,
+    protected_source: Contributors,
+    unlanded_source: Contributors,
 }
 
 impl Paths {
@@ -962,8 +1076,8 @@ fn assemble(
     let sources = attribution(
         repo,
         present,
-        strictness.source,
-        fail_on_warning.source,
+        strictness.contributors,
+        fail_on_warning.contributors,
         tables.rules_source,
         &paths,
     );
@@ -1001,19 +1115,21 @@ fn assemble(
     }
 }
 
-/// Which layer set each emitted key.
+/// Which layers set each emitted key.
 ///
 /// Every key the authority *can* set but no layer may override is attributed the
 /// same way — present in the committed file means `repo-config`, absent means
-/// `default` — so the two cannot drift apart by being written out per key.
+/// `default` — so the two cannot drift apart by being written out per key. Such
+/// a key can never be contested: there is exactly one layer able to speak to it,
+/// which is why `declared_by` answers with a set of at most one.
 fn attribution(
     repo: &config::Config,
     present: config::Authority,
-    strictness: Source,
-    fail_on_warning: Source,
-    rules: Source,
+    strictness: Contributors,
+    fail_on_warning: Contributors,
+    rules: Contributors,
     paths: &Paths,
-) -> BTreeMap<&'static str, Source> {
+) -> BTreeMap<&'static str, Contributors> {
     let authority_set = |declared: bool| declared_by(present, declared);
     BTreeMap::from([
         // `version` comes from the authority whenever there is one: the key is
@@ -1029,10 +1145,12 @@ fn attribution(
         ("fail_on_warning", fail_on_warning),
         ("rule", rules),
         // Layered since CLOUD-239: these three carry the local file's source
-        // when it narrowed them, so `config show` names the layer that did.
-        ("scope", paths.scope_source),
-        ("protected", paths.protected_source),
-        ("unlanded", paths.unlanded_source),
+        // when it narrowed them, so `config show` names the layer that did —
+        // and since CLOUD-373 the authority's beside it, since narrowing a
+        // committed set is the contest a reader most needs to see.
+        ("scope", paths.scope_source.clone()),
+        ("protected", paths.protected_source.clone()),
+        ("unlanded", paths.unlanded_source.clone()),
         ("epoch", authority_set(repo.epoch.is_some())),
         ("verb", authority_set(!repo.verbs.is_empty())),
         ("marker", authority_set(!repo.markers.is_empty())),
@@ -1214,11 +1332,125 @@ mod tests {
     }
 
     #[test]
+    fn a_contested_key_names_every_layer_that_set_it() {
+        // CLOUD-373's whole point: `strictness` here resolves to `local-file`
+        // either way, so the winner alone cannot tell a committed policy being
+        // overridden from a repository that never had an opinion. The
+        // contributor list is what separates them.
+        let contested = repo(
+            "contributors-contested",
+            "version = 1\nstrictness = \"standard\"\n",
+            Some("version = 1\nstrictness = \"strict\"\n"),
+        );
+        let document = resolve_with_env(&contested, &Overrides::default(), &no_env)
+            .unwrap()
+            .attributed()
+            .unwrap();
+        assert_eq!(
+            document["strictness"].contributors,
+            vec![Source::RepoConfig, Source::LocalFile],
+            "both layers set the key, weakest-first"
+        );
+        assert_eq!(document["strictness"].source, Source::LocalFile);
+
+        // The same winner, reached with nothing underneath it. Identical
+        // `source`, different `contributors` — which is the defect closed.
+        let uncontested = repo(
+            "contributors-uncontested",
+            "version = 1\n",
+            Some("version = 1\nstrictness = \"strict\"\n"),
+        );
+        let document = resolve_with_env(&uncontested, &Overrides::default(), &no_env)
+            .unwrap()
+            .attributed()
+            .unwrap();
+        assert_eq!(document["strictness"].source, Source::LocalFile);
+        assert_eq!(
+            document["strictness"].contributors,
+            vec![Source::LocalFile],
+            "a key exactly one layer set reports exactly one contributor"
+        );
+    }
+
+    #[test]
+    fn a_key_no_layer_set_reports_the_default_alone() {
+        // `default` is what "nobody spoke" is called, not a layer that spoke, so
+        // it appears alone or not at all. A `[default, repo-config]` reading
+        // would report a contest against a value nobody wrote — and would make
+        // "exactly one layer means exactly one contributor" false of every
+        // authority key in the document.
+        let dir = repo(
+            "contributors-default",
+            "version = 1\nprotected = [\"a\"]\n",
+            None,
+        );
+        let document = resolve_with_env(&dir, &Overrides::default(), &no_env)
+            .unwrap()
+            .attributed()
+            .unwrap();
+        assert_eq!(document["unlanded"].contributors, vec![Source::Default]);
+        assert_eq!(document["protected"].contributors, vec![Source::RepoConfig]);
+        for (key, attributed) in &document {
+            assert!(
+                attributed.contributors.len() == 1
+                    || !attributed.contributors.contains(&Source::Default),
+                "{key} reports `default` beside another layer: {:?}",
+                attributed.contributors
+            );
+        }
+    }
+
+    #[test]
+    fn contributors_are_emitted_in_declaration_order_and_end_with_the_winner() {
+        // §6: the order is `Source`'s DECLARATION order, never the order the
+        // resolver happened to fold the layers in — and a layer that merely
+        // restates the value below it is recorded once, not once per pass.
+        let dir = repo(
+            "contributors-declaration-order",
+            "version = 1\nstrictness = \"standard\"\n",
+            None,
+        );
+        let document = resolve_with_env(
+            &dir,
+            &Overrides {
+                strictness: Some(Strictness::Strict),
+                ..Overrides::default()
+            },
+            &|name| (name == "BATTEN_STRICTNESS").then(|| "standard".to_owned()),
+        )
+        .unwrap()
+        .attributed()
+        .unwrap();
+        assert_eq!(
+            document["strictness"].contributors,
+            vec![Source::RepoConfig, Source::Env, Source::Flag],
+            "the env layer restated the committed value and still counts once"
+        );
+
+        // Over the whole document, and stated as the two properties the emitted
+        // shape rests on rather than as one fixture's answer.
+        for (key, attributed) in &document {
+            let mut sorted = attributed.contributors.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(
+                *attributed.contributors, sorted,
+                "{key}'s contributors are not in declared weakest-first order"
+            );
+            assert_eq!(
+                attributed.contributors.last().copied(),
+                Some(attributed.source),
+                "{key}'s winner is not its greatest contributor"
+            );
+        }
+    }
+
+    #[test]
     fn default_wins_when_no_layer_speaks() {
         let dir = repo("resolve-default", "version = 1\n", None);
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Standard);
-        assert_eq!(resolved.sources["strictness"], Source::Default);
+        assert_eq!(resolved.sources["strictness"].winner(), Source::Default);
     }
 
     #[test]
@@ -1230,7 +1462,7 @@ mod tests {
         );
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Permissive);
-        assert_eq!(resolved.sources["strictness"], Source::RepoConfig);
+        assert_eq!(resolved.sources["strictness"].winner(), Source::RepoConfig);
     }
 
     #[test]
@@ -1242,7 +1474,7 @@ mod tests {
         );
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Strict);
-        assert_eq!(resolved.sources["strictness"], Source::LocalFile);
+        assert_eq!(resolved.sources["strictness"].winner(), Source::LocalFile);
     }
 
     #[test]
@@ -1273,7 +1505,7 @@ mod tests {
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         let ids: Vec<&str> = resolved.rules.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b"], "an added rule tightens policy");
-        assert_eq!(resolved.sources["rule"], Source::LocalFile);
+        assert_eq!(resolved.sources["rule"].winner(), Source::LocalFile);
     }
 
     #[test]
@@ -1340,7 +1572,7 @@ mod tests {
         );
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.waivers.len(), 1);
-        assert_eq!(resolved.sources["waiver"], Source::RepoConfig);
+        assert_eq!(resolved.sources["waiver"].winner(), Source::RepoConfig);
     }
 
     #[test]
@@ -1369,7 +1601,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(strict.strictness, Strictness::Strict);
-        assert_eq!(strict.sources["strictness"], Source::Env);
+        assert_eq!(strict.sources["strictness"].winner(), Source::Env);
 
         // …and it still cannot go below the local file's floor.
         let err = resolve_with_env(&dir, &Overrides::default(), &|name| {
@@ -1430,7 +1662,7 @@ mod tests {
             .expect("an empty env var is not a bad value");
             assert_eq!(resolved.strictness, Strictness::Strict);
             assert_eq!(
-                resolved.sources["strictness"],
+                resolved.sources["strictness"].winner(),
                 Source::RepoConfig,
                 "an empty override must not claim the key"
             );
@@ -1479,7 +1711,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(resolved.strictness, Strictness::Strict);
-        assert_eq!(resolved.sources["strictness"], Source::Flag);
+        assert_eq!(resolved.sources["strictness"].winner(), Source::Flag);
 
         let err = resolve_with_env(
             &dir,
@@ -1500,12 +1732,18 @@ mod tests {
         let off = repo("fow-default", "version = 1\n", None);
         let resolved = resolve_with_env(&off, &Overrides::default(), &no_env).unwrap();
         assert!(!resolved.fail_on_warning, "unset means off");
-        assert_eq!(resolved.sources["fail_on_warning"], Source::Default);
+        assert_eq!(
+            resolved.sources["fail_on_warning"].winner(),
+            Source::Default
+        );
 
         let committed = repo("fow-repo", "version = 1\nfail_on_warning = true\n", None);
         let resolved = resolve_with_env(&committed, &Overrides::default(), &no_env).unwrap();
         assert!(resolved.fail_on_warning);
-        assert_eq!(resolved.sources["fail_on_warning"], Source::RepoConfig);
+        assert_eq!(
+            resolved.sources["fail_on_warning"].winner(),
+            Source::RepoConfig
+        );
 
         let local = repo(
             "fow-local",
@@ -1514,14 +1752,17 @@ mod tests {
         );
         let resolved = resolve_with_env(&local, &Overrides::default(), &no_env).unwrap();
         assert!(resolved.fail_on_warning);
-        assert_eq!(resolved.sources["fail_on_warning"], Source::LocalFile);
+        assert_eq!(
+            resolved.sources["fail_on_warning"].winner(),
+            Source::LocalFile
+        );
 
         let resolved = resolve_with_env(&off, &Overrides::default(), &|name| {
             (name == "BATTEN_FAIL_ON_WARNING").then(|| "true".to_owned())
         })
         .unwrap();
         assert!(resolved.fail_on_warning);
-        assert_eq!(resolved.sources["fail_on_warning"], Source::Env);
+        assert_eq!(resolved.sources["fail_on_warning"].winner(), Source::Env);
 
         let resolved = resolve_with_env(
             &off,
@@ -1533,7 +1774,7 @@ mod tests {
         )
         .unwrap();
         assert!(resolved.fail_on_warning);
-        assert_eq!(resolved.sources["fail_on_warning"], Source::Flag);
+        assert_eq!(resolved.sources["fail_on_warning"].winner(), Source::Flag);
     }
 
     #[test]
@@ -1571,7 +1812,7 @@ mod tests {
             (name == "BATTEN_FAIL_ON_WARNING").then(|| "true".to_owned())
         })
         .unwrap();
-        assert_eq!(resolved.sources["fail_on_warning"], Source::Env);
+        assert_eq!(resolved.sources["fail_on_warning"].winner(), Source::Env);
     }
 
     #[test]
@@ -1586,7 +1827,10 @@ mod tests {
         );
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert!(!resolved.fail_on_warning);
-        assert_eq!(resolved.sources["fail_on_warning"], Source::LocalFile);
+        assert_eq!(
+            resolved.sources["fail_on_warning"].winner(),
+            Source::LocalFile
+        );
     }
 
     #[test]
@@ -1604,7 +1848,10 @@ mod tests {
             })
             .expect("an empty env var is not a bad value");
             assert!(resolved.fail_on_warning);
-            assert_eq!(resolved.sources["fail_on_warning"], Source::RepoConfig);
+            assert_eq!(
+                resolved.sources["fail_on_warning"].winner(),
+                Source::RepoConfig
+            );
         }
     }
 
@@ -1647,7 +1894,7 @@ mod tests {
             Strictness::Standard,
             "the parent's config must not be found by walking up"
         );
-        assert_eq!(resolved.sources["strictness"], Source::Default);
+        assert_eq!(resolved.sources["strictness"].winner(), Source::Default);
     }
 
     #[test]
@@ -1694,7 +1941,7 @@ mod tests {
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.rules, config::defaults().rules);
         assert!(!resolved.rules.is_empty());
-        assert_eq!(resolved.sources["rule"], Source::Default);
+        assert_eq!(resolved.sources["rule"].winner(), Source::Default);
     }
 
     #[test]
@@ -1706,7 +1953,7 @@ mod tests {
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.authority, config::Authority::Present);
         assert!(resolved.rules.is_empty());
-        assert_eq!(resolved.sources["version"], Source::RepoConfig);
+        assert_eq!(resolved.sources["version"].winner(), Source::RepoConfig);
     }
 
     #[test]
@@ -1722,7 +1969,7 @@ mod tests {
         fs::remove_file(dir.join(config::CONFIG_FILE)).unwrap();
         let resolved = resolve_with_env(&dir, &Overrides::default(), &no_env).unwrap();
         assert_eq!(resolved.strictness, Strictness::Strict);
-        assert_eq!(resolved.sources["strictness"], Source::LocalFile);
+        assert_eq!(resolved.sources["strictness"].winner(), Source::LocalFile);
 
         // …and the clamp still refuses a local file that redefines a default
         // rule, exactly as it refuses one redefining a committed rule.
