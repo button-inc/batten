@@ -63,14 +63,30 @@ fn repo(name: &str) -> PathBuf {
 }
 
 /// Mint the branch-keyed receipt the way `claim-check` does: one file under the
-/// git dir, named for the check and the branch with separators replaced.
+/// git dir, named for the check and the branch with separators replaced, and
+/// carrying the `origin/main` the claim was made against.
+///
+/// **The base line is not optional here** (CLOUD-516). `claim-check` records it,
+/// and a receipt without one is void by design so that receipts predating that
+/// change cannot grandfather themselves in — so a helper that omitted it would
+/// mint a receipt no real claim resembles and would test the wrong thing.
 fn mint(dir: &Path, branch: &str) {
+    mint_against(
+        dir,
+        branch,
+        git_in(dir, &["rev-parse", "origin/main"]).trim(),
+    );
+}
+
+/// Mint a receipt naming a base of the caller's choosing, for the cases that are
+/// about the base having moved.
+fn mint_against(dir: &Path, branch: &str, base: &str) {
     let git_dir = git_in(dir, &["rev-parse", "--absolute-git-dir"]);
     let receipts = PathBuf::from(git_dir.trim()).join("batten-receipts");
     std::fs::create_dir_all(&receipts).expect("create the receipt store");
     std::fs::write(
         receipts.join(format!("claim.{}", branch.replace('/', "-"))),
-        "CLOUD-444\nready-lint pass\n",
+        format!("CLOUD-444\nready-lint pass\nbase {base}\n"),
     )
     .expect("mint the receipt");
 }
@@ -172,6 +188,54 @@ fn a_receipt_for_another_branch_does_not_vouch_for_this_one() {
     // And the branch it WAS minted for is allowed, so the negative above is
     // about the keying rather than about an unreadable store.
     git_in(&dir, &["checkout", "-q", "-b", "user/some-other-branch"]);
+    assert_allowed(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn a_branch_restarted_after_its_pr_merged_carries_no_usable_claim() {
+    // CLOUD-516, end to end through the real hook rather than the predicate. A
+    // merged PR's documented remedy is `git checkout -B <name> origin/main`,
+    // which repoints the name at a new base and discards the commits that were
+    // the branch — while the receipt, keyed by the name, survives. Measured
+    // 2026-08-13: a receipt naming CLOUD-230 authorised every edit behind four
+    // unrelated stories and reported nothing.
+    let dir = repo("claim-restarted");
+    mint(&dir, "user/cloud-444-slug");
+    assert_allowed(&dir, "src/tracked.rs");
+    // The branch does some work and lands; `origin/main` advances past the base
+    // the claim was made against.
+    write(&dir, "src/tracked.rs", "// landed\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "landed work"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    // The restart: same name, new base, nothing of its own. The receipt is still
+    // on disk and still names the same issue.
+    git_in(
+        &dir,
+        &["checkout", "-q", "-B", "user/cloud-444-slug", "origin/main"],
+    );
+    assert_denied(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn a_lap_that_rebases_onto_newer_main_is_never_asked_to_re_claim() {
+    // The row a careless fix breaks, and the reason the predicate is a
+    // conjunction. `land` rebases onto the current `origin/main` every lap, so
+    // the recorded base is stale on every lap after the first — voiding on that
+    // alone would demand a re-claim per lap, which is the false-positive rate
+    // that gets a guard bypassed.
+    let dir = repo("claim-lap");
+    let stale = git_in(&dir, &["rev-parse", "origin/main"]);
+    mint_against(&dir, "user/cloud-444-slug", stale.trim());
+    write(&dir, "src/tracked.rs", "// in flight\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "work in flight"]);
+    // main moves under the branch, which still carries its own commit.
+    git_in(
+        &dir,
+        &["commit", "-q", "--allow-empty", "-m", "someone else landed"],
+    );
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD~1"]);
     assert_allowed(&dir, "src/tracked.rs");
 }
 
