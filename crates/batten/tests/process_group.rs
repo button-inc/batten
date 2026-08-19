@@ -128,7 +128,16 @@ fn spawn_exec(dir: &Path, home: &Path, child: &Path, env: &[(&str, &str)]) -> Ch
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .current_dir(dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        // SCRUBBED, and this is the hermeticity that matters here: the whole
+        // suite runs under `mise run verify`, which sets the very marker the
+        // predicate reads. Inheriting it makes Batten decline — correctly — and
+        // every "owned" case below then measures how the SUITE was launched
+        // rather than what Batten decided. Measured: three cases passed run
+        // directly and failed under the gate, for exactly this reason.
+        //
+        // A case that wants the marker sets it back through `env`, below.
+        .env_remove("MISE_TASK_PGID_MANAGED");
     for (key, value) in env {
         command.env(key, value);
     }
@@ -312,7 +321,11 @@ fn a_session_leader_declines_even_with_the_opt_in_on() {
         .args(["exec", "--", child.to_str().expect("utf-8")])
         .current_dir(&dir)
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        // For `spawn_exec`'s reason: this case must decline on the SESSION-LEADER
+        // rule, and an inherited marker would make it decline on the other one —
+        // passing while measuring nothing it claims to.
+        .env_remove("MISE_TASK_PGID_MANAGED");
     command.state_home(&home);
     let status = command.status().expect("run batten under setsid");
     assert!(status.success(), "the wrapped child itself succeeds");
