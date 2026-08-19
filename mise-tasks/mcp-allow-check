@@ -5,7 +5,7 @@
 # symptom is an approval prompt on every call, which reads as harness behaviour
 # rather than as a settings bug. That silence is what earns a gate.
 #
-# Two predicates, both pure functions of the settings file:
+# Three predicates, all pure functions of the settings file:
 #
 #   unanchored-allow-glob     an allow rule whose glob reaches the server
 #                             segment. The CLI accepts a tool-name glob only
@@ -24,8 +24,16 @@
 #                             mandates stalled behind an approval prompt this
 #                             repo had already decided to give.
 #
-# Deny rules are deliberately not checked: a deny may glob freely, and a deny
-# that over-matches fails closed rather than silently.
+#   uncovered-connector-deny  a deny naming ONE host-supplied server and ONE
+#                             tool, both literally, that no suffix-matching
+#                             guard covers. Detail and the measurement are
+#                             beside the predicate at the foot of this file.
+#
+# A deny may still glob freely — `mcp__*` is a broad prohibition rather than a
+# misspelled narrow one, and a deny that OVER-matches fails closed. What the
+# third predicate added is the opposite direction: a deny that UNDER-matches,
+# because it spells a connector name the host has since changed, fails open and
+# silently. That distinction is the whole of its scope.
 #
 # Reads no network and no live MCP state — the settings file is the whole input,
 # so the same command answers the same way in a hook, on CI, and in a test.
@@ -110,5 +118,75 @@ done < <(jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] 
 # A gate may only assert what it can verify from the repo. The connector-name
 # question cannot be, and belongs in user-level settings — see CLOUD-178.
 
-[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, and every enabled server has a grant"
+# --- an under-matching DENY, which is the direction that fails open -----------
+#
+# The paragraph above still holds: this gate cannot know which name a connector
+# is live under. What it CAN decide from the repo alone is whether a rule is
+# being RELIED ON for a server the repo never declares.
+#
+# MEASURED 2026-08-19, on this gate's own settings file at `d671184`. Four deny
+# rules named `mcp__Claude_Code_Remote__*` and `mcp__github__*`; the session that
+# wrote them had those connectors exposed as `mcp__bf7c680d-…__*` and
+# `mcp__cc451d34-…__*`, so three of the four matched nothing. The gate passed,
+# because every rule was well-SHAPED. A deny that names no live tool reads as a
+# prohibition and enforces nothing.
+#
+# WHY DENIES AND NOT ALLOWS, which is the whole of the new predicate's scope. The
+# two fail in opposite directions. An under-matching ALLOW fails closed — the call
+# stops at an approval prompt, a human sees it, and the compensating control
+# CLOUD-178 already records ("the failure is loud to the human even though it is
+# silent to the agent") applies. An under-matching DENY fails OPEN, silently, and
+# no one is prompted about a prohibition that quietly stopped applying. Only the
+# second needs a gate, and scoping to it is what lets this land without a waiver
+# for every pre-existing allow rule.
+#
+# COVERAGE IS DECLARED, NEVER PARSED. A guard that decides a verb by tool-name
+# SUFFIX works under any exposed server name, which is the portable form of this
+# rule — `issue-read-guard` and `board-move-guard` have matched `*save_issue` that
+# way all along. Each such guard prints the suffixes it owns via `--covers`, and
+# this gate takes the union. Grepping a neighbour's `case` statements instead
+# would be a second authority for a fact the guard already states.
+#
+# A server the repo DOES declare (`.mcp.json` / `enabledMcpjsonServers`) keeps a
+# stable name by construction, so its deny rules need no guard.
+declared=$( (
+	jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null
+	jq -r '(.mcpServers // {}) | keys[]' .mcp.json 2>/dev/null
+) | sort -u)
+
+# STDIN IS CLOSED FOR THE PROBE, and that is not a tidiness detail. A guard that
+# does not know `--covers` falls through to its `raw=$(cat)` and blocks forever
+# waiting for a payload that will never come — this gate hung the whole suite
+# exactly once, at the two-minute harness kill, before the redirect was added.
+# The output is filtered to bare tool-name shapes so a guard that answers with a
+# usage line or an `::error::` cannot inject a spurious "coverage".
+covered=$(for guard in "$(dirname "$0")"/*-guard; do
+	[ -x "$guard" ] || continue
+	"$guard" --covers </dev/null 2>/dev/null || true
+done | grep -E '^[a-z][a-z0-9_]*$' | sort -u)
+
+while IFS= read -r rule; do
+	[ -n "$rule" ] || continue
+	case "$rule" in
+	mcp__*) ;;
+	*) continue ;;
+	esac
+	rule_server=${rule#mcp__}
+	rule_server=${rule_server%%__*}
+	suffix=${rule##*__}
+	# A GLOB IN EITHER SEGMENT IS THE OTHER QUESTION, and the header above already
+	# answers it: "a deny may glob freely". `mcp__*` is a broad prohibition, not a
+	# misspelled narrow one, and there is no suffix for a guard to cover. The
+	# predicate here is only about a deny that names ONE server and ONE tool, both
+	# literally — the shape that looks precise and silently addresses nothing.
+	case "$rule_server$suffix" in
+	*'*'*) continue ;;
+	esac
+	# Declared server: the name is the repo's own and cannot drift under it.
+	grep -qxF "$rule_server" <<<"$declared" && continue
+	grep -qxF "$suffix" <<<"$covered" && continue
+	report "$rule — a deny on a host-supplied connector, whose exposed name the host chooses per registration episode (CLOUD-178). No suffix-matching guard covers \`$suffix\`, so this rule reads as a prohibition and enforces nothing the moment the connector comes back under a different name."
+done < <(jq -r '[.permissions.deny // [] | .[] | select(type == "string")] | .[]' "$settings")
+
+[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, and every deny on a host-supplied connector is backed by a suffix-matching guard"
 exit "$fail"

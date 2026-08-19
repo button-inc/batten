@@ -138,3 +138,57 @@ enabled() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"nothing to check"* ]]
 }
+
+# --- the third predicate: an under-matching DENY (CLOUD-178) ------------------
+#
+# Added after the measured defect on `d671184`: four deny rules, three of them
+# naming a server the host had re-exposed under a UUID, and this gate passed them
+# all because every rule was well-SHAPED. A deny that names no live tool reads as
+# a prohibition and enforces nothing.
+
+# Writes a fixture whose permissions.deny is the given JSON array.
+denies() {
+	printf '{"permissions":{"allow":[],"deny":%s}}\n' "$1" >"$FIXTURE"
+}
+
+@test "a deny on a host-supplied connector with no guard coverage fails" {
+	denies '["mcp__Claude_Code_Remote__archive_session"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"archive_session"* ]]
+	[[ "$output" == *"enforces nothing"* ]]
+}
+
+@test "a deny whose suffix a guard covers passes under any server spelling" {
+	# The point of the predicate: the same verb under the readable name and under
+	# a UUID are one rule as far as coverage is concerned, because the guard that
+	# backs them never reads the server segment.
+	denies '["mcp__Claude_Code_Remote__send_later","mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__send_later"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a deny on a server the repo itself declares needs no guard" {
+	# `.mcp.json` and enabledMcpjsonServers are the repo's own declarations, so
+	# those names cannot drift under it — the predicate must not demand coverage
+	# it has no reason to want.
+	printf '{"enabledMcpjsonServers":["serena"],"permissions":{"allow":["mcp__serena__*"],"deny":["mcp__serena__delete_memory"]}}\n' >"$FIXTURE"
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "an under-matching ALLOW is deliberately not failed" {
+	# The asymmetry that scopes this predicate: an allow that matches nothing
+	# fails CLOSED, into an approval prompt a human sees. Only the deny fails
+	# open and silently. Asserted so a later author does not "improve" the gate by
+	# symmetry and make it unlandable against every pre-existing grant.
+	allow '["mcp__Claude_Code_Remote__get_session"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a non-MCP deny is not this predicate's business" {
+	denies '["Bash(rm -rf *)"]'
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
