@@ -99,13 +99,22 @@ all of them things a child must be told:**
 
 Call the Claude Code Remote `create_session` tool with
 `source_url: https://github.com/button-inc/batten`, `model: claude-opus-5`,
-`permission_mode: "plan"`, tags `["batten-bundle", "ready-queue-<YYYY-MM-DD>"]`,
+tags `["batten-bundle", "ready-queue-<YYYY-MM-DD>"]`,
 and a title of the form `BUNDLE <domain> — CLOUD-<a> → CLOUD-<b>`.
 
-**Plan mode is correct here and is also this environment's default.** The child
-plans, a human approves in the web UI, and it then works on. Its one failure
-mode is a child nobody intends to approve — that stalls indefinitely, so only
-omit it when dispatching genuinely fire-and-forget work.
+**Whether to pass `permission_mode: "plan"` is a property of the DISPATCH, not
+of the bundle.** Pass it when a human is standing by to approve in the web UI;
+omit it when the dispatch is fire-and-forget. The same bundle takes opposite
+answers depending on which is true, so the choice is made per dispatch and not
+once per ticket.
+
+It is **not** a default, and **not** this environment's: `create_session`
+inherits the caller's mode, and dispatchers here run `auto`, so omitting it
+yields `PERMISSION_MODE_AUTO`. Unattended, plan mode is not a free extra gate —
+one child parked 91 minutes on `AskUserQuestion` for no commit, branch or PR.
+Attended it is the cheapest review point there is: the five CLOUD-607 bundles
+dispatched in plan mode with the owner approving all reached `review_ready`.
+Reasoning in `mem:workflow/agent-fanout`; measurements on CLOUD-672.
 
 Reasoning effort is **not** a `create_session` parameter; children inherit the
 dispatching session's. Dispatch from a session at the effort you want.
@@ -121,7 +130,9 @@ Each prompt is standalone — the child starts from nothing — and carries:
    `mem:workflow/board-states`, the `.claude/rules/` file matching the surface,
    and any house-style section that governs the surface it touches.
 4. **The per-ticket loop**, verbatim in shape: `claim-check` → claim → plan
-   **this ticket only** and wait for approval → build, `verify`, `linear-check`,
+   **this ticket only** — waiting for approval only if this was a plan-mode
+   dispatch, since an unattended child told to wait never proceeds (CLOUD-672)
+   → build, `verify`, `linear-check`,
    draft PR, `land` backgrounded → next ticket. For a bundle dispatched under
    the one-PR shape (step 3b), the loop is `claim-check` → claim → plan **this
    ticket only** → build → commit → next ticket, with the draft PR, `verify`,
