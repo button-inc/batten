@@ -1007,24 +1007,6 @@ fn run_state_migrate(err: &mut dyn Write) -> Result<ExitCode> {
     Ok(ExitCode::Success)
 }
 
-/// Run a command through the passthrough verb (CLOUD-285, CLOUD-121).
-///
-/// Its own function rather than an arm, because the dispatcher above is at the
-/// workspace's function-length limit and a match arm that grows is the wrong
-/// thing to grow.
-///
-/// The report goes to the ERROR channel, never `out`: stdout belongs to the
-/// wrapped command, so a pointer line there would corrupt a document the caller
-/// may be parsing. That holds under `--capture-only` too — the caller gets no
-/// child bytes on stdout, but the channel is still the child's and Batten does
-/// not claim it.
-///
-/// # Errors
-///
-/// As [`exec::run_with`]; the config read is the output predicates' and an
-/// unreadable authority is a usage error, since a pattern table nobody could read
-/// is a gate that silently did not run.
-
 /// Navigate a frozen capture (CLOUD-121).
 ///
 /// A dispatcher only. The three sub-verbs are separate functions rather than
@@ -2105,7 +2087,13 @@ fn run_exec(
     // are typed, because asking for the bytes is the specific request: a caller
     // who typed both meant the one that says what they want rather than the one
     // that says what they do not.
-    settings.tee = (settings.tee || request.tee) && !(request.capture_only && !request.tee);
+    settings.tee = if request.tee {
+        true
+    } else if request.capture_only {
+        false
+    } else {
+        settings.tee
+    };
     if let Some(format) = request.format {
         settings.format = format;
     }

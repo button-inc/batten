@@ -1085,7 +1085,6 @@ impl Forwarding {
     }
 }
 
-
 /// Run `command`, teeing its streams, and report its exit code unchanged.
 ///
 /// Returns [`ExitCode::Success`] only for a child that exited `0`; every other

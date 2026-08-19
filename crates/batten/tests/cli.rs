@@ -8513,12 +8513,14 @@ fn capture_only_reports_handles_instead_of_the_childs_bytes() {
 
 #[cfg(unix)]
 #[test]
-fn the_default_still_passes_the_childs_streams_through() {
-    // The other half of the same property, and the one that must never regress:
-    // `--capture-only` is an opt-in exception, so an argv without it behaves
-    // exactly as CLOUD-285 pinned.
+fn tee_still_passes_the_childs_streams_through() {
+    // The other half of the same property, RE-POINTED at `--tee` (CLOUD-429).
+    // It used to read "the default", and the default is now the handle report —
+    // that inversion is the whole of CLOUD-429. What must never regress is the
+    // property itself: asking for the bytes gets exactly the bytes, and `--style
+    // quiet` is how a caller asks for them with nothing of Batten's alongside.
     let (repo, home) = capture_repo("handle-default-tees");
-    let output = run_counted(&repo, &home, &["exec"]);
+    let output = run_counted(&repo, &home, &["exec", "--tee", "--style", "quiet"]);
     assert_eq!(output.status.code(), Some(0));
     assert!(stdout(&output).contains("bravo warning here"));
     assert!(stderr(&output).is_empty(), "a clean run says nothing");
