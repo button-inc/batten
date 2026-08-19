@@ -155,6 +155,42 @@ payload() {
 	[ "$status" -eq 2 ]
 }
 
+# --- the declared field set (CLOUD-526) --------------------------------------
+#
+# Three of this gate's four rules never read the body, and until CLOUD-526 the
+# entry contract demanded it anyway — so reaching the commonest refusals cost a
+# full re-typed description, on the model's metered output side. These two rows
+# are what the projection is: the cheap refusals must ANSWER without a body, and
+# the one rule that reads it must still REFUSE its absence rather than skip.
+
+@test "not-todo, assigned and has-pr are each reachable on a payload with no description" {
+	# not-todo — the cheapest of the three, and the only one that short-circuits
+	# before the other two are consulted.
+	run bash -c "echo '[{\"id\":\"CLOUD-2\",\"status\":\"Backlog\"}]' | $CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-2 not-todo"* ]]
+
+	# assigned — Linear omits the key entirely when unassigned, so the rule reads
+	# a present-and-non-null value, and the body is irrelevant to it.
+	run bash -c "echo '[{\"id\":\"CLOUD-3\",\"status\":\"Todo\",\"assignee\":\"someone\"}]' | $CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-3 assigned"* ]]
+
+	# has-pr — including the PR number, which is the pointer the refusal carries.
+	run bash -c "echo '[{\"id\":\"CLOUD-4\",\"status\":\"Todo\",\"attachments\":[{\"url\":\"https://github.com/o/r/pull/42\"}]}]' | $CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-4 has-pr (42)"* ]]
+}
+
+@test "a bodyless payload nothing else refuses is exit 2 naming description, never a pass" {
+	run bash -c "echo '[{\"id\":\"CLOUD-5\",\"status\":\"Todo\"}]' | $CHECK"
+	# 2, not 0: the block decides here and it cannot be read. Narrowing the
+	# contract must never buy a cleaner verdict by sending less.
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"description"* ]]
+	[[ "$output" != *"pullable"* ]]
+}
+
 # --- the claim receipt (CLOUD-272) ------------------------------------------
 #
 # `claim-check` was a pure read: it answered "is this pullable" and left no

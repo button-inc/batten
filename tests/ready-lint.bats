@@ -609,3 +609,32 @@ defready_block() {
 	[[ "$output" == *"open-questions-block-ready"* ]]
 	[[ "$output" == *"non-canonical-ready-opener"* ]]
 }
+
+# --- the declared field set (CLOUD-526) --------------------------------------
+#
+# `ready-lint` is the one gate of the four whose question IS the text, so its
+# projection is the whole body and it does not narrow. Recorded as two rows
+# anyway, because "unchanged" is a claim like any other: the refusal must name
+# the field, and a payload carrying nothing but the body must be accepted — that
+# second row is what lets `claim-check` and `graph-check` delegate here with a
+# projected payload instead of forwarding everything they were handed.
+
+@test "a payload with no description is exit 2 naming the field, never a verdict" {
+	PAYLOAD="$BATS_TEST_TMPDIR/thin.json"
+	jq -nc '{id: "CLOUD-999", status: "Todo"}' >"$PAYLOAD"
+	lint
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"description"* ]]
+	# "Could not look" is not "your block is wrong": exit 1 would send the author
+	# to fix prose that was never sent.
+	[[ "$output" != *"no-ready-block"* ]]
+}
+
+@test "a payload carrying only the declared field set is judged on its merits" {
+	PAYLOAD="$BATS_TEST_TMPDIR/only-desc.json"
+	jq -nc --arg d "$(block)" '{description: $d}' >"$PAYLOAD"
+	lint
+	# Accepted with no id, no status, no relations: the body is the whole input
+	# contract, so a caller may project everything else away.
+	[ "$status" -eq 0 ]
+}

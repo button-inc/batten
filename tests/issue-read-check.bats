@@ -53,6 +53,22 @@ payload() {
 	[[ "$stamp" =~ ^[0-9]+$ ]]
 }
 
+# The row the `receipt-carries-no-time` mutation is written against, and which did
+# not exist: that mutation pins `read_at` to 0, and 0 is numeric, so the shape
+# assertion above passes under it unchanged. A receipt frozen at the epoch reads
+# as ~56 years old to `issue-read-guard`, which denies every write — so the
+# mutation's damage is invisible in this suite and loud in production. The value
+# has to be tied to NOW, not merely to a digit class.
+@test "the recorded time is when the read happened, so a receipt can actually age" {
+	local before after stamp
+	before=$(date -u +%s)
+	payload CLOUD-71 | "$CHECK" >/dev/null
+	after=$(date -u +%s)
+	stamp=$(awk 'NR==1{print $3}' "$RECEIPTS/issue-read.CLOUD-71")
+	[ "$stamp" -ge "$before" ]
+	[ "$stamp" -le "$after" ]
+}
+
 # Field 4 is the BODY BASELINE `claim-check` compares against (CLOUD-597,
 # CLOUD-615). The contract between the two files is that it moves when the body
 # moves and holds still when anything else about the row changes — which is the
@@ -79,11 +95,45 @@ payload() {
 	[ "$(field4 CLOUD-597)" != "$first" ]
 }
 
-@test "a payload with no description still mints, so the baseline is never a lie" {
-	# An absent body hashes the empty string rather than being omitted: a missing
-	# field would send `claim-check` down its fallback path silently.
+# CLOUD-526 / CLOUD-691. This row previously asserted the opposite — that an
+# absent body hashes the empty string "so the baseline is never a lie" — and the
+# behaviour it pinned was the lie. `jq -r '.description // ""'` emitted a lone
+# newline, which hashed to 8b137891791fe96927ad78e64b0aad7bded08bdc: a 40-hex
+# digest indistinguishable from a real one, identical for every bodyless payload,
+# and treated by `claim-check` as a baseline to compare against. It was minted
+# seven times on 2026-08-18 and twice more on 2026-08-19 before anyone looked.
+@test "a payload with no description records no baseline, rather than a digest of nothing" {
 	payload CLOUD-3 | "$CHECK" >/dev/null
-	[[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-3")" =~ ^[0-9a-f]{40}$ ]]
+	[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-3")" = "-" ]
+}
+
+# The specific constant, named, because "not a digest" is satisfied by any bug
+# that writes a different wrong thing. This is the value that actually shipped.
+@test "the empty-body digest 8b13789 is never written for an absent description" {
+	payload CLOUD-31 | "$CHECK" >/dev/null
+	local field4
+	field4=$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-31")
+	[ "$field4" != "8b137891791fe96927ad78e64b0aad7bded08bdc" ]
+	# And derived rather than trusted: recompute it the way the minting side used
+	# to, so the constant above cannot drift away from what it names.
+	[ "$field4" != "$(jq -rn 'null // ""' | git hash-object --stdin)" ]
+}
+
+# An explicitly null body is the same fact as an absent one, and a `has()` test
+# alone would let it through to `jq -r`, which renders it as the string "null".
+@test "an explicitly null description records no baseline either" {
+	jq -nc '{id: "CLOUD-32", updatedAt: "2026-08-13T04:00:00.000Z", description: null}' | "$CHECK" >/dev/null
+	[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-32")" = "-" ]
+}
+
+# CLOUD-526's accept row: the declared field set is `id` and `updatedAt`, and a
+# payload carrying exactly those is accepted. This is the row that buys the
+# projection — without it, "the gate no longer demands the body" is a claim
+# nothing holds to.
+@test "a payload carrying only the declared field set is accepted" {
+	run bash -c "'$CHECK'" <<<"$(jq -nc '{id: "CLOUD-33", updatedAt: "2026-08-13T04:00:00.000Z"}')"
+	[ "$status" -eq 0 ]
+	[ -f "$RECEIPTS/issue-read.CLOUD-33" ]
 }
 
 # Pointer-only, non-negotiable 4. A receipt is read by a human debugging a
@@ -111,10 +161,18 @@ payload() {
 	[ ! -f "$RECEIPTS/issue-read.CLOUD-5" ]
 }
 
-@test "a payload missing updatedAt still mints, recording the absence" {
-	jq -nc '{id: "CLOUD-6", status: "Todo"}' | "$CHECK" >/dev/null
-	run cat "$RECEIPTS/issue-read.CLOUD-6"
-	[[ "$output" == "CLOUD-6 - "* ]]
+# CLOUD-526's refuse row, and the inversion of what stood here. Recording `-` for
+# an absent `updatedAt` mints a receipt that cannot name the revision it read,
+# which is the same defect as the hollow body digest one field over: a real file
+# on disk, satisfying `issue-read-guard`, attesting to nothing. `updatedAt` is in
+# the declared field set, so its absence is refused by name.
+@test "a payload missing updatedAt is refused rather than minting a receipt that names no revision" {
+	run bash -c "'$CHECK'" <<<"$(jq -nc '{id: "CLOUD-6", status: "Todo"}')"
+	[ "$status" -eq 1 ]
+	[ ! -f "$RECEIPTS/issue-read.CLOUD-6" ]
+	[[ "$output" == *"updatedAt"* ]]
+	# Pointer-only: the refusal names the field, never a byte of the payload.
+	[[ "$output" != *"Todo"* ]]
 }
 
 @test "a single-element array is accepted, so a list payload of one composes" {

@@ -463,6 +463,34 @@ CLOUD-4 (now In Progress)"
 	[[ "$output" != *"board coherent"* ]]
 }
 
+# CLOUD-526's accept row for this gate. The row above is the refusal half — a
+# field this gate decides on is absent, so it says which and exits 2. This is the
+# other half: a payload carrying ONLY the declared field set is accepted, with no
+# unjudgeable report and no violation. Together they pin the contract from both
+# sides, which is what stops the set drifting wider by accident.
+#
+# Unlike its three siblings, this gate genuinely reads the body — the §8 claim
+# scan and the Ready-block delegation both consume it — so `description` is IN
+# the set here. That asymmetry is the point of declaring the set per gate rather
+# than once for all four.
+@test "a set carrying only the declared field set is accepted" {
+	jq -nc --arg ready "$READY" '{
+		id: "CLOUD-1", status: "Todo",
+		attachments: [], relations: {blockedBy: []},
+		description: ("**Why**\nx.\n\n" + $ready)
+	}' >"$BOARD"
+	jq -nc '{
+		id: "CLOUD-2", status: "In Progress", assigneeId: "someone",
+		attachments: [], relations: {blockedBy: []},
+		description: "nothing to claim here"
+	}' >>"$BOARD"
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"board coherent"* ]]
+	[[ "$output" != *"unjudgeable"* ]]
+	[[ "$output" == *"frontier CLOUD-1"* ]]
+}
+
 @test "a status claim report is pointer-only — no surrounding prose echoed" {
 	local secret="ACME Corp escalation"
 	issue CLOUD-1 Todo "" ""

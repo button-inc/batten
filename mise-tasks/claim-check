@@ -122,6 +122,11 @@
 # would let an adoption discard the claim this branch already holds.
 #MUTANT adopt-over-a-live-claim|s/^\tif \[ -e "\$dest" \]; then$/\tif false; then/|adopting onto a branch that already has a receipt is refused
 #MUTANT claim-records-no-base|s/^\t\techo "base .*$/\t\t:/|the receipt records the origin/main it was claimed against
+# CLOUD-526's projection is only real if the three body-free rules can actually
+# ANSWER without a body. Drop the short-circuit and an already-refused issue
+# falls into `ready-lint`, which cannot read a bodyless payload and exits 2 — so
+# the refusal it had already earned is replaced by "could not look".
+#MUTANT projection-loses-the-cheap-refusals|s/^\tif \[ "\$blocked" -ne "\$refused_before" \]; then$/\tif false; then/|reachable on a payload with no description
 set -euo pipefail
 
 # --- arguments (CLOUD-733) ---------------------------------------------------
@@ -290,15 +295,28 @@ fi
 # Accept either a JSON array or a concatenated stream of payload objects, the
 # same normalisation `graph-check` performs, so a caller can pipe either shape
 # to either gate. Exit 2 is "unreadable input", distinct from a failing check.
-# `description` joined `id` and `status` with CLOUD-431: the gate now asks whether
-# the story is REFINED, and it cannot ask that of a payload whose body was
-# projected away. Widening the contract rather than skipping the rules on a thin
-# payload is the whole point — a rule that silently disappears when a field is
-# absent is a rule an agent turns off by sending less.
+#
+# `description` joined `id` and `status` with CLOUD-431 and LEAVES AGAIN WITH
+# CLOUD-526, and the reason it can leave is that its argument was never about the
+# contract. That argument — "a rule that silently disappears when a field is
+# absent is a rule an agent turns off by sending less" — forbids SKIPPING a rule
+# on a thin payload. It does not oblige every rule to demand the largest field on
+# the row. Three of this gate's four rules decide from `status`, `assignee` and
+# `attachments` and never look at the body; only `not-ready` reads it, and that
+# one demands it at its own site below, by name, as a refusal.
+#
+# So the entry contract is what EVERY issue needs: `id` and `status`.
+# `updatedAt` is asserted at the clock arm that reads it, for the same reason —
+# the baseline path reached first does not need it.
+#
+# `assignee` is deliberately NOT required, and this is a fact about the tracker
+# rather than a softening: Linear omits the key entirely for an unassigned issue,
+# so `has("assignee")` would refuse the very payloads the `assigned` rule exists
+# to pass. Absent means unassigned, which is what the rule already reads it as.
 if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' 2>/dev/null) ||
 	[ "$(jq 'length' <<<"$issues")" = 0 ] ||
-	! jq -e 'all(.[]; has("id") and has("status") and has("description"))' <<<"$issues" >/dev/null 2>&1; then
-	echo "::error:: stdin is not a set of get_issue payloads (need id, status and description per issue)" >&2
+	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: stdin is not a set of get_issue payloads (need id and status per issue)" >&2
 	exit 2
 fi
 
@@ -354,6 +372,10 @@ while read -r id; do
 	[ -n "$id" ] || continue
 	payload=$(jq -c --arg id "$id" '.[] | select(.id == $id)' <<<"$issues")
 	status=$(jq -r '.status // ""' <<<"$payload")
+	# Where this issue's own refusals start, so the body-reading arm below can
+	# tell "nothing has objected yet" from "the cheap rules already answered"
+	# (CLOUD-526). `blocked` is cumulative across the set; the delta is per issue.
+	refused_before=$blocked
 
 	if [ "$status" != "Todo" ]; then
 		report "$id" "not-todo (in $status)"
@@ -408,13 +430,36 @@ while read -r id; do
 	# says "I refined it just now, on purpose".
 	[ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ] && continue
 
+	# THE BODY IS NEEDED FROM HERE DOWN, AND ONLY FROM HERE DOWN (CLOUD-526).
+	# `not-todo`, `assigned` and `has-pr` have all had their say; if any of them
+	# refused, this issue is not pullable and no reading of the body can make it
+	# so. Returning that answer on a payload that carries no body is the point of
+	# the projection — those three are the common refusals, and they were costing
+	# a full re-typed description to reach.
+	#
+	# It also keeps them REACHABLE. Without this, an assigned issue sent without a
+	# body would fall into `ready-lint`, exit 2 as unreadable, and the `assigned`
+	# refusal it had already earned would be lost behind "could not look".
+	if [ "$blocked" -ne "$refused_before" ]; then
+		continue
+	fi
+
+	# Nothing has objected yet, so the block decides — and now the body is a
+	# declared requirement of THIS arm rather than of the gate. Refused by name:
+	# `ready-lint` would also exit 2 on a bodyless payload, but as "not a
+	# get_issue payload", which sends the reader to the wrong question.
+	if ! jq -e 'has("description") and (.description != null)' <<<"$payload" >/dev/null 2>&1; then
+		echo "::error:: claim-check: $id carries no description, and nothing else has refused it — the not-ready rule decides on the body. Re-fetch this one issue with get_issue and pipe it again." >&2
+		exit 2
+	fi
+
 	# `not-ready`. The same gate `graph-check` already calls by path, at the
 	# point of PULLING — which is where the decision is actually made, and what
 	# makes a claim receipt mean what its name implies.
 	#
-	# `.description` is guaranteed present by the input contract above, so the
-	# only exit-2 left here is `ready-lint` failing to read what it was handed —
-	# "could not look" in both scripts, and never a verdict.
+	# `.description` is asserted immediately above, so the only exit-2 left here
+	# is `ready-lint` failing to read what it was handed — "could not look" in
+	# both scripts, and never a verdict.
 	lint_rc=0
 	printf '%s' "$payload" | "$lint" >/dev/null 2>&1 || lint_rc=$?
 	if [ "$lint_rc" = 2 ]; then

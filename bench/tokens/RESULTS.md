@@ -80,11 +80,28 @@ count for the task is the step count above.
 | batten | 3 | 920 | 230 | 0.4600 | 0.0460 | 0 |
 | **ratio** | | **27.97×** | **27.97×** | | | |
 
+### board-gate-payload — declared field sets on tracker-payload gates
+
+**Question.** How old was this clone's read of the issue it is about to update?
+
+**Baseline** (1 step(s), `cat issue.json`). The whole `get_issue` payload, which is what `issue-read-check` demanded before CLOUD-526 — it hashed `.description` and read nothing else from it. THE BYTES ARE PAID ON THE MODEL'S OUTPUT SIDE, and that is the direction that makes this workload worth measuring at all. No tracker credential exists in a task, so the payload cannot be piped from disk: the model reads the row through the connector, carries it in context, and RE-TYPES it into the gate's stdin. The harness counts an arm's stdout, so the number below is the same bytes travelling the other way — metered generation, not ingestion. A table that reported this as context cost would be claiming something it did not measure. The fixture body sits at the small end of real ones (this repository's own issues run two to three times longer), so the ratio is a floor.
+
+**Batten** (1 step(s), `jq -c '{id, updatedAt}' issue.json`). The declared field set, and nothing else: which row was read, and at which revision. `description` is not in it, because after CLOUD-526 the baseline is an optional arm rather than the contract — and the same projection is what stops the honest receipt costing more than a forged one, which is the mechanism-design half of that issue rather than a saving. Narrowing is never a skip: a payload missing one of these two fields is refused by name, so sending less cannot buy a cleaner verdict.
+
+**Method.** measured; 3 runs per arm, byte-identical across all of them; run
+count for the task is the step count above.
+
+| arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 1 | 4433 | 1109 | 2.2180 | 0.2218 | 0 |
+| batten | 1 | 58 | 15 | 0.0300 | 0.0030 | 0 |
+| **ratio** | | **76.43×** | **73.93×** | | | |
+
 ## Aggregate
 
 **Not published.** An aggregate across capabilities is a weighted mean over a
 workload mix nobody here has measured, so it would be exactly the unmethodical
-figure this benchmark exists to beat. Measured capabilities: 3. Reporting
+figure this benchmark exists to beat. Measured capabilities: 4. Reporting
 "not measured" with a reason above: 0.
 
 ## Stated gaps

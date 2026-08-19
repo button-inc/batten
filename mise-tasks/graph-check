@@ -28,6 +28,15 @@
 #
 #   unjudgeable-blockedby        a payload carries no blockedBy key    -> exit 2
 #   excluded (unjudgeable-ready-block)  ready-lint could not read it   -> exit 2
+#
+# DECLARED FIELD SET (CLOUD-526), stated because a gate that never writes its
+# input contract down grows one by accident: `id` and `status` for every issue,
+# `relations.blockedBy` for the graph, `description` for the §8 claim scan and
+# the Ready-block delegation, `assignee` for In Progress and `attachments` for In
+# Review. This gate is the one of the four that genuinely reads the body, so the
+# projection CLOUD-526 buys elsewhere is not available here — and that is the
+# whole reason each absence below is a NAMED exit-2 refusal rather than a rule
+# that quietly scans nothing. Sending less must never buy a cleaner verdict.
 #   excluded (blocked-by …)      a blocker has not landed              -> exit 0
 #
 # And one more predicate, CLOUD-234's: prose is not a second authority for a

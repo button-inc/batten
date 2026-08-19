@@ -168,3 +168,34 @@ read_at_age() {
 	run bash -c "'$GUARD' < $(update)"
 	[[ "$output" != *"groomed"* ]]
 }
+
+# --- the declared field set, end to end (CLOUD-526) --------------------------
+#
+# The projection is only worth anything if the receipt it mints still opens this
+# gate. These two rows are the seam between `issue-read-check`'s narrowed
+# contract and the guard that consumes its output, and they are here rather than
+# in the check's own suite because neither file can answer the question alone.
+
+@test "a receipt minted from the declared field set alone authorises the update" {
+	# `id` and `updatedAt`, nothing else — no body, which is the ~15 KB the model
+	# used to re-type to reach exactly this outcome.
+	jq -nc '{id: "CLOUD-1", updatedAt: "2026-08-13T04:00:00.000Z"}' | "$CHECK" >/dev/null
+	run bash -c "'$GUARD' < $(update)"
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+	# And it recorded no baseline rather than a digest of nothing — the field
+	# `claim-check` reads, and the one CLOUD-691 measured as forged.
+	[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-1")" = "-" ]
+}
+
+@test "a payload too thin to mint a receipt leaves the update denied" {
+	# No `updatedAt`: the check refuses, so no receipt exists, so this gate is
+	# exactly where it was before the read. A narrowed contract must not be
+	# reachable by sending even less.
+	run bash -c "jq -nc '{id: \"CLOUD-1\"}' | '$CHECK'"
+	[ "$status" -eq 1 ]
+	[ ! -f "$RECEIPTS/issue-read.CLOUD-1" ]
+	run bash -c "'$GUARD' < $(update)"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *'"permissionDecision": "deny"'* ]]
+}

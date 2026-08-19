@@ -1,0 +1,22 @@
+{
+  "id": "PROJ-1234",
+  "title": "A gate's input contract is undeclared, so it grows one by accident",
+  "description": "**Why**\n\nParagraph 1. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 2. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 3. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 4. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 5. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 6. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 7. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 8. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 9. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 10. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 11. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\nParagraph 12. The gate resolves this to a command and an exit code over an object it decides, never a model verdict. The predicate is stated here rather than left to the implementer, because a rule whose mechanism is discovered during implementation is a rule that ships as prose.\n\n**Refinement — Ready**\n\n* **Source of truth (§1).** One committed artifact, read from the working tree.\n* **Mechanism as a computable predicate (§2).** A conjunct over that artifact, resolved by one command.\n* **Effect (§3).** `read`.\n* **Output & exit (§5).** Pointer-only; 0 clean / 1 a finding / 2 could not look.\n* **Commit / bump (§6).** `fix(gates)` — patch until `0.1.0`.\n* **Test obligation (§7).** Two rows: the finding is reported, and a clean tree is not.\n* **Blockers (§8).** None.\n",
+  "status": "Todo",
+  "statusType": "unstarted",
+  "priority": {
+    "value": 3,
+    "name": "Medium"
+  },
+  "assignee": null,
+  "attachments": [],
+  "labels": [],
+  "createdAt": "2026-01-02T03:04:05.000Z",
+  "updatedAt": "2026-01-09T10:11:12.000Z",
+  "url": "https://example.invalid/issue/PROJ-1234",
+  "relations": {
+    "blocks": [],
+    "blockedBy": [],
+    "relatedTo": []
+  }
+}

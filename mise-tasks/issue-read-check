@@ -38,13 +38,18 @@
 #
 # Usage: mise run issue-read-check   (a get_issue payload on stdin)
 #
+# DECLARED FIELD SET (CLOUD-526): `id` and `updatedAt`, both required, plus
+# `description` on the optional baseline arm. Sending fields it does not read is
+# harmless; sending a body it does not need is the cost this gate stopped
+# charging.
+#
 # Exit 0 receipt minted / 1 the payload is not a usable read / 2 unreadable
 # stdin — matching `claim-check` and `issue-search-check` so all three compose.
 #
 # The mutation drops the timestamp from the receipt, so every receipt reads as
 # age zero and the guard can only ever test existence — which is the gate this
 # replaces, and every DENY row for a missing receipt still passes.
-#MUTANT receipt-carries-no-time|s/read_at=\$(date -u +%s)/read_at=0/|a receipt with no read time cannot age
+#MUTANT receipt-carries-no-time|s/read_at=\$(date -u +%s)/read_at=0/|so a receipt can actually age
 set -uo pipefail
 
 if ! payload=$(jq -sc 'if length == 1 and (.[0] | type == "array") and (.[0] | length == 1) then .[0][0] elif length == 1 then .[0] else . end' 2>/dev/null); then
@@ -58,6 +63,21 @@ fi
 if ! jq -e 'type == "object" and has("id")' <<<"$payload" >/dev/null 2>&1; then
 	echo "::error:: issue-read-check: stdin is not a get_issue payload (want one object carrying an id)" >&2
 	exit 2
+fi
+
+# THE DECLARED FIELD SET (CLOUD-526). This gate decides two things — which row
+# was read, and at which revision — so `id` and `updatedAt` are what it is
+# entitled to demand, and it demands both. `description` is NOT in the set: it is
+# read by exactly one arm below, and that arm is optional by construction.
+#
+# The rule the projection must not break is `claim-check`'s: "a rule that
+# silently disappears when a field is absent is a rule an agent turns off by
+# sending less." It survives because narrowing here is a REFUSAL, never a skip —
+# a payload missing `updatedAt` is turned away by name rather than recorded with
+# an invented value.
+if ! jq -e 'has("updatedAt") and (.updatedAt != null)' <<<"$payload" >/dev/null 2>&1; then
+	echo "::error:: issue-read-check: payload carries no updatedAt — the receipt cannot say which revision was read. Re-fetch with get_issue." >&2
+	exit 1
 fi
 
 key=$(jq -r '.id' <<<"$payload")
@@ -76,9 +96,10 @@ esac
 # `updatedAt` is what the read SAW; `read_at` is when it saw it. Both are
 # recorded because they answer different questions: the guard compares `read_at`
 # against now, and a human debugging a refusal wants to know which revision the
-# author had in front of them. Absent `updatedAt` is not fatal — a caller may
-# have projected fields away — but it is recorded as `-` rather than invented.
-seen=$(jq -r '.updatedAt // "-"' <<<"$payload")
+# author had in front of them. Its presence is asserted above rather than
+# defaulted here (CLOUD-526): a receipt that cannot name a revision is a receipt
+# that attests to nothing, which is the same defect as a hollow body digest.
+seen=$(jq -r '.updatedAt' <<<"$payload")
 read_at=$(date -u +%s)
 
 git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
@@ -115,8 +136,39 @@ receipt="$git_dir/batten-receipts/issue-read.$key"
 #
 # `git hash-object` rather than `sha256sum`: git is already required in this
 # file, and `sha256sum` does not exist on macOS, which `cross-check` covers.
-body_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || body_hash="-"
-[ -n "$body_hash" ] || body_hash="-"
+#
+# THE BASELINE IS AN ARM, NOT THE CONTRACT (CLOUD-526). `description` is the
+# largest field on the row and the model transports it by re-typing it, so
+# demanding it on every read prices this gate — the pre-condition of every
+# `save_issue` — at the size of the artifact rather than the size of the
+# question. A caller that only needs to date its read sends no body and gets a
+# receipt that says so.
+#
+# `// ""` USED TO STAND WHERE THE `has` TEST NOW DOES, and it is the single
+# operator that made the forgery indistinguishable from the honest read
+# (CLOUD-691). An absent `description` fell through it to the empty string, which
+# `jq -r` emitted as a lone newline, which hashed to
+# 8b137891791fe96927ad78e64b0aad7bded08bdc — a real-looking 40-hex digest that
+# `claim-check` then compared against as though it were a baseline. Two payloads
+# with no body matched each other. Measured seven times on 2026-08-18 and twice
+# more on 2026-08-19.
+#
+# `-` is the honest answer and it is not a weakening: `claim-check` already reads
+# `-` as "no baseline" and falls back to the clock pair, which refuses on any
+# write to the row. Sending less therefore makes a claim HARDER, never easier,
+# which is the direction the incentive has to point.
+#
+# The mutation widens the arm's guard back to something every payload satisfies,
+# so a bodyless read takes the hashing branch again and records a 40-hex digest
+# where `-` belongs — the hollow receipt, by the route it actually shipped.
+# (No `|` may appear in a mutation script: `mutant` splits these rows on it.)
+#MUTANT hollow-digest-restored|s@has("description") and (.description != null)@has("id")@|records no baseline
+if jq -e 'has("description") and (.description != null)' <<<"$payload" >/dev/null 2>&1; then
+	body_hash=$(jq -r '.description' <<<"$payload" | git hash-object --stdin 2>/dev/null) || body_hash="-"
+	[ -n "$body_hash" ] || body_hash="-"
+else
+	body_hash="-"
+fi
 
 # TRUNCATED, never appended, unlike `issue-search-check`'s. A search receipt
 # accumulates what the author has seen; this one answers "how old is the newest
