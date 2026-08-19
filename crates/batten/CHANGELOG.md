@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.82](https://github.com/button-inc/batten/compare/v0.0.81...v0.0.82) - 2026-08-19
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.0.81](https://github.com/button-inc/batten/compare/v0.0.80...v0.0.81) - 2026-08-18
 
 ### Fixed
