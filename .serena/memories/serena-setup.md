@@ -10,8 +10,11 @@ Project-scoped Serena MCP server (LSP-backed semantic navigation/edits). Wired i
 `.mcp.json`. It does **not** "just start" on a cold container — see "Two gates"
 below. Pinned like every tool: `"pipx:serena-agent"`
 in `mise.toml [tools]` (pipx backend installs with pinned `uv`), version in
-`mise.lock`. `.mcp.json` launches it via mise: `mise exec -- serena
-start-mcp-server --context claude-code --project .`.
+`mise.lock`. `.mcp.json` launches it through `mise-tasks/serena-mcp`, a shim
+that records the spawn and then `exec`s the scoped, pinned launch line the file
+still carries verbatim: `mise exec pipx:serena-agent@<v> -- serena
+start-mcp-server --context claude-code --project .`. The argv stayed in
+`.mcp.json` on purpose — `mise-pin-agreement` reads the pin out of it.
 
 `--project .` matters: Serena keys projects by **path** and activates the cwd, so
 the main checkout and every `.claude/worktrees/` worktree are independent projects
@@ -23,10 +26,23 @@ Both must be closed. Each alone looks sufficient on a **warm** container, which 
 why the first fix was validated green and Serena stayed absent anyway.
 
 1. **Install timing.** `mise exec` installs on demand; on a cold container that
-   24s `pipx:serena-agent` install lands inside the MCP startup window, the
-   handshake never completes, and MCP servers are not retried mid-session.
-   Closed by the synchronous `SessionStart` hook (`.claude/hooks/session-start.sh`)
-   running `mise install` **before** the session starts.
+   24s `pipx:serena-agent` install lands inside the MCP startup window and the
+   handshake never completes. Closed by the synchronous `SessionStart` hook
+   (`.claude/hooks/session-start.sh`) running `mise install` **before** the
+   session starts.
+
+   **Closed for INSTALLATION, not for everything that happens before Serena
+   answers** (CLOUD-714). `mise install` guarantees the files exist; it never
+   reads them, and Serena still spends ~1.2 s importing 2,664 `.py` files before
+   it opens its own log. That gap is why an absent serena log is _not_ proof the
+   process never ran, and why `mise-tasks/serena-mcp` records the spawn.
+
+   **And MCP connections ARE retried** — this memory said they are not, on
+   CLOUD-196's evidence. Measured 2026-08-19: after failures at 07:05:17 and
+   07:41:58, a third attempt fired unprompted at 14:30:15. The client also
+   aborts ~1.5 s _before_ its declared 30,000 ms, so a gate asserting the
+   effective budget must expect ~28.3 s and not 30.
+
 2. **Approval.** A `.mcp.json` server is project-scoped and needs per-project
    approval, closed by committing `"enabledMcpjsonServers": ["serena"]` in
    `.claude/settings.json`. Keep that line.
@@ -109,9 +125,10 @@ Never commit `.serena/cache/`; never point two worktrees at one cache.
 ## Cold-start race: fixed and verified (CLOUD-196)
 
 `mise exec` installs on demand. Before the fix, on a cold container the
-`pipx:serena-agent` install (~24s) ran _inside_ the MCP startup window, the
-handshake never completed, and MCP servers are not retried mid-session —
-Serena was absent for the whole session while being perfectly runnable.
+`pipx:serena-agent` install (~24s) ran _inside_ the MCP startup window and the
+handshake never completed — Serena was absent for the whole session while being
+perfectly runnable. (This paragraph used to add "and MCP servers are not retried
+mid-session"; that is false, see gate 1 above.)
 
 Fix (`9f78869`): a **synchronous** `SessionStart` hook,
 `.claude/hooks/session-start.sh`, runs `mise install` + submodule init before
@@ -124,7 +141,34 @@ and `/tmp/session-start-submodules.log`. Serena's ~21 tools were attached to the
 session and `list_memories`/`edit_memory` on `.serena/memories` worked. Cold
 start is no longer a race.
 
-### Which mechanism is at fault when a server is missing
+### When Serena does not attach, read the spawn ledger first (CLOUD-714)
+
+`$GIT_DIR/batten-mcp-spawns`, one tab-separated line per launch:
+`<epoch> <server> <pid> <loadavg-1min> <sibling-count>`. `mise run
+mcp-attach-check` compares its newest entry against the connection attempt and
+reports one of three things, and the third is the one that keeps the other two
+honest:
+
+- **spawned-and-unresponsive** — the client ran the command and the child did
+  not answer. The fault is downstream of the spawn.
+- **never-spawned** — the ledger has seen this server before and recorded
+  nothing for this attempt. The fault is in the client's spawn path.
+- **unrecorded** — no ledger, or none for this server. _Not_ a verdict: the shim
+  is not wired here, so its silence means nothing.
+
+Do not re-derive this from `/root/.serena/logs/` mtimes. A day went into that on
+2026-08-19 and it cannot answer the question: Serena opens its log ~1.2 s of
+Python import into the process, so a launch killed during import looks exactly
+like one that never happened. Eleven hypotheses were eliminated by measurement
+that day — `mise` resolution, the spawn env, cwd, PATH, LSP indexing, the news
+fetch, the grant spelling, stdio shape, cold page cache (1,349 ms vs 1,103 ms
+warm — the leading theory for hours, and false), proxy vars, and the full launch
+shape (3,114 ms). Five isolated replications attach in 3.1–7.3 s. The only
+surviving correlate is that every failure happened during a multi-server startup
+burst and every success was a lone launch, which is why the ledger records load
+and sibling count.
+
+## Which mechanism is at fault when a server is missing
 
 Serena is **repo-scoped**, from this repo's `.mcp.json`. It is _not_ a claude.ai
 connector, so `mem:connector-allowlist-recovery` (Linear/Gmail/Xero flipping
