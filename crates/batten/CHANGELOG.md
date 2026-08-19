@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.88](https://github.com/button-inc/batten/compare/v0.0.87...v0.0.88) - 2026-08-19
+
+### Added
+
+- *(config)* [**breaking**] name every layer that set a key, not only the winner
+
 ## [0.0.87](https://github.com/button-inc/batten/compare/v0.0.86...v0.0.87) - 2026-08-19
 
 ### Added
