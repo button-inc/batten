@@ -297,6 +297,18 @@ the second gate exactly. The expensive capability, knowing a string from a
 proposed, price the cheap discriminator first; it usually carries most of the
 measured gap.
 
+**A compile-time rule compiler does not remove the interpreter — it adds a
+second one.** A candidate whose selling point was "rules compiled into the
+binary, not interpreted" shipped both: the same rule grammar existed twice, once
+as macro-expanded token generation and once as a 729-line runtime evaluator,
+hand-synced, and under two different licenses. The reason is structural rather
+than sloppy — a compile-time expansion cannot read a rule a consumer supplies at
+run time, so the moment user-supplied rules are wanted the interpreter comes
+back, and here it came back as a separate program on the other side of a license
+boundary. Price that duplicate whenever a candidate offers the compiled form as
+the cheap one: it is the cost the design hides, and it is where the two halves
+drift.
+
 Where the residue goes: an approximation reported as coverage is worse than the
 literal it replaced, so the change that lands the cheap half must _name_ the
 lines it still cannot reach and file them with a re-open predicate. CLOUD-310's
@@ -320,6 +332,18 @@ readable-but-not-vendorable. One product, three licenses, three different
 answers. **Ask the question per layer, never per vendor** — the licensing FAQ
 page said "LGPL-2.1" and would have been read as clearance for all three.
 
+**And per FILE, once copying is on the table.** The rule above asks per layer
+because a product's layers can carry different licenses; this asks one level
+finer, because a single crate's _files_ can too. A candidate's library crate
+declared `MPL-2.0` in its manifest and three of its ten sources carried no
+per-file notice at all — including the largest, which was the file worth copying
+— under a repository whose only license text was AGPL. What makes it worth
+stating separately is which disposition it reaches: a **dependency** is governed
+by the published package metadata and is untouched by this, so the gap bites
+only where the plan is to copy files out. A manifest field is a claim about the
+crate; a per-file notice is the claim a copied file carries with it, and only
+the second travels.
+
 **A survey's most useful output can be an argument for a rule we already have.**
 That plugin's fleet-rollout documentation ships managed settings with
 `autoUpdate` against a git repo — no version pin, no checksum, no attestation —
@@ -337,6 +361,16 @@ when a rule appears in several policies — is max-severity resolution, i.e.
 independent confirmation that raise-only is the stable resolution for layered
 policy. **A rejected candidate can still yield evidence for a decision already
 made**, and that evidence is worth more than the feature would have been.
+
+**Measure a project's bus factor from the commit log, not from stars or commit
+count.** A capture brief described a candidate as popular, busy and active, and
+cited a star count and a total commit count for it. The log said 850 of those
+898 commits — 94.7% — came from one address, the next contributor had 8, and the
+default branch had been quiet for two months. Both headline numbers move _with_
+the concentration rather than against it, so neither can detect it; `git log
+--format=%ae | sort | uniq -c | sort -rn` can, in one command. This is a
+`depend-on` question specifically: adopting the design costs nothing when the
+author stops, and taking the crate does.
 
 **Measure the wrapped tool; never infer its contract from its docs.** Measured,
 not read: it exits 0 with findings by default (a false green unless `--error`);
