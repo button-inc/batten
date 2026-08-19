@@ -44,6 +44,7 @@ pub mod output;
 pub mod outputs;
 pub mod provision;
 pub mod receipt;
+pub mod redirect;
 pub mod refusal;
 pub mod render;
 pub mod resolve;

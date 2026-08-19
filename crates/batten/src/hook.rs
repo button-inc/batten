@@ -45,6 +45,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::receipt::Validity;
+use crate::redirect::{self, Redirect};
 use crate::refusal::{Fix, Refusal};
 use crate::resolve::Resolved;
 use crate::rules::{PathSet, ReceiptKey, ReceiptTrigger, Rule, RuleKind, RuleScope};
@@ -1492,6 +1493,12 @@ pub struct Policy {
     /// the cross product as rules would need one row per verb × path pair, and
     /// the config would restate what an intersection already says.
     protected: PathSet,
+    /// What to run instead, per protected path class (CLOUD-280).
+    ///
+    /// Message composition only — it never decides whether the gate fires, which
+    /// is why it sits beside `protected` rather than inside it and why no
+    /// raise-only clamp applies to it.
+    redirects: Vec<Redirect>,
 }
 
 impl Policy {
@@ -1507,6 +1514,7 @@ impl Policy {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         }
     }
 
@@ -1534,6 +1542,7 @@ impl Policy {
             fail_on_warning: resolved.fail_on_warning,
             verbs: resolved.verbs.clone(),
             protected: PathSet::includes("protected", &resolved.protected)?,
+            redirects: resolved.redirects.clone(),
         })
     }
 
@@ -1741,7 +1750,7 @@ fn adjudicated(
         && let Some(verb) = crate::verbs::classify(&policy.verbs, &envelope.tool)
         && policy.protected.contains(normalise(path))
     {
-        return Decision::Deny(protected_refusal(&Target {
+        return Decision::Deny(protected_refusal(&policy.redirects, &Target {
             program: &envelope.tool,
             subcommand: None,
             path,
@@ -2309,7 +2318,7 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
             if !policy.protected.contains(normalise(target.path)) {
                 continue;
             }
-            return Decision::Deny(protected_refusal(&target));
+            return Decision::Deny(protected_refusal(&policy.redirects, &target));
         }
     }
     Decision::Allow
@@ -2388,18 +2397,22 @@ fn normalise(path: &str) -> &str {
 /// typed, and naming it is the difference between an actionable refusal and a
 /// riddle. The file's contents never appear.
 ///
-/// The fix is the verb's own declared `redirect`, and [`Fix::None`] where the
-/// consumer declared none — stated rather than papered over with a catch-all
-/// that pretends to be specific. That absence is the seam CLOUD-280 fills: the
-/// useful redirect is a property of what is being protected, not of the verb
-/// reaching for it, so a per-path-class table lands *here* and this fallback
-/// becomes the third tier rather than the second.
+/// The fix is three-tiered (CLOUD-280): the `[[redirect]]` row for this path
+/// class, else the verb's own declared `redirect`, else [`Fix::None`] — stated
+/// rather than papered over with a catch-all that pretends to be specific. The
+/// useful remedy is a property of what is being protected, not of the verb
+/// reaching for it, which is why the table is consulted first; the two fallbacks
+/// are CLOUD-96's behaviour unchanged, so the floor cannot regress.
+///
+/// It makes a refusal SPECIFIC; it does not make the named surface reachable.
+/// CLOUD-663 was canceled on exactly that distinction — a redirect pointing at a
+/// surface that is down is a defect in the surface.
 ///
 /// A subcommand-qualified row names the whole action, not just the front-end:
 /// `<program> <subcommand>` is what the caller typed and what a reader has to
 /// recognise, and a refusal naming only the front-end would read as a ban on
 /// every use of it (CLOUD-442).
-fn protected_refusal(target: &Target<'_>) -> Refusal {
+fn protected_refusal(redirects: &[Redirect], target: &Target<'_>) -> Refusal {
     let action = match target.subcommand {
         Some(subcommand) => format!("{} {subcommand}", target.program),
         None => target.program.to_owned(),
@@ -2407,7 +2420,21 @@ fn protected_refusal(target: &Target<'_>) -> Refusal {
     Refusal::new(
         PROTECTED_MUTATION,
         format!("`{action}` targets the protected path {}", target.path),
-        Fix::declared(target.verb.redirect.as_deref()),
+        // Three tiers, narrowest first (CLOUD-280): the path class the consumer
+        // declared, then the verb's own general remedy, then `Fix::None` — which
+        // renders an explicit "none declared" and names the gate. The two
+        // fallbacks are exactly CLOUD-96's behaviour, so this can only ever make
+        // a refusal more specific, never less.
+        //
+        // The lookup takes `normalise`d path, the same value
+        // `policy.protected.contains` was asked about, so the two tables cannot
+        // disagree about WHICH path is under discussion. The message keeps the
+        // path as the caller typed it, because that is the pointer they can act
+        // on.
+        Fix::declared(
+            redirect::resolve(redirects, normalise(target.path))
+                .or(target.verb.redirect.as_deref()),
+        ),
     )
 }
 
@@ -2991,6 +3018,11 @@ mod tests {
     /// one protected glob. Both tables are the consumer's, so a test supplies
     /// them exactly as a `batten.toml` would.
     fn protected_policy(verbs: Vec<MutatingVerb>) -> Policy {
+        protected_policy_with(verbs, Vec::new())
+    }
+
+    /// The same fixture with a declared `[[redirect]]` table (CLOUD-280).
+    fn protected_policy_with(verbs: Vec<MutatingVerb>, redirects: Vec<Redirect>) -> Policy {
         Policy {
             shapes: Vec::new(),
             fail_on_warning: false,
@@ -3000,6 +3032,7 @@ mod tests {
                 &[".serena/memories/**".to_owned(), "batten.toml".to_owned()],
             )
             .expect("the fixture protected set is well formed"),
+            redirects,
         }
     }
 
@@ -3022,6 +3055,7 @@ mod tests {
         Policy {
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
             shapes: vec![
                 shape("gh-pr-merge", "gh pr merge", None),
                 shape(
@@ -3543,6 +3577,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         };
         assert_eq!(
             adjudicate(
@@ -3568,6 +3603,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         };
         assert_eq!(
             adjudicate(
@@ -3587,6 +3623,7 @@ mod tests {
             fail_on_warning: true,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         };
         assert!(
             matches!(
@@ -3617,6 +3654,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         };
         let reason = denial_text(adjudicate(
             &policy,
@@ -3653,6 +3691,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         };
         let reason = denial_text(adjudicate(
             &policy,
@@ -3707,6 +3746,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         }
     }
 
@@ -3746,6 +3786,7 @@ mod tests {
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         }
     }
 
@@ -4373,6 +4414,143 @@ mod tests {
         assert!(reason.contains("surface that owns it"), "got: {reason}");
     }
 
+    /// Adjudicate against the protected fixture with a declared redirect table.
+    fn guarded_with(redirects: Vec<Redirect>, command: &str) -> Decision {
+        adjudicate(
+            &protected_policy_with(
+                vec![
+                    verb("rm", Some("restore it with git")),
+                    verb("mv", None),
+                ],
+                redirects,
+            ),
+            &envelope(command),
+            false,
+            &None,
+            &None,
+            &crate::stop::StopFacts::default(),
+        )
+    }
+
+    fn redirect_row(glob: &str, mutation: &str) -> Redirect {
+        Redirect {
+            glob: glob.to_owned(),
+            mutation: mutation.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_path_class_redirect_outranks_the_verbs_own() {
+        // Tier one (CLOUD-280). `rm` declares "restore it with git", which is
+        // true of most paths and useless for this one: agent memory has a write
+        // surface, and that is the fact the PATH knows and the verb cannot.
+        let refusal = denial(guarded_with(
+            vec![redirect_row(
+                ".serena/memories/**",
+                "write it through the memory surface that owns it",
+            )],
+            "rm .serena/memories/core.md",
+        ));
+        assert_eq!(
+            refusal.fix().declared_alternative(),
+            Some("write it through the memory surface that owns it"),
+            "the class the config declared beats the verb's general remedy"
+        );
+    }
+
+    #[test]
+    fn a_class_no_row_claims_falls_back_to_the_verbs_redirect() {
+        // Tier two, and the floor this issue promised not to regress: with a
+        // table declared but silent about this path, the answer is exactly what
+        // CLOUD-96 shipped.
+        let refusal = denial(guarded_with(
+            vec![redirect_row(".serena/memories/**", "use the memory surface")],
+            "rm batten.toml",
+        ));
+        assert_eq!(
+            refusal.fix().declared_alternative(),
+            Some("restore it with git"),
+            "an unclaimed class leaves the verb's own redirect standing"
+        );
+    }
+
+    #[test]
+    fn neither_tier_declaring_anything_still_names_the_gate() {
+        // Tier three, also unchanged: `mv` declares no redirect and no row
+        // claims the path, so the absence is stated as a value.
+        let decision = guarded_with(
+            vec![redirect_row("somewhere/else/**", "irrelevant")],
+            "mv batten.toml elsewhere",
+        );
+        let refusal = denial(decision.clone());
+        assert_eq!(refusal.fix(), &Fix::None);
+        assert!(denial_text(decision).contains(PROTECTED_MUTATION));
+    }
+
+    #[test]
+    fn the_redirect_lookup_sees_the_same_path_the_protected_check_did() {
+        // Both tables must discuss ONE path. `./x` and `x` are the same file, and
+        // `protected.contains` is asked about the normalised form — so a lookup
+        // on the raw operand would guard the path and then fail to find the class
+        // that speaks for it, producing a deny whose fix silently fell back a
+        // tier for a spelling.
+        let refusal = denial(guarded_with(
+            vec![redirect_row("batten.toml", "change it in a reviewed PR")],
+            "rm ./batten.toml",
+        ));
+        assert_eq!(
+            refusal.fix().declared_alternative(),
+            Some("change it in a reviewed PR")
+        );
+        // And the message still points at what the caller actually typed.
+        assert!(
+            refusal.reason().contains("./batten.toml"),
+            "got: {}",
+            refusal.reason()
+        );
+    }
+
+    #[test]
+    fn the_declared_order_decides_which_class_answers() {
+        // The tie-break, at the surface that consumes it rather than only in the
+        // table's own unit tests: two rows match, and the one declared first
+        // wins, because the config author orders the table.
+        let refusal = denial(guarded_with(
+            vec![
+                redirect_row(".serena/memories/**", "the narrow answer"),
+                redirect_row("**", "the catch-all"),
+            ],
+            "rm .serena/memories/core.md",
+        ));
+        assert_eq!(
+            refusal.fix().declared_alternative(),
+            Some("the narrow answer")
+        );
+    }
+
+    #[test]
+    fn a_redirect_changes_the_message_and_never_the_verdict() {
+        // The claim that exempts this table from the raise-only clamp, asserted
+        // rather than assumed: the same command against the same policy is a
+        // deny with the table and a deny without it, and an ALLOW stays an allow.
+        // If a redirect could ever flip a verdict it would be policy-bearing and
+        // would need a clamp (the issue's stated assumption 1).
+        let rows = vec![redirect_row("**", "some remedy")];
+        assert!(matches!(
+            guarded_with(rows.clone(), "rm batten.toml"),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            guarded_with(Vec::new(), "rm batten.toml"),
+            Decision::Deny(_)
+        ));
+        assert_eq!(
+            guarded_with(rows, "rm target/debug/scratch"),
+            Decision::Allow,
+            "a redirect matching every path cannot make an unprotected one deny"
+        );
+    }
+
     #[test]
     fn flags_are_never_treated_as_paths() {
         // And `--` ends option parsing, so a dash-leading operand after it is
@@ -4425,6 +4603,7 @@ mod tests {
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
             protected: PathSet::empty(),
+            redirects: Vec::new(),
         };
         assert_eq!(
             adjudicate(
@@ -4503,6 +4682,7 @@ mod tests {
             verbs: verbs.clone(),
             protected: PathSet::includes("protected", &["guarded/**".to_owned()])
                 .expect("well formed"),
+            redirects: Vec::new(),
         };
         let elsewhere = Policy {
             shapes: Vec::new(),
@@ -4510,6 +4690,7 @@ mod tests {
             verbs,
             protected: PathSet::includes("protected", &["other/**".to_owned()])
                 .expect("well formed"),
+            redirects: Vec::new(),
         };
         let call = envelope("rm guarded/thing");
         assert!(

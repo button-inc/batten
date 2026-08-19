@@ -162,6 +162,18 @@ pub struct Config {
     /// lookup are [`crate::verbs`].
     #[serde(default, rename = "verb", skip_serializing_if = "Vec::is_empty")]
     pub verbs: Vec<crate::verbs::MutatingVerb>,
+    /// The per-path-class redirect table (CLOUD-280): what to run instead,
+    /// keyed by what is protected rather than by the verb reaching for it.
+    ///
+    /// Consulted before [`MutatingVerb::redirect`], which stays the fallback, so
+    /// the behaviour CLOUD-96 shipped is the floor rather than a regression.
+    /// Deliberately a sibling of [`Config::protected`] rather than a widening of
+    /// it: that set keeps its element type, so [`crate::trust`]'s
+    /// `protected[<entry>]` weakening keys are untouched.
+    ///
+    /// [`MutatingVerb::redirect`]: crate::verbs::MutatingVerb::redirect
+    #[serde(default, rename = "redirect", skip_serializing_if = "Vec::is_empty")]
+    pub redirects: Vec<crate::redirect::Redirect>,
     /// Output predicates over a wrapped command's captured streams (CLOUD-117):
     /// literals that, found in `batten exec`'s output, promote a lying exit `0`
     /// to a violation. Consumer-specific by nature — which warning means
@@ -420,6 +432,14 @@ pub struct OverrideConfig {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub exec_patterns: Vec<outputs::OutputPattern>,
+    /// Redirects this file **adds**. A duplicate glob is refused.
+    ///
+    /// Needs no raise-only clamp, and that is a decision rather than an
+    /// oversight: a redirect changes what a refusal *says*, never whether it
+    /// fires, so there is no bar here to lower. Refusing a redefinition is
+    /// coherence with the other append-only tables.
+    #[serde(default, rename = "redirect", skip_serializing_if = "Vec::is_empty")]
+    pub redirects: Vec<crate::redirect::Redirect>,
     /// Waivers this file adds, for rules the authority does not declare. A
     /// waiver over a committed rule lowers that bar and is refused.
     #[serde(default, rename = "waiver", skip_serializing_if = "Vec::is_empty")]
@@ -497,6 +517,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // too: `batten.local.toml` may add verb rows, and a raise-only override that
     // adds an inert one has still written something that cannot mean anything.
     crate::verbs::validate(&config.verbs)?;
+    crate::redirect::validate(&config.redirects)?;
     // And the marker table, for the identical reason in the identical shape
     // (CLOUD-253). Both tables arrived in one commit; CLOUD-242 wired one of
     // them up and nobody checked the sibling, so an empty `token` — which
@@ -650,6 +671,7 @@ impl Config {
             unlanded: Vec::new(),
             epoch: None,
             verbs: Vec::new(),
+            redirects: Vec::new(),
             markers: Vec::new(),
             exec: None,
             exec_patterns: Vec::new(),
@@ -891,6 +913,7 @@ mod tests {
     /// [`parse_ungated`] that does it. Deleting a call fails the test below.
     const VALIDATED_AT_LOAD: &[(&str, &str)] = &[
         ("verbs", "crate::verbs::validate("),
+        ("redirects", "crate::redirect::validate("),
         ("markers", "crate::markers::validate("),
         ("rules", "crate::rules::validate("),
         ("exec_patterns", "crate::outputs::validate("),

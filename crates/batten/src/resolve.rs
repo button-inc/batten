@@ -220,6 +220,12 @@ pub struct Resolved {
     /// The mutating-verb table, consumer data the authority supplies.
     #[serde(rename = "verb")]
     pub verbs: Vec<crate::verbs::MutatingVerb>,
+    /// The per-path-class redirect table (CLOUD-280), authority rows plus any a
+    /// local file **added**. Local rows append after committed ones, and the
+    /// lookup takes the first match, so an uncommitted file can add a class the
+    /// authority never named and can never change what a committed row says.
+    #[serde(rename = "redirect")]
+    pub redirects: Vec<crate::redirect::Redirect>,
     /// The suppression-marker table, consumer data the authority supplies.
     #[serde(rename = "marker")]
     pub markers: Vec<crate::markers::Marker>,
@@ -579,6 +585,7 @@ pub fn resolve_with_env(
         rules_source: declared_by(present, !repo.rules.is_empty()),
         rules: repo.rules.clone(),
         exec_patterns: repo.exec_patterns.clone(),
+        redirects: repo.redirects.clone(),
         waivers: repo.waivers.clone(),
     };
 
@@ -675,6 +682,7 @@ struct Tables {
     rules: Vec<Rule>,
     rules_source: Source,
     exec_patterns: Vec<crate::outputs::OutputPattern>,
+    redirects: Vec<crate::redirect::Redirect>,
     waivers: Vec<crate::waiver::Waiver>,
 }
 
@@ -742,6 +750,7 @@ fn apply_local(
         tables.rules_source = Source::LocalFile;
     }
     merge_local_patterns(&mut tables.exec_patterns, local.exec_patterns)?;
+    merge_local_redirects(&mut tables.redirects, local.redirects)?;
     merge_local_waivers(&mut tables.waivers, local.waivers, &repo.rules)?;
     // §8's three policy-bearing path sets, raise-only. Before CLOUD-239 these
     // were parsed and discarded: an author who wrote `protected` here got no
@@ -865,6 +874,36 @@ fn merge_local_patterns(
     Ok(())
 }
 
+/// Add a local file's redirects to the committed ones, refusing a redefinition.
+///
+/// The same append-only shape [`merge_local_patterns`] uses, keyed on `glob`,
+/// and for coherence rather than for safety: a redirect is **not
+/// policy-bearing** — it changes what a refusal says, never whether it fires —
+/// so §8's raise-only clamp has no bar here to protect. What refusing a
+/// redefinition buys is that a committed remedy cannot be quietly reworded by an
+/// uncommitted file, which is a claim about provenance, not about strictness.
+///
+/// Appending is what makes that hold: [`crate::redirect::resolve`] takes the
+/// **first** matching row, so a local row can only ever answer for a class the
+/// authority left unclaimed.
+fn merge_local_redirects(
+    committed: &mut Vec<crate::redirect::Redirect>,
+    local: Vec<crate::redirect::Redirect>,
+) -> Result<()> {
+    for entry in local {
+        if committed.iter().any(|row| row.glob == entry.glob) {
+            return Err(UsageError::raise(format!(
+                "redirect {}: {LOCAL_CONFIG_FILE} may not redefine a redirect from {}; an \
+                 override may only add path classes the authority does not claim (§8)",
+                entry.glob,
+                config::CONFIG_FILE,
+            )));
+        }
+        committed.push(entry);
+    }
+    Ok(())
+}
+
 /// Add a local file's waivers to the committed ones, refusing any that touch a
 /// committed rule.
 ///
@@ -940,6 +979,7 @@ fn assemble(
         unlanded: paths.unlanded,
         epoch: repo.epoch.clone(),
         verbs: repo.verbs.clone(),
+        redirects: tables.redirects,
         markers: repo.markers.clone(),
         exec: repo.exec,
         exec_patterns: tables.exec_patterns,
@@ -1001,6 +1041,7 @@ fn attribution(
             authority_set(!repo.exec_patterns.is_empty()),
         ),
         ("exec", authority_set(repo.exec.is_some())),
+        ("redirect", authority_set(!repo.redirects.is_empty())),
         ("waiver", authority_set(!repo.waivers.is_empty())),
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
