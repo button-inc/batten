@@ -463,6 +463,45 @@ fn check_clean_repo_exits_success() {
     assert!(output.stdout.is_empty(), "clean run reports nothing");
 }
 
+/// CLOUD-222's load-bearing assertion, and it is a NEGATIVE one: the agent path
+/// keeps the silence it has today.
+///
+/// A first-contact notice on stderr is only defensible if it cannot reach the
+/// caller §6's silence rule exists for — an agent in a loop, reading an exit code
+/// and paying for every byte. A spawned process has both channels piped, so §4
+/// resolves it unattended and the notice is unreachable **by construction**
+/// rather than by a reviewer's promise. This is what proves it, and it fails the
+/// moment the notice is emitted unconditionally.
+///
+/// Both channels, not just stdout: the notice rides stderr, so asserting only
+/// stdout would pass over exactly the regression this guards.
+#[test]
+fn a_clean_check_says_nothing_at_all_when_its_channels_are_piped() {
+    let dir = repo_with_config(
+        "check-clean-piped",
+        "version = 1\n\n[[rule]]\nid = \"no-todo\"\nkind = \"forbid\"\nglob = \"**/*.rs\"\npattern = \"TODO\"\nseverity = \"deny\"\n",
+    );
+    fs::write(dir.join("lib.rs"), "all clear\n").expect("write source");
+
+    let output = batten()
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .expect("run batten check");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        output.stdout.is_empty(),
+        "stdout is the answer channel and a clean run has no answer, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "a piped run is the agent path — it must keep today's silence, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn check_violation_exits_two_with_pointer_only_output() {
     let dir = repo_with_config(

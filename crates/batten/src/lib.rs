@@ -3630,6 +3630,21 @@ fn run_rules(
             }
         }
     }
+    // First contact's one line (CLOUD-222). The decision is [`clean_run_notice`],
+    // extracted rather than inlined here because this sandbox cannot produce a
+    // TTY, so a test asserting the attended branch over a spawned process would
+    // assert its own premise (`.claude/rules/rust.md`, the `markers::scannable`
+    // shape). Extracted, the branch is decided by a pure function with a table
+    // over it, and what remains here is the write.
+    if let Some(note) = clean_run_notice(
+        json,
+        mode.machine,
+        findings.is_empty(),
+        config.rules.len(),
+        scan.not_evaluated.len(),
+    ) {
+        output::message(mode, Verbosity::Normal, err, &note)?;
+    }
     // The severity axis reaches the exit contract exactly here: blocking is
     // derived through the taxonomy table, never name-matched (CLOUD-168), and
     // the two-valued outcome becomes a code in one place (§7).
@@ -3637,6 +3652,47 @@ fn run_rules(
         &findings,
         config.fail_on_warning,
     )))
+}
+
+/// What a clean run says on stderr, or `None` when it says nothing (CLOUD-222).
+///
+/// A clean `check` prints nothing on stdout and exits `0` — §6's cheapest
+/// possible signal, and right for the agent path, where the exit code is the
+/// whole interface and every byte printed is context spent. It is wrong exactly
+/// once: a newcomer who has just paid a cold build cannot tell "evaluated N
+/// rules, all clean" from "nothing ran", so the first useful thing the tool does
+/// is invisible to the only reader with no priors to fill the silence.
+///
+/// Four things this returns `None` for, and each is load-bearing:
+///
+/// * **`machine`** — §4's already-resolved attendedness (`!stderr_tty || <CI
+///   signal>`), read here rather than re-derived. A piped or CI run cannot reach
+///   the notice, so the agent path keeps byte-for-byte the output it has today
+///   **by construction**, which is what makes that assertion testable rather than
+///   a promise a reviewer has to take on trust.
+/// * **`json`** — the data channel emits its document and nothing else; a `-J`
+///   caller parses stdout and this would be noise beside it.
+/// * **not clean** — a run with findings has already said something worth more.
+/// * **nothing declared and nothing run** — see below.
+///
+/// The count is the rules that actually **evaluated**, `not_evaluated`
+/// subtracted: "checked 12 rules" over a run where four never looked is the
+/// false green this engine exists to refuse. A config declaring no rules at all
+/// still gets the line, and that is the point rather than an oversight — `0` is
+/// the honest answer to "what ran", and it is exactly the reader who suspects
+/// nothing ran who most needs to be told they are right.
+fn clean_run_notice(
+    json: bool,
+    machine: bool,
+    clean: bool,
+    declared: usize,
+    not_evaluated: usize,
+) -> Option<String> {
+    if json || machine || !clean {
+        return None;
+    }
+    let evaluated = declared.saturating_sub(not_evaluated);
+    Some(format!("checked {evaluated} rule(s) — nothing to report"))
 }
 
 /// A key's value as one pointer-line token.
@@ -3923,4 +3979,65 @@ fn run_generate(command: &GenerateCommand, out: &mut dyn Write) -> Result<ExitCo
         }
     }
     Ok(ExitCode::Success)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// The whole decision as a table, because the branch that matters cannot be
+    /// reached over a spawned process: this sandbox gives a test no TTY, so
+    /// `machine` is always true there and the attended arm would never run. The
+    /// e2e suite asserts the SILENT half against the real binary; this asserts
+    /// that the other half exists and is reached for the right reasons
+    /// (`.claude/rules/rust.md`: extract the decision rather than assert a
+    /// conclusion over a precondition the environment never created).
+    #[test]
+    fn a_clean_run_speaks_only_when_a_person_is_reading() {
+        // (json, machine, clean) -> whether a line is emitted.
+        let cases = [
+            ((false, false, true), true, "attended, clean, human channel"),
+            ((false, true, true), false, "piped or CI: the agent path is silent"),
+            ((true, false, true), false, "-J: the document is the whole answer"),
+            ((false, false, false), false, "findings said something already"),
+            ((true, true, false), false, "none of the three hold"),
+        ];
+        for ((json, machine, clean), speaks, why) in cases {
+            assert_eq!(
+                clean_run_notice(json, machine, clean, 3, 0).is_some(),
+                speaks,
+                "{why}"
+            );
+        }
+    }
+
+    /// The count is what RAN, not what was declared. A rule that never looked
+    /// must not be counted as one that passed — that is the false green the
+    /// engine exists to refuse, and it would be invisible in a line that reads
+    /// reassuringly either way.
+    #[test]
+    fn the_count_subtracts_the_rules_that_never_looked() {
+        assert_eq!(
+            clean_run_notice(false, false, true, 12, 4).unwrap(),
+            "checked 8 rule(s) — nothing to report"
+        );
+        // Saturating, not panicking: the two numbers come from different places
+        // and an inverted pair must not take the process down over a message.
+        assert_eq!(
+            clean_run_notice(false, false, true, 1, 9).unwrap(),
+            "checked 0 rule(s) — nothing to report"
+        );
+    }
+
+    /// A config declaring nothing still gets the line. The reader who suspects
+    /// nothing ran is exactly the one who needs to be told they are right, and
+    /// `0` is the honest answer rather than a reason to stay silent.
+    #[test]
+    fn declaring_no_rules_is_reported_rather_than_hidden() {
+        assert_eq!(
+            clean_run_notice(false, false, true, 0, 0).unwrap(),
+            "checked 0 rule(s) — nothing to report"
+        );
+    }
 }
