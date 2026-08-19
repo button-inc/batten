@@ -54,6 +54,58 @@
 //! process. That keeps [`ExitCode`] total over the four codes Batten *chooses*
 //! rather than widening the table to hold one it does not.
 //!
+//! ## Whose tree is it, and who is already managing it (CLOUD-427)
+//!
+//! A dispatched tree outlives the dispatcher by default: a `SIGTERM` to Batten
+//! kills Batten, the child is reparented to init, and nothing holds the pids.
+//! Owning it means a process group — and a process group is exactly the thing a
+//! *nested* manager must not make twice, because the outer `killpg` then reaches
+//! the inner manager and not the leaves.
+//!
+//! mise already defines that protocol, and Batten interoperates with it rather
+//! than reproducing it. mise's `should_use_pgroup()` declines on two observations
+//! —  [`TASK_PGID_MANAGED_ENV`] present, or the process is its own session leader
+//! — and Batten honours both, adding a third of its own: the
+//! `[exec] manage_process_group` key, **default `false`**. The third is not
+//! redundant: the first two are necessary and provably not sufficient. Measured
+//! on a live session, a `mise run land` under the harness's Bash tool made its
+//! own group (rule 2 asks whether *mise* leads the session, and there the Bash
+//! did), so an orchestrator's intent to `kill(-pgid)` a grandchild is simply not
+//! observable from the process table. What cannot be decided must be declared,
+//! and it must default to today's behaviour.
+//!
+//! Two consequences, each load-bearing:
+//!
+//! * **The predicate is computed once**, at spawn, and the same value is read at
+//!   teardown. mise's own cache comment names the failure when the two disagree:
+//!   only the direct pid gets the signal, and the grandchildren leak.
+//! * **Grouping obliges forwarding.** A new group is no longer the terminal's
+//!   foreground group, so `^C` stops reaching the child — grouping without
+//!   forwarding would take a signal path away and give nothing back. HUP, INT,
+//!   QUIT and TERM are forwarded to the group, escalating to `SIGKILL` after
+//!   [`GROUP_GRACE`], and Batten then reports `128 + the signal Batten received`
+//!   — never the signal the child died of. A child that ignored TERM and fell to
+//!   the escalated KILL must not read as `137` to a caller that sent `15`.
+//!
+//! When Batten groups it sets [`TASK_PGID_MANAGED_ENV`] on the child's
+//! environment, so a nested mise stands down and the leaves stay in Batten's
+//! group. Without that propagation grouping is a regression, not a feature.
+//!
+//! ## The drain has a deadline, because EOF is not guaranteed
+//!
+//! The tee threads read until EOF, and EOF arrives when the last holder of the
+//! write end closes it — which is *not* the moment the child is reaped. A
+//! surviving grandchild that inherited stdout holds it open forever, so the
+//! joins after `child.wait()` never return: `exec` hangs with the child already
+//! dead. That is a live hang today rather than a prediction, and it is why the
+//! drain is bounded by [`PIPE_DRAIN_TIMEOUT`] and reports through a channel
+//! rather than a bare `join()`, which has no timed form.
+//!
+//! Bounded, not abandoned: each tee appends into a shared buffer as it goes, so
+//! a drain that times out still stores the bytes that did arrive and says how
+//! many — a count, never the bytes (non-negotiable rule 4). A capture that
+//! quietly did not happen is indistinguishable from a command nobody checked.
+//!
 //! ## What is still Batten's answer
 //!
 //! Exactly one thing: whether the command could be *started*. An absent program
@@ -67,8 +119,13 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::capture::{self, Stream};
 use crate::error::{Passthrough, UsageError};
@@ -93,23 +150,478 @@ fn signal_code(_status: std::process::ExitStatus) -> i32 {
     128
 }
 
-/// Drain `pipe` into `sink`, returning everything that passed through.
+/// mise's marker that an ancestor is already managing this task's process group.
+///
+/// Read, and — when Batten is the one managing — written onto the child's
+/// environment. The name is mise's `TASK_PGID_MANAGED_ENV` verbatim: it is a
+/// protocol token shared with another tool, so spelling it differently would not
+/// be a rename but a silent opt-out of the protocol.
+pub const TASK_PGID_MANAGED_ENV: &str = "MISE_TASK_PGID_MANAGED";
+
+/// How long a managed group has to die on the forwarded signal before `SIGKILL`.
+///
+/// A grace period rather than an immediate kill, because the forwarded signal is
+/// the one a well-behaved child cleans up on; escalating instantly would throw
+/// away the orderly shutdown that forwarding exists to deliver.
+const GROUP_GRACE: Duration = Duration::from_secs(5);
+
+/// How long the pipes have to reach EOF once the child has been reaped.
+///
+/// See the module docs: a surviving grandchild holding the write end means EOF
+/// never arrives, so this is a deadline on a wait that otherwise has no end.
+const PIPE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The `[exec]` table: how `batten exec` owns what it dispatched.
+///
+/// One key today, and it is an opt-in rather than a tuning knob. `false` is not
+/// a conservative default chosen for taste — it is the *only* value that leaves
+/// the process topology byte-for-byte what it was, which is what an existing
+/// consumer's orchestrator is already built against.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecConfig {
+    /// Whether Batten may put a dispatched command in its own process group and
+    /// take responsibility for tearing that group down.
+    ///
+    /// Declared rather than inferred, because the residual case is not
+    /// observable: an orchestrator two levels up intending to `kill(-pgid)` looks
+    /// exactly like one that is not. Even when this is `true`, Batten still
+    /// declines whenever mise's own two rules say an ancestor is already
+    /// managing — see [`GroupDecision`].
+    #[serde(default)]
+    pub manage_process_group: bool,
+}
+
+impl ExecConfig {
+    /// The settings a caller that reads no config gets.
+    ///
+    /// A `const` rather than `Default::default()` at each call site so the
+    /// library entry points can name it in a `&`-position without a temporary,
+    /// and so "the default is off" is one object a reader can follow.
+    pub const DEFAULT: Self = Self {
+        manage_process_group: false,
+    };
+}
+
+/// Whether Batten manages this invocation's process group — computed **once**.
+///
+/// The type exists to make "once" structural rather than a comment. The spawn and
+/// the teardown must read the *same* answer; two call sites to a predicate over
+/// the environment could disagree (a child's own `MISE_TASK_PGID_MANAGED`, a
+/// `setsid` in between) and the failure mode is silent — only the direct pid gets
+/// the signal, and the grandchildren leak, which is the bug this whole issue is
+/// about. So the observation happens in one constructor and travels as a value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GroupDecision(bool);
+
+impl GroupDecision {
+    /// The predicate itself, over facts a caller supplies.
+    ///
+    /// Separated from the observation so both branches of each rule are
+    /// exercisable without a `setsid` or an environment mutation, which are
+    /// process-global and therefore untestable in a threaded test harness.
+    const fn decide(opt_in: bool, marker_present: bool, session_leader: bool) -> Self {
+        Self(opt_in && !marker_present && !session_leader)
+    }
+
+    /// [`Self::decide`] over the live process and environment.
+    #[cfg(unix)]
+    fn observe(opt_in: bool) -> Self {
+        Self::decide(
+            opt_in,
+            std::env::var_os(TASK_PGID_MANAGED_ENV).is_some(),
+            is_session_leader(),
+        )
+    }
+
+    /// [`Self::observe`] where there are no process groups to manage.
+    ///
+    /// Windows has no `setpgid`, no `killpg` and none of the four forwarded
+    /// signals, so there is nothing to opt into. Answering `false` unconditionally
+    /// keeps the config key readable everywhere and inert where it cannot mean
+    /// anything — the alternative, a parse-time refusal, would make one
+    /// `batten.toml` unusable across a consumer's own matrix.
+    #[cfg(not(unix))]
+    fn observe(_opt_in: bool) -> Self {
+        Self(false)
+    }
+
+    /// Whether Batten groups and therefore owns the teardown.
+    const fn groups(self) -> bool {
+        self.0
+    }
+}
+
+/// Whether this process leads its own session.
+///
+/// mise's second decline rule. A session leader is the top of a job-control
+/// hierarchy, so making a group under it manages nothing an ancestor was not
+/// already positioned to manage. A `getsid` that fails answers "could not look",
+/// and could-not-look declines — the fail-closed direction here is *not* to
+/// grab ownership on a fact nobody established.
+#[cfg(unix)]
+fn is_session_leader() -> bool {
+    rustix::process::getsid(None).is_ok_and(|sid| sid == rustix::process::getpid())
+}
+
+/// Whether the process group led by `pgid` has no members left.
+///
+/// `kill(-pgid, 0)`: the standard existence probe, which reports `ESRCH` when
+/// there is nothing to signal. An error other than "no such group" is answered as
+/// *not empty*, because the escalation that follows a `false` is the safe
+/// direction — a redundant `SIGKILL` to a group that has already gone costs
+/// nothing, while skipping one over an unreadable answer leaks the tree.
+#[cfg(unix)]
+fn group_is_empty(pgid: rustix::process::Pid) -> bool {
+    rustix::process::test_kill_process_group(pgid)
+        .is_err_and(|errno| errno == rustix::io::Errno::SRCH)
+}
+
+/// Send `signal` to the process group led by `pgid`, best effort.
+///
+/// Best effort is the honest contract: the group may already be gone, which is
+/// the outcome being asked for, and `ESRCH` on the way to exiting is not a
+/// failure anyone can act on.
+#[cfg(unix)]
+fn signal_group(pgid: rustix::process::Pid, signal: rustix::process::Signal) {
+    // `let _`, not `drop`: the result is `Copy`, so dropping it is a no-op the
+    // compiler warns about rather than the discard it looks like.
+    let _ = rustix::process::kill_process_group(pgid, signal);
+}
+
+/// Drain `pipe` into `sink`, accumulating everything that passed through.
 ///
 /// The tee. Chunked rather than read-to-end-then-write so a long-running child's
 /// output still appears as it is produced: buffering it all until exit would make
 /// `batten exec -- cargo test` look hung.
-fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W) -> Result<Vec<u8>> {
-    let mut seen = Vec::new();
+///
+/// `seen` is shared rather than returned because the caller may stop waiting
+/// (see [`PIPE_DRAIN_TIMEOUT`]): a return value is only readable by a join that
+/// completes, so a deadline over a returned `Vec` could only ever store nothing.
+/// Appended under the lock per chunk, which is the same granularity the write to
+/// `sink` already has.
+fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W, seen: &Mutex<Vec<u8>>) -> Result<()> {
     let mut chunk = [0_u8; 8192];
     loop {
         let read = pipe.read(&mut chunk)?;
         if read == 0 {
-            return Ok(seen);
+            return Ok(());
         }
         let bytes = chunk.get(..read).unwrap_or(&[]);
         sink.write_all(bytes)?;
         sink.flush()?;
-        seen.extend_from_slice(bytes);
+        match seen.lock() {
+            Ok(mut held) => held.extend_from_slice(bytes),
+            // A poisoned lock means the other end panicked mid-append. The bytes
+            // already on `sink` are the caller's answer either way, so the tee
+            // keeps teeing and the capture is what it is — dropping the stream
+            // here would take output away from the caller to protect bookkeeping.
+            Err(_) => return Err(anyhow::anyhow!("exec: the capture buffer was poisoned")),
+        }
+    }
+}
+
+/// What a tee thread reports, and where its bytes accumulate meanwhile.
+struct Drain {
+    /// The tee's own result, arriving when the pipe reaches EOF or errors.
+    outcome: mpsc::Receiver<Result<()>>,
+    /// Everything written through so far.
+    seen: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Drain {
+    /// Spawn a tee of `pipe` into `sink`.
+    fn spawn<R, W>(pipe: R, sink: W) -> Self
+    where
+        R: Read + Send + 'static,
+        W: Write + Send + 'static,
+    {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (tx, outcome) = mpsc::channel();
+        let buffer = Arc::clone(&seen);
+        // Detached on purpose. A thread blocked on a pipe a grandchild holds open
+        // cannot be joined, and there is nothing to join it *for*: its bytes are
+        // in `seen` already, and the process is on its way out.
+        drop(std::thread::spawn(move || {
+            drop(tx.send(tee(pipe, sink, &buffer)));
+        }));
+        Self { outcome, seen }
+    }
+
+    /// Wait up to [`PIPE_DRAIN_TIMEOUT`] for EOF, then take what arrived.
+    ///
+    /// Returns the bytes and whether the deadline was reached. A timeout is not
+    /// an error: the child's exit code is still the caller's answer, and refusing
+    /// to report it because bookkeeping ran long would turn a leaked grandchild
+    /// into a failed build.
+    fn collect(self, stream: Stream, report: &mut dyn Write) -> Result<Vec<u8>> {
+        self.collect_within(PIPE_DRAIN_TIMEOUT, stream, report)
+    }
+
+    /// [`Self::collect`] with the deadline supplied.
+    ///
+    /// The deadline is a parameter for one reason: a test of the bound has to
+    /// reach it, and reaching a ten-second bound ten times is a suite nobody
+    /// runs. Production has exactly one caller, above, and it passes the constant.
+    fn collect_within(
+        self,
+        deadline: Duration,
+        stream: Stream,
+        report: &mut dyn Write,
+    ) -> Result<Vec<u8>> {
+        let timed_out = match self.outcome.recv_timeout(deadline) {
+            Ok(result) => {
+                result.with_context(|| format!("tee the wrapped command's {}", stream.as_str()))?;
+                false
+            }
+            // Disconnected without a value means the tee thread died without
+            // reporting — a panic. The bytes it did append are still real.
+            Err(mpsc::RecvTimeoutError::Disconnected) => false,
+            Err(mpsc::RecvTimeoutError::Timeout) => true,
+        };
+        let bytes = match self.seen.lock() {
+            Ok(held) => held.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        if timed_out {
+            // Pointer-only: the stream and a count, never a byte of what was
+            // captured. Said out loud rather than swallowed, because a truncated
+            // capture that looks complete is the failure mode a gate reading this
+            // store cannot detect for itself.
+            writeln!(
+                report,
+                "exec: {} did not reach EOF within {:?}; captured {} byte(s) \
+                 — a process still holds the pipe open",
+                stream.as_str(),
+                deadline,
+                bytes.len()
+            )?;
+        }
+        Ok(bytes)
+    }
+}
+
+/// Put `builder`'s child in its own process group, when `decision` says so.
+///
+/// Two halves, and the second is what makes the first safe to do at all: the
+/// group, and the marker that tells a nested mise an ancestor is already managing
+/// one. Grouping without propagating would leave mise making a second group under
+/// Batten's, so Batten's `killpg` would reach mise and not the leaves — strictly
+/// worse than not grouping, which is why they are one function.
+///
+/// `CommandExt::process_group` rather than mise's `pre_exec(setpgid)`: the
+/// workspace forbids `unsafe`, and for this purpose the two are the same call.
+#[cfg(unix)]
+fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {
+    use std::os::unix::process::CommandExt as _;
+
+    if decision.groups() {
+        builder.process_group(0).env(TASK_PGID_MANAGED_ENV, "1");
+    }
+}
+
+/// [`group_at_spawn`] where there are no process groups.
+#[cfg(not(unix))]
+fn group_at_spawn(_builder: &mut Command, _decision: GroupDecision) {}
+
+/// The on-disk note that a group is currently owned, and by which Batten.
+///
+/// Written **before** the wait and removed on a clean reap, so its presence means
+/// "a Batten died holding a group". That asymmetry is the whole design: `SIGKILL`
+/// cannot be caught, so the one case forwarding cannot help with is the one case
+/// a record can — this is recordable, never preventable, and a clean run leaves
+/// nothing behind to read.
+///
+/// Out of tree, under [`crate::state::repo_state_dir`], for the reason every
+/// other piece of state is: a checkout stays clean and the record survives a
+/// reclone. Pointer-only by nature — a pgid and nothing else.
+struct GroupRecord {
+    /// `None` when Batten is not managing a group, so there is nothing to clear.
+    path: Option<std::path::PathBuf>,
+}
+
+impl GroupRecord {
+    /// Note that `pgid` is owned, if `decision` says Batten owns it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the note cannot be written. Not a silent skip: a
+    /// caller that asked Batten to own the tree has been told the leak is
+    /// recoverable, and an unwritable record makes that untrue without saying so.
+    fn write(repo_root: &Path, decision: GroupDecision, pgid: u32) -> Result<Self> {
+        if !decision.groups() {
+            return Ok(Self { path: None });
+        }
+        let dir = crate::state::repo_state_dir(repo_root)?.join("exec");
+        std::fs::create_dir_all(&dir).context("create the exec group-record directory")?;
+        // Keyed by Batten's OWN pid, not the group's: the reader's question is
+        // "which supervisor died", and a second `exec` in the same checkout must
+        // not overwrite the first one's note.
+        let path = dir.join(format!("group.{}", std::process::id()));
+        std::fs::write(&path, format!("{pgid}\n")).context("record the owned process group")?;
+        Ok(Self { path: Some(path) })
+    }
+
+    /// Remove the note, because the child was reaped and the group is gone.
+    fn clear(self) {
+        if let Some(path) = self.path {
+            // A record that cannot be removed is stale rather than harmful — it
+            // names a pgid that no longer exists, and a reader must tolerate that
+            // anyway, since a pid can be reused between the write and the read.
+            drop(std::fs::remove_file(path));
+        }
+    }
+}
+
+/// The signals Batten forwards to a group it owns.
+///
+/// The four job-control signals a caller sends *on purpose*. Deliberately not
+/// `SIGKILL` (uncatchable, so a `kill -9` to Batten is recordable at best and
+/// never preventable) and not `SIGUSR1`/`SIGUSR2`, which mean whatever a
+/// consumer's own tooling has agreed they mean.
+#[cfg(unix)]
+const FORWARDED: &[i32] = &[
+    signal_hook::consts::SIGHUP,
+    signal_hook::consts::SIGINT,
+    signal_hook::consts::SIGQUIT,
+    signal_hook::consts::SIGTERM,
+];
+
+/// Signal forwarding for the lifetime of one managed child.
+///
+/// Absent — every field `None` — whenever [`GroupDecision::groups`] is false, so
+/// an invocation with the opt-in off installs no disposition at all and the
+/// process topology is byte-for-byte what it was before CLOUD-427.
+#[cfg(unix)]
+struct Forwarding {
+    /// `None` when Batten is not managing this child's group.
+    active: Option<ForwardingThread>,
+}
+
+/// The pieces of a live forwarder.
+#[cfg(unix)]
+struct ForwardingThread {
+    /// Ends the `Signals` iterator, which is how the worker is asked to stop.
+    handle: signal_hook::iterator::Handle,
+    /// The worker itself.
+    worker: std::thread::JoinHandle<()>,
+    /// The signal Batten was sent, or `0` for none. Read once, after the join.
+    received: Arc<std::sync::atomic::AtomicI32>,
+}
+
+#[cfg(unix)]
+impl Forwarding {
+    /// Start forwarding to `child_pid`'s group, if `decision` says Batten owns it.
+    ///
+    /// `child_pid` **is** the group id: `process_group(0)` makes the child a group
+    /// leader, so the two are the same number by construction rather than by a
+    /// lookup that could race the child's death.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the signal registry cannot be installed. That is an
+    /// internal error rather than a silent downgrade to unmanaged: a caller that
+    /// asked Batten to own the tree and got an unowned one would find out by
+    /// leaking processes, which is exactly the state this issue exists to end.
+    fn install(decision: GroupDecision, child_pid: u32) -> Result<Self> {
+        use std::sync::atomic::{AtomicI32, Ordering};
+
+        if !decision.groups() {
+            return Ok(Self { active: None });
+        }
+        let Some(pgid) = i32::try_from(child_pid)
+            .ok()
+            .and_then(rustix::process::Pid::from_raw)
+        else {
+            return Err(anyhow::anyhow!(
+                "exec: the spawned child reported an unusable pid, so its group cannot be owned"
+            ));
+        };
+
+        let mut signals = signal_hook::iterator::Signals::new(FORWARDED)
+            .context("install the signal forwarder for the wrapped command")?;
+        let handle = signals.handle();
+        let received = Arc::new(AtomicI32::new(0));
+
+        let seen = Arc::clone(&received);
+        let worker = std::thread::spawn(move || {
+            let Some(signal) = signals.forever().next() else {
+                // The handle was closed: the child was reaped without Batten
+                // being signalled at all, which is every clean run.
+                return;
+            };
+            seen.store(signal, Ordering::SeqCst);
+            if let Some(sig) = rustix::process::Signal::from_named_raw(signal) {
+                signal_group(pgid, sig);
+            }
+            // Escalate on the GROUP being empty, never on Batten's direct child
+            // being reaped. The two come apart routinely and the difference is
+            // the whole issue: a non-interactive shell sets a background job's
+            // INT and QUIT to ignored, so `sh -c 'sleep 300 & wait'` dies on the
+            // forwarded INT while the `sleep` it started does not. Waiting on the
+            // child there would report a clean teardown over a live orphan.
+            //
+            // Polled rather than slept through, so a group that dies promptly —
+            // the common case — costs one poll interval and not the whole grace.
+            let deadline = std::time::Instant::now() + GROUP_GRACE;
+            while std::time::Instant::now() < deadline {
+                if group_is_empty(pgid) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            signal_group(pgid, rustix::process::Signal::KILL);
+        });
+
+        Ok(Self {
+            active: Some(ForwardingThread {
+                handle,
+                worker,
+                received,
+            }),
+        })
+    }
+
+    /// Stop forwarding and report the signal Batten was sent, if any.
+    ///
+    /// Called immediately after the child is reaped. Closing the handle is what
+    /// ends a worker parked on the signal stream, and the join is what orders the
+    /// escalation before Batten's own exit — a supervisor that reported the
+    /// teardown and then left it half-done would be the bug wearing the fix's
+    /// clothes.
+    fn finish(self) -> Option<i32> {
+        use std::sync::atomic::Ordering;
+
+        let active = self.active?;
+        active.handle.close();
+        // A worker that panicked has still recorded what it saw before it could,
+        // and a panic on the way out is not worth failing a completed command for.
+        drop(active.worker.join());
+        match active.received.load(Ordering::SeqCst) {
+            0 => None,
+            signal => Some(signal),
+        }
+    }
+}
+
+/// [`Forwarding`] where there are no signals to forward.
+#[cfg(not(unix))]
+struct Forwarding;
+
+#[cfg(not(unix))]
+impl Forwarding {
+    /// Always inactive: [`GroupDecision::observe`] never groups here.
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "one signature across both platforms; the unix half genuinely fails"
+    )]
+    fn install(_decision: GroupDecision, _child_pid: u32) -> Result<Self> {
+        Ok(Self)
+    }
+
+    /// Nothing was forwarded, so nothing outranks the child's own status.
+    const fn finish(self) -> Option<i32> {
+        None
     }
 }
 
@@ -154,7 +666,7 @@ pub enum Mode {
 /// [`ExitCode::Violation`] of its own accord; a `2` from this verb came from the
 /// child.
 pub fn run(command: &[String]) -> Result<ExitCode> {
-    run_with(command, &[], Mode::Tee, &mut std::io::sink())
+    run_with(command, &[], Mode::Tee, &ExecConfig::DEFAULT, &mut std::io::sink())
 }
 
 /// [`run`], with the output predicates to apply and where to report a hit.
@@ -166,6 +678,7 @@ pub fn run_with(
     command: &[String],
     patterns: &[OutputPattern],
     mode: Mode,
+    settings: &ExecConfig,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
     // The repository root, not the cwd: `state::derive_repo_name` needs a real
@@ -174,7 +687,7 @@ pub fn run_with(
     // also means a capture taken from a subdirectory lands in the same store as one
     // taken from the top, which is what makes a handle portable within a checkout.
     let root = crate::git::repo_root(Path::new("."))?;
-    run_in_with(&root, command, patterns, mode, report)
+    run_in_with(&root, command, patterns, mode, settings, report)
 }
 
 /// [`run`], with the repository root the capture is stored under.
@@ -183,7 +696,14 @@ pub fn run_with(
 ///
 /// As [`run`].
 pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
-    run_in_with(repo_root, command, &[], Mode::Tee, &mut std::io::sink())
+    run_in_with(
+        repo_root,
+        command,
+        &[],
+        Mode::Tee,
+        &ExecConfig::DEFAULT,
+        &mut std::io::sink(),
+    )
 }
 
 /// [`run_in`], with the output predicates to apply and where to report a hit.
@@ -196,6 +716,7 @@ pub fn run_in_with(
     command: &[String],
     patterns: &[OutputPattern],
     mode: Mode,
+    settings: &ExecConfig,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
     let Some((program, args)) = command.split_first() else {
@@ -213,13 +734,20 @@ pub fn run_in_with(
     // find, and a shell script it will not read a `#!` for. `.` is the directory
     // this spawn resolves a relative name against, since it inherits the working
     // directory rather than setting one.
+    //
+    // ONE OBSERVATION, READ TWICE (CLOUD-427). Computed here and carried as a
+    // value to the teardown below; see `GroupDecision` for why re-asking is the
+    // bug rather than the tidier spelling.
+    let decision = GroupDecision::observe(settings.manage_process_group);
     let spawned = crate::rules::spawn_resolving(Some(Path::new(".")), program, |program, extra| {
-        Command::new(OsString::from(program))
+        let mut builder = Command::new(OsString::from(program));
+        builder
             .args(extra.iter().map(OsString::from))
             .args(args.iter().map(OsString::from))
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        group_at_spawn(&mut builder, decision);
+        builder.spawn()
     });
 
     let mut child = match spawned {
@@ -257,18 +785,23 @@ pub fn run_in_with(
 
     // One thread per pipe. See the module docs: draining them in sequence
     // deadlocks as soon as a child fills the one not being read.
-    let out_worker = std::thread::spawn(move || tee(out_pipe, out_sink));
-    let err_worker = std::thread::spawn(move || tee(err_pipe, err_sink));
+    let out_drain = Drain::spawn(out_pipe, out_sink);
+    let err_drain = Drain::spawn(err_pipe, err_sink);
+
+    // Forwarding is installed only for a group Batten owns, so an invocation
+    // with the opt-in off has the dispositions it has always had.
+    let forwarding = Forwarding::install(decision, child.id())?;
+    let record = GroupRecord::write(repo_root, decision, child.id())?;
 
     let status = child.wait().context("wait for the wrapped command")?;
-    let out_bytes = out_worker
-        .join()
-        .map_err(|_| anyhow::anyhow!("exec: the stdout tee panicked"))?
-        .context("tee the wrapped command's stdout")?;
-    let err_bytes = err_worker
-        .join()
-        .map_err(|_| anyhow::anyhow!("exec: the stderr tee panicked"))?
-        .context("tee the wrapped command's stderr")?;
+    let received = forwarding.finish();
+    record.clear();
+
+    // Deadline-bounded (see the module docs). A grandchild that inherited the
+    // write end keeps the pipe open past the child's own death, and a bare
+    // `join()` on that is a hang with no upper bound.
+    let out_bytes = out_drain.collect(Stream::Stdout, report)?;
+    let err_bytes = err_drain.collect(Stream::Stderr, report)?;
 
     // Both streams are stored, including an empty one: zero bytes is the real
     // answer "the command said nothing", and it must be distinguishable from a run
@@ -294,7 +827,14 @@ pub fn run_in_with(
         }
     }
 
-    let code = status.code().unwrap_or_else(|| signal_code(status));
+    // A signal Batten was SENT outranks whatever the child died of. A child that
+    // ignored TERM and fell to the escalated KILL must not report `137` to a
+    // caller that sent `15` — the caller's question is what happened to the
+    // command it asked for, and the answer is "the signal you sent stopped it".
+    let code = match received {
+        Some(signal) => 128 + signal,
+        None => status.code().unwrap_or_else(|| signal_code(status)),
+    };
     if code != 0 {
         // Batten only ever ADDS failure (CLOUD-117). A child that already failed
         // needs no promotion, and re-deciding a failure Batten did not diagnose
@@ -394,6 +934,210 @@ mod tests {
             128 + 15,
             "the shell's own 128 + signal convention"
         );
+    }
+
+    // --- process-group ownership (CLOUD-427) --------------------------------
+
+    #[test]
+    fn the_opt_in_defaults_off_so_the_topology_is_unchanged() {
+        // The acceptance clause a consumer feels: with nothing declared, `exec`
+        // makes no group, installs no disposition and writes no record. Asserted
+        // over the default value rather than over an absent config key, because
+        // both `run`/`run_in` and an empty `[exec]` table land here.
+        const { assert!(!ExecConfig::DEFAULT.manage_process_group) };
+        assert_eq!(ExecConfig::default(), ExecConfig::DEFAULT);
+        assert!(!GroupDecision::decide(false, false, false).groups());
+    }
+
+    #[test]
+    fn each_decline_rule_refuses_on_its_own() {
+        // mise's two, plus Batten's declaration. Every rule is asserted to be
+        // individually sufficient to decline: a predicate that only refuses when
+        // several hold at once would pass an "all three off" case and still leak.
+        assert!(
+            GroupDecision::decide(true, false, false).groups(),
+            "opt-in, no ancestor managing, not the session leader: Batten owns it"
+        );
+        assert!(
+            !GroupDecision::decide(true, true, false).groups(),
+            "MISE_TASK_PGID_MANAGED means an ancestor already manages the group"
+        );
+        assert!(
+            !GroupDecision::decide(true, false, true).groups(),
+            "a session leader manages nothing an ancestor was not already placed to"
+        );
+        assert!(
+            !GroupDecision::decide(false, false, false).groups(),
+            "the residual case is declared, never inferred — off means off"
+        );
+    }
+
+    #[test]
+    fn the_decision_is_observed_exactly_once_per_run() {
+        // "Computed once and read again" is the property, and it is structural
+        // rather than behavioural: two observations could disagree (a `setsid`
+        // in between, an inherited marker) and the failure is silent — only the
+        // direct pid gets the signal, and the grandchildren leak. So the source
+        // is asserted to contain exactly one observation, in the run body, with
+        // every later reader taking the value.
+        // Counted over the module's own code, never over this file whole: the
+        // needle appears in this very assertion, and a test that counts itself
+        // reports a number nobody can reason about.
+        let source = include_str!("exec.rs");
+        let shipped = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the module has code before its tests");
+        let observations = shipped.matches("GroupDecision::observe(").count();
+        assert_eq!(
+            observations, 1,
+            "expected exactly one observation, in `run_in_with`. A second call \
+             site means the spawn and the teardown can disagree, which is \
+             CLOUD-427's own bug."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_marker_batten_reads_is_the_marker_mise_writes() {
+        // A protocol token shared with another tool. Spelling it differently
+        // would not be a rename, it would be a silent opt-out: Batten would stop
+        // seeing mise's marker and mise would stop seeing Batten's, and both ends
+        // would group.
+        assert_eq!(TASK_PGID_MANAGED_ENV, "MISE_TASK_PGID_MANAGED");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grouping_always_propagates_the_marker() {
+        // Without the propagation, grouping is strictly worse than not grouping:
+        // a nested mise groups again under Batten's group, so Batten's `killpg`
+        // reaches mise and not the leaves. Asserted on the builder rather than on
+        // a live child, because `process_group` has no getter — what is checkable
+        // is that the two are set by one function and cannot be separated.
+        let source = include_str!("exec.rs");
+        let body = source
+            .split("fn group_at_spawn(builder: &mut Command, decision: GroupDecision) {")
+            .nth(1)
+            .expect("the unix grouping function is declared here");
+        let body = &body[..body.find("\n}").expect("the function closes")];
+        assert!(body.contains(".process_group(0)"), "it must make the group");
+        assert!(
+            body.contains(".env(TASK_PGID_MANAGED_ENV"),
+            "and it must tell a nested manager to stand down, in the same call"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_the_four_job_control_signals_are_forwarded() {
+        // KILL is absent because it cannot be caught — that case is recordable,
+        // never preventable — and USR1/USR2 are absent because they mean whatever
+        // a consumer's tooling has agreed they mean.
+        assert_eq!(
+            FORWARDED,
+            [
+                signal_hook::consts::SIGHUP,
+                signal_hook::consts::SIGINT,
+                signal_hook::consts::SIGQUIT,
+                signal_hook::consts::SIGTERM,
+            ]
+        );
+        assert!(!FORWARDED.contains(&signal_hook::consts::SIGKILL));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unmanaged_run_installs_nothing_and_records_nothing() {
+        let decision = GroupDecision::decide(false, false, false);
+        let forwarding =
+            Forwarding::install(decision, std::process::id()).expect("no forwarder to install");
+        assert_eq!(
+            forwarding.finish(),
+            None,
+            "nothing was forwarded, so the child's own status is the answer"
+        );
+
+        // A path that does not exist, on purpose: an unmanaged run must not so
+        // much as resolve the state directory, and this case fails loudly if it
+        // starts to.
+        let record = GroupRecord::write(Path::new("/batten-no-such-repo"), decision, 4242)
+            .expect("an unmanaged run writes no record");
+        assert!(record.path.is_none());
+    }
+
+    #[test]
+    fn the_drain_reports_what_arrived_when_the_pipe_never_closes() {
+        // The live hang CLOUD-162 introduced and this issue bounds: EOF arrives
+        // when the LAST holder of the write end closes it, which is not the
+        // moment the child is reaped. Modelled with a reader that never sees EOF
+        // — the case cannot pass at all without the deadline, because a bare
+        // `join()` on this shape does not return.
+        struct NeverEnds {
+            /// One chunk, then silence forever.
+            spoken: bool,
+        }
+        impl Read for NeverEnds {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if self.spoken {
+                    std::thread::sleep(Duration::from_hours(1));
+                    return Ok(0);
+                }
+                self.spoken = true;
+                let said = b"partial";
+                buf.get_mut(..said.len())
+                    .ok_or_else(|| std::io::Error::other("buffer too small"))?
+                    .copy_from_slice(said);
+                Ok(said.len())
+            }
+        }
+
+        let drain = Drain::spawn(NeverEnds { spoken: false }, std::io::sink());
+        // Wait for the one chunk to land, so the case asserts "kept what arrived"
+        // rather than accidentally asserting "gave up before anything did".
+        while drain.seen.lock().map_or(true, |held| held.is_empty()) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut report = Vec::new();
+        let bytes = drain
+            .collect_within(Duration::from_millis(200), Stream::Stdout, &mut report)
+            .expect("a drain that timed out is not a failed command");
+        assert_eq!(
+            bytes, b"partial",
+            "the bytes that did arrive are still stored"
+        );
+        let said = String::from_utf8(report).expect("the report is text");
+        assert!(
+            said.contains("did not reach EOF") && said.contains("7 byte(s)"),
+            "a truncated capture must say so, as a count: {said}"
+        );
+        assert!(
+            !said.contains("partial"),
+            "pointer-only (rule 4): the notice names a count, never the bytes"
+        );
+    }
+
+    #[test]
+    fn a_drain_that_reaches_eof_reports_nothing_at_all() {
+        // The other half, and the one that runs on every ordinary command: no
+        // notice on the happy path, or `exec` would be writing on a channel it
+        // promises is the child's.
+        let drain = Drain::spawn(&b"hello"[..], std::io::sink());
+        let mut report = Vec::new();
+        let bytes = drain
+            .collect(Stream::Stdout, &mut report)
+            .expect("clean EOF");
+        assert_eq!(bytes, b"hello");
+        assert!(report.is_empty(), "the happy path emits nothing");
+    }
+
+    #[test]
+    fn the_drain_deadline_is_long_enough_to_be_about_a_leak() {
+        // A deadline short enough to fire on a slow-but-healthy command would
+        // truncate real captures, which is a false negative in every gate reading
+        // the store. Ten seconds after the child is already reaped is a leak.
+        assert!(PIPE_DRAIN_TIMEOUT >= Duration::from_secs(10));
+        assert!(GROUP_GRACE >= Duration::from_secs(5));
     }
 
     #[test]

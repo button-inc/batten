@@ -233,6 +233,11 @@ pub struct Resolved {
     /// committed rule is refused rather than merged — see [`merge_local_waivers`].
     #[serde(rename = "waiver")]
     pub waivers: Vec<crate::waiver::Waiver>,
+    /// How `batten exec` owns what it dispatched (CLOUD-427), as the authority
+    /// states it. Not layered: an uncommitted file may not change the shape of a
+    /// process tree an orchestrator two levels up is built against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exec: Option<crate::exec::ExecConfig>,
     /// The declared thresholds (CLOUD-50), as the authority states them. Not
     /// layered: a budget is a bar this repository sets for itself, and there is
     /// no raise-only reading of "tighten a threshold" that a local file could
@@ -936,6 +941,7 @@ fn assemble(
         epoch: repo.epoch.clone(),
         verbs: repo.verbs.clone(),
         markers: repo.markers.clone(),
+        exec: repo.exec,
         exec_patterns: tables.exec_patterns,
         waivers: tables.waivers,
         budget: repo.budget.clone(),
@@ -994,6 +1000,7 @@ fn attribution(
             "exec_pattern",
             authority_set(!repo.exec_patterns.is_empty()),
         ),
+        ("exec", authority_set(repo.exec.is_some())),
         ("waiver", authority_set(!repo.waivers.is_empty())),
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),

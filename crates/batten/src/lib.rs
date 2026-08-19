@@ -1033,13 +1033,13 @@ fn run_exec(
     overrides: &Overrides,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    let patterns = load_exec_patterns(overrides)?;
+    let (patterns, settings) = load_exec_settings(overrides)?;
     let mode = if capture_only {
         exec::Mode::CaptureOnly
     } else {
         exec::Mode::Tee
     };
-    exec::run_with(command, &patterns, mode, err)
+    exec::run_with(command, &patterns, mode, &settings, err)
 }
 
 /// Navigate a frozen capture (CLOUD-121).
@@ -2100,12 +2100,19 @@ fn load_policy(overrides: &Overrides) -> Result<(hook::Policy, Vec<waiver::Waive
 /// An authority that exists and **cannot be read** propagates. A pattern table
 /// nobody could parse is a gate that silently did not run, which is the false
 /// green this predicate exists to prevent.
-fn load_exec_patterns(overrides: &Overrides) -> Result<Vec<outputs::OutputPattern>> {
+fn load_exec_settings(
+    overrides: &Overrides,
+) -> Result<(Vec<outputs::OutputPattern>, exec::ExecConfig)> {
     let here = Path::new(".");
     if !here.join(config::CONFIG_FILE).exists() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), exec::ExecConfig::DEFAULT));
     }
-    Ok(resolve::resolve(here, overrides)?.exec_patterns)
+    // One resolve for both, because they are one question — what this repository
+    // declared about wrapped commands. Two calls would read the authority twice
+    // and could, on a file rewritten in between, answer from two different epochs.
+    let config = resolve::resolve(here, overrides)?;
+    let settings = config.exec.unwrap_or(exec::ExecConfig::DEFAULT);
+    Ok((config.exec_patterns, settings))
 }
 
 /// Everything the boundary looked up because [`hook::adjudicate`] cannot.

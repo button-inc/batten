@@ -91,6 +91,25 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend"] 
 # foreground kill would otherwise strand a lockfile and brick the store
 # repo-wide.
 fs4 = "1.1"
+# The two halves of owning a dispatched process tree (CLOUD-427), and they are
+# two crates because no one crate offers both halves safely.
+#
+# `rustix` asks and tells: `getsid`/`getpid` decide whether Batten is the session
+# leader, and `kill_process_group` is the teardown. Already in the tree
+# transitively under `fs4` above, so the direct declaration vendors nothing new —
+# it only stops the version being decided by a transitive edge. `process` is the
+# one feature this needs; the default `std`/`use-libc-auxv` come with it.
+rustix = { version = "1.1", features = ["process"] }
+# `signal-hook` receives. Installing a disposition is `sigaction(2)`, which
+# `unsafe_code = "forbid"` puts out of reach, and rustix's own spelling lives
+# behind its private `runtime` feature — so a safe registry is not a convenience
+# here, it is the only route. `iterator` is the blocking `Signals` stream a
+# dedicated forwarding thread reads; the default `channel` feature underneath it
+# is what makes the delivery async-signal-safe, which a hand-written handler
+# writing to a `Vec` would not be. mise's supervisor reaches for the same crate
+# for the same reason, so the two ends of the pgroup protocol are implemented
+# against one set of semantics (CLOUD-455 is the prior-art gate).
+signal-hook = { version = "0.4", default-features = false, features = ["iterator"] }
 # The tree walk (CLOUD-214), adopted rather than rebuilt. ripgrep's own walker,
 # so gitignore semantics are the ones every contributor already has in their
 # head — and, measured on this repository after one `cargo build`, 8891 of the

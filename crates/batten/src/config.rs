@@ -174,6 +174,14 @@ pub struct Config {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub exec_patterns: Vec<crate::outputs::OutputPattern>,
+    /// How `batten exec` owns what it dispatched (CLOUD-427). Absent means the
+    /// defaults, and the default is today's behaviour: Batten makes no process
+    /// group. Authority-only by omission from [`OverrideConfig`] — an uncommitted
+    /// file may not decide that a dispatched tree changes shape, because an
+    /// orchestrator two levels up is built against the shape the repository
+    /// declared. The type and the predicate are [`crate::exec`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exec: Option<crate::exec::ExecConfig>,
     /// The suppression markers to count (CLOUD-36). Which comment shape waves
     /// a rule through is a property of the repository being gated, never of
     /// Batten; the type and the counting are [`crate::markers`].
@@ -643,6 +651,7 @@ impl Config {
             epoch: None,
             verbs: Vec::new(),
             markers: Vec::new(),
+            exec: None,
             exec_patterns: Vec::new(),
             waivers: Vec::new(),
             // An authority that declares no budget grants no exemption from one

@@ -92,6 +92,17 @@
         }
       ]
     },
+    "exec": {
+      "description": "How `batten exec` owns what it dispatched (CLOUD-427). Absent means the\ndefaults, and the default is today's behaviour: Batten makes no process\ngroup. Authority-only by omission from [`OverrideConfig`] — an uncommitted\nfile may not decide that a dispatched tree changes shape, because an\norchestrator two levels up is built against the shape the repository\ndeclared. The type and the predicate are [`crate::exec`].",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExecConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "exec_pattern": {
       "description": "Output predicates over a wrapped command's captured streams (CLOUD-117):\nliterals that, found in `batten exec`'s output, promote a lying exit `0`\nto a violation. Consumer-specific by nature — which warning means\nnot-actually-done is a property of the tools a repository runs — so it\nlives here and never in the crate (non-negotiable rule 1). The type and\nthe predicate are [`crate::outputs`].",
       "type": "array",
@@ -589,6 +600,18 @@
           "items": {
             "type": "string"
           }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ExecConfig": {
+      "description": "The `[exec]` table: how `batten exec` owns what it dispatched.\n\nOne key today, and it is an opt-in rather than a tuning knob. `false` is not\na conservative default chosen for taste — it is the *only* value that leaves\nthe process topology byte-for-byte what it was, which is what an existing\nconsumer's orchestrator is already built against.",
+      "type": "object",
+      "properties": {
+        "manage_process_group": {
+          "description": "Whether Batten may put a dispatched command in its own process group and\ntake responsibility for tearing that group down.\n\nDeclared rather than inferred, because the residual case is not\nobservable: an orchestrator two levels up intending to `kill(-pgid)` looks\nexactly like one that is not. Even when this is `true`, Batten still\ndeclines whenever mise's own two rules say an ancestor is already\nmanaging — see [`GroupDecision`].",
+          "type": "boolean",
+          "default": false
         }
       },
       "additionalProperties": false

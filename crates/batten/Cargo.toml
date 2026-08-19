@@ -70,6 +70,15 @@ toml.workspace = true
 unicode-normalization.workspace = true
 yaml-rust2.workspace = true
 
+# Process-group ownership for `batten exec` (CLOUD-427). Unix-only rather than
+# in the table above because the whole mechanism is: `setpgid`, the four
+# forwarded signals and `killpg` have no Windows analogue, and `exec.rs` gates
+# every use of them on `cfg(unix)`. A Windows build therefore links neither
+# crate, which is what keeps the topology there exactly what it is today.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+signal-hook.workspace = true
+
 [dev-dependencies]
 # Only what the *tests* need and the crate itself does not. A normal dependency
 # is already in scope for every test target, so re-listing one here declares
