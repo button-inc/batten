@@ -3228,8 +3228,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
             "printf 'census\n'",
         ])
         .current_dir(&repo)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
+        .state_home(&home)
         .output()
         .expect("seed a capture");
     assert_eq!(
@@ -3240,8 +3239,7 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     let listed = batten()
         .args(["capture", "list", "--stream", "stdout"])
         .current_dir(&repo)
-        .env("HOME", &home)
-        .env("XDG_DATA_HOME", home.join("data"))
+        .state_home(&home)
         .output()
         .expect("list the census capture");
     let handle = stdout(&listed)
@@ -7886,8 +7884,7 @@ fn run_counted(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) ->
         .args(args)
         .args(["--", "sh", "-c", &script])
         .current_dir(repo)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
+        .state_home(home)
         .env_remove("BATTEN_FAIL_ON_WARNING")
         .output()
         .expect("run batten exec")
@@ -7906,8 +7903,7 @@ fn run_capture(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) ->
         .arg("capture")
         .args(args)
         .current_dir(repo)
-        .env("HOME", home)
-        .env("XDG_DATA_HOME", home.join("data"))
+        .state_home(home)
         .output()
         .expect("run batten capture")
 }
