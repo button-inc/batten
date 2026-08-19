@@ -11,10 +11,27 @@
 setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mcp-timeout-budget"
 	S="$BATS_TEST_TMPDIR/settings.json"
+	LOGS="$BATS_TEST_TMPDIR/logs"
 }
 
 declare_timeout() { # declare_timeout <value>
 	jq -n --arg v "$1" '{env: {MCP_TIMEOUT: $v}, hooks: {}}' >"$S"
+}
+
+# A settings file that also enables a server, so the effect half has something
+# to look for. The declaration half ignores this key entirely, which is why the
+# rows above can keep using the simpler writer.
+declare_with_server() { # declare_with_server <value> <server>
+	jq -n --arg v "$1" --arg s "$2" \
+		'{env: {MCP_TIMEOUT: $v}, enabledMcpjsonServers: [$s], hooks: {}}' >"$S"
+}
+
+# One connection log, named the way the CLI names them: the UTC start instant,
+# whose lexicographic order is its chronological one.
+log_connection() { # log_connection <server> <observed-ms> [stamp]
+	local dir="$LOGS/mcp-logs-$1" stamp="${3:-2026-08-19T14-28-33-648Z}"
+	mkdir -p "$dir"
+	printf '{"debug":"Starting connection with timeout of %sms"}\n' "$2" >"$dir/$stamp.jsonl"
 }
 
 @test "the committed budget passes" {
@@ -28,17 +45,17 @@ declare_timeout() { # declare_timeout <value>
 	run "$GATE" --settings "$S"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"30000"* ]]
-	[[ "$output" == *"60000"* ]]
+	[[ "$output" == *"105000"* ]]
 }
 
 @test "exactly the floor passes — the bound is inclusive" {
-	declare_timeout 60000
+	declare_timeout 105000
 	run "$GATE" --settings "$S"
 	[ "$status" -eq 0 ]
 }
 
 @test "one millisecond under the floor is refused" {
-	declare_timeout 59999
+	declare_timeout 104999
 	run "$GATE" --settings "$S"
 	[ "$status" -eq 1 ]
 }
@@ -90,5 +107,90 @@ declare_timeout() { # declare_timeout <value>
 
 @test "--settings with an empty value is refused rather than silently defaulted" {
 	run timeout 10s "$GATE" --settings ""
+	[ "$status" -eq 2 ]
+}
+
+# --- the effect half (CLOUD-700) ---------------------------------------------
+#
+# The declaration passed for ten sessions while the client used the host default,
+# so these rows are the ones that decide whether this gate measures anything. The
+# `declaration-without-effect` mutation removes exactly this half.
+
+@test "a budget the client actually used passes, and says it is in force" {
+	declare_with_server 120000 serena
+	log_connection serena 120000
+	run "$GATE" --settings "$S" --logs "$LOGS"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"in force"* ]]
+}
+
+@test "an observed budget below the declared one is refused" {
+	# THE CASE THAT WAS SILENT: declared high, client used the host default.
+	# Recorded sessions looked exactly like this and nothing fired, because the
+	# only check was over the settings file.
+	declare_with_server 120000 serena
+	log_connection serena 30000
+	run "$GATE" --settings "$S" --logs "$LOGS"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"30000"* ]]
+	[[ "$output" == *"120000"* ]]
+	[[ "$output" == *"host ignored"* ]]
+}
+
+@test "the refusal names both numbers and no log line" {
+	declare_with_server 120000 serena
+	local dir="$LOGS/mcp-logs-serena"
+	mkdir -p "$dir"
+	printf '{"debug":"Starting connection with timeout of 30000ms"}\n{"debug":"Server stderr: SENTINEL-9f3a"}\n' \
+		>"$dir/2026-08-19T14-28-33-648Z.jsonl"
+	run "$GATE" --settings "$S" --logs "$LOGS"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"SENTINEL"* ]]
+}
+
+@test "an absent log tree is not a live session, so the declaration is all there is" {
+	declare_with_server 120000 serena
+	run "$GATE" --settings "$S" --logs "$BATS_TEST_TMPDIR/nowhere"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"not a live session"* ]]
+}
+
+@test "a live tree whose log records no budget is exit 2, never a pass" {
+	declare_with_server 120000 serena
+	local dir="$LOGS/mcp-logs-serena"
+	mkdir -p "$dir"
+	printf '{"debug":"something else entirely"}\n' >"$dir/2026-08-19T14-28-33-648Z.jsonl"
+	run "$GATE" --settings "$S" --logs "$LOGS"
+	[ "$status" -eq 2 ]
+}
+
+@test "the NEWEST log decides, so a stale passing attempt cannot vouch for this one" {
+	declare_with_server 120000 serena
+	log_connection serena 120000 2026-08-19T09-00-00-000Z
+	log_connection serena 30000 2026-08-19T14-28-33-648Z
+	run "$GATE" --settings "$S" --logs "$LOGS"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"30000"* ]]
+}
+
+@test "a server enabled but never logged is not judged — absence is not a low budget" {
+	declare_with_server 120000 serena
+	mkdir -p "$LOGS"
+	run "$GATE" --settings "$S" --logs "$LOGS"
+	[ "$status" -eq 0 ]
+}
+
+@test "an observed budget ABOVE the declared one is not a refusal" {
+	# The comparison is one-sided on purpose: the declaration is a floor on what
+	# the client must allow, not a ceiling on what the host may be generous with.
+	declare_with_server 120000 serena
+	log_connection serena 300000
+	run "$GATE" --settings "$S" --logs "$LOGS"
+	[ "$status" -eq 0 ]
+}
+
+@test "--logs with no value is refused, and does not hang" {
+	declare_timeout 120000
+	run "$GATE" --settings "$S" --logs
 	[ "$status" -eq 2 ]
 }
