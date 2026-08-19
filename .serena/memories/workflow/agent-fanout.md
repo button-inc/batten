@@ -243,24 +243,36 @@ invisible until they bite:
   and it works on from there. It is only a defect for work nobody intends to
   approve, which then stalls forever. Pass it explicitly so the intent is legible.
 
-  **Both halves are false. Superseded 2026-08-18 (CLOUD-672).** `create_session`
-  inherits the **caller's** mode — the tool contract says "omit to inherit it" —
-  and dispatchers on this account run `auto`: two children dispatched with no
-  `permission_mode` came up `PERMISSION_MODE_AUTO`, not plan. The 2026-08-11
-  reading was taken from a dispatcher already in plan mode, so it measured
-  inheritance and recorded it as an environment property. The "only a defect for
-  work nobody intends to approve" bound is the normal case, not the edge: one
-  child parked **91 minutes** on `AskUserQuestion` — not `ExitPlanMode` — for
-  zero commits, branches or PRs, and the same ticket re-dispatched without the
+  **Both halves are false. Superseded 2026-08-18 (CLOUD-672).** The 2026-08-11
+  reading was taken from a dispatcher already in plan mode, so it measured one
+  case and recorded it as an environment property. The "only a defect for work
+  nobody intends to approve" bound is the normal case, not the edge: one child
+  parked **91 minutes** on `AskUserQuestion` — not `ExitPlanMode` — for zero
+  commits, branches or PRs, and the same ticket re-dispatched without the
   parameter reached a draft PR. Plan mode does not add one gate at the end; it
   raises the child's propensity to hand control back at all.
 
-  **The criterion is a property of the DISPATCH, not the ticket:** pass it when a
-  human is standing by to approve, omit it when the dispatch is fire-and-forget.
-  The same bundle takes opposite answers — plan mode was _correct_ for the five
+  **The criterion is a property of the DISPATCH, not the ticket, and for an
+  interactively-driven fan-out it resolves to `plan`.** Someone steering a
+  campaign is standing by by construction, and the approval prompt is the
+  cheapest review point there is — before any tokens are spent building, where a
+  review of the finished branch is after. Plan mode was _correct_ for the five
   CLOUD-607 BUNDLE children on 2026-08-14, all of which reached `review_ready`
-  with the owner approving in the web UI. That is the criterion working, not an
-  exception to it.
+  with the owner approving in the web UI. `default`/`auto` is for a dispatch
+  nobody is watching, and "the dispatcher would rather not wait" is not that.
+
+  **CLOUD-672's own replacement claim was false too, and it is the one to stop
+  re-typing: the mode is NOT inherited.** Measured 2026-08-19, one account, one
+  environment, over CLOUD-703's six bundles — dispatcher `auto` + omitted came up
+  `default`; dispatcher `plan` + `auto` was **refused at the call** ("requires the
+  parent session to be in auto mode"); dispatcher `plan` + `default` came up
+  `plan`. No single rule fits all three: omission does not inherit, and a value
+  below the caller's is not honoured either. The reachable set is bounded by the
+  dispatcher's mode at the moment of the call, which drifts as plan mode is
+  entered and left. So name the parameter, **read the child's mode back**, and
+  dispatch from the mode you want the children to run in. The cost of omitting
+  it: five wave-1 bundles came up `default` and ran to landed without their plans
+  ever reaching the owner supervising the campaign (CLOUD-728).
 
   **Unmeasured, so do not lean on "works on from there":** one child declined a
   write at end-of-session citing plan mode, hours after its plan was approved.

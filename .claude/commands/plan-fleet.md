@@ -103,18 +103,38 @@ tags `["batten-bundle", "ready-queue-<YYYY-MM-DD>"]`,
 and a title of the form `BUNDLE <domain> — CLOUD-<a> → CLOUD-<b>`.
 
 **Whether to pass `permission_mode: "plan"` is a property of the DISPATCH, not
-of the bundle.** Pass it when a human is standing by to approve in the web UI;
-omit it when the dispatch is fire-and-forget. The same bundle takes opposite
-answers depending on which is true, so the choice is made per dispatch and not
-once per ticket.
+of the bundle.** The same bundle takes opposite answers depending on whether a
+human is standing by, so the choice is made per dispatch and not once per
+ticket — and for an interactively-driven fan-out the answer is `plan`. Someone
+steering a campaign is standing by by construction, and the approval prompt is
+the cheapest review point there is: it arrives before any tokens are spent
+building, where a review of the finished branch arrives after. Reach for
+`default` or `auto` only when the dispatch is genuinely unattended — nobody
+watching, nobody to approve — and not because waiting on an approval is
+inconvenient. Unattended, plan mode is no free extra gate: one child parked 91
+minutes on `AskUserQuestion` for no commit, branch or PR.
 
-It is **not** a default, and **not** this environment's: `create_session`
-inherits the caller's mode, and dispatchers here run `auto`, so omitting it
-yields `PERMISSION_MODE_AUTO`. Unattended, plan mode is not a free extra gate —
-one child parked 91 minutes on `AskUserQuestion` for no commit, branch or PR.
-Attended it is the cheapest review point there is: the five CLOUD-607 bundles
-dispatched in plan mode with the owner approving all reached `review_ready`.
-Reasoning in `mem:workflow/agent-fanout`; measurements on CLOUD-672.
+**Name the mode explicitly. It is not inherited, and passing a value does not
+guarantee getting it.** Measured 2026-08-19, one account, one environment,
+dispatching CLOUD-703's six bundles:
+
+| dispatcher mode | passed    | child came up                                                          |
+| --------------- | --------- | ---------------------------------------------------------------------- |
+| `auto`          | omitted   | `default`                                                              |
+| `plan`          | `auto`    | refused at the call — "requires the parent session to be in auto mode" |
+| `plan`          | `default` | `plan`                                                                 |
+
+No single rule fits all three rows. Omission does not inherit the caller's mode
+(row 1), and a value below the caller's is not honoured either (row 3) — so the
+reachable set is bounded by the dispatcher's own mode at the moment of the call,
+which drifts as plan mode is entered and left. **Read the child's mode back
+after the call** rather than assuming the parameter took, and dispatch from the
+mode you want the children to run in. Omitting it cost exactly this: five wave-1
+bundles came up `default` and ran to landed without their plans ever reaching
+the owner supervising the campaign.
+
+Reasoning in `mem:workflow/agent-fanout`; measurements on CLOUD-672 and
+CLOUD-728.
 
 Reasoning effort is **not** a `create_session` parameter; children inherit the
 dispatching session's. Dispatch from a session at the effort you want.
