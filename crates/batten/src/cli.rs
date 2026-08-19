@@ -80,6 +80,14 @@ pub enum Command {
     Exec {
         /// The command and its arguments, exactly as the caller wrote them.
         command: Vec<String>,
+        /// Store the child's streams and report their handles instead of
+        /// passing the bytes through. Opt-in: transparency is the default.
+        capture_only: bool,
+    },
+    /// Captured command output, and the verbs that navigate it.
+    Capture {
+        /// The chosen sub-verb.
+        command: CaptureCommand,
     },
     /// Adjudicate a mediated tool call read from stdin.
     Hook {
@@ -279,6 +287,37 @@ pub enum AttributionCommand {
     },
     /// Set this clone's repo-local git identity when it is unset or denied.
     Identity,
+}
+
+/// Subcommands of `capture` (CLOUD-121).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CaptureCommand {
+    /// Read a frozen capture, with no second run of the command that made it.
+    Show {
+        /// The `<stream>:<digest>` handle to read.
+        handle: String,
+        /// A 1-indexed inclusive `FROM:TO` window, clamped to the capture.
+        lines: Option<String>,
+        /// A case-sensitive literal substring; only lines containing it.
+        grep: Option<String>,
+        /// Emit the selection as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
+    /// List this repository's captures as handles.
+    List {
+        /// Only captures of this stream.
+        stream: Option<String>,
+        /// Emit the listing as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
+    /// Remove this repository's captures. The one removal path.
+    Prune {
+        /// The global `-y --yes`, which this verb requires: it never prompts.
+        yes: bool,
+        /// Report what would be removed and remove nothing.
+        dry_run: bool,
+    },
 }
 
 /// Subcommands of `state`.
@@ -594,6 +633,31 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
     }
 }
 
+/// The positionals and selectors differ per sub-verb, so each is read inside its
+/// own arm — the shape [`state_of`] uses.
+fn capture_of(matches: &ArgMatches) -> Option<CaptureCommand> {
+    match matches.subcommand()? {
+        ("show", matches) => Some(CaptureCommand::Show {
+            // Required by the surface, so clap has already refused an argv
+            // without it; `None` here would be unreachable and is mapped to a
+            // refusal rather than a default handle nobody named.
+            handle: matches.get_one::<String>("handle").cloned()?,
+            lines: matches.get_one::<String>("lines").cloned(),
+            grep: matches.get_one::<String>("grep").cloned(),
+            json: flag(matches, "json"),
+        }),
+        ("list", matches) => Some(CaptureCommand::List {
+            stream: matches.get_one::<String>("stream").cloned(),
+            json: flag(matches, "json"),
+        }),
+        ("prune", matches) => Some(CaptureCommand::Prune {
+            yes: flag(matches, "yes"),
+            dry_run: flag(matches, "dry_run"),
+        }),
+        _ => None,
+    }
+}
+
 /// Unlike [`receipt_of`], the positional is optional and belongs to one
 /// sub-verb, so it is read inside the arm rather than ahead of the match.
 fn state_of(matches: &ArgMatches) -> Option<StateCommand> {
@@ -652,9 +716,13 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
             if command.is_empty() {
                 None
             } else {
-                Some(Command::Exec { command })
+                Some(Command::Exec {
+                    command,
+                    capture_only: flag(matches, "capture_only"),
+                })
             }
         }
+        "capture" => capture_of(matches).map(|command| Command::Capture { command }),
         "hook" => matches
             .get_one::<Harness>("harness")
             .map(|harness| Command::Hook { harness: *harness }),

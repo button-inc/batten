@@ -157,13 +157,24 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // (CLOUD-117) — and renders no verdict of its own beyond them. An
         // unreadable authority is still a usage error here: a pattern table nobody
         // could read is a gate that silently did not run.
-        Some(Command::Exec { command }) => {
+        Some(Command::Exec {
+            command,
+            capture_only,
+        }) => {
             let patterns = load_exec_patterns(&overrides)?;
+            let exec_mode = if capture_only {
+                exec::Mode::CaptureOnly
+            } else {
+                exec::Mode::Tee
+            };
             // The report goes to the ERROR channel, never `out`: stdout belongs to
             // the wrapped command (CLOUD-285), so a pointer line there would
-            // corrupt a document the caller may be parsing.
-            exec::run_with(&command, &patterns, err)
+            // corrupt a document the caller may be parsing. That holds under
+            // `--capture-only` too — the caller gets no child bytes on stdout, but
+            // the channel is still the child's and Batten does not claim it.
+            exec::run_with(&command, &patterns, exec_mode, err)
         }
+        Some(Command::Capture { command }) => run_capture(&command, mode, out, err),
         Some(Command::Hook { harness }) => run_hook(harness, mode, &overrides, out, err),
         // CLOUD-479. Touches NO config — this is the per-turn hot path, and the
         // whole point is that it costs less than the `jq` process it replaces.
@@ -1000,6 +1011,153 @@ fn run_state_migrate(err: &mut dyn Write) -> Result<ExitCode> {
         )?;
     }
     Ok(ExitCode::Success)
+}
+
+/// Navigate a frozen capture (CLOUD-121).
+///
+/// **Always [`ExitCode::Success`] on the read verbs**, for the same reason
+/// [`run_state_list`] is: these report what a past run produced, and a verdict
+/// here would put a record on the deny channel. A handle that names nothing is
+/// still a [`UsageError`] — the caller asked about a capture that is not there,
+/// which is a statement about the invocation, not a finding about the repository.
+///
+/// `--lines` and `--grep` together is refused rather than composed. Two selectors
+/// have two readings — the intersection or the union — and picking one silently
+/// would make the answer depend on a choice the caller never saw. A caller who
+/// wants both greps first and then widens around what it found, which is the
+/// navigation loop this verb exists to make possible.
+fn run_capture(
+    command: &cli::CaptureCommand,
+    mode: Mode,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<ExitCode> {
+    let repo = git::repo_root(Path::new("."))?;
+    match command {
+        cli::CaptureCommand::Show {
+            handle,
+            lines,
+            grep,
+            json,
+        } => {
+            let parsed = capture::Handle::parse(handle)?;
+            let selection = match (lines.as_deref(), grep.as_deref()) {
+                (Some(_), Some(_)) => {
+                    return Err(UsageError::raise(
+                        "capture show: --lines and --grep select differently; grep first, then \
+                         widen around the line it names",
+                    ));
+                }
+                (Some(range), None) => capture::Selection::Lines {
+                    from: parse_line(range, 0)?,
+                    to: parse_line(range, 1)?,
+                },
+                (None, Some(needle)) => capture::Selection::Grep {
+                    needle: needle.to_owned(),
+                },
+                (None, None) => capture::Selection::Summary,
+            };
+            let record = capture::Capture {
+                stream: parsed.stream.as_str(),
+                bytes: 0,
+                digest: parsed.digest.clone(),
+            };
+            let bytes = capture::read(&repo, &record).map_err(|_| {
+                UsageError::raise(format!(
+                    "capture show: no capture at {parsed} — `batten capture list` names the ones \
+                     this repository holds"
+                ))
+            })?;
+            let answer = capture::select(&parsed, &bytes, &selection);
+            if *json {
+                writeln!(out, "{}", serde_json::to_string_pretty(&answer)?)?;
+            } else if matches!(selection, capture::Selection::Summary) {
+                // The pointer, in the `<pointer> <fact>` shape every other verb
+                // here emits, so a caller needs no second parser.
+                writeln!(out, "{} {} bytes {} lines", answer.handle, answer.bytes, answer.lines)?;
+            } else {
+                for line in &answer.selected {
+                    writeln!(out, "{}:{} {}", parsed.stream.as_str(), line.number, line.text)?;
+                }
+            }
+            Ok(ExitCode::Success)
+        }
+        cli::CaptureCommand::List { stream, json } => {
+            if let Some(stream) = stream.as_deref() {
+                // Validated through the handle parser rather than a second list of
+                // stream names, so the filter cannot come to disagree with the
+                // store about what a stream is.
+                capture::Handle::parse(&format!("{stream}:00"))?;
+            }
+            let held: Vec<capture::Capture> = capture::list(&repo)?
+                .into_iter()
+                .filter(|record| stream.as_deref().is_none_or(|want| record.stream == want))
+                .collect();
+            if *json {
+                writeln!(out, "{}", serde_json::to_string_pretty(&held)?)?;
+            } else {
+                for record in &held {
+                    writeln!(out, "{} {} bytes", record.handle(), record.bytes)?;
+                }
+            }
+            Ok(ExitCode::Success)
+        }
+        cli::CaptureCommand::Prune { yes, dry_run } => {
+            if *dry_run {
+                let held = capture::list(&repo)?.len();
+                output::message(
+                    mode,
+                    output::Verbosity::Normal,
+                    err,
+                    &format!("capture prune: would remove {held} capture(s)"),
+                )?;
+                return Ok(ExitCode::Success);
+            }
+            if !*yes {
+                // §4's refusal, and unconditional rather than only-when-unattended
+                // on purpose: the same section says a policy engine that blocks a
+                // loop waiting for a Y/N is a dead gate, and the primary caller
+                // here is a program. Naming the flag is the whole remedy, which is
+                // what makes the refusal one hop from done rather than a wall.
+                return Err(UsageError::raise(
+                    "capture prune: removing captures is destructive and this never prompts — \
+                     pass -y, or -n to see what would go",
+                ));
+            }
+            let removed = capture::prune(&repo)?;
+            output::message(
+                mode,
+                output::Verbosity::Normal,
+                err,
+                &format!("capture prune: removed {removed} capture(s)"),
+            )?;
+            Ok(ExitCode::Success)
+        }
+    }
+}
+
+/// One half of a `FROM:TO` range, as a 1-indexed line number.
+///
+/// Strict on both halves: a range with a missing or unparseable side is a
+/// [`UsageError`] naming the shape, never a silent default. Defaulting the end to
+/// the capture's length would make `--lines 5:` mean "the rest" without anyone
+/// declaring it, and defaulting the start to 1 would turn a typo into a full dump
+/// — the exact cost this verb exists to avoid.
+fn parse_line(range: &str, half: usize) -> Result<usize> {
+    let bad = || {
+        UsageError::raise(format!(
+            "capture show: {range:?} is not a line range — write `FROM:TO`, both 1-indexed"
+        ))
+    };
+    let (from, to) = range.split_once(':').ok_or_else(bad)?;
+    let chosen = if half == 0 { from } else { to };
+    let value: usize = chosen.trim().parse().map_err(|_| bad())?;
+    if value == 0 {
+        return Err(UsageError::raise(format!(
+            "capture show: line numbers are 1-indexed, so {range:?} has no line 0"
+        )));
+    }
+    Ok(value)
 }
 
 /// List what the store holds.

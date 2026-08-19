@@ -39,6 +39,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::error::UsageError;
 use crate::identity;
 use crate::state;
 
@@ -155,6 +156,252 @@ pub fn read(repo_root: &Path, capture: &Capture) -> Result<Vec<u8>> {
     std::fs::read(&path).with_context(|| format!("read the capture {}", path.display()))
 }
 
+// --- navigation (CLOUD-121) --------------------------------------------------
+//
+// The half that deletes the re-run. `cmd | tail -N` re-executes a possibly
+// non-idempotent command to widen a window the agent had to guess the size of;
+// everything below selects against bytes that were captured once and are frozen,
+// so widening costs a read and never a second run.
+
+/// A parsed `<stream>:<digest>` handle.
+///
+/// A type rather than two strings threaded through every call, and parsed rather
+/// than trusted: a handle arrives from an agent's argv, so an unknown stream or a
+/// non-hex digest is a [`UsageError`] naming the shape it wanted, never a path
+/// join that reaches for a file outside the store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Handle {
+    /// Which stream the capture holds.
+    pub stream: Stream,
+    /// The content digest, lowercase hex.
+    pub digest: String,
+}
+
+impl Handle {
+    /// Parse `text` as `<stream>:<digest>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UsageError`] (→ exit `1`) for a missing separator, a stream
+    /// token no [`Stream`] declares, or a digest that is not lowercase hex.
+    ///
+    /// The digest check is not cosmetic: the digest becomes a path component, so
+    /// rejecting anything that is not hex is what stops `..` and a separator from
+    /// travelling there. Validating the *shape* rather than sanitising the string
+    /// keeps that a property of the parser instead of a habit at each call site.
+    pub fn parse(text: &str) -> Result<Self> {
+        let Some((stream, digest)) = text.split_once(':') else {
+            return Err(UsageError::raise(format!(
+                "capture: {text:?} is not a handle — write `<stream>:<digest>`, as `batten capture \
+                 list` prints them"
+            )));
+        };
+        let Some(stream) = Stream::ALL.iter().find(|known| known.as_str() == stream) else {
+            return Err(UsageError::raise(format!(
+                "capture: unknown stream {stream:?} — a capture is one of {}",
+                Stream::ALL
+                    .iter()
+                    .map(|known| known.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        };
+        if digest.is_empty() || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(UsageError::raise(format!(
+                "capture: {digest:?} is not a digest — it is the lowercase hex `batten capture \
+                 list` prints"
+            )));
+        }
+        Ok(Handle {
+            stream: *stream,
+            digest: digest.to_owned(),
+        })
+    }
+}
+
+impl std::fmt::Display for Handle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.stream.as_str(), self.digest)
+    }
+}
+
+/// What a caller asked to see of a capture.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Selection {
+    /// No selection: the pointer alone — stream, digest, byte and line counts.
+    ///
+    /// The default, and deliberately the cheap one. Content is something a caller
+    /// names, so the shape that costs nothing is what an unqualified `show`
+    /// returns.
+    Summary,
+    /// A 1-indexed, inclusive line range, clamped to the capture.
+    ///
+    /// Clamped rather than refused: widening a window is the whole point, and an
+    /// agent that asks for `1:5000` of a 400-line log wants the log, not an error
+    /// telling it to guess again. Guessing again is the behaviour this deletes.
+    Lines { from: usize, to: usize },
+    /// Every line containing a literal substring.
+    ///
+    /// Literal, not regex, for the reason [`crate::outputs`] states about its own
+    /// predicate: a reader should see what would match without evaluating an
+    /// expression. `forbid` took the regex decision narrowly (CLOUD-283) and this
+    /// is one of the places it was deliberately not taken.
+    Grep { needle: String },
+}
+
+/// A capture's lines, numbered, as selected.
+///
+/// Numbered because the number is what makes the next call possible: an agent
+/// greps, reads `127`, and asks for `120:135` — navigation, rather than a second
+/// guess at a window size.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Line {
+    /// The 1-indexed line number within the capture.
+    pub number: usize,
+    /// The line's text, without its terminator.
+    pub text: String,
+}
+
+/// The answer to one `capture show`.
+///
+/// Carries the pointer *and* whatever content was selected, so a `-J` consumer
+/// gets the provenance of the bytes in the same document as the bytes.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Selected {
+    /// The handle these lines came from.
+    pub handle: String,
+    /// The capture's total size in bytes.
+    pub bytes: u64,
+    /// The capture's total line count.
+    pub lines: usize,
+    /// The selected lines. Empty for [`Selection::Summary`], and empty is also a
+    /// real answer for a `--grep` that matched nothing.
+    pub selected: Vec<Line>,
+}
+
+/// Apply `selection` to `bytes`.
+///
+/// Pure over the bytes, so the arithmetic that decides what a caller sees is
+/// testable without a store, a repository, or a spawned child.
+///
+/// **Lines come from a lossy decode**, and that is the honest reading rather than
+/// a shortcut: a capture holds whatever a program wrote, which is not guaranteed
+/// to be UTF-8, and refusing an agent line 127 of a build log because byte 4000
+/// was invalid would send it back to the re-run. The *bytes* stay exact in the
+/// store and are what the digest addresses; only this view is decoded. A trailing
+/// newline mints no empty last line — a 400-line log has 400 lines.
+#[must_use]
+pub fn select(handle: &Handle, bytes: &[u8], selection: &Selection) -> Selected {
+    let decoded = String::from_utf8_lossy(bytes);
+    let all: Vec<&str> = decoded.lines().collect();
+    let numbered = |index: usize, text: &str| Line {
+        number: index + 1,
+        text: text.to_owned(),
+    };
+    let selected = match selection {
+        Selection::Summary => Vec::new(),
+        Selection::Lines { from, to } => {
+            // Clamped at both ends, and an inverted range selects nothing rather
+            // than panicking on the slice — `5:2` is a caller error that costs an
+            // empty answer, never a crash on a reachable path.
+            let start = from.saturating_sub(1).min(all.len());
+            let end = (*to).min(all.len());
+            all.get(start..end)
+                .unwrap_or(&[])
+                .iter()
+                .enumerate()
+                .map(|(offset, text)| numbered(start + offset, text))
+                .collect()
+        }
+        Selection::Grep { needle } => all
+            .iter()
+            .enumerate()
+            .filter(|(_, text)| text.contains(needle.as_str()))
+            .map(|(index, text)| numbered(index, text))
+            .collect(),
+    };
+    Selected {
+        handle: handle.to_string(),
+        bytes: bytes.len() as u64,
+        lines: all.len(),
+        selected,
+    }
+}
+
+/// Every capture in the repository's store, in a fixed order.
+///
+/// Sorted by handle rather than by mtime, so a listing is byte-stable (§6) and
+/// two runs over an unchanged store agree. An mtime order would make the answer a
+/// function of when captures happened, which is exactly the kind of field
+/// [`store`] refuses to record.
+///
+/// A store that does not exist yet is an **empty listing, not an error**: a
+/// repository where `exec` has never run has honestly captured nothing.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved, or when the store
+/// exists and cannot be read.
+pub fn list(repo_root: &Path) -> Result<Vec<Capture>> {
+    let dir = captures_dir(repo_root)?;
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut found = Vec::new();
+    for entry in
+        std::fs::read_dir(&dir).with_context(|| format!("read the capture store {}", dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("read the capture store {}", dir.display()))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // A file the store did not write is skipped rather than reported: the
+        // directory is Batten's, but a stray file there is not evidence about any
+        // command, and inventing a capture from one would be a fabricated pointer.
+        let Some((stream, digest)) = name.split_once('-') else {
+            continue;
+        };
+        if Handle::parse(&format!("{stream}:{digest}")).is_err() {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Some(stream) = Stream::ALL.iter().find(|known| known.as_str() == stream) else {
+            continue;
+        };
+        found.push(Capture {
+            stream: stream.as_str(),
+            bytes: meta.len(),
+            digest: digest.to_owned(),
+        });
+    }
+    found.sort_by(|a, b| a.handle().cmp(&b.handle()));
+    Ok(found)
+}
+
+/// Remove every capture in the repository's store, returning how many went.
+///
+/// **The whole lifecycle, and that is the design.** A capture is content-addressed
+/// and never expires on its own; this is the one removal path. A time-based
+/// sweeper would put a property of the world inside a verb — the split
+/// `.claude/rules/toolchain.md` draws between a gate and a schedule — and the
+/// store is bounded by how many *distinct* outputs a repository produces, not by
+/// how often it runs them, because identical bytes are one record.
+///
+/// # Errors
+///
+/// Returns an error when the state root cannot be resolved or a record cannot be
+/// removed. A store that does not exist removes nothing and is not an error.
+pub fn prune(repo_root: &Path) -> Result<usize> {
+    let dir = captures_dir(repo_root)?;
+    let mut removed = 0;
+    for capture in list(repo_root)? {
+        let path = dir.join(format!("{}-{}", capture.stream, capture.digest));
+        std::fs::remove_file(&path)
+            .with_context(|| format!("remove the capture {}", path.display()))?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -205,6 +452,138 @@ mod tests {
             identity::capture_fingerprint("stdout", b"hello").to_hex(),
             "a trailing newline is a different output, so it is a different capture"
         );
+    }
+
+    // --- navigation (CLOUD-121) ---------------------------------------------
+
+    fn handle() -> Handle {
+        Handle {
+            stream: Stream::Stdout,
+            digest: "abc123".to_owned(),
+        }
+    }
+
+    /// Four lines, so a clamp has something to clamp against.
+    const LOG: &[u8] = b"first\nsecond warning[duplicate] here\nthird\nfourth\n";
+
+    #[test]
+    fn a_handle_round_trips_through_its_text() {
+        for capture in [Stream::Stdout, Stream::Stderr] {
+            let text = format!("{}:deadbeef", capture.as_str());
+            let parsed = Handle::parse(&text).expect("a well-formed handle parses");
+            assert_eq!(parsed.stream, capture);
+            assert_eq!(parsed.to_string(), text);
+        }
+    }
+
+    #[test]
+    fn a_malformed_handle_is_a_usage_error_never_a_path() {
+        // The digest becomes a path component, so the parser refusing anything
+        // that is not hex is what stops a separator or a `..` travelling there.
+        // Shape-checking here rather than sanitising at each call site is what
+        // makes that a property instead of a habit.
+        for bad in [
+            "nocolon",
+            "stdin:abc",
+            "stdout:",
+            "stdout:../../etc/passwd",
+            "stdout:not hex",
+            ":abc",
+        ] {
+            let err = Handle::parse(bad).expect_err("{bad} is not a handle");
+            assert!(
+                err.downcast_ref::<UsageError>().is_some(),
+                "{bad} should be a usage error"
+            );
+        }
+    }
+
+    #[test]
+    fn the_default_selection_is_the_pointer_not_the_payload() {
+        // Content is something a caller names. An unqualified `show` answers with
+        // the shape that costs nothing, which is what keeps the cheap path cheap.
+        let answer = select(&handle(), LOG, &Selection::Summary);
+        assert!(answer.selected.is_empty());
+        assert_eq!(answer.lines, 4);
+        assert_eq!(answer.bytes, LOG.len() as u64);
+        assert_eq!(answer.handle, "stdout:abc123");
+    }
+
+    #[test]
+    fn a_line_range_is_one_indexed_and_inclusive() {
+        let answer = select(&handle(), LOG, &Selection::Lines { from: 2, to: 3 });
+        assert_eq!(
+            answer
+                .selected
+                .iter()
+                .map(|line| line.number)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(answer.selected[0].text, "second warning[duplicate] here");
+    }
+
+    #[test]
+    fn a_range_past_the_end_is_clamped_rather_than_refused() {
+        // Widening a window is the whole point of a handle. An agent asking for
+        // 1:5000 of a 4-line log wants the log — refusing would send it back to
+        // guessing, which is the behaviour this deletes.
+        let answer = select(&handle(), LOG, &Selection::Lines { from: 1, to: 5000 });
+        assert_eq!(answer.selected.len(), 4);
+        assert_eq!(answer.selected[3].number, 4);
+    }
+
+    #[test]
+    fn an_inverted_range_selects_nothing_rather_than_panicking() {
+        // A reachable path, since the range comes from an agent's argv, and the
+        // workspace lints forbid panicking on one.
+        let answer = select(&handle(), LOG, &Selection::Lines { from: 5, to: 2 });
+        assert!(answer.selected.is_empty());
+        assert_eq!(answer.lines, 4, "the capture is still described");
+    }
+
+    #[test]
+    fn grep_numbers_the_lines_it_matched() {
+        // The number is what makes the next call possible: grep, read 2, then ask
+        // for a window around it — navigation rather than a second guess.
+        let answer = select(
+            &handle(),
+            LOG,
+            &Selection::Grep {
+                needle: "warning[duplicate]".to_owned(),
+            },
+        );
+        assert_eq!(answer.selected.len(), 1);
+        assert_eq!(answer.selected[0].number, 2);
+    }
+
+    #[test]
+    fn grep_matching_nothing_is_an_answer_not_an_error() {
+        let answer = select(
+            &handle(),
+            LOG,
+            &Selection::Grep {
+                needle: "absent".to_owned(),
+            },
+        );
+        assert!(answer.selected.is_empty());
+        assert_eq!(answer.lines, 4);
+    }
+
+    #[test]
+    fn a_trailing_newline_mints_no_empty_last_line() {
+        assert_eq!(select(&handle(), b"a\nb\n", &Selection::Summary).lines, 2);
+        assert_eq!(select(&handle(), b"a\nb", &Selection::Summary).lines, 2);
+        assert_eq!(select(&handle(), b"", &Selection::Summary).lines, 0);
+    }
+
+    #[test]
+    fn invalid_utf8_is_still_navigable() {
+        // A capture holds whatever a program wrote. Refusing to show line 2
+        // because byte 3 is invalid would send the caller back to re-running.
+        let answer = select(&handle(), b"ok\n\xff\xfe bad\ntail\n", &Selection::Summary);
+        assert_eq!(answer.lines, 3);
+        assert_eq!(answer.bytes, 15);
     }
 
     #[test]

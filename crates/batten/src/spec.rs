@@ -291,6 +291,12 @@ mod tests {
                 // against it, so it is `read`; `attribution identity` writes
                 // .git/config and is deliberately absent, as is the noun above it.
                 "attribution check".to_owned(),
+                // Both navigation verbs are on it, and the `capture` noun above
+                // them is not: the noun is unclassified because `capture prune`
+                // removes, which is the fail-safe reading a consumer treating an
+                // entry as a prefix depends on (CLOUD-121).
+                "capture list".to_owned(),
+                "capture show".to_owned(),
                 "check".to_owned(),
                 "config".to_owned(),
                 "config epoch".to_owned(),
@@ -437,6 +443,13 @@ mod tests {
                 // §2's listing gained the row in the same change, which is what
                 // this assertion exists to prompt.
                 "baseline".to_owned(),
+                // The handle-navigation noun (CLOUD-121). `capture show`, not a
+                // bare `show`: §2 is noun-verb and lists no bare `show`, and the
+                // noun is what gives lifecycle (`prune`) somewhere to live.
+                "capture".to_owned(),
+                "capture list".to_owned(),
+                "capture prune".to_owned(),
+                "capture show".to_owned(),
                 "check".to_owned(),
                 "config".to_owned(),
                 "config epoch".to_owned(),

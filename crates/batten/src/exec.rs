@@ -113,6 +113,31 @@ fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W) -> Result<Vec<u8>> {
     }
 }
 
+/// Whether the child's bytes reach the caller, or only their handles.
+///
+/// The default is [`Mode::Tee`] and stays the default: CLOUD-285's transparency
+/// is a promise every wrapped command's caller relies on, and
+/// `exec_inherits_both_child_streams_unchanged` pins it. [`Mode::CaptureOnly`] is
+/// the caller *asking* to be given pointers instead — never inferred, because a
+/// wrapper that decided for itself when to swallow a build's output would be
+/// unpredictable in exactly the situation the caller most needs it not to be.
+///
+/// Why it exists at all is economics, and it was measured rather than assumed.
+/// The token benchmark (CLOUD-119) reports the teed path at 1.47x the raw
+/// `tail`-then-re-run baseline, and says why: the saving is only the discarded
+/// window, because the log itself is still teed in full. A handle nobody can
+/// obtain without first paying for the whole output saves nothing. This is the
+/// mode where capture-once becomes read-a-little.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum Mode {
+    /// Copy each stream to the store **and** to Batten's corresponding stream.
+    #[default]
+    Tee,
+    /// Copy each stream to the store only, and report the handles instead.
+    CaptureOnly,
+}
+
 /// Run `command`, teeing its streams, and report its exit code unchanged.
 ///
 /// Returns [`ExitCode::Success`] only for a child that exited `0`; every other
@@ -129,7 +154,7 @@ fn tee<R: Read, W: Write>(mut pipe: R, mut sink: W) -> Result<Vec<u8>> {
 /// [`ExitCode::Violation`] of its own accord; a `2` from this verb came from the
 /// child.
 pub fn run(command: &[String]) -> Result<ExitCode> {
-    run_with(command, &[], &mut std::io::sink())
+    run_with(command, &[], Mode::Tee, &mut std::io::sink())
 }
 
 /// [`run`], with the output predicates to apply and where to report a hit.
@@ -140,6 +165,7 @@ pub fn run(command: &[String]) -> Result<ExitCode> {
 pub fn run_with(
     command: &[String],
     patterns: &[OutputPattern],
+    mode: Mode,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
     // The repository root, not the cwd: `state::derive_repo_name` needs a real
@@ -148,7 +174,7 @@ pub fn run_with(
     // also means a capture taken from a subdirectory lands in the same store as one
     // taken from the top, which is what makes a handle portable within a checkout.
     let root = crate::git::repo_root(Path::new("."))?;
-    run_in_with(&root, command, patterns, report)
+    run_in_with(&root, command, patterns, mode, report)
 }
 
 /// [`run`], with the repository root the capture is stored under.
@@ -157,7 +183,7 @@ pub fn run_with(
 ///
 /// As [`run`].
 pub fn run_in(repo_root: &Path, command: &[String]) -> Result<ExitCode> {
-    run_in_with(repo_root, command, &[], &mut std::io::sink())
+    run_in_with(repo_root, command, &[], Mode::Tee, &mut std::io::sink())
 }
 
 /// [`run_in`], with the output predicates to apply and where to report a hit.
@@ -169,6 +195,7 @@ pub fn run_in_with(
     repo_root: &Path,
     command: &[String],
     patterns: &[OutputPattern],
+    mode: Mode,
     report: &mut dyn Write,
 ) -> Result<ExitCode> {
     let Some((program, args)) = command.split_first() else {
@@ -218,10 +245,20 @@ pub fn run_in_with(
         ));
     };
 
+    // The sinks are chosen here and nowhere else, so `Mode` changes exactly one
+    // thing: where the bytes go on their way to the store. Everything downstream —
+    // the store write, the exit code, the predicates — cannot tell the difference,
+    // which is what keeps `--capture-only` from being a second code path that can
+    // drift from the transparent one.
+    let (out_sink, err_sink): (Box<dyn Write + Send>, Box<dyn Write + Send>) = match mode {
+        Mode::Tee => (Box::new(std::io::stdout()), Box::new(std::io::stderr())),
+        Mode::CaptureOnly => (Box::new(std::io::sink()), Box::new(std::io::sink())),
+    };
+
     // One thread per pipe. See the module docs: draining them in sequence
     // deadlocks as soon as a child fills the one not being read.
-    let out_worker = std::thread::spawn(move || tee(out_pipe, std::io::stdout()));
-    let err_worker = std::thread::spawn(move || tee(err_pipe, std::io::stderr()));
+    let out_worker = std::thread::spawn(move || tee(out_pipe, out_sink));
+    let err_worker = std::thread::spawn(move || tee(err_pipe, err_sink));
 
     let status = child.wait().context("wait for the wrapped command")?;
     let out_bytes = out_worker
@@ -235,11 +272,27 @@ pub fn run_in_with(
 
     // Both streams are stored, including an empty one: zero bytes is the real
     // answer "the command said nothing", and it must be distinguishable from a run
-    // that was never captured at all. The handles are addressable, never printed —
-    // emitting them here would put Batten's bookkeeping on a channel this verb
-    // promises is the child's (CLOUD-121 owns the verbs that read them).
-    capture::store(repo_root, Stream::Stdout, &out_bytes)?;
-    capture::store(repo_root, Stream::Stderr, &err_bytes)?;
+    // that was never captured at all.
+    let captured = [
+        capture::store(repo_root, Stream::Stdout, &out_bytes)?,
+        capture::store(repo_root, Stream::Stderr, &err_bytes)?,
+    ];
+
+    // Under `Tee` the handles stay addressable and unprinted, exactly as CLOUD-162
+    // left them: emitting them would put Batten's bookkeeping on a channel this
+    // verb promises is the child's. Under `CaptureOnly` the caller has asked for
+    // the pointer *instead of* the bytes, so withholding it would leave nothing at
+    // all — and it goes on the ERROR channel for the same reason a predicate hit
+    // does, since stdout belongs to the wrapped command either way.
+    //
+    // Emitted BEFORE the exit-code branch below, deliberately: a child that failed
+    // is the case where an agent most needs to read its output, and a handle
+    // withheld on the failing path would send it straight back to the re-run.
+    if mode == Mode::CaptureOnly {
+        for record in &captured {
+            writeln!(report, "{} {} bytes", record.handle(), record.bytes)?;
+        }
+    }
 
     let code = status.code().unwrap_or_else(|| signal_code(status));
     if code != 0 {

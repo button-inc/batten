@@ -672,6 +672,89 @@ const DRY_RUN: FlagDecl = FlagDecl {
     value: ValueDecl::Bool,
 };
 
+/// `--capture-only` on `exec` (CLOUD-121): handles instead of the bytes.
+///
+/// Opt-in, and it must stay opt-in. `exec`'s transparency is a promise every
+/// wrapped command's caller relies on (CLOUD-285), so a wrapper that decided for
+/// itself when to swallow a build's output would be unpredictable exactly where
+/// predictability matters most. Inferring it from output size was considered and
+/// rejected for that reason: the threshold would be a policy nobody declared.
+///
+/// It raises nothing under §5 — `exec` is already unclassified, and this changes
+/// where the child's bytes go, never what may run.
+const CAPTURE_ONLY: FlagDecl = FlagDecl {
+    id: "capture_only",
+    long: Some("capture-only"),
+    short: None,
+    help: "Store the child's streams and report their handles instead of passing the bytes through",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Bool,
+};
+
+/// `--lines A:B` on `capture show`: a 1-indexed, inclusive, clamped window.
+///
+/// One flag taking a range rather than `--from`/`--to`, because the two are never
+/// meaningful apart and a pair of flags would need a rule for each half being
+/// absent. Clamped rather than validated against the capture's length: widening a
+/// window is the point, and an out-of-range end is a caller who wants the rest.
+const LINES: FlagDecl = FlagDecl {
+    id: "lines",
+    long: Some("lines"),
+    short: None,
+    help: "A 1-indexed inclusive line range, `FROM:TO`, clamped to the capture",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--grep <literal>` on `capture show`: a case-sensitive literal substring.
+///
+/// Literal, not regex, for the reason [`crate::outputs`] gives about its own
+/// predicate: a reader should be able to see what would match without evaluating
+/// an expression. CLOUD-283 took the regex decision narrowly, for `forbid` alone,
+/// and this is one of the places it was deliberately not taken.
+const GREP: FlagDecl = FlagDecl {
+    id: "grep",
+    long: Some("grep"),
+    short: None,
+    help: "Only lines containing this literal substring",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
+/// `--stream <stdout|stderr>` on `capture list`: narrow the listing.
+///
+/// A plain string rather than a `ValueEnum`, because the set it validates against
+/// is [`crate::capture::Stream::ALL`] — the same list the store keys by. A second
+/// enum here would be a place for the two to disagree about what a stream is.
+const STREAM: FlagDecl = FlagDecl {
+    id: "stream",
+    long: Some("stream"),
+    short: None,
+    help: "Only captures of this stream",
+    env: EnvDecl::None,
+    global: false,
+    positional: false,
+    required: false,
+    hidden: false,
+    rung: Rung::None,
+    value: ValueDecl::Str,
+};
+
 fn verbosity_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<Verbosity>::new())
 }
@@ -871,10 +954,77 @@ pub const SURFACE: &[CommandDecl] = &[
         // CLOUD-162's, on stderr.
         data_channel: false,
         effect: Effect::Unclassified,
-        flags: &[FlagDecl::trailing(
-            "command",
-            "The command to run, after `--`, with its own arguments intact",
-        )],
+        flags: &[
+            // Declared BEFORE the trailing arg: clap reads the tail as everything
+            // remaining, so a flag listed after it would only ever be parseable as
+            // one of the child's own arguments.
+            CAPTURE_ONLY,
+            FlagDecl::trailing(
+                "command",
+                "The command to run, after `--`, with its own arguments intact",
+            ),
+        ],
+    },
+    // The `capture` noun only dispatches, and its subtree carries a `destructive`
+    // verb, so it takes the `receipt`/`provision` fail-safe reading rather than
+    // `policy`'s: §5 derives the agent allowlist from `effect == read`, and a noun
+    // over a removing subtree would leak onto it for any consumer that treats an
+    // entry as a prefix (CLOUD-121).
+    CommandDecl {
+        path: "capture",
+        about: "Captured command output: navigate what `exec` already ran, without running it again",
+        data_channel: false,
+        effect: Effect::Unclassified,
+        flags: &[],
+    },
+    // `read`, and structurally so rather than by good behaviour: it opens one file
+    // under the out-of-tree state dir, addressed by a handle whose digest the
+    // parser refuses unless it is hex. No path here reaches user-supplied code —
+    // the *child* ran long ago, under `exec`, and this verb cannot start one.
+    //
+    // It is also the one verb in the tool whose product is CONTENT, and the
+    // boundary is worth stating where it lives: non-negotiable rule 4 governs
+    // checks over sensitive content, and this renders no verdict. The bytes are
+    // the child's own and were already paid for once; withholding them would leave
+    // re-running the command as the only way to see more, which is the behaviour
+    // this issue exists to delete. The default selection is still the pointer.
+    CommandDecl {
+        path: "capture show",
+        about: "Print a capture's pointer, or the lines a selection asks for, with no second run",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[
+            FlagDecl::positional("handle", "The `<stream>:<digest>` handle to read"),
+            LINES,
+            GREP,
+            JSON,
+        ],
+    },
+    // Fixed reads of the store's own directory plus arithmetic over the entries.
+    CommandDecl {
+        path: "capture list",
+        about: "List this repository's captures as handles, in a fixed order",
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[STREAM, JSON],
+    },
+    // `destructive`, not `write`: what it removes is a record of a run that has
+    // already happened, and recovering one means re-running the command — which is
+    // precisely the cost this whole capability exists to avoid paying. §5 binds
+    // `-y --yes` to this effect, so a non-interactive caller is told the flag it
+    // needs rather than prompted into the void.
+    CommandDecl {
+        path: "capture prune",
+        about: "Remove this repository's captures — the one removal path; captures never expire on their own",
+        data_channel: false,
+        effect: Effect::Destructive,
+        // `-y` comes from the globals (CLOUD-46 landed it there), and this row
+        // requires it UNCONDITIONALLY rather than only when unattended — stricter
+        // than §4's minimum and deliberate: §4's own words are that a policy
+        // engine which blocks a loop waiting for a Y/N is a dead gate, and the
+        // primary caller here is a program. A rule that never prompts cannot hang,
+        // and needs no attendedness to be true.
+        flags: &[DRY_RUN],
     },
     CommandDecl {
         path: "config",
@@ -1943,16 +2093,26 @@ mod tests {
              invocation, not of one verb"
         );
 
+        // Counted, so the loop cannot pass by finding nothing to judge. The
+        // predecessor asserted the set was EMPTY, so emptiness was the pass; this
+        // one asserts a property OF the set, and the same emptiness would make it
+        // vacuous. `capture prune` (CLOUD-121) is the second row it covers.
+        let mut destructive = 0;
         for decl in std::iter::once(&ROOT).chain(SURFACE) {
             if decl.effect != Effect::Destructive {
                 continue;
             }
+            destructive += 1;
             assert!(
                 decl.flags.iter().any(|flag| flag.id == "dry_run"),
                 "{:?} is destructive and declares no --dry-run (CLOUD-42, G11)",
                 decl.path
             );
         }
+        assert!(
+            destructive > 0,
+            "no destructive row: this test would pass vacuously"
+        );
     }
 
     #[test]

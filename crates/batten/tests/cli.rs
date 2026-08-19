@@ -3168,7 +3168,7 @@ fn a_local_file_may_add_a_pattern_but_not_redefine_a_committed_one() {
 /// `config epoch` needs readable tracked paths, `receipt status` needs a repo with
 /// `origin/main`, and `check`/`enforce`/`config *` need an authority. One fixture
 /// satisfying all of them beats a per-verb table that would drift.
-fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
+fn census_fixture(name: &str) -> (PathBuf, PathBuf, String) {
     // Shaped like `receipt_fixture`, but with a config every data-emitting verb
     // can actually answer from. `policy budget` is the reason it diverged: a
     // budget verb whose config declares no budget measured nothing, and it
@@ -3213,8 +3213,40 @@ fn census_fixture(name: &str) -> (PathBuf, PathBuf) {
         .work_commit()
         .build();
     let home = Fixture::at(root.join("home")).build();
-    (repo, home)
+    // `capture show` is the fourth verb with a minimum input, and the first whose
+    // input cannot be a literal: a handle carries a content digest, so the fixture
+    // has to MAKE one rather than name one. Seeded through `exec --capture-only`
+    // — the same path a caller uses — so the census asserts about a real capture
+    // and not about a file this test hand-placed in the store.
+    let seeded = batten()
+        .args(["exec", "--capture-only", "--", "sh", "-c", "printf 'census\n'"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .output()
+        .expect("seed a capture");
+    assert_eq!(seeded.status.code(), Some(0), "the census capture was not made");
+    let listed = batten()
+        .args(["capture", "list", "--stream", "stdout"])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .output()
+        .expect("list the census capture");
+    let handle = stdout(&listed)
+        .split_whitespace()
+        .next()
+        .expect("the seeded capture is listed")
+        .to_owned();
+    (repo, home, handle)
 }
+
+/// The stand-in `CENSUS_POSITIONALS` uses for a value only the fixture can know.
+///
+/// A sentinel rather than a second table: exactly one verb takes an input that is
+/// computed rather than named, and giving the table two shapes for one column
+/// would cost more than the single substitution below.
+const CENSUS_SEEDED_HANDLE: &str = "<seeded-capture-handle>";
 
 /// The positional value each data-emitting verb needs to reach its document.
 ///
@@ -3240,6 +3272,8 @@ const CENSUS_POSITIONALS: &[(&str, &str)] = &[
     // — which is what `no_progress_reaches_stderr_when_it_is_not_a_terminal`
     // needs, and what makes the empty `-J` document the interesting case.
     ("lint brief", "census-brief.md"),
+    // Substituted at argv time — see `CENSUS_SEEDED_HANDLE`.
+    ("capture show", CENSUS_SEEDED_HANDLE),
 ];
 
 /// A brief satisfying every row of `brief::SCHEMA`, for the census fixture.
@@ -3263,7 +3297,7 @@ fn census_brief() -> String {
 /// Derived from the declaration rather than listed: the path, then the positional
 /// [`CENSUS_POSITIONALS`] names for it, then `-J`. A verb with a positional and no
 /// row fails loudly here rather than being handed a value that means nothing to it.
-fn census_argv(decl: &batten::surface::CommandDecl) -> Vec<String> {
+fn census_argv(decl: &batten::surface::CommandDecl, seeded: &str) -> Vec<String> {
     let positionals: Vec<&batten::surface::FlagDecl> =
         decl.flags.iter().filter(|flag| flag.positional).collect();
     assert!(
@@ -3284,7 +3318,11 @@ fn census_argv(decl: &batten::surface::CommandDecl) -> Vec<String> {
                 decl.path
             )
         };
-        argv.push(value.to_owned());
+        argv.push(if value == CENSUS_SEEDED_HANDLE {
+            seeded.to_owned()
+        } else {
+            value.to_owned()
+        });
     }
     argv.push("-J".to_owned());
     argv
@@ -3308,9 +3346,9 @@ fn every_data_channel_verb_emits_one_pure_json_document() {
     // Acceptance: "JSON mode emits pure JSON on stdout for every subcommand."
     // Purity is the load-bearing half — a single line of messaging mixed into
     // stdout makes the document unparseable for the caller that asked for it.
-    let (repo, home) = census_fixture("census-purity");
+    let (repo, home, seeded) = census_fixture("census-purity");
     for decl in data_channel_verbs() {
-        let owned = census_argv(decl);
+        let owned = census_argv(decl, &seeded);
         let argv: Vec<&str> = owned.iter().map(String::as_str).collect();
         let output = receipt_cmd(&repo, &home, &argv);
         assert!(
@@ -3335,9 +3373,9 @@ fn every_data_channel_verb_is_byte_stable_across_runs() {
     // yields byte-identical stdout." No timestamps, no durations, no ordering
     // nondeterminism — the property that makes a golden file possible at all
     // (CLOUD-106 mechanises it from here).
-    let (repo, home) = census_fixture("census-stable");
+    let (repo, home, seeded) = census_fixture("census-stable");
     for decl in data_channel_verbs() {
-        let owned = census_argv(decl);
+        let owned = census_argv(decl, &seeded);
         let argv: Vec<&str> = owned.iter().map(String::as_str).collect();
         let first = receipt_cmd(&repo, &home, &argv).stdout;
         let second = receipt_cmd(&repo, &home, &argv).stdout;
@@ -3356,9 +3394,9 @@ fn no_ladder_rung_can_change_a_data_document() {
     // data-emitting functions take `out: &mut dyn Write` and have no `Mode` to
     // consult, so no rung can reach stdout. This is what makes `-J` safe to hand
     // to a parser regardless of what the wrapper script passed.
-    let (repo, home) = census_fixture("census-ladder");
+    let (repo, home, seeded) = census_fixture("census-ladder");
     for decl in data_channel_verbs() {
-        let base: Vec<String> = census_argv(decl);
+        let base: Vec<String> = census_argv(decl, &seeded);
         let baseline = {
             let argv: Vec<&str> = base.iter().map(String::as_str).collect();
             receipt_cmd(&repo, &home, &argv).stdout
@@ -3386,9 +3424,9 @@ fn no_progress_reaches_stderr_when_it_is_not_a_terminal() {
     // rung explicitly DOES produce output, even piped, because the caller asked.
     // The property is that unrequested decoration never appears, not that stderr
     // is unreachable.
-    let (repo, home) = census_fixture("census-progress");
+    let (repo, home, seeded) = census_fixture("census-progress");
     for decl in data_channel_verbs() {
-        let base: Vec<String> = census_argv(decl);
+        let base: Vec<String> = census_argv(decl, &seeded);
         let argv: Vec<&str> = base.iter().map(String::as_str).collect();
         let quiet = receipt_cmd(&repo, &home, &argv);
         assert!(
@@ -3416,7 +3454,7 @@ fn receipt_status_json_names_the_pointer_lines_tokens() {
     // and every receipt test used the pointer form, so a declared data channel
     // shipped with nothing asserting its shape. The census above covers purity
     // and stability; this covers the field names a consumer actually reads.
-    let (repo, home) = census_fixture("census-receipt");
+    let (repo, home, _seeded) = census_fixture("census-receipt");
     let output = receipt_cmd(&repo, &home, &["receipt", "status", "verify", "-J"]);
     // Missing receipt: a policy verdict, and the document is still emitted.
     assert_eq!(output.status.code(), Some(2));
@@ -7800,4 +7838,284 @@ fn the_document_is_byte_identical_across_two_runs() {
             "{harness}: the document is not byte-stable"
         );
     }
+}
+
+// --- handles: capture once, expand without re-running (CLOUD-121) ------------
+//
+// The pain is `cmd | tail -N`: the agent guesses a window, misses the line, and
+// re-runs a possibly non-idempotent command to widen it. Everything below reads a
+// capture that was taken once and is frozen, so widening costs a read.
+//
+// A COUNTER IS THE LOAD-BEARING FIXTURE. The wrapped command appends to a file
+// every time it runs, so "no second run" is asserted against evidence the child
+// itself leaves rather than against the absence of output — which would pass just
+// as happily if the command ran twice and printed nothing the second time.
+
+/// A repo with a counter script, plus an isolated store.
+#[cfg(unix)]
+fn capture_repo(name: &str) -> (PathBuf, PathBuf) {
+    let root = scratch(name);
+    let repo = Fixture::at(root.join("repo"))
+        .config("version = 1\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+    (repo, home)
+}
+
+/// Run the counter child, appending a tick per execution.
+#[cfg(unix)]
+fn run_counted(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Output {
+    let script = format!(
+        "printf 'x' >>{}/runs; printf 'alpha\\nbravo warning here\\ncharlie\\ndelta\\n'",
+        repo.display()
+    );
+    batten()
+        .args(args)
+        .args(["--", "sh", "-c", &script])
+        .current_dir(repo)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten exec")
+}
+
+/// How many times the counter child has run.
+#[cfg(unix)]
+fn runs(repo: &std::path::Path) -> usize {
+    std::fs::read_to_string(repo.join("runs")).map_or(0, |text| text.len())
+}
+
+/// `batten capture …` against the same isolated store.
+#[cfg(unix)]
+fn run_capture(repo: &std::path::Path, home: &std::path::Path, args: &[&str]) -> Output {
+    batten()
+        .arg("capture")
+        .args(args)
+        .current_dir(repo)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .output()
+        .expect("run batten capture")
+}
+
+/// The stdout handle of the one capture in the store.
+#[cfg(unix)]
+fn stdout_handle(repo: &std::path::Path, home: &std::path::Path) -> String {
+    let listed = run_capture(repo, home, &["list", "--stream", "stdout"]);
+    assert_eq!(listed.status.code(), Some(0));
+    stdout(&listed)
+        .split_whitespace()
+        .next()
+        .expect("a listed handle")
+        .to_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn capture_only_reports_handles_instead_of_the_childs_bytes() {
+    // The economics of the whole capability. Teeing is the default and stays it;
+    // this is the caller asking to be handed pointers, which is what makes a
+    // handle worth having — one obtainable only after paying for the full output
+    // saves nothing (measured at 1.47x in bench/tokens/RESULTS.md).
+    let (repo, home) = capture_repo("handle-only");
+    let output = run_counted(&repo, &home, &["exec", "--capture-only"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        stdout(&output).is_empty(),
+        "the child's bytes must not reach stdout: {}",
+        stdout(&output)
+    );
+    let report = stderr(&output);
+    assert!(report.contains("stdout:"), "got {report}");
+    assert!(report.contains("stderr:"), "got {report}");
+    assert!(
+        !report.contains("bravo warning here"),
+        "the handle report echoed the payload: {report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_default_still_passes_the_childs_streams_through() {
+    // The other half of the same property, and the one that must never regress:
+    // `--capture-only` is an opt-in exception, so an argv without it behaves
+    // exactly as CLOUD-285 pinned.
+    let (repo, home) = capture_repo("handle-default-tees");
+    let output = run_counted(&repo, &home, &["exec"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(stdout(&output).contains("bravo warning here"));
+    assert!(stderr(&output).is_empty(), "a clean run says nothing");
+}
+
+#[cfg(unix)]
+#[test]
+fn widening_the_window_costs_no_second_run_of_the_command() {
+    // THE acceptance criterion. The counter is what makes it evidence: an
+    // assertion that output was absent would pass even if the child ran again.
+    let (repo, home) = capture_repo("handle-no-rerun");
+    run_counted(&repo, &home, &["exec", "--capture-only"]);
+    assert_eq!(runs(&repo), 1);
+
+    let handle = stdout_handle(&repo, &home);
+    let found = run_capture(&repo, &home, &["show", &handle, "--grep", "warning"]);
+    assert_eq!(found.status.code(), Some(0));
+    assert_eq!(stdout(&found), "stdout:2 bravo warning here\n");
+
+    let widened = run_capture(&repo, &home, &["show", &handle, "--lines", "1:4"]);
+    assert_eq!(widened.status.code(), Some(0));
+    assert_eq!(stdout(&widened).lines().count(), 4);
+
+    assert_eq!(
+        runs(&repo),
+        1,
+        "the command ran again — the handle bought nothing"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unqualified_show_is_the_pointer_not_the_payload() {
+    let (repo, home) = capture_repo("handle-summary");
+    run_counted(&repo, &home, &["exec", "--capture-only"]);
+    let handle = stdout_handle(&repo, &home);
+    let output = run_capture(&repo, &home, &["show", &handle]);
+    assert_eq!(output.status.code(), Some(0));
+    let answer = stdout(&output);
+    assert!(answer.contains("4 lines"), "got {answer}");
+    assert!(
+        !answer.contains("bravo"),
+        "content must be asked for by name: {answer}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_line_range_past_the_end_is_clamped_rather_than_refused() {
+    // Widening is the point. Refusing an over-wide range would send the caller
+    // back to guessing a window size, which is the behaviour this deletes.
+    let (repo, home) = capture_repo("handle-clamp");
+    run_counted(&repo, &home, &["exec", "--capture-only"]);
+    let handle = stdout_handle(&repo, &home);
+    let output = run_capture(&repo, &home, &["show", &handle, "--lines", "1:9999"]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output).lines().count(), 4);
+}
+
+#[cfg(unix)]
+#[test]
+fn two_selectors_are_refused_rather_than_silently_composed() {
+    // Two readings — intersection or union — and picking one silently would make
+    // the answer depend on a choice the caller never saw.
+    let (repo, home) = capture_repo("handle-two-selectors");
+    run_counted(&repo, &home, &["exec", "--capture-only"]);
+    let handle = stdout_handle(&repo, &home);
+    let output = run_capture(
+        &repo,
+        &home,
+        &["show", &handle, "--lines", "1:2", "--grep", "alpha"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("grep first"), "{}", stderr(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_handle_naming_nothing_is_a_usage_error_never_a_verdict() {
+    // Exit 1, not 2: the caller asked about a capture that is not there, which is
+    // a statement about the invocation rather than a finding about the repo.
+    let (repo, home) = capture_repo("handle-absent");
+    let output = run_capture(&repo, &home, &["show", "stdout:abc123"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr(&output).contains("capture list"), "{}", stderr(&output));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_malformed_handle_never_reaches_the_filesystem() {
+    // The digest is a path component, so the parser refusing anything but hex is
+    // what stops a traversal travelling there.
+    let (repo, home) = capture_repo("handle-traversal");
+    for bad in ["stdout:../../../etc/passwd", "stdin:abc", "nocolon"] {
+        let output = run_capture(&repo, &home, &["show", bad]);
+        assert_eq!(output.status.code(), Some(1), "{bad} should be refused");
+        assert!(
+            !stderr(&output).contains("root:"),
+            "{bad} reached a file: {}",
+            stderr(&output)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn prune_refuses_without_confirmation_and_removes_with_it() {
+    // The first destructive verb in the surface. It never prompts — §4's own
+    // reasoning is that a policy engine blocking a loop on a Y/N is a dead gate —
+    // so the refusal names the flag and is one hop from done.
+    let (repo, home) = capture_repo("handle-prune");
+    run_counted(&repo, &home, &["exec", "--capture-only"]);
+
+    let refused = run_capture(&repo, &home, &["prune"]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(stderr(&refused).contains("-y"), "{}", stderr(&refused));
+
+    let preview = run_capture(&repo, &home, &["prune", "-n"]);
+    assert_eq!(preview.status.code(), Some(0));
+    assert!(stderr(&preview).contains("would remove 2"), "{}", stderr(&preview));
+    assert_eq!(
+        run_capture(&repo, &home, &["list"]).stdout.len(),
+        run_capture(&repo, &home, &["list"]).stdout.len(),
+    );
+    assert!(!stdout(&run_capture(&repo, &home, &["list"])).is_empty());
+
+    let pruned = run_capture(&repo, &home, &["prune", "-y"]);
+    assert_eq!(pruned.status.code(), Some(0));
+    assert!(stdout(&run_capture(&repo, &home, &["list"])).is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_capture_listing_is_byte_stable_across_runs() {
+    // §6: the same bytes for the same input. Sorted by handle rather than mtime,
+    // so a listing is a statement about the store and not about when it happened.
+    let (repo, home) = capture_repo("handle-stable");
+    run_counted(&repo, &home, &["exec", "--capture-only"]);
+    let first = run_capture(&repo, &home, &["list"]);
+    let second = run_capture(&repo, &home, &["list"]);
+    assert_eq!(first.stdout, second.stdout);
+    assert_eq!(
+        run_capture(&repo, &home, &["list", "-J"]).stdout,
+        run_capture(&repo, &home, &["list", "-J"]).stdout
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_navigation_verbs_declare_themselves_read_in_the_spec() {
+    // The derived allowlist is built from this classification: `show` and `list`
+    // must be on it, and the `capture` noun must not — its subtree removes.
+    let output = batten().arg("spec").output().expect("run batten spec");
+    let spec: serde_json::Value = serde_json::from_slice(&output.stdout).expect("spec is JSON");
+    let capture = spec["subcommands"]
+        .as_array()
+        .expect("subcommands is an array")
+        .iter()
+        .find(|node| node["path"] == "capture")
+        .expect("capture is in the spec");
+    assert_eq!(capture["effect"], "unclassified");
+    let subs = capture["subcommands"]
+        .as_array()
+        .expect("subcommands is an array");
+    let effect = |path: &str| {
+        subs.iter()
+            .find(|node| node["path"] == path)
+            .unwrap_or_else(|| panic!("{path} is in the spec"))["effect"]
+            .clone()
+    };
+    assert_eq!(effect("capture show"), "read");
+    assert_eq!(effect("capture list"), "read");
+    assert_eq!(effect("capture prune"), "destructive");
 }
