@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.83](https://github.com/button-inc/batten/compare/v0.0.82...v0.0.83) - 2026-08-19
+
+### Added
+
+- *(exec)* [**breaking**] keep the group predicate live on Windows, and re-measure the tokens
+- *(exec)* dispatch a `:::` bundle, and make a live capture readable
+- *(exec)* charge the caller a record, not the bytes it already stored
+- *(exec)* own the dispatched process tree, or decline to mise's protocol
+- *(hook)* give the payload allowlist the spawn prompt it had no member for
+- *(commit)* [**breaking**] read the subject convention from batten.toml, not from a mise variable
+- *(capture)* navigate a frozen capture instead of re-running the command
+
+### Fixed
+
+- *(exec)* finish reconciling with the capture surface main grew
+- *(rules)* dedup rule-scoped findings so a batched command rule reports once
+- *(capture)* [**breaking**] reconcile with the surface main grew while this branch was out
+- *(cross-check)* gate the dead-helper class, not just its one instance
+
+### Other
+
+- *(process-group)* scrub the marker the suite runs under
+- *(census)* decide the shape-row obligation instead of stating it
+- *(capture)* route the handle suite's store through state_home
+- *(capture)* one function per sub-verb, so the dispatcher clears the length lint
+- *(capture)* sort by key, and take the formatters' shape
+
 ## [0.0.82](https://github.com/button-inc/batten/compare/v0.0.81...v0.0.82) - 2026-08-19
 
 ### Other
