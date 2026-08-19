@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.86](https://github.com/button-inc/batten/compare/v0.0.85...v0.0.86) - 2026-08-19
+
+### Other
+
+- *(git)* keep two cargo test runs out of one fixture directory
+
 ## [0.0.85](https://github.com/button-inc/batten/compare/v0.0.84...v0.0.85) - 2026-08-19
 
 ### Added
