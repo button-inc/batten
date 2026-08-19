@@ -3630,12 +3630,30 @@ fn run_rules(
             }
         }
     }
-    // First contact's one line (CLOUD-222). The decision is [`clean_run_notice`],
-    // extracted rather than inlined here because this sandbox cannot produce a
-    // TTY, so a test asserting the attended branch over a spawned process would
-    // assert its own premise (`.claude/rules/rust.md`, the `markers::scannable`
-    // shape). Extracted, the branch is decided by a pure function with a table
-    // over it, and what remains here is the write.
+    report_clean_run(json, mode, err, &findings, &config, &scan)?;
+    // The severity axis reaches the exit contract exactly here: blocking is
+    // derived through the taxonomy table, never name-matched (CLOUD-168), and
+    // the two-valued outcome becomes a code in one place (§7).
+    Ok(ExitCode::verdict(rules::any_blocking(
+        &findings,
+        config.fail_on_warning,
+    )))
+}
+
+/// Say what a clean run did, if anything (CLOUD-222).
+///
+/// The write half, split from [`clean_run_notice`]'s decision half so the branch
+/// that a TTY-less test cannot reach is still decided by something a table can
+/// drive. Kept out of [`run_rules`] because that funnel is already at clippy's
+/// line ceiling, and a notice is not what should push it over.
+fn report_clean_run(
+    json: bool,
+    mode: Mode,
+    err: &mut dyn Write,
+    findings: &[rules::Finding],
+    config: &resolve::Resolved,
+    scan: &rules::Scan,
+) -> Result<()> {
     if let Some(note) = clean_run_notice(
         json,
         mode.machine,
@@ -3645,13 +3663,7 @@ fn run_rules(
     ) {
         output::message(mode, Verbosity::Normal, err, &note)?;
     }
-    // The severity axis reaches the exit contract exactly here: blocking is
-    // derived through the taxonomy table, never name-matched (CLOUD-168), and
-    // the two-valued outcome becomes a code in one place (§7).
-    Ok(ExitCode::verdict(rules::any_blocking(
-        &findings,
-        config.fail_on_warning,
-    )))
+    Ok(())
 }
 
 /// What a clean run says on stderr, or `None` when it says nothing (CLOUD-222).
@@ -3998,9 +4010,21 @@ mod tests {
         // (json, machine, clean) -> whether a line is emitted.
         let cases = [
             ((false, false, true), true, "attended, clean, human channel"),
-            ((false, true, true), false, "piped or CI: the agent path is silent"),
-            ((true, false, true), false, "-J: the document is the whole answer"),
-            ((false, false, false), false, "findings said something already"),
+            (
+                (false, true, true),
+                false,
+                "piped or CI: the agent path is silent",
+            ),
+            (
+                (true, false, true),
+                false,
+                "-J: the document is the whole answer",
+            ),
+            (
+                (false, false, false),
+                false,
+                "findings said something already",
+            ),
             ((true, true, false), false, "none of the three hold"),
         ];
         for ((json, machine, clean), speaks, why) in cases {
