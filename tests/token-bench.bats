@@ -58,12 +58,47 @@ setup() {
 
 @test "a not-measured capability with no stated reason is refused" {
 	# A gap that is stated is a finding; a gap that is silent is a claim of
-	# coverage nobody made on purpose. Stripping the reason leaves a section that
-	# reads as covered.
-	sed -i 's/^\*\*not measured\*\* — .*/**not measured**/' "$ROOT/bench/tokens/RESULTS.md"
+	# coverage nobody made on purpose.
+	#
+	# The section is APPENDED rather than made by stripping a reason off an
+	# existing one: every committed workload carries a figure since CLOUD-121
+	# landed the handle verbs, so a test that edited the published table would
+	# have quietly stopped exercising this rule the moment the last "not measured"
+	# row got its number. The honesty pass runs before the regeneration diff, so a
+	# hand-written section is judged on its own.
+	cat >>"$ROOT/bench/tokens/RESULTS.md" <<-'EOF'
+
+		### silent-gap — a capability nobody scoped
+
+		**Question.** Does an unexplained omission survive the gate?
+
+		**not measured**
+	EOF
 	run "$CHECK"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"token-bench-unmethodical (no figure and no stated reason)"* ]]
+}
+
+@test "a not-measured capability WITH a reason passes, so the rule is not just a ban" {
+	# The other half, and what keeps the rule from reading as "never say not
+	# measured": a stated gap is the honest answer the issue asks for, and the
+	# gate must accept one. Without this the suite would pass just as happily if
+	# the check refused every `not measured` line outright.
+	cat >>"$ROOT/bench/tokens/workloads.toml" <<-'EOF'
+
+		[[workload]]
+		id = "stated-gap"
+		capability = "suite fixture"
+		fixture = "scan-pointer"
+		question = "Is a gap with a reason accepted?"
+		runs = 1
+		not_measured = "a reason the suite supplies, so the accepting path is exercised"
+	EOF
+	run env TOKEN_BENCH_OUT="$ROOT/bench/tokens/RESULTS.md" "$BENCH"
+	[ "$status" -eq 0 ]
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+	grep -q "a reason the suite supplies" "$ROOT/bench/tokens/RESULTS.md"
 }
 
 @test "a missing table is a violation, never a quiet pass" {

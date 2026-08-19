@@ -67,17 +67,25 @@ count for the task is the step count above.
 
 **Question.** What is in this log around the line that matters, without re-running the command?
 
-**not measured** — the capability is not shipped — `show <handle>` and its select verbs are CLOUD-121, the next issue in this bundle
+**Baseline** (2 step(s), `tail -n 200 build.log` then `cat build.log`). The same two commands `build-warning`'s baseline costs, because it is the same pain: guess a window, miss the line, re-run to widen. Repeated deliberately rather than cross-referenced — a workload whose baseline lives in another row is a figure a reader has to assemble.
 
-No figure is published for this capability, and none is projected from a
-neighbouring one. A projection is an assertion wearing a measurement's clothes.
+**Batten** (3 step(s), `batten exec --capture-only -- cat build.log` then `batten capture show "$(batten capture list --stream stdout | cut -d' ' -f1)" --grep 'warning[duplicate]'` then `batten capture show "$(batten capture list --stream stdout | cut -d' ' -f1)" --lines 125:130`). Three steps and no second run of the command. `--capture-only` returns handles instead of the log, then the agent greps the frozen capture and widens around the line the grep named. The command substitution is the agent reading a handle out of step one's own pointer output — it costs nothing here because it costs nothing there either, the handle having already been printed. What this measures against the baseline is precisely the re-run the acceptance criterion says handles delete, plus the dump the agent never has to hold.
+
+**Method.** measured; 3 runs per arm, byte-identical across all of them; run
+count for the task is the step count above.
+
+| arm | steps | bytes | est. tokens | USD / 1k tasks (fresh) | USD / 1k tasks (cache read) | exit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| baseline | 2 | 25731 | 6433 | 12.8660 | 1.2866 | 0 |
+| batten | 3 | 877 | 220 | 0.4400 | 0.0440 | 0 |
+| **ratio** | | **29.34×** | **29.24×** | | | |
 
 ## Aggregate
 
 **Not published.** An aggregate across capabilities is a weighted mean over a
 workload mix nobody here has measured, so it would be exactly the unmethodical
-figure this benchmark exists to beat. Measured capabilities: 2. Reporting
-"not measured" with a reason above: 1.
+figure this benchmark exists to beat. Measured capabilities: 3. Reporting
+"not measured" with a reason above: 0.
 
 ## Stated gaps
 

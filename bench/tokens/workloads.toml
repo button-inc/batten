@@ -79,8 +79,27 @@ fixture = "build-warning"
 question = "What is in this log around the line that matters, without re-running the command?"
 runs = 3
 
-# No arms, and therefore no figure. The honesty gate refuses a number here rather
-# than borrowing `build-warning`'s or projecting one from the capture store's byte
-# counts: a projection is an assertion wearing a measurement's clothes, and this
-# issue exists because borrowed magnitudes drift from their sources.
-not_measured = "the capability is not shipped — `show <handle>` and its select verbs are CLOUD-121, the next issue in this bundle"
+# This row read "not measured — the capability is not shipped" until CLOUD-121
+# shipped it. The harness measured rather than asserted, and this is the diff
+# where that pays: the number below was produced by the same command a reader can
+# run, not written by whoever wanted it to be good.
+baseline = ["tail -n 200 build.log", "cat build.log"]
+baseline_model = """
+The same two commands `build-warning`'s baseline costs, because it is the same \
+pain: guess a window, miss the line, re-run to widen. Repeated deliberately \
+rather than cross-referenced — a workload whose baseline lives in another row is \
+a figure a reader has to assemble."""
+
+batten = [
+  "$BATTEN exec --capture-only -- cat build.log",
+  "$BATTEN capture show \"$($BATTEN capture list --stream stdout | cut -d' ' -f1)\" --grep 'warning[duplicate]'",
+  "$BATTEN capture show \"$($BATTEN capture list --stream stdout | cut -d' ' -f1)\" --lines 125:130",
+]
+batten_model = """
+Three steps and no second run of the command. `--capture-only` returns handles \
+instead of the log, then the agent greps the frozen capture and widens around the \
+line the grep named. The command substitution is the agent reading a handle out \
+of step one's own pointer output — it costs nothing here because it costs nothing \
+there either, the handle having already been printed. What this measures against \
+the baseline is precisely the re-run the acceptance criterion says handles \
+delete, plus the dump the agent never has to hold."""
