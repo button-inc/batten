@@ -64,3 +64,19 @@ cross_check_body() {
 	code=$(grep -vE '^[[:space:]]*#' <<<"$(cross_check_body)")
 	! grep -qE 'cargo (build|test|run)' <<<"$code"
 }
+
+@test "cross-check denies warnings, so a dead cfg-gated helper fails rather than prints" {
+	# CLOUD-397. `--all-targets` made the test code visible to this gate; warnings
+	# being tolerated is what let its one finding sit unread on every run. The flag
+	# is the predicate and not the run's exit code, because a green run cannot
+	# distinguish "no warnings" from "warnings tolerated" — which is precisely how
+	# this went unnoticed for as long as it did.
+	local code
+	code=$(grep -vE '^[[:space:]]*#' <<<"$(cross_check_body)")
+
+	local line
+	while IFS= read -r line; do
+		[[ "$line" == *"RUSTFLAGS="* ]]
+		[[ "$line" == *"-D warnings"* ]]
+	done <<<"$(grep -E 'cargo check' <<<"$code")"
+}

@@ -853,8 +853,18 @@ for t in x86_64-pc-windows-gnu; do
   # using a Unix-only API without that gate compiled fine here forever
   # (CLOUD-395). It passes today, which is the point of adding the flag now: the
   # property held by luck, and a mechanism is what makes it hold on purpose.
-  if ! cargo check --workspace --all-targets --target "$t"; then
-    echo "::error:: cross-check: $t does not type-check." >&2
+  # `-D warnings`, and it is the SWEEP rather than a tightening for its own sake
+  # (CLOUD-397). `--all-targets` made the test code visible to this gate for the
+  # first time; tolerating warnings meant the one thing it found — a helper whose
+  # every caller is `#[cfg(unix)]` but which is not, so it is dead on the other
+  # target — printed a line nobody read on every run. The class is invisible on
+  # Linux by construction, so a hand audit of it is feedforward only; this makes
+  # the compiler the sweep, once and for every future instance.
+  #
+  # It cannot red on a third-party warning: cargo compiles registry dependencies
+  # with `--cap-lints allow`, so only workspace code is held to this.
+  if ! RUSTFLAGS="-D warnings" cargo check --workspace --all-targets --target "$t"; then
+    echo "::error:: cross-check: $t does not type-check cleanly (warnings are denied here — see CLOUD-397)." >&2
     exit 1
   fi
 done

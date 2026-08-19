@@ -2604,6 +2604,11 @@ fn exec_cmd(name: &str, args: &[&str]) -> (Output, PathBuf) {
 }
 
 /// Every file under a scratch home's capture store, sorted.
+///
+/// `cfg(unix)` because every caller is, and an ungated helper whose callers all
+/// vanish is dead code on the other target — invisible on Linux, and the first
+/// thing `cross-check` reports for the Windows triple (CLOUD-397).
+#[cfg(unix)]
 fn captures_in(home: &std::path::Path) -> Vec<String> {
     let mut found = Vec::new();
     let root = home.join("data");
