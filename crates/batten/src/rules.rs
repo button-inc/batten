@@ -30,14 +30,16 @@
 //! * **Pointer-only output** (non-negotiable rule 4): a finding is a
 //!   `path:line`, never the matched bytes.
 //! * **Byte-stable results** (§6): findings are sorted, so identical input yields
-//!   identical output.
+//!   identical output — and rule-scoped findings are deduped *before* that sort
+//!   ([`dedup_scoped`]), so a `command` rule failing in every batch of a large
+//!   match set reports once rather than once per batch (CLOUD-396).
 //!
 //! File selection is intentionally simple at this stage: a walk of the working
 //! tree, skipping `.git`. Scoping selection to the git change-set / protected /
 //! unlanded sets is a separate concern (CLOUD-36, CLOUD-37) that layers on top of
 //! this walk without changing the rule model.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -1636,11 +1638,54 @@ fn run(
             scan.not_evaluated.insert(rule.id.clone(), why);
         }
     }
+    // BEFORE the sort, deliberately (CLOUD-396): the sort is what makes the
+    // output byte-stable, so a dedup running after it would be reading an order
+    // it also has to preserve, and "which duplicate survived" would become a
+    // property of the comparator. Run first and the survivor is the one the
+    // engine emitted first — a function of the walk, which is already sorted.
+    dedup_scoped(&mut scan.findings);
     // Sort by the pointer tuple so identical input yields identical output.
     scan.findings.sort_by(|a, b| {
         (a.path.as_str(), a.line, a.rule.as_str()).cmp(&(b.path.as_str(), b.line, b.rule.as_str()))
     });
     Ok(scan)
+}
+
+/// Collapse rule-scoped findings that the same rule raised more than once,
+/// keeping the first of each identity (CLOUD-396).
+///
+/// A `command` rule whose match set exceeds [`MAX_FILES_BYTES`] runs once per
+/// [`batches`] group, and a rule-scoped finding condemns the **batch** rather
+/// than a span — so its identity carries nothing telling one batch from
+/// another, and a rule failing in N batches emitted N byte-identical findings.
+/// Batching is an argv bound, an implementation detail this module's own
+/// [`MAX_FILES_BYTES`] doc promises is "invisible to the predicate"; a finding
+/// count that moves with the caller's path count is that detail leaking into
+/// the output contract (§6).
+///
+/// **Identity is the unit, not the whole value**, because identity is already
+/// what "one finding" means downstream: [`crate::findings`] holds one record per
+/// identity, so two findings sharing one is one finding there whatever this
+/// function does. Emitting both is the leak, not the disagreement.
+///
+/// **Only [`identity::FindingKind::Scope`]**, and the two exclusions are for
+/// different reasons. A span-keyed kind may legitimately raise the same identity
+/// twice — the same banned text on two lines is two pointers, and collapsing
+/// them would delete a location nothing else reports. An identity this build
+/// cannot classify (`kind()` is `None`) is left alone for
+/// [`crate::findings`]'s reason: guessing a kind for one a later version minted
+/// would silently drop findings by a rule nobody wrote here.
+fn dedup_scoped(findings: &mut Vec<Finding>) {
+    let mut seen: BTreeSet<identity::StoredIdentity> = BTreeSet::new();
+    findings.retain(|finding| {
+        if finding.identity.kind() != Some(identity::FindingKind::Scope) {
+            return true;
+        }
+        // `insert` answers false for an identity already held, which is the
+        // "drop this one" verdict — first occurrence wins, and `retain` keeps
+        // the order the engine emitted in.
+        seen.insert(finding.identity.clone())
+    });
 }
 
 /// Apply one rule to the pre-collected, sorted `files` list.
@@ -1810,7 +1855,9 @@ pub const FILES_PLACEHOLDER: &str = "{{files}}";
 /// Kept well under every platform's real argv limit (Windows' ~32 KiB command
 /// line is the tightest), so a large match set is split across independent
 /// invocations instead of overflowing. Batching is invisible to the predicate:
-/// a non-zero exit in *any* batch is a violation.
+/// a non-zero exit in *any* batch is a violation — and invisible to the
+/// **count** too, since [`dedup_scoped`] collapses the one finding per batch a
+/// failing rule would otherwise emit (CLOUD-396).
 pub const MAX_FILES_BYTES: usize = 16_384;
 
 /// Run a [`RuleKind::Command`] rule over its matched paths.
@@ -3907,6 +3954,87 @@ mod tests {
         let flattened: Vec<&str> = batches.concat();
         let expected: Vec<&str> = paths.iter().map(String::as_str).collect();
         assert_eq!(flattened, expected, "batching must preserve order");
+    }
+
+    /// Enough matching files under `dir` that [`batches`] has to split them,
+    /// sized off [`MAX_FILES_BYTES`] rather than a magic count — the bound is
+    /// the thing under test, so a fixture that hard-codes a number stops
+    /// splitting the day the bound moves and the case passes vacuously.
+    ///
+    /// Long names rather than many files: the argv bound is bytes, so 130 files
+    /// carry it as cheaply as 2000 short ones and the case stays fast.
+    fn files_forcing_a_split(dir: &Path) {
+        let stem = "b".repeat(120);
+        // `+ 1` per path is the separator `batches` accounts for; `+ 2` files
+        // past the bound guarantees a second group rather than an exact fill.
+        let count = MAX_FILES_BYTES / (stem.len() + ".0000.rs".len() + 1) + 2;
+        for i in 0..count {
+            write(dir, &format!("{stem}.{i:04}.rs"), "x\n");
+        }
+    }
+
+    #[test]
+    fn a_command_rule_failing_in_every_batch_reports_once() {
+        // CLOUD-396. The match set is large enough that `command_rule` spawns
+        // per batch and `false` fails in every one of them, so the pre-dedup
+        // engine emitted one byte-identical finding per batch — a count moving
+        // with the caller's path count, which is the argv bound leaking into
+        // the output contract.
+        let dir = temp_dir("cmd-multi-batch");
+        files_forcing_a_split(&dir);
+
+        // The premise, asserted rather than assumed: this match set really does
+        // split. Without it a fixture that stopped splitting would report one
+        // finding for the trivial reason and still pass.
+        let files = tree_files(&dir).unwrap();
+        let matched: Vec<&String> = files.iter().collect();
+        assert!(
+            batches(&matched).len() > 1,
+            "the fixture must force more than one batch, or this proves nothing"
+        );
+
+        let findings = run_all(&[command("multi", "**/*.rs", "false {{files}}")], &dir).unwrap();
+        assert_eq!(
+            findings.len(),
+            1,
+            "batching is invisible to the predicate: one failing rule is one finding"
+        );
+    }
+
+    #[test]
+    fn dedup_collapses_one_rule_and_never_two() {
+        // The other half, and the one that stops the fix from over-reaching:
+        // two failing rules over the same split match set are two findings, not
+        // one. The identities differ by rule id, so nothing here rests on the
+        // findings' other fields differing — they do not.
+        let dir = temp_dir("cmd-multi-batch-two-rules");
+        files_forcing_a_split(&dir);
+
+        let findings = run_all(
+            &[
+                command("first", "**/*.rs", "false {{files}}"),
+                command("second", "**/*.rs", "false {{files}}"),
+            ],
+            &dir,
+        )
+        .unwrap();
+        assert_eq!(findings.len(), 2, "one finding per failing rule");
+        let rules: Vec<&str> = findings.iter().map(|f| f.rule.as_str()).collect();
+        assert_eq!(rules, ["first", "second"], "and both rules are named");
+    }
+
+    #[test]
+    fn dedup_leaves_span_findings_at_two_lines_alone() {
+        // The exclusion the dedup rests on. A `forbid` rule reports a pointer
+        // per line, and its identity is not the scope kind — so two matches of
+        // the same text are two findings, and collapsing them would delete a
+        // location nothing else reports.
+        let dir = temp_dir("dedup-spans-survive");
+        write(&dir, "a.rs", "TODO\nfine\nTODO\n");
+        let findings = run_static(&[forbid("todo", "**/*.rs", "TODO")], &dir).unwrap();
+        assert_eq!(findings.len(), 2, "each matched line keeps its own pointer");
+        let lines: Vec<Option<usize>> = findings.iter().map(|f| f.line).collect();
+        assert_eq!(lines, [Some(1), Some(3)]);
     }
 
     #[test]
