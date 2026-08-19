@@ -143,7 +143,11 @@ rule() {
 	CONFIG_LINT_BASE=origin/main run "$CHECK"
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"severity-lowered"* ]]
-	[[ "$output" == *"weakens policy against"* ]]
+	# The refusal names the ref it judged against. Deliberately not worded
+	# "weakens policy": armed, one run can report a base-ref weakening AND a
+	# single-tree smell, so a message claiming only the first would be wrong
+	# half the time.
+	[[ "$output" == *"judged against"* ]]
 }
 
 @test "with a base ref supplied an unweakened tree still exits 0" {
@@ -164,45 +168,54 @@ rule() {
 	[[ "$output" == *"could not judge"* ]]
 }
 
-# --- the named bypass, and the three things it must not reach ----------------
+# --- there is no PR-time hatch, and that is asserted -------------------------
 
-@test "the bypass waives a base-ref weakening, loudly and by name" {
+@test "no environment variable waives a base-ref weakening" {
+	# A label-driven bypass was built here and removed (CLOUD-236). Its
+	# justification — that a deliberate relaxation becomes visible in review —
+	# is false in this repository: it lands by fast-forward on green CI, reviews
+	# AFTER merge, and merges each PR under its own author, so a label the author
+	# sets is one extra self-served click rather than a control.
+	#
+	# Asserted as a decision-table case rather than left to the header, because
+	# the failure mode is someone rebuilding it. A weakening blocks, and the
+	# env name that used to waive it now does nothing.
 	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
 	CONFIG_LINT_BASE=origin/main BATTEN_CONFIG_LINT_BASE_BYPASS=1 run "$CHECK"
-	[ "$status" -eq 0 ]
-	[[ "$output" == *"BATTEN_CONFIG_LINT_BASE_BYPASS set"* ]]
+	[ "$status" -eq 2 ]
 	[[ "$output" == *"severity-lowered"* ]]
 }
 
-@test "the bypass does not reach a single-tree smell in the same run" {
-	# The load-bearing bound. A single-tree smell is a property of the commit and
-	# is what the pre-commit gate exists for; a hatch for the base-ref class must
-	# not quietly cover it, even when both are reported by one invocation.
-	# Built with `printf`, never a double-quoted `\n`: bash does not interpret
-	# the escape there, and a base config carrying a literal backslash-n does not
-	# parse — which this gate correctly reports as exit 1, "could not look",
-	# rather than the verdict this case is about.
-	base=$(printf 'version = 1\nprotected = ["a"]\n')
-	work=$(printf 'version = 1\nprotected = []\n')
-	arm_base "$base$(rule no-todo deny)" "$work$(rule no-todo warn)"
-	CONFIG_LINT_BASE=origin/main BATTEN_CONFIG_LINT_BASE_BYPASS=1 run "$CHECK"
+@test "the refusal points at grooming, not at a flag to set" {
+	# Where the intent belongs: the issue's Ready block, checked by `ready-lint`
+	# before the work starts. A refusal naming a bypass would teach the opposite.
+	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
 	[ "$status" -eq 2 ]
-	[[ "$output" == *"empty-protected-set"* ]]
+	[[ "$output" == *"Ready block"* ]]
+	[[ "$output" != *"BYPASS"* ]]
 }
 
-@test "the bypass does not reach a usage error" {
-	# "Could not look" is not a verdict, so there is nothing there to waive.
-	printf 'version = 1\nthis is not toml\n' >"$ROOT/batten.toml"
-	CONFIG_LINT_BASE=origin/main BATTEN_CONFIG_LINT_BASE_BYPASS=1 run "$CHECK"
-	[ "$status" -eq 1 ]
-}
-
-@test "the bypass does nothing when no base ref is armed" {
-	# Unarmed it must be inert, or it would be an off switch for the `hk` gate
-	# every commit passes.
-	printf 'version = 1\nprotected = []\n' >"$ROOT/batten.toml"
-	BATTEN_CONFIG_LINT_BASE_BYPASS=1 run "$CHECK"
-	[ "$status" -eq 2 ]
+@test "the task carries no bypass branch at all" {
+	# Over the committed bytes, so the hatch cannot come back as dead code that a
+	# later edit re-wires.
+	#
+	# COMMENTS STRIPPED FIRST, and that is not a loophole — it is the difference
+	# between the mechanism and the record of why the mechanism is absent. The
+	# header argues at length for there being no hatch, naming the rejected
+	# design; a gate that fired on that paragraph would be unfixable except by
+	# deleting the explanation, which is the shape `ci-local-parity` calls out
+	# and refuses to ship. Prose may discuss a bypass; code may not have one.
+	#
+	# Captured into a variable rather than piped into `grep -q`, per
+	# `pipefail-grep-check`: an early-exiting consumer makes the producer report
+	# failure on a MATCH.
+	code=$(grep -vE '^[[:space:]]*#' "$CHECK" || true)
+	run grep -qiE 'BYPASS|waiv' <<<"$code"
+	[ "$status" -ne 0 ] || {
+		echo "the gate's CODE carries a bypass or waiver again — CLOUD-236 removed it deliberately" >&2
+		false
+	}
 }
 
 # --- the claims this file makes about the rest of the system ------------------
@@ -256,20 +269,17 @@ rule() {
 	}
 }
 
-@test "the base-ref smell ids match WeakeningKind exactly" {
-	# A crate<->task contract: the bypass recognises a weakening by id, so a
-	# `WeakeningKind` added to the crate and not here would not be recognised as
-	# one. That direction fails CLOSED — the bypass refuses to downgrade and the
-	# run fails — but a set that silently drifts is still a set nobody can trust,
-	# so it is asserted rather than commented.
-	crate=$(sed -n 's/.*WeakeningKind::[A-Za-z]* => "\([a-z-]*\)".*/\1/p' \
-		"$REPO/crates/batten/src/trust.rs" | sort -u)
-	task=$(sed -n '/^base_ref_smells="\\$/,/^[a-z-]*"$/p' "$CHECK" |
-		sed -e 's/"$//' -e '/^base_ref_smells=/d' | sort -u)
-	[ -n "$crate" ]
-	[ "$crate" = "$task" ] || {
-		echo "crate: $crate" >&2
-		echo "task:  $task" >&2
+@test "verify arms the same task CI arms" {
+	# `ci-local-parity` property 3 satisfied rather than dodged, and the reason
+	# it matters here is measured: the first arming ran in CI ALONE, so a
+	# ref-namespace mistake was unreachable by any local run and cost a full
+	# matrix to find. A weakening must be provable locally before a runner is
+	# spent, and CI must confirm it against the PR's real base.
+	run grep -qE 'CONFIG_LINT_BASE=origin/main mise run config-lint' "$REPO/mise.toml"
+	[ "$status" -eq 0 ] || {
+		echo "verify no longer arms config-lint, so CI would be where a weakening is discovered" >&2
 		false
 	}
+	run grep -q 'mise run config-lint' "$REPO/.github/workflows/ci.yml"
+	[ "$status" -eq 0 ]
 }

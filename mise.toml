@@ -1111,6 +1111,27 @@ if ! BASE_SHA="$(git rev-parse origin/main)" HEAD_SHA="$(git rev-parse HEAD)" mi
   echo "::error:: verify: commit-lint failed. No receipt written." >&2
   exit 1
 fi
+# The config trust mechanism, armed (CLOUD-236). `--config-from` reads the
+# committed authority out of a trusted ref rather than out of the branch under
+# review, so a change cannot lower the bar it is judged by (house style §8).
+#
+# HERE AND IN CI, which is `ci-local-parity` property 3 satisfied rather than
+# dodged: the `ci.yml` step runs this same task against the PR's real base, so
+# CI confirms what this proved. The first arming ran in CI alone and a
+# ref-namespace mistake was unreachable by any local run — it cost a matrix.
+#
+# `origin/main` is the right base HERE and is not the property-of-the-world
+# mistake the `hk` gate must avoid: `verify` has already refused this branch
+# unless it is rebased on current `origin/main` (see the guard in `verify`), so
+# this task is a function of (commit, current trunk) before this line runs. The
+# pre-commit step stays single-tree, where that reasoning does not hold.
+#
+# Unarmed callers are unaffected: absent `CONFIG_LINT_BASE` the task runs exactly
+# the single-tree class the `hk` gate has always run.
+if ! CONFIG_LINT_BASE=origin/main mise run config-lint; then
+  echo "::error:: verify: config-lint refused this tree — either batten.toml carries a policy smell, or this branch weakens policy against origin/main. No receipt written." >&2
+  exit 1
+fi
 # The external analyzer's verdict on this exact HEAD, which `final` asserts in
 # CI (CLOUD-441). Here for the reason every other gate is: what CI runs, verify
 # runs, so the failure is discovered locally and for free rather than costing a

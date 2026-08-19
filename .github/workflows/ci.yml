@@ -225,43 +225,36 @@ jobs:
           # "assert the submodule, no rust targets"; unset would take the
           # default pair.
           DOCTOR_TARGETS: ""
-          # CLOUD-236: ARMING THE CONFIG TRUST MECHANISM. `--config-from` landed
-          # with CLOUD-31 and no caller ever passed it, so house style §8's
-          # security property — policy loads out of band of the change under
-          # review, and a branch cannot lower the bar it is judged by — was held
-          # nowhere. This is the caller.
-          #
-          # An ENV VAR ON THE EXISTING STEP, not a step or job of its own, and
-          # the shape is forced by `ci-local-parity` property 3: every task CI
-          # runs must be one `verify` runs, and `verify` must NEVER run this
-          # armed — a local verdict that depends on whatever the base ref happens
-          # to be is a property of the world, which is the `lock-check` split and
-          # the whole reason the base-ref class is CI-only. A dedicated
-          # `mise run config-lint` step would name a task `verify` does not run
-          # and fail that gate; the gate is right, and this is the shape that
-          # respects it. `mise-tasks/config-lint` reads the variable and adds the
-          # flag; unset, it behaves exactly as the `hk` gate has always run it.
-          #
-          # `origin/`-PREFIXED, and the prefix is the whole of what a red run
-          # taught here. `base.ref` is a bare branch NAME (`main`); the fetch
-          # above lands it at `refs/remotes/origin/<name>`, and a CI checkout has
-          # no local branch of that name at all — it is a detached head on the PR
-          # merge ref. So the unprefixed spelling resolved to nothing and the gate
-          # answered exit 1, "cannot read batten.toml at main: no such ref". That
-          # is the fail-LOUD path working exactly as designed, and it is still a
-          # red run this file was responsible for. `tests/config-lint.bats` now
-          # holds the fetch and this value to the same namespace, because no local
-          # run can exercise the pairing: `verify` runs the gate unarmed on purpose.
+
+      # CLOUD-236: THE CONFIG TRUST MECHANISM, ARMED AGAINST THIS PR'S OWN BASE.
+      # `--config-from` landed with CLOUD-31 and no caller ever passed it, so
+      # house style §8's security property — policy loads out of band of the
+      # change under review, so a branch cannot lower the bar it is judged by —
+      # was held nowhere.
+      #
+      # THE SAME TASK `verify` RUNS, which is what makes this a confirmation
+      # rather than a discovery (`ci-local-parity` property 3). `verify:gated`
+      # invokes `mise run config-lint` against `origin/main`; this invokes it
+      # against the PR's real base. The `hk` pre-commit step stays UNARMED — a
+      # pre-commit verdict must not depend on whatever a ref happens to be — and
+      # `verify` is different in kind, since it already refuses a branch that is
+      # not rebased on current `origin/main`.
+      #
+      # `origin/`-PREFIXED, and the prefix is what a red run taught. `base.ref` is
+      # a bare branch NAME; the fetch above lands it at
+      # `refs/remotes/origin/<name>`, and a CI checkout has no local branch of
+      # that name — it is a detached head on the PR merge ref. The unprefixed
+      # spelling resolved to nothing and the gate answered exit 1, "no such ref":
+      # the fail-loud path working, and still a red run. `tests/config-lint.bats`
+      # holds the fetch and this value to the same namespace.
+      #
+      # There is deliberately no bypass here. A deliberate relaxation belongs in
+      # the issue's Ready block at grooming time, not in a label the PR author
+      # sets on a review that happens after the merge.
+      - name: Judge this branch's config against the PR base
+        env:
           CONFIG_LINT_BASE: origin/${{ github.event.pull_request.base.ref }}
-          # THE NAMED BYPASS, AS A LABEL RATHER THAN A COMMITTED EDIT. Smells
-          # carry no severity and there is no waiver yet, so a PR that
-          # legitimately relaxes policy — retiring an obsolete rule, narrowing an
-          # over-broad `protected` set — would otherwise be blocked with no way
-          # through. A label is the escape hatch that leaves a record on the PR
-          # itself and needs no commit to set or unset. The gate bounds what it
-          # can waive: only base-ref weakenings, never a single-tree smell and
-          # never a "could not look" (see the task's header).
-          BATTEN_CONFIG_LINT_BASE_BYPASS: ${{ contains(github.event.pull_request.labels.*.name, 'config-weakening-ok') && '1' || '' }}
+        run: mise run config-lint
 
   cross:
     name: cross
