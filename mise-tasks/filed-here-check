@@ -62,7 +62,7 @@
 # The mutation reads "not answered" as a refusal, so a row the recorder could not
 # lint — mise unresolvable from the tool call's cwd, `ready-lint` exiting 2 —
 # stops the lap over the environment rather than over the row.
-#MUTANT unanswered-refused|s/^\t\*) continue ;; # not answered/\t*) ;; # not answered/|could not be linted is not a refusal
+#MUTANT unanswered-refused|s/^\t\*) continue ;; # not answered/\t*) ;; # not answered/|could not lint is not a refusal
 set -uo pipefail
 
 [ -n "${BATTEN_FILED_HERE_BYPASS:-}" ] && exit 0
