@@ -52,7 +52,7 @@ clap_complete = "4"
 clap_mangen = "0.3"
 # Per-OS base directories: XDG on Linux/macOS (honours XDG_DATA_HOME), the
 # roaming known folder on Windows — the CLOUD-23 state-path rule, one crate.
-etcetera = "0.10"
+etcetera = "0.11"
 # Secret-class identity inputs are HMAC-keyed (CLOUD-123): an unkeyed digest of a
 # matched secret is an offline-guessing oracle, because secrets are often
 # low-entropy and a journalled hash cannot be expunged. Pinned to the 0.12 line,

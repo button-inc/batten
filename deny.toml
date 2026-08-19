@@ -10,15 +10,13 @@ yanked = "deny"
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-# etcetera 0.10 (the newest release that still supports our pinned rustc 1.85 —
-# 0.11 requires 1.87) transitively pulls an older windows-sys (0.59, via `home`)
-# than the 0.61 the rest of the tree resolves. windows-sys is the Windows FFI
-# shim; its multi-versioning is benign and ubiquitous, so skip that subtree to
-# keep the duplicate advisory meaningful. Drop this once the MSRV allows
-# etcetera 0.11, which removes both `home` and the old windows-sys — the MSRV
-# regression that a bump like that introduces is what CLOUD-103 (cargo-msrv)
-# gates automatically.
-skip-tree = [{ crate = "windows-sys@0.59" }]
+# No `skip-tree`, and the empty state is the point: the one exemption this file
+# carried was for `windows-sys@0.59`, arriving via `home` under etcetera 0.10 —
+# the newest release that still built under the old 1.85 floor. Since the floor
+# tracks the toolchain pin (CLOUD-593) etcetera 0.11 resolves, which drops `home`
+# and the old windows-sys outright, so the duplicate it was hiding no longer
+# exists. An exemption whose cause is gone narrows the duplicate advisory for
+# nothing, which is the state it was added to avoid.
 
 [licenses]
 version = 2
