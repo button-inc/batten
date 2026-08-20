@@ -126,6 +126,60 @@ payload() {
 	[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-32")" = "-" ]
 }
 
+# Field 5 is the COLUMN the read saw (CLOUD-775), and `finding-sink-check` reads
+# it to tell an annotation on a terminal row from an amendment to an open one.
+@test "the receipt records the column the read saw" {
+	jq -nc '{id: "CLOUD-775", updatedAt: "2026-08-20T04:00:00.000Z", status: "Done"}' | "$CHECK" >/dev/null
+	[ "$(awk 'NR==1{print $5}' "$RECEIPTS/issue-read.CLOUD-775")" = "done" ]
+}
+
+# The delimiter, which is the whole reason the value is normalised rather than
+# written through: half the board's columns carry a space, and `In Progress`
+# verbatim makes field 5 `In` and field 6 `Progress`. Field 6 is asserted empty,
+# because "field 5 is in-progress" alone passes against a receipt that also
+# spilled a sixth field.
+@test "a column with a space is one field, not two" {
+	jq -nc '{id: "CLOUD-776", updatedAt: "2026-08-20T04:00:00.000Z", status: "In Progress"}' | "$CHECK" >/dev/null
+	local line
+	line=$(cat "$RECEIPTS/issue-read.CLOUD-776")
+	[ "$(awk 'NR==1{print $5}' <<<"$line")" = "in-progress" ]
+	[ -z "$(awk 'NR==1{print $6}' <<<"$line")" ]
+}
+
+# The row the `absent-status-reads-open` mutation is written against, and the
+# direction the whole arm rests on. An omitted status must record `-`, which
+# `finding-sink-check` reads as "could not look" and still reports on — so
+# sending less makes that gate louder. A plausible open column recorded here
+# instead is the forgery: a receipt asserting a row is open when nothing was ever
+# read about it, minted by sending LESS. It is the hollow digest one field over
+# (CLOUD-691) in a second spelling.
+@test "a payload with no status records no column, rather than one that reads as open" {
+	run bash -c "'$CHECK'" <<<"$(jq -nc '{id: "CLOUD-777", updatedAt: "2026-08-20T04:00:00.000Z"}')"
+	[ "$status" -eq 0 ]
+	[ "$(awk 'NR==1{print $5}' "$RECEIPTS/issue-read.CLOUD-777")" = "-" ]
+}
+
+# An explicitly null column is the same fact as an absent one, and a `has()` test
+# alone would let it through to `jq -r`, which renders it as the string "null" —
+# a column name no board carries and no reader recognises.
+@test "an explicitly null status records no column either" {
+	jq -nc '{id: "CLOUD-778", updatedAt: "2026-08-20T04:00:00.000Z", status: null}' | "$CHECK" >/dev/null
+	[ "$(awk 'NR==1{print $5}' "$RECEIPTS/issue-read.CLOUD-778")" = "-" ]
+}
+
+# The arms are independent. A payload carrying a body and no status, or a status
+# and no body, must record the one it has and `-` for the one it does not —
+# otherwise the projection CLOUD-526 bought is silently re-coupled.
+@test "the body baseline and the column arm do not depend on each other" {
+	jq -nc '{id: "CLOUD-779", updatedAt: "x", description: "a body"}' | "$CHECK" >/dev/null
+	[[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-779")" =~ ^[0-9a-f]{40}$ ]]
+	[ "$(awk 'NR==1{print $5}' "$RECEIPTS/issue-read.CLOUD-779")" = "-" ]
+
+	jq -nc '{id: "CLOUD-780", updatedAt: "x", status: "Todo"}' | "$CHECK" >/dev/null
+	[ "$(awk 'NR==1{print $4}' "$RECEIPTS/issue-read.CLOUD-780")" = "-" ]
+	[ "$(awk 'NR==1{print $5}' "$RECEIPTS/issue-read.CLOUD-780")" = "todo" ]
+}
+
 # CLOUD-526's accept row: the declared field set is `id` and `updatedAt`, and a
 # payload carrying exactly those is accepted. This is the row that buys the
 # projection — without it, "the gate no longer demands the body" is a claim

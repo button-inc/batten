@@ -39,9 +39,11 @@
 # Usage: mise run issue-read-check   (a get_issue payload on stdin)
 #
 # DECLARED FIELD SET (CLOUD-526): `id` and `updatedAt`, both required, plus
-# `description` on the optional baseline arm. Sending fields it does not read is
-# harmless; sending a body it does not need is the cost this gate stopped
-# charging.
+# `description` on the optional baseline arm and `status` on the optional column
+# arm (CLOUD-775). Sending fields it does not read is harmless; sending a body it
+# does not need is the cost this gate stopped charging. Both arms record `-` when
+# absent, and `-` is read downstream as "could not look" — so an omission always
+# makes a later gate louder, never quieter.
 #
 # Exit 0 receipt minted / 1 the payload is not a usable read / 2 unreadable
 # stdin — matching `claim-check` and `issue-search-check` so all three compose.
@@ -170,11 +172,53 @@ else
 	body_hash="-"
 fi
 
+# THE STATUS ARM, a fifth field (CLOUD-775). `finding-sink-check` decides whether
+# a turn that cited evidence gave the finding a HOME, and since CLOUD-475 it has
+# split tracker writes on a proxy: a `save_issue` with no `id` opens a row, one
+# WITH an id annotates a row that may be terminal. The proxy is right about a
+# comment onto the Done issue that shipped the defect and wrong about the
+# symmetric case — amending a row that is still open schedules the work, and was
+# reported as a stranding. The target's state is not lookupable in a hook (no
+# tracker credential, `claim-check`'s constraint), but this receipt already
+# exists for every row by the time anything annotates it: `issue-read-guard`
+# denies `save_issue` without one. So the column the read SAW is recorded here
+# and read there, and an uncomputable question becomes a local file read.
+#
+# AN ARM, NOT A FIELD OF THE DECLARED SET, exactly like `description` above and
+# for the same CLOUD-526 reason: the declared set is what this gate DECIDES over
+# — which row, at which revision — and `status` decides nothing here. Demanding
+# it would price every read on behalf of a different gate's question.
+#
+# WHICH MEANS THE DIRECTION IS THE SAFETY ARGUMENT. Absent records `-`, which
+# `finding-sink-check` reads as "could not look" and STILL REPORTS. Sending less
+# makes that gate LOUDER, so there is no payload an author can send, and no
+# payload they can withhold, that buys silence. `-` already points this way one
+# field over (CLOUD-691), where the opposite — a plausible value invented for an
+# absent field — is the hollow digest that shipped.
+#
+# NORMALISED, because the receipt is space-delimited and half the board's columns
+# carry a space. `In Progress` written through would make field 5 `In` and field 6
+# `Progress`, and every positional reader downstream would be reading a fragment.
+# Lowercase with non-alphanumerics folded to `-`: `todo`, `in-progress`, `done`.
+# Appending is safe for the readers that exist — `issue-read-guard` reads field 3,
+# `claim-check` field 4, and neither moves.
+#
+# The mutation gives the absent arm a plausible open column instead of `-`, which
+# is the forgery this shape exists to refuse: a receipt asserting a row is open
+# when nothing was ever read about it, minted by sending LESS.
+#MUTANT absent-status-reads-open|s@seen_status="-"@seen_status="todo"@|an absent status must not read as an open row
+if jq -e 'has("status") and (.status != null)' <<<"$payload" >/dev/null 2>&1; then
+	seen_status=$(jq -r '.status | ascii_downcase | gsub("[^a-z0-9]+"; "-")' <<<"$payload" 2>/dev/null) || seen_status="-"
+	[ -n "$seen_status" ] || seen_status="-"
+else
+	seen_status="-"
+fi
+
 # TRUNCATED, never appended, unlike `issue-search-check`'s. A search receipt
 # accumulates what the author has seen; this one answers "how old is the newest
 # read", and an append would leave the guard reading whichever line it happened
 # to parse first — the freshest read must overwrite the stalest.
-printf '%s %s %s %s\n' "$key" "$seen" "$read_at" "$body_hash" >"$receipt" 2>/dev/null || {
+printf '%s %s %s %s %s\n' "$key" "$seen" "$read_at" "$body_hash" "$seen_status" >"$receipt" 2>/dev/null || {
 	echo "::error:: issue-read-check: cannot write $receipt" >&2
 	exit 2
 }
