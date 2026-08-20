@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "preToolUse",
+  "conversation_id": "sess-cursor-write",
+  "cwd": "/repo",
+  "tool_name": "write",
+  "tool_input": {
+    "file_path": "guarded.txt"
+  }
+}

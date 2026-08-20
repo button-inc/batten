@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "BeforeTool",
+  "session_id": "sess-gemini-write",
+  "cwd": "/repo",
+  "tool_name": "WriteFile",
+  "tool_input": {
+    "file_path": "guarded.txt"
+  }
+}

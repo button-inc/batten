@@ -2573,6 +2573,146 @@ fn every_host_denies_the_same_call_through_its_own_channel() {
     }
 }
 
+/// A policy declaring one protected path and **Claude Code's** write vocabulary.
+///
+/// The table a consumer actually writes, and the one CLOUD-779 measured: four
+/// tool names, all of them one host's. Every other harness spells a write
+/// differently, which is the whole defect — so this config is deliberately not
+/// widened to name the others.
+const PROTECTED_WRITE_CONFIG: &str = r#"version = 1
+protected = ["guarded.txt"]
+
+[[redirect]]
+glob = "guarded.txt"
+mutation = "change it through the surface that owns it"
+
+[[verb]]
+verb = "rm"
+effect = "destructive"
+redirect = "restore it with `git checkout --`"
+
+[[verb]]
+verb = "Write"
+effect = "write"
+redirect = "write through the surface that owns the file"
+
+[[verb]]
+verb = "Edit"
+effect = "write"
+redirect = "write through the surface that owns the file"
+
+[[verb]]
+verb = "MultiEdit"
+effect = "write"
+redirect = "write through the surface that owns the file"
+
+[[verb]]
+verb = "NotebookEdit"
+effect = "write"
+redirect = "write through the surface that owns the file"
+"#;
+
+/// Whether this host's deny travels in a JSON body or on the exit code.
+///
+/// The channel matrix CLOUD-40 owns, restated here as data so the write matrix
+/// below asserts one verdict per harness rather than one per channel.
+fn denied(harness: &str, output: &Output) -> bool {
+    match harness {
+        "claude-code" => {
+            String::from_utf8_lossy(&output.stdout).contains("\"permissionDecision\":\"deny\"")
+        }
+        "cursor" => String::from_utf8_lossy(&output.stdout).contains("\"permission\":\"deny\""),
+        _ => output.status.code() == Some(2),
+    }
+}
+
+/// THE PINNED REGRESSION (CLOUD-779), over the compiled binary.
+///
+/// One protected path, one policy, and a write-shaped call from every harness in
+/// `Harness::ALL` **in that host's own vocabulary**. Measured on `main`
+/// 2026-08-20: Cursor's `write`, Gemini's `WriteFile` and Copilot's
+/// `StrReplaceEditor` all reached `guarded.txt` and were **allowed**, because the
+/// gate asked a consumer's `[[verb]]` table — Claude Code's names — to recognise
+/// spellings it had never been given. Not degraded: absent, and silent, because a
+/// rule that matches nothing is indistinguishable from a rule with nothing to
+/// match.
+#[test]
+fn a_protected_write_is_refused_on_every_harness_in_its_own_vocabulary() {
+    let dir = repo_with_config("protected-write-matrix", PROTECTED_WRITE_CONFIG);
+    for (harness, stem) in [
+        ("claude-code", "claude-code-write"),
+        ("cursor", "cursor-write"),
+        ("copilot-cli", "copilot-cli-write"),
+        ("gemini-cli", "gemini-cli-write"),
+        ("codex-cli", "codex-cli-write"),
+    ] {
+        let output = run_hook_in(&dir, harness, &host_fixture(stem), false);
+        assert!(
+            denied(harness, &output),
+            "{harness}: a write to a protected path was not refused — \
+             stdout: {}, stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            common::stderr(&output)
+        );
+    }
+    // `exit-code` is a contract rather than a host, so it has no checked-in
+    // fixture: a caller composing the envelope by hand states the normalized
+    // shape, and that shape is what it is asserted against.
+    let neutral = run_hook_in(
+        &dir,
+        "exit-code",
+        r#"{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"guarded.txt"}}"#,
+        false,
+    );
+    assert_eq!(
+        neutral.status.code(),
+        Some(2),
+        "the neutral contract denies through the exit code alone"
+    );
+}
+
+#[test]
+fn a_cursor_shell_call_reaches_the_same_protected_gate() {
+    // The other half of CLOUD-779's routing: `beforeShellExecution` carries the
+    // operand at top level and no `tool_name`, so it names no write target
+    // through the tool and every target it has lives in the command text. It is
+    // `Operation::Execute`, and the SAME gate judges it — which is what stops the
+    // shell path and the tool path from being two implementations that drift.
+    let dir = repo_with_config("protected-write-cursor-shell", PROTECTED_WRITE_CONFIG);
+    let output = run_hook_in(&dir, "cursor", &host_fixture("cursor-shell-write"), false);
+    assert!(
+        denied("cursor", &output),
+        "got stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("guarded.txt"),
+        "the refusal names the path it refused"
+    );
+}
+
+#[test]
+fn a_read_of_a_protected_path_is_not_refused_on_any_harness() {
+    // The false positive that would get the gate switched off, asserted across
+    // the matrix rather than on one host: `Read` and `Write` both carry
+    // `file_path`, and what keeps them apart is each host's own `write_tools`
+    // table. A gate keyed on "the payload names a protected path" would refuse
+    // reading the policy file everywhere at once.
+    let dir = repo_with_config("protected-read-matrix", PROTECTED_WRITE_CONFIG);
+    for harness in ["claude-code", "cursor", "gemini-cli", "codex-cli"] {
+        let output = run_hook_in(
+            &dir,
+            harness,
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"guarded.txt"}}"#,
+            false,
+        );
+        assert!(
+            !denied(harness, &output),
+            "{harness}: reading a protected path must not be refused"
+        );
+    }
+}
+
 #[test]
 fn a_cursor_payload_with_a_windows_bom_still_denies() {
     // The measured failure this guards: a UTF-8 BOM on Cursor's stdin breaks a

@@ -1656,9 +1656,9 @@ fn run_hook(
     // never touch config.
     let (policy, waivers) = if bypass || (envelope.command.is_empty() && envelope.writes.is_none())
     {
-        (hook::Policy::declaring_nothing(), Vec::new())
+        (hook::Policy::declaring_nothing(harness), Vec::new())
     } else {
-        load_policy(overrides)?
+        load_policy(overrides, harness)?
     };
     // The receipt facts, resolved HERE because `adjudicate` is contractually
     // pure — no I/O, no environment, no clock — and a receipt predicate reads a
@@ -1840,7 +1840,7 @@ fn fire_actions(
         envelope.event,
         action::Facts {
             event: envelope.event.as_str(),
-            tool: &envelope.tool,
+            tool: &envelope.raw_tool,
             path: envelope.writes.as_deref().unwrap_or_default(),
             session: envelope.session.as_deref().unwrap_or_default(),
         },
@@ -2043,7 +2043,10 @@ fn drain_advisories(
 /// this engine exists to catch. It surfaces as a [`UsageError`] — exit `1`, loud
 /// on stderr, and structurally not a deny, because §7 spends `2` on the verdict
 /// alone.
-fn load_policy(overrides: &Overrides) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
+fn load_policy(
+    overrides: &Overrides,
+    harness: hook::Harness,
+) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
     let here = std::path::Path::new(".");
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
     // short-circuit below is correct in its own right — `batten hook` runs in
@@ -2060,7 +2063,7 @@ fn load_policy(overrides: &Overrides) -> Result<(hook::Policy, Vec<waiver::Waive
     // working tree when one is named (`resolve::authority`), so consulting the
     // flag is all this needs.
     if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
-        return Ok((hook::Policy::declaring_nothing(), Vec::new()));
+        return Ok((hook::Policy::declaring_nothing(harness), Vec::new()));
     }
     // The waivers travel beside the policy rather than inside it (CLOUD-610).
     // `Policy` is what `adjudicate` decides against and is resolved without a
@@ -2068,7 +2071,7 @@ fn load_policy(overrides: &Overrides) -> Result<(hook::Policy, Vec<waiver::Waive
     // folding the table into `Policy` would put an undecided value in the one
     // structure whose whole point is that everything in it is decided.
     let resolved = resolve::resolve(here, overrides)?;
-    let policy = hook::Policy::from_resolved(&resolved)?;
+    let policy = hook::Policy::from_resolved(&resolved, harness)?;
     Ok((policy, resolved.waivers))
 }
 

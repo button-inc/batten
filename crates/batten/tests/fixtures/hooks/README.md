@@ -31,3 +31,34 @@ event cannot dispatch on it.
 `cursor-bom.json` is the same Cursor payload with a leading UTF-8 BOM — the
 Windows shape that broke strict parsers and, staff-confirmed, silently degraded
 guards to allow-all. It must decode identically.
+
+## The write matrix (CLOUD-779)
+
+`*-write.json` is the second row of fixtures: one write-shaped call per host,
+each **in that host's own spelling**, all naming the same path. They exist
+because the tool layer had no neutral vocabulary — `Envelope` normalized the
+shape of a call and not the word for it — so a gate keyed on a tool name was a
+gate against one host.
+
+| Host        | Its word for "write this file" | On `main`, 2026-08-20 |
+| ----------- | ------------------------------ | --------------------- |
+| claude-code | `Write`                        | refused               |
+| cursor      | `write`                        | **allowed**           |
+| gemini-cli  | `WriteFile`                    | **allowed**           |
+| copilot-cli | `StrReplaceEditor`             | **allowed**           |
+| codex-cli   | `NotebookEdit`                 | refused               |
+
+The three allows were measured against a `[[verb]]` table naming Claude Code's
+four write tools — the table a consumer actually writes. Nothing reported them,
+because a rule that matches nothing is indistinguishable from a rule with nothing
+to match. `Envelope::operation` is the neutral layer that closes them, and
+`raw_tool` is where the host's own word stays addressable.
+
+`cursor-shell-write.json` is the other half: a `beforeShellExecution` naming no
+write target through the tool at all, because its targets live in the command
+text. It is `Operation::Execute`, and the same gate judges it — which is what
+stops the shell path and the tool path from being two implementations that drift.
+
+The spellings come from `Harness::write_tools`, which is the M1 survey's output,
+not from re-derivation. There is no `exit-code` fixture here for the same reason
+there is none above: it is a contract, not a host.

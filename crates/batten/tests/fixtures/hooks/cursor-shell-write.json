@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "beforeShellExecution",
+  "conversation_id": "sess-cursor-shell-write",
+  "cwd": "/repo",
+  "command": "rm guarded.txt",
+  "sandbox": "danger-full-access"
+}

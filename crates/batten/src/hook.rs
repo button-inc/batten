@@ -247,6 +247,61 @@ impl Harness {
             Harness::ExitCode => &["Write", "Edit", "MultiEdit", "NotebookEdit"],
         }
     }
+
+    /// Classify this host's tool name into the neutral [`Operation`] vocabulary.
+    ///
+    /// The write arm reuses [`Harness::write_tools`] rather than restating it:
+    /// that table is what [`Envelope::writes`] is already derived from, and two
+    /// lists of the same host fact is how the two come to disagree.
+    ///
+    /// **What is NOT declared here is as deliberate as what is.** Gemini and
+    /// Copilot get no read/shell/MCP/subagent spellings, because the M1 survey
+    /// (CLOUD-209) recorded their event names and their write tools and did not
+    /// record those, and its own instruction is that "anything re-derived without
+    /// a fetch should be assumed wrong". Their other calls therefore classify as
+    /// [`Operation::Other`] — could not look — which every dispatch below reads
+    /// as *unknown* rather than as *harmless*. Inventing a spelling would trade a
+    /// safe unknown for a confident wrong answer.
+    ///
+    /// Cursor's three constants are the ones its specialized events already
+    /// synthesize (`Shell`/`Read`/`MCP`, from `cursor_specialized_tool`), so this
+    /// classifies what that adapter actually produces rather than a second guess
+    /// at the same host.
+    #[must_use]
+    pub fn operation_of(self, raw_tool: &str) -> Operation {
+        // An absent tool name is not a tool called "": it is a payload that did
+        // not say. `Other` carries the empty spelling so the distinction stays
+        // readable, and no arm below can mistake it for a classification.
+        if raw_tool.is_empty() {
+            return Operation::Other(String::new());
+        }
+        if self.write_tools().contains(&raw_tool) {
+            return Operation::Write;
+        }
+        match self {
+            // Codex is a near-verbatim clone of Claude's wire format and the
+            // neutral contract states the normalized shape, so all three read the
+            // converged vocabulary — each answering for itself, because
+            // coincidence is not agreement.
+            Harness::ClaudeCode | Harness::CodexCli | Harness::ExitCode => match raw_tool {
+                "Bash" => Operation::Execute,
+                "Read" => Operation::Read,
+                "Task" => Operation::Subagent,
+                other if other.starts_with(MCP_TOOL_PREFIX) => Operation::Mcp,
+                other => Operation::Other(other.to_owned()),
+            },
+            Harness::Cursor => match raw_tool {
+                "Shell" => Operation::Execute,
+                "Read" => Operation::Read,
+                "MCP" => Operation::Mcp,
+                other => Operation::Other(other.to_owned()),
+            },
+            // Surveyed for writes and events, not for the rest — see the doc
+            // above. Stated as its own arm rather than folded into a wildcard so
+            // a later fetch has somewhere to land.
+            Harness::GeminiCli | Harness::CopilotCli => Operation::Other(raw_tool.to_owned()),
+        }
+    }
 }
 
 /// What one host can and cannot do (CLOUD-45).
@@ -274,13 +329,21 @@ impl Harness {
 pub struct Capabilities {
     /// The events this host emits, so Batten can be invoked on them.
     pub events: &'static [Event],
-    /// Whether the host offers an escalate-to-human verdict.
+    /// Where an escalate-to-human verdict is actually reachable on this host
+    /// (CLOUD-601).
     ///
-    /// Absent on Gemini (allow/deny only) and not in effect on Codex (its schema
-    /// lists `ask`; its docs mark it "parsed but not supported yet"). A policy
-    /// wanting confirmation must hard-deny on those two — degrading to *allow*
-    /// would turn "ask a human" into "go ahead".
-    pub ask: bool,
+    /// **Not a per-host bool, because the fact is not per-host.** Cursor honours
+    /// `ask` on `beforeShellExecution` and `beforeMCPExecution` and merely parses
+    /// it on the generic `preToolUse`, where an unenforced escalation *proceeds*
+    /// — the one degradation direction CLOUD-45 §7(b) forbids. A row saying
+    /// "Cursor has `ask`" is true of the host and false of the surface Batten
+    /// registers, and once a rule can read the table that stops being a
+    /// documentation defect and becomes a wrong answer the engine hands policy.
+    ///
+    /// One authority, two readings: [`AskReach::declared`] is what the host has,
+    /// [`AskReach::enforced_on`] is where Batten can reach it, and
+    /// [`Capabilities::ask_reachable`] is the only question a dispatch asks.
+    pub ask: AskReach,
     /// Whether a stop-family event can veto completion.
     ///
     /// **`false` on every surveyed host, Claude included** — all of them can only
@@ -545,11 +608,62 @@ const fn measured(yes: bool) -> Declaration {
     }
 }
 
+/// Where escalation is reachable on one host, and what that host declares.
+///
+/// The shape [`Capabilities::events`] already uses, applied to the second column
+/// whose truth turned out to be envelope-scoped (CLOUD-601). Keeping both halves
+/// in one value is the point: `ask_is_reachable` *beside* `ask` would leave two
+/// facts where one belongs, and adjacency is not identity.
+///
+/// The events are the **host's own spellings**, not [`Event`]s, because that is
+/// the granularity the divergence lives at: Cursor's four pre-tool events all
+/// normalize to [`Event::PreTool`] and only two of them enforce the verdict, so a
+/// normalized key could not express the fact at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AskReach {
+    /// The host event spellings on which an emitted `ask` is **enforced**.
+    ///
+    /// Empty means Batten cannot escalate on this host at all — which resolves to
+    /// a hard deny at the boundary, never an allow.
+    pub enforced_on: &'static [&'static str],
+    /// What the survey measured about the host itself, with its citation in the
+    /// row's own comment.
+    ///
+    /// Distinct from `enforced_on` on purpose, and the gap between them is the
+    /// thing that must be *stated* rather than merely true — see `ASK_GAPS`.
+    pub declared: Declaration,
+}
+
+impl AskReach {
+    /// The row for a host that cannot be asked at all.
+    #[must_use]
+    pub const fn unreachable(declared: Declaration) -> AskReach {
+        AskReach {
+            enforced_on: &[],
+            declared,
+        }
+    }
+}
+
 impl Capabilities {
     /// Whether this host emits `event`.
     #[must_use]
     pub fn emits(&self, event: Event) -> bool {
         self.events.contains(&event)
+    }
+
+    /// Whether an `ask` emitted at this host's `raw_event` is actually enforced.
+    ///
+    /// **The one authority a dispatch consults.** Before CLOUD-601 this was
+    /// reconstructed inside [`encode_ask`]'s match arms, so the declaration and
+    /// the reachability were two facts kept in step by hand.
+    ///
+    /// The comparison is on the host's own spelling, so it answers correctly for
+    /// a host whose four pre-tool events do not agree with each other.
+    #[must_use]
+    pub fn ask_reachable(&self, raw_event: &str) -> bool {
+        self.ask.enforced_on.contains(&raw_event)
     }
 
     /// What this host declares for one scalar capability.
@@ -562,7 +676,7 @@ impl Capabilities {
     #[must_use]
     pub const fn declares(&self, capability: Capability) -> Declaration {
         match capability {
-            Capability::Ask => measured(self.ask),
+            Capability::Ask => self.ask.declared,
             Capability::StopVetoesCompletion => measured(self.stop_vetoes_completion),
             Capability::TimeoutFailsOpen => measured(self.timeout_fails_open),
             Capability::NeedsFailClosedConfig => measured(self.needs_fail_closed_config),
@@ -826,7 +940,14 @@ impl Harness {
         match self {
             Harness::ClaudeCode => Capabilities {
                 events: CLAUDE_EVENTS,
-                ask: true,
+                // Documented, and merged most-restrictive-first by the host
+                // itself (`deny > defer > ask > allow`), so an ask cannot
+                // override another hook's deny. `PreToolUse` is the only event
+                // that carries the verdict and the only one Batten adjudicates.
+                ask: AskReach {
+                    enforced_on: &["PreToolUse"],
+                    declared: Declaration::Yes,
+                },
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -854,9 +975,19 @@ impl Harness {
             },
             Harness::Cursor => Capabilities {
                 events: CONVERGED_EVENTS,
-                // On shell and MCP events; `ask` parses but is unenforced on the
-                // generic `preToolUse`, and is coerced to deny on `subagentStart`.
-                ask: true,
+                // The row that forced this column to become event-scoped
+                // (CLOUD-601). M1 records the verdict vocabulary as
+                // event-dependent: `allow|deny|ask` on `beforeShellExecution` and
+                // `beforeMCPExecution`, `allow|deny` on the generic `preToolUse`
+                // where `ask` "parses but is not enforced" — and coerced to deny
+                // on `subagentStart`. `Harness::wiring` registers the generic
+                // event, so escalation is declared and today unreachable; that
+                // gap is stated in `ASK_GAPS` rather than smoothed over, and it
+                // closes on its own when CLOUD-777 registers these two surfaces.
+                ask: AskReach {
+                    enforced_on: &["beforeShellExecution", "beforeMCPExecution"],
+                    declared: Declaration::Yes,
+                },
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: true,
@@ -865,7 +996,16 @@ impl Harness {
             },
             Harness::CopilotCli => Capabilities {
                 events: CONVERGED_EVENTS,
-                ask: true,
+                // `Unknown`, not `No`, and not `Yes` either: M1 confirms the
+                // verdict exists and names the `preToolUse` output *fields*
+                // (`permissionDecision`/`permissionDecisionReason`) without
+                // naming the object they sit in. Claude's `hookSpecificOutput`
+                // envelope is a guess on the strength of the field names, and a
+                // guessed envelope that fails to parse is read as no decision —
+                // an allow. "Could not confirm" is a legitimate stored answer
+                // (CLOUD-757's three-valued discipline); guessing is not, so
+                // `enforced_on` is empty until a primary-doc fetch fills it.
+                ask: AskReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: true,
                 needs_fail_closed_config: false,
@@ -874,7 +1014,10 @@ impl Harness {
             },
             Harness::GeminiCli => Capabilities {
                 events: CONVERGED_EVENTS,
-                ask: false,
+                // Allow/deny only. A policy wanting confirmation must hard-deny
+                // here — degrading to *allow* would turn "ask a human" into "go
+                // ahead".
+                ask: AskReach::unreachable(Declaration::No),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -884,8 +1027,9 @@ impl Harness {
             Harness::CodexCli => Capabilities {
                 events: CONVERGED_EVENTS,
                 // Advertised in the output schema, marked "parsed but not
-                // supported yet" in the docs. Advertised is not available.
-                ask: false,
+                // supported yet" in the docs. Advertised is not available, and
+                // that is a measurement rather than a gap — hence `No`.
+                ask: AskReach::unreachable(Declaration::No),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -894,7 +1038,9 @@ impl Harness {
             },
             Harness::ExitCode => Capabilities {
                 events: CONVERGED_EVENTS,
-                ask: false,
+                // Not a host: the channel is the exit status alone, which has no
+                // third value to carry an escalation. Measured, not unsurveyed.
+                ask: AskReach::unreachable(Declaration::No),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1043,6 +1189,87 @@ impl Event {
 /// pre-tool can only ever over-adjudicate, which is the safe direction.
 const ASSUMED_EVENT: &str = "PreToolUse";
 
+/// The prefix every MCP-provided tool carries in the converged wire format.
+///
+/// A host fact rather than an invention: this repository's own
+/// `.claude/settings.json` registers a `^mcp__` matcher, which is the same
+/// convention the hosts that clone Claude's format inherit. Hosts whose MCP
+/// spelling the M1 survey did not record classify as [`Operation::Other`]
+/// instead of being credited with this one.
+const MCP_TOOL_PREFIX: &str = "mcp__";
+
+/// What a mediated call **does**, normalized across hosts (CLOUD-779).
+///
+/// The neutral layer [`Envelope::raw_tool`] was missing. `Event`/`raw_event`
+/// already ship this shape one field up — abstract where the semantics converge,
+/// the host's own word kept addressable where they do not — and tools had only
+/// the second half, which is why a gate keyed on a tool name is a gate against
+/// one host. Measured on `main` 2026-08-20: with the consumer's `[[verb]]` table
+/// naming Claude Code's vocabulary, a write to a protected path arriving as
+/// Cursor's `write`/`edit`, Gemini's `WriteFile` or Copilot's `StrReplaceEditor`
+/// was allowed silently, because a rule that matches nothing is indistinguishable
+/// from a rule with nothing to match.
+///
+/// **This is not [`crate::effect::Effect`] and must not become it** (CLOUD-312).
+/// That vocabulary classifies *Batten's own* command surface for the house-style
+/// §5 read-only allowlist and its consumer is `spec.rs`; importing it here would
+/// put a classification of Batten's verbs in the path that judges a consumer's
+/// shell commands. Two declared tables, two different objects.
+///
+/// [`Operation::Other`] is **could not look**, never "not a write" (CLOUD-757's
+/// three-valued discipline). An adapter that meets a tool its host's survey never
+/// recorded says so rather than guessing, and every predicate over this type
+/// treats that answer as *unknown* — the write gate consults every source a call
+/// could name a target through, rather than concluding the call is harmless.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Operation {
+    /// The call writes the path it names.
+    Write,
+    /// The call reads without changing anything.
+    Read,
+    /// The call runs a shell command; its targets live in the command text.
+    Execute,
+    /// The call reaches an MCP server.
+    Mcp,
+    /// The call spawns a subagent.
+    Subagent,
+    /// The adapter could not classify this host's tool, carrying its spelling.
+    ///
+    /// The honest escape, and the reason the variant is not called `Unknown`:
+    /// something specific was seen and not recognized, which is a different claim
+    /// from "nothing was there".
+    Other(String),
+}
+
+impl Operation {
+    /// The stable token, for a pointer-only report and the payload-field surface.
+    ///
+    /// [`Operation::Other`] renders as `other` and **never as the tool it
+    /// carries**: a normalized vocabulary that leaked a host string would be the
+    /// thing this type exists to stop, and the spelling is already addressable
+    /// through [`Envelope::raw_tool`] for a rule that means to reach it.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Operation::Write => "write",
+            Operation::Read => "read",
+            Operation::Execute => "execute",
+            Operation::Mcp => "mcp",
+            Operation::Subagent => "subagent",
+            Operation::Other(_) => "other",
+        }
+    }
+
+    /// Whether this operation is one the adapter could not classify.
+    ///
+    /// Read at every dispatch that would otherwise treat a non-`Write` as safe.
+    #[must_use]
+    pub const fn is_unclassified(&self) -> bool {
+        matches!(self, Operation::Other(_))
+    }
+}
+
 /// The normalized hook envelope — the shape the core adjudicates, whatever the
 /// host called its fields.
 ///
@@ -1068,8 +1295,27 @@ pub struct Envelope {
     pub event: Event,
     /// The host's own spelling, echoed back in a decision document.
     pub raw_event: String,
-    /// The tool being mediated, e.g. `Bash`.
-    pub tool: String,
+    /// The host's own word for the tool being mediated, e.g. `Bash` on Claude
+    /// Code and `Shell` on Cursor.
+    ///
+    /// The second layer of the pair [`Envelope::operation`] completes, and the
+    /// same split [`Envelope::event`]/[`Envelope::raw_event`] makes one field up:
+    /// `operation` is what policy dispatches on, this is the token echoed back in
+    /// a decision document and still addressable by a rule that *means* to be
+    /// harness-specific. Normalizing inward and echoing outward are different
+    /// directions, and unportability is a diagnostic rather than something to
+    /// design out (CLOUD-779).
+    pub raw_tool: String,
+    /// The normalized operation this call performs, which policy dispatches on.
+    ///
+    /// Derived by the adapter from [`Harness::operation_of`], so by the time
+    /// [`adjudicate`] sees an envelope "this is write-shaped" is a normalized
+    /// fact rather than a tool-name comparison the policy layer would have to
+    /// make against one host's vocabulary.
+    ///
+    /// [`Operation::Other`] is **could not look**, never "not a write" — see the
+    /// type's own doc.
+    pub operation: Operation,
     /// The tool's whole input object; `Value::Null` when the payload had none.
     pub input: Value,
     /// The command text for shell-shaped tools; empty when the tool has none.
@@ -1180,7 +1426,7 @@ impl Field {
         let value = match self {
             Field::HookEventName => Some(envelope.raw_event.clone()),
             Field::SessionId => envelope.session.clone(),
-            Field::ToolName => Some(envelope.tool.clone()),
+            Field::ToolName => Some(envelope.raw_tool.clone()),
             Field::Command => Some(envelope.command.clone()),
             Field::Cwd => envelope.cwd.as_ref().map(|path| path.display().to_string()),
             Field::StopHookActive => envelope.stop_active.map(|active| active.to_string()),
@@ -1352,10 +1598,17 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
         })
         .flatten();
 
+    // The neutral vocabulary, resolved here beside `writes` for the same reason
+    // (CLOUD-779): by the time `adjudicate` sees an envelope, "what does this
+    // call do" is already a normalized fact rather than a comparison the policy
+    // layer would have to make against one host's tool names.
+    let operation = harness.operation_of(&tool);
+
     Some(Envelope {
         event,
         raw_event,
-        tool,
+        raw_tool: tool,
+        operation,
         command: input
             .pointer("/command")
             .and_then(Value::as_str)
@@ -1482,6 +1735,20 @@ pub const BYPASS_ENV: &str = "BATTEN_GH_GUARD_BYPASS";
 /// ignores it — and `--config-from` is inherited for free.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Policy {
+    /// The host this policy is being applied on, and through it the
+    /// [`Capabilities`] row a rule may branch on (CLOUD-779).
+    ///
+    /// **Engine-side plumbing, deliberately not a `[[rule]]` column.** The
+    /// resolved config already travels this way into [`adjudicate`], so the
+    /// harness's capability row travels the same way and the evaluator reads it
+    /// from here — no config key, no schema regeneration, and no collision with
+    /// the two issues that do add `Rule` columns and do regenerate the two schema
+    /// files (CLOUD-772, CLOUD-773).
+    ///
+    /// It is data resolved at the boundary like every other fact, which is what
+    /// keeps [`adjudicate`] contractually pure: nothing here reaches for the
+    /// environment inside the evaluator.
+    harness: Harness,
     shapes: Vec<Rule>,
     fail_on_warning: bool,
     /// Which programs change the world, and what to run instead (CLOUD-36).
@@ -1508,8 +1775,9 @@ impl Policy {
     /// declared no mediated-call policy, and "nothing declared" means "nothing
     /// denied". Mirrors `Config::declaring_nothing`.
     #[must_use]
-    pub fn declaring_nothing() -> Policy {
+    pub fn declaring_nothing(harness: Harness) -> Policy {
         Policy {
+            harness,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -1531,8 +1799,9 @@ impl Policy {
     /// Returns a [`UsageError`] (→ exit `1`) when the protected list is malformed
     /// — a `!` entry in an include-only key. Never a deny: a policy that cannot be
     /// read must fail loud, not refuse the call.
-    pub fn from_resolved(resolved: &Resolved) -> anyhow::Result<Policy> {
+    pub fn from_resolved(resolved: &Resolved, harness: Harness) -> anyhow::Result<Policy> {
         Ok(Policy {
+            harness,
             shapes: resolved
                 .rules
                 .iter()
@@ -1544,6 +1813,25 @@ impl Policy {
             protected: PathSet::includes("protected", &resolved.protected)?,
             redirects: resolved.redirects.clone(),
         })
+    }
+
+    /// The host capability row this policy is being evaluated against
+    /// (CLOUD-779, CLOUD-601).
+    ///
+    /// The read side of the plumbing declared on [`Policy::harness`]: a gate that
+    /// needs to know whether the host can be asked, whether its stop event can
+    /// veto, or which events it emits, asks here rather than guessing or being
+    /// silently degraded. Compiled-in data, so the answer costs nothing on the
+    /// hottest path in the binary.
+    #[must_use]
+    pub const fn capabilities(&self) -> Capabilities {
+        self.harness.capabilities()
+    }
+
+    /// The host this policy is being applied on.
+    #[must_use]
+    pub const fn harness(&self) -> Harness {
+        self.harness
     }
 
     /// The receipt names this **command** needs proved, deduplicated.
@@ -1733,32 +2021,26 @@ fn adjudicated(
     // adjudicated by nothing at all — the rows existed, the payload decoded,
     // and `command.is_empty()` sent it home (CLOUD-312).
     //
-    // The tool is classified through the SAME `[[verb]]` table a shell program
-    // is, rather than through a second list of write tools in config. A `Write`
-    // aimed at a protected path and an `echo x >` aimed at it are one predicate
-    // — {mutating verb} × {protected path} — and splitting them into two tables
-    // is how the two halves come to disagree. It also means the refusal keeps
-    // its declared `redirect`, so the consumer's own remedy text survives the
-    // move out of bash, which is what CLOUD-312's differential suite asserts.
+    // Dispatched on the NEUTRAL `Operation`, not on the host's tool name
+    // (CLOUD-779). The predicate used to be `writes × verbs::classify(raw_tool) ×
+    // protected`, which asked a consumer's `[[verb]]` table — Claude Code's
+    // vocabulary — to recognise every host's spelling of a write. Measured on
+    // `main` 2026-08-20: Cursor's `write`/`edit`, Gemini's `WriteFile` and
+    // Copilot's `StrReplaceEditor` all reached a protected path and were allowed
+    // silently, because a rule that matches nothing is indistinguishable from a
+    // rule with nothing to match.
     //
-    // Classified by program alone, and since CLOUD-442 that is a decision rather
-    // than an omission: `verbs::classify` is `qualify` over no arguments, so a
-    // row whose mutation is qualified by a flag or a subcommand cannot fire here.
-    // A write tool names one path and no argv, so there is nothing a qualifier
-    // could be satisfied by — firing anyway would deny on a condition never met.
-    if let Some(path) = envelope.writes.as_deref()
-        && let Some(verb) = crate::verbs::classify(&policy.verbs, &envelope.tool)
-        && policy.protected.contains(normalise(path))
-    {
-        return Decision::Deny(protected_refusal(
-            &policy.redirects,
-            &Target {
-                program: &envelope.tool,
-                subcommand: None,
-                path,
-                verb,
-            },
-        ));
+    // The `[[verb]]` row survives as MESSAGE COMPOSITION — see `Target::redirect`
+    // — so the consumer's own remedy text still travels wherever it is declared,
+    // which is what CLOUD-312's differential suite asserts, and a spelling the
+    // consumer never declared now denies with the path-class remedy instead of
+    // not denying at all.
+    match protected_write(policy, envelope, WriteStage::ToolNamed) {
+        decided @ Decision::Deny(_) => return decided,
+        // `protected_write` renders exactly one verdict; the others are stated as
+        // arms rather than wildcarded so a fifth `Decision` variant has to come
+        // back here and be decided rather than silently falling through.
+        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) => {}
     }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
@@ -1807,7 +2089,7 @@ fn adjudicated(
                 match receipt_rules(policy, envelope, receipts) {
                     decided @ (Decision::Deny(_) | Decision::Ask(_)) => decided,
                     Decision::Allow | Decision::Waived(_) => {
-                        protected_mutation(policy, &envelope.command)
+                        protected_write(policy, envelope, WriteStage::CommandParsed)
                     }
                 }
             }
@@ -2259,17 +2541,117 @@ pub const REDIRECT_VERBS: &[&str] = &[">", ">>"];
 /// One resolved write target: the action that reaches for it, and the row that
 /// declared that action mutating.
 ///
-/// The row travels with the target rather than being looked up again at the deny
-/// site, because since CLOUD-442 a program can carry more than one row and only
-/// the one that *qualified* holds the right redirect. `subcommand` is carried
-/// separately so the refusal can name the whole action (`<program> <subcommand>`)
-/// while nothing is allocated on the allow path.
+/// The declared remedy travels with the target rather than being looked up again
+/// at the deny site, because since CLOUD-442 a program can carry more than one
+/// row and only the one that *qualified* holds the right redirect. `subcommand`
+/// is carried separately so the refusal can name the whole action (`<program>
+/// <subcommand>`) while nothing is allocated on the allow path.
+///
+/// `redirect` is an `Option` rather than the row itself because since CLOUD-779
+/// the `[[verb]]` row is **message composition, not the predicate**: a write
+/// arriving under a host spelling the consumer never declared still fires the
+/// gate, and simply has no verb-level remedy to offer. `redirect::resolve`'s
+/// per-path tier answers first in any case, and `Fix::None` is the honest floor.
 struct Target<'a> {
     program: &'a str,
     subcommand: Option<&'a str>,
     path: &'a str,
-    verb: &'a MutatingVerb,
+    redirect: Option<&'a str>,
 }
+/// Where in the gate chain the protected-path predicate is being asked.
+///
+/// **Two positions, one implementation, and the split is deliberate** — it is
+/// what lets a Cursor `beforeShellExecution` reach the same gate a Claude Code
+/// `Write` does without overturning a precedence this crate already decided.
+///
+/// * [`WriteStage::ToolNamed`] runs before the write-triggered receipt gate, so
+///   "a ban outranks an unmet precondition" holds for a tool-named write.
+/// * [`WriteStage::CommandParsed`] runs after the explicit `[[rule]]` rows, so
+///   "a row a reviewer wrote by hand is the one they see quoted back" holds for a
+///   shell command.
+///
+/// A deny at the first position returns immediately, so an [`Operation::Other`]
+/// call — which is asked at both, because *could not look* must not be read as
+/// *harmless* — can never be judged twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteStage {
+    /// The tool named its own target: [`Envelope::writes`].
+    ToolNamed,
+    /// The targets are inside the shell command text.
+    CommandParsed,
+}
+
+impl Operation {
+    /// Whether a call doing this can name a write target through `stage`.
+    ///
+    /// The three-valued reading lives here and nowhere else (CLOUD-757): a
+    /// classified operation answers for exactly the source it uses, and
+    /// [`Operation::Other`] answers `true` at **both** — an adapter that could not
+    /// classify the tool has told us nothing about what the call touches, and
+    /// reading that silence as "not a write" is the vacuous pass this whole issue
+    /// is about. The cost of asking anyway is one lookup that finds no target.
+    const fn names_targets_through(&self, stage: WriteStage) -> bool {
+        match (self, stage) {
+            (Operation::Write, WriteStage::ToolNamed)
+            | (Operation::Execute, WriteStage::CommandParsed)
+            | (Operation::Other(_), _) => true,
+            (Operation::Write, WriteStage::CommandParsed)
+            | (Operation::Execute, WriteStage::ToolNamed)
+            | (Operation::Read | Operation::Mcp | Operation::Subagent, _) => false,
+        }
+    }
+}
+
+/// The derived protected-path gate: `{a write target} × {path ∈ protected}`.
+///
+/// One predicate over whichever source the call's [`Operation`] says names its
+/// targets, so the question "does this call write a protected path" has a single
+/// implementation rather than one per shape of call (CLOUD-779). What varies per
+/// stage is only *where the targets are read from*, never what makes them refused.
+fn protected_write(policy: &Policy, envelope: &Envelope, stage: WriteStage) -> Decision {
+    if !envelope.operation.names_targets_through(stage) {
+        return Decision::Allow;
+    }
+    match stage {
+        WriteStage::ToolNamed => protected_tool_write(policy, envelope),
+        WriteStage::CommandParsed => protected_mutation(policy, &envelope.command),
+    }
+}
+
+/// The tool-named half: the adapter already resolved the target, so this is the
+/// protected-set lookup and the refusal.
+///
+/// The target comes from [`Envelope::writes`], which the adapter derives from
+/// [`Harness::write_tools`] — a **per-host** table, so it is already the neutral
+/// fact the old `verbs::classify(raw_tool)` was failing to reconstruct from a
+/// consumer's config. The `[[verb]]` row is consulted only for its remedy text,
+/// and its absence costs a more specific sentence rather than the whole gate.
+fn protected_tool_write(policy: &Policy, envelope: &Envelope) -> Decision {
+    let Some(path) = envelope.writes.as_deref() else {
+        return Decision::Allow;
+    };
+    if !policy.protected.contains(normalise(path)) {
+        return Decision::Allow;
+    }
+    // Looked up by program alone, and since CLOUD-442 that is a decision rather
+    // than an omission: `verbs::classify` is `qualify` over no arguments, so a row
+    // whose mutation is qualified by a flag or a subcommand cannot match here. A
+    // write tool names one path and no argv, so there is nothing a qualifier could
+    // be satisfied by. Under CLOUD-779 a miss no longer suppresses the deny — it
+    // only means this host's spelling carries no verb-level remedy.
+    let redirect = crate::verbs::classify(&policy.verbs, &envelope.raw_tool)
+        .and_then(|verb| verb.redirect.as_deref());
+    Decision::Deny(protected_refusal(
+        &policy.redirects,
+        &Target {
+            program: &envelope.raw_tool,
+            subcommand: None,
+            path,
+            redirect,
+        },
+    ))
+}
+
 fn protected_mutation(policy: &Policy, command: &str) -> Decision {
     for segment in segments(command) {
         let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
@@ -2299,7 +2681,7 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                         program,
                         subcommand: matched.verb.subcommand.as_deref(),
                         path,
-                        verb: matched.verb,
+                        redirect: matched.verb.redirect.as_deref(),
                     });
                 }
             }
@@ -2312,7 +2694,7 @@ fn protected_mutation(policy: &Policy, command: &str) -> Decision {
                     program: operator,
                     subcommand: None,
                     path,
-                    verb,
+                    redirect: verb.redirect.as_deref(),
                 });
             }
         }
@@ -2434,10 +2816,7 @@ fn protected_refusal(redirects: &[Redirect], target: &Target<'_>) -> Refusal {
         // disagree about WHICH path is under discussion. The message keeps the
         // path as the caller typed it, because that is the pointer they can act
         // on.
-        Fix::declared(
-            redirect::resolve(redirects, normalise(target.path))
-                .or(target.verb.redirect.as_deref()),
-        ),
+        Fix::declared(redirect::resolve(redirects, normalise(target.path)).or(target.redirect)),
     )
 }
 
@@ -2789,7 +3168,7 @@ pub fn encode_claude_deny(event: &str, reason: &str) -> serde_json::Result<Strin
     encode_claude_verdict(event, "deny", reason)
 }
 
-/// Cursor's deny body.
+/// Cursor's verdict body, shared by every token it documents.
 ///
 /// A different shape for a different reason than Claude's: Cursor documents no
 /// meaning for stderr at all, so this is the **only** channel a reason can travel
@@ -2797,7 +3176,7 @@ pub fn encode_claude_deny(event: &str, reason: &str) -> serde_json::Result<Strin
 /// carry the same text — the human and the model are being told the same thing,
 /// and a refusal that told them different things would be two contracts.
 #[derive(Serialize)]
-struct CursorDeny<'a> {
+struct CursorVerdict<'a> {
     permission: &'a str,
     #[serde(rename = "user_message")]
     user_message: &'a str,
@@ -2812,8 +3191,19 @@ struct CursorDeny<'a> {
 /// Serialization of this fixed shape cannot practically fail; the `Result` is
 /// the honest signature for a serde boundary.
 pub fn encode_cursor_deny(reason: &str) -> serde_json::Result<String> {
-    serde_json::to_string(&CursorDeny {
-        permission: "deny",
+    encode_cursor_verdict("deny", reason)
+}
+
+/// Encode any one of Cursor's documented verdicts into its body shape.
+///
+/// The shape is the host's and does not vary by verdict — only the token does —
+/// so `deny` and `ask` share one encoder rather than two that could drift. Which
+/// verdicts are *reachable* is not this function's question: [`encode_ask`] asks
+/// [`Capabilities::ask_reachable`] first, so an escalation never reaches a
+/// surface that would parse and ignore it.
+fn encode_cursor_verdict(permission: &str, reason: &str) -> serde_json::Result<String> {
+    serde_json::to_string(&CursorVerdict {
+        permission,
         user_message: reason,
         agent_message: reason,
     })
@@ -2858,38 +3248,37 @@ pub fn encode_deny(
 /// has no verified wire shape for it, and inventing one is exactly what the M1
 /// survey records as unsafe.
 ///
-/// Two hosts declare `ask` and still answer `None`, each for its own measured
-/// reason, and both reasons are about the surface Batten actually registers:
+/// **The event is part of the question, not decoration** (CLOUD-601). It was
+/// already a parameter and was only echoed into the body; the reachability it
+/// decides was reconstructed below, in the match arms, so the row and the
+/// dispatch were two facts kept in step by hand. Cursor is why: its verdict
+/// vocabulary is *event-dependent* — `ask` is honoured on `beforeShellExecution`
+/// and `beforeMCPExecution` and "parses but is not enforced" on the generic
+/// `preToolUse`, and an unenforced ask **proceeds**. One host, two answers, and
+/// no per-host bool can hold both.
 ///
-/// * **Cursor** — the verdict vocabulary is *event-dependent*. `ask` is honoured
-///   on `beforeShellExecution` and `beforeMCPExecution`, but on the generic
-///   `preToolUse` — the one [`Harness::wiring`] registers, because it is the only
-///   one covering all tools — it "parses but is not enforced". An unenforced ask
-///   proceeds, which is the silent allow this clause forbids.
-/// * **Copilot CLI** — M1 confirms the verdict exists and names the output
-///   *fields* (`permissionDecision`/`permissionDecisionReason`), but not the
-///   object they sit in. Emitting Claude's `hookSpecificOutput` envelope on the
-///   strength of the field names would be a guess, and a guessed envelope that
-///   fails to parse is read as no decision at all — an allow.
+/// Copilot CLI is the other measured `None` and is a different question:
+/// M1 confirms the verdict exists and names the output *fields*
+/// (`permissionDecision`/`permissionDecisionReason`) without naming the object
+/// they sit in. Emitting Claude's `hookSpecificOutput` envelope on the strength
+/// of the field names would be a guess, and a guessed envelope that fails to
+/// parse is read as no decision at all — an allow. Both gaps are declared in
+/// `ASK_GAPS` and asserted over `Harness::ALL`.
 ///
 /// # Errors
 ///
 /// Serialization of these fixed shapes cannot practically fail; the `Result` is
 /// the honest signature for a serde boundary.
-// `match_same_arms` would collapse Cursor, Copilot and the three hosts with no
-// `ask` row into one arm. Refused for the reason `capabilities` refuses it: the
-// arms agree on the ANSWER and disagree on the REASON, and each reason is a
-// measured fact about a different host. Collapsing them would delete the
-// citations and make a future divergence a structural edit.
-#[allow(clippy::match_same_arms)]
 pub fn encode_ask(
     harness: Harness,
     event: &str,
     reason: &str,
 ) -> serde_json::Result<Option<String>> {
-    // The table, consulted before the shape. A host that does not have the
-    // verdict cannot be sent one whatever its wire format looks like.
-    if !harness.capabilities().ask {
+    // The table, consulted before the shape — and asked about THIS EVENT, which
+    // is the whole of CLOUD-601. A host that does not enforce the verdict on the
+    // surface Batten is standing on cannot be sent one, whatever its wire format
+    // looks like and whatever the host-level row says it has.
+    if !harness.capabilities().ask_reachable(event) {
         return Ok(None);
     }
     match harness {
@@ -2897,14 +3286,50 @@ pub fn encode_ask(
         // (`deny > defer > ask > allow`), so an ask here cannot override another
         // hook's deny.
         Harness::ClaudeCode => encode_claude_verdict(event, "ask", reason).map(Some),
-        // See the two measured exceptions above.
-        Harness::Cursor | Harness::CopilotCli => Ok(None),
-        // No `ask` row; unreachable through the guard above, and stated rather
-        // than wildcarded so a row that ever flips to `true` has to come back
-        // here and answer for its wire shape.
-        Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => Ok(None),
+        // Reachable on `beforeShellExecution` and `beforeMCPExecution` only, which
+        // the guard above has already established by the time this arm runs. The
+        // body is the host's one documented verdict shape, the same one a deny
+        // travels in — so this arm is a projection rather than a second guess.
+        Harness::Cursor => encode_cursor_verdict("ask", reason).map(Some),
+        // No reachable surface: Copilot because its output object is unconfirmed,
+        // the other three because the verdict is absent or inert. Unreachable
+        // through the guard above, and stated rather than wildcarded so a row that
+        // ever gains an `enforced_on` entry has to come back here and answer for
+        // its wire shape.
+        Harness::CopilotCli | Harness::GeminiCli | Harness::CodexCli | Harness::ExitCode => {
+            Ok(None)
+        }
     }
 }
+
+/// Hosts whose declared escalation and reachable escalation disagree, **stated**.
+///
+/// CLOUD-601's load-bearing half: the current state must be *declared*, not
+/// merely true. A host that says it has `ask` and cannot be asked on the surface
+/// [`Harness::wiring`] registers is a fact somebody has to be able to read, and a
+/// table nobody keeps is how the two answers drifted apart in the first place.
+///
+/// The census over `Harness::ALL` fails when a disagreement exists and is missing
+/// here, **and** when a row here no longer describes a disagreement — so closing
+/// one (CLOUD-777 registers Cursor's specialized events) fails until the row is
+/// removed, rather than leaving a stale citation behind.
+///
+/// `pub` because being readable IS the mechanism: a table only the tests can see
+/// states the gap to nobody, which is the shape of the defect this closes.
+pub const ASK_GAPS: &[(Harness, &str)] = &[
+    (
+        Harness::Cursor,
+        "declared on the host, enforced only on `beforeShellExecution` and \
+         `beforeMCPExecution`; `wiring` registers the generic `preToolUse`, where \
+         an ask parses and is ignored. CLOUD-777 registers the specialized events.",
+    ),
+    (
+        Harness::CopilotCli,
+        "the verdict exists and the `preToolUse` output OBJECT is unconfirmed by \
+         primary docs, so no envelope can be emitted without guessing; recorded \
+         `Unknown` rather than `No`.",
+    ),
+];
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -3027,6 +3452,7 @@ mod tests {
     /// The same fixture with a declared `[[redirect]]` table (CLOUD-280).
     fn protected_policy_with(verbs: Vec<MutatingVerb>, redirects: Vec<Redirect>) -> Policy {
         Policy {
+            harness: Harness::ExitCode,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,
@@ -3056,6 +3482,7 @@ mod tests {
 
     fn gh_policy() -> Policy {
         Policy {
+            harness: Harness::ExitCode,
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
@@ -3081,7 +3508,8 @@ mod tests {
         Envelope {
             event,
             raw_event: ASSUMED_EVENT.to_owned(),
-            tool: "Bash".to_owned(),
+            raw_tool: "Bash".to_owned(),
+            operation: Operation::Execute,
             input: Value::Null,
             command: command.to_owned(),
             writes: None,
@@ -3098,14 +3526,33 @@ mod tests {
     /// A write-tool envelope: no command, a target path, as the adapter decodes
     /// one. The unit tests build it directly so the write gate is exercised
     /// without a harness in the way; `tests/cli.rs` covers the decode end.
+    ///
+    /// **`writes` and `operation` are DERIVED here, exactly as `decode` derives
+    /// them** (CLOUD-779), rather than being handed in. Both come from the same
+    /// `write_tools` lookup in the adapter, so a hand-built fixture that carried a
+    /// target while claiming not to be write-shaped — or the reverse — would
+    /// describe an envelope no host can produce, and every case resting on it
+    /// would be asserting its own premise. `Harness::ExitCode` is the neutral
+    /// contract these unit cases speak; per-host spellings are `tests/cli.rs`'s.
     fn write_envelope(tool: &str, path: &str) -> Envelope {
+        write_envelope_on(Harness::ExitCode, tool, path)
+    }
+
+    /// [`write_envelope`] under a named host, for the per-harness vocabulary
+    /// cases — the same derivation, a different table to derive from.
+    fn write_envelope_on(harness: Harness, tool: &str, path: &str) -> Envelope {
+        let writes = harness
+            .write_tools()
+            .contains(&tool)
+            .then(|| path.to_owned());
         Envelope {
             event: Event::PreTool,
             raw_event: ASSUMED_EVENT.to_owned(),
-            tool: tool.to_owned(),
+            raw_tool: tool.to_owned(),
+            operation: harness.operation_of(tool),
             input: Value::Null,
             command: String::new(),
-            writes: Some(path.to_owned()),
+            writes,
             cwd: None,
             session: None,
             stop_active: None,
@@ -3394,7 +3841,7 @@ mod tests {
         let raw = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"gh pr merge"}}"#;
         let envelope = decode(Harness::ClaudeCode, raw).expect("decodes");
         assert_eq!(envelope.command, "gh pr merge");
-        assert_eq!(envelope.tool, "Bash");
+        assert_eq!(envelope.raw_tool, "Bash");
     }
 
     #[test]
@@ -3519,7 +3966,7 @@ mod tests {
         // policy at all.
         assert_eq!(
             adjudicate(
-                &Policy::declaring_nothing(),
+                &Policy::declaring_nothing(Harness::ExitCode),
                 &envelope("gh pr merge 42"),
                 false,
                 &None,
@@ -3576,6 +4023,7 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.severity = Some(RuleSeverity::Allow);
         let policy = Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -3602,6 +4050,7 @@ mod tests {
         let call = envelope("gh pr merge 42");
 
         let advisory = Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule.clone()],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -3622,6 +4071,7 @@ mod tests {
         );
 
         let promoted = Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule],
             fail_on_warning: true,
             verbs: Vec::new(),
@@ -3650,6 +4100,7 @@ mod tests {
         // to bottom, and any cleverer precedence would be a rule about rules the
         // config never states.
         let policy = Policy {
+            harness: Harness::ExitCode,
             shapes: vec![
                 shape("first", "gh pr merge", None),
                 shape("second", "gh pr merge", None),
@@ -3690,6 +4141,7 @@ mod tests {
         let mut rule = shape("gh-pr-merge", "gh pr merge", None);
         rule.policy_url = Some("https://example.invalid/policy".to_owned());
         let policy = Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -3745,6 +4197,7 @@ mod tests {
         rule.reason = Some("run verify then linear-check, or just land".to_owned());
         rule.checks = Some(vec!["verify".to_owned(), "linear-check".to_owned()]);
         Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -3785,6 +4238,7 @@ mod tests {
         rule.reason = Some("pipe the issue payload to `mise run claim-check`".to_owned());
         rule.checks = Some(vec!["claim".to_owned()]);
         Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4061,11 +4515,17 @@ mod tests {
 
     /// The false positive that would get this gate switched off.
     ///
-    /// `Read` and `Write` both carry `file_path`, so a gate keyed on "the
-    /// payload names a protected path" would refuse *reading* the policy file.
-    /// The tool must be classified, and an unclassified one is not a write.
+    /// `Read` and `Write` both carry `file_path`, so a gate keyed on "the payload
+    /// names a protected path" would refuse *reading* the policy file. What keeps
+    /// them apart is the host's own `write_tools` table, read once in the adapter
+    /// — so a read resolves no `writes` and classifies as [`Operation::Read`], and
+    /// two independent facts have to agree before anything is refused.
+    ///
+    /// Since CLOUD-779 this is no longer the same question as "is the tool in
+    /// `[[verb]]`": a consumer's verb table is one host's vocabulary, and reading
+    /// its silence as "not a write" is what let three harnesses through.
     #[test]
-    fn an_undeclared_tool_against_a_protected_path_is_allowed() {
+    fn a_read_against_a_protected_path_is_allowed() {
         assert_eq!(
             write_guarded("Read", ".serena/memories/core.md"),
             Decision::Allow
@@ -4259,24 +4719,37 @@ mod tests {
     }
 
     #[test]
-    fn a_qualified_row_cannot_fire_on_a_write_tool_that_parses_no_argv() {
-        // A write tool names one path and carries no arguments, so a qualifier
-        // has nothing to be satisfied by. Denying anyway would be a deny on a
-        // condition that was never met.
+    fn a_qualified_row_narrows_the_shell_path_and_no_longer_suppresses_a_write() {
+        // CLOUD-442's narrowing is about ARGV: `sed -i` writes and bare `sed`
+        // reads, and only a command line can say which. A write tool names one
+        // path and carries no arguments, so a qualifier has nothing to be
+        // satisfied by there.
+        //
+        // What CHANGED in CLOUD-779 is what that unsatisfiable qualifier means.
+        // It used to suppress the deny, because the `[[verb]]` row WAS the
+        // predicate — so a consumer's one host's vocabulary decided whether a
+        // write existed at all. It does not: `Harness::write_tools` is the host's
+        // own statement that this tool writes the path it names, and a consumer
+        // cannot be asked to name a host's tool inventory. The row is message
+        // composition now, so a qualifier it cannot satisfy costs the refusal its
+        // specific remedy and never the refusal itself.
         for row in [
             behind_flag("Write", &["-i"], None),
             under_subcommand("Write", "mv", None),
         ] {
-            assert_eq!(
-                adjudicate(
-                    &protected_policy(vec![row]),
-                    &write_envelope("Write", "batten.toml"),
-                    false,
-                    &None,
-                    &None,
-                    &crate::stop::StopFacts::default(),
+            assert!(
+                matches!(
+                    adjudicate(
+                        &protected_policy(vec![row]),
+                        &write_envelope("Write", "batten.toml"),
+                        false,
+                        &None,
+                        &None,
+                        &crate::stop::StopFacts::default(),
+                    ),
+                    Decision::Deny(_)
                 ),
-                Decision::Allow
+                "a qualifier a write tool cannot satisfy must not read as `not a write`"
             );
         }
         // The unqualified row still denies, so this is a narrowing rather than a
@@ -4602,6 +5075,7 @@ mod tests {
             Decision::Allow
         );
         let no_paths = Policy {
+            harness: Harness::ExitCode,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
@@ -4680,6 +5154,7 @@ mod tests {
         // hardcoded path could not produce that.
         let verbs = vec![verb("rm", None)];
         let guarding = Policy {
+            harness: Harness::ExitCode,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: verbs.clone(),
@@ -4688,6 +5163,7 @@ mod tests {
             redirects: Vec::new(),
         };
         let elsewhere = Policy {
+            harness: Harness::ExitCode,
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,
@@ -4786,7 +5262,7 @@ mod tests {
                 harness.as_str()
             );
             assert!(
-                !envelope.tool.is_empty(),
+                !envelope.raw_tool.is_empty(),
                 "{} must yield a tool name, derived where the host sends none",
                 harness.as_str()
             );
@@ -4821,7 +5297,7 @@ mod tests {
             include_str!("../tests/fixtures/hooks/cursor.json"),
         )
         .expect("decodes");
-        assert_eq!(envelope.tool, "Shell");
+        assert_eq!(envelope.raw_tool, "Shell");
         assert_eq!(envelope.raw_event, "beforeShellExecution");
         assert_eq!(
             envelope.input.pointer("/command").and_then(Value::as_str),
@@ -4835,7 +5311,7 @@ mod tests {
         )
         .expect("decodes");
         assert_eq!(generic.event, Event::PreTool);
-        assert_eq!(generic.tool, "Shell");
+        assert_eq!(generic.raw_tool, "Shell");
     }
 
     #[test]
@@ -5082,8 +5558,8 @@ mod tests {
             let body = encode_ask(*harness, "PreToolUse", "reason").expect("serializes");
             if body.is_some() {
                 assert!(
-                    harness.capabilities().ask,
-                    "{}: an ask body was encoded for a host declaring no ask row",
+                    harness.capabilities().ask_reachable("PreToolUse"),
+                    "{}: an ask body was encoded for an event the row calls unreachable",
                     harness.as_str()
                 );
             }
@@ -5102,7 +5578,12 @@ mod tests {
         // unenforced ask proceeds; on Copilot no verified body envelope exists.
         // Both therefore hard-deny, which is the safe direction.
         for harness in [Harness::Cursor, Harness::CopilotCli] {
-            assert!(harness.capabilities().ask);
+            assert_ne!(
+                harness.capabilities().declares(Capability::Ask),
+                Declaration::No,
+                "{}: the host is not measured as lacking the verdict",
+                harness.as_str()
+            );
             assert_eq!(
                 encode_ask(harness, "PreToolUse", "reason").expect("serializes"),
                 None,
@@ -5202,9 +5683,23 @@ mod tests {
         // A policy wanting human confirmation must hard-deny on these two.
         // Degrading `ask` to *allow* would turn "check with a human" into "go
         // ahead", which is the one direction that must never be the fallback.
-        assert!(!Harness::GeminiCli.capabilities().ask);
-        assert!(!Harness::CodexCli.capabilities().ask);
-        assert!(Harness::ClaudeCode.capabilities().ask);
+        for harness in [Harness::GeminiCli, Harness::CodexCli] {
+            assert_eq!(
+                harness.capabilities().declares(Capability::Ask),
+                Declaration::No,
+                "{}: measured absent, not merely unsurveyed",
+                harness.as_str()
+            );
+            assert!(
+                harness.capabilities().ask.enforced_on.is_empty(),
+                "{}: a host without the verdict can have no surface enforcing it",
+                harness.as_str()
+            );
+        }
+        assert_eq!(
+            Harness::ClaudeCode.capabilities().declares(Capability::Ask),
+            Declaration::Yes
+        );
     }
 
     #[test]
@@ -5311,5 +5806,319 @@ mod tests {
         let two = encode_claude_deny("PreToolUse", "reason").expect("serializes");
         assert_eq!(one, two);
         assert!(one.contains("\"permissionDecision\":\"deny\""));
+    }
+
+    // ---------------------------------------------------------------------
+    // CLOUD-779: the neutral operation layer, and CLOUD-601's event-scoped ask.
+    // ---------------------------------------------------------------------
+
+    /// Each host's own word for "write this file", one row per harness.
+    ///
+    /// The census below is exhaustive over [`Harness::ALL`], so a seventh adapter
+    /// cannot land with the fact unmapped, and it is the CLOUD-418 lever: delete a
+    /// harness's vocabulary mapping from [`Harness::write_tools`] and that row
+    /// turns red rather than quietly allowing.
+    ///
+    /// Three of these are the measured hole. On `main`, 2026-08-20, against a
+    /// `[[verb]]` table naming Claude Code's four write tools, a call to a
+    /// protected path under `write`, `WriteFile` or `StrReplaceEditor` was
+    /// **allowed**: the gate asked `verbs::classify(raw_tool)`, the consumer's
+    /// table did not know the spelling, and a rule that matches nothing is
+    /// indistinguishable from a rule with nothing to match.
+    const WRITE_SPELLINGS: &[(Harness, &str)] = &[
+        (Harness::ClaudeCode, "Write"),
+        (Harness::Cursor, "write"),
+        (Harness::CopilotCli, "StrReplaceEditor"),
+        (Harness::GeminiCli, "WriteFile"),
+        (Harness::CodexCli, "NotebookEdit"),
+        (Harness::ExitCode, "Write"),
+    ];
+
+    #[test]
+    fn every_harness_classifies_its_own_write_spelling_as_write() {
+        for harness in Harness::ALL {
+            let (_, spelling) = WRITE_SPELLINGS
+                .iter()
+                .find(|(row, _)| row == harness)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{}: no write spelling declared — a new adapter must name one",
+                        harness.as_str()
+                    )
+                });
+            assert_eq!(
+                harness.operation_of(spelling),
+                Operation::Write,
+                "{}: `{spelling}` is in this host's write_tools and must classify as write",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn a_tool_no_survey_recorded_is_could_not_look_rather_than_not_a_write() {
+        // The three-valued discipline at the harness boundary (CLOUD-757). An
+        // adapter that meets a spelling its host's survey never recorded says so;
+        // it does not guess, and nothing downstream may read that silence as
+        // "harmless".
+        let unknown = Harness::GeminiCli.operation_of("SomeToolNobodySurveyed");
+        assert_eq!(
+            unknown,
+            Operation::Other("SomeToolNobodySurveyed".to_owned()),
+            "an unrecognised tool carries its spelling rather than vanishing"
+        );
+        assert!(unknown.is_unclassified());
+        assert!(
+            unknown.names_targets_through(WriteStage::ToolNamed)
+                && unknown.names_targets_through(WriteStage::CommandParsed),
+            "could not look must ask every source, or it has silently become `false`"
+        );
+        // And the classified operations answer for exactly the source they use,
+        // so the fallback above is a genuine widening rather than the default.
+        assert!(!Operation::Read.names_targets_through(WriteStage::ToolNamed));
+        assert!(!Operation::Mcp.names_targets_through(WriteStage::CommandParsed));
+        assert!(!Operation::Subagent.names_targets_through(WriteStage::ToolNamed));
+        assert!(!Operation::Write.names_targets_through(WriteStage::CommandParsed));
+        assert!(!Operation::Execute.names_targets_through(WriteStage::ToolNamed));
+    }
+
+    #[test]
+    fn the_operation_token_never_leaks_the_host_spelling_it_carries() {
+        // Rule 4 on a type whose whole job is to be reported: `Other` renders the
+        // reading, never the payload. The spelling stays addressable through
+        // `raw_tool` for a rule that means to reach it.
+        assert_eq!(
+            Operation::Other("mcp__secretserver__do".to_owned()).as_str(),
+            "other"
+        );
+        for (operation, token) in [
+            (Operation::Write, "write"),
+            (Operation::Read, "read"),
+            (Operation::Execute, "execute"),
+            (Operation::Mcp, "mcp"),
+            (Operation::Subagent, "subagent"),
+        ] {
+            assert_eq!(operation.as_str(), token);
+        }
+    }
+
+    /// THE PINNED REGRESSION (CLOUD-779).
+    ///
+    /// Every harness that can emit a write-shaped call denies the same protected
+    /// path, under the host's own spelling and against a `[[verb]]` table that
+    /// names only Claude Code's. Red on `main` for Cursor, Gemini and Copilot.
+    #[test]
+    fn a_protected_write_denies_on_every_harness_under_its_own_vocabulary() {
+        // Deliberately Claude Code's four names and nothing else — the table a
+        // consumer actually writes, and the one this issue measured.
+        let policy = protected_policy(vec![
+            verb("Write", Some("use the surface that owns the file")),
+            verb("Edit", Some("use the surface that owns the file")),
+            verb("MultiEdit", Some("use the surface that owns the file")),
+            verb("NotebookEdit", Some("use the surface that owns the file")),
+        ]);
+        for (harness, spelling) in WRITE_SPELLINGS {
+            let decision = adjudicate(
+                &policy,
+                &write_envelope_on(*harness, spelling, "batten.toml"),
+                false,
+                &None,
+                &None,
+                &crate::stop::StopFacts::default(),
+            );
+            assert!(
+                matches!(decision, Decision::Deny(_)),
+                "{}: `{spelling}` reached a protected path and was not refused — \
+                 the gate reads as coverage on every harness and enforces on one",
+                harness.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn a_write_under_an_undeclared_spelling_still_names_a_fix() {
+        // The `[[verb]]` row is message composition now, so a spelling the
+        // consumer never declared loses the verb's remedy and keeps the refusal.
+        // `redirect::resolve`'s per-path tier is what answers instead, which is
+        // why the deny is still actionable rather than a bare no (CLOUD-122).
+        let policy = protected_policy_with(
+            vec![verb("Write", Some("use the surface that owns the file"))],
+            vec![Redirect {
+                glob: "batten.toml".to_owned(),
+                mutation: "change it in a pull request".to_owned(),
+            }],
+        );
+        let Decision::Deny(refusal) = adjudicate(
+            &policy,
+            &write_envelope_on(Harness::GeminiCli, "WriteFile", "batten.toml"),
+            false,
+            &None,
+            &None,
+            &crate::stop::StopFacts::default(),
+        ) else {
+            panic!("a host-spelled write against a protected path must deny");
+        };
+        let rendered = refusal.render();
+        assert!(rendered.contains("WriteFile"), "got: {rendered}");
+        assert!(
+            rendered.contains("change it in a pull request"),
+            "the path class must answer where the verb row cannot; got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn a_shell_call_reaches_the_same_protected_gate_a_tool_named_write_does() {
+        // CLOUD-779's routing: `beforeShellExecution` is `Operation::Execute`, and
+        // an Execute names its targets inside the command text rather than in a
+        // `writes` field. One gate, two sources — so "which stage answers" is a
+        // property of the operation and not a second implementation that could
+        // drift from the first.
+        let envelope = decode(
+            Harness::Cursor,
+            r#"{"hook_event_name":"beforeShellExecution","cwd":"/repo","command":"rm batten.toml"}"#,
+        )
+        .expect("decodes");
+        assert_eq!(envelope.operation, Operation::Execute);
+        assert_eq!(envelope.raw_tool, "Shell");
+        assert!(
+            envelope.writes.is_none(),
+            "a shell call names no target through the tool, which is why the \
+             stage split exists"
+        );
+        assert_eq!(
+            protected_write(
+                &protected_policy(vec![verb("rm", Some("restore it with git"))]),
+                &envelope,
+                WriteStage::ToolNamed
+            ),
+            Decision::Allow,
+            "an Execute has nothing to say at the tool-named stage"
+        );
+        assert!(
+            matches!(
+                protected_write(
+                    &protected_policy(vec![verb("rm", Some("restore it with git"))]),
+                    &envelope,
+                    WriteStage::CommandParsed
+                ),
+                Decision::Deny(_)
+            ),
+            "and everything to say at the command stage"
+        );
+    }
+
+    /// CLOUD-601: the declaration and the reachability are one fact, and where
+    /// they still disagree the disagreement is DECLARED rather than merely true.
+    #[test]
+    fn a_declared_escalation_is_reachable_or_the_gap_is_stated() {
+        for harness in Harness::ALL {
+            let capabilities = harness.capabilities();
+            // The surface Batten actually registers on this host. `ExitCode` has
+            // no wiring — it is a contract, not a host — so there is no
+            // registration for a declaration to disagree with.
+            let Some(wiring) = harness.wiring() else {
+                assert!(
+                    capabilities.ask.enforced_on.is_empty(),
+                    "{}: nothing is registered here, so nothing can enforce a verdict",
+                    harness.as_str()
+                );
+                continue;
+            };
+            let registered = wiring
+                .spellings
+                .iter()
+                .find(|(event, _)| *event == Event::PreTool)
+                .map(|(_, spelling)| *spelling)
+                .expect("every wired host registers a pre-tool surface");
+
+            let declared = capabilities.declares(Capability::Ask);
+            let reachable = capabilities.ask_reachable(registered);
+            let stated = ASK_GAPS.iter().any(|(row, _)| row == harness);
+
+            if declared == Declaration::No {
+                assert!(
+                    !reachable,
+                    "{}: measured as lacking the verdict and enforcing it anyway",
+                    harness.as_str()
+                );
+                assert!(
+                    !stated,
+                    "{}: a host with no verdict has no gap to declare",
+                    harness.as_str()
+                );
+                continue;
+            }
+            assert_eq!(
+                stated,
+                !reachable,
+                "{}: declared `{}` and reachable on `{registered}` = {reachable}, but \
+                 ASK_GAPS says {stated}. A gap must be STATED, and a gap that has \
+                 closed must be removed rather than left as a stale citation.",
+                harness.as_str(),
+                declared.as_str()
+            );
+        }
+        // Shown able to fail (CLOUD-418): the case discriminates. Cursor is the
+        // live gap — re-declare its generic `preToolUse` as enforcing and the
+        // equality above flips, which is exactly what CLOUD-777 will do and what
+        // must then force the row out of ASK_GAPS.
+        assert!(
+            !Harness::Cursor.capabilities().ask_reachable("preToolUse"),
+            "an ask parses unenforced here, and an unenforced ask PROCEEDS"
+        );
+        assert!(
+            Harness::Cursor
+                .capabilities()
+                .ask_reachable("beforeShellExecution"),
+            "the two surfaces that do honour it are what the row records"
+        );
+    }
+
+    #[test]
+    fn an_unreachable_escalation_hard_denies_and_never_degrades_to_allow() {
+        // CLOUD-45 §7(b), now asked per event rather than per host. `None` is the
+        // boundary's instruction to hard-deny; the direction that must never be
+        // reachable is a `Some` on a surface that would parse and ignore it.
+        for harness in Harness::ALL {
+            for event in ["PreToolUse", "preToolUse", "BeforeTool", "afterFileEdit"] {
+                let body = encode_ask(*harness, event, "reason").expect("serializes");
+                assert_eq!(
+                    body.is_some(),
+                    harness.capabilities().ask_reachable(event),
+                    "{}: an ask body at `{event}` disagrees with the one authority",
+                    harness.as_str()
+                );
+            }
+        }
+        // And where it IS reachable the body is that host's own documented shape,
+        // not a shared guess — Cursor assigns stderr no meaning at all, so the
+        // body is the only channel a reason can travel on.
+        let cursor = encode_ask(Harness::Cursor, "beforeShellExecution", "reason")
+            .expect("serializes")
+            .expect("reachable on this surface");
+        assert!(cursor.contains("\"permission\":\"ask\""), "got: {cursor}");
+        assert!(
+            cursor.contains("\"user_message\":\"reason\""),
+            "got: {cursor}"
+        );
+    }
+
+    #[test]
+    fn the_capability_row_is_readable_through_the_policy_a_rule_is_judged_by() {
+        // CLOUD-779 item 2: engine-side plumbing through `Policy`, deliberately
+        // not a `Rule` column — no config key, no schema regeneration, and no
+        // collision with the two issues that do add columns (CLOUD-772/773).
+        // `adjudicate` stays pure: this is compiled-in data resolved at the
+        // boundary like every other fact.
+        for harness in Harness::ALL {
+            let policy = Policy::declaring_nothing(*harness);
+            assert_eq!(policy.harness(), *harness);
+            assert_eq!(
+                policy.capabilities().declares(Capability::Ask),
+                harness.capabilities().declares(Capability::Ask),
+                "{}: the policy must hand a rule the same row the table holds",
+                harness.as_str()
+            );
+        }
     }
 }
