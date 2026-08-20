@@ -15,6 +15,13 @@
 //! Judged against the **committed** `batten.toml`, because the tables are the
 //! consumer's: a fixture-only suite would stay green after someone deleted the
 //! `cargo` row, which is exactly the drift the corpus exists to catch.
+//!
+//! Every `cargo` sample is written `mise exec -- cargo …` since CLOUD-271: the
+//! committed `no-bare-cargo` row refuses the unmediated route outright, so a
+//! bare spelling would make the allows fail and — worse — make the denies pass
+//! for the wrong row, which is coverage that has stopped testing this predicate.
+//! The wrapper look-through means the mediated form is still judged as `cargo`,
+//! so each case asks exactly what it asked before.
 
 // Panicking on setup failure is the idiomatic way for a test to fail loudly.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -62,8 +69,8 @@ fn a_verdict_piped_into_a_pager_or_filter_is_refused() {
     assert_denied("mise run verify 2>&1 | tail -6");
     assert_denied("mise run verify | head -20");
     assert_denied("git push origin branch | tail -2");
-    assert_denied("cargo clippy | grep -E error");
-    assert_denied("cargo test -p batten | wc -l");
+    assert_denied("mise exec -- cargo clippy | grep -E error");
+    assert_denied("mise exec -- cargo test -p batten | wc -l");
     assert_denied("gh pr merge 42 | tail -1");
     // A filter two stages down substitutes just as completely as an adjacent one.
     assert_denied("mise run verify | sort | tail -3");
@@ -76,7 +83,7 @@ fn a_read_only_query_carries_no_verdict_and_composes_freely() {
     assert_allowed("git log --oneline -5 | head -2");
     assert_allowed("git status --short | wc -l");
     assert_allowed("gh pr view 42 | tail -3");
-    assert_allowed("cargo metadata | jq .packages");
+    assert_allowed("mise exec -- cargo metadata | jq .packages");
     // `jq` is composition rather than a verdict substitute, so it is not a filter
     // even downstream of a real verdict.
     assert_allowed("gh pr view 42 --json title | jq -r .title");
@@ -98,7 +105,7 @@ fn a_trailing_list_element_replaces_the_status() {
     // as `completed (exit code 0)`.
     assert_denied("mise run verify >log 2>&1; echo \"EXIT=$?\"");
     assert_denied("mise run fmt >log 2>&1 || echo failed");
-    assert_denied("cargo test >log 2>&1; ls");
+    assert_denied("mise exec -- cargo test >log 2>&1; ls");
 }
 
 #[test]
@@ -109,14 +116,14 @@ fn an_and_chain_is_allowed_because_it_cannot_manufacture_a_green() {
     // `verify`'s own body is built from guarded chains for that property.
     assert_allowed("mise run fmt && mise run verify");
     assert_allowed("git fetch origin main && git rebase origin/main");
-    assert_allowed("cargo build && cargo test");
+    assert_allowed("mise exec -- cargo build && mise exec -- cargo test");
 }
 
 #[test]
 fn detaching_a_verdict_orphans_it_from_the_tool_call() {
     assert_denied("nohup mise run land >/tmp/land.log 2>&1 &");
     assert_denied("mise run ci-wait &");
-    assert_denied("nohup cargo test -p batten >/tmp/t.log 2>&1 &");
+    assert_denied("nohup mise exec -- cargo test -p batten >/tmp/t.log 2>&1 &");
     // The wrapper is looked through, so the wrapped program is what is judged.
     assert_denied("nohup mise run verify");
 }
@@ -129,7 +136,7 @@ fn the_prescribed_form_is_allowed_including_its_redirection() {
     // recommends, which is the worst failure this gate could have.
     assert_allowed("mise run verify >/tmp/verify.log 2>&1");
     assert_allowed("mise run land >/tmp/land.log 2>&1");
-    assert_allowed("cargo test -p batten >/tmp/test.log 2>&1");
+    assert_allowed("mise exec -- cargo test -p batten >/tmp/test.log 2>&1");
     assert_allowed("git push origin branch >/tmp/push.log 2>&1");
     // The other redirection spellings that carry an `&`.
     assert_allowed("mise run verify &>/tmp/verify.log");
@@ -139,7 +146,7 @@ fn the_prescribed_form_is_allowed_including_its_redirection() {
 #[test]
 fn a_verdict_alone_in_the_call_is_the_prescribed_form() {
     assert_allowed("mise run verify");
-    assert_allowed("cargo test -p batten");
+    assert_allowed("mise exec -- cargo test -p batten");
     assert_allowed("git push origin branch");
     assert_allowed("bats tests/land.bats");
 }
@@ -150,7 +157,7 @@ fn a_bare_invocation_that_answers_nothing_is_not_a_verdict() {
     // usage. Piping usage is not discarding a verdict, because there is none.
     assert_allowed("bats --version | head -1");
     assert_allowed("bats --help | tail -5");
-    assert_allowed("cargo | head -3");
+    assert_allowed("mise exec -- cargo | head -3");
 }
 
 #[test]

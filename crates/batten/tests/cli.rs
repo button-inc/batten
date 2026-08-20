@@ -2133,6 +2133,18 @@ const SHAPE_CENSUS: &[ShapeCase] = &[
         site: CensusSite::Checkout,
     },
     ShapeCase {
+        command: "cargo test -p batten",
+        rule: "no-bare-cargo",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
+        // The wrapper does not launder it: `effective_program` steps past `env`
+        // to reach `cargo`, and the mediator is read from what it stepped over.
+        command: "env RUSTFLAGS=-Awarnings cargo build",
+        rule: "no-bare-cargo",
+        site: CensusSite::Checkout,
+    },
+    ShapeCase {
         command: "gh pr create --title 'no key here'",
         rule: "pr-names-an-issue",
         site: CensusSite::Keyless,
@@ -2284,7 +2296,17 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
     // is censused at the keyless site above, where the shape rows are evaluated
     // first and the refusal therefore names `ready-names-an-issue`; the receipt
     // row's own case is the one below this.
-    for command in ["gh pr view 42", "mise run land"] {
+    // `mise exec -- cargo test` and `mise run test:cargo` are here because
+    // `no-bare-cargo` is not a ban on the program (CLOUD-271): the row refuses
+    // the ROUTE, and a row that closed the sanctioned route too would ban the
+    // toolchain outright. `mise exec` is looked through, so this pair is the
+    // only thing standing between `require_via` and exactly that.
+    for command in [
+        "gh pr view 42",
+        "mise run land",
+        "mise exec -- cargo test -p batten",
+        "mise run test:cargo",
+    ] {
         let output = run_hook_in(&root, "exit-code", &claude_payload(command), false);
         assert_eq!(
             output.status.code(),
@@ -2292,6 +2314,25 @@ fn the_committed_shape_rules_fire_on_every_banned_shape() {
             "the committed policy must allow {command:?}"
         );
     }
+}
+
+#[test]
+fn the_bare_cargo_refusal_names_the_sanctioned_route() {
+    // A deny reaches the model as the entire explanation (CLOUD-122), and this
+    // row's whole point is that the program is fine and the route is not — so a
+    // refusal that did not name the route would read as "cargo is banned" and
+    // send its reader looking for a way around rather than through.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = run_hook_in(
+        &root,
+        "exit-code",
+        &claude_payload("cargo test -p batten"),
+        false,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("mise exec -- cargo"), "got: {stderr}");
+    assert!(stderr.contains("mise run"), "got: {stderr}");
 }
 
 #[test]

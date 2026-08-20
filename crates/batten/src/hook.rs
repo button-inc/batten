@@ -2493,6 +2493,17 @@ fn matching_shape_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
             if !operands_match(&words, &wanted) {
                 continue;
             }
+            // The mediator, read from the segment AS WRITTEN (CLOUD-271). This
+            // is the one place the sanctioned route and the bare one still
+            // differ: `effective_program` has already looked through
+            // `mise exec`, so by here both have resolved to the same program.
+            // Present means the row does not fire — the objection is to the
+            // toolchain selection, not to the program.
+            if let Some(via) = rule.require_via()
+                && mediator_present(via, &tokens[..program_index])
+            {
+                continue;
+            }
             // The extra literal is matched against the segment as written,
             // because the thing it looks for lives inside a quoted argument and
             // so is not one of the words above.
@@ -3076,6 +3087,22 @@ fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
     wanted.is_empty() || words.windows(wanted.len()).any(|window| window == wanted)
 }
 
+/// Did the call reach its program through the mediator a row requires?
+///
+/// Read from the tokens BEFORE the effective program, so a mediator named as an
+/// argument (`cargo run --bin mise`) is not one, and every wrapper form is:
+/// `effective_program` steps past `env`/`timeout`/… on its way, and this looks
+/// at everything it stepped over. That is what stops
+/// `env RUSTFLAGS=-Awarnings cargo build` from laundering the bare call.
+fn mediator_present(via: crate::rules::RequireVia, before_program: &[&str]) -> bool {
+    match via {
+        // `mise exec -- cargo` and `mise x -- cargo` both leave `mise` here;
+        // `mise run <task>` never reaches another program at all, so it is
+        // judged as `mise` and no row keyed on the wrapped program sees it.
+        crate::rules::RequireVia::Mise => before_program.contains(&"mise"),
+    }
+}
+
 /// The wrapper programs [`effective_program`] looks through **unconditionally**.
 ///
 /// Declared once because two surfaces read it: the matcher, to step past a
@@ -3418,6 +3445,7 @@ mod tests {
             regex: None,
             exclude: None,
             contains: contains.map(ToOwned::to_owned),
+            require_via: None,
             requires_key: None,
             reason: Some(format!("use the sanctioned path for {id}")),
             policy_url: None,
@@ -3841,6 +3869,79 @@ mod tests {
         assert!(program_only_shape_denies(
             "mise exec rust@1.85 -- cargo build"
         ));
+    }
+
+    /// The program-only row again, this time carrying the mediator requirement
+    /// (CLOUD-271). Same row shape as `program_only_shape_policy`, one key more,
+    /// so the pair of policies isolates what the key changes.
+    fn require_via_policy() -> Policy {
+        let mut rule = shape("no-bare-cargo", "cargo", None);
+        rule.require_via = Some(crate::rules::RequireVia::Mise);
+        Policy {
+            shapes: vec![rule],
+            fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+            redirects: Vec::new(),
+        }
+    }
+
+    fn require_via_denies(command: &str) -> bool {
+        matches!(
+            adjudicate(
+                &require_via_policy(),
+                &envelope(command),
+                false,
+                &None,
+                &None,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Deny(_)
+        )
+    }
+
+    #[test]
+    fn require_via_denies_the_unmediated_reach() {
+        assert!(require_via_denies("cargo test -p batten"));
+        assert!(require_via_denies("cargo build"));
+    }
+
+    #[test]
+    fn require_via_allows_the_mediated_reach() {
+        // The distinction the key exists for. `effective_program` looks through
+        // `mise exec`, so both of these resolve to the program `cargo` and the
+        // shape half of the row matches identically -- the mediator is read
+        // from the segment as written, which is the one place they still differ.
+        assert!(!require_via_denies("mise exec -- cargo test -p batten"));
+        assert!(!require_via_denies("mise x -- cargo build"));
+        assert!(!require_via_denies("mise run test:cargo"));
+    }
+
+    #[test]
+    fn a_wrapper_does_not_launder_an_unmediated_reach() {
+        // `effective_program` steps past these to find `cargo`, and the mediator
+        // is looked for in everything it stepped over -- so a wrapper cannot
+        // hide the missing pin, and a mise the wrapper DOES carry still counts.
+        assert!(require_via_denies("env RUSTFLAGS=-Awarnings cargo build"));
+        assert!(require_via_denies("timeout 300 cargo test"));
+        assert!(require_via_denies("nohup cargo build"));
+        assert!(!require_via_denies("env FOO=1 mise exec -- cargo build"));
+    }
+
+    #[test]
+    fn a_mediator_named_as_an_argument_is_not_a_mediator() {
+        // Read from the tokens BEFORE the program, so the word appearing later
+        // in the line is subject matter rather than a route.
+        assert!(require_via_denies("cargo run --bin mise"));
+    }
+
+    #[test]
+    fn a_row_without_require_via_is_unnarrowed() {
+        // The column is optional and absence means "no mediator required", so
+        // every row that predates the key keeps denying every route to its
+        // program. Pinned here because a default would have silently narrowed
+        // the four committed `gh` rows.
+        assert!(is_deny("mise exec -- gh pr merge 42"));
     }
 
     #[test]

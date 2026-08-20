@@ -1080,6 +1080,16 @@
         "mutation"
       ]
     },
+    "RequireVia": {
+      "description": "The mediator a [`Rule::require_via`] row requires (CLOUD-271).\n\nOne variant, deliberately, and it is a variant rather than a string because\nthe set is the set of mediators the matcher knows how to look for. A free\nstring would let a typo load as a row that never finds its mediator and\ntherefore refuses every call — a gate that reads as narrow and denies wide.",
+      "oneOf": [
+        {
+          "description": "The pinned toolchain: the call reached its program through `mise`.\n\n`mise run <task>` and `mise exec -- <program>` both count. They are the\nsame fact for this key — the program was selected by the pin rather than\nby `PATH` — and only the second reaches the program token at all, since\n`mise run` names a task and is judged as `mise` itself.",
+          "type": "string",
+          "const": "mise"
+        }
+      ]
+    },
     "Rule": {
       "description": "One declarative rule from `batten.toml`'s `[[rule]]` array.\n\n`deny_unknown_fields` keeps the surface narrow (§8): a mistyped key is a hard\nerror, never a silently ignored setting that disables a gate. The struct is\nflat rather than an enum with `#[serde(flatten)]` precisely so this guarantee\nholds — `flatten` silently defeats `deny_unknown_fields`.\n`severity` is required by every kind but `judge`, which is refused it\n(CLOUD-445). The field is an `Option` so a judge row can omit it, so the\nderived `required` list cannot carry it — and a schema that merely dropped it\nwould stop flagging the missing key on the four kinds that must have one,\nmoving a check out of the editor with nothing taking its place.\n\nThis conditional puts it back, stated once here and derived into both\npublished schemas. It mirrors [`RuleKind::requires`] and\n[`RuleKind::permits`]; `tests::the_schema_conditional_matches_the_column_census`\nis what keeps the two from drifting.",
       "type": "object",
@@ -1241,6 +1251,17 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "require_via": {
+          "description": "Narrow a [`RuleKind::Shape`] deny to a call that reached its program\n**without** the named mediator (CLOUD-271).\n\nThe row still selects on the command shape; this decides whether that\nselection refuses. Without it a row keyed on `cargo` denies every route\nto `cargo`, the sanctioned one included — because\n`hook::effective_program` looks *through* `mise exec` by design, so the\nmediated call resolves to the same program as the bare one. The\nobjection here is not to the program but to the **toolchain selection**:\na bare `cargo` compiles against whatever is ambient, and the pin is what\nmakes a local green mean anything.\n\nSo the mediator is read from the segment **as written**, which is the\none place the two routes still differ, and a wrapper cannot launder it:\n`env RUSTFLAGS=-Awarnings cargo build` names no mediator and is refused,\nwhile `env FOO=1 mise exec -- cargo build` names one and is not.\n\nA closed set rather than a free string: an unrecognised mediator would\nbe a row that never finds what it is looking for and therefore denies\neverything, which is the loud half of the same silence\n[`validate`] exists to refuse.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequireVia"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "requires_key": {

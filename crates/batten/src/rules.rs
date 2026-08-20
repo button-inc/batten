@@ -402,6 +402,7 @@ impl RuleKind {
                 "pattern",
                 "reason",
                 "contains",
+                "require_via",
                 "requires_key",
                 "base",
                 "policy_url",
@@ -657,6 +658,29 @@ pub struct Rule {
     /// against the raw text of the same segment, quotes included.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contains: Option<String>,
+    /// Narrow a [`RuleKind::Shape`] deny to a call that reached its program
+    /// **without** the named mediator (CLOUD-271).
+    ///
+    /// The row still selects on the command shape; this decides whether that
+    /// selection refuses. Without it a row keyed on `cargo` denies every route
+    /// to `cargo`, the sanctioned one included — because
+    /// `hook::effective_program` looks *through* `mise exec` by design, so the
+    /// mediated call resolves to the same program as the bare one. The
+    /// objection here is not to the program but to the **toolchain selection**:
+    /// a bare `cargo` compiles against whatever is ambient, and the pin is what
+    /// makes a local green mean anything.
+    ///
+    /// So the mediator is read from the segment **as written**, which is the
+    /// one place the two routes still differ, and a wrapper cannot launder it:
+    /// `env RUSTFLAGS=-Awarnings cargo build` names no mediator and is refused,
+    /// while `env FOO=1 mise exec -- cargo build` names one and is not.
+    ///
+    /// A closed set rather than a free string: an unrecognised mediator would
+    /// be a row that never finds what it is looking for and therefore denies
+    /// everything, which is the loud half of the same silence
+    /// [`validate`] exists to refuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_via: Option<RequireVia>,
     /// Narrow a [`RuleKind::Shape`] deny to work that names **no** tracker key
     /// (CLOUD-446).
     ///
@@ -1025,6 +1049,24 @@ impl VerdictProgram {
     }
 }
 
+/// The mediator a [`Rule::require_via`] row requires (CLOUD-271).
+///
+/// One variant, deliberately, and it is a variant rather than a string because
+/// the set is the set of mediators the matcher knows how to look for. A free
+/// string would let a typo load as a row that never finds its mediator and
+/// therefore refuses every call — a gate that reads as narrow and denies wide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RequireVia {
+    /// The pinned toolchain: the call reached its program through `mise`.
+    ///
+    /// `mise run <task>` and `mise exec -- <program>` both count. They are the
+    /// same fact for this key — the program was selected by the pin rather than
+    /// by `PATH` — and only the second reaches the program token at all, since
+    /// `mise run` names a task and is judged as `mise` itself.
+    Mise,
+}
+
 /// What makes a receipt row fire (CLOUD-444).
 ///
 /// The two triggers answer different questions and neither subsumes the other. A
@@ -1147,7 +1189,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 25] {
+    fn columns(&self) -> [(&'static str, bool); 26] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1163,6 +1205,7 @@ impl Rule {
             ("check", self.check.is_some()),
             ("fix", self.fix.is_some()),
             ("contains", self.contains.is_some()),
+            ("require_via", self.require_via.is_some()),
             ("requires_key", self.requires_key.is_some()),
             ("reason", self.reason.is_some()),
             ("policy_url", self.policy_url.is_some()),
@@ -1193,6 +1236,16 @@ impl Rule {
         self.key.unwrap_or_default()
     }
 
+    /// The mediator this row requires, if it requires one.
+    ///
+    /// Absence is "no mediator required", which is every row that predates
+    /// CLOUD-271 and is why the column is optional rather than defaulted: a
+    /// default would silently narrow every existing shape row.
+    #[must_use]
+    pub fn require_via(&self) -> Option<RequireVia> {
+        self.require_via
+    }
+
     fn validate(&self) -> anyhow::Result<()> {
         let kind = self.kind.as_str();
         // Ahead of every per-kind question, so the rename is what the author
@@ -1205,26 +1258,7 @@ impl Rule {
                 self.id
             )));
         }
-        // The pipeline row's own tables (CLOUD-443), refused here for the same
-        // reason as everything else in this block: a list that narrows nothing,
-        // or a row whose conditions contradict, loads clean and decides nothing.
-        if self.kind == RuleKind::Pipeline {
-            for entry in self.verdict.iter().flatten() {
-                entry.validate(&self.id)?;
-            }
-            if self.verdict.as_ref().is_some_and(Vec::is_empty) {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"pipeline\" requires at least one `verdict` entry; with none it judges no command",
-                    self.id
-                )));
-            }
-            if self.filters.as_ref().is_some_and(Vec::is_empty) {
-                return Err(UsageError::raise(format!(
-                    "rule {}: kind \"pipeline\" requires at least one `filters` entry; with none it cannot recognise the substitution it refuses",
-                    self.id
-                )));
-            }
-        }
+        self.validate_pipeline_tables()?;
         // The key modifier's own obligations (CLOUD-446). Both here rather than
         // in the column census for the reason stated below it: the census is a
         // per-kind const, and these depend on a value inside the row.
@@ -1332,6 +1366,35 @@ impl Rule {
         self.validate_command_pattern()?;
         self.validate_forbid_predicate()?;
         self.validate_remediation()
+    }
+
+    /// The pipeline row's own tables (CLOUD-443).
+    ///
+    /// Refused for the reason everything in [`Rule::validate`] is refused: a
+    /// list that narrows nothing, or a row whose conditions contradict, loads
+    /// clean and decides nothing. Extracted rather than inlined so `validate`
+    /// stays under the line limit as columns accumulate — the census below it
+    /// is the part that must stay whole.
+    fn validate_pipeline_tables(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Pipeline {
+            return Ok(());
+        }
+        for entry in self.verdict.iter().flatten() {
+            entry.validate(&self.id)?;
+        }
+        if self.verdict.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"pipeline\" requires at least one `verdict` entry; with none it judges no command",
+                self.id
+            )));
+        }
+        if self.filters.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"pipeline\" requires at least one `filters` entry; with none it cannot recognise the substitution it refuses",
+                self.id
+            )));
+        }
+        Ok(())
     }
 
     /// Refuse a `pattern` the command matcher cannot honour (CLOUD-401).
@@ -3286,6 +3349,7 @@ mod tests {
             regex: None,
             exclude: None,
             contains: None,
+            require_via: None,
             requires_key: None,
             reason: None,
             policy_url: None,
@@ -4470,6 +4534,26 @@ mod tests {
     /// A `shape` row keyed on a command line, for the pattern-shape refusals.
     fn shape_pattern(pattern: &str) -> Rule {
         shape("row", pattern, "use the sanctioned path")
+    }
+
+    #[test]
+    fn require_via_is_a_shape_column_only() {
+        // The census decides it, so this case is what proves the column was
+        // actually declared per-kind rather than left open to every row. A
+        // `forbid` row reads file contents and reaches no command, so a
+        // mediator requirement on one would narrow nothing while reading as a
+        // narrowing.
+        let mut rule = forbid("no-todo", "**/*.rs", "TODO");
+        rule.require_via = Some(RequireVia::Mise);
+        let err = validate(&[rule]).unwrap_err().to_string();
+        assert!(err.contains("require_via"), "{err}");
+    }
+
+    #[test]
+    fn require_via_loads_on_a_shape_row() {
+        let mut rule = shape("no-bare-cargo", "cargo", "use the pinned toolchain");
+        rule.require_via = Some(RequireVia::Mise);
+        assert!(validate(&[rule]).is_ok());
     }
 
     #[test]

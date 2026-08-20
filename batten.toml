@@ -256,6 +256,46 @@ reason = """
 Hand-watching CI is the ad-hoc shape `mise run ci-wait` replaces. Background \
 it rather than holding a foreground poll open."""
 
+# The toolchain pin, given a mechanism (CLOUD-271). AGENTS.md has said "never a
+# bare `cargo`" since long before anything enforced it, which non-negotiable
+# rule 2 calls half a change.
+#
+# NOT A BAN on `cargo`, and `require_via` is what says so: the row selects the
+# program and then refuses only the calls that reached it without the pin.
+# `mise exec -- cargo test` and `mise run test:cargo` are the sanctioned routes
+# and stay open; a bare `cargo` does not, and neither does a wrapper hiding one
+# (`env RUSTFLAGS=-Awarnings cargo build`), because the mediator is read from
+# the segment as written.
+#
+# It cannot be spelled as a program comparison. `effective_program` looks
+# THROUGH `mise exec` by design — that is what makes the four `gh` rows above
+# survive the sandbox's wrapper form — so `program == "cargo"` denies the
+# sanctioned route too. The objection here is to the toolchain SELECTION rather
+# than to the program, which is a different question and needed its own key.
+#
+# `cargo --version` is denied along with everything else, decided rather than
+# omitted: the row's subject is the program being reached, an argument-less
+# reach is still a reach, and the redirect costs one `mise exec --`. A carve-out
+# for read-only queries would be a hole that looks intentional.
+#
+# Why it matters TODAY, when a bare `cargo` fails loudly on its own: that is a
+# version inequality, not a gate. The pin (1.97) currently sits above the
+# ambient toolchain (1.94), so Cargo's own `rust-version` check refuses. When
+# ambient passes 1.97 the inequality reverses and the bare call goes back to
+# compiling silently against the wrong compiler — measured 2026-08-09, three
+# gates disagreeing with a green local run.
+[[rule]]
+id = "no-bare-cargo"
+kind = "shape"
+scope = "mediated_call"
+severity = "deny"
+pattern = "cargo"
+require_via = "mise"
+reason = """
+A bare `cargo` resolves to whatever toolchain is ambient, not the pin in \
+mise.toml, so a green local run can mean nothing. Use `mise run <task>` (\
+`test:cargo`, `lint`, `verify`), or `mise exec -- cargo ...` for a one-off."""
+
 # `issue-guard`'s naming half, as config (CLOUD-446).
 #
 # NOT A BAN, and the `requires_key` column is what says so: the row selects on
