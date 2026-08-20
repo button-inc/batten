@@ -206,11 +206,81 @@ pub enum RuleKind {
     Document,
 }
 
+/// What a rule kind may reach beyond the inputs the boundary handed it
+/// (CLOUD-763).
+///
+/// Three values rather than a boolean, because the boolean could not express the
+/// case the fact model creates. `carries_ambient_authority` asked *does it start a
+/// program?*, which is a proxy: what actually decides admission to the mediated
+/// call is whether a kind can acquire anything its inputs did not already carry.
+/// A kind that reaches the network without spawning would have passed the old
+/// question and must fail the new one, which is exactly what makes the
+/// replacement pin **strictly stronger** rather than a rename.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Authority {
+    /// Reads only what the boundary supplied: the resolved facts, the envelope,
+    /// the files the glob already selected, and fixed VCS queries whose only
+    /// configured input is data. The fact set is the whole world it sees.
+    Supplied,
+    /// Reaches beyond its inputs without running a configured program — a
+    /// network client, an unbounded walk, a warm process it did not start.
+    ///
+    /// **No kind carries this today**, and it is a variant rather than a comment
+    /// for the reason the whole issue turns on: the retired predicate would have
+    /// admitted such a kind to the mediated call, silently, because it does not
+    /// spawn. Naming the value is what lets a test prove the new pin refuses it.
+    Acquires,
+    /// Runs a program a `batten.toml` named, which can do everything above and
+    /// more: any file, any process, the network, with the calling user's
+    /// authority.
+    Spawns,
+}
+
+impl Authority {
+    /// Every authority the model knows, so the partitions below are total.
+    pub const ALL: &'static [Authority] =
+        &[Authority::Supplied, Authority::Acquires, Authority::Spawns];
+
+    /// The stable lowercase token used in machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Authority::Supplied => "supplied",
+            Authority::Acquires => "acquires",
+            Authority::Spawns => "spawns",
+        }
+    }
+
+    /// Whether this authority reaches beyond the inputs it was handed.
+    ///
+    /// The one predicate `scopes` and `run_static` both read. Exhaustive with no
+    /// wildcard arm, so a fourth value cannot default to "safe" — the direction
+    /// this mistake is expensive in.
+    #[must_use]
+    pub const fn is_ambient(self) -> bool {
+        match self {
+            Authority::Supplied => false,
+            Authority::Acquires | Authority::Spawns => true,
+        }
+    }
+}
+
+/// Whether a kind carrying `authority` may be adjudicated on the mediated call.
+///
+/// The admission predicate, as a free function over the authority rather than
+/// over a [`RuleKind`], so a test can feed it [`Authority::Acquires`] — a value
+/// no kind carries yet — and prove the pin refuses it (CLOUD-418: a gate never
+/// shown to fail ships as coverage).
+#[must_use]
+pub const fn admissible_at_mediated_call(authority: Authority) -> bool {
+    !authority.is_ambient()
+}
+
 impl RuleKind {
     /// Every kind the engine knows, so the partitions below are total.
     ///
     /// A new variant must be added here or [`tests::all_covers_every_kind`]
-    /// fails — which is what keeps [`RuleKind::spawns_processes`] from silently
+    /// fails — which is what keeps [`RuleKind::carries_ambient_authority`] from silently
     /// defaulting a spawning kind to "safe".
     pub const ALL: &'static [RuleKind] = &[
         RuleKind::Forbid,
@@ -240,57 +310,71 @@ impl RuleKind {
         }
     }
 
-    /// Whether running this kind can execute a process declared in
-    /// `batten.toml`.
+    /// What this kind may reach beyond the inputs the boundary handed it
+    /// (CLOUD-763).
     ///
-    /// This is the load-bearing predicate behind the §5 effect split
-    /// (CLOUD-170): a `read`-classified verb may only run kinds for which this
-    /// is `false`. It is stated per-kind rather than inferred, so adding a
-    /// spawning kind (the `command` kind, CLOUD-89) is a deliberate act that
-    /// automatically routes it away from the read-only surface.
+    /// # The axis is ambient authority, and it always was
+    ///
+    /// This predicate used to be spelled `carries_ambient_authority`, and its own comment
+    /// conceded the name was wrong — *"this predicate is about user-supplied
+    /// code, not about spawning at all."* Half right. The axis is neither
+    /// spawning nor authorship: it is **ambient authority**. A `command` row is
+    /// excluded from the mediated call because the process it starts can read
+    /// any file, spawn anything and reach the network — unbounded — not because
+    /// a consumer wrote the line that starts it.
+    ///
+    /// "Consumer-authored" was a serviceable proxy while nobody could describe
+    /// what a module could see. [`crate::facts`] makes that describable: a pure
+    /// evaluator over supplied facts has exactly the authority the boundary
+    /// handed it, and the fact set **is** the whole world it can see. So the
+    /// proxy retires and the real axis is stated.
+    ///
+    /// # Stated per kind, and the classification is what `scopes` rests on
+    ///
+    /// [`RuleKind::scopes`] pairs every kind carrying ambient authority with
+    /// [`RuleScope::Tree`] alone, and `hook`'s `Policy::from_resolved` filters on
+    /// scope — so this is the property that filter relies on.
+    /// `tests::no_mediated_call_kind_carries_ambient_authority` pins the whole
+    /// cross product, and it is **strictly stronger** than the spawn-only pin it
+    /// replaces: [`Authority::Acquires`] passes "does it spawn?" and fails this.
     #[must_use]
-    pub const fn spawns_processes(self) -> bool {
+    pub const fn authority(self) -> Authority {
         match self {
             // `Ratchet` reaches git plumbing, which is a *process* — and still
-            // `false`, because this predicate is about user-supplied code, not
-            // about spawning at all. `receipt status` already carries the same
-            // reading with its own `rev-parse`: a read verb may run a fixed VCS
-            // query, and what it must never reach is a command a config named.
-            // A ratchet's git invocations are fixed literals in this crate; the
-            // only configured value that reaches them is a rev, which is data.
-            // Reading this as "no process at all" would make the kind
-            // enforce-only and cost it `check`, which is the surface the gate is
-            // worth having on (CLOUD-55, stated assumption 1).
-            // `Receipt` reads a file and two git refs, which is the same
-            // reading `Ratchet` takes above: fixed VCS queries in this crate,
-            // with only data crossing from config. It must stay `false` or it
-            // could not be scoped to the mediated call at all — `scopes` pairs
-            // every spawning kind with `Tree` alone, which is what keeps `hook`
-            // structurally unable to execute a configured command.
-            // `Pipeline` reads the operators between a command's segments and
-            // nothing else — no file, no git, no process. It joins this arm for
-            // the same structural reason `Receipt` does: `scopes` pairs every
-            // spawning kind with `Tree` alone, so a `true` here would make the
-            // kind unscopable to the mediated call.
-            // `Document` reads a file and parses it in-process. No program a
-            // config named ever runs, which is this predicate's whole subject —
-            // the parsers are vendored crates chosen here, and the only
-            // configured values reaching them are a path, a format token and a
-            // node path, all data.
+            // `Supplied`, because the invocations are fixed literals in this
+            // crate and the only configured value crossing into them is a rev,
+            // which is data. `receipt status` carries the same reading with its
+            // own `rev-parse`: a read verb may run a fixed VCS query, and what it
+            // must never reach is a command a config named. Reading it the other
+            // way would make the kind enforce-only and cost it `check`, which is
+            // the surface the gate is worth having on (CLOUD-55).
+            //
+            // `Receipt` reads a file and two git refs — same reading. `Pipeline`
+            // reads the operators between a command's segments and nothing else.
+            // `Forbid`, `Shape` and `Document` read only what the glob or the
+            // envelope already selected.
             RuleKind::Forbid
             | RuleKind::Shape
             | RuleKind::Ratchet
             | RuleKind::Receipt
             | RuleKind::Pipeline
-            | RuleKind::Document => false,
-            // All three run a program a `batten.toml` named, which is the
-            // whole predicate — that a judge's consults a model, a command's
-            // decides a gate, and a secrets rule's scans for credentials makes
-            // no difference to the surface question. `check` refuses all three,
-            // naming `batten enforce`, with no code per kind: that refusal reads
-            // this predicate and nothing else.
-            RuleKind::Command | RuleKind::Judge | RuleKind::Secrets => true,
+            | RuleKind::Document => Authority::Supplied,
+            // All three run a program a `batten.toml` named. That a judge's
+            // consults a model, a command's decides a gate and a secrets rule's
+            // scans for credentials makes no difference to the axis: each starts
+            // a process with the ambient authority of the calling user.
+            RuleKind::Command | RuleKind::Judge | RuleKind::Secrets => Authority::Spawns,
         }
+    }
+
+    /// Whether this kind may reach beyond its supplied inputs at all.
+    ///
+    /// The `scopes` predicate and `run_static`'s refusal both read this and
+    /// nothing else, so "which kinds are excluded from the mediated call" and
+    /// "which kinds `batten check` refuses" cannot drift apart.
+    #[must_use]
+    pub const fn carries_ambient_authority(self) -> bool {
+        self.authority().is_ambient()
     }
 
     /// The columns this kind cannot load without.
@@ -513,7 +597,7 @@ impl RuleKind {
     /// What evaluating this kind costs, and the narrowest surface it may be
     /// evaluated on (CLOUD-757's two axes, CLOUD-773's composition input).
     ///
-    /// Stated per kind rather than inferred, for [`RuleKind::spawns_processes`]'s
+    /// Stated per kind rather than inferred, for [`RuleKind::carries_ambient_authority`]'s
     /// reason: a kind that lands unclassified would compose as whatever the
     /// default happened to be, and the cheap default is the one direction the
     /// mistake is expensive in. This is the value [`Rule::derives`] publishes and
@@ -732,7 +816,7 @@ pub struct Rule {
     /// The evidence is the mediated command itself plus, resolved at the
     /// boundary, the branch name and the commit subjects on
     /// `<base>..HEAD` — the same fixed VCS-query class [`RuleKind::Receipt`]
-    /// already makes, which is why [`RuleKind::spawns_processes`] stays `false`.
+    /// already makes, which is why [`RuleKind::carries_ambient_authority`] stays `false`.
     /// Requires `base`, since the range has to be named by the consumer rather
     /// than by a trunk name baked into the crate.
     ///
@@ -2036,7 +2120,7 @@ pub fn run_static(
     // Refuse before any work: the read-only surface must not even begin a run
     // it cannot complete honestly.
     for rule in rules {
-        if rule.kind.spawns_processes() {
+        if rule.kind.carries_ambient_authority() {
             // The refusal contract (CLOUD-122) covers this deny site too, and it
             // is the one that most needed it: a refusal naming only what it would
             // not do leaves the caller to guess the verb that would. Exit 1 rather
@@ -3691,10 +3775,10 @@ mod tests {
     fn a_ratchet_is_tree_scoped_and_spawns_no_configured_command() {
         // The two properties that keep it on `check`'s read surface: it looks at
         // the tree, and it reaches no user-supplied code. Reading
-        // `spawns_processes` as "no process at all" would make it enforce-only
+        // `carries_ambient_authority` as "no process at all" would make it enforce-only
         // and cost it the surface worth having (CLOUD-55, assumption 1).
         assert_eq!(RuleKind::Ratchet.scopes(), &[RuleScope::Tree]);
-        assert!(!RuleKind::Ratchet.spawns_processes());
+        assert!(!RuleKind::Ratchet.carries_ambient_authority());
     }
 
     use std::fs;
@@ -4177,18 +4261,115 @@ mod tests {
     }
 
     #[test]
-    fn no_mediated_call_kind_spawns_a_process() {
-        // What actually makes `hook`'s dispatch structurally unable to run a
-        // configured command, stated over the whole cross product rather than a
-        // named pair. `Policy::from_resolved` filters on scope alone, so this is
-        // the property that filter relies on.
+    fn no_mediated_call_kind_carries_ambient_authority() {
+        // What actually makes `hook`'s dispatch structurally unable to reach past
+        // its inputs, stated over the whole cross product rather than a named
+        // pair. `Policy::from_resolved` filters on scope alone, so this is the
+        // property that filter relies on.
+        //
+        // The REPLACEMENT for `no_mediated_call_kind_spawns_a_process`, and
+        // strictly stronger rather than a rename: that pin asked "does it
+        // spawn?", so a kind reaching the network without starting a program
+        // would have passed it. This asks whether the kind can acquire anything
+        // its inputs did not carry, which refuses that kind too — whatever wrote
+        // it, and whatever it happens to spawn.
         for kind in RuleKind::ALL {
             if kind.scopes().contains(&RuleScope::MediatedCall) {
                 assert!(
-                    !kind.spawns_processes(),
-                    "{kind:?} is adjudicable at the mediation channel and can spawn"
+                    admissible_at_mediated_call(kind.authority()),
+                    "{kind:?} is adjudicable at the mediation channel and carries `{}` authority",
+                    kind.authority().as_str()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_replacement_pin_is_strictly_stronger_than_the_one_it_retired() {
+        // CLOUD-418: a gate never shown to fail ships as coverage. The pin above
+        // cannot fail today — every kind is classified correctly — so strictness
+        // is proved over the AUTHORITY rather than over the kind table, by
+        // feeding the admission predicate a value no kind carries yet.
+        //
+        // The retired predicate, written out so the comparison is a comparison
+        // and not a claim about one.
+        let spawn_only = |authority: Authority| !matches!(authority, Authority::Spawns);
+
+        // The case that separates them: `Acquires` reaches the network without
+        // starting a program. The old question admitted it to the mediated call.
+        assert!(
+            spawn_only(Authority::Acquires),
+            "the retired pin admitted a kind that acquires without spawning"
+        );
+        assert!(
+            !admissible_at_mediated_call(Authority::Acquires),
+            "the replacement must refuse it — that is the whole strengthening"
+        );
+
+        // And nothing the retired pin refused is admitted by the replacement, so
+        // "stronger" is not bought by relaxing somewhere else.
+        for authority in Authority::ALL {
+            if !spawn_only(*authority) {
+                assert!(
+                    !admissible_at_mediated_call(*authority),
+                    "{} was refused before and must stay refused",
+                    authority.as_str()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bound_one_the_fact_set_is_the_whole_input() {
+        // CLOUD-763's first bound, as a check rather than an intention: a kind
+        // admitted to the mediated call reads only what the boundary handed it,
+        // and that is asserted on BOTH classifications rather than one — the
+        // authority axis says it acquires nothing, and CLOUD-757's cost axis says
+        // resolving its facts spends nothing beyond a bounded read. Two
+        // classifications of one property that disagreed would be worse than one.
+        for kind in RuleKind::ALL {
+            if !kind.scopes().contains(&RuleScope::MediatedCall) {
+                continue;
+            }
+            assert_eq!(
+                kind.authority(),
+                Authority::Supplied,
+                "{kind:?} reaches the mediated call and is not supplied-only"
+            );
+            assert!(
+                matches!(
+                    kind.fact_class().cost,
+                    crate::facts::Cost::Free | crate::facts::Cost::Read
+                ),
+                "{kind:?} reaches the mediated call at cost `{}`",
+                kind.fact_class().cost.as_str()
+            );
+            assert_eq!(
+                kind.fact_class().surface,
+                crate::facts::Surface::Hook,
+                "{kind:?} reaches the mediated call from a narrower surface"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_axes_agree_about_every_kind() {
+        // The converse of the bound above, which is where a drift would actually
+        // land: a kind classified `Supplied` must not be classified `effect` by
+        // the cost axis, and one that spawns must not read as free. Adding a kind
+        // and classifying it on one axis only is the mistake this catches.
+        for kind in RuleKind::ALL {
+            let spends = matches!(
+                kind.fact_class().cost,
+                crate::facts::Cost::Effect | crate::facts::Cost::Stateful
+            );
+            assert_eq!(
+                kind.carries_ambient_authority(),
+                spends,
+                "{kind:?} is `{}` on the authority axis and `{}` on the cost axis",
+                kind.authority().as_str(),
+                kind.fact_class().cost.as_str()
+            );
         }
     }
 
@@ -4686,7 +4867,7 @@ mod tests {
         let dir = temp_dir("rules-spawn-gate");
         write(&dir, "a.rs", "TODO\n");
         for kind in RuleKind::ALL {
-            if !kind.spawns_processes() {
+            if !kind.carries_ambient_authority() {
                 continue;
             }
             let rule = Rule {

@@ -591,7 +591,17 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   The four-stage `adjudicated` chain deliberately stays code: referenceable
   VALUES are in scope, configurable ORDERING is out, because a chain a consumer
   can misorder puts the protected-mutation gate behind a shape rule that allows
-  and the failure is silent. **`Ratchet`** (CLOUD-55) is the fourth kind: a count
+  and the failure is silent. **`Authority`** (CLOUD-763) is the axis `scopes`
+  actually pairs on, renamed from `spawns_processes` and corrected: not
+  "consumer-authored" and not "spawns", but AMBIENT AUTHORITY — can this kind
+  acquire anything its inputs did not carry? Three values, because the boolean
+  could not express the case the fact model creates: `Acquires` (reaches the
+  network without starting a program) passes "does it spawn?" and fails this,
+  which is what makes `no_mediated_call_kind_carries_ambient_authority` STRICTLY
+  STRONGER than the pin it replaces rather than a rename. No kind carries
+  `Acquires` today; naming the value is what lets a test prove the pin refuses
+  it (CLOUD-418). `admissible_at_mediated_call` is the predicate as a free
+  function over the authority, so that proof does not need a fixture kind. **`Ratchet`** (CLOUD-55) is the fourth kind: a count
   of `pattern` over `glob`, at a `base` rev vs the working tree, that may only
   move the declared `direction`. It exists because a test suite cannot be a
   `protected` path — tests are edited daily — so the computable property is
@@ -604,7 +614,7 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   hatch for a legitimate reduction. It is evaluated BEFORE the empty-match early
   return, which is load-bearing: for every other kind an empty match set is
   "nothing to inspect", but for a ratchet it is the maximal deletion.
-  `spawns_processes` stays false — it reaches git plumbing, which is a process,
+  `carries_ambient_authority` stays false — it reaches git plumbing, which is a process,
   but CLOUD-170's invariant is about USER-SUPPLIED CODE (`receipt status` reads
   the same way), and the strict reading would make the kind enforce-only and cost
   it `check`. Two traps measured while adopting it: an unanchored literal counts
@@ -1039,7 +1049,7 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   reading any non-zero as a raise, or any non-two as clean, converts a plumbing
   failure into a verdict.
   The `judge` RULE KIND (CLOUD-56) is `rules.rs` vocabulary only —
-  `spawns_processes() == true`, so `run_static` already refuses it on `check`
+  `carries_ambient_authority() == true`, so `run_static` already refuses it on `check`
   naming `batten enforce`, with no new code. Columns: `criteria` (required, the
   committed question), `tier` (`AdvisoryTier`, default `advisory`), and
   `no_fix_reason` **required** — a judge finding reaches the store and CLOUD-81

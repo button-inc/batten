@@ -245,7 +245,7 @@ fn the_corpus_covers_every_rule_kind() {
             if !covered.contains(&rule.kind) {
                 covered.push(rule.kind);
             }
-            if rule.kind.spawns_processes() {
+            if rule.kind.carries_ambient_authority() {
                 // §3: a spawning kind runs under `enforce`; `check` refuses it.
                 assert_eq!(
                     expectation(&name).argv.first().map(String::as_str),

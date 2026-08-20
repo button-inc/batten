@@ -1210,7 +1210,7 @@ mod tests {
         // a missing authority must never produce.
         for rule in &defaults().rules {
             assert!(
-                !rule.kind.spawns_processes(),
+                !rule.kind.carries_ambient_authority(),
                 "default rule {} spawns, so `batten check` would refuse the whole run",
                 rule.id
             );

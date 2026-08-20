@@ -53,7 +53,7 @@
 //!
 //! # Stated per fact, never inferred
 //!
-//! [`crate::rules::RuleKind::spawns_processes`] is the shipped model and this
+//! [`crate::rules::RuleKind::carries_ambient_authority`] is the shipped model and this
 //! copies it wholesale: every match over an axis is exhaustive with **no
 //! wildcard arm**, [`Cost::ALL`] / [`Surface::ALL`] / [`Fact::ALL`] keep the
 //! partitions total, and each fact's classification is a `const` written beside
@@ -104,7 +104,7 @@ impl Cost {
     ///
     /// A new variant must be added here or `tests/facts.rs`'s
     /// `all_covers_every_cost` fails
-    /// — the same guard `RuleKind::ALL` gives `spawns_processes`.
+    /// — the same guard `RuleKind::ALL` gives `carries_ambient_authority`.
     pub const ALL: &'static [Cost] = &[Cost::Free, Cost::Read, Cost::Effect, Cost::Stateful];
 
     /// The stable lowercase token (§6).
