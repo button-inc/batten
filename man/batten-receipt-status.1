@@ -4,16 +4,29 @@
 .SH NAME
 batten\-receipt\-status \- Judge the named check\*(Aqs recorded receipt against HEAD and origin/main
 .SH SYNOPSIS
-\fBbatten receipt status\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcheck\fR> 
+\fBbatten receipt status\fR [\fB\-\-key\fR] [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] <\fIcheck\fR> 
 .SH DESCRIPTION
 Judge the named check\*(Aqs recorded receipt against HEAD and origin/main
 .SH OPTIONS
+.TP
+\fB\-\-key\fR [default: head]
+Which git fact the receipt is judged against: the exact commit, or the branch
+.br
+
+.br
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+head: Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it
+.IP \(bu 2
+branch: Keyed to the branch; every commit on it continues to serve the claim
+.RE
 .TP
 \fB\-J\fR, \fB\-\-json\fR
 Emit byte\-stable JSON instead of pointer lines
 .TP
 \fB\-h\fR, \fB\-\-help\fR
-Print help
+Print help (see a summary with \*(Aq\-h\*(Aq)
 .TP
 <\fIcheck\fR>
 The check whose receipt is judged

@@ -171,7 +171,9 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         // not apply — a receipt records policy (as a digest), it never resolves it.
         Some(Command::Receipt { command }) => match command {
             ReceiptCommand::Record { check } => receipt::run_record(&check),
-            ReceiptCommand::Status { check, json } => receipt::run_status(&check, json, out),
+            ReceiptCommand::Status { check, key, json } => {
+                receipt::run_status(&check, key, json, out)
+            }
         },
         Some(Command::Policy { command }) => match command {
             PolicyCommand::Budget { json } => run_budget(json, &overrides, out),

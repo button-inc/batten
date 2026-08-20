@@ -1054,12 +1054,44 @@ run = '''
 # everywhere, which is the trust path CLOUD-431 exists to prevent.
 claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [ -n "$claim_branch" ]; then
-  receipt_dir="$(git rev-parse --git-dir)/batten-receipts"
-  claim_receipt="$receipt_dir/claim.${claim_branch//\//-}"
-  bot_receipt="$receipt_dir/bot.${claim_branch//\//-}"
-  if [ ! -f "$claim_receipt" ] && [ ! -f "$bot_receipt" ]; then
-    echo "::error:: verify: this branch carries no claim receipt, so nothing attests that the work on it was pulled from a refined issue. Run \`mise run claim-check\` with the issue's get_issue payload on stdin — or, on a bot branch, \`mise run bot-issue receipt\`. No receipt written." >&2
-    exit 1
+  # ONE PREDICATE, NOT A SECOND ONE WRITTEN IN SHELL (CLOUD-741).
+  #
+  # This was `[ -f "$claim_receipt" ]` — a presence test, and therefore strictly
+  # weaker than the engine's reader, which also applies CLOUD-516's staleness
+  # rule. So a branch restarted with `git checkout -B <name> origin/main` after
+  # its PR merged was void to the hook and PASSED here: the exact incident
+  # CLOUD-516 was filed for, where a receipt naming CLOUD-230 authorised edits
+  # behind four unrelated stories. The backstop was the weaker of the two, which
+  # inverts the reason a backstop exists — `claim-needs-receipt` is a HOOK and a
+  # hook can be unloaded (CLOUD-187), so when it is, nothing was left that could
+  # see staleness at all.
+  #
+  # It could not simply be taught the rule: writing that comparison a second
+  # time, in a second language, with nothing holding the two in agreement, is how
+  # this pair drifted in the first place. `receipt status --key branch` exposes
+  # `receipt::branch_validity` to the tree surface instead — which a `receipt`
+  # RULE structurally cannot reach, since `RuleKind::scopes` pins the kind to the
+  # mediated call and `batten check` can never evaluate one.
+  #
+  # `cargo run` for `batten-check`'s reason: the gate must judge the working
+  # tree's engine, not whatever binary was built last.
+  claim_line="$(cargo run --quiet -p batten -- receipt status claim --key branch 2>/dev/null)"
+  claim_rc=$?
+  if [ "$claim_rc" != 0 ]; then
+    # A bot branch attests something different and is keyed separately
+    # (CLOUD-693), but it is the same predicate over the same receipt shape —
+    # `bot-issue receipt` records a `base` line too, so it gets CLOUD-516's
+    # staleness rule here for free rather than needing its own.
+    bot_line="$(cargo run --quiet -p batten -- receipt status bot --key branch 2>/dev/null)"
+    bot_rc=$?
+    if [ "$bot_rc" != 0 ]; then
+      # The verdict is printed rather than swallowed: `missing` and `stale-main`
+      # carry different remedies, and the pointer line is what tells them apart.
+      echo "  $claim_line" >&2
+      echo "  $bot_line" >&2
+      echo "::error:: verify: this branch carries no VALID claim receipt, so nothing attests that the work on it was pulled from a refined issue. \`missing\` means mint one: run \`mise run claim-check\` with the issue's get_issue payload on stdin, or on a bot branch \`mise run bot-issue receipt\`. \`stale-main\` means a receipt EXISTS but the branch was restarted out from under it (CLOUD-516), so it must be re-claimed rather than trusted. No receipt written." >&2
+      exit 1
+    fi
   fi
 fi
 linear_rc=0

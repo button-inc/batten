@@ -16,6 +16,7 @@ use clap::{ArgMatches, ValueEnum};
 
 use crate::config::Strictness;
 use crate::hook::{Field as HookFieldName, Harness};
+use crate::rules::ReceiptKey;
 use crate::surface;
 
 /// The parsed invocation: the global flags plus the chosen command.
@@ -418,6 +419,11 @@ pub enum ReceiptCommand {
     Status {
         /// The check whose receipt is judged.
         check: String,
+        /// Which git fact the receipt is judged against (CLOUD-741).
+        ///
+        /// Defaults to [`ReceiptKey::Head`], the only keying this verb had
+        /// before, so every caller predating the flag is unchanged.
+        key: ReceiptKey,
         /// Emit the verdict as byte-stable JSON instead of a pointer line.
         json: bool,
     },
@@ -717,8 +723,14 @@ fn receipt_of(matches: &ArgMatches) -> Option<ReceiptCommand> {
     let check = matches.get_one::<String>("check")?.clone();
     match name {
         "record" => Some(ReceiptCommand::Record { check }),
+        // `unwrap_or_default` rather than `?`: the flag is declared with a
+        // default, so an absent value is the ordinary case, not a parse failure.
         "status" => Some(ReceiptCommand::Status {
             check,
+            key: matches
+                .get_one::<ReceiptKey>("key")
+                .copied()
+                .unwrap_or_default(),
             json: flag(matches, "json"),
         }),
         _ => None,

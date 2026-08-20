@@ -458,21 +458,13 @@ pub(crate) fn verdicts(
     checks: &BTreeMap<String, ReceiptKey>,
 ) -> Option<BTreeMap<String, Validity>> {
     let facts = repo_facts().ok()?;
-    // The branch, resolved once and only when a branch-keyed row asked for it.
-    // A detached HEAD has no branch to key a claim on, and that resolves the
-    // whole call to "could not look" rather than to a missing receipt: denying
-    // there would refuse every edit during a rebase conflict resolution, which
-    // is the one moment the workflow contract says a human decision is required.
+    // Resolved once, and only when a branch-keyed row asked for it: a head-keyed
+    // caller must not pay two extra git invocations for a question it never
+    // asks. `None` here resolves the WHOLE call to "could not look" rather than
+    // to a missing receipt — see [`branch_facts`] for why that direction is the
+    // safe one.
     let branch = if checks.values().any(|key| *key == ReceiptKey::Branch) {
-        Some(crate::git::current_branch(Path::new(".")).ok()??)
-    } else {
-        None
-    };
-    // Resolved once, and only when a branch-keyed row asked for it — same
-    // laziness as `branch` above, for the same reason: a head-keyed caller must
-    // not pay two extra git invocations for a question it never asks.
-    let own = if branch.is_some() {
-        Some(own_commit_count(&facts.main)?)
+        Some(branch_facts(&facts.main)?)
     } else {
         None
     };
@@ -488,18 +480,35 @@ pub(crate) fn verdicts(
                         validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir)
                     }
                     ReceiptKey::Branch => {
-                        branch
-                            .as_deref()
-                            .zip(own)
-                            .map_or(Validity::Missing, |(branch, own)| {
-                                branch_validity(&facts.git_dir, check, branch, &facts.head, own)
-                            })
+                        branch.as_ref().map_or(Validity::Missing, |(branch, own)| {
+                            branch_validity(&facts.git_dir, check, branch, &facts.head, *own)
+                        })
                     }
                 };
                 (check.clone(), verdict)
             })
             .collect(),
     )
+}
+
+/// The two facts a branch-keyed verdict needs beyond [`repo_facts`]: which branch
+/// HEAD is on, and how many commits that branch carries of its own.
+///
+/// **`None` is "could not look", never a missing receipt.** A detached HEAD has
+/// no branch to key a claim on, and a rebase detaches — so denying there would
+/// refuse every edit during a rebase conflict resolution, the one moment the
+/// workflow contract says a human decision is required. Every caller must map
+/// `None` to its own "cannot answer" outcome and never to a verdict.
+///
+/// Extracted so the mediated row ([`verdicts`]) and the CLI ([`run_status`])
+/// resolve it identically (CLOUD-741). They previously could not: a `receipt`
+/// rule is pinned to `RuleScope::MediatedCall`, so `verify` had re-implemented
+/// the branch-keyed question in shell as a presence test — strictly weaker than
+/// this, and green on the exact restart CLOUD-516 was filed for.
+fn branch_facts(main: &str) -> Option<(String, usize)> {
+    let branch = crate::git::current_branch(Path::new(".")).ok()??;
+    let own = own_commit_count(main)?;
+    Some((branch, own))
 }
 
 /// How many commits this branch carries that `origin/main` does not, or `None`
@@ -910,23 +919,42 @@ fn agent_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
         .join(format!("{}.agent-context.json", fingerprint.to_hex())))
 }
 
-/// The `receipt status -J` document: the pointer line's three tokens, named.
+/// The `receipt status -J` document: the pointer line's tokens, named.
 ///
 /// Borrowed rather than owned, so the document is a view over the facts already
 /// read and nothing is copied to be serialized.
+///
+/// **`key` and `subject` rather than a bare `head`** (CLOUD-741). The second
+/// token is the git fact the verdict was judged against, and once `--key branch`
+/// exists that is a SHA under one keying and a branch name under the other. A
+/// field whose meaning silently changes with a flag is exactly what the `json`
+/// arm exists to prevent, so the keying is named beside it and the field is not
+/// called `head` when it is not one.
 #[derive(Debug, serde::Serialize)]
 struct StatusReport<'a> {
     check: &'a str,
-    head: &'a str,
+    key: &'a str,
+    subject: &'a str,
     verdict: &'a str,
 }
 
-/// Judge the recorded receipt for `check` against HEAD and `origin/main`.
+/// Judge the recorded receipt for `check` against the git fact `key` names.
 ///
-/// Prints the pointer line `<check> <head-sha> <verdict>` — byte-stable, and
-/// never the receipt payload; `json` swaps it for the same three tokens as a
-/// named document. Exits [`ExitCode::Success`] iff the receipt is
-/// valid, [`ExitCode::Violation`] otherwise.
+/// Prints the pointer line `<check> <subject> <verdict>` — byte-stable, and
+/// never the receipt payload; `json` swaps it for the same tokens as a named
+/// document. The subject is HEAD under [`ReceiptKey::Head`] and the branch name
+/// under [`ReceiptKey::Branch`].
+///
+/// **This is the whole point of the verb gaining a key** (CLOUD-741). A
+/// `receipt` rule is pinned to `RuleScope::MediatedCall`, so `batten check`
+/// cannot evaluate one and `verify` cannot reach [`branch_validity`] through the
+/// engine — it had re-implemented the question in shell as a presence test,
+/// which passed the exact branch restart CLOUD-516 was filed for. Exposing the
+/// keying here lets the tree surface call the one implementation instead of
+/// growing a second.
+///
+/// Exits [`ExitCode::Success`] iff the receipt is valid and
+/// [`ExitCode::Violation`] otherwise.
 ///
 /// # Errors
 ///
@@ -934,29 +962,66 @@ struct StatusReport<'a> {
 /// a repository, unresolvable HEAD or `origin/main` — a checkout problem is
 /// never reported as a verification verdict), and an internal error when the
 /// output stream cannot be written.
-pub fn run_status(check: &str, json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+///
+/// A **detached HEAD under `--key branch`** is an internal error rather than a
+/// verdict, for [`branch_facts`]'s reason: a rebase detaches, and answering
+/// "not valid" there would make every rebase look like an unclaimed branch.
+pub fn run_status(
+    check: &str,
+    key: ReceiptKey,
+    json: bool,
+    out: &mut dyn Write,
+) -> Result<ExitCode> {
     validate_check_name(check)?;
     let facts = repo_facts()?;
-    let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
-    let verdict = validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir);
+    let (subject, verdict) = match key {
+        ReceiptKey::Head => {
+            let statement = load_statement(&receipt_path(&facts.repo_root, check)?);
+            (
+                facts.head.clone(),
+                validity(statement.as_ref(), &facts.head, &facts.main, &facts.git_dir),
+            )
+        }
+        ReceiptKey::Branch => {
+            let Some((branch, own)) = branch_facts(&facts.main) else {
+                return Err(anyhow::anyhow!(
+                    "receipt status --key branch: HEAD is detached, so there is no branch to key a receipt on. This is not a verdict about the receipt — a rebase detaches, and reporting one here would read as an unclaimed branch."
+                ));
+            };
+            let verdict = branch_validity(&facts.git_dir, check, &branch, &facts.head, own);
+            (branch, verdict)
+        }
+    };
     if json {
-        // The same three tokens the pointer line carries, named — so a caller
-        // reading the verdict programmatically stops splitting on whitespace and
-        // a fourth token could never be mistaken for the third. Emitted for a
+        // The same tokens the pointer line carries, named — so a caller reading
+        // the verdict programmatically stops splitting on whitespace and a
+        // further token could never be mistaken for the last. Emitted for a
         // valid receipt too: a document that is sometimes absent is unparseable.
         let report = StatusReport {
             check,
-            head: &facts.head,
+            key: key_token(key),
+            subject: &subject,
             verdict: verdict.as_str(),
         };
         writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
     } else {
-        writeln!(out, "{check} {} {}", facts.head, verdict.as_str())?;
+        writeln!(out, "{check} {subject} {}", verdict.as_str())?;
     }
     Ok(match verdict {
         Validity::Valid => ExitCode::Success,
         Validity::StaleHead | Validity::StaleMain | Validity::Missing => ExitCode::Violation,
     })
+}
+
+/// The wire spelling of a [`ReceiptKey`], for the `-J` document.
+///
+/// Matched rather than derived from `Debug`: the token is part of the output
+/// contract, and a `Debug` rename would move it without failing anything.
+const fn key_token(key: ReceiptKey) -> &'static str {
+    match key {
+        ReceiptKey::Head => "head",
+        ReceiptKey::Branch => "branch",
+    }
 }
 
 #[cfg(test)]

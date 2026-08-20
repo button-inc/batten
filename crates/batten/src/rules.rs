@@ -43,6 +43,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use clap::ValueEnum;
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -806,8 +807,20 @@ pub struct Rule {
 /// would demand a re-claim per commit — the false-positive rate that gets a
 /// guard bypassed. Both spellings are carried from the shell layer that proved
 /// them (`ready-guard` keys by SHA, `claim-check` by branch).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+///
+/// **`ValueEnum` because the CLI selects the same keying** (CLOUD-741). A
+/// `receipt` rule is pinned to [`RuleScope::MediatedCall`], so `batten check`
+/// can never evaluate one and `verify` cannot reach this predicate through the
+/// engine — which left `verify` re-implementing it in shell, weakly enough that
+/// CLOUD-516's own incident passed. `receipt status --key branch` is how the
+/// tree surface reaches the one implementation instead, so config and CLI must
+/// name the keying with the same tokens or the two surfaces disagree about what
+/// they asked for. `clap`'s and serde's renames both land on `head`/`branch`;
+/// the `clap(rename_all)` is stated rather than inferred so a future variant
+/// cannot drift them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
 #[serde(rename_all = "lowercase")]
+#[clap(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum ReceiptKey {
     /// Keyed to the exact commit; an amend, a rebase, or a moved trunk expires it.

@@ -851,6 +851,14 @@ fn config_surface_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<crate::cli::ConfigSurface>::new())
 }
 
+/// Which git fact `receipt status` judges the receipt against, as a pointer to
+/// the type the config already uses rather than a second list of tokens — so the
+/// CLI and a `[[rule]]`'s `key` column cannot come to mean different things
+/// (CLOUD-741).
+fn receipt_key_parser() -> ValueParser {
+    ValueParser::new(clap::builder::EnumValueParser::<crate::rules::ReceiptKey>::new())
+}
+
 fn shell_parser() -> ValueParser {
     ValueParser::new(clap::builder::EnumValueParser::<clap_complete::Shell>::new())
 }
@@ -1608,6 +1616,15 @@ pub const SURFACE: &[CommandDecl] = &[
     // state-dir read. A `read` verb may run a fixed VCS query; what it must
     // never reach is user-supplied code (CLOUD-170's invariant), and no
     // configured command is reachable from this path.
+    // `--key`, and it is what lets the tree surface reach this predicate at all
+    // (CLOUD-741). A `receipt` rule is pinned to `RuleScope::MediatedCall`, so
+    // `batten check` cannot evaluate one and `verify` had re-implemented the
+    // branch-keyed question in shell — as a presence test, which is strictly
+    // weaker than the engine's and passed the very incident CLOUD-516 was filed
+    // for. This flag is the seam that lets both callers run ONE implementation.
+    //
+    // Defaulted to `head` rather than required, so every caller predating it is
+    // byte-identical: the SHA keying was the only keying this verb had.
     CommandDecl {
         path: "receipt status",
         about: "Judge the named check's recorded receipt against HEAD and origin/main",
@@ -1615,6 +1632,13 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[
             FlagDecl::positional("check", "The check whose receipt is judged"),
+            FlagDecl::defaulted_enum(
+                "key",
+                "key",
+                "Which git fact the receipt is judged against: the exact commit, or the branch",
+                receipt_key_parser,
+                "head",
+            ),
             JSON,
         ],
     },
