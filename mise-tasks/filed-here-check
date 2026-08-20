@@ -224,6 +224,41 @@ for entry in $latest; do
 	report "$id filed-unrefined" unrefined
 done
 
+# THE INTERSECTION HAPPENS HERE NOW, NOT AT WRITE TIME (CLOUD-774). The column
+# holds the paths the row NAMES; the diff it is judged against is read fresh. The
+# old shape froze a fact about the diff at the instant the row was filed, and rows
+# are filed before any file is touched — AGENTS.md says claim before writing code
+# — so the compliant order recorded `0` every time and this refusal could never
+# see the punt it exists for. Measured 2026-08-20: CLOUD-770 filed at 06:27 with
+# an empty diff recorded `0` and kept it, while the identical row groomed after an
+# edit recorded a real overlap.
+#
+# Read once, outside the loop; a failure is "could not look", which passes every
+# row rather than refusing on a question this could not ask.
+changed_now=$(git diff --name-only origin/main...HEAD 2>/dev/null) || changed_now=""
+
+# THE ROWS THIS PR CLOSES ARE EXEMPT, and without this the change inverts the
+# gate. Recomputing against the landing diff fires on a row the branch filed AND
+# THEN FIXED, because its paths are in the diff by construction — so every honest
+# file-then-fix would need the override, and a routinely-overridden gate is
+# bypassed rather than satisfied. Worse, the cheapest way to dodge it becomes not
+# filing the row at all, which is the property the board exists for in a container
+# that can be reclaimed at any moment.
+#
+# `closing-key-check --list` is CALLED rather than copied: it owns `$CLOSING_VERBS`,
+# and a second copy of that regex would be one value in two files with no gate
+# holding them equal — the defect CLOUD-769 and CLOUD-770 are about, which makes
+# duplicating it inside this change self-refuting. No stdin means no exemption, so
+# a hand-run stays a pure function of the receipt and the diff.
+closes=""
+if [ ! -t 0 ]; then
+	pr_body=$(timeout 1s cat 2>/dev/null) || pr_body=""
+	if [ -n "$pr_body" ]; then
+		lister="$(dirname -- "${BASH_SOURCE[0]}")/closing-key-check"
+		[ -x "$lister" ] && closes=$(printf '%s' "$pr_body" | "$lister" --list 2>/dev/null) || closes=""
+	fi
+fi
+
 # THE DIFF REFUSAL, in its own pass because a row can earn both: "never groomed
 # to Ready" and "names code this branch is holding open" are different facts, and
 # neither subsumes the other.
@@ -233,15 +268,38 @@ for entry in $latest; do
 	overlap=${rest#*=}
 	# THREE STATES, exactly as the verdict column has: `-` is the recorder saying
 	# it could not look and passes, `0` is a measurement that found nothing and
-	# passes, and a count with at least one path after it is the refusal. Anything
-	# else is a line this reader cannot parse, which is skipped and never judged.
+	# passes, and a count with at least one path after it is a row with paths to
+	# intersect. Anything else is a line this reader cannot parse, which is skipped
+	# and never judged.
 	case "$overlap" in
 	-) continue ;;
 	0) continue ;;
 	[1-9]*,*) ;;
 	*) continue ;;
 	esac
-	paths=${overlap#*,}
+	# A row the PR closes is the opposite of a punt: it is the work landing.
+	case "
+$closes
+" in
+	*"
+$id
+"*) continue ;;
+	esac
+	named=${overlap#*,}
+	paths=""
+	saved_ifs=$IFS
+	IFS=,
+	for path in $named; do
+		case "
+$changed_now
+" in
+		*"
+$path
+"*) paths="${paths:+$paths,}$path" ;;
+		esac
+	done
+	IFS=$saved_ifs
+	[ -n "$paths" ] || continue
 	if [ -n "${BATTEN_FILED_HERE_OVERLAP:-}" ]; then
 		overridden="${overridden:+$overridden }$id"
 		continue

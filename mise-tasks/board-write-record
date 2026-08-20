@@ -78,7 +78,7 @@
 # The mutation drops the relations synthesis, so a row whose §8 claims a blocker
 # lints as blocker-cited-without-relation and records `unready` — the false
 # refusal that would fire on the best-refined rows.
-#MUTANT relations-dropped|s/relations: {blockedBy: \$blockers}/relations: {}/|claims a blocker still records a green verdict
+#MUTANT relations-dropped|s/relations: \$rels/relations: {}/|claims a blocker still records a green verdict
 # The mutation restores the shipped defect: take the id from the response for a
 # comment too, so an issue-key column fills with comment uuids and sink 2 becomes
 # unobservable while every count still looks right.
@@ -86,7 +86,12 @@
 # The mutation stops asking the diff question at all, so every row records `-`
 # and `filed-here-check` reads "could not look" for a row filed straight over the
 # branch's own open files — phase 3 wired shut while every count still looks right.
-#MUTANT overlap-never-measured|s/^\t\toverlap=\$(printf .*$/\t\toverlap=-/|a row whose body names a changed file records a non-zero overlap
+#MUTANT overlap-never-measured|s/^\t\toverlap=\$(printf .*$/\t\toverlap=-/|a row whose body names a tracked file records the paths it names
+# The mutation drops `--named`, so the column falls back to the write-time
+# intersection — which is `0` for every row filed before its file is touched, the
+# defect CLOUD-774 exists to remove. Only a case that files with an EMPTY diff and
+# then checks can catch it.
+#MUTANT overlap-frozen-at-write-time|s@/board-diff-overlap" --named@/board-diff-overlap"@|a row filed before the diff exists still records the paths it names
 set -uo pipefail
 
 #
@@ -208,11 +213,24 @@ branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
 # observable, never judged. Only a new row carries a refinement obligation.
 verdict=-
 if [ "$kind" = issue ]; then
-	blockers=$(printf '%s' "$raw" | jq -c '[.tool_input.blockedBy[]? | {id: .}]' 2>/dev/null) || blockers='[]'
-	payload=$(jq -c --argjson blockers "$blockers" '{
+	# ALL THREE DIRECTIONS, NOT JUST `blockedBy` (CLOUD-774). `ready-lint`'s
+	# `deferral-cited-without-relation` scans the whole description and accepts ANY
+	# relation direction, and its header says why: demanding `blockedBy`
+	# specifically "would push authors to declare false dependencies to pass a
+	# lint". Synthesising only `blockedBy` reintroduced exactly that pressure from
+	# the other side — a row that honestly records a hand-off as `relatedTo`, the
+	# direction that rule calls the common case, linted `unready` here while
+	# passing when a human ran `ready-lint` by hand. Measured 2026-08-20: CLOUD-769
+	# recorded `unready` through four grooms for this and nothing else.
+	rels=$(printf '%s' "$raw" | jq -c '{
+	  blockedBy: [.tool_input.blockedBy[]? | {id: .}],
+	  blocks: [.tool_input.blocks[]? | {id: .}],
+	  relatedTo: [.tool_input.relatedTo[]? | {id: .}]
+	}' 2>/dev/null) || rels='{"blockedBy":[],"blocks":[],"relatedTo":[]}'
+	payload=$(jq -c --argjson rels "$rels" '{
 	  id: .id,
 	  description: (.description // ""),
-	  relations: {blockedBy: $blockers}
+	  relations: $rels
 	}' <<<"$row" 2>/dev/null) || payload=""
 	# BY PATH, AND THE STATUS IS READ AS THREE ANSWERS RATHER THAN TWO.
 	#
@@ -238,15 +256,26 @@ if [ "$kind" = issue ]; then
 	fi
 fi
 
-# THE DIFF COLUMN. `-` is "could not look" here exactly as it is for the verdict:
-# outside a checkout, no `origin/main` to diff against, or a body the tracker did
-# not return. The description read is the tracker's RESPONSE, not the caller's
-# argument, so it is unforgeable for the same reason the verdict is.
+# THE NAMED-PATHS COLUMN, which until CLOUD-774 held the write-time INTERSECTION
+# and was renamed with the meaning. `-` is "could not look" here exactly as it is
+# for the verdict: outside a checkout, or a body the tracker did not return. It is
+# no longer "no `origin/main`" — `--named` needs only `git ls-files`, so a fresh
+# clone records the row instead of losing it.
+#
+# WHY THE COLUMN CHANGED MEANING. An intersection is a fact about the diff at the
+# instant the row was written, and rows are routinely written before any file is
+# touched — AGENTS.md tells you to claim before writing code, so the compliant
+# order produced `0` every time and `filed-over-own-diff` could never see the punt
+# it was built for. What a row is ABOUT does not decay; `filed-here-check` does
+# the intersection when it is asked instead.
+#
+# The description read is the tracker's RESPONSE, not the caller's argument, so it
+# is unforgeable for the same reason the verdict is.
 overlap=-
 if [ "$kind" = issue ]; then
 	description=$(jq -r '.description // empty' <<<"$row" 2>/dev/null) || description=""
 	if [ -n "$description" ]; then
-		overlap=$(printf '%s' "$description" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap" 2>/dev/null) || overlap=-
+		overlap=$(printf '%s' "$description" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap" --named 2>/dev/null) || overlap=-
 	fi
 	[ -n "$overlap" ] || overlap=-
 fi

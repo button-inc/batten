@@ -22,6 +22,22 @@ setup() {
 	cd "$REPO" || return 1
 }
 
+# `changes <path>...` — give the fixture a real `origin/main` and a real diff
+# containing those paths (CLOUD-774). The gate no longer trusts the count the
+# recorder froze; it intersects the recorded paths with
+# `git diff --name-only origin/main...HEAD` when it is asked. So a case about the
+# diff refusal has to CREATE the diff, which is what makes these assertions about
+# the predicate rather than about a number in a file.
+changes() {
+	git -C "$REPO" update-ref refs/remotes/origin/main HEAD
+	for path in "$@"; do
+		mkdir -p "$REPO/$(dirname "$path")"
+		printf 'x\n' >"$REPO/$path"
+	done
+	git -C "$REPO" add -A
+	git -C "$REPO" commit -q -m change
+}
+
 # The recorder's line shape, named once: kind, id, the tracker's updatedAt, the
 # stored `ready-lint` verdict.
 record() { printf '%s\n' "$@" >>"$RECORD"; }
@@ -223,6 +239,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # the overlapping tracked paths.
 
 @test "a row naming a file this branch is changing stops the lap" {
+	changes crates/batten/src/git.rs
 	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 crates/batten/src/git.rs"
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -260,6 +277,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "every overlapping path is named, one pointer per line" {
+	changes a/one.rs b/two.rs
 	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 2 a/one.rs b/two.rs"
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -270,6 +288,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # The two refusals are different facts about the same row and neither subsumes
 # the other, so a row can earn both and must report both.
 @test "a row that is both unrefined and over the diff reports both" {
+	changes a/one.rs
 	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready 1 a/one.rs"
 	run "$GATE"
 	[ "$status" -eq 1 ]
@@ -289,6 +308,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 }
 
 @test "and a later reading WITH an overlap supersedes a clean one" {
+	changes a/one.rs
 	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 0" \
 		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready 1 a/one.rs"
 	run "$GATE"
@@ -306,9 +326,75 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 	[[ "$output" != *"filed-over-own-diff"* ]]
 }
 
+# CLOUD-774. THE HOLE THIS CLOSED, and the case that would have caught the punt
+# that prompted it. The recorder stores the paths a row NAMES; the intersection
+# happens here. Before, the count was frozen when the row was filed — and rows are
+# filed before any file is touched, because AGENTS.md says claim before writing
+# code — so the compliant order recorded `0` and this refusal never fired.
+@test "A ROW RECORDED BEFORE THE FILE WAS TOUCHED IS STILL CAUGHT" {
+	# Recorded with no diff at all: the paths are what the body named, not an
+	# intersection. The edit lands afterwards, exactly as it did on the branch this
+	# was found on.
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 2 a/one.rs b/two.rs"
+	changes a/one.rs b/two.rs
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff a/one.rs"* ]]
+}
+
+# The intersection is real, not a pass-through of the recorded list: a row may
+# name a dozen files and touch one, and only the one it touches is a pointer.
+@test "a recorded path the branch does not change is not reported" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 2 a/one.rs b/untouched.rs"
+	changes a/one.rs
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"a/one.rs"* ]]
+	[[ "$output" != *"b/untouched.rs"* ]]
+}
+
+@test "a row naming only files this branch leaves alone passes" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 b/untouched.rs"
+	changes a/one.rs
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# THE EXEMPTION, and without it this change would punish the honest path: a row
+# filed AND THEN FIXED on the same branch has its paths in the diff by
+# construction, so every file-then-fix would need the override.
+@test "A ROW THE PR CLOSES IS EXEMPT — filing then fixing is the point, not the punt" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs"
+	changes a/one.rs
+	run bash -c 'printf "Closes CLOUD-900\n" | "$1"' _ "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+@test "closing a different row does not exempt this one" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs"
+	changes a/one.rs
+	run bash -c 'printf "Closes CLOUD-901\n" | "$1"' _ "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff a/one.rs"* ]]
+}
+
+# A body that merely MENTIONS the key hands the board nothing, so it cannot buy an
+# exemption either — the distinction `closing-key-check` already draws, reused by
+# calling it rather than by copying its match.
+@test "a body that only refs the row does not exempt it" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs"
+	changes a/one.rs
+	run bash -c 'printf "Refs CLOUD-900 for context\n" | "$1"' _ "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff a/one.rs"* ]]
+}
+
 # THE REFUSAL HAS NO PROSE REMEDY, which is the load-bearing difference from
 # `filed-unrefined`: a Ready block is payable in typing and this is not.
 @test "the diff refusal names four remedies and none of them is writing more prose" {
+	changes a/one.rs
 	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs"
 	run "$GATE"
 	[[ "$output" == *"Fix it here"* ]]
@@ -343,6 +429,7 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 # THE ONLY THING THAT MAKES IT WORTH HAVING. A blanket off-switch and a recorded
 # decision look identical to the branch and completely different to a reviewer.
 @test "the override records which rows it overrode" {
+	changes a/one.rs b/two.rs
 	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs" \
 		"issue CLOUD-901 2026-08-19T00:00:00.000Z ready 1 b/two.rs"
 	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"

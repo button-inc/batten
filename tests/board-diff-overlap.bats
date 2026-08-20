@@ -239,3 +239,52 @@ replay_repo() {
 		[ "$output" = "0" ]
 	done
 }
+
+# CLOUD-774. `--named` REPORTS WHAT THE BODY NAMES, WITH NO DIFF TERM. The recorder
+# wants that rather than the intersection: an intersection is a fact about the diff
+# at the instant the row was written, and a row is routinely written before the
+# file is touched, so the frozen number was `0` for every compliant filing.
+@test "--named reports a named path the branch has not changed" {
+	changing src/git.rs
+	run bash -c "printf 'See \`lint.rs\` for it.\n' | '$SENSOR' --named"
+	[ "$status" -eq 0 ]
+	[ "$output" = "1 src/lint.rs" ]
+}
+
+@test "the default mode still intersects, so the same body reports nothing" {
+	changing src/git.rs
+	run bash -c "printf 'See \`lint.rs\` for it.\n' | '$SENSOR'"
+	[ "$status" -eq 0 ]
+	[ "$output" = "0" ]
+}
+
+# `--named` KEEPS THE AMBIGUITY RULE: dropping the diff term must not also drop
+# the refusal to guess, or the recorder would store a path nobody named.
+@test "--named still resolves an ambiguous basename to nothing" {
+	changing src/git.rs
+	run bash -c "printf 'See \`mod.rs\` for it.\n' | '$SENSOR' --named"
+	[ "$status" -eq 0 ]
+	[ "$output" = "0" ]
+}
+
+# `--named` NEEDS ONLY `git ls-files`, NOT `origin/main`, and the asymmetry is
+# deliberate: a container with no remote ref would otherwise record `-` for every
+# row it files, losing the entry the later intersection depends on.
+@test "--named works where there is no origin/main to diff against" {
+	git -C "$REPO" update-ref -d refs/remotes/origin/main
+	run bash -c "printf 'See \`lint.rs\` for it.\n' | '$SENSOR' --named"
+	[ "$status" -eq 0 ]
+	[ "$output" = "1 src/lint.rs" ]
+}
+
+@test "the default mode without origin/main is still could-not-look" {
+	git -C "$REPO" update-ref -d refs/remotes/origin/main
+	run bash -c "printf 'See \`lint.rs\` for it.\n' | '$SENSOR'"
+	[ "$status" -eq 0 ]
+	[ "$output" = "-" ]
+}
+
+@test "an unknown flag is a usage error, not a silent default" {
+	run bash -c "printf 'x\n' | '$SENSOR' --nope"
+	[ "$status" -eq 2 ]
+}

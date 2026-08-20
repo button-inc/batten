@@ -56,6 +56,16 @@ HOLD_MARKER='DO-NOT-CLOSE'
 # rather than doubling the alternation.
 CLOSING_VERBS='clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed)'
 
+LIST_ONLY=
+case "${1:-}" in
+--list) LIST_ONLY=1 ;;
+"") ;;
+*)
+	echo "usage: closing-key-check [--list]  (PR body on stdin)" >&2
+	exit 2
+	;;
+esac
+
 # Exit 2 is "I could not read the input", distinct from exit 1 "this PR will not
 # move the board" — a caller piping nothing must not look like a passing body.
 if ! body=$(cat) || [ -z "${body//[[:space:]]/}" ]; then
@@ -103,6 +113,22 @@ closing=$(grep -oiE "(^|[^0-9A-Za-z-])($CLOSING_VERBS)[[:space:]]*:?[[:space:]]*
 # board, so nothing else in it should be able to override that — and with the
 # opt-out tested first, a body that merely DISCUSSED the marker was excused from
 # a check it passed on the merits.
+# `--list` PRINTS THE KEYS AND DECIDES NOTHING (CLOUD-774), so a sibling gate can
+# ask "does this body close CLOUD-N?" without owning a second copy of
+# `$CLOSING_VERBS`. `filed-here-check` needs exactly that to exempt a row the PR
+# closes, and a duplicated regex would be one value in two files with no gate
+# holding them equal — the defect CLOUD-769 and CLOUD-770 are about, which makes
+# copying it here self-refuting rather than merely untidy.
+#
+# It sits AFTER the extraction and BEFORE every verdict branch: the flag changes
+# what is emitted, never what is matched, so the two callers can never disagree
+# about what a closing key is. Empty output with exit 0 means "this body closes
+# nothing", which is a usable answer and not a refusal.
+if [ -n "${LIST_ONLY:-}" ]; then
+	[ -n "$closing" ] && printf '%s\n' "$closing"
+	exit 0
+fi
+
 if [ -n "$closing" ]; then
 	echo "closing-key-check: closes $(tr '\n' ' ' <<<"$closing" | sed 's/ $//') — the merge will move the board"
 	exit 0

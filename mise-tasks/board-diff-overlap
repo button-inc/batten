@@ -54,8 +54,30 @@
 # The intersection is with what this branch CHANGES, not with what it tracks. Drop
 # that term and every row naming any file in the repository is refused, which is a
 # gate nobody can work under and therefore a gate that gets switched off.
-#MUTANT overlap-ignores-the-diff|s/^overlap = sorted(named & changed)$/overlap = sorted(named)/|a row naming only untouched files reports nothing
+#
+# RE-AIMED AT THE DEFAULT BRANCH (CLOUD-774). This row used to mutate the line to
+# `sorted(named)`, which is now a legitimate MODE rather than a defect — the
+# mutation and the feature had become the same bytes, so the row would have
+# demanded a test that `--named` fails. It now forces the named set in the
+# DEFAULT path, which is the thing that must never happen and which `--named`
+# does not do.
+#MUTANT overlap-ignores-the-diff|s/^named_only = .*$/named_only = True/|the default mode intersects with the diff rather than reporting every named path
 set -uo pipefail
+
+# `--named` reports what the body NAMES, with no diff term (CLOUD-774). The
+# recorder wants that rather than the intersection, because an intersection is a
+# fact about the diff AT WRITE TIME and a row is routinely filed before the file
+# is touched — the order AGENTS.md prescribes. What a row is about does not decay;
+# the diff it is measured against does.
+named_only=
+case "${1:-}" in
+--named) named_only=1 ;;
+"") ;;
+*)
+	echo "usage: board-diff-overlap [--named]  (issue body on stdin)" >&2
+	exit 2
+	;;
+esac
 
 body=$(cat) || {
 	echo -
@@ -66,10 +88,17 @@ body=$(cat) || {
 	exit 0
 }
 
-# Both halves come from git, and either being unavailable is "could not look".
+# Both halves come from git, and either being unavailable is "could not look" —
+# EXCEPT under `--named`, which needs no diff at all. That asymmetry is the point
+# rather than an oversight: a container with no `origin/main` (a fresh clone, a
+# detached checkout) would otherwise record `-` for every row it files, losing the
+# entry the later intersection depends on.
 changed=$(git diff --name-only origin/main...HEAD 2>/dev/null) || {
-	echo -
-	exit 0
+	if [ -z "$named_only" ]; then
+		echo -
+		exit 0
+	fi
+	changed=""
 }
 tracked=$(git ls-files 2>/dev/null) || {
 	echo -
@@ -80,7 +109,7 @@ tracked=$(git ls-files 2>/dev/null) || {
 	exit 0
 }
 
-BODY="$body" CHANGED="$changed" TRACKED="$tracked" python3 - <<'PY' 2>/dev/null || echo -
+BODY="$body" CHANGED="$changed" TRACKED="$tracked" NAMED_ONLY="$named_only" python3 - <<'PY' 2>/dev/null || echo -
 import collections
 import os
 import re
@@ -113,6 +142,7 @@ for token in tokens:
     if len(cands) == 1:
         named.add(cands[0])
 
-overlap = sorted(named & changed)
+named_only = bool(os.environ.get("NAMED_ONLY"))
+overlap = sorted(named) if named_only else sorted(named & changed)
 print(f"{len(overlap)} {' '.join(overlap)}".strip() if overlap else "0")
 PY

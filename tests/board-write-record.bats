@@ -160,13 +160,29 @@ with_diff() { # a branch whose diff against origin/main touches ONE tracked file
 
 # THE OTHER DIRECTION (CLOUD-418): a suite that only ever asserts the firing
 # cannot tell a working sensor from one that names every file in the repository.
-@test "a row naming only a file this branch never touched records a zero overlap" {
+# Here that means a body naming NOTHING TRACKED records `0` — the column is the
+# paths the row names, so an untracked mention is the only thing that can be empty.
+@test "a row naming nothing tracked records a zero" {
+	with_diff
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'The bug is in nosuchfile.rs:12.')"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 0" ]]
+	[[ "$output" != *nosuchfile.rs* ]]
+}
+
+# CLOUD-774. THE COLUMN IS WHAT THE ROW NAMES, NOT AN INTERSECTION, and this is the
+# case that pins the change. A file the branch has not touched is still recorded,
+# because the diff it will be judged against does not exist yet: rows are filed
+# before any edit — AGENTS.md says claim before writing code — and freezing the
+# intersection there recorded `0` for every one of them. `filed-here-check`
+# intersects when it is asked.
+@test "A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED" {
 	with_diff
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'The bug is in untouched.rs:12.')"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" 0" ]]
-	[[ "$output" != *untouched.rs* ]]
+	[[ "$output" == *" 1 untouched.rs" ]]
 }
 
 # POINTER, NEVER PAYLOAD (non-negotiable 4). The recorder reads an entire issue
