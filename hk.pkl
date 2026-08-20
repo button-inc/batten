@@ -188,8 +188,19 @@ local gate = new Mapping<String, Step> {
     glob = List(".claude/settings.json", "mise-tasks/*", "mise.toml")
     check = "mise run hook-pin-check"
   }
+  // The memory glob is CLOUD-770's, and it has to be here rather than only in the
+  // task: the gate now walks `.serena/memories/**`, and a step that does not list
+  // it never fires on a memory-only commit — the widening would hold in `verify`
+  // and `ci` while the pre-commit tier stayed blind to the surface it was added
+  // for.
   ["rules-drift"] {
-    glob = List(".claude/rules/*.md", ".claude/settings.json", "mise-tasks/**")
+    glob =
+      List(
+        ".claude/rules/*.md",
+        ".serena/memories/**/*.md",
+        ".claude/settings.json",
+        "mise-tasks/**",
+      )
     check = "mise run rules-drift"
   }
   // House style §11 makes completions AND man pages derivations of the command
