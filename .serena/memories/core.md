@@ -302,6 +302,22 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   73 awk readers in `mise-tasks/`, where an empty extraction reads as agreement.
   `Node::at` walks a dotted path and answers `IsNot` for a node that is not
   there, which is the OTHER absence and must stay a different value.
+  CLOUD-776 added the second fact class and the first that is not the engine's
+  to resolve: `Sourced` + `sourced` + `rows_in` are the AGENT-SOURCED fact — a
+  gate denies with `Fix::Run`, the AGENT's own tool runs the command, and the
+  harness hands the bytes back as `Envelope::result`. Batten executes nothing, so
+  the same answer that is `read` x `verify-only` when the ENGINE would fetch it
+  is `read` x `hook` here: the table is about who resolves, not about what is
+  known, which is the second axis earning itself twice. Two disciplines hold it
+  up. The recorded command is compared to the asked one by BYTE EQUALITY — the
+  agent picks which command runs and any normalisation is a gap between asked and
+  accepted, so a near miss is `CouldNotLook`, sharing that arm with never-ran
+  because both call for the same remedy. And `rows_in` reduces the buffer to a
+  COUNT at the boundary, so no byte of a tool's stdout — the likeliest field in
+  the envelope to hold a secret — reaches disk, a deny message or a `-J`
+  document. An unrecognised buffer shape is `CouldNotLook`, never zero: the
+  shapes read are the two this tree has evidence for, and guessing a third would
+  make a mis-parse a silent fact.
 - `doctor.rs` — `batten doctor` (CLOUD-66), house-style §12's post-install
   self-check: can Batten do its job in this repository? Diagnoses only — it
   **never returns exit 2**, because every failure it can report (config absent,

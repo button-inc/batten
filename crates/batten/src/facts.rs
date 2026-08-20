@@ -295,6 +295,9 @@ pub enum Fact {
     Waived,
     /// A structured document, parsed once and addressed by node path (CLOUD-772).
     Document,
+    /// What a command the AGENT ran said, read off the post-tool result buffer
+    /// (CLOUD-776).
+    AgentSourced,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -332,6 +335,22 @@ pub const WAIVED: Class = Class::new(Cost::Read, Surface::Hook);
 /// rather than on the forge facts that motivated it.
 pub const DOCUMENT: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::AgentSourced`] — a small record under the git dir, written by the
+/// boundary from bytes the harness already handed it (CLOUD-776).
+///
+/// **This is the row that makes the second axis pay for itself.** The table above
+/// says forge facts are `read` × `verify-only`: bounded and cacheable by price,
+/// and barred from the mediated path because reaching them means building an
+/// HTTP client. That bound is about the ENGINE resolving them. An agent-sourced
+/// fact is not the engine resolving anything — the agent ran the command, the
+/// harness delivered the bytes, and Batten reads a file. So the same underlying
+/// answer that is `verify-only` when the engine would fetch it is `hook` when the
+/// agent sources it, and the price is a file read either way.
+///
+/// That is not a loophole in the table; it is the table being about *who
+/// resolves* rather than *what is known*, which is what having two axes was for.
+pub const AGENT_SOURCED: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -341,6 +360,7 @@ impl Fact {
         Fact::Stop,
         Fact::Waived,
         Fact::Document,
+        Fact::AgentSourced,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -353,6 +373,7 @@ impl Fact {
             Fact::Stop => "stop",
             Fact::Waived => "waived",
             Fact::Document => "document",
+            Fact::AgentSourced => "agent-sourced",
         }
     }
 
@@ -373,6 +394,7 @@ impl Fact {
             Fact::Stop => STOP,
             Fact::Waived => WAIVED,
             Fact::Document => DOCUMENT,
+            Fact::AgentSourced => AGENT_SOURCED,
         }
     }
 }
@@ -639,4 +661,194 @@ impl Node {
             Node::Null | Node::List(_) | Node::Map(_) => None,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Agent-sourced facts (CLOUD-776)
+// ---------------------------------------------------------------------------
+
+/// One recorded agent-sourced fact, as it sits under the git dir.
+///
+/// # The channel, and why it is not a spawn
+///
+/// A gate that needs a fact it does not hold denies with
+/// [`crate::refusal::Fix::Run`]; the agent runs that command with its own
+/// binary, its own flags and its own PATH; the harness hands the result buffer
+/// back as [`crate::hook::Envelope::result`]; the boundary records what it said
+/// and the retry decides. **Batten executes nothing**, so house-style §5's read
+/// promise is untouched — reading a buffer somebody else produced is not running
+/// a program, and that is why [`AGENT_SOURCED`] can sit on `Surface::Hook` while
+/// the same answer fetched by the engine could not.
+///
+/// It is also the cheap variant of a pattern this repository already uses.
+/// "Agents fetch, gates decide" normally makes the MODEL transport the payload,
+/// and CLOUD-526 priced that exactly: ~15 KB of **output** tokens per
+/// `issue-read` receipt, an asymmetry that produced seven forged receipts in one
+/// measured session. A tool buffer is different in kind — the model does not
+/// re-type it, so there is no transcription to be unfaithful and no cost
+/// proportional to the artifact.
+///
+/// # The shape is `issue-read-check`'s, borrowed rather than invented
+///
+/// **What was seen, and when it was seen**; the reader bounds the age. That is
+/// already this repository's answer to a fact that goes stale with no
+/// compare-and-swap available, and it is a recency bound rather than a freshness
+/// proof — the same limitation, stated the same way.
+///
+/// # Rule 4, structural rather than careful
+///
+/// A command's stdout can carry anything, which makes a result buffer the
+/// likeliest thing in the envelope to hold a secret. **No byte of it is stored.**
+/// [`rows_in`] reduces the buffer to a COUNT at the boundary and the count is
+/// what reaches disk, so a deny message, a `-J` document and everything under
+/// the state root are payload-free by construction rather than by care at each
+/// emission site.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sourced {
+    /// The command that actually ran, verbatim, so the gate can check it against
+    /// what it asked for.
+    pub command: String,
+    /// When the agent ran it, RFC3339. Provenance beside the answer; no predicate
+    /// here reads a clock (the caller supplies one, `waiver::today`'s idiom).
+    pub seen_at: String,
+    /// How many rows the buffer carried. **A count, never the payload.**
+    pub rows: usize,
+}
+
+impl Sourced {
+    /// Render the record as its on-disk lines.
+    ///
+    /// One `key value` pair per line, the shape every other receipt in
+    /// `$GIT_DIR/batten-receipts/` uses, so a human reading that directory does
+    /// not meet a second format.
+    #[must_use]
+    pub fn render(&self) -> String {
+        format!(
+            "command {}\nseen-at {}\nrows {}\n",
+            self.command, self.seen_at, self.rows
+        )
+    }
+
+    /// Parse a record back, or `None` if it is not one.
+    ///
+    /// Unreadable and unparseable both answer `None`, which [`sourced`] turns
+    /// into [`Look::CouldNotLook`] — fail closed to *could not look*, never to a
+    /// fact. A half-written record is exactly the case that must not read as "ran
+    /// and there are none".
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Sourced> {
+        // An if/else chain rather than a `match` with a `_ =>` arm, and that is
+        // this module's own gate rather than a style choice: `tests/facts.rs`
+        // scans this file for wildcard arms, because `_ => Cost::Free` compiles
+        // happily and classifies every future fact as cheap. The scan is
+        // file-wide and blunt on purpose, so a match over STRING keys — which
+        // cannot be exhaustive — is written without the token instead of the gate
+        // being taught an exception it would then have to be trusted about.
+        let (mut command, mut seen_at, mut rows) = (None, None, None);
+        for line in text.lines() {
+            let (key, value) = line.split_once(' ')?;
+            if key == "command" {
+                command = Some(value.to_owned());
+            } else if key == "seen-at" {
+                seen_at = Some(value.to_owned());
+            } else if key == "rows" {
+                rows = Some(value.parse().ok()?);
+            }
+        }
+        Some(Sourced {
+            command: command?,
+            seen_at: seen_at?,
+            rows: rows?,
+        })
+    }
+}
+
+/// Where one agent-sourced fact's record lives, beside the other receipts.
+///
+/// Keyed on the FACT's own natural key rather than on a branch or a SHA: a
+/// claimed-key answer is a statement about one issue row at one moment, and
+/// keying it to a branch would make the same answer unavailable to the next
+/// branch that needs it and stale-by-construction on this one.
+#[must_use]
+pub fn sourced_path(git_dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    git_dir
+        .join("batten-receipts")
+        .join(format!("fact.{}", name.replace('/', "-")))
+}
+
+/// What a recorded answer means, given the command the gate asked for.
+///
+/// A pure function of the record and the request — no clock, no filesystem —
+/// which is what lets the whole contract be tested without a world.
+///
+/// **Two different failures share [`Look::CouldNotLook`], and that is the point.**
+/// No record means the agent never ran it. A record naming a different command
+/// means something ran and it was not what was asked for. Neither is a fact, and
+/// both call for the same remedy — run *the* command — so they answer the same
+/// arm rather than tempting a caller to treat one of them as evidence.
+///
+/// The command comparison is byte equality, deliberately. The agent picks WHICH
+/// command runs; it does not author what the output says. Any normalisation is a
+/// gap between what was asked and what is accepted, and a fact keyed to a
+/// `Fix::Run` nobody verifies is CLOUD-526's forgery gradient on a new surface.
+#[must_use]
+pub fn sourced(record: Option<&Sourced>, asked_for: &str) -> Look<usize> {
+    match record {
+        Some(record) if record.command == asked_for => Look::Is(record.rows),
+        Some(_) | None => Look::CouldNotLook,
+    }
+}
+
+/// Reduce a tool result buffer to a row count, or [`Look::CouldNotLook`] if its
+/// shape is not one this build recognises.
+///
+/// The buffer's shape is per-tool and only partly surveyed: an MCP tool returns a
+/// content-block array (measured — `tests/board-write-record.bats`), and a shell
+/// tool returns something this repository has not measured. **Answering `0` for a
+/// shape this build cannot read would be a guessed envelope becoming a silent
+/// fact**, which is the failure the capability table exists to prevent, so an
+/// unrecognised shape is could-not-look instead.
+///
+/// Two shapes are read, both with evidence in this tree: a **bare row array**,
+/// and the **content-block envelope**, whose text blocks are counted where they
+/// parse as JSON arrays — the same `fromjson?` posture `board-write-record` takes
+/// over the same bytes, so a block that is not JSON is skipped rather than
+/// aborting the read.
+///
+/// No byte of the buffer is returned (rule 4). The count is the whole answer.
+#[must_use]
+pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
+    let serde_json::Value::Array(items) = result else {
+        return Look::CouldNotLook;
+    };
+    let blocks: Vec<&serde_json::Value> = items.iter().filter(|item| is_text_block(item)).collect();
+    if blocks.is_empty() {
+        // A bare array of rows. An EMPTY array reaches here too and is a genuine
+        // zero — it is a shape we read that carried nothing, not a shape we
+        // failed to read.
+        return Look::Is(items.len());
+    }
+    let mut rows = 0;
+    let mut parsed_any = false;
+    for text in blocks
+        .iter()
+        .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+    {
+        if let Ok(serde_json::Value::Array(inner)) = serde_json::from_str::<serde_json::Value>(text)
+        {
+            rows += inner.len();
+            parsed_any = true;
+        }
+    }
+    // Nothing parsed is NOT "zero rows": it is a shape this build did not
+    // understand, which is could not look.
+    if parsed_any {
+        Look::Is(rows)
+    } else {
+        Look::CouldNotLook
+    }
+}
+
+fn is_text_block(value: &serde_json::Value) -> bool {
+    value.get("type").and_then(serde_json::Value::as_str) == Some("text")
 }

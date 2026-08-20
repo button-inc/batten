@@ -1318,6 +1318,34 @@ pub struct Envelope {
     pub operation: Operation,
     /// The tool's whole input object; `Value::Null` when the payload had none.
     pub input: Value,
+    /// The tool's whole RESULT object on a post-tool event; `Value::Null`
+    /// otherwise (CLOUD-776).
+    ///
+    /// [`Envelope::input`]'s twin, one event later, and it is what turns "ask the
+    /// agent to run a command" into a fact-acquisition channel: the engine denies
+    /// with [`crate::refusal::Fix::Run`], the agent's own tool runs it, and the
+    /// bytes arrive here. **The engine spawns nothing** — house-style §5's read
+    /// promise is untouched, because reading a buffer the harness already handed
+    /// us is not execution.
+    ///
+    /// Cheaper and more faithful than the re-typed payload the "agents fetch,
+    /// gates decide" pattern uses elsewhere (CLOUD-526 measured that at ~15 KB of
+    /// OUTPUT tokens per receipt, and seven forged receipts in one session): the
+    /// model does not re-type a tool buffer, so there is no transcription to be
+    /// unfaithful and no token cost proportional to the artifact.
+    ///
+    /// **Never emitted** (rule 4), and here that is load-bearing rather than
+    /// formal: a command's stdout can carry anything, so this is the likeliest
+    /// field in the envelope to hold a secret. It is decided OVER and never
+    /// reproduced — not in a deny message, not in a `-J` document, and not under
+    /// the state root.
+    ///
+    /// Carried as the raw [`Value`] rather than a projection because the shape is
+    /// per-tool and only partly surveyed: an MCP tool returns a content-block
+    /// array (measured — `tests/board-write-record.bats`), a shell tool returns
+    /// something else this repository has not measured. A reader that does not
+    /// recognise the shape answers **could not look**, never a fact.
+    pub result: Value,
     /// The command text for shell-shaped tools; empty when the tool has none.
     pub command: String,
     /// The path this call writes, when the tool is one of its host's writers.
@@ -1641,6 +1669,16 @@ pub fn decode(harness: Harness, raw: &str) -> Option<Envelope> {
         // here rather than in a second decoder because a second decoder is a
         // second thing to keep in step with the BOM strip and the alias tables
         // above, for no gain. Three `get`s on an already-parsed value.
+        // The result buffer (CLOUD-776), read the way `input` is: the host's own
+        // key, with the aliases the survey recorded. Absent on every pre-tool
+        // payload, which is `Value::Null` rather than an error — the field is a
+        // post-tool fact and a pre-tool call simply does not have one.
+        result: value
+            .get("tool_response")
+            .or_else(|| value.get("toolResponse"))
+            .or_else(|| value.get("tool_result"))
+            .cloned()
+            .unwrap_or(Value::Null),
         stop_active: value.get("stop_hook_active").and_then(Value::as_bool),
         last_message: value
             .get("last_assistant_message")
@@ -3626,6 +3664,7 @@ mod tests {
             raw_tool: "Bash".to_owned(),
             operation: Operation::Execute,
             input: Value::Null,
+            result: Value::Null,
             command: command.to_owned(),
             writes: None,
             cwd: None,
@@ -3666,6 +3705,7 @@ mod tests {
             raw_tool: tool.to_owned(),
             operation: harness.operation_of(tool),
             input: Value::Null,
+            result: Value::Null,
             command: String::new(),
             writes,
             cwd: None,
@@ -6469,6 +6509,7 @@ mod tests {
             raw_tool: "Read".to_owned(),
             operation: Operation::Read,
             input: Value::Null,
+            result: Value::Null,
             command: String::new(),
             writes: None,
             cwd: None,
