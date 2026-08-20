@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
-# SessionStart: perform the per-clone setup AGENTS.md documents, before the
-# session (and its project-scoped MCP servers) start.
+# SessionStart: perform the per-clone setup AGENTS.md documents, at the start of
+# the session.
+#
+# NOT before the MCP servers start, which this header claimed for its whole life
+# and CLOUD-734 measured false. Two samples, one per container incarnation on
+# 2026-08-19/20: the generated MCP config is written, the client opens its
+# connection logs ~2.4s later, and this hook writes its first byte ~5s after
+# that — the connections are initiated BEFORE the hook and complete while it is
+# still provisioning. What rescues the install fix below is therefore not
+# ordering but the client's 120s connect timeout: serena's connection was
+# established 45.5s in, from inside this hook's window. CLOUD-316 recorded that
+# timeout as 30s, at which this session would have lost serena outright.
 #
 # Why this exists (CLOUD-196). `.mcp.json` launches Serena with
 # `mise exec -- serena start-mcp-server`, and `mise exec` INSTALLS a missing
@@ -221,6 +231,28 @@ step signing-posture mise run signing-posture --repair
 if [ "$fail" -ne 0 ]; then
 	echo "::error:: session-start: setup incomplete — expect missing tools or MCP servers" >&2
 fi
+
+# --- the committed MCP rules, projected onto the identity the host attached ---
+#
+# CLOUD-734. `.claude/settings.json` names a server by label; the host attaches a
+# toolbox server under an identifier it picks per registration episode, so a
+# committed grant can name nothing and enforce nothing — measured this session as
+# zero of six grants reaching the Claude Code Remote server. `mcp-grant-sync`
+# rewrites the gitignored local overlay from the committed file; the task's own
+# header owns the what and the why, this owns only the WHEN.
+#
+# WHY HERE and not on a later event: settings are a startup snapshot (CLOUD-187),
+# so a write after the read binds nothing — measured, on this very session, by
+# projecting mid-session and watching the identical call refuse exactly as
+# before. This is the earliest writable moment, and the overlay it leaves is read
+# by the next session start in this container.
+#
+# NEVER SETS `fail`, and deliberately not routed through `step`, for the reason
+# `reclaim-census` below is not: a stale committed rule is a finding about the
+# settings file, not a provisioning failure, and halting a session over one would
+# be the sensor deciding something it has no business deciding. Its own
+# `::error::` line is the report; pointer-only, so nothing it prints names a tool.
+mise run mcp-grant-sync || true
 
 # --- can this container do the work at all? -----------------------------------
 #
