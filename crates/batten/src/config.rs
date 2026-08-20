@@ -473,7 +473,7 @@ pub fn parse_override(text: &str, source: &str) -> Result<OverrideConfig> {
     // The same validators the authority runs, over the same tables. An override
     // row is a policy row: one that loads here and gates nothing is the defect
     // CLOUD-242 named, and it does not become acceptable for being uncommitted.
-    crate::rules::validate(&config.rules)?;
+    crate::rules::validate_in(&config.rules, text, source)?;
     crate::outputs::validate(&config.exec_patterns)?;
     crate::waiver::validate(&config.waivers)?;
     Ok(config)
@@ -538,7 +538,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // malformed `mediated_call` row validated only by `check` is a policy row
     // that loads, matches nothing at the mediation channel, and reads as
     // coverage. `run_rule` still calls `Rule::validate` as defence in depth.
-    crate::rules::validate(&config.rules)?;
+    crate::rules::validate_in(&config.rules, text, source)?;
     crate::outputs::validate(&config.exec_patterns)?;
     // And the waiver table, where the stakes are inverted from every other row
     // here: a malformed rule fails to gate, but a malformed *waiver* is a hatch
@@ -828,6 +828,8 @@ fn default_rules() -> Vec<Rule> {
         base: None,
         format: None,
         node: None,
+        derives: None,
+        reads: None,
         no_fix_reason: None,
         checks: None,
         key: None,
@@ -918,7 +920,11 @@ mod tests {
         ("verbs", "crate::verbs::validate("),
         ("redirects", "crate::redirect::validate("),
         ("markers", "crate::markers::validate("),
-        ("rules", "crate::rules::validate("),
+        // The LOCATED form (CLOUD-773): the loaders hold the config text, so a
+        // composition refusal points at a line rather than only at a rule id.
+        // `rules::validate_in` runs `rules::validate` first — one implementation,
+        // an optional locator — so naming it here is naming the whole check.
+        ("rules", "crate::rules::validate_in("),
         ("exec_patterns", "crate::outputs::validate("),
         ("provisions", "crate::provision::validate("),
         ("waivers", "crate::waiver::validate("),

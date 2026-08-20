@@ -359,7 +359,11 @@ impl RuleKind {
             // a row without one selects a document and asks nothing of it.
             // `pattern` is the value the node must hold, so a row without one
             // loads, matches, and decides nothing.
-            RuleKind::Document => &["glob", "format", "node", "pattern", "severity"],
+            // `pattern` is deliberately absent, the shape `forbid` already uses
+            // (CLOUD-283): a document row carries exactly one of `pattern` (a
+            // literal) or `reads` (another rule's derived value), and a flat
+            // column list cannot express "one of". `validate` carries that.
+            RuleKind::Document => &["glob", "format", "node", "severity"],
         }
     }
 
@@ -472,6 +476,8 @@ impl RuleKind {
                 "format",
                 "node",
                 "pattern",
+                "derives",
+                "reads",
                 "severity",
                 "identity_key",
                 "reason",
@@ -501,6 +507,39 @@ impl RuleKind {
             | RuleKind::Secrets
             | RuleKind::Document => &[RuleScope::Tree],
             RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => &[RuleScope::MediatedCall],
+        }
+    }
+
+    /// What evaluating this kind costs, and the narrowest surface it may be
+    /// evaluated on (CLOUD-757's two axes, CLOUD-773's composition input).
+    ///
+    /// Stated per kind rather than inferred, for [`RuleKind::spawns_processes`]'s
+    /// reason: a kind that lands unclassified would compose as whatever the
+    /// default happened to be, and the cheap default is the one direction the
+    /// mistake is expensive in. This is the value [`Rule::derives`] publishes and
+    /// [`Rule::reads`] is judged against — a reference that would make the
+    /// reading rule more expensive or narrower than it declares is refused at
+    /// load rather than answering from a fact that was never resolvable there.
+    #[must_use]
+    pub const fn fact_class(self) -> crate::facts::Class {
+        use crate::facts::{Class, Cost, Surface};
+        match self {
+            // Reads matched files, on the tree surface. `Ratchet` adds fixed git
+            // plumbing, which is the same bounded read.
+            RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Document => {
+                Class::new(Cost::Read, Surface::Check)
+            }
+            // All three run a program a config named, which is `Cost::Effect` by
+            // definition — and `scopes` already pairs each with `Tree` alone.
+            RuleKind::Command | RuleKind::Secrets => Class::new(Cost::Effect, Surface::Check),
+            // A judge consults a model: it spawns, and its verdict is advisory,
+            // so it may not be resolved anywhere a gate reads it.
+            RuleKind::Judge => Class::new(Cost::Effect, Surface::VerifyOnly),
+            // Adjudicated per mediated call over data the boundary already
+            // carries. `Receipt` pays a bounded git read there; the other two
+            // read only the envelope, which is `Cost::Free` — already in hand.
+            RuleKind::Shape | RuleKind::Pipeline => Class::new(Cost::Free, Surface::Hook),
+            RuleKind::Receipt => Class::new(Cost::Read, Surface::Hook),
         }
     }
 }
@@ -808,6 +847,37 @@ pub struct Rule {
     /// particular one contains (non-negotiable rule 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
+    /// The name this rule publishes its derived value under, for another rule to
+    /// read (CLOUD-773). [`RuleKind::Document`] only.
+    ///
+    /// **A value, not a verdict.** Composition already exists in the layer this
+    /// engine is absorbing: 57 of 126 tasks invoke a sibling and branch on its
+    /// exit code. That channel carries three states and nothing else, so a
+    /// consumer that needs the producer's *structure* re-derives it — measured,
+    /// `graph-check` spawns `ready-lint` and then re-spells the issue-key regex
+    /// three times. The re-derivation is caused by values not crossing the
+    /// boundary, which is what this column is for.
+    ///
+    /// Names are global to the config and unique: two rows deriving one name is
+    /// refused at load, because "which one did I read" is not a question a
+    /// reviewer should have to answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derives: Option<String>,
+    /// The derived value this rule compares its node against — [`Rule::pattern`]'s
+    /// **alternative**, never an addition to it. [`RuleKind::Document`] only.
+    ///
+    /// A row carries exactly one of the two, the shape `forbid`'s
+    /// `pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a
+    /// load error rather than a precedence rule nobody can read.
+    ///
+    /// Three checks run at load and never later (house-style §8, and CLOUD-647
+    /// measured that the obvious candidate engine reports the third at
+    /// *evaluation*, which on the mediated path is the worst possible time):
+    /// the name must be derived by some row, the reference graph must be
+    /// acyclic, and the derivation's [`RuleKind::fact_class`] must not make this
+    /// rule more expensive or narrower than its own kind already is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reads: Option<String>,
     /// Why this rule's findings have no fix — the stated answer, which is not
     /// the same as an absent one (CLOUD-81).
     ///
@@ -1189,7 +1259,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 26] {
+    fn columns(&self) -> [(&'static str, bool); 28] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1215,6 +1285,8 @@ impl Rule {
             ("base", self.base.is_some()),
             ("format", self.format.is_some()),
             ("node", self.node.is_some()),
+            ("derives", self.derives.is_some()),
+            ("reads", self.reads.is_some()),
             ("checks", self.checks.is_some()),
             ("key", self.key.is_some()),
             ("trigger", self.trigger.is_some()),
@@ -1365,6 +1437,7 @@ impl Rule {
         }
         self.validate_command_pattern()?;
         self.validate_forbid_predicate()?;
+        self.validate_document_predicate()?;
         self.validate_remediation()
     }
 
@@ -1588,6 +1661,31 @@ impl Rule {
     ///
     /// Each expression is compiled here, at load, so a bad one is a config error
     /// naming the row rather than a failure part-way through a scan.
+    /// A document row's predicate: exactly one of `pattern` or `reads`.
+    ///
+    /// The same "one of" the forbid predicate carries and for the same reason —
+    /// a flat column list cannot express it, so it lives here where the pair is
+    /// in scope. A row with neither loads, matches a document, and asks nothing
+    /// of it; a row with both declares two answers to one comparison.
+    fn validate_document_predicate(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Document {
+            return Ok(());
+        }
+        match (self.pattern.is_some(), self.reads.is_some()) {
+            (true, true) => Err(UsageError::raise(format!(
+                "rule {}: `pattern` and `reads` are alternatives; a row carries exactly one, \
+                 never both",
+                self.id
+            ))),
+            (false, false) => Err(UsageError::raise(format!(
+                "rule {}: kind \"document\" requires `pattern` (a literal) or `reads` (another \
+                 rule's derived value)",
+                self.id
+            ))),
+            _ => Ok(()),
+        }
+    }
+
     fn validate_forbid_predicate(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Forbid {
             return Ok(());
@@ -1663,6 +1761,14 @@ impl Rule {
 ///
 /// Returns a [`UsageError`] (→ exit `1`) for a malformed or duplicated rule.
 pub fn validate(rules: &[Rule]) -> anyhow::Result<()> {
+    validate_rows(rules)?;
+    validate_composition(rules, None)
+}
+
+/// Everything [`validate`] checks except the cross-row composition — split out so
+/// [`validate_in`] can run the composition half with a locator instead of
+/// running it twice and reporting the unlocated message first.
+fn validate_rows(rules: &[Rule]) -> anyhow::Result<()> {
     for (index, rule) in rules.iter().enumerate() {
         rule.validate()?;
         if rules[..index].iter().any(|prior| prior.id == rule.id) {
@@ -1690,6 +1796,155 @@ pub fn validate(rules: &[Rule]) -> anyhow::Result<()> {
                     prior.id, rule.id
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+/// [`validate`], with the config text in hand so a composition refusal can point
+/// at a **line** rather than only at a rule id (CLOUD-773's §5).
+///
+/// The located form is what the two real loaders call; the bare [`validate`]
+/// stays for callers holding a rule table and no file — the defaults, and the
+/// runner's own defence in depth. One implementation, an optional locator, so
+/// the two can never disagree about what is refused.
+///
+/// # Errors
+///
+/// As [`validate`].
+pub fn validate_in(rules: &[Rule], text: &str, source: &str) -> anyhow::Result<()> {
+    validate_rows(rules)?;
+    validate_composition(rules, Some(Located { text, source }))
+}
+
+/// The config text and its path, for turning a rule id into `path:line`.
+#[derive(Clone, Copy)]
+struct Located<'a> {
+    text: &'a str,
+    source: &'a str,
+}
+
+impl Located<'_> {
+    /// `<source>:<line>` for the row declaring `id`, or `<source>` where the
+    /// declaration cannot be located.
+    ///
+    /// A literal search for the `id` key rather than a second TOML parse: the
+    /// pointer is a courtesy on an error path, and a parser here would be a
+    /// second reader of the file the loader already read.
+    fn pointer(self, id: &str) -> String {
+        let needle = format!("id = \"{id}\"");
+        for (index, line) in self.text.lines().enumerate() {
+            if line.trim_start().starts_with(&needle) {
+                return format!("{}:{}", self.source, index + 1);
+            }
+        }
+        self.source.to_owned()
+    }
+}
+
+/// Where a rule id renders when there is no config text to locate it in.
+fn pointer_for(at: Option<Located<'_>>, id: &str) -> String {
+    match at {
+        Some(located) => located.pointer(id),
+        None => format!("rule {id}"),
+    }
+}
+
+/// Refuse a composition a run could not honour, **at load and never later**.
+///
+/// Four refusals, and the ordering matters only in that each is checked over the
+/// whole table rather than per row — which is why this cannot live in
+/// [`Rule::validate`]:
+///
+/// 1. **Two rows deriving one name.** "Which one did I read" is not a question a
+///    reviewer should have to answer, and the answer would be positional.
+/// 2. **A reference to a name nothing derives.** The row loads, matches a
+///    document, and compares against a value that will never exist — the
+///    present-and-inert gate this file is written against.
+/// 3. **A cycle.** Once B can reference A, A can reference B. CLOUD-647 measured
+///    that the obvious candidate engine reports cycles at *evaluation*, which on
+///    the mediated path is the worst possible time and the wrong exit class.
+/// 4. **A reference that changes the reading rule's class.** CLOUD-757 settled
+///    composition as the **meet on both axes**: a derived fact is at most as
+///    cheap as its most expensive input and at most as wide as its narrowest.
+///    So if meeting the derivation's class with the reader's own moves it, the
+///    reader is not the rule it declares itself to be — a `read`-class row would
+///    silently inherit an `effect`-class dependency, or a hook-surface row would
+///    answer from a fact never resolvable there.
+///
+/// Pointer-only (rule 4): a `path:line` and a rule id, never a derived value.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) for each of the four. A config declaring a
+/// composition the engine cannot honour is the config-or-usage class, never a
+/// policy verdict about the repository.
+fn validate_composition(rules: &[Rule], at: Option<Located<'_>>) -> anyhow::Result<()> {
+    let mut derived: BTreeMap<&str, &Rule> = BTreeMap::new();
+    for rule in rules {
+        let Some(name) = rule.derives.as_deref() else {
+            continue;
+        };
+        if let Some(prior) = derived.insert(name, rule) {
+            return Err(UsageError::raise(format!(
+                "{} and {}: both derive `{name}`; a derived value has one definition",
+                pointer_for(at, &prior.id),
+                pointer_for(at, &rule.id)
+            )));
+        }
+    }
+    for rule in rules {
+        let Some(name) = rule.reads.as_deref() else {
+            continue;
+        };
+        let Some(producer) = derived.get(name).copied() else {
+            return Err(UsageError::raise(format!(
+                "{}: reads `{name}`, which no rule derives",
+                pointer_for(at, &rule.id)
+            )));
+        };
+        // The meet on BOTH axes. Equality with the reader's own class is the
+        // predicate rather than a comparison per axis, because "did this
+        // reference move me" is one question and asking it twice invites the
+        // two halves to drift.
+        let mine = rule.kind.fact_class();
+        if mine.meet(producer.kind.fact_class()) != mine {
+            return Err(UsageError::raise(format!(
+                "{}: reads `{name}`, derived by {} at cost `{}` on surface `{}`, which a rule at \
+                 cost `{}` on surface `{}` cannot carry — composition takes the meet on both axes",
+                pointer_for(at, &rule.id),
+                pointer_for(at, &producer.id),
+                producer.kind.fact_class().cost.as_str(),
+                producer.kind.fact_class().surface.as_str(),
+                mine.cost.as_str(),
+                mine.surface.as_str()
+            )));
+        }
+    }
+    // Depth-first over the reference edges. The graph is tiny — one edge per row
+    // that reads — so the walk is the whole algorithm and there is nothing to
+    // memoise that would pay for itself.
+    for rule in rules {
+        if rule.reads.is_none() {
+            continue;
+        }
+        let mut seen: Vec<&str> = vec![rule.id.as_str()];
+        let mut here = rule;
+        while let Some(name) = here.reads.as_deref() {
+            let Some(next) = derived.get(name).copied() else {
+                break;
+            };
+            if seen.contains(&next.id.as_str()) {
+                return Err(UsageError::raise(format!(
+                    "{} and {}: their `reads`/`derives` references form a cycle, so neither \
+                     value can be resolved; refused at load, where a cycle costs a config error \
+                     rather than a decision",
+                    pointer_for(at, &here.id),
+                    pointer_for(at, &next.id)
+                )));
+            }
+            seen.push(next.id.as_str());
+            here = next;
         }
     }
     Ok(())
@@ -1849,10 +2104,15 @@ fn run(
     root: &Path,
 ) -> anyhow::Result<Scan> {
     let files = tree_files(root)?;
+    // Resolved ONCE for the whole run, before any rule is evaluated (CLOUD-773).
+    // That is the entire point: the shell layer this replaces re-derives because
+    // a producer's value cannot cross the boundary, so it pays the extraction
+    // per consumer. Here the producer pays once and every reader reads.
+    let derived = resolve_derived(rules, root, &files);
 
     let mut scan = Scan::default();
     for rule in rules {
-        if let Some(why) = run_rule(rule, provisions, root, &files, &mut scan.findings)? {
+        if let Some(why) = run_rule(rule, provisions, root, &files, &derived, &mut scan.findings)? {
             scan.not_evaluated.insert(rule.id.clone(), why);
         }
     }
@@ -1916,6 +2176,7 @@ fn run_rule(
     provisions: &[crate::provision::Provision],
     root: &Path,
     files: &[String],
+    derived: &BTreeMap<String, crate::facts::Look<String>>,
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<Option<NotObserved>> {
     // Validation first, and it owns the empty-glob refusal now: the census in
@@ -1974,7 +2235,7 @@ fn run_rule(
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
         RuleKind::Document => {
             for path in matched {
-                document_in_file(rule, root, path, findings)?;
+                document_in_file(rule, root, path, derived, findings)?;
             }
         }
         RuleKind::Secrets => crate::secrets::scan(rule, provisions, root, &matched, findings)?,
@@ -2708,13 +2969,32 @@ fn document_in_file(
     rule: &Rule,
     root: &Path,
     rel_path: &str,
+    derived: &BTreeMap<String, crate::facts::Look<String>>,
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<()> {
     // `validate` has already refused a row missing either column, so both are
     // defence in depth on the same reading `forbid_in_file` applies.
-    let (Some(format), Some(node_path), Some(expected)) =
-        (rule.format, rule.node.as_deref(), rule.pattern.as_deref())
-    else {
+    let (Some(format), Some(node_path)) = (rule.format, rule.node.as_deref()) else {
+        return Ok(());
+    };
+    // The comparand: a literal the row states, or another row's derived value
+    // (CLOUD-773). `validate` has already refused a row carrying neither or both,
+    // and refused a reference nothing derives — so an absent value here can only
+    // mean the producer could not look.
+    //
+    // THREE-VALUED COMPOSITION, and this is the arm the whole issue turns on: a
+    // derived fact over a base that could not be looked at is itself **could not
+    // look**, never false. Reading it as false is CLOUD-251's vacuous pass — the
+    // comparison "succeeds" against nothing and the gate reports agreement.
+    let expected = match rule.reads.as_deref() {
+        None => rule.pattern.as_deref().map(ToOwned::to_owned),
+        Some(name) => match derived.get(name) {
+            Some(crate::facts::Look::Is(value)) => Some(value.clone()),
+            Some(crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook) | None => None,
+        },
+    };
+    let Some(expected) = expected else {
+        findings.push(unreadable_document(rule, rel_path, node_path)?);
         return Ok(());
     };
     let contents = match fs::read(root.join(rel_path)) {
@@ -2740,7 +3020,7 @@ fn document_in_file(
             crate::facts::Look::IsNot => Some(DOCUMENT_NODE_ABSENT),
             crate::facts::Look::CouldNotLook => Some(DOCUMENT_UNREADABLE),
             crate::facts::Look::Is(node) => {
-                if node.scalar().as_deref() == Some(expected) {
+                if node.scalar().as_deref() == Some(expected.as_str()) {
                     None
                 } else {
                     Some(DOCUMENT_NODE_DIFFERS)
@@ -2774,6 +3054,117 @@ fn document_in_file(
         remediation: rule.remediation(),
     });
     Ok(())
+}
+
+/// The finding a row raises when it could not look — factored out because two
+/// call sites reach it now: the document itself was unreadable, or the derived
+/// value it compares against was.
+fn unreadable_document(rule: &Rule, rel_path: &str, node_path: &str) -> anyhow::Result<Finding> {
+    let default = identity::code_fingerprint(
+        &rule.id,
+        rel_path,
+        &format!("{node_path} {DOCUMENT_UNREADABLE}"),
+        identity::SpanNormalization::Verbatim,
+    )?;
+    Ok(Finding {
+        rule: rule.id.clone(),
+        severity: rule.severity(),
+        path: rel_path.to_owned(),
+        line: Some(1),
+        identity: identity_of(rule, identity::FindingKind::Code, default),
+        check: rule.settling_check().unwrap_or(Check::Reevaluate),
+        remediation: rule.remediation(),
+    })
+}
+
+/// Resolve every rule that derives a value, once for the whole run (CLOUD-773).
+///
+/// Resolving once is the entire point. The layer this absorbs re-derives because
+/// a producer's value cannot cross the boundary — 57 of 126 tasks invoke a
+/// sibling and get three states back — so the extraction is paid per consumer.
+/// Here the producer pays once and every reader reads.
+///
+/// The graph is acyclic and every reference resolves: `validate_composition`
+/// refused both at load. So this is a fold rather than a fixed point — a pass
+/// resolves every row whose input is already in hand, and a chain of N rows
+/// needs at most N passes. The alternative, a recursive walk, would carry its
+/// own cycle guard duplicating the one the loader already owns.
+///
+/// Three-valued (CLOUD-757): a producer whose document does not parse, whose
+/// node is absent, or whose own input could not be resolved yields
+/// [`crate::facts::Look::CouldNotLook`] — never a value that reads as agreement.
+fn resolve_derived(
+    rules: &[Rule],
+    root: &Path,
+    files: &[String],
+) -> BTreeMap<String, crate::facts::Look<String>> {
+    let mut resolved: BTreeMap<String, crate::facts::Look<String>> = BTreeMap::new();
+    let producers: Vec<&Rule> = rules.iter().filter(|rule| rule.derives.is_some()).collect();
+    for _ in 0..producers.len() {
+        let mut advanced = false;
+        for rule in &producers {
+            let Some(name) = rule.derives.as_deref() else {
+                continue;
+            };
+            if resolved.contains_key(name) {
+                continue;
+            }
+            // A producer that itself reads waits for its input; the loader
+            // guarantees the wait terminates.
+            if let Some(input) = rule.reads.as_deref()
+                && !resolved.contains_key(input)
+            {
+                continue;
+            }
+            resolved.insert(name.to_owned(), derive_one(rule, root, files));
+            advanced = true;
+        }
+        if !advanced {
+            break;
+        }
+    }
+    resolved
+}
+
+/// The value one deriving row publishes: the scalar at its node, three-valued.
+fn derive_one(rule: &Rule, root: &Path, files: &[String]) -> crate::facts::Look<String> {
+    use crate::facts::Look;
+    let (Some(format), Some(node_path), Some(glob)) =
+        (rule.format, rule.node.as_deref(), rule.glob.as_deref())
+    else {
+        return Look::CouldNotLook;
+    };
+    let Ok(selector) = Selector::new(glob) else {
+        return Look::CouldNotLook;
+    };
+    // The FIRST matching path, in the walk's sorted order. A derivation is one
+    // value, so a glob matching several documents has to pick, and picking by
+    // the sorted walk is the one choice that does not depend on the filesystem's
+    // order. A row meaning "these must all agree" writes several READING rows
+    // instead, which is what keeps each clause independently nameable.
+    let Some(path) = files.iter().find(|path| selector.matches(path)) else {
+        return Look::CouldNotLook;
+    };
+    let Ok(bytes) = fs::read(root.join(path)) else {
+        return Look::CouldNotLook;
+    };
+    let Ok(text) = String::from_utf8(bytes) else {
+        return Look::CouldNotLook;
+    };
+    match format.read(&text) {
+        Look::Is(document) => match document.at(node_path) {
+            Look::Is(node) => match node.scalar() {
+                Some(value) => Look::Is(value),
+                // A container is not a value a comparison can consume. "Looked,
+                // and there is no scalar here" is the honest answer, and it is
+                // not the same as a parse failure.
+                None => Look::IsNot,
+            },
+            Look::IsNot => Look::IsNot,
+            Look::CouldNotLook => Look::CouldNotLook,
+        },
+        Look::IsNot | Look::CouldNotLook => Look::CouldNotLook,
+    }
 }
 
 /// The document could not be looked at — it does not parse, is not UTF-8, or its
@@ -3362,6 +3753,8 @@ mod tests {
             base: None,
             format: None,
             node: None,
+            derives: None,
+            reads: None,
             criteria: None,
             tier: None,
             // The one that needs no argv, so a fixture about a different column
@@ -3874,6 +4267,13 @@ mod tests {
                 if *kind == RuleKind::Receipt {
                     rule.pattern = Some("x".to_owned());
                 }
+                // And once more, for the third "one of" (CLOUD-773): a document
+                // row carries exactly one of `pattern` or `reads`, which the flat
+                // column list cannot say either. Supplied so the only possible
+                // complaint stays the pairing.
+                if *kind == RuleKind::Document {
+                    rule.pattern = Some("x".to_owned());
+                }
                 let result = rule.validate();
                 if kind.scopes().contains(scope) {
                     assert!(result.is_ok(), "{kind:?}/{scope:?} must load");
@@ -4116,6 +4516,138 @@ mod tests {
             "the column is refused, so it is absent"
         );
         assert_eq!(rule.severity(), RuleSeverity::Allow);
+    }
+
+    /// A deriving/reading pair, built directly rather than through a config, so
+    /// the composition checks can be exercised over kind combinations the column
+    /// tables do not permit a config to write today.
+    ///
+    /// That gap is stated rather than hidden: `derives` and `reads` are permitted
+    /// on the document kind alone, so the cost half of the load refusal has no
+    /// reachable config spelling YET — it becomes reachable the day a second kind
+    /// derives, and it is live and failable now.
+    fn pair(reader_kind: RuleKind, producer_kind: RuleKind) -> Vec<Rule> {
+        let mut producer = blank("producer", producer_kind);
+        producer.derives = Some("pin".to_owned());
+        let mut reader = blank("reader", reader_kind);
+        reader.reads = Some("pin".to_owned());
+        vec![producer, reader]
+    }
+
+    #[test]
+    fn a_reference_to_a_name_nothing_derives_is_refused() {
+        // The row loads, matches a document, and compares against a value that
+        // will never exist — present, inert, and reading as coverage.
+        let mut reader = blank("reader", RuleKind::Document);
+        reader.reads = Some("pin".to_owned());
+        let err = validate_composition(&[reader], None).expect_err("an undefined name is refused");
+        assert!(err.to_string().contains("which no rule derives"));
+    }
+
+    #[test]
+    fn two_rows_deriving_one_name_are_refused() {
+        // "Which one did I read" is not a question a reviewer should have to
+        // answer, and the answer would be positional.
+        let mut first = blank("first", RuleKind::Document);
+        first.derives = Some("pin".to_owned());
+        let mut second = blank("second", RuleKind::Document);
+        second.derives = Some("pin".to_owned());
+        let err = validate_composition(&[first, second], None)
+            .expect_err("a duplicated derived name is refused");
+        assert!(
+            err.to_string()
+                .contains("a derived value has one definition")
+        );
+    }
+
+    #[test]
+    fn a_cycle_is_refused_at_load_and_names_both_sites() {
+        // CLOUD-647 measured that the obvious candidate engine reports cycles at
+        // EVALUATION, which on the mediated path is the worst possible time and
+        // the wrong exit class. This is the refusal moved to where a config fault
+        // belongs, and the message names both ends so a reader can open either.
+        let mut first = blank("first", RuleKind::Document);
+        first.derives = Some("a".to_owned());
+        first.reads = Some("b".to_owned());
+        let mut second = blank("second", RuleKind::Document);
+        second.derives = Some("b".to_owned());
+        second.reads = Some("a".to_owned());
+        let err =
+            validate_composition(&[first, second], None).expect_err("a cycle is refused at load");
+        let text = err.to_string();
+        assert!(text.contains("form a cycle"));
+        assert!(text.contains("first"), "the message names one end");
+        assert!(text.contains("second"), "and the other");
+    }
+
+    #[test]
+    fn a_reference_that_widens_the_readers_surface_is_refused() {
+        // The second axis, and the one a single-axis reading loses: a
+        // hook-surface rule reading a derivation resolvable only on the tree
+        // would answer from a fact that was never resolvable where it runs.
+        //
+        // Fails by: meeting only the cost axis in `validate_composition`.
+        assert_eq!(
+            RuleKind::Receipt.fact_class().surface,
+            crate::facts::Surface::Hook
+        );
+        assert_eq!(
+            RuleKind::Document.fact_class().surface,
+            crate::facts::Surface::Check
+        );
+        let err = validate_composition(&pair(RuleKind::Receipt, RuleKind::Document), None)
+            .expect_err("a hook-surface rule cannot read a check-surface derivation");
+        assert!(err.to_string().contains("the meet on both axes"));
+    }
+
+    #[test]
+    fn a_reference_that_makes_the_reader_more_expensive_is_refused() {
+        // The first axis: a `read`-class row silently inheriting an
+        // `effect`-class dependency is the composition defect CLOUD-757 named,
+        // and it is refused by the same equality rather than by a second check.
+        //
+        // Fails by: meeting only the surface axis in `validate_composition`.
+        assert_eq!(
+            RuleKind::Document.fact_class().cost,
+            crate::facts::Cost::Read
+        );
+        assert_eq!(
+            RuleKind::Secrets.fact_class().cost,
+            crate::facts::Cost::Effect
+        );
+        let err = validate_composition(&pair(RuleKind::Document, RuleKind::Secrets), None)
+            .expect_err("a read-class rule cannot read an effect-class derivation");
+        assert!(err.to_string().contains("the meet on both axes"));
+    }
+
+    #[test]
+    fn a_reference_that_moves_neither_axis_is_admitted() {
+        // The gate must not simply refuse everything: two rows of the same class
+        // compose, which is the whole point of the column existing.
+        validate_composition(&pair(RuleKind::Document, RuleKind::Document), None)
+            .expect("a same-class reference composes");
+    }
+
+    #[test]
+    fn no_column_can_reorder_the_adjudication_chain() {
+        // CLOUD-773 decision 5, as a gate rather than a stated intention.
+        // `adjudicated`'s four stages stay a hard-coded match: referenceable
+        // VALUES are in scope, configurable ORDERING is out. A chain a consumer
+        // can misorder is one that puts the protected-mutation gate behind a
+        // shape rule that allows, and the failure is silent.
+        //
+        // Fails by: adding a rule column whose name could carry a stage position.
+        let named: Vec<&str> = blank("any", RuleKind::Document)
+            .columns()
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        for banned in ["stage", "order", "before", "after", "priority", "phase"] {
+            assert!(
+                !named.contains(&banned),
+                "a `{banned}` column would make the adjudication chain data (CLOUD-773 decision 5)"
+            );
+        }
     }
 
     #[test]

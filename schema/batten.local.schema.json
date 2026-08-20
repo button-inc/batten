@@ -285,6 +285,13 @@
             "null"
           ]
         },
+        "derives": {
+          "description": "The name this rule publishes its derived value under, for another rule to\nread (CLOUD-773). [`RuleKind::Document`] only.\n\n**A value, not a verdict.** Composition already exists in the layer this\nengine is absorbing: 57 of 126 tasks invoke a sibling and branch on its\nexit code. That channel carries three states and nothing else, so a\nconsumer that needs the producer's *structure* re-derives it — measured,\n`graph-check` spawns `ready-lint` and then re-spells the issue-key regex\nthree times. The re-derivation is caused by values not crossing the\nboundary, which is what this column is for.\n\nNames are global to the config and unique: two rows deriving one name is\nrefused at load, because \"which one did I read\" is not a question a\nreviewer should have to answer.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "direction": {
           "description": "Which way a [`RuleKind::Ratchet`] count may move. Required by that kind,\nrejected by every other.",
           "anyOf": [
@@ -387,6 +394,13 @@
         },
         "policy_url": {
           "description": "An optional link to the policy this rule enforces, appended to the deny.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reads": {
+          "description": "The derived value this rule compares its node against — [`Rule::pattern`]'s\n**alternative**, never an addition to it. [`RuleKind::Document`] only.\n\nA row carries exactly one of the two, the shape `forbid`'s\n`pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a\nload error rather than a precedence rule nobody can read.\n\nThree checks run at load and never later (house-style §8, and CLOUD-647\nmeasured that the obvious candidate engine reports the third at\n*evaluation*, which on the mediated path is the worst possible time):\nthe name must be derived by some row, the reference graph must be\nacyclic, and the derivation's [`RuleKind::fact_class`] must not make this\nrule more expensive or narrower than its own kind already is.",
           "type": [
             "string",
             "null"

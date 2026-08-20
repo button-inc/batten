@@ -576,7 +576,22 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   is now the one value type for both doors, which is why its name is the general
   one and not the judge's.
 - `rules.rs` — the rule/check engine (CLOUD-12): glob-selected, `kind`-typed
-  predicates over the repo. **`Ratchet`** (CLOUD-55) is the fourth kind: a count
+  predicates over the repo. **`Document`** (CLOUD-772) addresses a node in a
+  parsed document — `glob` + `format` + `node` + `pattern`; the parse itself is
+  `facts::Format::read`, so the core knows formats and never artifacts.
+  **Derived values** (CLOUD-773) are the composition half: a row may `derives` a
+  name and another may `reads` it, resolved ONCE per run by `resolve_derived`
+  instead of per consumer — which is the defect the shell layer has, where 57 of
+  126 tasks compose over an exit code and re-derive what the producer already
+  knew. `RuleKind::fact_class` is what makes composition checkable: the meet on
+  BOTH CLOUD-757 axes, and a reference that moves the reader's class is refused
+  AT LOAD (`validate_composition`), as are a cycle, a duplicate name and a
+  reference nothing derives. `validate_in` is the located form the two loaders
+  call, so a refusal points at `batten.toml:<line>` rather than only at an id.
+  The four-stage `adjudicated` chain deliberately stays code: referenceable
+  VALUES are in scope, configurable ORDERING is out, because a chain a consumer
+  can misorder puts the protected-mutation gate behind a shape rule that allows
+  and the failure is silent. **`Ratchet`** (CLOUD-55) is the fourth kind: a count
   of `pattern` over `glob`, at a `base` rev vs the working tree, that may only
   move the declared `direction`. It exists because a test suite cannot be a
   `protected` path — tests are edited daily — so the computable property is
