@@ -215,14 +215,20 @@ jobs:
       # Exit 1 is "this PR is not one of ours" (its diff touches no manifest the
       # lane owns) and must not fail the run or block the landing: the issue is
       # what makes the merge move a row, not what makes the merge safe. Only exit
-      # 2, "could not look", is a failure — a credential that cannot reach the
-      # tracker is a defect to see, not to route around.
+      # 2, "could not look", is a failure — GitHub refusing to answer is a defect
+      # to see, not to route around.
+      #
+      # NO TRACKER CREDENTIAL REACHES THIS STEP, and that is the design rather
+      # than an omission (CLOUD-750). The row is filed as a GitHub ISSUE with the
+      # token this job already carries, and Linear's GitHub Issues sync mirrors it
+      # into a `CLOUD-*` row — measured at ~2 seconds on #558 -> CLOUD-764. The
+      # key comes back on a `linear-code[bot]` linkback comment, so the lane
+      # learns its own row's name without ever authenticating to the tracker.
       - name: File the issue this bump lands under, and link it
         if: steps.target.outputs.num != ''
         id: row
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
-          LINEAR_ACCESS_KEY: ${{ secrets.LINEAR_ACCESS_KEY }}
           PR_NUM: ${{ steps.target.outputs.num }}
         run: |
           set +e

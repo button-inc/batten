@@ -44,11 +44,11 @@
 # manifest paths. Never a diff body, never a version, never the tracker token.
 #
 # Exit 0 did the work (or found it already done) / 1 refused, this PR is not one of
-# ours / 2 could not look — a credential that cannot reach GitHub or the tracker.
+# ours / 2 could not look — GitHub would not answer, so nothing was written.
 #
 # Usage:
 #   mise run bot-issue derive <pr>        candidate payload on stdout, no writes
-#   mise run bot-issue file <pr>          derive, then create the row
+#   mise run bot-issue file <pr>          derive, then open the mirror issue
 #   mise run bot-issue link <pr> <key>    write `Closes <key>` into the PR body
 #   mise run bot-issue ensure <pr>        the lander's call: all three, idempotent
 #   mise run bot-issue receipt            mint this branch's bot receipt
@@ -73,13 +73,19 @@ OWNED_MANIFESTS_RE='^(mise\.toml|Cargo\.toml|Cargo\.lock|\.github/workflows/.+)$
 # this repository does not have.
 BOT_LOGINS_RE='^(renovate|renovate\[bot\]|mend-for-github-com\[bot\])$'
 
-# The tracker coordinates. Ids rather than names, because the GraphQL create takes
-# ids and resolving a name adds a query whose failure mode is filing into the
-# wrong team. Overridable so a fixture can drive the task without a credential.
-LINEAR_API="${BOT_ISSUE_LINEAR_API:-https://api.linear.app/graphql}"
-LINEAR_TEAM="${BOT_ISSUE_TEAM:-c7e590ea-b946-4dbd-946c-a234d82bf209}"
-LINEAR_PROJECT="${BOT_ISSUE_PROJECT:-1d254c3b-9ebc-4930-999d-965e334cc6dc}"
-LINEAR_MILESTONE="${BOT_ISSUE_MILESTONE:-8238f8da-115e-4af1-9a39-b199dfa70d46}"
+# The marker that ties a mirror issue to the pull request it was filed for. A
+# hidden HTML comment rather than a label or a title convention: it survives an
+# edit, it is invisible in the rendered issue, and it is what makes `ensure`
+# idempotent across the window where the row exists and the PR body does not yet
+# name it. Searched by listing issues, never through the search API, whose
+# indexing lag would let one tick file a second mirror.
+MIRROR_MARKER_PREFIX="${BOT_ISSUE_MARKER:-bot-lane pr=}"
+
+# What Linear's GitHub Issues sync leaves on the issue once it has mirrored it.
+# Measured on #558 -> CLOUD-764, 2026-08-20: `linear-code[bot]` posts a comment
+# carrying this marker and the row's URL, about two seconds after creation.
+LINKBACK_MARKER="${BOT_ISSUE_LINKBACK:-<!-- linear-linkback -->}"
+
 REPO="${BOT_ISSUE_REPO:-${REPO:-button-inc/batten}}"
 
 die() {
@@ -213,114 +219,74 @@ derive() {
 
 # --- file ---------------------------------------------------------------------
 #
-# The one write to the tracker, and the only place in this repository that holds a
-# tracker credential. `claim-check` states the rule this bends: "no tracker
-# credential exists, so gates are pure functions of stdin". That rule is about
-# GATES — a gate must not depend on a network call that can hang or rate-limit.
-# This is not a gate; it is the step that CREATES the row a gate later reads, and
-# a step that cannot write cannot exist at all. The gate half stays pure:
-# `ready-lint` reads `derive`'s output with no credential anywhere.
-# THE ONE CALL THAT REACHES THE TRACKER, and every failure of it is told apart
-# rather than collapsed. The first production run of this lane died on
-# `no Todo state on the team`, which was one message standing for three different
-# failures — a transport error, a refused query, and a workspace that genuinely
-# has no such state. A diagnosis that cannot distinguish those is a diagnosis that
-# makes the next step a guess, which is the CLOUD-198 class in a task's own error
-# path.
+# THE ROW IS FILED AS A GITHUB ISSUE, AND LINEAR MIRRORS IT (CLOUD-750). The
+# first shape of this task called the tracker's GraphQL API directly, which cost
+# a credential — and the one this repository has answers 401 in both auth forms.
+# It was also the only place in the tree holding a tracker credential at all.
 #
-# Pointer-only, and here that is a security property rather than a style: the
-# response body echoes the REQUEST on some errors, and the request carries the
-# credential header. So what reaches stdout is the HTTP status, the number of
-# errors, and the first error's `extensions.code` — an enum like
-# `AUTHENTICATION_ERROR` — never a body, never a message that could quote one.
-tracker_post() {
-	local query="$1" what="$2" raw status body errors code
-	# Status is appended on its own line and split off, so one call yields both
-	# without a second request or a temp file.
-	raw=$(curl -sS -X POST "$LINEAR_API" \
-		-H "Authorization: $TRACKER_AUTH" \
-		-H "Content-Type: application/json" \
-		-w '\n%{http_code}' \
-		-d "$query" 2>/dev/null) || die "the tracker did not answer the $what — no HTTP response at all"
-	status=${raw##*$'\n'}
-	body=${raw%$'\n'*}
-	if [ "$status" != 200 ]; then
-		die "the tracker answered HTTP $status to the $what"
-	fi
-	errors=$(jq -r '(.errors // []) | length' <<<"$body" 2>/dev/null) || errors=0
-	if [ "${errors:-0}" != 0 ]; then
-		code=$(jq -r '(.errors[0].extensions.code // .errors[0].extensions.type // "unclassified")' <<<"$body" 2>/dev/null)
-		printf '%s' "$code" >"$TRACKER_ERROR_CODE"
-		return 1
-	fi
-	printf '%s' "$body"
-}
-
-create_issue() {
-	local payload="$1" title body query resp key state
-	[ -n "${LINEAR_ACCESS_KEY:-}" ] ||
-		die "LINEAR_ACCESS_KEY is empty, so a bot PR would land with no row and the board would silently stop describing what shipped. Set the secret; do not route around this."
-
+# Linear's GitHub Issues sync removes the need for one: the integration is
+# configured for this repository (`button-inc/batten` -> Button Cloud), so an
+# issue opened with the `GITHUB_TOKEN` this workflow already carries is mirrored
+# into a `CLOUD-*` row. Measured end to end on #558 -> CLOUD-764, 2026-08-20:
+#
+#   created -> mirrored          ~2 seconds, team Button Cloud, body verbatim
+#   the key comes back           a `linear-code[bot]` comment carrying
+#                                `<!-- linear-linkback -->` and the row's URL
+#   the row arrives in           Backlog, with NO project and NO milestone
+#   closing the GitHub issue     moves the row to Done in ~1 second
+#
+# THE LAST ROW IS WHY THIS TASK NEVER CLOSES THE MIRROR. Done here means
+# RELEASED (mem:workflow/board-states), so closing the issue would skip In Review
+# and assert a release that has not happened. The pull request therefore closes
+# the CLOUD KEY — never `#<issue>` — and the merge moves the row exactly as it
+# does for an agent's PR. The mirror issue outliving its row is the accepted
+# cost of not holding a credential.
+#
+# AND THE ROW ARRIVES UNREFINED-BY-FIELD, which is recorded rather than hidden:
+# the sync sets no project and no milestone, and CLOUD-693's acceptance asked for
+# both. Setting them is precisely what a credential would buy. The Ready block is
+# in the body, so the row is refined in the sense that matters — `ready-lint`
+# reads it — and the fields it cannot set are named on that issue.
+file_issue() {
+	local payload="$1" num title body tmp created
+	num=$(jq -r '.pr' <<<"$payload")
 	title=$(jq -r '.title' <<<"$payload")
 	body=$(jq -r '.description' <<<"$payload")
-	TRACKER_ERROR_CODE=$(mktemp)
+	tmp=$(mktemp)
+	# The marker goes LAST, after the derived block, so it is the one line a
+	# reader never has to look at and the one line `ensure` always finds.
+	{
+		printf '%s\n\n' "$body"
+		printf '<!-- %s%s -->\n' "$MIRROR_MARKER_PREFIX" "$num"
+	} >"$tmp"
+	created=$(gh api -X POST "repos/$REPO/issues" \
+		-f title="$title" -F body=@"$tmp" --jq '.number' 2>&1) || {
+		rm -f "$tmp"
+		# Pointer-only: never the response, which can echo a header back.
+		die "could not open the mirror issue for #$num — no row exists, and none is invented"
+	}
+	rm -f "$tmp"
+	[ -n "$created" ] || die "the mirror issue for #$num was accepted but named no number"
+	printf '%s' "$created"
+}
 
-	# The Todo state id is RESOLVED, never pinned: a workflow state is a
-	# workspace-side object whose id nobody here controls, and a stale pin would
-	# file into whatever state that id has become. Todo is the ready queue
-	# (mem:workflow/board-states) — the row is pullable by an agent the moment it
-	# exists, which is what makes it real work rather than a note.
-	#
-	# `workflowStates` with a filter rather than `team(id:) { states }`: one hop,
-	# and the filter says what is being asked for instead of fetching every state
-	# and picking one here.
-	query=$(jq -n --arg team "$LINEAR_TEAM" \
-		'{query: "query($team: ID!) { workflowStates(filter: {team: {id: {eq: $team}}, name: {eq: \"Todo\"}}) { nodes { id name } } }", variables: {team: $team}}')
+# The mirror this PR already has, if any. Listed rather than searched: the search
+# API's indexing lag is measured in tens of seconds, and a tick that ran inside
+# that window would file a second row for the same pull request.
+mirror_for() {
+	local num="$1"
+	gh_api "repos/$REPO/issues?state=all&per_page=100" \
+		--jq "[.[] | select((.pull_request // null) == null) | select((.body // \"\") | contains(\"$MIRROR_MARKER_PREFIX$num -->\"))] | .[0].number // empty"
+}
 
-	# TWO AUTH FORMS, TRIED IN ORDER, BECAUSE THE TRACKER TAKES BOTH AND THE SECRET
-	# DOES NOT SAY WHICH IT IS. A personal API key authenticates raw; an OAuth
-	# token needs `Bearer`. `LINEAR_ACCESS_KEY` was minted for the release action,
-	# whose input names neither, so the shape is not knowable from here — and a
-	# lane that fails twice a day until someone guesses right is worse than one
-	# extra request on the first call. The form that worked is reported, so the
-	# next reader knows which it is without repeating this.
-	TRACKER_AUTH="$LINEAR_ACCESS_KEY"
-	if ! resp=$(tracker_post "$query" "states query"); then
-		local first_code
-		first_code=$(cat "$TRACKER_ERROR_CODE" 2>/dev/null)
-		TRACKER_AUTH="Bearer $LINEAR_ACCESS_KEY"
-		if ! resp=$(tracker_post "$query" "states query"); then
-			rm -f "$TRACKER_ERROR_CODE"
-			die "the tracker refused the states query under both auth forms (bare: $first_code, bearer: $(cat "$TRACKER_ERROR_CODE" 2>/dev/null)) — the credential is the thing to look at, not the query"
-		fi
-		echo "bot-issue: the tracker credential authenticates as a bearer token"
-	fi
-
-	state=$(jq -r '.data.workflowStates.nodes[]? | select(.name == "Todo") | .id' <<<"$resp" | head -n1)
-	if [ -z "$state" ]; then
-		rm -f "$TRACKER_ERROR_CODE"
-		# The genuine third case, now distinguishable from the two above: the
-		# query was answered and the workspace has no such state.
-		die "the tracker answered, and this team has no workflow state named Todo — the row would be filed somewhere the ready queue cannot see it"
-	fi
-
-	query=$(jq -n \
-		--arg team "$LINEAR_TEAM" --arg project "$LINEAR_PROJECT" \
-		--arg milestone "$LINEAR_MILESTONE" --arg state "$state" \
-		--arg title "$title" --arg body "$body" \
-		'{query: "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { identifier url } } }",
-		  variables: {input: {teamId: $team, projectId: $project, projectMilestoneId: $milestone, stateId: $state, title: $title, description: $body}}}')
-	if ! resp=$(tracker_post "$query" "create"); then
-		local code
-		code=$(cat "$TRACKER_ERROR_CODE" 2>/dev/null)
-		rm -f "$TRACKER_ERROR_CODE"
-		die "the tracker refused the create for #$(jq -r .pr <<<"$payload") ($code) — no row exists, and none is invented"
-	fi
-	rm -f "$TRACKER_ERROR_CODE"
-
-	key=$(jq -r '.data.issueCreate.issue.identifier // empty' <<<"$resp")
-	[ -n "$key" ] || die "the tracker accepted the create for #$(jq -r .pr <<<"$payload") but named no issue — no row to link, and none is invented"
-	printf '%s' "$key"
+# The `CLOUD-<n>` the sync reported back, or empty while it has not run yet. Read
+# from the linkback comment alone: the issue BODY is this task's own text, and a
+# key named there would be one we wrote rather than one the tracker assigned.
+mirror_key() {
+	local issue="$1"
+	gh_api "repos/$REPO/issues/$issue/comments?per_page=100" \
+		--jq "[.[] | select((.body // \"\") | contains(\"$LINKBACK_MARKER\"))] | .[0].body // empty" |
+		grep -oE 'CLOUD-[0-9]+' | head -n1 || true
 }
 
 # --- link ---------------------------------------------------------------------
@@ -349,18 +315,42 @@ link_issue() {
 }
 
 # --- ensure -------------------------------------------------------------------
+#
+# TWO PHASES, BECAUSE THE KEY ARRIVES ASYNCHRONOUSLY. Filing the issue and
+# learning its `CLOUD-<n>` are separated by however long the sync takes — about
+# two seconds when it was measured, but nothing here may depend on that. So a
+# tick does as much as it can and says what it did: file the mirror, or link a
+# mirror that now has a key. The lander ticks twice an hour and `ensure` is
+# idempotent at every step, so the second phase costs nothing to wait for.
+#
+# THAT IS ALSO WHY THIS DOES NOT POLL. A wall-clock wait inside the job would be
+# a guess about someone else's latency dressed as a mechanism, and the landing
+# loop's own doctrine refuses those (mem:workflow/landing-loop). A tick that
+# cannot finish returns 0 having made progress, and the next one finishes.
 ensure() {
-	local num="$1" pr existing payload key
+	local num="$1" pr existing issue key
 	pr=$(pr_json "$num")
 	existing=$(grep -oE 'CLOUD-[0-9]+' <<<"$(jq -r '.body // ""' <<<"$pr")" | head -n1 || true)
 	if [ -n "$existing" ]; then
 		echo "bot-issue: #$num already names $existing; nothing filed"
 		return 0
 	fi
-	payload=$(derive "$num") || return $?
-	key=$(create_issue "$payload") || return $?
+	issue=$(mirror_for "$num")
+	if [ -z "$issue" ]; then
+		# `derive` refuses a PR that is not this lane's before anything is
+		# written, which is what keeps a refusal from leaving a half-filed row.
+		local payload
+		payload=$(derive "$num") || return $?
+		issue=$(file_issue "$payload") || return $?
+		echo "bot-issue: #$num -> issue #$issue filed; waiting for the tracker to mirror it"
+	fi
+	key=$(mirror_key "$issue")
+	if [ -z "$key" ]; then
+		echo "bot-issue: issue #$issue is not mirrored yet; the next tick links it"
+		return 0
+	fi
 	link_issue "$num" "$key"
-	echo "bot-issue: #$num -> $key"
+	echo "bot-issue: #$num -> $key (via issue #$issue)"
 }
 
 # --- receipt ------------------------------------------------------------------
@@ -426,7 +416,7 @@ derive)
 	;;
 file)
 	[ -n "${2:-}" ] || die "usage: bot-issue file <pr>"
-	create_issue "$(derive "$2")"
+	file_issue "$(derive "$2")"
 	echo
 	;;
 link)
