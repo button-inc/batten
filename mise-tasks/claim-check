@@ -333,6 +333,24 @@ report() {
 	overridden="${overridden}${overridden:+; }$1 $2"
 }
 
+# THE SECOND COUNTER, AND WHY IT IS SEPARATE (CLOUD-816). `report` above feeds
+# the counter the takeover zeroes, and the four refinement-sequence rules used
+# it too — so `--takeover`, documented for "the competitor is this branch",
+# also cleared `refined-this-session`, which is the whole of CLOUD-431.
+# Measured on a payload with NO competitor at all (Todo, unassigned, no
+# attachments): without the flag the gate refused on the sequence rule; with it
+# the gate exited 0 and minted a receipt. The header below states these are two
+# decisions; this is what makes the code say so.
+#
+# The projection short-circuit at `refused_before` still reads `blocked` alone,
+# which is correct: it asks "did a COMPETITOR rule fire for this issue", and the
+# body-reading arms below it are exactly the ones this counter serves.
+sequence_blocked=0
+report_sequence() {
+	echo "$1 $2" >&2
+	sequence_blocked=$((sequence_blocked + 1))
+}
+
 # --- the refinement-sequence machinery (CLOUD-431) ---------------------------
 
 # The session boundary. Written by `.claude/hooks/session-start.sh` before it
@@ -467,7 +485,7 @@ while read -r id; do
 		exit 2
 	fi
 	if [ "$lint_rc" != 0 ]; then
-		report "$id" "not-ready (ready-lint refuses this block — run \`mise run ready-lint\` on it)"
+		report_sequence "$id" "not-ready (ready-lint refuses this block — run \`mise run ready-lint\` on it)"
 		continue
 	fi
 
@@ -489,7 +507,7 @@ while read -r id; do
 	# re-meeting. The remedy is local and cheap — the SessionStart hook writes it
 	# before it does anything else — and the bypass covers a human who means it.
 	if [ ! -e "$stamp_file" ]; then
-		report "$id" "no-session-stamp (run .claude/hooks/session-start.sh, or set BATTEN_CLAIM_CHECK_BYPASS)"
+		report_sequence "$id" "no-session-stamp (run .claude/hooks/session-start.sh, or set BATTEN_CLAIM_CHECK_BYPASS)"
 		continue
 	fi
 	# THE BODY BASELINE FIRST, and the clocks only when there is none to read
@@ -521,14 +539,14 @@ while read -r id; do
 			exit 2
 		fi
 		if [ "$now_hash" != "$baseline" ]; then
-			report "$id" "refined-this-session (the body changed since this clone read it)"
+			report_sequence "$id" "refined-this-session (the body changed since this clone read it)"
 		fi
 		continue
 	fi
 
 	updated=$(jq -r '.updatedAt // ""' <<<"$payload")
 	if [ -z "$updated" ]; then
-		report "$id" "no-updated-at (the payload cannot date its own refinement)"
+		report_sequence "$id" "no-updated-at (the payload cannot date its own refinement)"
 		continue
 	fi
 	stamp_epoch=$(mtime_of "$stamp_file") || stamp_epoch=""
@@ -538,7 +556,7 @@ while read -r id; do
 		exit 2
 	fi
 	if [ "$updated_epoch" -gt "$stamp_epoch" ]; then
-		report "$id" "refined-this-session (refinement must predate the session that implements it)"
+		report_sequence "$id" "refined-this-session (refinement must predate the session that implements it)"
 		continue
 	fi
 done <<<"$(jq -r '.[].id' <<<"$issues")"
@@ -576,6 +594,21 @@ if [ "$blocked" -ne 0 ]; then
 		echo "::error:: claim-check: not pullable — someone is already on it. Pick another issue from \`mise run graph-check\`'s frontier, or take it over deliberately with BATTEN_CLAIM_TAKEOVER=1, which mints the receipt and records what it overrode." >&2
 		exit 1
 	fi
+fi
+
+# THE SEQUENCE RULES SURVIVE THE TAKEOVER (CLOUD-816), and this is the arm that
+# makes the header above true rather than merely stated. Checked AFTER the
+# takeover arm, deliberately: a resumed branch may legitimately clear all three
+# competitor rules and still be refused here, and the reader needs both facts.
+#
+# The refusal names the OTHER hatch, because offering `--takeover` for this is
+# what shipped the hole: a remedy that works for the wrong reason reads as
+# permission. `BATTEN_CLAIM_CHECK_BYPASS` means "this story was refined in my
+# own session", which is exactly the admission this rule is asking for.
+#MUTANT takeover-clears-the-sequence-rules|s/^if \[ "\$sequence_blocked" -ne 0 \]; then$/if false; then/|a sequence refusal is NOT cleared by --takeover
+if [ "$sequence_blocked" -ne 0 ]; then
+	echo "::error:: claim-check: $sequence_blocked refinement-sequence refusal(s) above, and --takeover does not clear them. That flag answers \"the competitor is this branch\"; these rules answer \"was this story refined before the session implementing it\", which is a different question and the one CLOUD-431 exists to ask. If the honest answer is that you refined it yourself, that decision is BATTEN_CLAIM_CHECK_BYPASS, which says so in the receipt." >&2
+	exit 1
 fi
 
 # --- the claim receipt (CLOUD-272) -------------------------------------------

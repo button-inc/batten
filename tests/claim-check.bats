@@ -600,6 +600,59 @@ baseline_for() { # baseline_for <key> <body>
 	[[ "$(cat "$RECEIPT")" != *"takeover"* ]]
 }
 
+# --- the takeover does NOT reach the sequence rules (CLOUD-816) --------------
+#
+# `report` fed one counter and the takeover zeroed it, so `--takeover` cleared
+# `refined-this-session` as well as the three competitor rules — measured on a
+# payload with no competitor at all, where the flag turned a refusal into a
+# minted receipt. The header has always said these are two decisions; these four
+# rows are what make the code say it. The second is the one that fails against
+# the old counter.
+
+@test "a sequence refusal is NOT cleared by --takeover" {
+	setup_repo
+	local later
+	later=$(refined_after_the_stamp)
+	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '' '$later' | (cd '$REPO' && $CHECK --takeover)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-816 refined-this-session"* ]]
+	# No receipt: a takeover that minted one here would be a bypass wearing the
+	# takeover's name, which is the whole defect.
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "the sequence refusal names the bypass, not the takeover" {
+	# A remedy that works for the wrong reason reads as permission. Offering
+	# `--takeover` for a rule it must not clear is how the hole shipped.
+	setup_repo
+	local later
+	later=$(refined_after_the_stamp)
+	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '' '$later' | (cd '$REPO' && $CHECK --takeover)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"BATTEN_CLAIM_CHECK_BYPASS"* ]]
+	[[ "$output" == *"does not clear them"* ]]
+}
+
+@test "the bypass DOES clear a sequence refusal, so the two hatches stay distinct" {
+	setup_repo
+	local later
+	later=$(refined_after_the_stamp)
+	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '' '$later' | (cd '$REPO' && BATTEN_CLAIM_CHECK_BYPASS=1 $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"pullable"* ]]
+	[ -f "$RECEIPT" ]
+}
+
+@test "narrowing the takeover does not break it: a competitor refusal still clears" {
+	# The anti-vacuity half. A fix that simply stopped the takeover working would
+	# pass the three rows above and strand every resumed branch.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-816 'In Progress' | (cd '$REPO' && $CHECK --takeover)"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"takeover requested"* ]]
+	[ -f "$RECEIPT" ]
+}
+
 @test "the takeover does not silence the refusals — they are still reported" {
 	# It overrides the verdict, not the reporting: a human reading the run still
 	# sees exactly what was occupied, and so does the receipt.
