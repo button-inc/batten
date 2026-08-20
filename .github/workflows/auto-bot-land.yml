@@ -102,6 +102,20 @@ on:
   # of becoming landable) is worth less than a tighter poll's billed minutes.
   schedule:
     - cron: "5,35 * * * *"
+  # AND THE LANE CAN BE ASKED, not only waited for. Measured on its first day:
+  # the `:05` tick fired at 00:22, `:35` at 00:55, and `:05` again not by 01:24 —
+  # GitHub schedules a cron on a best-effort queue and runs it 15-20 minutes late
+  # under load, sometimes dropping one. That is fine for the lane's ordinary work,
+  # where the cost of lateness is a bump landing an hour later, and useless for the
+  # two cases that need an answer NOW: confirming a change to the lane actually
+  # works, and draining the queue after a credential or a config is repaired.
+  #
+  # Without this, the only way to exercise the lane is to wait for a scheduler
+  # nobody controls, which makes every fix to it unverifiable for up to an hour —
+  # so a lander with no manual trigger is a lander that gets changed blind. It adds
+  # no capability an operator does not already have (the trigger requires write
+  # access, and the job does exactly what a tick does).
+  workflow_dispatch:
 
 permissions:
   contents: write
