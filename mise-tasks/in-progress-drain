@@ -51,6 +51,21 @@
 # has stopped producing evidence — the framing `mem:workflow/landing-loop` records
 # for the lease's rolling TTL, one signal shallower.
 #
+# WHAT THE DELEGATED HALF IS WORTH, measured on the first run 2026-08-20, and why
+# its label says CANDIDATES. `landed-check` matches a bare mention of the id in
+# `main`'s log, and a commit can cite an issue as prior art, in a list of past
+# failures, or in a deferral. Over the 32-row column it named 19; adjudicated
+# against PR state, 2 were closed by a merged PR and 2 — CLOUD-271 and CLOUD-401,
+# both matched on citations — had their live work in an OPEN pull request.
+#
+# The imprecision is inherited, not introduced: this task delegates because
+# CLOUD-469 §2 settles that there is one authority for "landed", and sharpening
+# the predicate here would make a second. CLOUD-804 carries that fix. What is
+# this task's to get right is not presenting a grep as a conclusion — hence the
+# CANDIDATES wording, which points the reader at the gate that actually decides
+# a move. Reporting a number a reader cannot act on in bulk, without saying so,
+# is how CLOUD-480 sat wrong for 4.5 hours.
+#
 # WHAT `updatedAt` CANNOT SEE, measured while first running this 2026-08-20 and
 # stated here because a reader will otherwise trust the bound further than it
 # goes. `updatedAt` advances on ANY write to the row — a label, a relation, a
@@ -251,7 +266,10 @@ done < <(jq -r --argjson st "$stale_json" '
 fail=0
 if [ -n "$landed_ids" ]; then
 	fail=1
-	echo "::error:: landed-unswept — In Progress while their commits are on main; landed is In Review (AGENTS.md):" >&2
+	echo "::error:: landed-unswept — In Progress while main's log names them; landed is In Review (AGENTS.md)." >&2
+	echo "  CANDIDATES, not an adjudication: \`landed-check\` matches a bare MENTION, and a commit can cite an issue" >&2
+	echo "  without implementing it (CLOUD-804). Before moving any of these, \`board-move-guard\` wants a" >&2
+	echo "  \`graph-check\` exit 0 naming the id, which reads PR attachments rather than the log:" >&2
 	printf '%s\n' "$landed_ids" | sed 's/^/  /' >&2
 fi
 if [ -n "$abandoned" ]; then

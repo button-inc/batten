@@ -78,6 +78,21 @@ Refs: CLOUD-179"
 	[[ "$output" == *"1 landed-unswept, 0 claimed-abandoned"* ]]
 }
 
+@test "the landed report says it is candidates, and names what decides a move" {
+	# CLOUD-804: `landed-check` matches a bare MENTION, so this list is not an
+	# adjudication and must not read as one. Measured on the live board
+	# 2026-08-20: of 19 named, 2 had their live work in an open PR. Pinned as a
+	# case because the harm is silent — a reader acting on the list in bulk has
+	# no way to tell, which is how CLOUD-480 sat wrong for 4.5 hours.
+	land "feat: work
+
+That is CLOUD-179's shape."
+	drain "[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CANDIDATES, not an adjudication"* ]]
+	[[ "$output" == *"board-move-guard"* ]]
+}
+
 @test "a clean board is exit 0 and says so" {
 	drain "[]"
 	[ "$status" -eq 0 ]
