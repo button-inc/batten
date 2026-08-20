@@ -344,12 +344,6 @@ pub struct Resolved {
     /// could run anything under the agent's own hook.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook: Option<crate::action::HookConfig>,
-    /// The worktree pileup threshold (CLOUD-46), as the authority states it.
-    /// Not layered, for [`Resolved::budget`]'s reason: it is a threshold, and
-    /// two thresholds in one config with opposite layering rules is the drift
-    /// this engine exists to refuse.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<crate::worktree::WorktreeConfig>,
     /// The judge payload boundary (CLOUD-135), as the authority states it. Not
     /// layered: every field is refusing by default and widening it is the
     /// weakening, so there is no raise-only reading a local file could be
@@ -1113,7 +1107,6 @@ fn assemble(
         waivers: tables.waivers,
         budget: repo.budget.clone(),
         must_land_on: repo.must_land_on.clone(),
-        worktree: repo.worktree.clone(),
         hook: repo.hook.clone(),
         transcript: repo.transcript.clone(),
         attribution: repo.attribution.clone(),
@@ -1181,7 +1174,6 @@ fn attribution(
         ("waiver", authority_set(!repo.waivers.is_empty())),
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),
-        ("worktree", authority_set(repo.worktree.is_some())),
         ("hook", authority_set(repo.hook.is_some())),
         ("transcript", authority_set(repo.transcript.is_some())),
         ("attribution", authority_set(repo.attribution.is_some())),

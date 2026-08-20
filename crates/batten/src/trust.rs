@@ -203,10 +203,6 @@ pub enum WeakeningKind {
     /// `must_land_on` is gone, so `worktree status` has no target to judge work
     /// against (CLOUD-51).
     MustLandOnRemoved,
-    /// The worktree pileup threshold rose, or stopped being declared. The
-    /// verdict is `count >= threshold`, so a higher number tolerates more
-    /// (CLOUD-46).
-    PileupThresholdRaised,
     /// A content class arrived in `judge.raw`, so bytes that could not cross
     /// into a model call now can (CLOUD-135).
     JudgeRawClassAdded,
@@ -254,7 +250,6 @@ impl WeakeningKind {
         WeakeningKind::BudgetEmbeddedRemoved,
         WeakeningKind::BudgetLimitRaised,
         WeakeningKind::MustLandOnRemoved,
-        WeakeningKind::PileupThresholdRaised,
         WeakeningKind::JudgeRawClassAdded,
         WeakeningKind::JudgePayloadLimitRaised,
         WeakeningKind::DesignCaptureLimitRaised,
@@ -293,7 +288,6 @@ impl WeakeningKind {
             WeakeningKind::BudgetEmbeddedRemoved => "budget-embedded-removed",
             WeakeningKind::BudgetLimitRaised => "budget-limit-raised",
             WeakeningKind::MustLandOnRemoved => "must-land-on-removed",
-            WeakeningKind::PileupThresholdRaised => "pileup-threshold-raised",
             WeakeningKind::JudgeRawClassAdded => "judge-raw-class-added",
             WeakeningKind::JudgePayloadLimitRaised => "judge-payload-limit-raised",
             WeakeningKind::DesignCaptureLimitRaised => "design-capture-limit-raised",
@@ -439,10 +433,6 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "must_land_on",
         coverage: Coverage::Compared(&[WeakeningKind::MustLandOnRemoved]),
-    },
-    FieldCoverage {
-        field: "worktree",
-        coverage: Coverage::Compared(&[WeakeningKind::PileupThresholdRaised]),
     },
     FieldCoverage {
         field: "hook",
@@ -762,20 +752,6 @@ fn scalar_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
             "absent",
         ));
     }
-
-    // `count >= pileup_threshold`, so a higher number tolerates more and an
-    // absent one takes the predicate out of the verdict entirely (CLOUD-46).
-    found.extend(ceiling_raised(
-        WeakeningKind::PileupThresholdRaised,
-        "worktree.pileup_threshold",
-        base.worktree
-            .as_ref()
-            .and_then(|table| table.pileup_threshold),
-        working
-            .worktree
-            .as_ref()
-            .and_then(|table| table.pileup_threshold),
-    ));
 
     // The judge's privacy boundary (CLOUD-135). Compared from both sides
     // regardless of whether either declares the table: an absent `[judge]` is
@@ -2103,24 +2079,6 @@ mod tests {
             )
         );
         assert!(weakenings(&config(""), &base).is_empty());
-    }
-
-    #[test]
-    fn raising_the_pileup_threshold_is_a_weakening() {
-        // `count >= threshold`, so a higher number tolerates more (CLOUD-46).
-        let base = config("[worktree]\npileup_threshold = 3\n");
-        let raised = config("[worktree]\npileup_threshold = 5\n");
-        assert_eq!(
-            only(&base, &raised),
-            Weakening::new(
-                WeakeningKind::PileupThresholdRaised,
-                "worktree.pileup_threshold",
-                "3",
-                "5",
-            )
-        );
-        assert_eq!(only(&base, &config("")).working, "absent");
-        assert!(weakenings(&raised, &base).is_empty());
     }
 
     #[test]

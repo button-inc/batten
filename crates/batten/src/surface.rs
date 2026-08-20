@@ -1436,15 +1436,15 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Write,
         flags: &[],
     },
-    // The `worktree` noun only dispatches, and unlike `policy` it cannot be
-    // `read`: its house-style §2 subtree (new, adopt, prune, reclaim) is
-    // write-bearing, and a `read` noun over a mutating subtree would leak onto
-    // the derived allowlist for any consumer that treats an entry as a prefix.
-    // Same fail-safe posture as `receipt`: listed with its reason, never guessed
-    // (CLOUD-51). The mutating verbs themselves are other work and absent here.
+    // The `worktree` noun only dispatches, and it stays `Unclassified` even
+    // now that `status` is the whole subtree (CLOUD-780 retired `reclaim`).
+    // Absence is `Ask`, never `Read`, and classifying the noun `read` would put
+    // a PREFIX on the derived allowlist for any consumer that treats an entry
+    // as one — a widening this deletion has no business making. Same fail-safe
+    // posture as `receipt`: listed with its reason, never guessed (CLOUD-51).
     CommandDecl {
         path: "worktree",
-        about: "Worktrees and the work in them: what is at risk, and the hygiene verbs over them",
+        about: "Worktrees and the work in them: what is at risk",
         data_channel: false,
         effect: Effect::Unclassified,
         flags: &[],
@@ -1458,23 +1458,6 @@ pub const SURFACE: &[CommandDecl] = &[
         data_channel: true,
         effect: Effect::Read,
         flags: &[JSON],
-    },
-    // The first `destructive` row in the tree (CLOUD-46), and it earns the
-    // classification the hard way: it removes a worktree whose recovery means
-    // redoing work. What makes that acceptable is ordering, not optimism —
-    // `worktree::reclaim` snapshots and verifies the snapshot ref resolves
-    // before anything is removed — but §5 classifies by what a failure would
-    // cost, never by how careful the implementation is.
-    //
-    // Both flags §3 owes a destructive verb are here, and
-    // `every_destructive_row_owes_dry_run_and_yes` is what keeps that true for
-    // the next one: `-n` from this row, `-y` from the globals.
-    CommandDecl {
-        path: "worktree reclaim",
-        about: "Snapshot and abandon worktrees that are dirty and unreapable",
-        data_channel: false,
-        effect: Effect::Destructive,
-        flags: &[DRY_RUN],
     },
     // The `provision` noun only dispatches, and its subtree carries a write
     // verb, so it takes `receipt`'s conservative reading rather than `policy`'s:

@@ -47,12 +47,24 @@
 //! compared against one from the same binary in the same run, and the whitespace
 //! collision is deliberate and biases toward the safe answer — so rewriting the
 //! primitive that `worktree`, `baseline`, `stop` and `receipt` all rest on would
-//! be risk with no return. `worktrees` and `stash_create` stay because **git is
-//! the authority**: gix has no `prunable` concept and no stash API at all
-//! (measured against gix 0.86), and re-deriving either would make Batten a
-//! second answer to a question git already owns, which is what CLOUD-46's
-//! deferral exists to prevent and what the house rule "adopt prior art; don't
-//! expand the core" forbids.
+//! be risk with no return.
+//!
+//! **Nothing here is kept because gix cannot do it (CLOUD-780, 2026-08-20).**
+//! Two primitives used to be, and the standing strategy decided them the other
+//! way: *gix for everything gix can do; where it cannot, implement LESS rather
+//! than keep a spawn path.* So they were deleted, and the pileup gate and
+//! `worktree reclaim` retired with them — a deliberate capability loss, priced
+//! on CLOUD-780's row rather than restated here, and the reason that row is
+//! worth reading is that a partial drop would have been worse than either end
+//! state: `reclaim` was the crate's only destructive path, and its safety was
+//! the very interlock the drop removes.
+//!
+//! That leaves a property, not just a smaller module. Every spawn left in here
+//! is **unported**, never *unportable*, which is what makes the backend
+//! swappable at all and what CLOUD-737's re-decision needs to be a real choice.
+//! `no_gix_gap_primitive_survives` is the gate that keeps it true: the
+//! vocabulary of the two dropped concepts may not reappear anywhere in `src/`,
+//! so reinstating one is a visible change rather than a quiet regression.
 //!
 //! The latency argument for migrating more was measured and does not carry it:
 //! the only spawns on the mediated-call path are `key_facts`', and they cost
@@ -827,173 +839,16 @@ pub fn uncommitted(dir: &Path) -> Result<usize> {
     Ok(status.lines().filter(|line| !line.is_empty()).count())
 }
 
-/// Run a **mutating** `git` command in `dir` and return its trimmed stdout.
-///
-/// The write sibling of [`query`], and built from the same [`command`] so no
-/// second `Command::new("git")` appears — `no_second_git_invoker_exists` is what
-/// keeps that true. Named separately rather than folded into `query` because
-/// `query`'s doc comment promises a *read-only* call, and a caller reasoning
-/// about §5's structural `read` promise must be able to tell the two apart by
-/// the function it is looking at.
-///
-/// # Errors
-///
-/// As [`query`]: a non-zero exit raises a [`UsageError`] (exit `1`) carrying
-/// `refusal`, and a failure to run `git` at all is an internal error (exit `3`).
-fn mutate(dir: &Path, args: &[&str], refusal: &str) -> Result<String> {
-    let output = command(dir)
-        .args(args)
-        .stderr(Stdio::null())
-        .output()
-        .with_context(|| format!("run `git {}`", args.join(" ")))?;
-    if !output.status.success() {
-        return Err(UsageError::raise(refusal));
-    }
-    let stdout = String::from_utf8(output.stdout)
-        .with_context(|| format!("decode `git {}` output as UTF-8", args.join(" ")))?;
-    Ok(stdout.trim_end_matches(['\r', '\n']).to_owned())
-}
-
-/// One entry of `git worktree list --porcelain`.
-///
-/// The three boolean facts are git's own vocabulary, not Batten's reading of it:
-/// `locked` is an explicit human "keep this", and `prunable` is git's own
-/// statement that `git worktree prune` will clear the entry. A gate that decided
-/// either for itself would be second-guessing the tool that owns the answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Worktree {
-    /// The worktree's absolute path, as git reports it.
-    pub path: PathBuf,
-    /// The commit `HEAD` points at, or `None` for a bare entry (which has none).
-    pub head: Option<String>,
-    /// The branch checked out there, or `None` when detached or bare.
-    pub branch: Option<String>,
-    /// A bare repository entry — no working tree, so nothing to be dirty.
-    pub bare: bool,
-    /// Explicitly locked: the operator said keep it, and `git worktree remove`
-    /// refuses without a force nobody should be issuing on their behalf.
-    pub locked: bool,
-    /// git will clear this entry itself on the next `git worktree prune`.
-    pub prunable: bool,
-}
-
-/// Every worktree sharing `dir`'s common directory, main checkout first.
-///
-/// Parses `git worktree list --porcelain`, whose grammar is a blank-line
-/// separated record of `key value` and bare-key lines. Unknown keys are ignored
-/// rather than refused: git adds attributes over time, and failing on one would
-/// break the gate on a change nobody made — the same forward-compatibility
-/// posture [`crate::transcript`] takes toward a host's format.
-///
-/// The **main** checkout is always the first record, which is what lets a caller
-/// distinguish it without a second query.
-///
-/// # Errors
-///
-/// Raises a [`UsageError`] (exit `1`) when `dir` is not inside a repository.
-pub fn worktrees(dir: &Path) -> Result<Vec<Worktree>> {
-    let listing = query(
-        dir,
-        &["worktree", "list", "--porcelain"],
-        "cannot list worktrees; this is not a git repository",
-    )?;
-
-    let mut worktrees = Vec::new();
-    let mut current: Option<Worktree> = None;
-    for line in listing.lines() {
-        // A blank line closes the record. `--porcelain` also ends the whole
-        // listing with one, so the flush below the loop is for input that does
-        // not — a shape the format does not promise either way.
-        if line.is_empty() {
-            worktrees.extend(current.take());
-            continue;
-        }
-        // `key value` where a value exists, a bare key where it does not. Split
-        // once: a path may contain spaces, and it is the value half.
-        let (key, value) = line.split_once(' ').unwrap_or((line, ""));
-        match (key, current.as_mut()) {
-            ("worktree", _) => {
-                worktrees.extend(current.replace(Worktree {
-                    path: PathBuf::from(value),
-                    head: None,
-                    branch: None,
-                    bare: false,
-                    locked: false,
-                    prunable: false,
-                }));
-            }
-            // Every other key belongs to the record `worktree` opened. A stray
-            // one before any record is ignored rather than raised: it cannot
-            // describe a worktree that was never named.
-            ("HEAD", Some(entry)) => entry.head = Some(value.to_owned()),
-            ("branch", Some(entry)) => entry.branch = Some(value.to_owned()),
-            ("bare", Some(entry)) => entry.bare = true,
-            // Both carry an optional reason after the key. The reason is prose
-            // git wrote and is deliberately dropped — the fact is what policy
-            // reads, and rule 4 keeps the report a pointer.
-            ("locked", Some(entry)) => entry.locked = true,
-            ("prunable", Some(entry)) => entry.prunable = true,
-            _ => {}
-        }
-    }
-    worktrees.extend(current);
-    Ok(worktrees)
-}
-
-/// Snapshot `dir`'s uncommitted state as a commit object, changing nothing.
-///
-/// `git stash create` is the one git primitive that captures a dirty tree
-/// *without* touching the working tree, the index, or the stash reflog — which
-/// is what a snapshot-before-abandon needs and what `git stash push` would
-/// violate by reverting the tree it is about to have removed anyway.
-///
-/// **Empty output is the load-bearing answer.** git prints nothing when there is
-/// nothing to stash, and — measured on git 2.43 — that includes a tree dirty
-/// **only with untracked files**, which `stash create` does not capture. A caller
-/// that read `None` as "clean, safe to remove" would destroy exactly the work
-/// this gate exists to preserve, so the type says `Option` and the one caller
-/// ([`crate::worktree::reclaim`]) treats `None` as a refusal to abandon.
-///
-/// # Errors
-///
-/// Raises a [`UsageError`] (exit `1`) when `dir` is not a worktree git can read.
-pub fn stash_create(dir: &Path) -> Result<Option<String>> {
-    let sha = mutate(
-        dir,
-        &["stash", "create"],
-        "cannot snapshot the working tree; this is not a git worktree",
-    )?;
-    Ok((!sha.is_empty()).then_some(sha))
-}
-
-/// Point `name` at `sha`, creating the ref if it does not exist.
-///
-/// # Errors
-///
-/// Raises a [`UsageError`] (exit `1`) when the ref name is invalid or the
-/// commit does not resolve.
-pub fn update_ref(dir: &Path, name: &str, sha: &str) -> Result<()> {
-    mutate(
-        dir,
-        &["update-ref", "--end-of-options", name, sha],
-        "cannot write the snapshot ref",
-    )?;
-    Ok(())
-}
-
 /// The commit `name` resolves to, or `None` when the ref does not exist.
 ///
 /// Built on [`query_optional`], for which a missing ref is an *answer* rather
-/// than a failure — and the caller here owes the absent case its own reading:
-/// [`crate::worktree::reclaim`] verifies the snapshot ref resolves **before**
-/// removing anything, so `None` there means "do not abandon this".
+/// than a failure — and a caller owes the absent case its own reading:
+/// [`crate::baseline`]'s minting path asks for the landing target's commit, and
+/// `None` there is "no target resolved", never "clean".
 ///
-/// Carries **no** `--end-of-options`, for the reason this module's doc records
-/// against `upstream_of_head`: `rev-parse` echoes that flag as an output line in
-/// some modes rather than consuming it. The only caller constructs `name` itself
-/// from a hex SHA, so there is no caller-influenced token for the flag to
-/// protect and omitting it costs nothing.
+/// It DOES carry `--end-of-options`, and the comment in the body says why —
+/// `name` is caller-influenced, so this is not the ref-PRINTING exception this
+/// module's doc records against `upstream_of_head`.
 ///
 /// # Errors
 ///
@@ -1018,34 +873,6 @@ pub fn resolve_ref(dir: &Path, name: &str) -> Result<Option<String>> {
         dir,
         &["rev-parse", "--verify", "--quiet", "--end-of-options", name],
     )
-}
-
-/// Remove the linked worktree at `path`, discarding its working tree.
-///
-/// `--force` is passed because the whole point of the caller is to remove a
-/// worktree git would otherwise refuse to touch *because* it is dirty. That is
-/// safe only in the one order [`crate::worktree::reclaim`] enforces — snapshot,
-/// verify the ref resolves, then this — and it is why this primitive names that
-/// caller rather than reading as a general-purpose verb.
-///
-/// # Errors
-///
-/// Raises a [`UsageError`] (exit `1`) when the path is not valid UTF-8, or when
-/// git refuses the removal — a locked worktree, or the main checkout, neither of
-/// which the caller passes.
-pub fn worktree_remove(dir: &Path, path: &Path) -> Result<()> {
-    let path = path.to_str().ok_or_else(|| {
-        UsageError::raise(format!(
-            "worktree path is not valid UTF-8: {}",
-            path.display()
-        ))
-    })?;
-    mutate(
-        dir,
-        &["worktree", "remove", "--force", "--end-of-options", path],
-        "cannot remove the worktree",
-    )?;
-    Ok(())
 }
 
 /// The repo-relative paths the working tree has changed against `HEAD`.
@@ -1819,109 +1646,6 @@ mod tests {
     }
 
     #[test]
-    fn the_worktree_listing_reads_gits_own_attributes() {
-        // The porcelain grammar, against a real git rather than a fixture
-        // string: the parser's whole job is agreeing with the tool that emits
-        // it, and a hand-written sample can only ever agree with itself.
-        let repo = scratch("worktree-listing");
-        git(&repo, &["init", "-q"]);
-        git(
-            &repo,
-            &["commit", "-q", "--allow-empty", "-m", "chore: init"],
-        );
-        let plain = repo.join("wt").join("plain");
-        let locked = repo.join("wt").join("locked");
-        for (path, branch) in [(&plain, "plain"), (&locked, "locked")] {
-            git(
-                &repo,
-                &[
-                    "worktree",
-                    "add",
-                    "-q",
-                    "-b",
-                    branch,
-                    path.to_str().unwrap(),
-                ],
-            );
-        }
-        git(&repo, &["worktree", "lock", locked.to_str().unwrap()]);
-
-        let listed = worktrees(&repo).expect("list worktrees");
-        assert_eq!(listed.len(), 3, "the main checkout plus two linked");
-
-        // The main checkout is the first record, which is what lets `pileup`
-        // skip it by position rather than by comparing canonicalized paths.
-        assert_same_dir(&listed[0].path, &repo);
-        assert!(!listed[0].locked, "the main checkout is not lockable");
-
-        let by_name = |name: &str| {
-            listed
-                .iter()
-                .find(|entry| entry.path.ends_with(name))
-                .unwrap_or_else(|| panic!("{name} is listed"))
-        };
-        let plain = by_name("plain");
-        assert_eq!(plain.branch.as_deref(), Some("refs/heads/plain"));
-        assert!(plain.head.is_some(), "a checked-out worktree has a HEAD");
-        assert!(!plain.locked && !plain.prunable && !plain.bare);
-
-        // The attribute the predicate's "unreapable" conjunct turns on, read
-        // from git rather than inferred.
-        assert!(by_name("locked").locked, "git reports the lock it was told");
-    }
-
-    #[test]
-    fn a_snapshot_captures_a_dirty_tree_and_nothing_else() {
-        // The Option in `stash_create`'s signature, measured rather than
-        // assumed: a clean tree yields no commit, and — the case the whole
-        // refusal path exists for — neither does a tree dirty only with
-        // untracked files.
-        let repo = scratch("snapshot");
-        git(&repo, &["init", "-q"]);
-        fs::write(repo.join("tracked.txt"), "base\n").unwrap();
-        git(&repo, &["add", "-A"]);
-        git(&repo, &["commit", "-q", "-m", "chore: init"]);
-
-        assert!(
-            stash_create(&repo).unwrap().is_none(),
-            "a clean tree has nothing to capture"
-        );
-
-        fs::write(repo.join("untracked.txt"), "never committed\n").unwrap();
-        assert!(
-            stash_create(&repo).unwrap().is_none(),
-            "`git stash create` does not capture an untracked-only tree — the \
-             measurement `worktree::reclaim`'s refusal rests on"
-        );
-
-        fs::write(repo.join("tracked.txt"), "edited\n").unwrap();
-        let sha = stash_create(&repo)
-            .unwrap()
-            .expect("a tracked edit captures");
-
-        // And it is a real commit the ref machinery can point at and read back.
-        let name = "refs/batten/snapshot/test";
-        update_ref(&repo, name, &sha).expect("write the snapshot ref");
-        assert_eq!(resolve_ref(&repo, name).unwrap().as_deref(), Some(&*sha));
-        assert_eq!(
-            resolve_ref(&repo, "refs/batten/snapshot/absent").unwrap(),
-            None,
-            "a ref that does not exist is an answer, not a failure"
-        );
-        assert_eq!(
-            show(&repo, name, "tracked.txt").unwrap(),
-            "edited\n",
-            "the captured content is recoverable from the ref"
-        );
-
-        // The snapshot changed nothing: the working tree still carries the edit.
-        assert_eq!(
-            fs::read_to_string(repo.join("tracked.txt")).unwrap(),
-            "edited\n"
-        );
-    }
-
-    #[test]
     fn an_option_shaped_ref_name_is_not_parsed_as_an_option() {
         // `resolve_ref`'s `name` reaches it from config (`must_land_on`), which a
         // branch can edit when no `--config-from` is in play. Without
@@ -2288,6 +2012,40 @@ mod tests {
                  alone until CLOUD-320's migration finishes (CLOUD-718)",
                 path.display()
             );
+        }
+    }
+
+    #[test]
+    fn no_gix_gap_primitive_survives() {
+        // CLOUD-780's rule, shipped with its mechanism. Two primitives used to
+        // live here for one reason — a concept the in-process backend has no
+        // API for — and the standing strategy retired them rather than keep a
+        // spawn path nothing could ever replace. What that buys is a property
+        // about the whole module (the doc above states it): every remaining
+        // spawn is *unported*, never *unportable*. Reinstating one of the two
+        // silently would take the property back, and nothing else would notice.
+        //
+        // Scope is `src/` and includes THIS file, for `no_ancestry_decides_
+        // merged_ness`'s reason: the decision lives here, so exempting the
+        // decision's home would gut the gate. Tokens are assembled by
+        // concatenation so this test's own source is not a match — which is
+        // also why the doc above points at the issue for what was dropped
+        // instead of re-typing the vocabulary it forbids.
+        let forbidden = [
+            ["sta", "sh"].concat(),
+            ["prun", "able"].concat(),
+            ["worktree", "_remove"].concat(),
+        ];
+        for (path, source) in crate_sources(false) {
+            for token in &forbidden {
+                assert!(
+                    !source.contains(token.as_str()),
+                    "{}: names {token:?}; that vocabulary retired with the primitives \
+                     built on it, and re-deriving either would put a spawn back that \
+                     exists only because gix has no equivalent (CLOUD-780)",
+                    path.display()
+                );
+            }
         }
     }
 

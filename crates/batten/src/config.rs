@@ -245,18 +245,6 @@ pub struct Config {
     /// them together would give one key two meanings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub must_land_on: Option<String>,
-    /// What this repository will tolerate on its machine (CLOUD-46): today one
-    /// key, `pileup_threshold`, the count of dirty unreapable worktrees at which
-    /// `worktree status` returns a violation. Absent means the predicate does
-    /// not participate — a threshold nobody wrote down is not a threshold of
-    /// zero, the same reading [`Config::budget`] gives. The type and the
-    /// predicate are [`crate::worktree`].
-    ///
-    /// [`Config::must_land_on`] stays a top-level key rather than moving in
-    /// here: it landed there (CLOUD-51) and relocating it would break every
-    /// committed config for a tidier table of contents.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<crate::worktree::WorktreeConfig>,
     /// Side effects this repository attaches to hook events (CLOUD-91), the
     /// house-style §9 extension surface: `[[hook.action]]` names an event and a
     /// command already on the operator's PATH, so repo-specific cleanup or
@@ -397,9 +385,7 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
 /// `judge`, `ci`, `defects`, `provision`, `transcript`, `design`) becomes a hard
 /// parse error here rather than a silently discarded tightening. A hand-maintained
 /// refusal list would be a second authority, and would drift the moment a field
-/// is added to [`Config`]. `worktree` is authority-only for `budget`'s reason
-/// (CLOUD-46): a threshold is a bar a repository sets for itself, and two
-/// thresholds in one config with opposite layering rules is drift. `hook` is
+/// is added to [`Config`]. `hook` is
 /// authority-only for a sharper one (CLOUD-91): an action *runs a command*, and
 /// there is no reading of §8's raise-only rule under which an uncommitted file
 /// adding one is a tightening.
@@ -698,10 +684,6 @@ impl Config {
             // either — there is simply no threshold, which is what `None` says.
             budget: None,
             must_land_on: None,
-            // Same reading as `budget`, for the same reason: a threshold nobody
-            // declared is not a threshold of zero, and an unreadable authority
-            // declares none.
-            worktree: None,
             // An authority that cannot be read attaches no side effects. The
             // safe direction is unambiguous here: firing a command an
             // unreadable config might have declared is the one outcome nobody

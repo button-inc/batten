@@ -370,7 +370,6 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/transcript.rs",
         "crates/batten/src/verbs.rs",
         "crates/batten/src/waiver.rs",
-        "crates/batten/src/worktree.rs",
         "schema/*",
       )
     check = "mise run schema-check"

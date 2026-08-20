@@ -617,17 +617,6 @@ const CENSUS: &[Verb] = &[
         disposition: Disposition::PointerOnly,
     },
     Verb {
-        path: "worktree reclaim",
-        // `-n` is not a convenience here. This is the tree's one `destructive`
-        // row, and a sweep that ran it for real would abandon worktrees to ask a
-        // question about output. The corpus happens to have none, but "the
-        // fixture is empty" is a property of the fixture and not of the verb —
-        // §5 classifies by what a failure would cost, and so does this.
-        args: &["-n"],
-        stdin: Stdin::Nothing,
-        disposition: Disposition::PointerOnly,
-    },
-    Verb {
         path: "provision status",
         args: &[],
         stdin: Stdin::Nothing,

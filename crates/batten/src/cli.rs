@@ -290,11 +290,6 @@ pub enum WorktreeCommand {
         /// Emit the report as byte-stable JSON instead of pointer lines.
         json: bool,
     },
-    /// Snapshot and abandon worktrees that are dirty and unreapable.
-    Reclaim {
-        /// Preview what would be reclaimed, writing and removing nothing.
-        dry_run: bool,
-    },
 }
 
 /// Subcommands of `policy`.
@@ -688,9 +683,6 @@ fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(WorktreeCommand::Status {
             json: flag(matches, "json"),
-        }),
-        ("reclaim", matches) => Some(WorktreeCommand::Reclaim {
-            dry_run: flag(matches, "dry_run"),
         }),
         _ => None,
     }

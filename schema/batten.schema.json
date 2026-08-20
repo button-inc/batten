@@ -250,17 +250,6 @@
       "items": {
         "$ref": "#/$defs/Waiver"
       }
-    },
-    "worktree": {
-      "description": "What this repository will tolerate on its machine (CLOUD-46): today one\nkey, `pileup_threshold`, the count of dirty unreapable worktrees at which\n`worktree status` returns a violation. Absent means the predicate does\nnot participate — a threshold nobody wrote down is not a threshold of\nzero, the same reading [`Config::budget`] gives. The type and the\npredicate are [`crate::worktree`].\n\n[`Config::must_land_on`] stays a top-level key rather than moving in\nhere: it landed there (CLOUD-51) and relocating it would break every\ncommitted config for a tidier table of contents.",
-      "anyOf": [
-        {
-          "$ref": "#/$defs/WorktreeConfig"
-        },
-        {
-          "type": "null"
-        }
-      ]
     }
   },
   "additionalProperties": false,
@@ -1648,22 +1637,6 @@
           "const": "both"
         }
       ]
-    },
-    "WorktreeConfig": {
-      "description": "The `[worktree]` table: what this repository will tolerate on its machine.\n\nLives with its module rather than in [`crate::config`], as `[budget]`,\n`[judge]` and `[defects]` do — the config struct holds the field, the module\nthat reads it owns the type.\n\n**Authority-only.** It is deliberately absent from\n[`crate::config::OverrideConfig`], following the landed `[budget]` posture:\na threshold is a bar a repository sets for itself, and two thresholds in one\nconfig with opposite layering rules is exactly the drift a policy engine\nexists to refuse. `trust.rs` compares the committed bytes instead. That is\nstrictly stronger than \"an override may only tighten\", not a relaxation of it.",
-      "type": "object",
-      "properties": {
-        "pileup_threshold": {
-          "description": "How many dirty, unreapable worktrees constitute a pileup.\n\nThe verdict is `count >= pileup_threshold`, so `1` means \"any at all\".\nAbsent means the predicate does not participate — a threshold nobody\nwrote down is not a threshold of zero, the same reading `[budget]` gives.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint",
-          "minimum": 0
-        }
-      },
-      "additionalProperties": false
     }
   }
 }

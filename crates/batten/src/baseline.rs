@@ -377,15 +377,12 @@ impl Refusal {
 /// it resolves to [`worktree::status`] and its exit-bearing `any()`. See the
 /// module header for why this is patch identity and not ancestry.
 ///
-/// `pileup_threshold` is deliberately not consulted — a pileup is a fact about
-/// the machine, not about whether *this* checkout's state is mintable.
-///
 /// # Errors
 ///
 /// Propagates `worktree::status`'s errors: a [`crate::UsageError`] when `root` is
 /// not a repository or a declared `must_land_on` resolves to no commit.
 pub fn mintable(root: &Path, must_land_on: Option<&str>) -> Result<Option<Refusal>> {
-    let at_risk = worktree::status(root, must_land_on, None)?;
+    let at_risk = worktree::status(root, must_land_on)?;
     if at_risk.any() {
         return Ok(Some(Refusal::AtRisk(at_risk.lines())));
     }

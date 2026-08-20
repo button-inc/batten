@@ -169,15 +169,10 @@ impl StopFacts {
 pub fn facts(
     repo: Option<&Path>,
     must_land_on: Option<&str>,
-    pileup_threshold: Option<usize>,
     store_dir: Option<&Path>,
 ) -> Result<StopFacts> {
     let at_risk = match repo {
-        Some(repo) => Some(crate::worktree::status(
-            repo,
-            must_land_on,
-            pileup_threshold,
-        )?),
+        Some(repo) => Some(crate::worktree::status(repo, must_land_on)?),
         None => None,
     };
     let pending = match store_dir {
@@ -239,7 +234,6 @@ mod tests {
             unpushed: None,
             no_upstream: None,
             unlanded: Unlanded::Landed,
-            pileup: None,
         }
     }
 

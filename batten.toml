@@ -125,27 +125,6 @@ glob = "batten.toml"
 mutation = "change it in a pull request — this file is the policy authority every gate reads, and `mise run config-lint` is what checks the edit before it lands"
 
 # ---------------------------------------------------------------------------
-# The worktree pileup threshold (CLOUD-46).
-#
-# How many LINKED worktrees may sit dirty-and-unreapable before `worktree status`
-# calls it a pileup. Unreaped dirty worktrees are the highest realized harm this
-# project has recorded: an agent spawns one, leaves uncommitted work in it, and
-# the work is neither landed nor abandoned until the disk is the constraint.
-#
-# Deliberately NOT a `[[rule]]`: rules match file content, and this is a property
-# of the machine rather than of the tree or of any commit. It is for the same
-# reason not a commit-gate step — a pileup does not become true or false because
-# someone committed.
-#
-# `3` for this repository, not a number the engine ships: the core carries no
-# default, because how many parallel worktrees is normal is a fact about how a
-# repository is worked (non-negotiable rule 1). The escape is
-# `batten worktree reclaim --yes`, which snapshots to `refs/batten/snapshot/<sha>`
-# and only then abandons, so nothing it removes is unrecoverable.
-[worktree]
-pileup_threshold = 3
-
-# ---------------------------------------------------------------------------
 # The transcript substrate (CLOUD-95), and what it finally switches on: CLOUD-97's
 # `completion.unlanded` — declared done with work not landed, the predicate this
 # whole engine's thesis names. It had never evaluated once in this repository.

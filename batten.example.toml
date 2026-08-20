@@ -334,28 +334,6 @@ path = "vendor/**"
 tracked = ["batten.toml"]
 
 # ---------------------------------------------------------------------------
-# The worktree pileup threshold (CLOUD-46).
-#
-# How many LINKED worktrees may sit dirty-and-unreapable before
-# `batten worktree status` calls it a pileup and returns the policy verdict
-# (exit 2). "Unreapable" is git's own answer, not Batten's: a worktree git
-# reports as `prunable` will be cleared by `git worktree prune`, and one you
-# `git worktree lock` is a deliberate keep — neither is counted.
-#
-# The core ships NO default. How many parallel worktrees is normal is a fact
-# about how your repository is worked, so an absent `[worktree]` means the
-# predicate does not run at all — `worktree status` still reports the three
-# at-risk categories, and does not become an error for want of this key.
-#
-# The escape is `batten worktree reclaim --yes`, which snapshots each offending
-# worktree to `refs/batten/snapshot/<commit>` and removes it only after that ref
-# is shown to resolve. Pass `--dry-run` to preview. A worktree whose dirt is all
-# untracked files cannot be snapshotted by git, so it is left in place and
-# reported rather than abandoned.
-[worktree]
-pileup_threshold = 3
-
-# ---------------------------------------------------------------------------
 # Side effects attached to hook events (CLOUD-91) — house style §9's extension
 # surface, so repo-specific cleanup or keepalive is reconstructed here instead of
 # being carried by the engine.
@@ -395,9 +373,9 @@ pileup_threshold = 3
 # does not carry expands to nothing. An unknown placeholder is left as written
 # rather than emptied, so a typo fails loudly instead of silently shortening argv.
 #
-# The worked example: report at-risk work and worktree pileup when a task is
-# marked complete — the completion signal is exactly where "done" and "landed"
-# drift apart, which is what this engine exists to catch.
+# The worked example: report at-risk work when a task is marked complete — the
+# completion signal is exactly where "done" and "landed" drift apart, which is
+# what this engine exists to catch.
 [[hook.action]]
 id = "worktree-hygiene"
 on = "task-completed"

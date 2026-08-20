@@ -355,9 +355,8 @@ mod tests {
                 "receipt status".to_owned(),
                 "spec".to_owned(),
                 "state list".to_owned(),
-                // The verb, never the `worktree` noun: that subtree is
-                // write-bearing, so the noun is `Unclassified` and stays off
-                // this list (CLOUD-51).
+                // The verb, never the `worktree` noun: the noun stays
+                // `Unclassified`, so it is off this list (CLOUD-51, CLOUD-780).
                 "worktree status".to_owned(),
             ]
         );
@@ -517,14 +516,6 @@ mod tests {
                 "state migrate".to_owned(),
                 "state record".to_owned(),
                 "worktree".to_owned(),
-                // CLOUD-46. §2 already names this row — `worktree status |
-                // new|adopt|prune|reclaim` — so the reconciliation this test
-                // prompts for found the section and the tree in agreement, and
-                // §2 needed no edit. `reclaim` is the shipped spelling of the
-                // `prune|reclaim` slot; `prune` would be a wrapper over `git
-                // worktree prune`, and Batten adopts prior art rather than
-                // wrapping it.
-                "worktree reclaim".to_owned(),
                 "worktree status".to_owned(),
             ]
         );
