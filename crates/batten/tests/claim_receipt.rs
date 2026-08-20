@@ -27,7 +27,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, git_in, run_with_stdin, stderr, write};
+use common::{Fixture, git_in, run, run_with_stdin, stderr, stdout, write};
 
 /// The policy under test: the committed row's shape, with nothing else declared.
 ///
@@ -301,5 +301,153 @@ fn a_repository_declaring_no_claim_row_judges_nothing() {
         .git()
         .base_commit()
         .build();
+    assert_allowed(&dir, "src/tracked.rs");
+}
+
+// --- the same predicate, reached from the tree surface (CLOUD-741) -----------
+//
+// Everything above asks the ENGINE, through `batten hook`. `verify` cannot ask
+// that way: `RuleKind::scopes` pins `RuleKind::Receipt` to the mediated call, so
+// `batten check` can never evaluate a receipt row, and the tree surface had
+// re-implemented the question in shell as `[ -f "$claim_receipt" ]`.
+//
+// A presence test is strictly weaker than the engine's reader, so the restart
+// case above — the very incident CLOUD-516 was filed for — passed `verify` while
+// the hook refused it. And because that hook can be unloaded (CLOUD-187), the one
+// scenario the shell check existed for was also the one where nothing could see
+// staleness at all.
+//
+// These rows are what stops the two coming apart again: they drive `receipt
+// status --key branch` over the SAME fixtures as the hook cases and assert the
+// two readers reach the same verdict. Written as a pair per state rather than
+// asserting the CLI alone, because "they agree" is the property, not "the CLI
+// answers".
+
+/// The pointer line and exit code of `receipt status --key branch` in `dir`.
+fn branch_status(dir: &Path) -> (Option<i32>, String) {
+    let output = run(dir, &["receipt", "status", "claim", "--key", "branch"]);
+    (output.status.code(), stdout(&output))
+}
+
+#[test]
+fn the_tree_surface_reads_the_same_receipt_the_hook_does() {
+    let dir = repo("status-valid");
+    mint(&dir, "user/cloud-444-slug");
+    let (code, line) = branch_status(&dir);
+    assert_eq!(code, Some(0), "a valid claim exits clean: {line}");
+    assert!(line.contains("valid"), "names the verdict: {line}");
+    assert!(
+        line.contains("user/cloud-444-slug"),
+        "the subject is the BRANCH under this keying, not a SHA: {line}"
+    );
+    // And the hook agrees, which is the whole point of the row.
+    assert_allowed(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn an_absent_claim_is_a_violation_on_the_tree_surface_too() {
+    let dir = repo("status-missing");
+    let (code, line) = branch_status(&dir);
+    assert_eq!(code, Some(2), "no receipt is a policy verdict: {line}");
+    assert!(
+        line.contains("missing"),
+        "`missing` is the remedy 'mint one', distinct from `stale-main`: {line}"
+    );
+    assert_denied(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn the_restart_that_used_to_pass_verify_is_now_refused_by_it() {
+    // THE ROW THIS ISSUE EXISTS FOR. Identical setup to
+    // `a_branch_restarted_after_its_pr_merged_carries_no_usable_claim`, asked of
+    // the surface `verify` actually calls. Before CLOUD-741 the shell check saw a
+    // file on disk and passed, so a restarted branch could be verified, readied
+    // and landed carrying a claim for an unrelated issue.
+    let dir = repo("status-restarted");
+    mint(&dir, "user/cloud-444-slug");
+    write(&dir, "src/tracked.rs", "// landed\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "landed work"]);
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    git_in(
+        &dir,
+        &["checkout", "-q", "-B", "user/cloud-444-slug", "origin/main"],
+    );
+
+    let (code, line) = branch_status(&dir);
+    assert_eq!(code, Some(2), "the restart is refused: {line}");
+    assert!(
+        line.contains("stale-main"),
+        "`stale-main` is what tells a re-claim apart from a first claim: {line}"
+    );
+    assert!(
+        !line.contains("missing"),
+        "the receipt EXISTS; reporting it absent would send the reader to the wrong remedy: {line}"
+    );
+    assert_denied(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn a_lap_that_rebases_onto_newer_main_still_passes_the_tree_surface() {
+    // The false-positive direction, and the one a careless fix breaks: `land`
+    // rebases every lap, so voiding on a moved base alone would demand a
+    // re-claim per lap and get the gate bypassed. Asserted on both surfaces for
+    // the same reason the deny is.
+    let dir = repo("status-lap");
+    let stale = git_in(&dir, &["rev-parse", "origin/main"]);
+    mint_against(&dir, "user/cloud-444-slug", stale.trim());
+    write(&dir, "src/tracked.rs", "// in flight\n");
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "work in flight"]);
+    git_in(
+        &dir,
+        &["commit", "-q", "--allow-empty", "-m", "someone else landed"],
+    );
+    git_in(&dir, &["update-ref", "refs/remotes/origin/main", "HEAD~1"]);
+
+    let (code, line) = branch_status(&dir);
+    assert_eq!(code, Some(0), "a rebase lap is not a re-claim: {line}");
+    assert_allowed(&dir, "src/tracked.rs");
+}
+
+#[test]
+fn the_sha_keying_is_untouched_by_the_new_flag() {
+    // `--key` was added to an existing verb, so the contract that matters most is
+    // the one for callers who supply nothing. `receipt record`/`status` without a
+    // key must judge the SHA-keyed receipt exactly as before, and the subject it
+    // names must still be a commit.
+    let dir = repo("status-head-default");
+    let head = git_in(&dir, &["rev-parse", "HEAD"]);
+    let output = run(&dir, &["receipt", "status", "verify"]);
+    let line = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "no SHA-keyed receipt was recorded: {line}"
+    );
+    assert!(
+        line.contains(head.trim()),
+        "the default keying still names HEAD: {line}"
+    );
+}
+
+#[test]
+fn a_detached_head_cannot_answer_and_says_so_rather_than_refusing() {
+    // `branch_facts` returns "could not look", and the CLI must not launder that
+    // into a verdict: a rebase detaches, so answering `missing` here would make
+    // every rebase read as an unclaimed branch and stop `land` on its own loop.
+    // Exit 3 is the engine's internal code — distinct from the 2 a real refusal
+    // carries, which is what lets `verify` map the two differently.
+    let dir = repo("status-detached");
+    mint(&dir, "user/cloud-444-slug");
+    git_in(&dir, &["checkout", "-q", "--detach", "HEAD"]);
+    let output = run(&dir, &["receipt", "status", "claim", "--key", "branch"]);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "could not look is not a verdict: {}",
+        stderr(&output)
+    );
+    // And the hook's own carve-out is unchanged.
     assert_allowed(&dir, "src/tracked.rs");
 }

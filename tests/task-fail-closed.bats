@@ -17,8 +17,8 @@
 
 setup() {
 	cd "$BATS_TEST_DIRNAME/.." || return 1
-	MAPPER=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
-	GATED=$(awk '/^\[tasks\."verify:gated"\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
+	MAPPER=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^'"'''"'$/{exit} c' mise.toml)
+	GATED=$(awk '/^\[tasks\."verify:gated"\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^'"'''"'$/{exit} c' mise.toml)
 	# Concatenated in RUN ORDER, which is what keeps the ordering assertions below
 	# meaningful: `linear-check` really does precede the receipt write, across the
 	# task boundary, because the mapper reaches `verify:gated` only past it.

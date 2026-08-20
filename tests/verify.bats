@@ -23,8 +23,8 @@
 
 setup() {
 	cd "$BATS_TEST_DIRNAME/.." || return 1
-	MAPPER=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
-	GATED=$(awk '/^\[tasks\."verify:gated"\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^.{3}$/{exit} c' mise.toml)
+	MAPPER=$(awk '/^\[tasks\.verify\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^'"'''"'$/{exit} c' mise.toml)
+	GATED=$(awk '/^\[tasks\."verify:gated"\]/{f=1} f&&/^run = .{3}$/{c=1;next} c&&/^'"'''"'$/{exit} c' mise.toml)
 
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
@@ -34,7 +34,7 @@ setup() {
 	FAKE_BRANCH="work"
 	FAKE_GIT_DIR="$BATS_TEST_TMPDIR/gitdir"
 	mkdir -p "$FAKE_GIT_DIR/batten-receipts"
-	claim_receipt CLOUD-431
+	claim_receipt
 }
 
 # The stub stands in for the whole task runner. Each task's exit code is read
@@ -72,20 +72,52 @@ stub_git() {
 	chmod +x "$STUB/git"
 }
 
-# CLOUD-431: the claim receipt `verify` now demands. Present by default, because
-# every case below is about the EXIT-CODE contract and would otherwise stop at a
-# refusal that is not its subject.
-claim_receipt() { printf '%s\n' "$1" >"$FAKE_GIT_DIR/batten-receipts/claim.$FAKE_BRANCH"; }
-no_claim_receipt() { rm -f "$FAKE_GIT_DIR/batten-receipts/claim.$FAKE_BRANCH"; }
+# CLOUD-741: the receipt question is no longer a file test in this body — it is
+# `batten receipt status --key branch`, so the ENGINE decides and this suite
+# stubs its answer. That is the point of the change: a presence test could not
+# tell `missing` from `stale-main`, so a branch restarted out from under its
+# receipt passed `verify` while the hook refused the same tree.
+#
+# `cargo` rather than a `batten` binary, because the body invokes it the way
+# every other gate does — `cargo run --quiet -p batten -- …` — so the gate judges
+# the working tree's engine rather than whatever was built last.
+stub_cargo() {
+	cat >"$STUB/cargo" <<-'EOF'
+		#!/usr/bin/env bash
+		# cargo run --quiet -p batten -- receipt status <check> --key branch
+		check="${8:-}"
+		answer="$MISE_STUB_DIR/receipt.$check"
+		if [ -f "$answer" ]; then
+			read -r rc verdict <"$answer"
+			echo "$check work $verdict"
+			exit "$rc"
+		fi
+		echo "$check work missing"
+		exit 2
+	EOF
+	chmod +x "$STUB/cargo"
+}
+
+# What `receipt status` answers for one check: an exit code and the verdict word
+# its pointer line carries. Valid by default for `claim`, because every case
+# below is about the EXIT-CODE contract and would otherwise stop at a refusal
+# that is not its subject.
+receipt_says() { printf '%s %s\n' "$2" "$3" >"$BATS_TEST_TMPDIR/receipt.$1"; }
+claim_receipt() { receipt_says claim 0 valid; }
+no_claim_receipt() { receipt_says claim 2 missing; }
+# The state a presence test could not see, and the reason this issue exists: a
+# receipt EXISTS and is void, so the remedy is re-claim rather than claim.
+stale_claim_receipt() { receipt_says claim 2 stale-main; }
 # CLOUD-693's second kind, minted by `mise run bot-issue receipt` on a bot branch.
-bot_receipt() { printf '%s\n' "$1" >"$FAKE_GIT_DIR/batten-receipts/bot.$FAKE_BRANCH"; }
-no_bot_receipt() { rm -f "$FAKE_GIT_DIR/batten-receipts/bot.$FAKE_BRANCH"; }
+bot_receipt() { receipt_says bot 0 valid; }
+no_bot_receipt() { receipt_says bot 2 missing; }
 
 task_exits() { printf '%s\n' "$2" >"$BATS_TEST_TMPDIR/rc.$1"; }
 
 run_verify() {
 	stub_mise
 	stub_git
+	stub_cargo
 	MISE_STUB_DIR="$BATS_TEST_TMPDIR" \
 		MISE_STUB_CALLS="$BATS_TEST_TMPDIR/calls" \
 		PATH="$STUB:$PATH" \
@@ -216,7 +248,7 @@ called() {
 	no_claim_receipt
 	run_verify
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"no claim receipt"* ]]
+	[[ "$output" == *"no VALID claim receipt"* ]]
 	# It stops BEFORE spending anything: the question "should this branch exist"
 	# is cheaper than every question below it, and different in kind.
 	[ "$(called linear-check)" -eq 0 ]
@@ -242,7 +274,7 @@ called() {
 	bot_receipt CLOUD-999
 	run_verify
 	[ "$status" -eq 0 ]
-	[[ "$output" != *"no claim receipt"* ]]
+	[[ "$output" != *"no VALID claim receipt"* ]]
 }
 
 @test "neither receipt is still a refusal — the pair is an OR, not an escape hatch" {
@@ -250,7 +282,61 @@ called() {
 	no_bot_receipt
 	run_verify
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"no claim receipt"* ]]
+	[[ "$output" == *"no VALID claim receipt"* ]]
+}
+
+@test "A STALE RECEIPT IS REFUSED — the row a presence test could not hold" {
+	# CLOUD-741, and the reason this stopped being `[ -f "$claim_receipt" ]`.
+	#
+	# `git checkout -B <name> origin/main` after a PR merges is the documented
+	# remedy, and it repoints the name at a new base while the receipt, keyed by
+	# the name, survives on disk. The engine has called that `stale-main` since
+	# CLOUD-516 — but the file was still THERE, so `verify` passed it, and a
+	# branch could be verified, readied and landed carrying a claim for an
+	# unrelated issue. Measured on CLOUD-516: a receipt naming CLOUD-230
+	# authorised every edit behind four unrelated stories.
+	stale_claim_receipt
+	no_bot_receipt
+	run_verify
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no VALID claim receipt"* ]]
+	# It still stops before spending anything.
+	[ "$(called linear-check)" -eq 0 ]
+	[ "$(called verify:gated)" -eq 0 ]
+}
+
+@test "the refusal tells a re-claim apart from a first claim" {
+	# The two states carry different remedies — mint one, versus yours went void
+	# and must be re-made — and a refusal that named only one would send half its
+	# readers to the wrong fix. The pointer line is what distinguishes them, so
+	# it is echoed rather than swallowed.
+	stale_claim_receipt
+	no_bot_receipt
+	run_verify
+	[[ "$output" == *"stale-main"* ]]
+	[[ "$output" == *"re-claimed"* ]]
+}
+
+@test "a valid receipt that is merely present is not enough — the verdict decides" {
+	# The inverse assertion, and the one that shows the body reads the ENGINE
+	# rather than the filesystem: nothing here writes a receipt file at all, and
+	# `verify` passes purely on the stubbed verdict.
+	receipt_says claim 0 valid
+	rm -f "$FAKE_GIT_DIR/batten-receipts/claim.$FAKE_BRANCH"
+	run_verify
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"no VALID claim receipt"* ]]
+}
+
+@test "a bot receipt is judged by the same predicate, not merely counted" {
+	# CLOUD-693's lane records a `base` line too, so it gets CLOUD-516's staleness
+	# rule here rather than needing its own — a restarted bot branch is refused
+	# exactly as an agent branch is.
+	no_claim_receipt
+	receipt_says bot 2 stale-main
+	run_verify
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no VALID claim receipt"* ]]
 }
 
 @test "a detached HEAD is exempt, because a rebase detaches" {
@@ -267,15 +353,17 @@ called() {
 	EOF
 	chmod +x "$STUB/git"
 	no_claim_receipt
-	# `stub_mise` explicitly, because this case cannot use `run_verify` — that
-	# helper reinstalls the git stub and would undo the detached HEAD.
+	# `stub_mise` and `stub_cargo` explicitly, because this case cannot use
+	# `run_verify` — that helper reinstalls the git stub and would undo the
+	# detached HEAD.
 	stub_mise
+	stub_cargo
 	MISE_STUB_DIR="$BATS_TEST_TMPDIR" \
 		MISE_STUB_CALLS="$BATS_TEST_TMPDIR/calls" \
 		PATH="$STUB:$PATH" \
 		run bash "$BODY_FILE"
 	[ "$status" -eq 0 ]
-	[[ "$output" != *"no claim receipt"* ]]
+	[[ "$output" != *"no VALID claim receipt"* ]]
 }
 
 @test "the receipt check precedes every other question in the mapper" {
@@ -287,7 +375,7 @@ called() {
 	# linear-check several lines above any code, so grepping the bare name would
 	# compare a comment against a command and always fail.
 	local claim_line linear_line
-	claim_line=$(grep -n 'claim_receipt=' <<<"$MAPPER" | head -1 | cut -d: -f1)
+	claim_line=$(grep -n 'receipt status claim' <<<"$MAPPER" | head -1 | cut -d: -f1)
 	linear_line=$(grep -n '^mise run linear-check' <<<"$MAPPER" | head -1 | cut -d: -f1)
 	[ -n "$claim_line" ]
 	[ "$claim_line" -lt "$linear_line" ]

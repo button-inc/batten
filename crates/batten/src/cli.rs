@@ -976,9 +976,69 @@ mod tests {
             Some(Command::Receipt {
                 command: ReceiptCommand::Status {
                     check: "verify".to_owned(),
+                    key: ReceiptKey::Head,
                     json: false,
                 }
             })
         );
+    }
+
+    /// The default is the contract, not a convenience (CLOUD-741). `--key` was
+    /// added to an existing verb, so every caller predating it supplies nothing
+    /// — and any default but `head` would silently re-point them at a receipt
+    /// they never asked about. Asserted rather than left to `ReceiptKey`'s
+    /// `#[default]`, which a future variant could move without failing anything
+    /// here.
+    #[test]
+    fn an_absent_key_is_the_sha_keying_every_earlier_caller_meant() {
+        let Some(Command::Receipt {
+            command: ReceiptCommand::Status { key, .. },
+        }) = parse(&["receipt", "status", "verify"]).command
+        else {
+            panic!("receipt status parses to its own arm")
+        };
+        assert_eq!(key, ReceiptKey::Head);
+    }
+
+    #[test]
+    fn the_branch_keying_is_selectable() {
+        assert_eq!(
+            parse(&["receipt", "status", "claim", "--key", "branch"]).command,
+            Some(Command::Receipt {
+                command: ReceiptCommand::Status {
+                    check: "claim".to_owned(),
+                    key: ReceiptKey::Branch,
+                    json: false,
+                }
+            })
+        );
+    }
+
+    /// The spelling the config uses, byte for byte. A `[[rule]]`'s `key` column
+    /// deserializes `head`/`branch`, and `ReceiptKey` carries an explicit
+    /// `clap(rename_all)` so the two cannot drift — a variant accepted here under
+    /// a spelling the config rejects would mean the surfaces disagree about what
+    /// was asked for.
+    ///
+    /// Asserted at the clap layer rather than through `parse`, which panics on a
+    /// rejected argv by design: the refusal *is* the behaviour under test.
+    #[test]
+    fn the_cli_and_the_config_name_the_keying_alike() {
+        for token in ["Branch", "BRANCH", "branches"] {
+            assert!(
+                surface::command()
+                    .try_get_matches_from(["batten", "receipt", "status", "claim", "--key", token])
+                    .is_err(),
+                "`--key {token}` is not a spelling the config would accept"
+            );
+        }
+        for token in ["head", "branch"] {
+            assert!(
+                surface::command()
+                    .try_get_matches_from(["batten", "receipt", "status", "claim", "--key", token])
+                    .is_ok(),
+                "`--key {token}` is the config's own spelling"
+            );
+        }
     }
 }
