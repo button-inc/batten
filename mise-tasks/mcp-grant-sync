@@ -68,11 +68,11 @@
 # The mutation drops the membership test, so every tool of a resolved server is
 # emitted rather than only the ones a committed rule names — the widening this
 # structurally forbids, and the case CLOUD-418 requires be shown to fail.
-#MUTANT grant-sync-widens|s/^\t\t\temit "\$id" "\$tool"$/\t\t\temit "$id" "*"/|a tool no committed rule names is never projected
+#MUTANT grant-sync-widens|s/^\t\temit "\$id" "\$tool"$/\t\temit "$id" "*"/|a tool no committed rule names is never projected
 # And the inert-tool refusal must stay a refusal: neutered, a rule naming a tool
 # its server does not expose is emitted anyway and reads as a grant that grants
 # nothing — the exact defect this exists to surface.
-#MUTANT grant-sync-ignores-inert-tools|s/^\t\t\tinert=\$((inert + 1))$/\t\t\t:/|a committed rule naming an unexposed tool exits non-zero
+#MUTANT grant-sync-ignores-inert-tools|s/^\t\t\tinert=\$((inert + 1))$/\t\t\t:/|does not expose exits non-zero
 #
 # The declared exemption `hook-pin-check` honours, beside the assertion it
 # describes rather than in a list that could drift from it.

@@ -57,8 +57,12 @@ settings_with() { # settings_with <allow-json> [deny-json]
 	config_with "$SERVER" list_sessions create_session
 	run_sync
 	[ "$status" -eq 0 ]
-	run jq -r '[.permissions.allow[] | select(endswith("create_session"))] | length' "$OVERLAY"
-	[ "$output" = "0" ]
+	# The predicate is over the TOOL SEGMENT of every projected rule: each must
+	# be one the committed file named. `create_session` appearing would be the
+	# obvious widening; a server-wide `*` is the subtle one, and an assertion
+	# that only looked for the tool name by suffix would miss it entirely.
+	run bash -c "jq -r '.permissions.allow[] | split(\"__\") | .[2:] | join(\"__\")' '$OVERLAY' | sort -u | tr '\\n' ' '"
+	[ "$output" = "list_sessions " ]
 }
 
 @test "a committed rule naming a tool the resolved server does not expose exits non-zero" {
