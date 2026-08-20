@@ -121,6 +121,13 @@ permissions:
   contents: write
   checks: read
   pull-requests: write
+  # The mirror issue the row is filed as (CLOUD-750). Added after the lane's first
+  # credential-free run failed on BOTH the list and the create with `gh exit 1`:
+  # the same two calls run clean from a clone, so the query was never the problem
+  # and the token was. `RELEASE_PLZ_TOKEN` is fine-grained — the header below
+  # already records that it cannot carry `checks:read` — and it carries no Issues
+  # permission either. This grant is what the ambient token needs instead.
+  issues: write
 
 # One constant group, not a per-SHA key. A cron tick and a `workflow_run` tick can
 # reach the same PR at the same moment, and a per-SHA group would let both ready it
@@ -224,11 +231,19 @@ jobs:
       # into a `CLOUD-*` row — measured at ~2 seconds on #558 -> CLOUD-764. The
       # key comes back on a `linear-code[bot]` linkback comment, so the lane
       # learns its own row's name without ever authenticating to the tracker.
+      #
+      # THE AMBIENT TOKEN, NOT THE PAT, and the split is the same one this workflow
+      # already makes for check status: each call gets the token that can actually
+      # make it. The PAT exists here for the two writes that must fire further
+      # workflows — a ready and a ref move — and it is fine-grained, so it carries
+      # neither `checks:read` nor Issues. Filing an issue has to fire nothing, so
+      # the ambient token with the `issues: write` grant above is both sufficient
+      # and narrower.
       - name: File the issue this bump lands under, and link it
         if: steps.target.outputs.num != ''
         id: row
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUM: ${{ steps.target.outputs.num }}
         run: |
           set +e
