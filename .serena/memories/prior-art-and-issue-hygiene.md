@@ -178,6 +178,23 @@ measurements into one. **Use a list** — lists round-trip byte-exact.
 The hazard is the tracker's, not markdown's: a table in a memory or in
 `AGENTS.md` is a file on disk and is safe (this page carries several).
 
+### The same save reflows paragraphs, so emphasis must not cross a line break
+
+A hard-wrapped paragraph is rejoined into one line on save. Where an emphasis run
+opened on one wrapped line and closed on the next, the delimiters land adjacent to
+the join and are re-emitted — leaving a literal `****` in the rendered body.
+Measured on CLOUD-807, 2026-08-20: four sites in one filing, e.g. a bold run
+around a code span became `**no** ` + a code span + `**, no****` / `****per-suite
+scope**`. Silent, exit 0, and visible only by reading the save response back —
+the same failure mode as the table above, and `ready-lint` cannot see it either,
+because the block is still structurally valid.
+
+Two rules, both cheap: **keep an emphasis run on one line**, and **keep code spans
+outside it**. A bold run that wraps a code span gets split even on one line —
+`**a `x` b**` comes back as `**a** `x` **b**`, which renders correctly but is not
+what was written. Repairing it costs a fresh `issue-read` receipt per attempt,
+since the row's revision moves on every save.
+
 ## Sorting rule
 
 Five destinations, no overlap:
