@@ -1046,7 +1046,13 @@ set -m
 #
 # The gate's own words reach the operator (CLOUD-407): it names the command that
 # mints the receipt, so this `die` adds only the landing's context.
-#MUTANT subscription-undropped|s/^mise run pr-unsubscribed drop "\$pr" || true$/true/|the landing makes the unsubscribe call itself
+# THE SCRIPT MUST CARRY NO `|`, and this line is why the rule exists: the
+# declaration grammar is three pipe-separated fields, so the `|| true` below —
+# matched literally by the obvious sed — was parsed as a fourth field and
+# truncated, and `mutant` reported `unterminated s command`. `pr-unsubscribed`
+# records the same trap against its own rows. Matching on the prefix and `.*`
+# keeps the script pipe-free while still naming exactly one line.
+#MUTANT subscription-undropped|s@^mise run pr-unsubscribed drop.*@true@|the landing makes the unsubscribe call itself
 mise run pr-unsubscribed drop "$pr" || true
 #MUTANT subscription-unenforced|s/^if ! mise run pr-unsubscribed check "\$pr"; then$/if false; then/|a session that has not dropped the subscription cannot land
 if ! mise run pr-unsubscribed check "$pr"; then

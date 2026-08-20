@@ -210,11 +210,11 @@ fi
 # The mutation mints a receipt whatever the endpoint answered, which is the whole
 # of the honest limit: a receipt must attest to an accepted call, not to an
 # attempted one. With it in place a 403 lands as silently as a 200.
-#MUTANT drop-mints-on-any-status|s/^\tif \[ "\$code" = 200 \] && \[ -n "\$body" \]; then$/\tif true; then/|a receipt is minted only for an accepted call
+#MUTANT drop-mints-on-any-status|s/^\tif \[ "\$code" = 200 \] && \[ -n "\$body" \]; then$/\tif true; then/|a refused call mints NOTHING, and the gate still refuses
 # And the fail-open must hold in the other direction. A `drop` that exits non-zero
 # on a status it did not like turns `land`'s first step into a wedge on every
 # clone whose session cannot reach the endpoint.
-#MUTANT drop-blocks-on-failure|s/^\techo "pr-unsubscribed: could not drop #\$pr's webhook subscription (\$1) — the manual path is unaffected"$/\tfail_input "could not drop #$pr ($1)"/|a drop that cannot look does not block the landing
+#MUTANT drop-blocks-on-failure|s/^\techo "pr-unsubscribed: could not drop #\$pr's webhook subscription (\$1) — the manual path is unaffected"$/\tfail_input "could not drop #$pr ($1)"/|drop NEVER blocks
 if [ "$verb" = drop ]; then
 	give_up() { # give_up <pointer-only reason>
 		echo "pr-unsubscribed: could not drop #$pr's webhook subscription ($1) — the manual path is unaffected"

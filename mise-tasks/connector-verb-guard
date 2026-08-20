@@ -95,7 +95,7 @@
 # the connector prompts anyway. Only an unsubscribe row can catch it — every deny
 # row passes under it — which is why those rows stay in the suite under both
 # spellings even though this file no longer decides them.
-#MUTANT unsubscribe-repreapproved|s@^ALLOW_SUFFIXES=""@ALLOW_SUFFIXES="unsubscribe_pr_activity"@|a verb the connector sets to ask is not claimed as pre-approved
+#MUTANT unsubscribe-repreapproved|s@^ALLOW_SUFFIXES=""@ALLOW_SUFFIXES="unsubscribe_pr_activity"@|an unsubscribe under the readable name is left undecided
 set -uo pipefail
 
 # Empty by measurement, not by omission — see the CLOUD-790 note above. Anything
