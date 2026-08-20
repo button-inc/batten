@@ -101,7 +101,7 @@
 # The takeover must stay OPT-IN. Unset, the refusal is the answer; a mutation that
 # takes over unconditionally turns every collision into a silent claim, which is
 # the failure this gate exists to prevent.
-#MUTANT takeover-always-on|s/^\tif \[ -n "\${BATTEN_CLAIM_TAKEOVER:-}" \]; then$/\tif true; then/|an occupied issue is refused when no takeover is asked for
+#MUTANT takeover-always-on|s/^\tif \[ -n "\${BATTEN_CLAIM_TAKEOVER:-}" \] \|\| \[ "\$takeover_flag" -eq 1 \]; then$/\tif true; then/|an occupied issue is refused when no takeover is asked for
 # And it must RECORD what it overrode: a takeover that mints a receipt
 # indistinguishable from a clean pull is a bypass wearing a better name.
 # CLOUD-520. Neutering the liveness filter restores the old behaviour — every
@@ -114,8 +114,65 @@
 # line and the receipt goes back to being a bare file whose existence
 # authorises every edit — which is how a claim naming CLOUD-230 sat on a
 # restarted branch through four unrelated stories, reporting nothing.
+# CLOUD-733's two. The first drops the "does the recorded branch still exist"
+# test, so ANY receipt becomes adoptable — including a live branch's, which turns
+# a recovery into a way to steal another branch's claim.
+#MUTANT adopt-ignores-liveness|s/^\t\tgit show-ref --verify --quiet "refs\/heads\/\$recorded" && continue$/\t\t:/|a receipt whose branch still exists is not adopted
+# The second drops the guard against adopting over an existing receipt, which
+# would let an adoption discard the claim this branch already holds.
+#MUTANT adopt-over-a-live-claim|s/^\tif \[ -e "\$dest" \]; then$/\tif false; then/|adopting onto a branch that already has a receipt is refused
 #MUTANT claim-records-no-base|s/^\t\techo "base .*$/\t\t:/|the receipt records the origin/main it was claimed against
 set -euo pipefail
+
+# --- arguments (CLOUD-733) ---------------------------------------------------
+#
+# This task parsed NO arguments until now, so the loop is new and it takes a
+# documented hazard with it: `shift 2` on a single remaining argument shifts
+# nothing and returns non-zero. `errexit` IS on here, unlike `mcp-timeout-budget`
+# where the same shape span the loop forever — but relying on that would make the
+# arity of every future flag depend on a `set` line at the top of the file, so
+# each one checks explicitly and `tests/claim-check.bats` asserts it under
+# `timeout`. A gate that hangs never reports, and both `verify` and the hk gate
+# wait on this one.
+#
+# `--adopt` takes NO value and `--adopt-from` takes one, rather than a single
+# flag with an optional argument. An optional-value flag cannot tell
+# `--adopt --takeover` from `--adopt <name>` without a rule about which tokens
+# look like names, and a rule about rules is what this repo's config posture
+# refuses.
+adopt=0
+adopt_from=""
+takeover_flag=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--adopt)
+		adopt=1
+		shift
+		;;
+	--adopt-from)
+		if [ $# -lt 2 ] || [ -z "$2" ]; then
+			echo "::error:: claim-check: --adopt-from needs the branch name the receipt was minted under" >&2
+			exit 2
+		fi
+		adopt=1
+		adopt_from="$2"
+		shift 2
+		;;
+	# The flag half of `BATTEN_CLAIM_TAKEOVER` (CLOUD-729). The env var is kept
+	# and unchanged; what this adds is REACHABILITY. A refusal naming a remedy
+	# its reader cannot execute is not a remedy, and an agent under a permission
+	# classifier that reads `FOO=1 cmd` as a bypass has no way to run the
+	# documented one.
+	--takeover)
+		takeover_flag=1
+		shift
+		;;
+	*)
+		echo "usage: claim-check [--adopt | --adopt-from <branch>] [--takeover]  (get_issue payloads on stdin)" >&2
+		exit 2
+		;;
+	esac
+done
 
 # The one escape hatch, and it is deliberately not shared with the mediated
 # gate's (`batten hook`'s own). That one says "do not refuse my edit"; this one
@@ -125,6 +182,100 @@ set -euo pipefail
 # gate enforces nothing — so the hatch exists, and it is loud rather than silent.
 if [ -n "${BATTEN_CLAIM_CHECK_BYPASS:-}" ]; then
 	echo "claim-check: BATTEN_CLAIM_CHECK_BYPASS set — the refinement-sequence rules are not being applied" >&2
+fi
+
+# --- adoption: re-key a stranded receipt (CLOUD-733) -------------------------
+#
+# A branch NAME outlives nothing, but the receipt keyed by it does: `git branch
+# -m` destroys the old ref and leaves `claim.<old-name>` on disk, describing this
+# exact work and unreachable by every reader. Measured on CLOUD-730, where it
+# cost a closed pull request to recover by hand.
+#
+# WHY THIS IS ON THE MINT SIDE, AND WHY THAT IS THE WHOLE DESIGN. The obvious fix
+# is a reader that notices the stray and adopts it. It cannot work: the mediated
+# `claim-needs-receipt` row fires on the FIRST WRITE, before the branch carries a
+# commit, so the only thing that could corroborate the claim — the issue keys the
+# branch's own commits name — does not exist yet. A reader left to infer from the
+# receipt alone would adopt a stray from a DELETED branch as readily as one from a
+# rename, which is a gate weakening itself on a guess. So the author asserts it,
+# once, and the assertion is recorded. The readers are untouched.
+#
+# The first version of this issue specified the reader form and was inert: it
+# asked for "a receipt whose recorded branch differs from its filename", and
+# after a rename those two AGREE — both name the old branch. Recorded here
+# because the mistake is easy to make twice.
+#
+# ORPHAN, not "any other receipt": a receipt whose recorded `branch` no longer
+# resolves as a ref. A rename destroys exactly one ref, so it produces exactly
+# one orphan, and a receipt belonging to a branch that still exists is that
+# branch's, not a stray.
+adopt_receipt() {
+	local git_dir branch dest candidates=() file recorded old
+	git_dir=$(git rev-parse --git-dir 2>/dev/null) || {
+		echo "::error:: claim-check: --adopt needs a git checkout" >&2
+		return 2
+	}
+	branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || branch=""
+	if [ -z "$branch" ]; then
+		echo "::error:: claim-check: --adopt needs a branch; HEAD is detached, and a detached HEAD has no name to key a claim on" >&2
+		return 2
+	fi
+	dest="$git_dir/batten-receipts/claim.${branch//\//-}"
+	if [ -e "$dest" ]; then
+		echo "::error:: claim-check: this branch already carries a claim receipt; adopting over it would discard the claim it records" >&2
+		echo "  branch $branch" >&2
+		return 1
+	fi
+
+	for file in "$git_dir"/batten-receipts/claim.*; do
+		[ -f "$file" ] || continue
+		# Read by KEY, never by line number: line 1 is the id list every existing
+		# reader parses, and the `branch` line is emitted with the others below.
+		recorded=$(awk '/^branch /{print substr($0, 8); exit}' "$file" 2>/dev/null) || recorded=""
+		# A receipt predating this change records no branch, and is NOT adoptable.
+		# Reading "no branch line" as "adopt me" would grandfather in every receipt
+		# ever written, which is the direction that turns a recovery into a bypass.
+		[ -n "$recorded" ] || continue
+		# Still a live branch: this receipt is that branch's, not a stray.
+		git show-ref --verify --quiet "refs/heads/$recorded" && continue
+		[ -z "$adopt_from" ] || [ "$adopt_from" = "$recorded" ] || continue
+		candidates+=("$file")
+	done
+
+	if [ "${#candidates[@]}" -eq 0 ]; then
+		echo "::error:: claim-check: no orphaned claim receipt to adopt — every receipt here names a branch that still exists, or records no branch at all" >&2
+		return 1
+	fi
+	if [ "${#candidates[@]}" -gt 1 ]; then
+		echo "::error:: claim-check: more than one orphaned receipt; name the one this branch continues with --adopt-from" >&2
+		for file in "${candidates[@]}"; do
+			echo "  $(awk '/^branch /{print substr($0, 8); exit}' "$file")" >&2
+		done
+		return 1
+	fi
+
+	old=$(awk '/^branch /{print substr($0, 8); exit}' "${candidates[0]}")
+	# RECORDED, never silent. A recovery indistinguishable from a clean pull is a
+	# bypass wearing a better name — the same reason the takeover names the
+	# refusals it overrode. The `branch` line is rewritten to this branch so the
+	# receipt keeps describing where it lives, and `adopted-from` keeps where it
+	# came from.
+	{
+		grep -v '^branch ' "${candidates[0]}"
+		echo "branch $branch"
+		echo "adopted-from $old"
+	} >"$dest"
+	rm -f "${candidates[0]}"
+	echo "claim-check: adopted the claim receipt from \"$old\" onto \"$branch\", recorded in the receipt"
+	return 0
+}
+
+if [ "$adopt" -eq 1 ]; then
+	# No payload is read: adoption re-keys a claim that was already checked when
+	# it was minted. Asking for stdin here would invite a caller to re-assert a
+	# verdict this gate is not re-taking.
+	adopt_receipt
+	exit $?
 fi
 
 # Accept either a JSON array or a concatenated stream of payload objects, the
@@ -358,8 +509,13 @@ if [ "$blocked" -ne 0 ]; then
 	# of quietly looking like a clean pull. `BATTEN_CLAIM_CHECK_BYPASS` is not
 	# widened to cover this — that switch means "this story was refined in my own
 	# session", a different decision a human might well want without this one.
-	if [ -n "${BATTEN_CLAIM_TAKEOVER:-}" ]; then
-		echo "claim-check: BATTEN_CLAIM_TAKEOVER set — claiming over $blocked refusal(s) above, recorded in the receipt" >&2
+	# The flag and the env var are ONE decision with two spellings (CLOUD-729):
+	# the env var is unreachable to an agent whose harness classifies `FOO=1 cmd`
+	# as a bypass, and a remedy its reader cannot execute is not a remedy. They
+	# record the identical line, so a receipt cannot say which was used — that is
+	# deliberate, because the decision is what is being recorded, not the syntax.
+	if [ -n "${BATTEN_CLAIM_TAKEOVER:-}" ] || [ "$takeover_flag" -eq 1 ]; then
+		echo "claim-check: takeover requested — claiming over $blocked refusal(s) above, recorded in the receipt" >&2
 		takeover="$blocked"
 		blocked=0
 	else
@@ -447,6 +603,14 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 		# fallback would append to it and record a two-line "origin/main\n-".
 		# Measured, not guessed.
 		echo "base $(git rev-parse --verify --quiet origin/main || echo -)"
+		# THE BRANCH THIS WAS MINTED FOR (CLOUD-733), which the FILENAME already
+		# encodes — until the branch is renamed, at which point the filename is
+		# the only record and it names something that no longer exists. Recorded
+		# so `--adopt` can tell a stranded receipt from a live branch's, by asking
+		# git whether the recorded name still resolves.
+		#
+		# Emitted by key like `base`, so line 1 stays the id list.
+		echo "branch $branch"
 	} >"$git_dir/batten-receipts/claim.${branch//\//-}" 2>/dev/null || true
 fi
 

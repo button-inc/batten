@@ -492,7 +492,10 @@ baseline_for() { # baseline_for <key> <body>
 	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && BATTEN_CLAIM_TAKEOVER=1 $CHECK)"
 	[ "$status" -eq 0 ]
 	[ -f "$RECEIPT" ]
-	[[ "$output" == *"BATTEN_CLAIM_TAKEOVER set"* ]]
+	# The wording is route-neutral since CLOUD-733 gave the takeover a flag: the
+	# env var and `--takeover` are one decision with two spellings, and a message
+	# naming only the env var would misdescribe half its callers.
+	[[ "$output" == *"takeover requested"* ]]
 }
 
 @test "a takeover receipt NAMES the refusals it overrode, never a bare flag" {
@@ -627,4 +630,185 @@ payload_pr() { # <id> <pr-url> <state-json-fragment>
 	run bash -c "$(declare -f payload_pr); payload_pr CLOUD-49 https://github.com/button-inc/batten/pull/145 '{}' | $CHECK"
 	[[ "$output" == *"state"* ]]
 	[[ "$output" == *"merged"* ]]
+}
+
+# --- adoption: a renamed branch recovers its own receipt (CLOUD-733) ---------
+#
+# `git branch -m` destroys the old ref and leaves `claim.<old-name>` on disk,
+# describing this exact work and unreachable by every reader. Measured on
+# CLOUD-730, where recovering by hand cost a closed pull request.
+#
+# The recovery is on the MINT side and it is OPT-IN, which is the property these
+# rows exist to hold. A reader that adopted a stray automatically would have to
+# do it on the FIRST WRITE, before the branch carries a commit — so the only
+# thing that could corroborate the claim does not exist yet, and it would adopt a
+# deleted branch's receipt as readily as a renamed one's.
+
+rename_branch() { # rename_branch <new-name>
+	git -C "$REPO" branch -m "$1"
+}
+
+recorded_branch() { # recorded_branch <receipt-path>
+	awk '/^branch /{print substr($0, 8); exit}' "$1"
+}
+
+@test "the minted receipt records the branch it was minted for" {
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[ "$(recorded_branch "$RECEIPT")" = work ]
+}
+
+@test "A RENAMED BRANCH RECOVERS ITS CLAIM WITH --adopt" {
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	rename_branch renamed
+	run bash -c "cd '$REPO' && $CHECK --adopt"
+	[ "$status" -eq 0 ]
+	[ -f "$REPO/.git/batten-receipts/claim.renamed" ]
+	# The claim it carried is the claim it keeps.
+	[[ "$(cat "$REPO/.git/batten-receipts/claim.renamed")" == *"CLOUD-733"* ]]
+	# And the stranded one is gone, so it cannot be adopted a second time.
+	[ ! -f "$REPO/.git/batten-receipts/claim.work" ]
+}
+
+@test "WITHOUT --adopt the rename is still unrecovered — the recovery is opt-in" {
+	# THE ROW THAT GOES RED if anyone later moves inference into the reader. A
+	# rename that silently keeps its claim is indistinguishable from a receipt
+	# adopting a branch it never described.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	rename_branch renamed
+	[ ! -f "$REPO/.git/batten-receipts/claim.renamed" ]
+}
+
+@test "the adoption is recorded, never silent" {
+	# The takeover's rule, for the same reason: a recovery indistinguishable from
+	# a clean pull is a bypass wearing a better name.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
+	rename_branch renamed
+	run bash -c "cd '$REPO' && $CHECK --adopt"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$REPO/.git/batten-receipts/claim.renamed")" == *"adopted-from work"* ]]
+	# The receipt describes where it now lives, not where it came from.
+	[ "$(recorded_branch "$REPO/.git/batten-receipts/claim.renamed")" = renamed ]
+}
+
+@test "a receipt whose branch still exists is not adopted" {
+	# It is that branch's receipt, not a stray. Without this the recovery becomes
+	# a way to take over a live branch's claim without the takeover's record.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
+	git -C "$REPO" checkout -q -b other
+	run bash -c "cd '$REPO' && $CHECK --adopt"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no orphaned claim receipt"* ]]
+	[ ! -f "$REPO/.git/batten-receipts/claim.other" ]
+}
+
+@test "adopting onto a branch that already has a receipt is refused" {
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
+	# A second, orphaned receipt beside this branch's own.
+	printf 'CLOUD-999\nbranch gone\n' >"$REPO/.git/batten-receipts/claim.gone"
+	run bash -c "cd '$REPO' && $CHECK --adopt"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"already carries a claim receipt"* ]]
+	# The claim it holds is untouched.
+	[[ "$(cat "$RECEIPT")" == *"CLOUD-733"* ]]
+}
+
+@test "a receipt with no branch line is not adoptable, never grandfathered" {
+	# Every receipt written before this change. Reading "no branch line" as
+	# "adopt me" would make each one a key to any branch.
+	setup_repo
+	printf 'CLOUD-999\nready-lint pass\n' >"$REPO/.git/batten-receipts/claim.ancient"
+	git -C "$REPO" branch -m renamed
+	run bash -c "cd '$REPO' && $CHECK --adopt"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no orphaned claim receipt"* ]]
+}
+
+@test "two orphans refuse and name both rather than guessing" {
+	setup_repo
+	printf 'CLOUD-1\nbranch gone-one\n' >"$REPO/.git/batten-receipts/claim.gone-one"
+	printf 'CLOUD-2\nbranch gone-two\n' >"$REPO/.git/batten-receipts/claim.gone-two"
+	run bash -c "cd '$REPO' && $CHECK --adopt"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"more than one orphaned receipt"* ]]
+	[[ "$output" == *"gone-one"* ]]
+	[[ "$output" == *"gone-two"* ]]
+}
+
+@test "--adopt-from picks one when two orphans are present" {
+	setup_repo
+	printf 'CLOUD-1\nbranch gone-one\n' >"$REPO/.git/batten-receipts/claim.gone-one"
+	printf 'CLOUD-2\nbranch gone-two\n' >"$REPO/.git/batten-receipts/claim.gone-two"
+	run bash -c "cd '$REPO' && $CHECK --adopt-from gone-two"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$REPO/.git/batten-receipts/claim.work")" == *"CLOUD-2"* ]]
+	[[ "$(cat "$REPO/.git/batten-receipts/claim.work")" == *"adopted-from gone-two"* ]]
+	# The one it did not pick is left alone.
+	[ -f "$REPO/.git/batten-receipts/claim.gone-one" ]
+}
+
+@test "a detached HEAD has no name to adopt onto" {
+	setup_repo
+	printf 'CLOUD-1\nbranch gone\n' >"$REPO/.git/batten-receipts/claim.gone"
+	git -C "$REPO" checkout -q --detach
+	run bash -c "cd '$REPO' && $CHECK --adopt"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"detached"* ]]
+}
+
+# --- the flags themselves ----------------------------------------------------
+
+@test "THE TAKEOVER AS A FLAG: reachable where an env-var bypass is classified" {
+	# CLOUD-729. The env var is the documented remedy and an agent under a
+	# permission classifier that reads `FOO=1 cmd` as a bypass cannot run it, so
+	# the refusal names a route its reader cannot take.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && $CHECK --takeover)"
+	[ "$status" -eq 0 ]
+	[ -f "$RECEIPT" ]
+	[[ "$(cat "$RECEIPT")" == *"takeover"* ]]
+	[[ "$(cat "$RECEIPT")" == *"not-todo"* ]]
+}
+
+@test "the flag and the env var record the identical line" {
+	# One decision, two spellings. A receipt that could say WHICH was used would
+	# invite a reader to treat them as different decisions; they are not.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && $CHECK --takeover)"
+	local by_flag
+	by_flag=$(grep '^takeover ' "$RECEIPT")
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-407 'In Progress' | (cd '$REPO' && BATTEN_CLAIM_TAKEOVER=1 $CHECK)"
+	[ "$(grep '^takeover ' "$RECEIPT")" = "$by_flag" ]
+}
+
+@test "an unknown flag is a usage error, not a silent pull" {
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK --nonsense)"
+	[ "$status" -eq 2 ]
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "--adopt-from with no value is refused, and does not hang" {
+	# `shift 2` on a lone flag shifts nothing; this task had no argument loop at
+	# all before, so the hazard arrives with it. `timeout` is the assertion: a
+	# gate that hangs never reports, and both verify and the hk gate wait on it.
+	setup_repo
+	run timeout 10s bash -c "cd '$REPO' && $CHECK --adopt-from"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"needs the branch name"* ]]
+}
+
+@test "--adopt-from with an empty value is refused rather than silently defaulted" {
+	setup_repo
+	run timeout 10s bash -c "cd '$REPO' && $CHECK --adopt-from ''"
+	[ "$status" -eq 2 ]
 }
