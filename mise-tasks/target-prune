@@ -14,9 +14,13 @@
 #   copies retained per stem                        6   (`batten` itself: 22)
 #   reclaimable with no rebuild cost              13.2 GB across 237 files
 #
-# `[profile.dev] debug = 1` is the constant: it makes each copy ~100 MB rather
-# than ~10 MB. Lowering it shrinks the constant and leaves the growth monotonic,
-# which is why this reclaims instead.
+# A ~100 MB test binary is the RIGHT size for a debug binary and nothing here is
+# a complaint about it: dev builds carry debug info because backtraces on a local
+# failure are the whole point of the profile. The defect is not what one copy
+# costs, it is that six of them are kept. Stated because the size is the first
+# thing a reader notices, and "shrink the artifacts" is the wrong repair — it
+# lowers a constant while the growth stays monotonic, and pays for that with
+# every backtrace.
 #
 # WHY THIS IS NOT `cargo clean`, and the distinction is the whole task. `clean`
 # takes the caches too — `incremental` and the cross-target dirs — and those
@@ -57,10 +61,10 @@
 #
 # The mutation drops the K-retention so every copy but the newest goes, which
 # reads as a working prune and silently makes each reverted lap a full rebuild.
-#MUTANT prune-keeps-no-spare|s/^KEEP=2$/KEEP=1/|the previous build is kept, so a reverted lap is not a full rebuild
+#MUTANT prune-keeps-no-spare|s/^KEEP=2$/KEEP=1/|THE SPARE IS KEPT, so a reverted lap is not a full rebuild
 # And the floor comparison, which is the half that turns exhaustion into a named
 # refusal rather than a rustc error inside a test run.
-#MUTANT floor-never-refuses|s/^\tif \[ "\$free_mb" -lt "\$FLOOR_MB" \]; then$/\tif false; then/|a tree still below the floor after pruning is refused
+#MUTANT floor-never-refuses|s/^if \[ "\$free_mb" -lt "\$FLOOR_MB" \]; then$/if false; then/|a tree still below the floor after pruning is refused
 set -uo pipefail
 
 # THE FLOOR AND THE MEASUREMENT THAT JUSTIFIES IT, on one line, in the form
