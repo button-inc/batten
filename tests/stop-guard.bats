@@ -14,6 +14,13 @@ setup() {
 	# the gate's own bypass, and turned back on explicitly by the cases that are
 	# about it, which run against a throwaway repo instead.
 	export BATTEN_FILED_HERE_BYPASS=1
+	# The OVERLAP hatch is the OTHER half of that gate and no case here wants it,
+	# so it is cleared rather than exported: inherited, it silences the overlap
+	# refusal the punt cases below are entirely about, and they go green while
+	# proving nothing. Not hypothetical — `BATTEN_FILED_HERE_OVERLAP=1 mise run
+	# land` is `filed-here-check`'s own remedy 4, and `land` runs `verify`, which
+	# runs this suite. Same lesson as `tests/filed-here-check.bats`'s setup.
+	unset BATTEN_FILED_HERE_OVERLAP
 }
 
 # `punt_repo <recorded-path>` — a throwaway repo carrying one filed row that names
