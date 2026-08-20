@@ -825,6 +825,8 @@ fn default_rules() -> Vec<Rule> {
         identity_key: None,
         direction: None,
         base: None,
+        format: None,
+        node: None,
         no_fix_reason: None,
         checks: None,
         key: None,

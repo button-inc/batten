@@ -1,0 +1,4 @@
+argv: check
+exit: 2
+stdout:
+pins.toml:1 pin-agreement

@@ -554,7 +554,8 @@ pub const fn reaches(kind: RuleKind) -> bool {
         | RuleKind::Secrets
         | RuleKind::Shape
         | RuleKind::Receipt
-        | RuleKind::Pipeline => true,
+        | RuleKind::Pipeline
+        | RuleKind::Document => true,
         RuleKind::Judge => false,
     }
 }

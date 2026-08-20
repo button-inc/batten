@@ -1,0 +1,11 @@
+version = 1
+
+[[rule]]
+id = "pin-agreement"
+kind = "document"
+glob = "pins.toml"
+format = "toml"
+node = "pin.rust"
+pattern = "1.97.1"
+severity = "deny"
+scope = "tree"

@@ -59,6 +59,7 @@ gix.workspace = true
 globset.workspace = true
 hmac.workspace = true
 ignore.workspace = true
+json5.workspace = true
 flate2.workspace = true
 regex.workspace = true
 schemars.workspace = true

@@ -293,6 +293,8 @@ pub enum Fact {
     Stop,
     /// The rules a live waiver suppresses today, with each claimed expiry.
     Waived,
+    /// A structured document, parsed once and addressed by node path (CLOUD-772).
+    Document,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -321,6 +323,15 @@ pub const STOP: Class = Class::new(Cost::Read, Surface::Hook);
 /// that keeps *same commit + same date → same bytes* true.
 pub const WAIVED: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::Document`] — a local file read and a parse, and the first fact whose
+/// narrowest surface is NOT the hook (CLOUD-772). It is `read` by price, exactly
+/// like [`RECEIPTS`], and still barred from the mediated path: parsing an
+/// arbitrary document is unbounded in the input's size where a git ref read is
+/// not, and CLOUD-689's 100ms budget is per mediated call. The two axes moving
+/// independently here is the model earning its second axis on a landed fact
+/// rather than on the forge facts that motivated it.
+pub const DOCUMENT: Class = Class::new(Cost::Read, Surface::Check);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -329,6 +340,7 @@ impl Fact {
         Fact::Keys,
         Fact::Stop,
         Fact::Waived,
+        Fact::Document,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -340,6 +352,7 @@ impl Fact {
             Fact::Keys => "keys",
             Fact::Stop => "stop",
             Fact::Waived => "waived",
+            Fact::Document => "document",
         }
     }
 
@@ -359,6 +372,271 @@ impl Fact {
             Fact::Keys => KEYS,
             Fact::Stop => STOP,
             Fact::Waived => WAIVED,
+            Fact::Document => DOCUMENT,
+        }
+    }
+}
+
+/// The document formats the engine can parse — the **format** half of a document
+/// fact (CLOUD-772).
+///
+/// # Formats, never artifacts
+///
+/// Non-negotiable rule 1 decides this shape. A `parse the toolchain manifest`
+/// fact would name a consumer's toolchain choice inside `crates/batten`; the
+/// core knows only *formats*, and which paths carry which format is the
+/// consumer's `batten.toml`. That is why the variants below are TOML and YAML
+/// rather than any file name, and why
+/// `tests/document_facts.rs`'s `no_artifact_name_reaches_the_core` is a gate on
+/// it rather than a convention anyone has to remember.
+///
+/// # PKL is declarable and deliberately unparseable
+///
+/// It has no maintained Rust parser, and adopting one on speculation is the
+/// scope expansion this repository refuses. So it is a **variant** rather than
+/// an omission: a consumer that declares a PKL path gets [`Look::CouldNotLook`],
+/// exhaustively matched, instead of a fact that silently does not exist. An
+/// absent variant would answer the same declaration with "no rows", and the only
+/// way to find that out is that the rule never fires — which is the vacuous pass
+/// the whole issue is filed against.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Format {
+    /// TOML.
+    Toml,
+    /// YAML — one document per stream; a multi-document stream reads its first.
+    Yaml,
+    /// JSON.
+    Json,
+    /// JSON5: JSON with comments, trailing commas and unquoted keys.
+    Json5,
+    /// PKL. Declarable, never parsed — see the type's own note.
+    Pkl,
+}
+
+impl Format {
+    /// Every format the engine knows, so the partitions below are total.
+    pub const ALL: &'static [Format] = &[
+        Format::Toml,
+        Format::Yaml,
+        Format::Json,
+        Format::Json5,
+        Format::Pkl,
+    ];
+
+    /// The stable lowercase token used in config and machine output (§6).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Format::Toml => "toml",
+            Format::Yaml => "yaml",
+            Format::Json => "json",
+            Format::Json5 => "json5",
+            Format::Pkl => "pkl",
+        }
+    }
+
+    /// Whether this crate carries a parser for the format.
+    ///
+    /// Stated per variant rather than inferred from whether [`Format::read`]
+    /// happens to return a value, so adding a format is a deliberate act at both
+    /// sites and a declared-but-unparseable one cannot be mistaken for a bug.
+    #[must_use]
+    pub const fn parseable(self) -> bool {
+        match self {
+            Format::Toml | Format::Yaml | Format::Json | Format::Json5 => true,
+            Format::Pkl => false,
+        }
+    }
+
+    /// Parse `text` as this format.
+    ///
+    /// Three-valued by construction (CLOUD-757): a document that parses is
+    /// [`Look::Is`], and **anything else is [`Look::CouldNotLook`]** — a syntax
+    /// error, an empty YAML stream, a format this crate cannot parse. It is
+    /// never [`Look::IsNot`], because a file failing to parse says nothing at
+    /// all about what it contains. That distinction is the whole point: the
+    /// hand-rolled readers this replaces default an empty extraction to
+    /// agreement, so a file they cannot read passes every gate over it.
+    #[must_use]
+    pub fn read(self, text: &str) -> Look<Node> {
+        match self {
+            Format::Toml => match toml::from_str::<toml::Value>(text) {
+                Ok(value) => Look::Is(Node::from_toml(&value)),
+                Err(_) => Look::CouldNotLook,
+            },
+            Format::Yaml => match yaml_rust2::YamlLoader::load_from_str(text) {
+                // The first document of the stream, and only it. A multi-document
+                // stream addressed as one would need a document index in every
+                // node path, which no consumer here has; taking the first is the
+                // narrow answer rather than a silent merge of several.
+                Ok(documents) => match documents.first() {
+                    Some(document) => Look::Is(Node::from_yaml(document)),
+                    None => Look::CouldNotLook,
+                },
+                Err(_) => Look::CouldNotLook,
+            },
+            Format::Json => match serde_json::from_str::<serde_json::Value>(text) {
+                Ok(value) => Look::Is(Node::from_json(&value)),
+                Err(_) => Look::CouldNotLook,
+            },
+            Format::Json5 => match json5::from_str::<serde_json::Value>(text) {
+                Ok(value) => Look::Is(Node::from_json(&value)),
+                Err(_) => Look::CouldNotLook,
+            },
+            // Declared, and honestly unanswerable. See the type's own note.
+            Format::Pkl => Look::CouldNotLook,
+        }
+    }
+}
+
+/// A parsed document, canonicalised into one shape whatever it was written in.
+///
+/// # One tree, four syntaxes
+///
+/// The point of a document fact is that a node path means the same thing in
+/// TOML and in JSON5, so every format lands here rather than each rule learning
+/// four libraries' value types. That is also what makes a rule portable across
+/// an artifact that changes format.
+///
+/// # Byte-stability is structural, not careful (§6)
+///
+/// [`Node::Map`] is a [`BTreeMap`], so iteration order is the keys' order and
+/// never the file's — two runs over identical bytes produce identical output,
+/// key ordering included, without any call site having to sort. And a number is
+/// carried as its **source text** rather than as `f64`: re-formatting a parsed
+/// float is the classic place a value stops round-tripping, and a version pin is
+/// exactly the kind of number that must survive as written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Node {
+    /// An explicit null.
+    Null,
+    /// A boolean.
+    Bool(bool),
+    /// A number, carried verbatim as the source wrote it.
+    Number(String),
+    /// A string, or any scalar the format does not distinguish further.
+    Text(String),
+    /// An ordered sequence.
+    List(Vec<Node>),
+    /// A mapping, keyed in sort order.
+    Map(std::collections::BTreeMap<String, Node>),
+}
+
+impl Node {
+    fn from_toml(value: &toml::Value) -> Node {
+        match value {
+            toml::Value::String(text) => Node::Text(text.clone()),
+            toml::Value::Integer(number) => Node::Number(number.to_string()),
+            toml::Value::Float(number) => Node::Number(number.to_string()),
+            toml::Value::Boolean(flag) => Node::Bool(*flag),
+            // A datetime is a scalar with one canonical spelling, which is what
+            // `Text` means here — not a string the author typed.
+            toml::Value::Datetime(stamp) => Node::Text(stamp.to_string()),
+            toml::Value::Array(items) => Node::List(items.iter().map(Node::from_toml).collect()),
+            toml::Value::Table(table) => Node::Map(
+                table
+                    .iter()
+                    .map(|(key, item)| (key.clone(), Node::from_toml(item)))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn from_json(value: &serde_json::Value) -> Node {
+        match value {
+            serde_json::Value::Null => Node::Null,
+            serde_json::Value::Bool(flag) => Node::Bool(*flag),
+            serde_json::Value::Number(number) => Node::Number(number.to_string()),
+            serde_json::Value::String(text) => Node::Text(text.clone()),
+            serde_json::Value::Array(items) => {
+                Node::List(items.iter().map(Node::from_json).collect())
+            }
+            serde_json::Value::Object(map) => Node::Map(
+                map.iter()
+                    .map(|(key, item)| (key.clone(), Node::from_json(item)))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn from_yaml(value: &yaml_rust2::Yaml) -> Node {
+        match value {
+            yaml_rust2::Yaml::Real(number) => Node::Number(number.clone()),
+            yaml_rust2::Yaml::Integer(number) => Node::Number(number.to_string()),
+            yaml_rust2::Yaml::String(text) => Node::Text(text.clone()),
+            yaml_rust2::Yaml::Boolean(flag) => Node::Bool(*flag),
+            yaml_rust2::Yaml::Array(items) => {
+                Node::List(items.iter().map(Node::from_yaml).collect())
+            }
+            yaml_rust2::Yaml::Hash(hash) => Node::Map(
+                hash.iter()
+                    .filter_map(|(key, item)| {
+                        // A non-scalar key addresses nothing a node path can
+                        // spell, so it is dropped rather than stringified into a
+                        // key a consumer could never write. YAML permits them;
+                        // no artifact in scope uses one.
+                        Node::from_yaml(key)
+                            .scalar()
+                            .map(|key| (key, Node::from_yaml(item)))
+                    })
+                    .collect(),
+            ),
+            // An alias resolves to a node this loader does not hand us, and a
+            // bad value is the parser saying it could not read one. Both are
+            // absences rather than nulls, and `Null` is the honest carrier: the
+            // node exists in the file and holds nothing this fact can address.
+            yaml_rust2::Yaml::Alias(_) | yaml_rust2::Yaml::BadValue | yaml_rust2::Yaml::Null => {
+                Node::Null
+            }
+        }
+    }
+
+    /// The node at a dotted path, three-valued.
+    ///
+    /// `a.b.0.c` walks maps by key and lists by index. A path that does not
+    /// resolve is [`Look::IsNot`] — **looked, and it is not there** — which is
+    /// the distinction from a document that could not be parsed at all. The two
+    /// collapsing into one another is the failure mode of every hand-rolled
+    /// reader this replaces.
+    #[must_use]
+    pub fn at(&self, path: &str) -> Look<&Node> {
+        let mut here = self;
+        for segment in path.split('.').filter(|segment| !segment.is_empty()) {
+            let next = match here {
+                Node::Map(map) => map.get(segment),
+                Node::List(items) => segment.parse::<usize>().ok().and_then(|at| items.get(at)),
+                Node::Null | Node::Bool(_) | Node::Number(_) | Node::Text(_) => None,
+            };
+            match next {
+                Some(node) => here = node,
+                None => return Look::IsNot,
+            }
+        }
+        Look::Is(here)
+    }
+
+    /// This node's scalar text, or `None` where it is a container.
+    ///
+    /// One spelling per kind, so a comparison in `batten.toml` reads the same
+    /// whatever format the document was written in.
+    #[must_use]
+    pub fn scalar(&self) -> Option<String> {
+        match self {
+            Node::Text(text) | Node::Number(text) => Some(text.clone()),
+            Node::Bool(true) => Some("true".to_owned()),
+            Node::Bool(false) => Some("false".to_owned()),
+            Node::Null | Node::List(_) | Node::Map(_) => None,
         }
     }
 }

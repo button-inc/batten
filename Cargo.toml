@@ -90,6 +90,13 @@ schemars = "1"
 # published artifact is asserted to accept what the binary accepts.
 # default-features = false drops resolve-http (reqwest + rustls + aws-lc-rs) —
 # the schema is local, and a validator must never fetch over the network anyway.
+# JSON5 — the fourth document format (CLOUD-772). Adopted rather than
+# hand-rolled for the reason the issue is filed on: comments, trailing commas
+# and unquoted keys are what every ad-hoc brace-depth state machine over such a
+# file gets wrong, and a reader that mis-parses reports agreement. It parses
+# straight into `serde_json::Value`, which is already vendored, so the document
+# tree gains no second value type.
+json5 = "0.4"
 jsonschema = { version = "0.49", default-features = false }
 # `min_batten_version` comparison. Cargo's own flavour of SemVer, so the config
 # key means what a Rust consumer already expects it to.

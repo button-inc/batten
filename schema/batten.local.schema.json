@@ -125,6 +125,36 @@
         }
       ]
     },
+    "Format": {
+      "description": "The document formats the engine can parse — the **format** half of a document\nfact (CLOUD-772).\n\n# Formats, never artifacts\n\nNon-negotiable rule 1 decides this shape. A `parse the toolchain manifest`\nfact would name a consumer's toolchain choice inside `crates/batten`; the\ncore knows only *formats*, and which paths carry which format is the\nconsumer's `batten.toml`. That is why the variants below are TOML and YAML\nrather than any file name, and why\n`tests/document_facts.rs`'s `no_artifact_name_reaches_the_core` is a gate on\nit rather than a convention anyone has to remember.\n\n# PKL is declarable and deliberately unparseable\n\nIt has no maintained Rust parser, and adopting one on speculation is the\nscope expansion this repository refuses. So it is a **variant** rather than\nan omission: a consumer that declares a PKL path gets [`Look::CouldNotLook`],\nexhaustively matched, instead of a fact that silently does not exist. An\nabsent variant would answer the same declaration with \"no rows\", and the only\nway to find that out is that the rule never fires — which is the vacuous pass\nthe whole issue is filed against.",
+      "oneOf": [
+        {
+          "description": "TOML.",
+          "type": "string",
+          "const": "toml"
+        },
+        {
+          "description": "YAML — one document per stream; a multi-document stream reads its first.",
+          "type": "string",
+          "const": "yaml"
+        },
+        {
+          "description": "JSON.",
+          "type": "string",
+          "const": "json"
+        },
+        {
+          "description": "JSON5: JSON with comments, trailing commas and unquoted keys.",
+          "type": "string",
+          "const": "json5"
+        },
+        {
+          "description": "PKL. Declarable, never parsed — see the type's own note.",
+          "type": "string",
+          "const": "pkl"
+        }
+      ]
+    },
     "OutputPattern": {
       "description": "One declared output predicate: a literal that must not appear.",
       "type": "object",
@@ -280,6 +310,17 @@
             "null"
           ]
         },
+        "format": {
+          "description": "How to parse the documents a [`RuleKind::Document`] row selects. Required\nby that kind, rejected by every other.\n\n**Declared, never inferred from the path.** An extension is a naming\nconvention — a JSON5 file is conventionally `.json5` and legally\nanything — and this column is what decides which parser reads the bytes.\nGuessing wrong yields \"could not look\" on a file that is perfectly well\nformed, which blames the document for the engine's inference.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Format"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "glob": {
           "description": "The glob selecting which files the rule inspects, matched against\nrepo-relative paths (`/`-separated). `**` matches any run of path\nsegments, `*` and `?` match within a single segment.\n\nOptional at the type level and required per-kind: a file kind cannot load\nwithout it, and [`RuleKind::Shape`] — which inspects no files — rejects it.",
           "type": [
@@ -315,6 +356,13 @@
         },
         "no_fix_reason": {
           "description": "Why this rule's findings have no fix — the stated answer, which is not\nthe same as an absent one (CLOUD-81).\n\nA finding a caller can neither clear nor act on spends attention for\nnothing, so \"there is no fix\" must be *said*. The **alternative** to\n[`Rule::fix`], never an addition: a row carrying both is a load error\nrather than a precedence rule nobody can read.\n\nThis is the only column CLOUD-81 adds. `fix` already exists — CLOUD-215\nreserved it as the `command` kind's repair side — and\n[`Rule::remediation`] reads it rather than declaring a second spelling of\nthe same thing. Recording a repair on a finding is not *running* one, so\nthis does not disturb `run_all`'s refusal of a rule that declares it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "node": {
+          "description": "The dotted node path a [`RuleKind::Document`] row addresses — `a.b.0.c`,\nwalking maps by key and lists by index. Required by that kind, rejected\nby every other.\n\nThe path is the consumer's, like every other artifact-shaped value here:\n`crates/batten` knows how to walk a document and nothing about what any\nparticular one contains (non-negotiable rule 1).",
           "type": [
             "string",
             "null"
@@ -492,6 +540,11 @@
           "description": "A **credential in the tree** (CLOUD-59): run the pinned secret scanner\nover the matched paths and turn each match into a pointer.\n\nThe kind exists because [`RuleKind::Forbid`] bans literals named in\nadvance, and a credential is the banned shape nobody can enumerate — so a\ncommitted secret passes every other gate this engine has. Detection is\nadopted prior art; what this kind owns is **containment**, in\n[`crate::secrets`].\n\nDistinct from [`RuleKind::Command`], which could run the same binary and\ncould not express this: a command rule's contract is the exit code alone,\nwith both child streams nulled, so it yields one batch verdict per glob —\nno per-secret `path:line`, no per-secret identity, and nothing to key.\nReading the scanner's output is precisely what makes this kind different,\nand precisely what makes it dangerous: the scanner prints the byte it\nmatched. Every span is opaque from the parse boundary onward\n([`crate::identity::SecretSpan`]), and [`Finding`] has no field one could\noccupy, so pointer-only output is structural rather than a property of\nthe renderer.",
           "type": "string",
           "const": "secrets"
+        },
+        {
+          "description": "Address a node in a structured document and compare it to a literal\n(CLOUD-772).\n\nThe kind that turns a parsed document into policy. It reads a file the\n`glob` selects, parses it as the declared `format`, walks to `node`, and\nreports when the value there is not `pattern`. What it never does is name\nan artifact: `format` and `node` are the consumer's, so a rule over a\nworkflow file and a rule over a package manifest are the same code\n(non-negotiable rule 1).\n\nThree-valued (CLOUD-757), which is the whole reason it exists. A file\nthat does not parse is **could not look** and is reported, never silently\nclean — an extraction that returns nothing reading as agreement is the\nlive failure mode of every hand-rolled reader this replaces.",
+          "type": "string",
+          "const": "document"
         }
       ]
     },

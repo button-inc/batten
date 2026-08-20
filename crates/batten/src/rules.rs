@@ -189,6 +189,21 @@ pub enum RuleKind {
     /// occupy, so pointer-only output is structural rather than a property of
     /// the renderer.
     Secrets,
+    /// Address a node in a structured document and compare it to a literal
+    /// (CLOUD-772).
+    ///
+    /// The kind that turns a parsed document into policy. It reads a file the
+    /// `glob` selects, parses it as the declared `format`, walks to `node`, and
+    /// reports when the value there is not `pattern`. What it never does is name
+    /// an artifact: `format` and `node` are the consumer's, so a rule over a
+    /// workflow file and a rule over a package manifest are the same code
+    /// (non-negotiable rule 1).
+    ///
+    /// Three-valued (CLOUD-757), which is the whole reason it exists. A file
+    /// that does not parse is **could not look** and is reported, never silently
+    /// clean — an extraction that returns nothing reading as agreement is the
+    /// live failure mode of every hand-rolled reader this replaces.
+    Document,
 }
 
 impl RuleKind {
@@ -206,6 +221,7 @@ impl RuleKind {
         RuleKind::Pipeline,
         RuleKind::Judge,
         RuleKind::Secrets,
+        RuleKind::Document,
     ];
 
     /// The stable lowercase token used in config and machine output (§6).
@@ -220,6 +236,7 @@ impl RuleKind {
             RuleKind::Pipeline => "pipeline",
             RuleKind::Judge => "judge",
             RuleKind::Secrets => "secrets",
+            RuleKind::Document => "document",
         }
     }
 
@@ -255,11 +272,17 @@ impl RuleKind {
             // the same structural reason `Receipt` does: `scopes` pairs every
             // spawning kind with `Tree` alone, so a `true` here would make the
             // kind unscopable to the mediated call.
+            // `Document` reads a file and parses it in-process. No program a
+            // config named ever runs, which is this predicate's whole subject —
+            // the parsers are vendored crates chosen here, and the only
+            // configured values reaching them are a path, a format token and a
+            // node path, all data.
             RuleKind::Forbid
             | RuleKind::Shape
             | RuleKind::Ratchet
             | RuleKind::Receipt
-            | RuleKind::Pipeline => false,
+            | RuleKind::Pipeline
+            | RuleKind::Document => false,
             // All three run a program a `batten.toml` named, which is the
             // whole predicate — that a judge's consults a model, a command's
             // decides a gate, and a secrets rule's scans for credentials makes
@@ -327,6 +350,16 @@ impl RuleKind {
             // can carry. Requiring it here is what keeps that refusal
             // unreachable from a config that parses.
             RuleKind::Judge => &["glob", "criteria", "no_fix_reason"],
+            // All four, and none of them has a defensible default. `format` is
+            // stated rather than inferred from the path's extension, because an
+            // extension is a naming convention and this is the one column that
+            // decides which parser reads the bytes — a `.json` file that is
+            // really JSON5 would parse-fail and report "could not look" forever,
+            // blaming the file for the guess. `node` is what the rule addresses;
+            // a row without one selects a document and asks nothing of it.
+            // `pattern` is the value the node must hold, so a row without one
+            // loads, matches, and decides nothing.
+            RuleKind::Document => &["glob", "format", "node", "pattern", "severity"],
         }
     }
 
@@ -431,6 +464,19 @@ impl RuleKind {
                 "policy_url",
                 "no_fix_reason",
             ],
+            // No `verbatim`: the span a document finding points at is a node,
+            // not a line of text, so whitespace normalization names nothing here.
+            RuleKind::Document => &[
+                "glob",
+                "format",
+                "node",
+                "pattern",
+                "severity",
+                "identity_key",
+                "reason",
+                "policy_url",
+                "no_fix_reason",
+            ],
         }
     }
 
@@ -443,11 +489,16 @@ impl RuleKind {
     #[must_use]
     pub const fn scopes(self) -> &'static [RuleScope] {
         match self {
+            // `Document` is `Tree` alone, and that pairing is `facts::DOCUMENT`
+            // read back: the fact's narrowest surface is `facts::Surface::Check`,
+            // so a row scoped to the mediated call would be a rule no surface
+            // could ever evaluate.
             RuleKind::Forbid
             | RuleKind::Command
             | RuleKind::Ratchet
             | RuleKind::Judge
-            | RuleKind::Secrets => &[RuleScope::Tree],
+            | RuleKind::Secrets
+            | RuleKind::Document => &[RuleScope::Tree],
             RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => &[RuleScope::MediatedCall],
         }
     }
@@ -714,6 +765,25 @@ pub struct Rule {
     /// second spelling of it would be the trunk name written twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// How to parse the documents a [`RuleKind::Document`] row selects. Required
+    /// by that kind, rejected by every other.
+    ///
+    /// **Declared, never inferred from the path.** An extension is a naming
+    /// convention — a JSON5 file is conventionally `.json5` and legally
+    /// anything — and this column is what decides which parser reads the bytes.
+    /// Guessing wrong yields "could not look" on a file that is perfectly well
+    /// formed, which blames the document for the engine's inference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<crate::facts::Format>,
+    /// The dotted node path a [`RuleKind::Document`] row addresses — `a.b.0.c`,
+    /// walking maps by key and lists by index. Required by that kind, rejected
+    /// by every other.
+    ///
+    /// The path is the consumer's, like every other artifact-shaped value here:
+    /// `crates/batten` knows how to walk a document and nothing about what any
+    /// particular one contains (non-negotiable rule 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
     /// Why this rule's findings have no fix — the stated answer, which is not
     /// the same as an absent one (CLOUD-81).
     ///
@@ -1077,7 +1147,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 23] {
+    fn columns(&self) -> [(&'static str, bool); 25] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1100,6 +1170,8 @@ impl Rule {
             ("identity_key", self.identity_key.is_some()),
             ("direction", self.direction.is_some()),
             ("base", self.base.is_some()),
+            ("format", self.format.is_some()),
+            ("node", self.node.is_some()),
             ("checks", self.checks.is_some()),
             ("key", self.key.is_some()),
             ("trigger", self.trigger.is_some()),
@@ -1315,13 +1387,19 @@ impl Rule {
                     .map(ToOwned::to_owned)
                     .collect(),
             )),
-            // Re-running the gate is what settles all three. For `Secrets` the
+            // Re-running the gate is what settles all three, and `Document`
+            // joins them: re-reading the file and re-walking the node is exactly
+            // how a document finding is re-decided, and there is no argv to put
+            // on the record because the parse happens in-process.
+            // For `Secrets` the
             // important half is what this is NOT: an `Argv` here would put the
             // scanner's invocation on the record, and the whole design is that
             // nothing carrying a matched byte leaves the adapter. It is also the
             // honest answer — unlike a judge's verdict, the engine can re-decide
             // a secret finding by scanning again.
-            RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Secrets => Some(Check::Reevaluate),
+            RuleKind::Forbid | RuleKind::Ratchet | RuleKind::Secrets | RuleKind::Document => {
+                Some(Check::Reevaluate)
+            }
             // None of the three reaches the store: each is adjudicated per
             // mediated call and produces a decision, not a finding.
             RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => None,
@@ -1767,6 +1845,11 @@ fn run_rule(
             }
         }
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
+        RuleKind::Document => {
+            for path in matched {
+                document_in_file(rule, root, path, findings)?;
+            }
+        }
         RuleKind::Secrets => crate::secrets::scan(rule, provisions, root, &matched, findings)?,
         // Unreachable: the shape, receipt and pipeline kinds are
         // `mediated_call`-scoped and a ratchet
@@ -2470,6 +2553,112 @@ fn forbid_in_file(
     Ok(())
 }
 
+/// Evaluate a [`RuleKind::Document`] row against one file.
+///
+/// # The three answers, and why the third is the point
+///
+/// * The node holds `pattern` — clean, no finding.
+/// * The node holds something else, or is not there — a finding, reported at the
+///   node path.
+/// * The document **could not be looked at** — it does not parse, or its format
+///   has no parser here — also a finding, under its own reason, and *never*
+///   silence.
+///
+/// That last arm is what the whole kind is for (CLOUD-772). Every hand-rolled
+/// reader it replaces defaults an empty extraction to agreement, so a file the
+/// reader cannot understand passes the gate over it: the gate is loudest exactly
+/// when it has seen the least. [`crate::facts::Look`] makes the two absences
+/// different values, and this is the call site where the difference is spent.
+///
+/// # Pointer-only (non-negotiable rule 4)
+///
+/// A finding carries the path, the rule id and — through the identity — nothing
+/// of the document's content. These files carry tokens and internal hostnames,
+/// so the value read is compared and discarded, never reported. The node path is
+/// the consumer's own config text and is what a reader needs to find the row
+/// again; the value at it is the thing that must not travel.
+fn document_in_file(
+    rule: &Rule,
+    root: &Path,
+    rel_path: &str,
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<()> {
+    // `validate` has already refused a row missing either column, so both are
+    // defence in depth on the same reading `forbid_in_file` applies.
+    let (Some(format), Some(node_path), Some(expected)) =
+        (rule.format, rule.node.as_deref(), rule.pattern.as_deref())
+    else {
+        return Ok(());
+    };
+    let contents = match fs::read(root.join(rel_path)) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
+    // Bytes that are not UTF-8 are a document nothing here can parse, which is
+    // "could not look" and not "no rows" — the same arm a syntax error takes.
+    let outcome = match String::from_utf8(contents) {
+        Ok(text) => format.read(&text),
+        Err(_) => crate::facts::Look::CouldNotLook,
+    };
+    let reason = match &outcome {
+        // `IsNot` rides with `CouldNotLook` rather than standing apart, and the
+        // pairing is not laziness: `Format::read` answers only `Is` or
+        // `CouldNotLook`, because a file that fails to parse says nothing at all
+        // about what it contains. The arm exists so the type stays total and
+        // resolves to the same honest answer if that ever changes — what it must
+        // never resolve to is silence.
+        crate::facts::Look::CouldNotLook | crate::facts::Look::IsNot => Some(DOCUMENT_UNREADABLE),
+        crate::facts::Look::Is(document) => match document.at(node_path) {
+            crate::facts::Look::IsNot => Some(DOCUMENT_NODE_ABSENT),
+            crate::facts::Look::CouldNotLook => Some(DOCUMENT_UNREADABLE),
+            crate::facts::Look::Is(node) => {
+                if node.scalar().as_deref() == Some(expected) {
+                    None
+                } else {
+                    Some(DOCUMENT_NODE_DIFFERS)
+                }
+            }
+        },
+    };
+    let Some(reason) = reason else {
+        return Ok(());
+    };
+    // The identity spans the rule, the file and the NODE PATH — never the value.
+    // Two rows addressing different nodes of the same file are different
+    // findings, and a value that changes without the node moving is the same
+    // one, which is what lets a waiver mean something across a version bump.
+    let default = identity::code_fingerprint(
+        &rule.id,
+        rel_path,
+        &format!("{node_path} {reason}"),
+        identity::SpanNormalization::Verbatim,
+    )?;
+    findings.push(Finding {
+        rule: rule.id.clone(),
+        severity: rule.severity(),
+        path: rel_path.to_owned(),
+        // Line 1 rather than a located node: the parsers here answer with values,
+        // not spans, and inventing a line by re-scanning the text would be a
+        // second reader of the document — the exact thing this kind deletes.
+        line: Some(1),
+        identity: identity_of(rule, identity::FindingKind::Code, default),
+        check: rule.settling_check().unwrap_or(Check::Reevaluate),
+        remediation: rule.remediation(),
+    });
+    Ok(())
+}
+
+/// The document could not be looked at — it does not parse, is not UTF-8, or its
+/// declared format has no parser in this build.
+const DOCUMENT_UNREADABLE: &str = "could-not-look";
+
+/// The document parsed and the addressed node is not in it.
+const DOCUMENT_NODE_ABSENT: &str = "node-absent";
+
+/// The node is there and holds something other than the declared literal.
+const DOCUMENT_NODE_DIFFERS: &str = "node-differs";
+
 /// The entry whose presence makes a directory a repository of its own — git's
 /// own boundary marker, and therefore the one this crate reads.
 ///
@@ -3043,6 +3232,8 @@ mod tests {
             identity_key: None,
             direction: None,
             base: None,
+            format: None,
+            node: None,
             criteria: None,
             tier: None,
             // The one that needs no argv, so a fixture about a different column
@@ -3321,16 +3512,15 @@ mod tests {
         assert!(glob_match("crates/**", "crates/batten/Cargo.toml"));
         assert!(!glob_match("crates/**", "batten.toml"));
 
-        assert!(glob_match(
-            ".github/workflows/*.yml",
-            ".github/workflows/ci.yml"
-        ));
-        // Single-segment `*` must NOT reach a nested workflow, or the row would
+        // A dot-directory two segments deep, spelled generically: naming a real
+        // consumer's automation directory here would put that consumer's
+        // identifier in the core (non-negotiable rule 1), which
+        // `tests/document_facts.rs` gates. The shape under test is the path
+        // shape, not whose path it is.
+        assert!(glob_match(".ci/jobs/*.yml", ".ci/jobs/build.yml"));
+        // Single-segment `*` must NOT reach a nested file, or the row would
         // judge files its author did not name.
-        assert!(!glob_match(
-            ".github/workflows/*.yml",
-            ".github/workflows/nested/ci.yml"
-        ));
+        assert!(!glob_match(".ci/jobs/*.yml", ".ci/jobs/nested/build.yml"));
         assert!(glob_match(
             ".serena/memories/**",
             ".serena/memories/core.md"
@@ -3534,6 +3724,8 @@ mod tests {
                         "filters" => rule.filters = Some(vec!["tail".to_owned()]),
                         "criteria" => rule.criteria = Some("intentional?".to_owned()),
                         "no_fix_reason" => rule.no_fix_reason = Some("answered by hand".to_owned()),
+                        "format" => rule.format = Some(crate::facts::Format::Toml),
+                        "node" => rule.node = Some("a.b".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
                     }
                 }
@@ -3813,12 +4005,13 @@ mod tests {
                 | RuleKind::Receipt
                 | RuleKind::Pipeline
                 | RuleKind::Judge
-                | RuleKind::Secrets => {}
+                | RuleKind::Secrets
+                | RuleKind::Document => {}
             }
         }
         assert_eq!(
             RuleKind::ALL.len(),
-            8,
+            9,
             "a new RuleKind must be added to RuleKind::ALL"
         );
     }

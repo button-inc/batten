@@ -292,7 +292,16 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   `hook::ReceiptFacts`'s `None` has meant since it shipped. `Surface::Check` is
   the tree-surface boundary NAMED WHILE STILL EMPTY: everything `adjudicate`
   consumes today is hook-resolvable, and the second axis exists for the facts
-  that are not landed yet.
+  that are not landed yet. CLOUD-772 put the first fact there: `Format` +
+  `Node` + `Format::read` are the DOCUMENT fact — TOML/YAML/JSON/JSON5 parsed
+  into one canonical tree (`BTreeMap`, so key order is the keys' and never the
+  file's; numbers carried as source text so a version pin round-trips). PKL is a
+  DECLARABLE variant that never parses: an absent variant would answer a
+  consumer's declaration with "no rows", which is the vacuous pass. A file that
+  does not parse is `CouldNotLook`, never `IsNot` — the live failure mode of the
+  73 awk readers in `mise-tasks/`, where an empty extraction reads as agreement.
+  `Node::at` walks a dotted path and answers `IsNot` for a node that is not
+  there, which is the OTHER absence and must stay a different value.
 - `doctor.rs` — `batten doctor` (CLOUD-66), house-style §12's post-install
   self-check: can Batten do its job in this repository? Diagnoses only — it
   **never returns exit 2**, because every failure it can report (config absent,

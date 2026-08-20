@@ -3391,6 +3391,8 @@ mod tests {
             identity_key: None,
             direction: None,
             base: None,
+            format: None,
+            node: None,
             criteria: None,
             tier: None,
             // A shape rule never reaches the findings store, so it is refused
