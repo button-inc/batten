@@ -30,7 +30,10 @@ Read on demand, never all of them.
 - `mem:prior-art-and-issue-hygiene` — surveying outside practice; adopting a
   tool or pattern; writing an issue or PR body.
 - `mem:connector-allowlist-recovery` — a connector's tools start prompting or
-  denying, or reappear under a different name.
+  denying, reappear under a different name, or are **absent entirely** ("No such
+  tool available"); before telling anyone a connector is unattached or needs
+  authorizing; and when `claim-check` has no payload to read, since a missing
+  receipt stops `verify` and strands the branch.
 - `mem:memory_maintenance` — writing, renaming or splitting a memory; the
   shipped convention template.
 

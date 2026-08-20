@@ -76,6 +76,53 @@ Step 2 does not persist — the container is reclaimed. That is the whole proble
 and CLOUD-191 is the durable answer: derive the live keys from the injected
 config in a `SessionStart` hook, so nothing account-specific is stored anywhere.
 
+## When the absent-tools episode hits a LANDING session (2026-08-20)
+
+The third state above, met again and costed. What is new is the coupling, the
+dead ends, and the fact that **this memory existed and was not read** — the
+session rediscovered its content by experiment, which is the failure `mem:core`'s
+routing exists to prevent. Route here from the trigger, do not re-derive.
+
+**It stalls the whole lifecycle, not just the board.** `claim-check` is a pure
+function of a `get_issue` payload, so with no callable connector there is no
+receipt; `verify` then refuses (`claim <branch> missing`) before it runs a single
+gate, and `land` cannot start. A connector blip becomes an unlandable branch.
+Commit and push and open the draft PR anyway — that work survives, and a session
+whose tools bind can mint the receipt and land it unchanged.
+
+**Forms that are NOT candidates**, so nobody spends turns on them again. The
+injected config's server entry carries three ids; only the key is a tool prefix.
+
+- key / `toolbox_mcp_server_id` — `4db58e41-…`, the documented UUID form
+- `mcp_server_id` — `8e7891d1-…`, in the url query. Never a tool prefix.
+- `directoryUuid` from `ListConnectors` — `fa50c30c-…`. Never a tool prefix.
+
+Also not candidates: lowercase `mcp__linear__*`.
+
+**Two dead ends, both tried:**
+
+- `claude mcp add --transport http linear https://mcp.linear.app/mcp` registers
+  fine and then reports `! Needs authentication` forever: the OAuth flow needs a
+  browser redirect to a localhost callback, which a remote container has no way
+  to complete. It is not a workaround, it is a second broken server.
+- Replaying the injected config's `headers` against its endpoint by hand is
+  **blocked by the auto-mode classifier**, correctly — it is credential replay.
+  Do not route around it.
+
+**What NOT to say to the user.** They are usually running several sessions and
+the others are fine, so "the connector is not attached" is both wrong and reads
+as blaming their setup. The true statement is narrower: _the config injected it
+with all its tools; this session did not bind them._ `ListMcpResourcesTool`
+(resources, not tools) and `claude mcp list` (CLI config, not connectors) prove
+NOTHING here — the only evidence is a call returning "No such tool available".
+
+**Sensor gap, unfiled because the tracker is the unreachable thing.** Both
+`mcp-attach-check` and `mcp-allow-check` pass green through this. Neither
+compares the injected config's `tools[].name` against the tools the session can
+actually call, which is the one comparison that catches it — and
+`connector-allow-resolve` already reads that file, so only the predicate is
+missing. Recorded in PR #575's body; wants a row of its own.
+
 ## What is NOT known
 
 - **What causes the flip.** No hypothesis is supported by evidence yet.
