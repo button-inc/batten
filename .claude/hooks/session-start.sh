@@ -242,10 +242,21 @@ fi
 # header owns the what and the why, this owns only the WHEN.
 #
 # WHY HERE and not on a later event: settings are a startup snapshot (CLOUD-187),
-# so a write after the read binds nothing — measured, on this very session, by
-# projecting mid-session and watching the identical call refuse exactly as
-# before. This is the earliest writable moment, and the overlay it leaves is read
-# by the next session start in this container.
+# so a write after the read binds nothing, and this is the earliest writable
+# moment there is.
+#
+# AND IT IS STILL NOT EARLY ENOUGH — say so here rather than let a reader infer a
+# working mechanism from a running one. Three surfaces have now been tried and
+# measured: the generated config edited mid-session, this overlay written
+# mid-session, and this overlay present on disk BEFORE a session started (same
+# container, same disk, verified by mtime). All three left the identical call
+# refused. The refusal arrives from the CCR proxy, upstream of the local
+# permission layer, where no file this hook can write will reach it — upstream
+# anthropics/claude-code#61044 and #61015, and the capability gap CLOUD-312
+# tracks. What the projection is FOR, then, is the committed intent expressed
+# against the identity that actually attached: that is what `mcp-allow-check`'s
+# inert-rule predicate reads, and it is what makes that predicate closable rather
+# than a verdict no edit could satisfy.
 #
 # NEVER SETS `fail`, and deliberately not routed through `step`, for the reason
 # `reclaim-census` below is not: a stale committed rule is a finding about the

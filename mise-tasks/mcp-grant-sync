@@ -25,8 +25,22 @@
 # the Claude Code Remote server, against six committed `mcp__Claude_Code_Remote__*`
 # allow rules and 20 tools all sitting at `always_ask`. So the host performs this
 # projection and silently dropped one connector's entire grant. A process
-# argument is fixed at startup and unreachable from a hook — but it is unioned
-# with the settings files, and a settings file is rereadable. Hence the overlay.
+# argument is fixed at startup and unreachable from a hook, which is what sends
+# the projection to the overlay instead.
+#
+# WHAT THE OVERLAY DOES NOT DO, measured rather than hoped: it does not release
+# the call. Three surfaces tried — the generated config edited mid-session, this
+# overlay written mid-session, and this overlay already on disk before a session
+# started (same container, verified by mtime) — and all three left the identical
+# committed-but-inert call refused. The refusal is the CCR proxy's, upstream of
+# the local permission layer (anthropics/claude-code#61044, #61015; CLOUD-312).
+#
+# So this is not a permission fix, and a reader should not spend a session
+# expecting one. It is the committed intent expressed against the identity that
+# actually attached, which is the thing `mcp-allow-check`'s inert-rule predicate
+# reads: without it, "this rule names a server that never attached" would be a
+# verdict no edit could satisfy, since a committed rule cannot name an identifier
+# that rotates.
 #
 # WHY `.claude/settings.local.json` AND NOT THE COMMITTED FILE. The overlay is
 # gitignored (`.gitignore:22`), per-container, and derived: every rule it carries
