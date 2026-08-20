@@ -113,7 +113,7 @@
 # The mutation drops the membership test, so every tool of a resolved server is
 # emitted rather than only the ones a committed rule names — the widening this
 # structurally forbids, and the case CLOUD-418 requires be shown to fail.
-#MUTANT grant-sync-projects-allows|s/^\t\t\[ "\$kind" = deny \] || continue$/\t\t:/|an allow rule is never projected
+#MUTANT grant-sync-projects-allows|s/^\t\t\[ "\$kind" = deny \].*$/\t\t:/|an allow rule is never projected
 #MUTANT grant-sync-widens|s/^\t\temit "\$id" "\$tool"$/\t\temit "$id" "*"/|a tool no committed rule names is never projected
 # And the inert-tool refusal must stay a refusal: neutered, a rule naming a tool
 # its server does not expose is emitted anyway and reads as a grant that grants
@@ -339,6 +339,11 @@ for label in $labels; do
 		# was present. The committed denies name a label the server does not
 		# register under, so without this projection AGENTS.md's ban on
 		# babysitting timers is enforced by nothing at all.
+		# THE ONE PLACE THIS IS ENFORCED. An earlier revision also filtered allows
+		# out at the overlay write, and the redundancy silently neutered the
+		# mutation that proves this line matters: neutered here, the second guard
+		# still produced a correct overlay and the suite stayed green. One
+		# enforcement point, one mutant, one case that can see it.
 		[ "$kind" = deny ] || continue
 		emit "$id" "$tool"
 	done < <(jq -r '.[] | [.kind, (.rule | split("__") | .[2:] | join("__"))] | @tsv' <<<"$label_rules")
@@ -364,7 +369,7 @@ if [ "$dry_run" = 0 ]; then
 	if ! jq --argjson allow "$new_allow" --argjson deny "$new_deny" '
 		def mine: type == "string" and test("^mcp__[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}__");
 		.permissions = ((.permissions // {})
-			| .allow = [((.allow // [])[] | select(mine | not))]
+			| .allow = ([((.allow // [])[] | select(mine | not))] + $allow | unique)
 			| .deny  = ([((.deny  // [])[] | select(mine | not))] + $deny  | unique))
 	' "$overlay" >"$tmp" 2>/dev/null; then
 		rm -f "$tmp"
