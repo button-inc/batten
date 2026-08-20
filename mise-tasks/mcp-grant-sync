@@ -1,0 +1,279 @@
+#!/usr/bin/env bash
+#MISE description="Project the committed MCP rules onto the identity the host actually attached this session, into the gitignored local overlay"
+#
+# CLOUD-734. `.claude/settings.json` grants and denies MCP tools by **label**
+# (`mcp__Linear__*`, `mcp__Claude_Code_Remote__create_session`). The host attaches
+# a toolbox server under an identifier it chooses per registration episode, so a
+# committed rule can name something that does not exist — and a rule that names
+# nothing is silent by construction. That is CLOUD-178's finding, and CLOUD-684
+# gates it from the settings side. This is the repair from the session side.
+#
+# WHERE A GRANT IS ACTUALLY CONSULTED, measured rather than assumed. The issue
+# proposed rewriting `/tmp/mcp-config-<session-id>.json`, whose per-tool
+# `permission_policy` looks like the lever. It is not reachable:
+#
+#   00:32:37.007  generated config written
+#   00:32:39.412  MCP connection logs opened (the read)
+#   00:32:44.703  this repo's SessionStart hook writes its first byte
+#
+# Two independent samples, one per container incarnation on 2026-08-19/20. The
+# hook runs AFTER the read every time, so a rewrite there lands in the same
+# window as the mid-session edit the issue already measured doing nothing.
+#
+# The effective list is instead `--allowed-tools` on the CLI process, and it is
+# already uuid-projected: measured 51 entries for the Linear server and ZERO for
+# the Claude Code Remote server, against six committed `mcp__Claude_Code_Remote__*`
+# allow rules and 20 tools all sitting at `always_ask`. So the host performs this
+# projection and silently dropped one connector's entire grant. A process
+# argument is fixed at startup and unreachable from a hook — but it is unioned
+# with the settings files, and a settings file is rereadable. Hence the overlay.
+#
+# WHY `.claude/settings.local.json` AND NOT THE COMMITTED FILE. The overlay is
+# gitignored (`.gitignore:22`), per-container, and derived: every rule it carries
+# is one committed rule wearing the name the host is currently using. The
+# committed file stays the ONLY source of intent (§1) and is never written. That
+# asymmetry is the safety property — this can express nothing the human did not
+# already commit, so it cannot widen, whatever the session state says.
+#
+# IDENTIFICATION IS BY TOOL INVENTORY, NEVER BY NAME, because the name is the
+# thing that rotates. Measured twice in one session: the servers registered as
+# `mcp__4db58e41-…`/`mcp__bf7c680d-…`, re-registered ~126s later under the human
+# labels `Linear`/`Claude_Code_Remote`, and rotated back to the uuids on the next
+# container. So a grant keyed to either name alone is in force for part of a
+# session and inert for the rest. Tool names do not rotate.
+#
+# AND THE MAP THAT PROVED UNNECESSARY. CLOUD-734's Ready block put the
+# label→identifying-tool mapping in `batten.toml`. It cannot go there: `Config`
+# carries `deny_unknown_fields` (crates/batten/src/config.rs), so a new top-level
+# table makes every `batten` invocation a hard error. It is not needed either —
+# the committed rules THEMSELVES name the tools (`mcp__<label>__<tool>`), so the
+# identifying inventory is derived from the source of truth and no second config
+# surface is introduced (AGENTS.md rule 6). A label whose rules are only globs
+# carries no tool to match on and is reported unresolved rather than guessed at.
+#
+# DENIES ARE PROJECTED TOO, and the direction is why. An under-matching ALLOW
+# fails closed — a human sees an approval prompt. An under-matching DENY fails
+# OPEN and silently, which is the whole of `mcp-allow-check`'s third predicate.
+# That gate reports the hole; this closes it, from the same committed authority.
+#
+# Output is pointer-only per non-negotiable rule 4: counts and 8-character server
+# id prefixes. Never a tool name, never a URL, and never a byte of the generated
+# config's `headers` block — that file carries this session's credentials, so
+# echoing any of it is the worst failure available here.
+#
+# Exit 0 projected or nothing to do / 1 a committed rule names a tool its own
+# resolved server does not expose (CLOUD-684's inert rule, from this side) /
+# 2 could not look.
+#
+# The mutation drops the membership test, so every tool of a resolved server is
+# emitted rather than only the ones a committed rule names — the widening this
+# structurally forbids, and the case CLOUD-418 requires be shown to fail.
+#MUTANT grant-sync-widens|s/^\t\t\temit "\$id" "\$tool"$/\t\t\temit "$id" "*"/|a tool no committed rule names is never projected
+# And the inert-tool refusal must stay a refusal: neutered, a rule naming a tool
+# its server does not expose is emitted anyway and reads as a grant that grants
+# nothing — the exact defect this exists to surface.
+#MUTANT grant-sync-ignores-inert-tools|s/^\t\t\tinert=\$((inert + 1))$/\t\t\t:/|a committed rule naming an unexposed tool exits non-zero
+#
+# The declared exemption `hook-pin-check` honours, beside the assertion it
+# describes rather than in a list that could drift from it.
+#PIN-OK: jq
+set -uo pipefail
+
+# jq reads a settings file, a `.mcp.json` and the generated MCP config here —
+# none of them a hook payload, so `payload-field` cannot serve any of them. Every
+# read below has a `2>/dev/null` fallback, so an absent jq would report a clean
+# projection while projecting nothing. Assert it loudly instead.
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: mcp-grant-sync: no jq on PATH — every read here would fail into a silent no-op. Run it through \`mise run mcp-grant-sync\`." >&2
+	exit 2
+fi
+
+settings=".claude/settings.json"
+mcp_json=".mcp.json"
+overlay=".claude/settings.local.json"
+config=""
+dry_run=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--settings)
+		settings="${2:-}"
+		shift 2
+		;;
+	--mcp-json)
+		mcp_json="${2:-}"
+		shift 2
+		;;
+	--config)
+		config="${2:-}"
+		shift 2
+		;;
+	--overlay)
+		overlay="${2:-}"
+		shift 2
+		;;
+	--dry-run)
+		dry_run=1
+		shift
+		;;
+	*)
+		echo "usage: mcp-grant-sync [--settings F] [--mcp-json F] [--config F] [--overlay F] [--dry-run]" >&2
+		exit 2
+		;;
+	esac
+done
+
+# The generated config is named for the HOST's session id (`cse_…`), which is not
+# the id the hook payload carries, so it is found by glob rather than derived.
+# Newest by mtime: a container restart writes a second one beside the first, and
+# the stale file describes servers that are no longer attached.
+if [ -z "$config" ]; then
+	config=$(find /tmp -maxdepth 1 -name 'mcp-config-*.json' -type f 2>/dev/null |
+		while IFS= read -r f; do printf '%s %s\n' "$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo 0)" "$f"; done |
+		sort -rn | head -n 1 | cut -d' ' -f2-)
+fi
+
+# FAIL OPEN, LOUDLY, on anything that means "this is not a live session" — CI, a
+# bare checkout, a different harness. A projection computed from a config that
+# is not there would be a claim about servers nobody attached.
+if [ ! -f "$settings" ]; then
+	echo "mcp-grant-sync: no $settings — nothing to project"
+	exit 0
+fi
+if [ -z "$config" ] || [ ! -r "$config" ]; then
+	echo "mcp-grant-sync: no generated MCP config — not a live session, nothing to project"
+	exit 0
+fi
+if ! inventory=$(jq -c '[(.mcpServers // {}) | to_entries[] | {id: .key, tools: [((.value.tools // [])[] | .name)]}]' "$config" 2>/dev/null); then
+	echo "::error:: mcp-grant-sync: the generated MCP config is not readable JSON" >&2
+	exit 2
+fi
+if ! rules=$(jq -c '[(.permissions.allow // [])[] | select(type == "string") | {kind: "allow", rule: .}] + [(.permissions.deny // [])[] | select(type == "string") | {kind: "deny", rule: .}]' "$settings" 2>/dev/null); then
+	echo "::error:: $settings is not readable JSON with a permissions block" >&2
+	exit 2
+fi
+
+server_ids=$(jq -r '.[].id' <<<"$inventory")
+exposes() { jq -e --arg id "$1" --arg t "$2" '.[] | select(.id == $id) | .tools | index($t)' <<<"$inventory" >/dev/null 2>&1; }
+
+# A server this repo DECLARES keeps a stable name by construction — the name is
+# the repo's own, not one the host chose — so its rules need no projection. Same
+# reasoning `mcp-allow-check` uses for the same set.
+declared=$( (
+	jq -r '(.enabledMcpjsonServers // empty) | if type == "array" then .[] else empty end' "$settings" 2>/dev/null
+	jq -r '(.mcpServers // {}) | keys[]' "$mcp_json" 2>/dev/null
+) | sort -u)
+
+labels=$(jq -r '.[] | .rule | select(startswith("mcp__")) | sub("^mcp__"; "") | split("__")[0]' <<<"$rules" | sort -u)
+
+projected=""   # newline-separated `<kind> <rule>` pairs
+touched_ids="" # server id prefixes that received a projection
+counts_allow=0
+counts_deny=0
+aligned=0
+unresolved=0
+ambiguous=0
+inert=0
+
+emit() { # emit <server-id> <tool>
+	projected="${projected}${kind} mcp__${1}__${2}
+"
+	case "$kind" in
+	allow) counts_allow=$((counts_allow + 1)) ;;
+	deny) counts_deny=$((counts_deny + 1)) ;;
+	esac
+}
+
+for label in $labels; do
+	[ -n "$label" ] || continue
+	# A glob in the server segment names no server at all; `mcp-allow-check`
+	# already refuses that shape for an allow, and there is nothing here to
+	# resolve it to.
+	case "$label" in
+	*'*'*) continue ;;
+	esac
+	grep -qxF "$label" <<<"$declared" && continue
+	# Already registered under its committed name: the rule matches as written,
+	# and emitting a copy of it would be a second authority for a live grant.
+	grep -qxF "$label" <<<"$server_ids" && {
+		aligned=$((aligned + 1))
+		continue
+	}
+
+	label_rules=$(jq -c --arg l "$label" '[.[] | select(.rule | startswith("mcp__" + $l + "__"))]' <<<"$rules")
+	# THE IDENTIFYING INVENTORY, taken from the committed rules themselves. A
+	# literal tool name is distinctive and does not rotate; a glob names none.
+	identifying=$(jq -r '.[] | .rule | split("__") | .[2:] | join("__")' <<<"$label_rules" | grep -vF '*' | sort -u)
+	if [ -z "$identifying" ]; then
+		unresolved=$((unresolved + 1))
+		continue
+	fi
+
+	# ANY identifying tool matching is enough to name the server, deliberately —
+	# requiring ALL of them would fold "this server is not attached" together
+	# with "one committed rule is stale", and the second is exactly the finding
+	# this must report rather than swallow.
+	matches=()
+	for id in $server_ids; do
+		for tool in $identifying; do
+			if exposes "$id" "$tool"; then
+				matches+=("$id")
+				break
+			fi
+		done
+	done
+	if [ "${#matches[@]}" -eq 0 ]; then
+		unresolved=$((unresolved + 1))
+		continue
+	fi
+	if [ "${#matches[@]}" -gt 1 ]; then
+		ambiguous=$((ambiguous + 1))
+		continue
+	fi
+	id="${matches[0]}"
+	touched_ids="${touched_ids}${touched_ids:+ }${id:0:8}"
+
+	while IFS=$'\t' read -r kind tool; do
+		[ -n "$tool" ] || continue
+		if [ "$tool" != "*" ] && ! exposes "$id" "$tool"; then
+			# The committed rule names a tool its own server does not expose:
+			# a grant that grants nothing, or a prohibition that prohibits
+			# nothing. CLOUD-684's inert rule, surfacing from the session side.
+			inert=$((inert + 1))
+			continue
+		fi
+		emit "$id" "$tool"
+	done < <(jq -r '.[] | [.kind, (.rule | split("__") | .[2:] | join("__"))] | @tsv' <<<"$label_rules")
+done
+
+new_allow=$(printf '%s' "$projected" | awk '$1 == "allow" {print $2}' | jq -R . | jq -sc .)
+new_deny=$(printf '%s' "$projected" | awk '$1 == "deny" {print $2}' | jq -R . | jq -sc .)
+
+if [ "$dry_run" = 0 ]; then
+	[ -f "$overlay" ] || echo '{}' >"$overlay"
+	# OWNED BY SHAPE, not by a marker file: every rule this writes carries a
+	# generated server segment, so the previous run's output is identified and
+	# replaced rather than accumulated. A human's own local rules — which never
+	# have that shape — survive untouched, and so does everything else in the
+	# file. Idempotent by construction, which is what lets the hook re-run it
+	# after a re-registration.
+	tmp="${overlay}.mcp-grant-sync.$$"
+	if ! jq --argjson allow "$new_allow" --argjson deny "$new_deny" '
+		def mine: type == "string" and test("^mcp__[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}__");
+		.permissions = ((.permissions // {})
+			| .allow = ([((.allow // [])[] | select(mine | not))] + $allow | unique)
+			| .deny  = ([((.deny  // [])[] | select(mine | not))] + $deny  | unique))
+	' "$overlay" >"$tmp" 2>/dev/null; then
+		rm -f "$tmp"
+		echo "::error:: mcp-grant-sync: $overlay is not readable JSON — refusing to overwrite it" >&2
+		exit 2
+	fi
+	mv "$tmp" "$overlay"
+fi
+
+echo "mcp-grant-sync: projected $counts_allow allow + $counts_deny deny rule(s) onto ${touched_ids:-no} server(s)${touched_ids:+ ($touched_ids)}; $aligned label(s) already live under their committed name, $unresolved unresolved, $ambiguous ambiguous"
+
+if [ "$inert" -ne 0 ]; then
+	echo "::error:: mcp-grant-sync: $inert committed rule(s) name a tool their own resolved server does not expose — the rule reads as policy and enforces nothing (CLOUD-684)" >&2
+	exit 1
+fi
+exit 0
