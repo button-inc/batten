@@ -135,12 +135,22 @@ set -uo pipefail
 #
 # One implementation, not two. A second copy of the intersection would be a second
 # thing to drift, which is the defect this whole change is about.
+#
+# `--checklist` IS A THIRD QUESTION OVER THE SAME PARSE, not a wider `--advisory`.
+# That mode's predicate is measured and mutation-gated — it fires on rows whose
+# body names a file this branch is changing — and widening it to every row would
+# retune a gate by editing the question it answers. The checklist asks something
+# genuinely different: not "which of these is a punt" but "here is every row you
+# spun off, say for each that it is really independent work". No predicate scores
+# that; the agent does, which is why this prints and never refuses.
 advisory=
+checklist=
 case "${1:-}" in
 --advisory) advisory=1 ;;
+--checklist) checklist=1 ;;
 "") ;;
 *)
-	echo "usage: filed-here-check [--advisory]  (PR body optional on stdin)" >&2
+	echo "usage: filed-here-check [--advisory|--checklist]  (PR body optional on stdin)" >&2
 	exit 2
 	;;
 esac
@@ -232,18 +242,6 @@ while read -r kind id _ verdict overlap; do
 	latest="${rebuilt:+$rebuilt }$id=${verdict:--}=${packed}"
 done <"$record"
 
-for entry in $latest; do
-	id=${entry%%=*}
-	rest=${entry#*=}
-	verdict=${rest%%=*}
-	case "$verdict" in
-	unready) ;;
-	ready) continue ;;
-	*) continue ;; # not answered — see the three-states note above
-	esac
-	report "$id filed-unrefined" unrefined
-done
-
 # THE INTERSECTION HAPPENS HERE NOW, NOT AT WRITE TIME (CLOUD-774). The column
 # holds the paths the row NAMES; the diff it is judged against is read fresh. The
 # old shape froze a fact about the diff at the instant the row was filed, and rows
@@ -278,6 +276,63 @@ if [ ! -t 0 ]; then
 		[ -x "$lister" ] && closes=$(printf '%s' "$pr_body" | "$lister" --list 2>/dev/null) || closes=""
 	fi
 fi
+
+# THE CHECKLIST, and it exits before either refusal pass because it is not one.
+# It enumerates every row this branch filed, marks the ones whose named paths
+# intersect the branch's own diff, and asks the agent to affirm each is genuinely
+# independent work rather than a punt it could have closed. The marking is the
+# same intersection the refusal below computes — one implementation, read twice —
+# but the VERDICT is the reader's, which is why this reports and returns 0.
+#
+# Pointer-only, and here it does real work: an id, a marker token, nothing from
+# the row's body. Handing back the row's own prose would make this a mirror, and
+# a mirror is cleared by restating it (`finding-sink-check`'s recorded lesson).
+# An id can only be answered by going and reading the row.
+if [ -n "$checklist" ]; then
+	listed=0
+	for entry in $latest; do
+		id=${entry%%=*}
+		rest=${entry#*=}
+		overlap=${rest#*=}
+		mark="filed"
+		case "$overlap" in
+		[1-9]*,*)
+			paths=${overlap#*,}
+			for path in ${paths//,/ }; do
+				case "
+$changed_now
+" in
+				*"
+$path
+"*)
+					mark="names-this-diff"
+					break
+					;;
+				esac
+			done
+			;;
+		esac
+		case " $closes " in
+		*" $id "*) mark="closed-by-this-pr" ;;
+		esac
+		printf '%s %s\n' "$id" "$mark"
+		listed=$((listed + 1))
+	done
+	[ "$listed" -gt 0 ] || exit 0
+	exit 1
+fi
+
+for entry in $latest; do
+	id=${entry%%=*}
+	rest=${entry#*=}
+	verdict=${rest%%=*}
+	case "$verdict" in
+	unready) ;;
+	ready) continue ;;
+	*) continue ;; # not answered — see the three-states note above
+	esac
+	report "$id filed-unrefined" unrefined
+done
 
 # THE DIFF REFUSAL, in its own pass because a row can earn both: "never groomed
 # to Ready" and "names code this branch is holding open" are different facts, and

@@ -61,16 +61,60 @@ field="$(dirname -- "${BASH_SOURCE[0]}")/payload-field"
 active=$(printf '%s' "$raw" | "$field" stop-hook-active) || exit 0
 [ "$active" = "true" ] && exit 0
 
+# THE TRANSCRIPT SEAM, AND THE RECORDER BEHIND IT (CLOUD-97). `batten.toml`'s
+# `[transcript]` names one fixed repo-relative path because the key is the
+# committed authority and is deliberately unlayerable — a local file redirecting
+# it would be CHOOSING THE EVIDENCE. The host's transcript is a per-session
+# absolute path no committed value can name, so the indirection lives here: the
+# authority names the file forever, and this points it at the session the host
+# just named. Nothing is READ here — the symlink is a pointer, and the engine is
+# the only thing that opens it.
+#
+# Then `state record` evaluates the detectors over it. THE COST IS REAL AND IS
+# STATED RATHER THAN BURIED, because a Stop hook's latency is paid at every turn
+# end: measured 2026-08-20, this registration goes from ~28ms to ~330-440ms, and
+# essentially all of the difference is this one call (`state record` 328ms, the
+# three reading rules 9-34ms each). It is a tree walk plus a store write, and it
+# is what the whole rule below rests on — the alternative is the detector staying
+# dark, which is what it has been for this repository's entire life. Revisit by
+# gating on a moved HEAD if a session ever feels it.
+# Everything fails open: no path, no binary, no repo, an unwritable link.
+transcript=$(printf '%s' "$raw" | "$field" transcript-path) || transcript=""
+root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
+if [ -n "$transcript" ] && [ -n "$root" ] && [ -r "$transcript" ]; then
+	ln -sfn "$transcript" "$root/.claude/.transcript.jsonl" 2>/dev/null || true
+fi
+for candidate in \
+	"${BATTEN_BIN:-}" \
+	"$root/target/release/batten" \
+	"$root/target/debug/batten" \
+	"$(command -v batten 2>/dev/null || true)"; do
+	if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+		# Streams discarded, exit status ignored: this is an evaluation, not a
+		# verdict. `unlanded-check` below reads what it wrote, and a recorder
+		# that failed simply leaves nothing to read — which is silence, the
+		# correct answer for a hook that may never be the reason a turn stalls.
+		(cd "$root" 2>/dev/null && "$candidate" state record >/dev/null 2>&1) || true
+		break
+	fi
+done
+
 # The turn's final response text, handed over directly — so this hook never opens
 # `transcript_path` and no session content is read beyond the message already
 # being judged.
 msg=$(printf '%s' "$raw" | "$field" last-assistant-message) || exit 0
-[ -n "$msg" ] || exit 0
 
 check="$(dirname -- "${BASH_SOURCE[0]}")/stop-posture-check"
 [ -x "$check" ] || exit 0
 
-reason=$(printf '%s' "$msg" | "$check") || true
+# An absent final message is no longer an exit: it costs the FIRST rule, whose
+# input it is, and nothing else. The rules below read the transcript and the
+# store, and the closing question reads neither — a turn that ended without a
+# text block is still a turn that ended.
+reason=""
+if [ -n "$msg" ]; then
+	reason=$(printf '%s' "$msg" | "$check") || true
+fi
 
 # The second rule (CLOUD-252), and it is SECOND on purpose: one advisory per turn.
 # `hedged-flag-framing` keeps precedence because it is the enforcing rule with the
@@ -155,12 +199,89 @@ A row this branch filed names a file this branch is changing. Finish it now whil
 	fi
 fi
 
-[ -n "$reason" ] || exit 0
+# THE FOURTH RULE (CLOUD-97), AND IT IS THE ONE THIS FILE WAS ALWAYS FOR. The
+# three above read PROSE and infer from its shape; this one reports a verdict the
+# engine already reached over repository state — a completion signal in the
+# session transcript with no patch-id-equivalent commit on the landing target.
+# It decides nothing itself (see `unlanded-check`), which is why it can sit here
+# without becoming a second answer to "is this landed".
+#
+# LAST, on this file's own rule that precedence is earned rather than asserted.
+# The rules above rank by measured precision — 3/3, then 1/1 — and this one has
+# no measurement yet, so it takes the bottom slot exactly as CLOUD-774 did.
+# Revisit when it has a record.
+if [ -z "$reason" ]; then
+	unlanded="$(dirname -- "${BASH_SOURCE[0]}")/unlanded-check"
+	if [ -x "$unlanded" ]; then
+		# Pointer-only by that gate's contract: a count and a rule id, never a
+		# commit message or a line of the transcript the verdict was read from.
+		pointer=$("$unlanded" </dev/null 2>/dev/null) || true
+		[ -z "$pointer" ] || reason="$pointer
+This turn declared a stopping point and the work is not on the landing target. Land it, or say what blocks it."
+	fi
+fi
+
+# THE FIFTH RULE: THE ROWS THIS BRANCH SPUN OFF, ENUMERATED FOR RE-EVALUATION.
+# Rule 3 asks a narrow, measured question — which filed row names a file this
+# branch is holding open — and answers it once per row. This asks the broad one
+# the narrow predicate cannot: here is EVERY row you spun off; say for each that
+# it is genuinely independent work and not something you could have closed here.
+# No predicate scores that, and none is asked to (non-negotiable 3): the ids are
+# the pointer and the judgement is the agent's.
+#
+# SUPPRESSED ON THE SET, NOT PER ROW, AND THAT IS THE WHOLE DIFFERENCE. A
+# per-row receipt would show a partial list — a checklist with rows hidden is not
+# a checklist — and no receipt at all would reprint the same list at every turn
+# end for the rest of the session, which is how this channel dies. The set is the
+# unit: file another row and the whole list is asked again, because the question
+# is about the set.
+if [ -z "$reason" ]; then
+	filed_list="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check"
+	if [ -x "$filed_list" ]; then
+		rows=$("$filed_list" --checklist </dev/null 2>/dev/null) || true
+		if [ -n "$rows" ]; then
+			set_key=$(printf '%s' "$rows" | tr '\n' ' ')
+			set_file=""
+			if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
+				branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
+				[ -n "$branch" ] &&
+				mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
+				set_file="$git_dir/batten-receipts/filed-set-nudged.${branch//\//-}"
+			fi
+			if [ -n "$set_file" ] && [ -f "$set_file" ] && grep -qxF "$set_key" "$set_file" 2>/dev/null; then
+				rows=""
+			else
+				[ -z "$set_file" ] || printf '%s\n' "$set_key" >>"$set_file" 2>/dev/null || true
+			fi
+		fi
+		[ -z "$rows" ] || reason="$rows
+Every row above was spun off while this branch was open. For each, by number: is it genuinely independent work, or a punt you could close here? Close the punts; leave a reason for the rest."
+	fi
+fi
+
+# AND THE CLOSING QUESTION, WHICH CARRIES NO INFORMATION AT ALL. Every rule above
+# can only fire on a shape somebody thought to enumerate, and the measured recall
+# is the weak half of all three. What has no recall problem is the bare question:
+# `finding-sink-check`'s own header records that "Done?" — asked with nothing in
+# it — surfaced nine real findings in one session, because a coordinate cannot be
+# cleared by restating and neither can a question. It is the cheapest rule here
+# and the only one that cannot miss.
+#
+# It is LAST and mutually exclusive with the others on purpose: a turn that
+# already got a pointer has been asked something more specific, and stacking the
+# generic question behind it is the second nudge this file exists to prevent.
+#
+# The cost is stated rather than buried: `additionalContext` continues the turn,
+# so this adds one model round trip to a turn that would otherwise have ended
+# silently. That IS the mechanism — the question has to be asked somewhere the
+# agent must answer it — and `stop_hook_active` bounds it to exactly one per
+# turn.
+[ -n "$reason" ] || reason="done?"
 
 # The reply document, built without `jq` for the same reason the reads above
 # dropped it. Only one value needs escaping and it is ours, not the payload's:
-# `reason` is assembled from `stop-posture-check`/`finding-sink-check` output,
-# which is pointer-only by their own contracts. `printf '%s' | od`-grade escaping
+# `reason` is assembled from the four checks' output, which is pointer-only by
+# their own contracts, or is this file's own `done?` literal. `printf '%s' | od`-grade escaping
 # is not needed — JSON strings require exactly backslash, quote, and the C0
 # controls, and `sed` covers them in that order (backslash FIRST, or it would
 # double the ones the later rules insert).
