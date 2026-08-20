@@ -4133,12 +4133,47 @@ fn receipt_status_json_names_the_pointer_lines_tokens() {
     assert_eq!(document["check"], serde_json::json!("verify"));
     assert_eq!(document["verdict"], serde_json::json!("missing"));
     let head = git_in(&repo, &["rev-parse", "HEAD"]);
-    assert_eq!(document["head"], serde_json::json!(head));
+    // `subject` carries the git fact judged, and `key` names which fact that is
+    // (CLOUD-741). It was `head`, which stopped being true the moment
+    // `--key branch` existed: under that keying the same field holds a branch
+    // name. A field whose meaning changes with a flag is unparseable in exactly
+    // the way this document exists to prevent, so the keying is named beside it
+    // rather than left for a consumer to infer from the value's shape.
+    assert_eq!(document["key"], serde_json::json!("head"));
+    assert_eq!(document["subject"], serde_json::json!(head));
+    assert!(
+        document.get("head").is_none(),
+        "the ambiguous field is gone, not merely joined by a clearer one: {document}"
+    );
 
-    // The same three tokens the human channel concatenates, so the two renderings
+    // The same tokens the human channel concatenates, so the two renderings
     // cannot drift apart.
     let (_, pointer) = receipt_status(&repo, &home, "verify");
     assert_eq!(pointer.trim(), format!("verify {head} missing"));
+}
+
+#[test]
+fn receipt_status_json_names_the_branch_it_judged_under_branch_keying() {
+    // The other half of the same contract: `subject` earns its name only if it
+    // actually changes with the keying. Without this row the rename would be
+    // cosmetic and a reader could still assume the field is always a SHA.
+    let (repo, home, _seeded) = census_fixture("census-receipt-branch");
+    let output = receipt_cmd(
+        &repo,
+        &home,
+        &["receipt", "status", "claim", "--key", "branch", "-J"],
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let document: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("receipt status -J is JSON");
+    assert_eq!(document["key"], serde_json::json!("branch"));
+    assert_eq!(document["verdict"], serde_json::json!("missing"));
+    let branch = git_in(&repo, &["symbolic-ref", "--quiet", "--short", "HEAD"]);
+    assert_eq!(
+        document["subject"],
+        serde_json::json!(branch),
+        "the subject is the branch under branch keying, never a commit"
+    );
 }
 
 // --- receipts (CLOUD-203) ----------------------------------------------------
