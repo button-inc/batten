@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Project the committed MCP rules onto the identity the host actually attached this session, into the gitignored local overlay"
+#MISE description="Project the committed MCP DENY rules onto the identity the host actually attached this session, into the gitignored local overlay"
 #
 # CLOUD-734. `.claude/settings.json` grants and denies MCP tools by **label**
 # (`mcp__Linear__*`, `mcp__Claude_Code_Remote__create_session`). The host attaches
@@ -43,6 +43,28 @@
 # brief and never checked, and the connector working beside it refutes it
 # (CLOUD-734). No allow rule anywhere — this overlay, the committed settings, or
 # `--allowed-tools` — overrides a connector tool set to ask.
+#
+# SO THIS PROJECTS DENIES AND NOT ALLOWS, and both halves of that are measured
+# rather than reasoned. The allow half was tested to exhaustion: the generated
+# config rewritten mid-session, this overlay written mid-session, and finally a
+# rule naming the LIVE identifier placed in the committed settings file — the
+# scope `mcp__serena__*` provably works from — forty minutes before a session
+# started. All three refused. An allow projection is a mechanism that does
+# nothing, which is exactly the inert rule `mcp-allow-check` exists to report.
+#
+# The deny half is live, and it is load-bearing. A deny is not subject to the
+# connector control — that control chooses ask versus allow, and nothing at any
+# level widens a deny — so a projected deny removes the tool from the session's
+# available set outright. Measured in the same session: of the toolbox's 20
+# tools, exactly the 3 this projects a deny for were absent from the tool list,
+# with `list_triggers` present beside them; and the same filtering holds for the
+# committed `mcp__github__subscribe_pr_activity`, whose label does match.
+#
+# WHAT THAT MEANS FOR THIS REPOSITORY'S OWN POLICY. The committed denies name
+# `Claude_Code_Remote`, which the server does not register under, so on their own
+# they enforce nothing and AGENTS.md's ban on babysitting timers would be a
+# convention with no mechanism. This projection is that mechanism. It is the
+# reason the task survived the measurement that killed its original purpose.
 #
 # So this is not a permission fix, and a reader should not spend a session
 # expecting one. It is the committed intent expressed against the identity that
@@ -91,6 +113,7 @@
 # The mutation drops the membership test, so every tool of a resolved server is
 # emitted rather than only the ones a committed rule names — the widening this
 # structurally forbids, and the case CLOUD-418 requires be shown to fail.
+#MUTANT grant-sync-projects-allows|s/^\t\t\[ "\$kind" = deny \] || continue$/\t\t:/|an allow rule is never projected
 #MUTANT grant-sync-widens|s/^\t\temit "\$id" "\$tool"$/\t\temit "$id" "*"/|a tool no committed rule names is never projected
 # And the inert-tool refusal must stay a refusal: neutered, a rule naming a tool
 # its server does not expose is emitted anyway and reads as a grant that grants
@@ -233,6 +256,12 @@ emit() { # emit <server-id> <tool>
 	allow) counts_allow=$((counts_allow + 1)) ;;
 	deny) counts_deny=$((counts_deny + 1)) ;;
 	esac
+	# Named only where a rule actually landed: a report that lists a server it
+	# wrote nothing for is a pointer to the wrong place.
+	case " $touched_ids " in
+	*" ${1:0:8} "*) ;;
+	*) touched_ids="${touched_ids}${touched_ids:+ }${1:0:8}" ;;
+	esac
 }
 
 for label in $labels; do
@@ -284,7 +313,6 @@ for label in $labels; do
 	id="${matches[0]}"
 	resolved="${resolved}${label}	${id}
 "
-	touched_ids="${touched_ids}${touched_ids:+ }${id:0:8}"
 
 	while IFS=$'\t' read -r kind tool; do
 		[ -n "$tool" ] || continue
@@ -295,6 +323,23 @@ for label in $labels; do
 			inert=$((inert + 1))
 			continue
 		fi
+		# ALLOWS ARE NOT EMITTED, and the measurement is why (CLOUD-734). A
+		# connector tool set to `ask` prompts on every call and "allow rules
+		# that match the tool don't skip the prompt either" — tested here on
+		# three surfaces, ending with a rule naming the LIVE identifier in the
+		# committed settings file, present forty minutes before session start:
+		# still refused. An allow projection is a mechanism that does nothing,
+		# which is the inert rule this repository refuses, written in code.
+		#
+		# A DENY IS THE OPPOSITE and is why this task still exists. The control
+		# decides ask versus allow; it never widens a deny, and a deny removes
+		# the tool from the session's available set outright. Measured the same
+		# session: of the toolbox's 20 tools, exactly the 3 this projects a deny
+		# for were absent from the tool list, and `list_triggers` beside them
+		# was present. The committed denies name a label the server does not
+		# register under, so without this projection AGENTS.md's ban on
+		# babysitting timers is enforced by nothing at all.
+		[ "$kind" = deny ] || continue
 		emit "$id" "$tool"
 	done < <(jq -r '.[] | [.kind, (.rule | split("__") | .[2:] | join("__"))] | @tsv' <<<"$label_rules")
 done
@@ -319,7 +364,7 @@ if [ "$dry_run" = 0 ]; then
 	if ! jq --argjson allow "$new_allow" --argjson deny "$new_deny" '
 		def mine: type == "string" and test("^mcp__[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}__");
 		.permissions = ((.permissions // {})
-			| .allow = ([((.allow // [])[] | select(mine | not))] + $allow | unique)
+			| .allow = [((.allow // [])[] | select(mine | not))]
 			| .deny  = ([((.deny  // [])[] | select(mine | not))] + $deny  | unique))
 	' "$overlay" >"$tmp" 2>/dev/null; then
 		rm -f "$tmp"
@@ -329,7 +374,7 @@ if [ "$dry_run" = 0 ]; then
 	mv "$tmp" "$overlay"
 fi
 
-echo "mcp-grant-sync: projected $counts_allow allow + $counts_deny deny rule(s) onto ${touched_ids:-no} server(s)${touched_ids:+ ($touched_ids)}; $aligned label(s) already live under their committed name, $unresolved unresolved, $ambiguous ambiguous"
+echo "mcp-grant-sync: projected $counts_deny deny rule(s) onto ${touched_ids:-no} server(s)${touched_ids:+ ($touched_ids)}; $aligned label(s) already live under their committed name, $unresolved unresolved, $ambiguous ambiguous"
 
 if [ "$inert" -ne 0 ]; then
 	echo "::error:: mcp-grant-sync: $inert committed rule(s) name a tool their own resolved server does not expose — the rule reads as policy and enforces nothing (CLOUD-684)" >&2

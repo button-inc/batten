@@ -40,12 +40,12 @@ settings_with() { # settings_with <allow-json> [deny-json]
 		'{permissions: {allow: $allow, deny: $deny}}' >"$SETTINGS"
 }
 
-@test "a committed rule is projected onto the server that exposes its tool" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]'
+@test "a committed deny is projected onto the server that exposes its tool" {
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]'
 	config_with "$SERVER" list_sessions create_session
 	run_sync
 	[ "$status" -eq 0 ]
-	run jq -r '.permissions.allow[]' "$OVERLAY"
+	run jq -r '.permissions.deny[]' "$OVERLAY"
 	[ "$output" = "mcp__${SERVER}__list_sessions" ]
 }
 
@@ -53,7 +53,7 @@ settings_with() { # settings_with <allow-json> [deny-json]
 # server exposes create_session and no committed rule names it, so it must not
 # appear. `mise run mutant` drives this red through `grant-sync-widens`.
 @test "a tool no committed rule names is never projected" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]'
 	config_with "$SERVER" list_sessions create_session
 	run_sync
 	[ "$status" -eq 0 ]
@@ -61,35 +61,35 @@ settings_with() { # settings_with <allow-json> [deny-json]
 	# be one the committed file named. `create_session` appearing would be the
 	# obvious widening; a server-wide `*` is the subtle one, and an assertion
 	# that only looked for the tool name by suffix would miss it entirely.
-	run bash -c "jq -r '.permissions.allow[] | split(\"__\") | .[2:] | join(\"__\")' '$OVERLAY' | sort -u | tr '\\n' ' '"
+	run bash -c "jq -r '.permissions.deny[] | split(\"__\") | .[2:] | join(\"__\")' '$OVERLAY' | sort -u | tr '\\n' ' '"
 	[ "$output" = "list_sessions " ]
 }
 
 @test "a committed rule naming a tool the resolved server does not expose exits non-zero" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions","mcp__Claude_Code_Remote__tool_that_went_away"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions","mcp__Claude_Code_Remote__tool_that_went_away"]'
 	config_with "$SERVER" list_sessions
 	run_sync
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"name a tool their own resolved server does not expose"* ]]
 	# The rule that DOES match is still projected: one stale rule does not
 	# forfeit the grants beside it.
-	run jq -r '.permissions.allow[]' "$OVERLAY"
+	run jq -r '.permissions.deny[]' "$OVERLAY"
 	[ "$output" = "mcp__${SERVER}__list_sessions" ]
 }
 
 @test "the server is matched by inventory under an identifier matching no label" {
-	settings_with '["mcp__Claude_Code_Remote__create_session"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__create_session"]'
 	config_with "$SERVER" create_session
 	run_sync
 	[ "$status" -eq 0 ]
 	# Nothing in the fixture spells `Claude_Code_Remote` except the committed
 	# rule; the identifier is a uuid, so only the tool name can have found it.
-	run jq -r '.permissions.allow[0]' "$OVERLAY"
+	run jq -r '.permissions.deny[0]' "$OVERLAY"
 	[[ "$output" == "mcp__${SERVER}__"* ]]
 }
 
 @test "the report carries no tool name, URL or header value" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]' '["mcp__Claude_Code_Remote__create_session"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]' '["mcp__Claude_Code_Remote__create_session"]'
 	config_with "$SERVER" list_sessions create_session
 	run_sync
 	[ "$status" -eq 0 ]
@@ -103,7 +103,7 @@ settings_with() { # settings_with <allow-json> [deny-json]
 	[[ "$output" != *"bf7c680d-5fdc"* ]]
 }
 
-@test "a deny is projected too — the direction that otherwise fails open" {
+@test "the projection is the only thing enforcing a deny on a rotating server" {
 	settings_with '[]' '["mcp__Claude_Code_Remote__send_later"]'
 	config_with "$SERVER" send_later
 	run_sync
@@ -113,45 +113,45 @@ settings_with() { # settings_with <allow-json> [deny-json]
 }
 
 @test "a server this repo declares is skipped — its name is the repo's own" {
-	settings_with '["mcp__serena__read_memory"]'
+	settings_with '[]' '["mcp__serena__read_memory"]'
 	jq -n '{mcpServers: {serena: {command: "serena"}}}' >"$MCPJSON"
 	config_with "$SERVER" read_memory
 	run_sync
 	[ "$status" -eq 0 ]
-	run jq -r '.permissions.allow | length' "$OVERLAY"
+	run jq -r '.permissions.deny | length' "$OVERLAY"
 	[ "$output" = "0" ]
 }
 
 @test "a label already live under its committed name is not copied" {
-	settings_with '["mcp__github__create_pull_request"]'
+	settings_with '[]' '["mcp__github__create_pull_request"]'
 	config_with github create_pull_request
 	run_sync
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"1 label(s) already live"* ]]
-	run jq -r '.permissions.allow | length' "$OVERLAY"
+	run jq -r '.permissions.deny | length' "$OVERLAY"
 	[ "$output" = "0" ]
 }
 
 @test "a label whose rules are all globs is unresolved, never guessed at" {
-	settings_with '["mcp__Linear__*"]'
+	settings_with '[]' '["mcp__Linear__*"]'
 	config_with "$SERVER" save_issue get_issue
 	run_sync
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"1 unresolved"* ]]
-	run jq -r '.permissions.allow | length' "$OVERLAY"
+	run jq -r '.permissions.deny | length' "$OVERLAY"
 	[ "$output" = "0" ]
 }
 
 @test "re-running converges rather than accumulating, and spares a human's own rules" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]'
 	config_with "$SERVER" list_sessions
 	jq -n '{permissions: {allow: ["Bash(ls:*)"]}}' >"$OVERLAY"
 	run_sync
 	[ "$status" -eq 0 ]
 	run_sync
 	[ "$status" -eq 0 ]
-	run jq -r '.permissions.allow | length' "$OVERLAY"
-	[ "$output" = "2" ]
+	run jq -r '.permissions.deny | length' "$OVERLAY"
+	[ "$output" = "1" ]
 	run jq -r '[.permissions.allow[] | select(. == "Bash(ls:*)")] | length' "$OVERLAY"
 	[ "$output" = "1" ]
 }
@@ -160,17 +160,17 @@ settings_with() { # settings_with <allow-json> [deny-json]
 # is no longer attached is dropped rather than left behind granting something
 # the committed file no longer projects anywhere.
 @test "a stale projection from an earlier registration is replaced, not kept" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]'
 	config_with "$SERVER" list_sessions
-	jq -n '{permissions: {allow: ["mcp__4db58e41-cd4e-4818-8922-46cf616593f4__list_sessions"]}}' >"$OVERLAY"
+	jq -n '{permissions: {deny: ["mcp__4db58e41-cd4e-4818-8922-46cf616593f4__list_sessions"]}}' >"$OVERLAY"
 	run_sync
 	[ "$status" -eq 0 ]
-	run jq -r '.permissions.allow[]' "$OVERLAY"
+	run jq -r '.permissions.deny[]' "$OVERLAY"
 	[ "$output" = "mcp__${SERVER}__list_sessions" ]
 }
 
 @test "no generated config means no live session, and nothing is written" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]'
 	run "$TASK" --settings "$SETTINGS" --mcp-json "$MCPJSON" --config "$BATS_TEST_TMPDIR/absent.json" --overlay "$OVERLAY"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"not a live session"* ]]
@@ -178,7 +178,7 @@ settings_with() { # settings_with <allow-json> [deny-json]
 }
 
 @test "an unreadable overlay is refused rather than overwritten" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]'
 	config_with "$SERVER" list_sessions
 	printf 'not json at all' >"$OVERLAY"
 	run_sync
@@ -188,10 +188,30 @@ settings_with() { # settings_with <allow-json> [deny-json]
 }
 
 @test "--dry-run computes the projection and writes nothing" {
-	settings_with '["mcp__Claude_Code_Remote__list_sessions"]'
+	settings_with '[]' '["mcp__Claude_Code_Remote__list_sessions"]'
 	config_with "$SERVER" list_sessions
 	run "$TASK" --settings "$SETTINGS" --mcp-json "$MCPJSON" --config "$CONFIG" --overlay "$OVERLAY" --dry-run
 	[ "$status" -eq 0 ]
-	[[ "$output" == *"projected 1 allow"* ]]
+	[[ "$output" == *"projected 1 deny"* ]]
 	[ ! -f "$OVERLAY" ]
+}
+
+# THE INVARIANT THE MEASUREMENT BOUGHT (CLOUD-734). An allow rule is never
+# projected, because a connector tool set to `ask` prompts on every call and no
+# allow rule at any scope skips it — tested to exhaustion, ending with a rule
+# naming the live identifier in the committed settings file, present before a
+# session started, still refused. Emitting one would be a mechanism that does
+# nothing, which is the inert rule this repository refuses. `mise run mutant`
+# drives this red through `grant-sync-projects-allows`.
+@test "an allow rule is never projected" {
+	settings_with '["mcp__Claude_Code_Remote__list_sessions"]' '["mcp__Claude_Code_Remote__send_later"]'
+	config_with "$SERVER" list_sessions send_later
+	run_sync
+	[ "$status" -eq 0 ]
+	run jq -r '(.permissions.allow // []) | length' "$OVERLAY"
+	[ "$output" = "0" ]
+	# The deny beside it still lands, so the case cannot pass by projecting
+	# nothing at all.
+	run jq -r '.permissions.deny[]' "$OVERLAY"
+	[ "$output" = "mcp__${SERVER}__send_later" ]
 }
