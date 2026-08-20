@@ -51,7 +51,7 @@
 # is the direction that already has a symptom — CI goes red on its own — so the
 # suite still passes every row except the half-lift, which is the row this gate
 # exists for and the only one that lands green unaided.
-#MUTANT only-checks-cap-without-ignore|s/^for crate in \$ignored; do$/for crate in ; do/|THE HALF-LIFT: an ignore entry with no cap is refused, and named
+#MUTANT only-checks-cap-without-ignore|s/^for crate in \$ignored; do$/for crate in ; do/|THE HALF-LIFT: an allowedVersions rule with no cap is refused, and named
 #PIN-OK: jq
 set -uo pipefail
 
