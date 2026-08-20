@@ -372,8 +372,33 @@ jobs:
       # compare and this update is the landing loop working, not a fault — the next
       # tick reads the new answer and asks for the rebase. Retrying in-job would only
       # race the same window again, so it logs and stops.
-      - name: Fast-forward main to the tested SHA
+      # DOES THE BODY STILL CLOSE THE ROW? Asked here, one step before the ref
+      # moves, because the answer expires: Renovate rewrites its own PR body on
+      # every rebase and the `Closes CLOUD-<n>` the row step appended goes with it
+      # (CLOUD-768, measured on #503). The row step running first makes the window
+      # small; it does not close it, and a landing inside it is silent — `main`
+      # advances, the bump ships, and the row never leaves Backlog.
+      #
+      # Exit 1 "closes nothing" is an ORDINARY outcome, like the `main`-moved
+      # refusal below: the next tick re-runs `ensure`, the key comes back, and it
+      # lands then. Only exit 2, "could not look", fails the run.
+      - name: Does the body still close its row?
         if: steps.checks.outputs.green == 'true'
+        id: closes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUM: ${{ steps.target.outputs.num }}
+        run: |
+          set +e
+          mise run bot-issue closes "$PR_NUM"
+          verdict=$?
+          case "$verdict" in
+            0) echo "linked=true" >> "$GITHUB_OUTPUT" ;;
+            1) echo "linked=false" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$verdict" ;;
+          esac
+      - name: Fast-forward main to the tested SHA
+        if: steps.closes.outputs.linked == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
           PR_NUM: ${{ steps.target.outputs.num }}

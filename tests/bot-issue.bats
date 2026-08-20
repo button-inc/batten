@@ -245,3 +245,78 @@ stubs() { stub_gh; }
 	[[ "$output" == *"could not open the mirror issue"* ]]
 	[ ! -e "$BATS_TEST_TMPDIR/patched-body" ]
 }
+
+# --- closes: the key `link` wrote is not the key the merge sees (CLOUD-768) ----
+#
+# Renovate regenerates its own PR body on every rebase, so `link`'s append is
+# transient. These rows pin the last-moment re-read that keeps a landing from
+# moving `main` while the row it names sits in Backlog.
+
+@test "a body that still closes its row is landable, and the verdict names the key" {
+	PR_BODY="This PR contains the following updates.
+
+---
+
+Closes CLOUD-767"
+	stubs
+	run "$TASK" closes 7
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"#7 closes CLOUD-767"* ]]
+}
+
+@test "A KEY NAMED BUT NOT CLOSED IS REFUSED — that is the whole failure being caught" {
+	# The shape a rewritten body leaves behind: Renovate keeps its own prose, the
+	# key survives only where the bot happened to echo it, and the merge moves
+	# nothing. `closing-key-check` makes the same distinction on the agent side.
+	PR_BODY="This PR contains the following updates. See CLOUD-767 for context."
+	stubs
+	run "$TASK" closes 7
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"closes no tracker key"* ]]
+}
+
+@test "a body naming no key at all is refused, not treated as nothing to check" {
+	PR_BODY="This PR contains the following updates."
+	stubs
+	run "$TASK" closes 7
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"closes no tracker key"* ]]
+}
+
+@test "fixes and resolves close it too — the predicate is closing-key-check's, not link's" {
+	# Narrowing this to the literal string `link` writes would refuse a body a
+	# human corrected by hand, which closes the row just as well.
+	PR_BODY="Fixes CLOUD-767"
+	stubs
+	run "$TASK" closes 7
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"#7 closes CLOUD-767"* ]]
+}
+
+@test "DO-NOT-CLOSE does not read as a close, though the marker ends in a closing verb" {
+	PR_BODY="DO-NOT-CLOSE CLOUD-767"
+	stubs
+	run "$TASK" closes 7
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"closes no tracker key"* ]]
+}
+
+@test "POINTER, NEVER PAYLOAD: the refusal names the PR and no part of the body" {
+	# A bot PR body is a release-notes dump. Echoing it here would put it in the
+	# log of every landing that waits a tick.
+	PR_BODY="This PR contains the following updates. SECRETSENTINEL in the changelog."
+	stubs
+	run "$TASK" closes 7
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"SECRETSENTINEL"* ]]
+	[[ "$output" == *"#7"* ]]
+}
+
+@test "closes writes nothing — it is a read, and a refusal must not repair by editing" {
+	PR_BODY="This PR contains the following updates."
+	stubs
+	run "$TASK" closes 7
+	[ "$status" -eq 1 ]
+	[ ! -e "$BATS_TEST_TMPDIR/patched-body" ]
+	[ ! -e "$BATS_TEST_TMPDIR/issue-body" ]
+}

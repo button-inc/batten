@@ -51,11 +51,17 @@
 #   mise run bot-issue file <pr>          derive, then open the mirror issue
 #   mise run bot-issue link <pr> <key>    write `Closes <key>` into the PR body
 #   mise run bot-issue ensure <pr>        the lander's call: all three, idempotent
+#   mise run bot-issue closes <pr>        does the body STILL close a key? (CLOUD-768)
 #   mise run bot-issue receipt            mint this branch's bot receipt
 #
 # The mutation drops the already-linked short circuit, so `ensure` files a second
 # row on every tick — twice an hour, forever, against a PR that already has one.
 #MUTANT files-a-row-per-tick|s/^\tif \[ -n "\$existing" \]; then$/\tif false; then/|a second call on the same PR files nothing
+#
+# The mutation drops the closing verb from the predicate, so any body merely
+# NAMING a key reads as closing it — which is the exact state a Renovate rebase
+# leaves behind, and the one this verb exists to refuse.
+#MUTANT closes-on-a-bare-key|s/refuse "#\$num.s body closes/key=$(grep -oEm1 "CLOUD-[0-9]+" <<<"$body"); [ -n "$key" ] \&\& { echo "bot-issue: #$num closes $key"; return 0; }; refuse "#$num.s body closes/|A KEY NAMED BUT NOT CLOSED IS REFUSED
 #PIN-OK: gh jq
 set -uo pipefail
 
@@ -314,6 +320,46 @@ link_issue() {
 	echo "bot-issue: #$num now closes $key"
 }
 
+# --- closes -------------------------------------------------------------------
+#
+# CLOUD-768. `link` writes the closing key. NOTHING KEEPS IT THERE: Renovate
+# regenerates its own PR body on every rebase, and the append `link` makes goes
+# with it. Measured on #503, 2026-08-20 — written at 05:49 on head `10ad9f8f`,
+# absent at 05:50:14 on head `2f65308e`, one force-push later.
+#
+# The lane is nearly right by ordering alone: `ensure` is the job's FIRST step,
+# so the key is normally rewritten seconds before the ref moves. "Normally" is
+# not a gate, and the failure inside that window is SILENT — the fast-forward
+# succeeds, `main` advances, the bump ships, and the row sits in Backlog with
+# nobody looking at it. So the landing asks once more, against GitHub rather than
+# against anything this job read a step earlier, at the last moment it still can.
+#
+# REFUSING IS AN ORDINARY OUTCOME, exactly like the `main`-moved refusal the
+# fast-forward already treats as routine: the next tick re-runs `ensure`, the key
+# comes back, and it lands then. Nothing is lost but half an hour.
+#
+# The predicate is `closing-key-check`'s, verbatim, and deliberately not a
+# narrower one matching only what `link` writes. A body a human edited to say
+# "Fixes CLOUD-767" closes the row just as well, and a gate that refused it would
+# be wrong about the one thing it exists to decide. The leading
+# `(^|[^0-9A-Za-z-])` is what keeps `DO-NOT-CLOSE CLOUD-388` from reading as a
+# close — that marker ends in a closing verb.
+#
+# Pointer-only per rule 4: the PR number and the key. Never the body — a bot PR
+# carries a release-notes dump, and echoing it would put that in the log of every
+# landing.
+BOT_ISSUE_CLOSING_VERBS='clos(e|es|ed)|fix(|es|ed)|resolv(e|es|ed)'
+
+closes() {
+	local num="$1" body key
+	body=$(gh api "repos/$REPO/pulls/$num" --jq '.body // ""' 2>/dev/null) ||
+		die "GET repos/$REPO/pulls/$num failed — cannot read the body, so nothing may be landed on its word"
+	key=$(grep -oiE "(^|[^0-9A-Za-z-])($BOT_ISSUE_CLOSING_VERBS)[[:space:]]*:?[[:space:]]*#?CLOUD-[0-9]+" <<<"$body" |
+		grep -oE 'CLOUD-[0-9]+' | head -n1 || true)
+	[ -n "$key" ] || refuse "#$num's body closes no tracker key, so merging it would move nothing — not landing; the next tick re-links it"
+	echo "bot-issue: #$num closes $key"
+}
+
 # --- ensure -------------------------------------------------------------------
 #
 # TWO PHASES, BECAUSE THE KEY ARRIVES ASYNCHRONOUSLY. Filing the issue and
@@ -427,10 +473,14 @@ ensure)
 	[ -n "${2:-}" ] || die "usage: bot-issue ensure <pr>"
 	ensure "$2"
 	;;
+closes)
+	[ -n "${2:-}" ] || die "usage: bot-issue closes <pr>"
+	closes "$2"
+	;;
 receipt)
 	mint_receipt
 	;;
 *)
-	die "usage: bot-issue derive|file|link|ensure <pr> | receipt"
+	die "usage: bot-issue derive|file|link|ensure|closes <pr> | receipt"
 	;;
 esac
