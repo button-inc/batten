@@ -26,6 +26,9 @@ setup() {
 	PR_BODY="This PR contains the following updates."
 	PR_FILES=$'Cargo.toml\nCargo.lock'
 	CREATE_OK=yes
+	STATES=todo
+	AUTH=bare
+	HTTP=200
 }
 
 # `gh` dispatches on the endpoint and returns what `--jq` would have produced, so
@@ -61,22 +64,45 @@ stub_gh() {
 }
 
 # `curl` answers the two GraphQL calls `file` makes, told apart by the mutation
-# name in the request body. `CREATE_OK=no` is the tracker refusing the create.
+# name in the request body, and appends the status line `-w` asks for. The knobs
+# are the three failures the task has to tell APART: `CREATE_OK=no` is a refused
+# create, `STATES=none` is a workspace with no Todo state, `AUTH=bearer` is a
+# credential that only authenticates with the `Bearer` prefix, and `HTTP=<code>`
+# is a transport-level answer.
 stub_curl() {
 	cat >"$STUB/curl" <<-EOF
 		#!/usr/bin/env bash
-		body=""
-		for a in "\$@"; do prev_is_d=\${is_d:-}; is_d=; [ "\$a" = "-d" ] && is_d=1; [ -n "\$prev_is_d" ] && body="\$a"; done
+		body=""; auth=""
+		prev=""
+		for a in "\$@"; do
+		  case "\$prev" in
+		    -d) body="\$a" ;;
+		    -H) case "\$a" in Authorization:*) auth="\${a#Authorization: }" ;; esac ;;
+		  esac
+		  prev="\$a"
+		done
 		echo "\$body" >>"$BATS_TEST_TMPDIR/graphql"
+		echo "\$auth" >>"$BATS_TEST_TMPDIR/auth"
+		emit() { printf '%s\n%s' "\$1" "\${HTTP:-$HTTP}"; }
+		if [ "$AUTH" = bearer ] && [ "\${auth#Bearer }" = "\$auth" ]; then
+		  emit '{"errors":[{"message":"nope","extensions":{"code":"AUTHENTICATION_ERROR"}}]}'
+		  exit 0
+		fi
 		case "\$body" in
 		  *issueCreate*)
 		    if [ "$CREATE_OK" = yes ]; then
-		      echo '{"data":{"issueCreate":{"success":true,"issue":{"identifier":"CLOUD-700","url":"https://linear.app/x"}}}}'
+		      emit '{"data":{"issueCreate":{"success":true,"issue":{"identifier":"CLOUD-700","url":"https://linear.app/x"}}}}'
 		    else
-		      echo '{"errors":[{"message":"refused"}]}'
+		      emit '{"errors":[{"message":"refused","extensions":{"code":"INVALID_INPUT"}}]}'
 		    fi
 		    ;;
-		  *) echo '{"data":{"team":{"states":{"nodes":[{"id":"state-todo","name":"Todo"},{"id":"state-done","name":"Done"}]}}}}' ;;
+		  *)
+		    if [ "$STATES" = none ]; then
+		      emit '{"data":{"workflowStates":{"nodes":[]}}}'
+		    else
+		      emit '{"data":{"workflowStates":{"nodes":[{"id":"state-todo","name":"Todo"}]}}}'
+		    fi
+		    ;;
 		esac
 	EOF
 	chmod +x "$STUB/curl"
@@ -106,7 +132,8 @@ stubs() {
 	run "$TASK" ensure 7
 	[ "$status" -eq 0 ]
 	[[ "$(cat "$BATS_TEST_TMPDIR/graphql")" == *"state-todo"* ]]
-	[[ "$(cat "$BATS_TEST_TMPDIR/graphql")" != *"state-done"* ]]
+	# Asked for by name in the filter rather than fetched-and-picked here.
+	[[ "$(cat "$BATS_TEST_TMPDIR/graphql")" == *'name: {eq: \"Todo\"}'* ]]
 }
 
 @test "IDEMPOTENCE: a second call on the same PR files nothing" {
@@ -211,6 +238,49 @@ stubs() {
 	run "$TASK" ensure 7
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"LINEAR_ACCESS_KEY"* ]]
+}
+
+@test "THE THREE TRACKER FAILURES ARE TOLD APART, which the first production run needed" {
+	# The lane's first scheduled tick died on "no Todo state on the team" — one
+	# message standing for a transport error, a refused query and a genuinely
+	# absent state. A diagnosis that cannot separate those makes the next step a
+	# guess.
+	stubs
+	HTTP=503 stub_curl
+	run "$TASK" ensure 7
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"HTTP 503"* ]]
+
+	STATES=none stub_curl
+	run "$TASK" ensure 7
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"no workflow state named Todo"* ]]
+	[[ "$output" == *"tracker answered"* ]]
+}
+
+@test "a credential that needs Bearer is tried, and the form that worked is named" {
+	# A personal API key authenticates raw; an OAuth token needs the prefix. The
+	# secret does not say which it is, and a lane that fails twice a day until
+	# someone guesses is worse than one extra request on the first call.
+	AUTH=bearer stub_curl
+	stub_gh
+	run "$TASK" ensure 7
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"authenticates as a bearer token"* ]]
+	[[ "$(cat "$BATS_TEST_TMPDIR/auth")" == *"Bearer "* ]]
+}
+
+@test "a credential neither form authenticates names both codes, and blames the credential" {
+	stubs
+	cat >"$STUB/curl" <<-EOF
+		#!/usr/bin/env bash
+		printf '%s\n200' '{"errors":[{"message":"nope","extensions":{"code":"AUTHENTICATION_ERROR"}}]}'
+	EOF
+	chmod +x "$STUB/curl"
+	run "$TASK" ensure 7
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"AUTHENTICATION_ERROR"* ]]
+	[[ "$output" == *"the credential is the thing to look at"* ]]
 }
 
 @test "a tracker that refuses the create is exit 2, and no key is invented" {

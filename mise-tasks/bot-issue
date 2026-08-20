@@ -220,27 +220,89 @@ derive() {
 # This is not a gate; it is the step that CREATES the row a gate later reads, and
 # a step that cannot write cannot exist at all. The gate half stays pure:
 # `ready-lint` reads `derive`'s output with no credential anywhere.
+# THE ONE CALL THAT REACHES THE TRACKER, and every failure of it is told apart
+# rather than collapsed. The first production run of this lane died on
+# `no Todo state on the team`, which was one message standing for three different
+# failures — a transport error, a refused query, and a workspace that genuinely
+# has no such state. A diagnosis that cannot distinguish those is a diagnosis that
+# makes the next step a guess, which is the CLOUD-198 class in a task's own error
+# path.
+#
+# Pointer-only, and here that is a security property rather than a style: the
+# response body echoes the REQUEST on some errors, and the request carries the
+# credential header. So what reaches stdout is the HTTP status, the number of
+# errors, and the first error's `extensions.code` — an enum like
+# `AUTHENTICATION_ERROR` — never a body, never a message that could quote one.
+tracker_post() {
+	local query="$1" what="$2" raw status body errors code
+	# Status is appended on its own line and split off, so one call yields both
+	# without a second request or a temp file.
+	raw=$(curl -sS -X POST "$LINEAR_API" \
+		-H "Authorization: $TRACKER_AUTH" \
+		-H "Content-Type: application/json" \
+		-w '\n%{http_code}' \
+		-d "$query" 2>/dev/null) || die "the tracker did not answer the $what — no HTTP response at all"
+	status=${raw##*$'\n'}
+	body=${raw%$'\n'*}
+	if [ "$status" != 200 ]; then
+		die "the tracker answered HTTP $status to the $what"
+	fi
+	errors=$(jq -r '(.errors // []) | length' <<<"$body" 2>/dev/null) || errors=0
+	if [ "${errors:-0}" != 0 ]; then
+		code=$(jq -r '(.errors[0].extensions.code // .errors[0].extensions.type // "unclassified")' <<<"$body" 2>/dev/null)
+		printf '%s' "$code" >"$TRACKER_ERROR_CODE"
+		return 1
+	fi
+	printf '%s' "$body"
+}
+
 create_issue() {
-	local payload="$1" title body query resp key
+	local payload="$1" title body query resp key state
 	[ -n "${LINEAR_ACCESS_KEY:-}" ] ||
 		die "LINEAR_ACCESS_KEY is empty, so a bot PR would land with no row and the board would silently stop describing what shipped. Set the secret; do not route around this."
 
 	title=$(jq -r '.title' <<<"$payload")
 	body=$(jq -r '.description' <<<"$payload")
+	TRACKER_ERROR_CODE=$(mktemp)
 
 	# The Todo state id is RESOLVED, never pinned: a workflow state is a
 	# workspace-side object whose id nobody here controls, and a stale pin would
 	# file into whatever state that id has become. Todo is the ready queue
 	# (mem:workflow/board-states) — the row is pullable by an agent the moment it
 	# exists, which is what makes it real work rather than a note.
-	query=$(jq -n --arg team "$LINEAR_TEAM" '{query: "query($team: String!) { team(id: $team) { states { nodes { id name } } } }", variables: {team: $team}}')
-	resp=$(curl -sS -X POST "$LINEAR_API" \
-		-H "Authorization: $LINEAR_ACCESS_KEY" \
-		-H "Content-Type: application/json" \
-		-d "$query" 2>/dev/null) || die "the tracker did not answer the states query"
-	local state
-	state=$(jq -r '.data.team.states.nodes[]? | select(.name == "Todo") | .id' <<<"$resp" | head -n1)
-	[ -n "$state" ] || die "no Todo state on the team — the row would be filed somewhere the ready queue cannot see it"
+	#
+	# `workflowStates` with a filter rather than `team(id:) { states }`: one hop,
+	# and the filter says what is being asked for instead of fetching every state
+	# and picking one here.
+	query=$(jq -n --arg team "$LINEAR_TEAM" \
+		'{query: "query($team: ID!) { workflowStates(filter: {team: {id: {eq: $team}}, name: {eq: \"Todo\"}}) { nodes { id name } } }", variables: {team: $team}}')
+
+	# TWO AUTH FORMS, TRIED IN ORDER, BECAUSE THE TRACKER TAKES BOTH AND THE SECRET
+	# DOES NOT SAY WHICH IT IS. A personal API key authenticates raw; an OAuth
+	# token needs `Bearer`. `LINEAR_ACCESS_KEY` was minted for the release action,
+	# whose input names neither, so the shape is not knowable from here — and a
+	# lane that fails twice a day until someone guesses right is worse than one
+	# extra request on the first call. The form that worked is reported, so the
+	# next reader knows which it is without repeating this.
+	TRACKER_AUTH="$LINEAR_ACCESS_KEY"
+	if ! resp=$(tracker_post "$query" "states query"); then
+		local first_code
+		first_code=$(cat "$TRACKER_ERROR_CODE" 2>/dev/null)
+		TRACKER_AUTH="Bearer $LINEAR_ACCESS_KEY"
+		if ! resp=$(tracker_post "$query" "states query"); then
+			rm -f "$TRACKER_ERROR_CODE"
+			die "the tracker refused the states query under both auth forms (bare: $first_code, bearer: $(cat "$TRACKER_ERROR_CODE" 2>/dev/null)) — the credential is the thing to look at, not the query"
+		fi
+		echo "bot-issue: the tracker credential authenticates as a bearer token"
+	fi
+
+	state=$(jq -r '.data.workflowStates.nodes[]? | select(.name == "Todo") | .id' <<<"$resp" | head -n1)
+	if [ -z "$state" ]; then
+		rm -f "$TRACKER_ERROR_CODE"
+		# The genuine third case, now distinguishable from the two above: the
+		# query was answered and the workspace has no such state.
+		die "the tracker answered, and this team has no workflow state named Todo — the row would be filed somewhere the ready queue cannot see it"
+	fi
 
 	query=$(jq -n \
 		--arg team "$LINEAR_TEAM" --arg project "$LINEAR_PROJECT" \
@@ -248,15 +310,16 @@ create_issue() {
 		--arg title "$title" --arg body "$body" \
 		'{query: "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { identifier url } } }",
 		  variables: {input: {teamId: $team, projectId: $project, projectMilestoneId: $milestone, stateId: $state, title: $title, description: $body}}}')
-	resp=$(curl -sS -X POST "$LINEAR_API" \
-		-H "Authorization: $LINEAR_ACCESS_KEY" \
-		-H "Content-Type: application/json" \
-		-d "$query" 2>/dev/null) || die "the tracker did not answer the create"
+	if ! resp=$(tracker_post "$query" "create"); then
+		local code
+		code=$(cat "$TRACKER_ERROR_CODE" 2>/dev/null)
+		rm -f "$TRACKER_ERROR_CODE"
+		die "the tracker refused the create for #$(jq -r .pr <<<"$payload") ($code) — no row exists, and none is invented"
+	fi
+	rm -f "$TRACKER_ERROR_CODE"
 
 	key=$(jq -r '.data.issueCreate.issue.identifier // empty' <<<"$resp")
-	# Pointer-only on failure too: the response can carry the request back,
-	# credential header included, so only the fact of refusal is printed.
-	[ -n "$key" ] || die "the tracker refused the create for #$(jq -r .pr <<<"$payload") — no row exists, and none is invented"
+	[ -n "$key" ] || die "the tracker accepted the create for #$(jq -r .pr <<<"$payload") but named no issue — no row to link, and none is invented"
 	printf '%s' "$key"
 }
 
