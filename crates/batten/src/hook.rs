@@ -2000,17 +2000,54 @@ fn adjudicated(
             None => Decision::Allow,
         };
     }
-    // Dispatch on the event FIRST, and allow every non-pre-tool one explicitly
-    // (CLOUD-43). Before this the field was decoded and never read, so a
-    // `PostToolUse` payload carrying a banned command in `tool_input.command`
-    // was adjudicated as though the call had not happened yet — and denied.
-    // That refusal is meaningless after the fact and is not a decision any host
-    // offers at that event, so it could only ever be noise the model was handed
-    // as a reason. Allowing here is a decision, not an omission: the events
-    // below have their own surfaces (the stop gate is CLOUD-85, the post-tool
-    // drain CLOUD-79), and neither is a deny channel.
-    if envelope.event != Event::PreTool {
-        return Decision::Allow;
+    // Dispatch on the event FIRST, and answer for EVERY one of them by name
+    // (CLOUD-43, then CLOUD-777). Before CLOUD-43 the field was decoded and never
+    // read, so a `PostToolUse` payload carrying a banned command in
+    // `tool_input.command` was adjudicated as though the call had not happened
+    // yet — and denied. That refusal is meaningless after the fact and is not a
+    // decision any host offers at that event.
+    //
+    // CLOUD-43's fix was `if event != PreTool { Allow }`, which is right at
+    // runtime and wrong as a contract. Batten is now registered on every surface
+    // a host emits, so an event nobody considered arrives at this function rather
+    // than never being delivered — and a fall-through absorbs it silently, with
+    // the same bytes as a decision somebody made. **A stated no-op and a
+    // fall-through are byte-identical at runtime and opposite as contracts.**
+    //
+    // So the match below is exhaustive with no wildcard: an eighth `Event` fails
+    // to compile here until somebody says what it decides. Each arm's comment is
+    // the answer, not decoration — that is the whole of what this replaced.
+    match envelope.event {
+        // The one adjudicated event. Everything past this point is its gate
+        // chain.
+        Event::PreTool => {}
+        // No decision, by design. The post-tool moment has no deny channel on any
+        // surveyed host — the call already happened — and its reader is the drain
+        // (CLOUD-79). Reading a fact off the result is CLOUD-776's, and it lands
+        // as a `Decision` here only once there is something to decide.
+        Event::PostTool | Event::PostToolBatch => return Decision::Allow,
+        // Handled ABOVE, before the bypass check, because what is judged there is
+        // not a call but whether the turn's work is finished (CLOUD-85). Stated
+        // rather than folded into the no-ops so this arm cannot silently become
+        // the answer if that early return is ever moved.
+        Event::Stop => return Decision::Allow,
+        // No decision, by design, and not a gap waiting on CLOUD-461: neither
+        // moment carries `Decision` semantics on ANY host. There is nothing to
+        // allow or deny at the start of a session or a config reload — what a
+        // policy might want there is advisory, which is a channel rather than a
+        // verdict.
+        Event::SessionStart | Event::ConfigChange => return Decision::Allow,
+        // Claude Code's completion signal, and the one event whose exit 2
+        // prevents completion. Batten does not use it yet: the stop gate is the
+        // reconciliation point (house-style §10) and `Capabilities::degrade` maps
+        // this to the Stop family elsewhere, so deciding here as well would give
+        // one question two answers.
+        Event::TaskCompleted => return Decision::Allow,
+        // The host said something this build cannot normalize. Allow, loudly
+        // elsewhere: an unrecognized event is a fact about the host, never a
+        // reason to refuse a call (CLOUD-45), and guessing which moment it stands
+        // for is how a gate fires at one nobody named.
+        Event::Unrecognized => return Decision::Allow,
     }
     if bypass || policy.is_empty() {
         return Decision::Allow;

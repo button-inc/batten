@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness gemini-cli"
+          }
+        ]
+      }
+    ],
+    "AfterTool": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness gemini-cli"
+          }
+        ]
+      }
+    ],
+    "AfterAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness gemini-cli"
+          }
+        ]
+      }
+    ],
+    "BeforeAgent": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness gemini-cli"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "preToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness cursor"
+          }
+        ]
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness cursor"
+          }
+        ]
+      }
+    ],
+    "stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness cursor"
+          }
+        ]
+      }
+    ],
+    "sessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "batten hook --harness cursor"
+          }
+        ]
+      }
+    ]
+  }
+}
