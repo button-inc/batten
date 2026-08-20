@@ -1,0 +1,51 @@
+{
+ "workspace_members": [
+  "reg#root@1.0.0"
+ ],
+ "packages": [
+  {
+   "id": "reg#root@1.0.0",
+   "name": "root",
+   "version": "1.0.0",
+   "dependencies": [
+    {
+     "name": "security-framework",
+     "optional": false,
+     "kind": null
+    }
+   ],
+   "features": {}
+  },
+  {
+   "id": "reg#security-framework@1.0.0",
+   "name": "security-framework",
+   "version": "1.0.0",
+   "dependencies": [],
+   "features": {}
+  }
+ ],
+ "resolve": {
+  "nodes": [
+   {
+    "id": "reg#root@1.0.0",
+    "features": [],
+    "deps": [
+     {
+      "name": "security-framework",
+      "pkg": "reg#security-framework@1.0.0",
+      "dep_kinds": [
+       {
+        "kind": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "reg#security-framework@1.0.0",
+    "features": [],
+    "deps": []
+   }
+  ]
+ }
+}

@@ -83,6 +83,38 @@ jsonschema = { version = "0.49", default-features = false }
 # `min_batten_version` comparison. Cargo's own flavour of SemVer, so the config
 # key means what a Rust consumer already expects it to.
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# In-process git (CLOUD-320's `git.rs` row, resolved to in-process). `gix` and
+# not `git2`: `libgit2-sys` declares a `links` key, which `macos-link-check`
+# rule 1 excludes outright — libgit2 on macOS needs CoreFoundation and Security,
+# and zig can only cross-link a Darwin framework given a real SDK
+# (ziglang/zig#1349, whose documented workaround is SDKROOT). That is an
+# Apple-SDK decision priced by the private-repo runner multiplier, not a
+# constraint of the code, and it is not one a `git.rs` change gets to make.
+#
+# `default-features = false` and three features is the minimum for what this
+# module asks: resolve a revspec, peel it, walk a tree, read a blob. What is
+# left off is the whole network half — `gix`'s default pulls transports and
+# credential helpers, and a library that can fetch has no business inside a gate
+# that must be offline and byte-stable.
+#
+# Both hash features are load-bearing rather than belt-and-braces. `gix-hash`
+# gates each variant of its `Kind` enum on the matching feature, so with neither
+# selected the enum has NO variants and the crate does not compile — measured
+# here, 16 errors from `darwin-link` before they were added. `sha256` joins
+# `sha1` because this module already contemplates both: `PatchId::parse` accepts
+# a 64-hex id precisely so a SHA-256 repository is readable, and a git library
+# that can only open half the repositories git can is not a replacement for
+# shelling out.
+#
+# The zlib backend needs no pinning here, unlike `flate2` above: gix always uses
+# zlib-rs now — its own `max-performance` is a bare alias for
+# `max-performance-safe` — so there is no C backend to select away from and no
+# `links` key to trip `macos-link-check` rule 1.
+gix = { version = "0.86", default-features = false, features = [
+  "revision",
+  "sha1",
+  "sha256",
+] }
 # OS advisory locks (flock/fcntl/LockFileEx) for the findings store's shard-merge
 # (CLOUD-78). A crate rather than the syscall directly because the workspace
 # forbids `unsafe`; the `sync` default feature is the blocking/try-lock file API

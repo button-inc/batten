@@ -1,0 +1,87 @@
+{
+ "workspace_members": [
+  "reg#root@1.0.0"
+ ],
+ "packages": [
+  {
+   "id": "reg#root@1.0.0",
+   "name": "root",
+   "version": "1.0.0",
+   "dependencies": [
+    {
+     "name": "midway",
+     "optional": false,
+     "kind": null
+    }
+   ],
+   "features": {}
+  },
+  {
+   "id": "reg#midway@1.0.0",
+   "name": "midway",
+   "version": "1.0.0",
+   "dependencies": [
+    {
+     "name": "nativebits",
+     "optional": true,
+     "kind": null
+    }
+   ],
+   "features": {
+    "logging": [
+     "dep:nativebits"
+    ]
+   }
+  },
+  {
+   "id": "reg#nativebits@1.0.0",
+   "name": "nativebits",
+   "version": "1.0.0",
+   "dependencies": [],
+   "features": {},
+   "links": "nativebits"
+  }
+ ],
+ "resolve": {
+  "nodes": [
+   {
+    "id": "reg#root@1.0.0",
+    "features": [],
+    "deps": [
+     {
+      "name": "midway",
+      "pkg": "reg#midway@1.0.0",
+      "dep_kinds": [
+       {
+        "kind": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "reg#midway@1.0.0",
+    "features": [
+     "default",
+     "logging"
+    ],
+    "deps": [
+     {
+      "name": "nativebits",
+      "pkg": "reg#nativebits@1.0.0",
+      "dep_kinds": [
+       {
+        "kind": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "reg#nativebits@1.0.0",
+    "features": [],
+    "deps": []
+   }
+  ]
+ }
+}
