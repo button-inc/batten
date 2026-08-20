@@ -265,27 +265,55 @@ fn the_enforce_surface_keys_a_static_finding_exactly_as_the_read_surface_did() {
 // --- (b) the recording verb's effect did not move ----------------------------
 
 #[test]
-fn state_record_still_refuses_a_spawning_kind_and_records_nothing_from_it() {
+fn state_record_withholds_a_spawning_kind_and_never_runs_it() {
+    // The recording verb's effect still has not moved, and this now asserts that
+    // DIRECTLY rather than through an exit code. `check` is a command with an
+    // observable side effect, so "a recording verb may not execute configured
+    // code" is proven by the absence of the marker rather than inferred from a
+    // refusal — a stronger statement than the one this case made before.
+    //
+    // WHAT CHANGED, AND WHY THE OLD ASSERTION HAD TO GO (CLOUD-97's strand).
+    // `state record` used to answer a spawning kind by refusing the WHOLE VERB,
+    // before any work. The invariant that justified it — no user-supplied code
+    // behind a store write — is intact and asserted below; what was never
+    // justified is the collateral. The refusal returned before the store write,
+    // the ref-death GC, and the transcript detectors, so one `command` or
+    // `secrets` row in a config cost the repository all of them. That is why
+    // CLOUD-97's `completion.unlanded` had never evaluated once in this
+    // repository, which declares sixteen such rules.
+    //
+    // The rule is now WITHHELD instead: partitioned out before the scan sees it,
+    // recorded in `Scan::not_evaluated`, and its findings HOLD in the store
+    // rather than resolving. That is not the silent skip `run_static`'s refusal
+    // exists to prevent — `check` still refuses, because its silence reaches a
+    // human as an exit code and it has no store to hold anything in.
     let env = Env::new("enforce-journal-effect");
     env.file("src/a.rs", "fn main() {}\n");
     env.bind_store();
 
-    env.file("batten.toml", &with_command("false"));
+    let marker = env.repo.join("the-command-ran");
+    env.file("batten.toml", &with_command("touch the-command-ran"));
     let recorded = env.run(&["state", "record"]);
     assert_eq!(
         recorded.status.code(),
-        Some(1),
+        Some(0),
+        "the verb completes rather than losing its store write to a rule it \
+         never wanted to run: {}",
+        common::stderr(&recorded)
+    );
+    assert!(
+        !marker.exists(),
         "a recording verb that could execute a configured command is a much larger \
          promise than remembering what the read-only gates found"
     );
     assert!(
-        common::stderr(&recorded).contains("batten enforce"),
-        "the refusal names the verb that runs it: {}",
-        common::stderr(&recorded)
+        env.record("gate").is_none(),
+        "and it recorded nothing from the kind it withheld"
     );
     assert!(
-        env.record("gate").is_none(),
-        "and it recorded nothing from the kind it refused"
+        common::stderr(&recorded).contains("1 rule(s) not evaluated"),
+        "withheld loudly, or a clean-looking record is the false green: {}",
+        common::stderr(&recorded)
     );
 }
 

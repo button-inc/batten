@@ -830,7 +830,40 @@ fn run_state_record(overrides: &Overrides, mode: Mode, err: &mut dyn Write) -> R
     let commit = git::head_commit(Path::new("."))?;
 
     let config = resolve::resolve(Path::new("."), overrides)?;
-    let scan = rules::run_static(&config.rules, &config.provisions, Path::new("."))?;
+    // `run_recorded`, not `run_static`: a spawning kind is WITHHELD here rather
+    // than refused. The refusal is right for `check`, whose silence reaches a
+    // human as an exit code and nothing else, and wrong for this verb — it
+    // returns before any work, so one `command` or `secrets` rule in the config
+    // cost the repository its whole store write, the transcript detectors
+    // included (CLOUD-97 never once evaluated in this repository for exactly
+    // that reason). Withholding is honest here because `record` below folds
+    // `not_evaluated` into the store, where a withheld rule's findings HOLD.
+    let scan = rules::run_recorded(&config.rules, &config.provisions, Path::new("."))?;
+    if !scan.not_evaluated.is_empty() {
+        // Never silent: a rule that did not look must say so, or a clean-looking
+        // record is the false green. The COUNT carries that on the default rung
+        // and the ids ride `Verbose` — this fires at every turn end, and sixteen
+        // rule ids on every one is how a line stops being read (`stop-guard`'s
+        // own lesson about spending a channel). Ids are the config author's own
+        // tokens rather than content, so the higher rung is a noise decision,
+        // not a rule-4 one.
+        let withheld: Vec<&str> = scan.not_evaluated.keys().map(String::as_str).collect();
+        output::message(
+            mode,
+            Verbosity::Normal,
+            err,
+            &format!(
+                "state record: {} rule(s) not evaluated, their findings held",
+                withheld.len()
+            ),
+        )?;
+        output::message(
+            mode,
+            Verbosity::Verbose,
+            err,
+            &format!("state record: not evaluated: {}", withheld.join(", ")),
+        )?;
+    }
 
     let bound = store::commit(store::resolve(&repo)?)?;
     if let Some(note) = &bound.note {

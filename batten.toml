@@ -146,6 +146,38 @@ mutation = "change it in a pull request — this file is the policy authority ev
 pileup_threshold = 3
 
 # ---------------------------------------------------------------------------
+# The transcript substrate (CLOUD-95), and what it finally switches on: CLOUD-97's
+# `completion.unlanded` — declared done with work not landed, the predicate this
+# whole engine's thesis names. It had never evaluated once in this repository.
+#
+# WHY A SYMLINK, WHICH LOOKS LIKE A WORKAROUND AND IS NOT. This key is
+# committed-authority-only and deliberately unlayerable (`resolve.rs`: "a local
+# file redirecting it would be choosing the evidence"), and it is resolved as
+# `root.join(path)` — one file, repo-relative. The host's transcript is neither:
+# it lives at `~/.claude/projects/<slug>/<session>.jsonl`, a per-session absolute
+# path no committed value can name. A layered override would let a branch point
+# the detector at evidence of its choosing, which is the weakening `trust.rs`
+# compares committed bytes for. So the committed value stays fixed and the
+# INDIRECTION moves out of the config: `mise-tasks/stop-guard` refreshes this
+# path from the Stop payload's own `transcript_path` at each turn end. The
+# authority names one file forever; which session it is, is the host's fact.
+#
+# Gitignored, and that is the point rather than housekeeping — a committed
+# transcript would be a session's whole prose in the tree, the exact payload
+# non-negotiable 4 keeps out of every report this engine writes.
+#
+# ABSENT IS THE ORDINARY STATE AND IS HONEST. No symlink — a fresh checkout, a
+# non-Claude host, a `state record` run by hand — resolves to
+# `Capability::Absent`, which reports `transcript::ABSENT_NOTICE` and changes no
+# verdict. It is NOT read as clean: an open `completion.unlanded` finding HOLDS
+# through an absent transcript, because a scan that could not look has not
+# observed zero.
+#
+# `memory_root` is omitted, so `selfwrite::DEFAULT_MEMORY_ROOT` applies.
+[transcript]
+path = ".claude/.transcript.jsonl"
+
+# ---------------------------------------------------------------------------
 # Pinned tools (CLOUD-90), fetched and cached out of tree.
 #
 # ripsecrets is the scanner the `secrets` rule kind runs (CLOUD-59). Adopted

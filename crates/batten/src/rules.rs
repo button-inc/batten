@@ -2141,6 +2141,62 @@ pub fn run_static(
     run(rules, &[], root)
 }
 
+/// Run only the rules that cannot spawn a process, and report the ones that can
+/// as **not evaluated** rather than refusing (CLOUD-97's strand).
+///
+/// The third scan surface, and it exists because the other two answer a question
+/// the *recording* verb never asked. [`run_static`] refuses a spawning kind
+/// because a `read`-effect verb that skipped one would exit `0` having gated
+/// nothing — the false green. [`run_all`] runs it, which a verb that writes the
+/// store may not do: `batten state record`'s own rustdoc refuses to put
+/// user-supplied code behind a store write. So the recorder inherited a refusal
+/// whose stated reason is about `batten check`, and the cost was total — the
+/// refusal returns *before any work*, so every repository declaring one spawning
+/// rule got no scan, no transcript detectors, and no store write at all.
+///
+/// **Skipping is safe here and unsafe in `run_static` for one structural
+/// reason**: this surface's caller folds [`Scan::not_evaluated`] into the store,
+/// where a withheld rule's findings **hold** instead of resolving
+/// ([`crate::findings::Observation`]'s whole purpose). `check` has no such
+/// destination — its silence reaches a human as an exit code and nothing else —
+/// so there the only honest answer is to refuse. Same omission, two surfaces,
+/// two correct answers.
+///
+/// Nothing here spawns: the withheld rules are partitioned out *before*
+/// [`run`] sees them, so the no-user-code-behind-a-store-write property is a
+/// property of the argument list rather than a promise. The partition asks
+/// [`RuleKind::carries_ambient_authority`] — the same question [`run_static`]
+/// refuses on, deliberately the identical call rather than a second predicate,
+/// so the two surfaces can disagree about what to DO with such a kind and never
+/// about which kinds they are.
+///
+/// # Errors
+///
+/// As [`run`]: a [`UsageError`] (→ exit `1`) for a malformed rule, and an I/O
+/// failure while walking the tree as an internal error (→ exit `3`).
+pub fn run_recorded(
+    rules: &[Rule],
+    provisions: &[crate::provision::Provision],
+    root: &Path,
+) -> anyhow::Result<Scan> {
+    let (evaluable, withheld): (Vec<&Rule>, Vec<&Rule>) = rules
+        .iter()
+        .partition(|rule| !rule.kind.carries_ambient_authority());
+    let evaluable: Vec<Rule> = evaluable.into_iter().cloned().collect();
+    let mut scan = run(&evaluable, provisions, root)?;
+    for rule in withheld {
+        // `RuleSkipped`, not a variant of its own. The distinction between "the
+        // input precondition was unmet" and "this surface cannot run the kind"
+        // changes no decision downstream — both mean the rule did not look, and
+        // both must hold — so a third variant would widen a stored enum to carry
+        // a difference nothing reads (CLOUD-78's no-implicit-upgrade rule makes
+        // that cost real).
+        scan.not_evaluated
+            .insert(rule.id.clone(), NotObserved::RuleSkipped);
+    }
+    Ok(scan)
+}
+
 /// Run every configured rule, including process-spawning kinds.
 ///
 /// This is the non-`read` surface: it may execute commands declared in

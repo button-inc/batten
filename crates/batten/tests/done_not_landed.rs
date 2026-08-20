@@ -368,3 +368,102 @@ fn the_finding_is_stored_as_a_settleable_advisory_at_a_latency_tier() {
         "nothing has settled it yet"
     );
 }
+
+#[test]
+fn a_spawning_rule_in_the_config_does_not_cost_the_repository_its_detector() {
+    // THE STRAND, and the reason CLOUD-97 had never evaluated once in the
+    // repository that ships it. `run_state_record` scanned with
+    // `rules::run_static`, which refuses *before any work* when any configured
+    // rule can spawn a process — so a config carrying one `command` or `secrets`
+    // row bought exit 1, no store write, and no transcript detector, at a verb
+    // that never wanted to run the rule in the first place. Every real consumer
+    // declares such a rule; this repository declares sixteen.
+    //
+    // The recorder now WITHHOLDS a spawning kind instead: the rule lands in
+    // `Scan::not_evaluated`, its findings hold, and everything else proceeds.
+    let root = scratch("cloud97-spawning-rule");
+    let repo = Fixture::at(root.join("repo"))
+        .config(
+            "version = 1\n\
+             must_land_on = \"main\"\n\n\
+             [transcript]\n\
+             path = \"session.jsonl\"\n\n\
+             [[rule]]\n\
+             id = \"spawns\"\n\
+             kind = \"command\"\n\
+             glob = \"src/**\"\n\
+             check = \"true\"\n\
+             severity = \"deny\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"fixture\"\n",
+        )
+        .file("src/a.rs", "fn main() {}\n")
+        .file(".gitignore", "session.jsonl\n")
+        .git()
+        .base_commit()
+        .build();
+    git_in(&repo, &["checkout", "-q", "-b", "work"]);
+    common::write(&repo, "src/b.rs", "pub fn added() {}\n");
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-q", "-m", "add b"]);
+    common::write(&repo, "session.jsonl", &transcript("completed-session"));
+    let home = Fixture::at(root.join("home")).build();
+
+    let output = record(&repo, &home);
+    assert!(
+        output.status.success(),
+        "the recorder completes rather than refusing: {}",
+        stderr(&output)
+    );
+
+    let reported = stderr(&output);
+    assert!(
+        reported.contains("completion: raised refs/heads/work"),
+        "and the detector it was blocking on actually ran: {reported}"
+    );
+
+    // Never silent about the half it could not do: a withheld rule that reported
+    // nothing would be the false green `run_static`'s refusal exists to prevent.
+    assert!(
+        reported.contains("1 rule(s) not evaluated"),
+        "the withheld rule is counted on the default rung: {reported}"
+    );
+    assert_eq!(one_count(&repo, &home), "1");
+}
+
+#[test]
+fn a_withheld_rule_holds_its_findings_rather_than_resolving_them() {
+    // The half that makes withholding honest rather than a silent skip. A rule
+    // the recorder did not run must not read as "ran and found nothing", or
+    // every finding it covers resolves on its silence — CLOUD-81's fail-closed
+    // law, and the exact bug that would make this change worse than the refusal
+    // it replaces. `-J` is asked, not the prose, so the assertion is over the
+    // recorded observation rather than a sentence.
+    let root = scratch("cloud97-withheld-holds");
+    let repo = Fixture::at(root.join("repo"))
+        .config(
+            "version = 1\n\
+             must_land_on = \"main\"\n\n\
+             [[rule]]\n\
+             id = \"spawns\"\n\
+             kind = \"command\"\n\
+             glob = \"src/**\"\n\
+             check = \"true\"\n\
+             severity = \"deny\"\n\
+             scope = \"tree\"\n\
+             no_fix_reason = \"fixture\"\n",
+        )
+        .file("src/a.rs", "fn main() {}\n")
+        .git()
+        .base_commit()
+        .build();
+    let home = Fixture::at(root.join("home")).build();
+
+    let output = record(&repo, &home);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("0 resolved"),
+        "the withheld rule resolves nothing: {}",
+        stderr(&output)
+    );
+}
