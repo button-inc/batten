@@ -20,6 +20,7 @@ setup() {
 		| path    | p50    | p95    | budget    |
 		| ------- | ------ | ------ | --------- |
 		| `noop`  | 2.6 ms | 3.3 ms | ≤ 100 ms  |
+		| `passthrough` | 2.8 ms | 3.4 ms | ≤ 100 ms  |
 		| `check` | 2.5 ms | 3.2 ms | —         |
 		| `hook`  | 2.7 ms | 3.5 ms | ≤ 100 ms  |
 		| `wired` | 3.4 ms | 4.1 ms | ≤ 100 ms  |
@@ -30,6 +31,7 @@ setup() {
 green_records() {
 	cat <<-'EOF'
 		path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+		path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 		path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 		path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
 		path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
@@ -54,6 +56,7 @@ IN"
 @test "a budgeted path over its budget is a violation, and is named" {
 	run bash -c "'$GATE' '$README' <<'IN'
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 path=hook p50=90.1 p95=140.5 mean=95.2 runs=100
 path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
@@ -70,6 +73,7 @@ IN"
 @test "the ungated path is never a violation, however slow" {
 	run bash -c "'$GATE' '$README' <<'IN'
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=800.0 p95=1200.0 mean=850.0 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
 path=wired p50=3.41 p95=4.09 mean=3.55 runs=100
@@ -82,6 +86,7 @@ IN"
 @test "a budgeted path missing from the records is exit 2, not a pass" {
 	run bash -c "'$GATE' '$README' <<'IN'
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 IN"
 	[ "$status" -eq 2 ]
@@ -101,6 +106,10 @@ IN"
 }
 
 @test "a line that is not a record is exit 2 and points at the line" {
+	# NO extra record before the malformed line: this case is about the POINTER
+	# naming the right line, so padding the fixture would move the thing it
+	# asserts. The presence check never runs — a line that is not a record is
+	# exit 2 before any budget is compared.
 	run bash -c "'$GATE' '$README' <<'IN'
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
 Benchmark 1: target/release/batten --help
@@ -113,6 +122,7 @@ IN"
 @test "a record whose p95 is not a number is malformed, not zero" {
 	run bash -c "'$GATE' '$README' <<'IN'
 path=noop p50=2.59 p95=NaN mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
 IN"
 	[ "$status" -eq 2 ]
@@ -157,6 +167,7 @@ IN"
 @test "a wired path over budget is named, with its measurement and its ceiling" {
 	run bash -c "'$GATE' '$README' <<'IN'
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
 path=wired p50=90.0 p95=140.5 mean=95.0 runs=100
@@ -173,6 +184,7 @@ IN"
 	# defect, one level up.
 	run bash -c "'$GATE' '$README' <<'IN'
 path=noop p50=2.59 p95=3.27 mean=2.67 runs=100
+path=passthrough p50=2.81 p95=3.40 mean=2.90 runs=100
 path=check p50=2.54 p95=3.17 mean=2.64 runs=100
 path=hook p50=2.72 p95=3.48 mean=2.96 runs=100
 IN"

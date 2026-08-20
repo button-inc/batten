@@ -28,11 +28,11 @@ setup() {
 }
 
 @test "every arm is measured in the pinned fixture repo" {
-	# Four paths, each pointing at the same materialised fixture. `wired` joins
+	# Five paths, each pointing at the same materialised fixture. `wired` joins
 	# them (CLOUD-697): its two arms differ in which LAUNCHER runs, not in the
-	# directory hyperfine is invoked from.
+	# directory hyperfine is invoked from. `passthrough` joined with CLOUD-777.
 	run bash -c "grep -cE '^pair [a-z]+ .*\\\$check_repo' '$TASK'"
-	[ "$output" -eq 4 ]
+	[ "$output" -eq 5 ]
 }
 
 # THE GAP THIS CLOSES (CLOUD-697). `perf-assert` budgets four paths; this task
@@ -47,7 +47,7 @@ setup() {
 	# loses it — which this case caught on its first run.
 	budgeted=$(sed -n "/^BUDGETS='/,/'$/p" "$BATS_TEST_DIRNAME/../mise-tasks/perf-assert" |
 		tr -d "'" | sed 's/^BUDGETS=//' | grep -cE '^[a-z]+ [0-9]+$')
-	paired=$(grep -cE '^pair (noop|check|hook|wired) ' "$TASK")
+	paired=$(grep -cE '^pair (noop|check|hook|wired|passthrough) ' "$TASK")
 	# perf-assert budgets the gated paths only; `check` is measured and ungated,
 	# so the paired set is the budgeted set plus it.
 	[ "$paired" -eq $((budgeted + 1)) ]

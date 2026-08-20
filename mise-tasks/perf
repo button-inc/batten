@@ -102,6 +102,8 @@ readonly OUT_DIR
 # materialised under a real name, so the copy is the un-suffixed one.
 readonly FIXTURE_REPO="crates/batten/tests/fixtures/repos/forbid-clean"
 readonly FIXTURE_HOOK="crates/batten/tests/fixtures/hooks/claude-code.json"
+# A read, which no committed rule selects — the shape match-all newly delivers.
+readonly FIXTURE_PASSTHROUGH="crates/batten/tests/fixtures/hooks/claude-code-passthrough.json"
 for f in "$FIXTURE_REPO/batten.toml.in" "$FIXTURE_REPO/lib.rs.in" "$FIXTURE_HOOK"; do
 	if [ ! -f "$f" ]; then
 		echo "::error:: perf: fixture $f is missing, so the measured input is not the one the test suite pins." >&2
@@ -118,6 +120,7 @@ cp "$FIXTURE_REPO/lib.rs.in" "$CHECK_REPO/lib.rs"
 # working directory and a relative one would resolve against that instead.
 readonly ABS_BIN="$PWD/$BIN"
 readonly ABS_HOOK="$PWD/$FIXTURE_HOOK"
+readonly ABS_PASSTHROUGH="$PWD/$FIXTURE_PASSTHROUGH"
 
 # One record per path, in a fixed order so two runs of this task differ only in
 # their numbers — byte-stable output, house style §6.
@@ -140,6 +143,7 @@ measure() {
 	)
 	case "$id" in
 	hook | wired) args+=(--input "$ABS_HOOK") ;;
+	passthrough) args+=(--input "$ABS_PASSTHROUGH") ;;
 	esac
 
 	# Guarded, not chained: a failed measurement must not fall through to the
@@ -181,6 +185,14 @@ measure noop "$PWD" "$ABS_BIN --help"
 measure check "$CHECK_REPO" "$ABS_BIN check"
 measure hook "$PWD" "$ABS_BIN hook --harness claude-code"
 
+# The PASS-THROUGH path (CLOUD-777). Under match-all every tool call reaches the
+# engine, so the common case is no longer the mediated one — it is a call no rule
+# selects, which must cost what looking costs and nothing more. `lib.rs` skips the
+# config load entirely for a payload that is neither a command nor a write, and
+# this is the number that says so out loud: an unmediated call that paid for
+# policy it never ran would show up here and nowhere else.
+measure passthrough "$PWD" "$ABS_BIN hook --harness claude-code"
+
 # The path that is actually WIRED, which is the one an agent waits on
 # (CLOUD-435). `hook` above measures the binary; this measures what
 # `.claude/settings.json` invokes, launcher and all — and the gap between them
@@ -194,10 +206,16 @@ measure hook "$PWD" "$ABS_BIN hook --harness claude-code"
 # One entry today. If the file ever wires several, this measures the first and
 # the count is reported, because a silent "we measured one of four" is the same
 # false green in a smaller size.
-wired_cmd=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command] | .[0] // empty' .claude/settings.json 2>/dev/null || true)
-wired_count=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command] | length' .claude/settings.json 2>/dev/null || echo 0)
+# BATTEN'S OWN entry, selected by name rather than by position (CLOUD-777).
+# It used to take `.[0]`, which was the engine's command only because the engine
+# happened to be listed first. Under match-all the file carries batten plus the
+# guards still awaiting retirement, and a positional read would publish whichever
+# one an unrelated edit floated to the top — a latency figure for a command
+# nobody waits on, which is the failure this whole path exists to prevent.
+wired_cmd=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command | select(contains("batten"))] | .[0] // empty' .claude/settings.json 2>/dev/null || true)
+wired_count=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command | select(contains("batten"))] | length' .claude/settings.json 2>/dev/null || echo 0)
 if [ -z "$wired_cmd" ]; then
-	echo "::error:: perf: .claude/settings.json wires no PreToolUse command, so the wired path cannot be measured. No records written." >&2
+	echo "::error:: perf: .claude/settings.json wires no PreToolUse command reaching batten, so the wired path cannot be measured. No records written." >&2
 	exit 1
 fi
 # The settings file spells the project dir as a variable the harness expands.
@@ -207,6 +225,6 @@ if [ ! -x "$wired_cmd" ]; then
 	exit 1
 fi
 if [ "$wired_count" -ne 1 ]; then
-	echo "::warning:: perf: $wired_count PreToolUse commands wired; measuring only the first ($wired_cmd)." >&2
+	echo "::warning:: perf: $wired_count PreToolUse commands reach batten; measuring only the first ($wired_cmd). hooks-wiring-check refuses more than one." >&2
 fi
 measure wired "$PWD" "$wired_cmd"

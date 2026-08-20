@@ -66,6 +66,7 @@ set -euo pipefail
 # alongside it so the launcher's own share stays attributable — a regression in
 # one and not the other says where to look.
 BUDGETS='noop 100
+passthrough 100
 hook 100
 wired 100'
 

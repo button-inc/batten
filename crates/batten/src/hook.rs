@@ -1975,6 +1975,15 @@ pub fn adjudicate(
 /// instead of a check repeated at each of the deny arms below. A deny site that
 /// forgot it would be a rule quietly unwaivable, which is exactly the asymmetry
 /// CLOUD-293 found and CLOUD-606 decided against.
+// `match_same_arms` would collapse the seven event arms below into one
+// `_ => Decision::Allow`. Refused for the reason `capabilities` and `encode_ask`
+// refuse it, and here the refusal IS the feature: the arms agree on the ANSWER
+// and disagree on the REASON, and CLOUD-777 exists because a fall-through and a
+// stated no-op are byte-identical at runtime and opposite as contracts. Merging
+// them would restore the silence — an eighth `Event` would land in a wildcard
+// nobody wrote for it, which is what registering on every surface makes likely
+// rather than hypothetical.
+#[allow(clippy::match_same_arms)]
 fn adjudicated(
     policy: &Policy,
     envelope: &Envelope,
@@ -6437,5 +6446,58 @@ mod tests {
                 harness.as_str()
             );
         }
+    }
+
+    #[test]
+    fn a_pass_through_call_resolves_nothing_it_does_not_need() {
+        // CLOUD-777's acceptance, asserted structurally rather than only as a
+        // latency figure: under match-all every tool call reaches the engine, so
+        // the COMMON case is now a call no rule selects. It must cost what
+        // looking costs and nothing more.
+        //
+        // The two resolutions that are not free are the ones asked here. Both
+        // are boundary work `adjudicate` cannot do — a receipt reads a file and
+        // two git refs, a key read runs `git log` — and both are narrowed by
+        // asking the policy FIRST whether any row could want them (CLOUD-460's
+        // lesson, after one receipt row made every mediated call pay four git
+        // subprocesses). A pass-through that answered `Some` here would pay for
+        // policy it never runs, and nothing else in the suite would notice.
+        let policy = receipt_policy();
+        let read = Envelope {
+            event: Event::PreTool,
+            raw_event: ASSUMED_EVENT.to_owned(),
+            raw_tool: "Read".to_owned(),
+            operation: Operation::Read,
+            input: Value::Null,
+            command: String::new(),
+            writes: None,
+            cwd: None,
+            session: None,
+            stop_active: None,
+            last_message: None,
+            transcript: None,
+        };
+        assert!(
+            policy.required_checks_for(&read).is_empty(),
+            "a read resolves no receipts — a receipt read is a file and two git refs"
+        );
+        assert_eq!(
+            policy.key_base_for(&read),
+            None,
+            "a read resolves no key facts — a key read is a branch and a `git log`"
+        );
+        // And the same call is allowed, so the cheapness above is the cheapness
+        // of the path actually taken rather than of one the gate skipped.
+        assert_eq!(
+            adjudicate(
+                &policy,
+                &read,
+                false,
+                &None,
+                &None,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Allow
+        );
     }
 }

@@ -168,6 +168,9 @@ fi
 # the corpus.
 readonly FIXTURE_REPO="crates/batten/tests/fixtures/repos/forbid-clean"
 readonly FIXTURE_HOOK="$PWD/crates/batten/tests/fixtures/hooks/claude-code.json"
+# A read, which the pinned fixture's config does not select — the shape match-all
+# newly delivers, and the one `perf-assert` budgets as `passthrough` (CLOUD-777).
+readonly FIXTURE_PASSTHROUGH="$PWD/crates/batten/tests/fixtures/hooks/claude-code-passthrough.json"
 check_repo="$OUT_DIR/check-repo"
 mkdir -p "$check_repo"
 cp "$FIXTURE_REPO/batten.toml.in" "$check_repo/batten.toml"
@@ -195,6 +198,7 @@ pair() {
 	# `mise-tasks/perf`, which already treats them as one class.
 	case "$id" in
 	hook | wired) flags+=(--input "$FIXTURE_HOOK") ;;
+	passthrough) flags+=(--input "$FIXTURE_PASSTHROUGH") ;;
 	esac
 
 	if ! (cd "$dir" && hyperfine "${flags[@]}" "$base_cmd" "$head_cmd" >/dev/null 2>"$OUT_DIR/$id.err"); then
@@ -235,6 +239,10 @@ pair() {
 pair noop "$check_repo" "$base_bin --help" "$head_bin --help"
 pair check "$check_repo" "$base_bin check" "$head_bin check"
 pair hook "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook --harness claude-code"
+# The pass-through arm (CLOUD-777). Under match-all the engine is handed every
+# tool call, so the case a regression would hurt most is the one no rule selects
+# — and `perf-assert` budgets it, which is what this file's own census enforces.
+pair passthrough "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook --harness claude-code"
 
 # THE WIRED PATH (CLOUD-697): what `.claude/settings.json` actually invokes,
 # launcher included — the number an agent waits on, and the one `perf-assert`

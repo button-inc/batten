@@ -165,12 +165,13 @@ measure time** rather than hardcoded — so the published figure describes what 
 installed rather than a binary nothing calls. `hook` stays measured beside it so
 the launcher's own share is attributable.
 
-| path    | what it does                                    | p50    | p95    | budget   |
-| ------- | ----------------------------------------------- | ------ | ------ | -------- |
-| `noop`  | process start, command tree, render             | 2.1 ms | 2.4 ms | ≤ 100 ms |
-| `check` | + config load, trust resolution, one-rule tree  | 2.3 ms | 2.7 ms | —        |
-| `hook`  | + envelope decode, adjudication, decision write | 2.8 ms | 3.0 ms | ≤ 100 ms |
-| `wired` | the hook as `.claude/settings.json` invokes it  | 8.0 ms | 8.4 ms | ≤ 100 ms |
+| path          | what it does                                           | p50    | p95    | budget   |
+| ------------- | ------------------------------------------------------ | ------ | ------ | -------- |
+| `noop`        | process start, command tree, render                    | 2.1 ms | 2.4 ms | ≤ 100 ms |
+| `check`       | + config load, trust resolution, one-rule tree         | 2.3 ms | 2.7 ms | —        |
+| `hook`        | + envelope decode, adjudication, decision write        | 2.8 ms | 3.0 ms | ≤ 100 ms |
+| `passthrough` | a call no rule selects — decode, allow, no config load | —      | —      | ≤ 100 ms |
+| `wired`       | the hook as `.claude/settings.json` invokes it         | 8.0 ms | 8.4 ms | ≤ 100 ms |
 
 100 ms is the [Command Line Interface Guidelines'][clig] floor for a response
 that reads as instant. It is an absolute ceiling rather than a tight band around
