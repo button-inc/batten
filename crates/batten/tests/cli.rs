@@ -9084,3 +9084,158 @@ fn a_non_string_prompt_reads_as_absent() {
     assert!(out.status.success(), "absent is not an error");
     assert!(String::from_utf8_lossy(&out.stdout).trim().is_empty());
 }
+
+// --- the agent-sourced fact loop (CLOUD-776) ---------------------------------
+//
+// The channel that removes a choice rather than making it. A gate that needs a
+// fact the engine cannot reach used to mean *the engine spawns a process* or *we
+// implement less*; here it denies with `Fix::Run`, the AGENT's own tool runs the
+// command, the harness hands the bytes back on the post-tool event, and the
+// retry decides. Batten executes nothing at any point in that loop.
+//
+// These run it over the compiled binary, because the halves live in different
+// processes and a unit test of either one would prove a loop that does not close.
+
+/// A policy whose `gh pr create` needs one agent-sourced fact.
+///
+/// `claim-not-raced` is the worked instance CLOUD-776 names: `issue-guard`'s
+/// duplicate-claim half could not port to the mediated path because "the
+/// claimed-key lookup needs a network call the mediated path is barred from"
+/// (CLOUD-446), so it became a `tree`-scoped row run under `verify` — catching
+/// the race at `verify` where the guard caught it at `gh pr create`. The engine
+/// still makes no network call; the agent's own `gh` does.
+const AGENT_FACT_CONFIG: &str = r#"version = 1
+
+[[fact]]
+name = "claimed-key"
+command = "gh pr list --state open --json headRefName"
+
+[[rule]]
+id = "claim-not-raced"
+kind = "receipt"
+scope = "mediated_call"
+severity = "deny"
+pattern = "gh pr create"
+checks = ["claimed-key"]
+key = "branch"
+reason = "unused: an agent-sourced check builds its fix from the declared command"
+"#;
+
+/// The post-tool payload a harness sends after the agent ran `command`.
+fn post_tool(command: &str, rows: &str) -> String {
+    serde_json::json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-agent-fact",
+        "cwd": "/repo",
+        "tool_name": "Bash",
+        "tool_input": { "command": command },
+        "tool_response": [{ "type": "text", "text": rows }],
+    })
+    .to_string()
+}
+
+/// The mediated call the fact gates.
+const PR_CREATE: &str = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"gh pr create --draft"}}"#;
+
+#[test]
+fn the_agent_sourced_fact_loop_closes_end_to_end() {
+    let dir = common::Fixture::new("agent-fact-loop")
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+
+    // 1. The gate has no fact, so it denies — and the deny carries the COMMAND to
+    //    run, built from the declared fact rather than from the row's prose.
+    let denied = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    assert_eq!(denied.status.code(), Some(2), "a missing fact must deny");
+    let reason = common::stderr(&denied);
+    assert!(
+        reason.contains("gh pr list --state open --json headRefName"),
+        "the deny must name the command whose output will be accepted; got: {reason}"
+    );
+
+    // 2. The agent runs it. The harness hands the buffer back.
+    let recorded = run_hook_in(
+        &dir,
+        "exit-code",
+        &post_tool("gh pr list --state open --json headRefName", "[]"),
+        false,
+    );
+    assert_eq!(
+        recorded.status.code(),
+        Some(0),
+        "a post-tool event is never a deny channel"
+    );
+
+    // 3. The retry decides from the fact. `[]` is "it ran and there are none" —
+    //    an ANSWER, and the one a never-ran must never collapse into.
+    let allowed = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    assert_eq!(
+        allowed.status.code(),
+        Some(0),
+        "the recorded fact must satisfy the check; stderr: {}",
+        common::stderr(&allowed)
+    );
+}
+
+#[test]
+fn a_buffer_from_another_command_never_becomes_the_fact() {
+    // THE residual attack this channel carries, over the binary. The agent picks
+    // WHICH command runs — it does not author what the output says — so a fact
+    // keyed to a `Fix::Run` nobody verifies is CLOUD-526's forgery gradient
+    // rebuilt on a new surface. `echo '[]'` is the convenient answer.
+    let dir = common::Fixture::new("agent-fact-forged")
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+
+    run_hook_in(&dir, "exit-code", &post_tool("echo '[]'", "[]"), false);
+
+    let still_denied = run_hook_in(&dir, "exit-code", PR_CREATE, false);
+    assert_eq!(
+        still_denied.status.code(),
+        Some(2),
+        "a buffer from a command nobody asked for must not satisfy the check"
+    );
+}
+
+#[test]
+fn no_byte_of_the_result_buffer_is_emitted_or_stored() {
+    // Rule 4 end to end, and load-bearing rather than formal here: a command's
+    // stdout can carry anything, which makes the result buffer the likeliest
+    // thing in the envelope to hold a secret.
+    let dir = common::Fixture::new("agent-fact-secret")
+        .config(AGENT_FACT_CONFIG)
+        .git()
+        .base_commit()
+        .build();
+
+    let secret = "ghp_PLANTEDSECRETVALUE";
+    let rows = format!("[{{\"headRefName\":\"{secret}\"}}]");
+    let recorded = run_hook_in(
+        &dir,
+        "exit-code",
+        &post_tool("gh pr list --state open --json headRefName", &rows),
+        false,
+    );
+
+    // Not on either channel of the call that carried it...
+    assert!(!String::from_utf8_lossy(&recorded.stdout).contains(secret));
+    assert!(!common::stderr(&recorded).contains(secret));
+
+    // ...and not in anything the recording wrote. The record carries a COUNT.
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir.join(".git/batten-receipts")).expect("the receipts dir exists") {
+        let path = entry.expect("read a receipt entry").path();
+        let body = fs::read_to_string(&path).unwrap_or_default();
+        if body.contains(secret) {
+            found.push(path.display().to_string());
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "the buffer reached the state root: {found:?}"
+    );
+}
