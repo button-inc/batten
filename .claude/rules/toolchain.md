@@ -233,7 +233,8 @@ means it is mediating.
   because `adjudicate` is pure. `None` is "could not look" and allows, matching
   the bash guard's `|| exit 0`. The one source the port drops is `gh pr view`:
   a PR body typed by hand and never echoed into the branch or a commit is no
-  longer evidence, because a network round trip cannot fit the ≤100ms budget.
+  longer evidence, because a network round trip cannot fit the invocation budget
+  `perf-assert` enforces.
   The other half is the row below, and `issue-guard` is **deleted**.
 - **`claim-race-check` is the duplicate-claim half** (CLOUD-446), and it is a
   `tree`-scoped `command` row — `claim-not-raced` — run by `batten check` under
@@ -250,7 +251,7 @@ means it is mediating.
   **It cannot live on the mediated call**: `RuleKind::scopes` pairs every
   spawning kind with `RuleScope::Tree` alone, pinned by
   `rules::tests::no_mediated_call_kind_spawns_a_process`, and a round trip on
-  every tool call is disqualifying against the ≤100ms budget besides. The cost of
+  every tool call is disqualifying against that same budget besides. The cost of
   the move, stated rather than absorbed: it catches the race at `verify` where
   the guard caught it at `gh pr create`. Both are later than pull time, which is
   what CLOUD-230 wanted and which no candidate restores. `glob` names the check's
@@ -434,7 +435,10 @@ token otherwise surfaces as an unrelated 403 in whichever task runs first.
 
 `perf` measures batten's own invocation cost (hyperfine over a release build:
 `noop`, `check`, `hook`) and `perf-assert` holds it to the ceiling README
-publishes — an ABSOLUTE budget, 100ms, clig's floor. `perf-pair` asks the other
+publishes — an ABSOLUTE budget rather than a ratchet, taken from clig's
+response-time floor. The number itself lives in `perf-assert`'s `BUDGETS` table,
+which is also what the README clause holds the published column against; do not
+restate it here (CLOUD-770). `perf-pair` asks the other
 question: it builds this branch's binary AND its merge base's, measures them back
 to back on one machine, and `perf-compare` decides the RATIO. `perf-gate`
 composes those two and is the one name `verify` calls. Do not confuse this with

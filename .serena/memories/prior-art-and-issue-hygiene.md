@@ -615,8 +615,8 @@ supplied by config **is** user-supplied code, so every logic-backed rule would
 land in `enforce` — off the mediation path, which is where the value was supposed
 to be. This is the test for any proposal that embeds an interpreter, it
 generalises past whichever one is on offer, and it is decided before performance
-or licensing. The measured bound alongside it: the `hook` path is budgeted at
-100ms p95 and pays that on every mediated tool call.
+or licensing. The measured bound alongside it: the `hook` path
+carries a p95 budget `perf-assert` owns, and pays it on every mediated tool call.
 
 **The layer that decides a dependency question is the resolved closure, and it is
 the one layer nobody documents.** Asking per layer rather than per vendor is

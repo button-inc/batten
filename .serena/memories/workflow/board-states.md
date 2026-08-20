@@ -317,9 +317,10 @@ Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
   The release PR used to land the instant its CI went green, so every such commit
   shipped its own tag within minutes. `auto-release-land` now gates that automated
   `/fast-forward` on `mise run release-due`: the PR lands once `main` has been
-  quiet for 30 minutes (`RELEASE_QUIET_MINUTES`) or the last release is 24h old
-  (`RELEASE_MAX_WAIT_HOURS`), whichever comes first, and a half-hourly cron is
-  what asks. So **In Review is the truthful column for longer**, by design — a
+  quiet for `RELEASE_QUIET_MINUTES` or the last release is older than
+  `RELEASE_MAX_WAIT_HOURS`, whichever comes first, and a cron is what asks.
+  `mise-tasks/release-due` owns both windows; read them there rather than here
+  (CLOUD-770). So **In Review is the truthful column for longer**, by design — a
   batch is accumulating in the open release PR, and one tag sweeps all of it.
   Nothing about the sweep changes; what changes is that "landed, not yet tagged"
   is the ordinary state for up to a day rather than a few minutes. A maintainer

@@ -445,7 +445,9 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   and no stash API**, so re-deriving would make Batten a second answer to a
   question git owns — CLOUD-46's deferral, and "adopt prior art; don't expand the
   core". The latency case was measured and does not carry it: `key_facts` is the
-  only mediated-path spawn site, 6.7ms of a 100ms budget on two command shapes.
+  only mediated-path spawn site, measured at 6.7ms on two command shapes against
+  the budget `perf-assert` owns (CLOUD-770 — the measurement is this note's, the
+  budget is not).
   `git2` is excluded by `macos-link-check` rule 1 — a COST, not a constraint:
   cross-linking Darwin frameworks needs an SDK the build declines because macOS
   runners bill at 10x on a **private** repo, which CLOUD-737 revisits when the

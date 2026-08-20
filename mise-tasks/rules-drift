@@ -32,6 +32,22 @@ set -euo pipefail
 
 cd "${RULES_DRIFT_ROOT:-$(git rev-parse --show-toplevel)}"
 rules="${RULES_DRIFT_RULES:-.claude/rules}"
+# THE SECOND PROSE SURFACE (CLOUD-770). `.serena/memories/**` is the largest one
+# in the repo and was subject to neither predicate: `memories-check` gates the
+# graph's EDGES (CLOUD-183 — `mem:` references resolve, names are addressable)
+# and deliberately not content, so a restated value or an unwired `runs on`
+# landing in a memory was judged by nothing at all.
+#
+# It catches zero on the tree as it stands, and that is stated rather than
+# hidden: measured 2026-08-20, no memory uses the `` `VAR` (N) `` anchor, and the
+# one inverse-form restatement was converted to a pointer in the same change
+# rather than gated. The coverage here is PROSPECTIVE, which is the honest claim
+# for it — the surface is now walked, so the next one is caught on arrival.
+#
+# Empty is NOT a failure the way an empty `$rules` is, and the asymmetry is
+# deliberate: this repo's rules directory is load-bearing and a missing one means
+# a wrong path, whereas a repo with no memory tree is an ordinary consumer.
+memories="${RULES_DRIFT_MEMORIES:-.serena/memories}"
 settings="${RULES_DRIFT_SETTINGS:-.claude/settings.json}"
 tasks="${RULES_DRIFT_TASKS:-mise-tasks}"
 
@@ -43,11 +59,19 @@ report() {
 	violations=$((violations + 1))
 }
 
+# A git pathspec `*` crosses `/`, so one pattern per root reaches every depth —
+# `.serena/memories/*.md` returns `workflow/board-states.md`. CLOUD-770's issue
+# body originally asserted the opposite and was corrected by running it; the
+# comment is here so the next reader does not re-derive it from the glob's shape.
 files=$(git ls-files -- "$rules/*.md" 2>/dev/null || true)
 if [ -z "$files" ]; then
 	echo "::error:: rules-drift: no tracked markdown under $rules — the path is wrong, and both predicates silently judged nothing." >&2
 	exit 1
 fi
+# Appended, never substituted: an absent memory tree leaves the rules walk exactly
+# as it was rather than turning the gate red.
+memory_files=$(git ls-files -- "$memories/*.md" 2>/dev/null || true)
+[ -n "$memory_files" ] && files=$(printf '%s\n%s\n' "$files" "$memory_files")
 
 checked_defaults=0
 checked_events=0

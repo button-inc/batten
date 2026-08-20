@@ -20,6 +20,7 @@ setup() {
 	git -C "$ROOT" config user.name t
 	export RULES_DRIFT_ROOT="$ROOT" \
 		RULES_DRIFT_RULES="rules" \
+		RULES_DRIFT_MEMORIES="memories" \
 		RULES_DRIFT_SETTINGS="settings.json" \
 		RULES_DRIFT_TASKS="tasks"
 	printf '{"hooks":{"SessionStart":[{"hooks":[{"command":"mise run -q contract-drift"}]}]}}\n' >"$ROOT/settings.json"
@@ -30,6 +31,15 @@ setup() {
 # sees it.
 rules() {
 	printf '%s\n' "$1" >"$ROOT/rules/toolchain.md"
+	git -C "$ROOT" add -A
+}
+
+# `memory <relative-path> <body>` — one tracked memory, at whatever depth the
+# case needs. Separate from `rules()` because the point of these cases is the
+# SECOND surface, and sharing a helper would hide which root found the file.
+memory() {
+	mkdir -p "$ROOT/memories/$(dirname "$1")"
+	printf '%s\n' "$2" >"$ROOT/memories/$1"
 	git -C "$ROOT" add -A
 }
 
@@ -171,6 +181,50 @@ once-per-batch `PostToolBatch` reminder has nowhere to land.'
 }
 
 # --- the real tree ------------------------------------------------------------
+
+@test "A DRIFTED VALUE IN A MEMORY FAILS — the second prose surface is walked" {
+	# CLOUD-770. The memory tree is the largest prose surface in the repo and was
+	# subject to neither predicate; `memories-check` gates the graph's edges and
+	# deliberately not its content.
+	rules 'The lap count is bounded by `LAND_MAX_LAPS`.'
+	memory "core.md" 'The runaway backstop `LAND_MAX_LAPS` (8) bounds a landing.'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"memories/core.md:1 (LAND_MAX_LAPS)"* ]]
+	[[ "$output" == *"says 8"* ]]
+	[[ "$output" == *"defaults to 2"* ]]
+}
+
+@test "A MEMORY IN A SUBDIRECTORY IS REACHED — proven, not assumed from the glob" {
+	# The assertion that exists because the reasoning was wrong once: CLOUD-770's
+	# issue body claimed a `<root>/*.md` pathspec does not recurse, and that a
+	# `workflow/` memory was therefore never read. It does recurse. This case is
+	# what makes the walk's depth a fact rather than a belief about fnmatch.
+	rules 'The lap count is bounded by `LAND_MAX_LAPS`.'
+	memory "workflow/board-states.md" 'The backstop `LAND_MAX_LAPS` (8) bounds it.'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"memories/workflow/board-states.md:1 (LAND_MAX_LAPS)"* ]]
+}
+
+@test "a memory naming a knob without quoting a value passes" {
+	# The false-positive direction, on the new surface. A memory must stay able to
+	# point at the owner — that is the form CLOUD-769 converted the budget to.
+	rules 'The lap count is bounded by `LAND_MAX_LAPS`.'
+	memory "workflow/landing-loop.md" 'Laps are bounded by `LAND_MAX_LAPS`; the task header is the authority.'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "AN ABSENT MEMORY TREE IS NOT A FAILURE, unlike an absent rules directory" {
+	# The asymmetry is deliberate and this pins it. A missing rules directory means
+	# a wrong path in a repo that must have one; a consumer repo with no memories
+	# is ordinary, and turning red for it would be a gate nobody can adopt.
+	rules 'The lap count is bounded: `LAND_MAX_LAPS` (2) is a runaway backstop.'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"1 restated default(s)"* ]]
+}
 
 @test "this repository's own rules files agree with their mechanisms" {
 	unset RULES_DRIFT_ROOT RULES_DRIFT_RULES RULES_DRIFT_SETTINGS RULES_DRIFT_TASKS
