@@ -90,6 +90,16 @@ gate, and `land` cannot start. A connector blip becomes an unlandable branch.
 Commit and push and open the draft PR anyway — that work survives, and a session
 whose tools bind can mint the receipt and land it unchanged.
 
+**Do not hunt for a bypass; there is none, by design.** Checked and recorded so
+nobody re-derives it: `verify`'s claim precondition (`mise.toml`, the
+`receipt status claim --key branch` block) is unconditional on a named branch and
+carries no env hatch. `claim-check`'s three hatches all override a JUDGEMENT over
+piped issues, never a missing input — `BATTEN_CLAIM_CHECK_BYPASS` (the
+refinement-sequence rules), `BATTEN_CLAIM_TAKEOVER` (the three competitor rules),
+and `--adopt`, which only re-keys an orphan left by `git branch -m`. The receipt
+attests "pulled from a refined issue", so a hatch for "could not read the issue"
+would be a hatch through the one thing it certifies. It is refusing correctly.
+
 **Forms that are NOT candidates**, so nobody spends turns on them again. The
 injected config's server entry carries three ids; only the key is a tool prefix.
 
