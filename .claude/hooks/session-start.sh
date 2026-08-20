@@ -232,45 +232,6 @@ if [ "$fail" -ne 0 ]; then
 	echo "::error:: session-start: setup incomplete — expect missing tools or MCP servers" >&2
 fi
 
-# --- the committed MCP rules, projected onto the identity the host attached ---
-#
-# CLOUD-734. `.claude/settings.json` names a server by label; the host attaches a
-# toolbox server under an identifier it picks per registration episode, so a
-# committed grant can name nothing and enforce nothing — measured this session as
-# zero of six grants reaching the Claude Code Remote server. `mcp-grant-sync`
-# rewrites the gitignored local overlay from the committed file; the task's own
-# header owns the what and the why, this owns only the WHEN.
-#
-# WHY HERE and not on a later event: settings are a startup snapshot (CLOUD-187),
-# so a write after the read binds nothing, and this is the earliest writable
-# moment there is.
-#
-# AND IT DOES NOT STOP AN APPROVAL PROMPT — say so here rather than let a reader
-# infer a working mechanism from a running one. A claude.ai connector carries a
-# PER-TOOL control, and a tool set to `ask` prompts on every call: the client
-# reads that setting at startup and enforces it locally, in every permission mode,
-# with no remember-my-choice option, and — decisively — "Allow rules that match
-# the tool don't skip the prompt either" (code.claude.com/docs/en/mcp, per-tool
-# controls on claude.ai connectors). Measured here: the Linear connector's tools
-# are set to allow and its calls pass, the toolbox connector's 20 are set to ask
-# and every call prompts, same session and same transport. No file this hook
-# writes can change that, by design.
-#
-# So what the projection is FOR is the committed intent expressed against the
-# identity that actually attached: that is what `mcp-allow-check`'s inert-rule
-# predicate reads, and it is what makes that predicate closable rather than a
-# verdict no edit could satisfy. It is not a fix for prompting, and an earlier
-# version of this comment claiming the refusal came from the CCR proxy was wrong
-# — asserted from a brief, never verified, and falsified by the connector working
-# beside it (CLOUD-734).
-#
-# NEVER SETS `fail`, and deliberately not routed through `step`, for the reason
-# `reclaim-census` below is not: a stale committed rule is a finding about the
-# settings file, not a provisioning failure, and halting a session over one would
-# be the sensor deciding something it has no business deciding. Its own
-# `::error::` line is the report; pointer-only, so nothing it prints names a tool.
-mise run mcp-grant-sync || true
-
 # --- can this container do the work at all? -----------------------------------
 #
 # Provisioning succeeding is a different question from the container being

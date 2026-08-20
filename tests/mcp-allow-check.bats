@@ -198,100 +198,124 @@ denies() {
 	[ "$status" -eq 0 ]
 }
 
-# --- the fourth predicate: an allow rule naming a server that never attached ---
+# --- the fourth predicate: an allow rule the connector control cannot honour ---
 #
-# CLOUD-684. The attached set comes from the generated MCP config, read through
-# `mcp-grant-sync --attached` so the two gates share one definition of the name —
-# never from the log tree, whose directory names are sanitized and lossy
-# (CLOUD-665). `--config` points the reader at a fixture so these cases do not
-# assert about whatever is attached to the session running them.
+# CLOUD-765, replacing CLOUD-684's predicate. That one reported a rule naming a
+# server not attached under that name, which `connector-allow-guard` (CLOUD-191)
+# repairs per call — so the finding was false wherever the guard is wired. This
+# reports the one no translation repairs: a tool the connector sets to `ask`,
+# which no allow rule at any scope skips.
+#
+# The fixtures carry the `mcp_url` endpoint `connector-allow-resolve` anchors on,
+# because that resolver — not this suite, and not a second copy of it — is what
+# says which committed alias a live key means. `BATTEN_MCP_CONFIG` keeps every
+# case off whatever is attached to the session running it.
 
-# A generated MCP config in the host's shape: server keys are the identifiers
-# actually registered, each with the tool inventory that identifies it.
-attached_config() { # attached_config <server-id> <tool>...
+TOOLBOX_ENDPOINT_ENC="https%3A%2F%2Fapi.anthropic.com%2Fv1%2Fcode%2Fmcp%2Fmeta"
+
+# A generated config in the host's shape: a rotating key, the toolbox endpoint
+# behind it, and a per-tool control the host wrote.
+policy_config() { # policy_config <server-id> <tool>:<policy>...
 	local id="$1"
 	shift
 	local tools="[]"
-	for t in "$@"; do
-		tools=$(jq -c --arg t "$t" '. + [{name: $t, permission_policy: "always_ask"}]' <<<"$tools")
+	for pair in "$@"; do
+		tools=$(jq -c --arg t "${pair%%:*}" --arg p "${pair##*:}" \
+			'. + [{name: $t, permission_policy: $p}]' <<<"$tools")
 	done
-	jq -n --arg id "$id" --argjson tools "$tools" \
-		'{mcpServers: {($id): {type: "http", url: "https://api.example.invalid/mcp", headers: {authorization: "Bearer s3cr3t"}, tools: $tools}}}' >"$BATTEN_MCP_CONFIG"
+	jq -n --arg id "$id" --arg u "https://api.anthropic.com/v1/code/mcp/proxy?mcp_url=$TOOLBOX_ENDPOINT_ENC" --argjson tools "$tools" \
+		'{mcpServers: {($id): {type: "http", url: $u, headers: {authorization: "Bearer s3cr3t"}, tools: $tools}}}' >"$BATTEN_MCP_CONFIG"
 }
 
-@test "an allow rule naming a server that attached under that exact name passes" {
-	allow '["mcp__github__create_pull_request"]'
-	attached_config github create_pull_request
+@test "an allow rule whose tool the connector allows passes" {
+	allow '["mcp__Claude_Code_Remote__list_sessions"]'
+	policy_config cccccccc-1111-2222-3333-444444444444 list_sessions:always_allow
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 0 ]
 }
 
-# THE DISCRIMINATOR (CLOUD-418, and CLOUD-684 §7b): the rule names the label, the
-# session registered a generated identifier, and no projection can place it
-# because a glob names no tool to identify the server by. This is the shape that
-# ships today and that no existing case can express.
-@test "an allow rule naming a label while the session registered an identifier is inert" {
-	allow '["mcp__Linear__*"]'
-	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue save_issue
+# THE DISCRIMINATOR (CLOUD-418, and CLOUD-765 §7b). The rule is well-formed, the
+# alias is the committed one, the server is attached — and the connector sets the
+# tool to `ask`, so the rule cannot do what it says. No earlier case can express
+# this, and `mise run mutant` drives it red through `allow-check-ignores-policy`.
+@test "an allow rule whose tool the connector sets to ask is unenforceable" {
+	allow '["mcp__Claude_Code_Remote__list_sessions"]'
+	policy_config cccccccc-1111-2222-3333-444444444444 list_sessions:always_ask
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"Linear"* ]]
-	[[ "$output" == *"grants nothing"* ]]
+	[[ "$output" == *"always_ask"* ]]
+	# The remedy is named, because an agent told only "this does not work"
+	# reaches for the file it can write.
+	[[ "$output" == *"Tool permissions"* ]]
 }
 
-# The same label, one literal tool named beside the glob: now the projection can
-# identify the server by a tool name, so the grant is carried onto the live
-# identifier and the rule is not inert. This is the closable half — without it
-# the predicate would be a verdict no edit could ever satisfy, since a committed
-# rule cannot name an identifier that rotates.
-@test "a label the projection can place is not inert" {
-	allow '["mcp__Linear__*","mcp__Linear__get_issue"]'
-	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue save_issue
+# A deny at the same policy is ENFORCED — the control chooses ask versus allow and
+# never widens a deny. Reporting it would say "delete the rules doing the only
+# enforcement there is".
+@test "a deny on the same tool is never reported" {
+	printf '{"permissions":{"allow":[],"deny":["mcp__Claude_Code_Remote__send_later"]}}\n' >"$FIXTURE"
+	policy_config cccccccc-1111-2222-3333-444444444444 send_later:always_ask
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 0 ]
 }
 
-@test "a declared server is never judged inert — its name is the repo's own" {
-	enabled '["serena"]' '["mcp__serena__*"]'
-	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue
+@test "a tool no rule names is not reported, whatever its policy" {
+	allow '["mcp__Claude_Code_Remote__list_sessions"]'
+	policy_config cccccccc-1111-2222-3333-444444444444 list_sessions:always_allow create_session:always_ask
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 0 ]
 }
 
-@test "the inert finding carries no tool name, URL or header value" {
-	allow '["mcp__Linear__*"]'
-	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue save_issue
+# A claude.ai connector is authorised at the connector layer, so the resolver
+# answers `-` for it and this predicate has nothing to say — translating its name
+# would be granting what the committed file does not.
+@test "a server that is not the toolbox is left alone" {
+	allow '["mcp__Linear__list_issues"]'
+	jq -n '{mcpServers: {"dddddddd-9999-8888-7777-666666666666": {url: "https://api.anthropic.com/v1/code/mcp/proxy?mcp_url=https%3A%2F%2Fmcp.linear.app%2Fmcp", tools: [{name: "list_issues", permission_policy: "always_ask"}]}}}' >"$BATTEN_MCP_CONFIG"
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the finding carries no tool name, URL or header value" {
+	allow '["mcp__Claude_Code_Remote__list_sessions"]'
+	policy_config cccccccc-1111-2222-3333-444444444444 list_sessions:always_ask
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 1 ]
-	[[ "$output" != *"get_issue"* ]]
-	[[ "$output" != *"save_issue"* ]]
-	[[ "$output" != *"http"* ]]
+	[[ "$output" != *"list_sessions"* ]]
 	[[ "$output" != *"s3cr3t"* ]]
+	[[ "$output" != *"api.anthropic.com"* ]]
 }
 
-# Six rules naming one dead label are one thing to fix, not six.
-@test "one finding per label, not per rule" {
-	allow '["mcp__Gone__alpha","mcp__Gone__beta","mcp__Gone__gamma"]'
-	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue
+# Six rules against one connector setting are one thing to fix.
+@test "one finding per alias, with a count" {
+	allow '["mcp__Claude_Code_Remote__list_sessions","mcp__Claude_Code_Remote__get_session","mcp__Claude_Code_Remote__create_session"]'
+	policy_config cccccccc-1111-2222-3333-444444444444 list_sessions:always_ask get_session:always_ask create_session:always_ask
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 1 ]
-	[ "$(grep -c -- 'Gone' <<<"$output")" = "1" ]
+	[ "$(grep -c -- 'Claude_Code_Remote' <<<"$output")" = "1" ]
+	[[ "$output" == *"3 allow rule(s)"* ]]
 }
 
-# FAILS OPEN where it cannot look. An attached-server set is a property of the
-# world, and CI has no MCP session — a gate that reported inert there would fail
-# every rule in the file for a reason that is not about the commit.
+# FAILS OPEN where it cannot look. A connector control is a property of the world,
+# and CI has no MCP session.
 @test "no generated config means no verdict — the predicate is skipped, not assumed" {
-	allow '["mcp__Linear__*"]'
+	allow '["mcp__Claude_Code_Remote__list_sessions"]'
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 0 ]
 }
 
-# The existing predicate is untouched by the new one: an enabled server with no
-# grant is still that finding, not an inert-rule finding.
+# The commit-scoped half never consults the world: without --session the same
+# unenforceable rule is silent, which is what keeps this out of the hk gate.
+@test "without --session the connector control is not consulted" {
+	allow '["mcp__Claude_Code_Remote__list_sessions"]'
+	policy_config cccccccc-1111-2222-3333-444444444444 list_sessions:always_ask
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
 @test "an enabled server with no grant keeps its own verdict" {
 	enabled '["serena"]' '["mcp__github__create_pull_request"]'
-	attached_config github create_pull_request
+	policy_config cccccccc-1111-2222-3333-444444444444 create_pull_request:always_allow
 	run "$GATE" --session "$FIXTURE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"every call to it prompts"* ]]
