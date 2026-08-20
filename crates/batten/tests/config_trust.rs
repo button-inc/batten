@@ -23,7 +23,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, git_in, scratch, stdout};
+use common::{Fixture, StateHome, batten, git_in, scratch, stdout};
 
 /// A pull-request-shaped fixture: `base` committed and pinned as `origin/main`,
 /// then `working` written into the tree on top (committed, so the tree is clean
@@ -602,4 +602,243 @@ fn without_a_base_ref_a_missing_config_falls_back_to_the_defaults_and_not_to_the
         stdout(&output)
     );
     assert_eq!(stdout(&output), "", "the base's rule must not have fired");
+}
+
+// --- the flag is consulted before the file, on every surface that takes it ----
+//
+// CLOUD-719. CLOUD-243 landed its rule in `run_rules` only, so `check` was the
+// one verb that survived the maximal weakening. Three others tested the working
+// file's existence BEFORE `resolve` was reached, and `--config-from` is
+// `global: true`, so all three accepted the flag and then ignored it.
+//
+// Every case below is paired with its no-flag control, because the early return
+// each fix guards is CORRECT on its own: `batten hook` and `batten exec` run in
+// directories that are not Batten repositories, and refusing there would make
+// the tool the reason ordinary work stops (CLOUD-70). The fix is to ask the flag
+// first, never to delete the short-circuit.
+
+/// The `[[rule]]` a `mediated_call` policy denies a `Write` with.
+fn protected_policy() -> String {
+    "\nprotected = [\"secrets.txt\"]\n\n[[verb]]\nverb = \"mv\"\neffect = \"destructive\"\n"
+        .to_owned()
+}
+
+/// A `PreToolUse` envelope carrying a shell command, in the neutral dialect.
+///
+/// The protected-path gate is the intersection of two config tables — a
+/// mutating `[[verb]]` and a `protected` path — so a shell command is what
+/// exercises it, which is also the shape `tests/mediated_verbs.rs` uses.
+fn bash_payload(command: &str) -> String {
+    let escaped = serde_json::to_string(command).expect("a command is encodable");
+    format!(
+        "{{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Bash\",\
+         \"tool_input\":{{\"command\":{escaped}}}}}"
+    )
+}
+
+#[test]
+fn hook_adjudicates_against_the_base_ref_when_the_working_config_is_gone() {
+    // The surface where this matters most, and the reason the issue is High: the
+    // pre-tool adjudicator is the one place a policy verdict actually stops an
+    // agent's tool call. On the other three surfaces CLOUD-243's failure is a
+    // report that under-states; here it is an un-gated write.
+    let repo = pr_fixture_without_working_config(
+        "trust-hook-deleted-config",
+        &format!("version = 1{}", protected_policy()),
+        &[],
+    );
+    let output = common::run_with_stdin(
+        &repo,
+        &[
+            "hook",
+            "--harness",
+            "exit-code",
+            "--config-from",
+            "origin/main",
+        ],
+        &bash_payload("mv secrets.txt elsewhere.txt"),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the base ref protects secrets.txt, so the write is denied whatever the \
+         working tree did to its own config. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn hook_without_the_flag_still_allows_everything_in_a_config_less_tree() {
+    // The control, and the whole reason the short-circuit exists. A tree with no
+    // authority declares no policy, and `hook` must not become the reason a
+    // non-Batten directory stops working (CLOUD-70).
+    let repo = pr_fixture_without_working_config(
+        "trust-hook-no-flag",
+        &format!("version = 1{}", protected_policy()),
+        &[],
+    );
+    let output = common::run_with_stdin(
+        &repo,
+        &["hook", "--harness", "exit-code"],
+        &bash_payload("mv secrets.txt elsewhere.txt"),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "absent authority is the empty policy, not a deny"
+    );
+}
+
+#[test]
+fn config_lint_reports_the_deleted_config_as_a_verdict_not_a_usage_error() {
+    // Exit 2, not 1. §7 reserves 2 for the policy verdict on every surface
+    // (CLOUD-226), and the most complete weakening available — delete the file —
+    // answered 1, "bad config". A consumer that is not this repo's own workflow
+    // reads that as its own mistake.
+    let repo = pr_fixture_without_working_config(
+        "trust-lint-deleted-config",
+        &format!(
+            "version = 1\nprotected = [\"crates/**\"]{}",
+            rule("no-todo", "deny")
+        ),
+        &[],
+    );
+    let output = run(&repo, &["config", "lint", "--config-from", "origin/main"]);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "stdout: {}, stderr: {}",
+        stdout(&output),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = stdout(&output);
+    // Every base key named as removed, each under its own key path — the same
+    // report `check --config-from` already prints for this tree.
+    assert!(
+        text.contains("protected[crates/**]"),
+        "the removed protected entry is named: {text}"
+    );
+    assert!(
+        text.contains("rule[no-todo]"),
+        "the removed rule is named: {text}"
+    );
+}
+
+#[test]
+fn config_lint_without_the_flag_still_refuses_a_missing_config_as_usage() {
+    // The control. With no ref named there is nothing to judge the tree against,
+    // so "no config found" is the honest answer and stays exit 1 — a statement
+    // about the invocation, not a policy verdict.
+    let repo = pr_fixture_without_working_config("trust-lint-no-flag", "version = 1\n", &[]);
+    let output = run(&repo, &["config", "lint"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("no config found"),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn an_unreadable_ref_still_outranks_a_missing_working_config_in_lint() {
+    // Ordering, pinned: the base ref is loaded BEFORE the working file's absence
+    // can route anywhere, so a ref this binary cannot read stays exit 1 and names
+    // the ref — never exit 2 against a base that was never loaded.
+    let repo = pr_fixture_without_working_config("trust-lint-bad-ref", "version = 1\n", &[]);
+    let output = run(
+        &repo,
+        &["config", "lint", "--config-from", "origin/nonexistent"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("origin/nonexistent"),
+        "the refusal names the ref: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_applies_the_base_refs_output_predicates_when_the_working_config_is_gone() {
+    // The quietest of the three and still real: `[[exec_pattern]]` promotes a
+    // wrapped command that lies with exit `0` (CLOUD-117), and deleting
+    // `batten.toml` dropped the whole table. A gate that silently did not run is
+    // the false green that predicate exists to prevent.
+    let repo = pr_fixture_without_working_config(
+        "trust-exec-deleted-config",
+        "version = 1\n\n[[exec_pattern]]\nid = \"lying-zero\"\n\
+         pattern = \"warning[duplicate]\"\nstream = \"both\"\n\
+         reason = \"configure the tool to fail instead\"\n",
+        &[],
+    );
+    let home = scratch("trust-exec-deleted-config-home");
+    let output = batten()
+        .args([
+            "exec",
+            "--config-from",
+            "origin/main",
+            "--tee",
+            "--style",
+            "quiet",
+            "--",
+            "sh",
+            "-c",
+            "echo 'warning[duplicate] serde'",
+        ])
+        .current_dir(&repo)
+        .state_home(&home)
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten exec");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "the base ref's pattern still promotes the lying zero. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Pointer-only, as the predicate always is: the id and the position, never
+    // the line that matched.
+    let report = String::from_utf8_lossy(&output.stderr);
+    assert!(report.contains("stdout:1 lying-zero"), "got {report}");
+    assert!(
+        !report.contains("serde"),
+        "no matched text echoed: {report}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_without_the_flag_declares_no_patterns_in_a_config_less_tree() {
+    // The control. `batten exec` is a wrapper a caller puts in front of arbitrary
+    // commands, most of them outside Batten repositories; an absent authority
+    // declares no patterns and passes the child's own exit code through.
+    let repo = pr_fixture_without_working_config(
+        "trust-exec-no-flag",
+        "version = 1\n\n[[exec_pattern]]\nid = \"lying-zero\"\n\
+         pattern = \"warning[duplicate]\"\nstream = \"both\"\n\
+         reason = \"configure the tool to fail instead\"\n",
+        &[],
+    );
+    let home = scratch("trust-exec-no-flag-home");
+    let output = batten()
+        .args([
+            "exec",
+            "--tee",
+            "--style",
+            "quiet",
+            "--",
+            "sh",
+            "-c",
+            "echo 'warning[duplicate] serde'",
+        ])
+        .current_dir(&repo)
+        .state_home(&home)
+        .env_remove("BATTEN_FAIL_ON_WARNING")
+        .output()
+        .expect("run batten exec");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "the child's own exit code passes through untouched"
+    );
 }

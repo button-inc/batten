@@ -2042,7 +2042,21 @@ fn drain_advisories(
 /// alone.
 fn load_policy(overrides: &Overrides) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
     let here = std::path::Path::new(".");
-    if !here.join(config::CONFIG_FILE).exists() {
+    // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
+    // short-circuit below is correct in its own right — `batten hook` runs in
+    // directories that are not Batten repositories, and refusing there would
+    // make the hook the reason ordinary work stops (CLOUD-70). What it must not
+    // do is answer *first*: under `--config-from` the working file's absence is
+    // the MAXIMAL WEAKENING, and a policy declaring nothing is exactly the
+    // verdict a branch deleting `batten.toml` was hoping for.
+    //
+    // This is CLOUD-243's rule on the surface where it bites hardest. There the
+    // cost was a report that under-stated; here it is an un-gated write, because
+    // `hook` is the pre-tool adjudicator and its verdict is the only thing that
+    // stops the call. `resolve` already reads the ref and never touches the
+    // working tree when one is named (`resolve::authority`), so consulting the
+    // flag is all this needs.
+    if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
         return Ok((hook::Policy::declaring_nothing(), Vec::new()));
     }
     // The waivers travel beside the policy rather than inside it (CLOUD-610).
@@ -2127,7 +2141,12 @@ fn load_exec_settings(
     overrides: &Overrides,
 ) -> Result<(Vec<outputs::OutputPattern>, exec::ExecConfig)> {
     let here = Path::new(".");
-    if !here.join(config::CONFIG_FILE).exists() {
+    // The flag before the file, for the reason `load_policy` states at length
+    // (CLOUD-719). The failure here is quieter than the hook's and still real:
+    // deleting `batten.toml` drops every `[[exec_pattern]]` row, so a wrapped
+    // command that lies with exit `0` stops being promoted to a failure — the
+    // one thing CLOUD-117 built this table to catch.
+    if overrides.config_from.is_none() && !here.join(config::CONFIG_FILE).exists() {
         return Ok((Vec::new(), exec::ExecConfig::DEFAULT));
     }
     // One resolve for both, because they are one question — what this repository

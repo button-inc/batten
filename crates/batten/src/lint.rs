@@ -330,16 +330,53 @@ pub fn smells(
 /// base-ref config cannot be read or parsed.
 pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Result<Vec<Smell>> {
     let path = dir.join(config::CONFIG_FILE);
-    let text = std::fs::read_to_string(&path).map_err(|err| {
-        if err.kind() == std::io::ErrorKind::NotFound {
-            crate::UsageError::raise(format!("no config found at {}", path.display()))
-        } else {
-            err.into()
-        }
-    })?;
+    // THE BASE REF IS LOADED FIRST, and the order is the contract rather than a
+    // style choice (CLOUD-719). A ref this binary cannot read stays exit `1`
+    // whatever the working tree looks like, so it must be asked before the
+    // working file's absence can route anywhere.
     let base = base_ref
         .map(|reference| trust::load_base(dir, reference))
         .transpose()?;
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // THE MAXIMAL WEAKENING IS A VERDICT, NOT A USAGE ERROR. Deleting
+            // `batten.toml` is the most complete relaxation available, and under
+            // `--config-from` it used to answer `1` — "bad config" — where §7
+            // reserves `2` for the policy verdict on every surface (CLOUD-226).
+            // A consumer that is not this repo's own workflow reads `1` as its
+            // own mistake and moves on.
+            //
+            // An absent authority grants no policy, so it is compared as one
+            // that declares nothing: every key the base declares reports as
+            // removed, each under its own key path. That is `run_rules`'
+            // treatment of the same condition, arrived at the same way
+            // (CLOUD-243), and it is both true and the loudest this report can
+            // be. The single-tree smells are skipped rather than faked — there
+            // is no file to carry a line number, and inventing one would put a
+            // location in the report that no reader could open.
+            let Some(base) = base.as_ref() else {
+                // No ref named: absence is still zero-config onboarding, and
+                // still not this verb's business to refuse differently.
+                return Err(crate::UsageError::raise(format!(
+                    "no config found at {}",
+                    path.display()
+                )));
+            };
+            let mut found: Vec<Smell> =
+                trust::weakenings(base, &config::Config::declaring_nothing())
+                    .into_iter()
+                    .map(|w| Smell {
+                        at: Where::Key(w.key),
+                        id: w.kind.as_str(),
+                    })
+                    .collect();
+            found.sort();
+            found.dedup();
+            return Ok(found);
+        }
+        Err(err) => return Err(err.into()),
+    };
     smells(&text, &path.display().to_string(), base.as_ref(), today)
 }
 
