@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+#MISE description="Report: which In Progress issues have landed, and which are abandoned claims (reads get_issue payloads on stdin) — CLOUD-469"
+#
+# CLOUD-469. `landed-check` computes the right predicate and NOTHING CALLS IT.
+# Verified 2026-08-20: `grep -rn landed-check` over mise.toml, mise-tasks/,
+# .github/ and hk.pkl returns prose only — six task headers cite the predicate,
+# no caller invokes it. A gate with no caller is a sensor with no gate, the shape
+# non-negotiable 2 refuses, and the cost is a column that only grows: 39 rows In
+# Progress for one assignee on 2026-08-12, still 32 on 2026-08-20 with 20 of them
+# sitting behind git.
+#
+# The asymmetry is why it accumulates by construction. INTO In Progress is
+# automated — the tracker moves a row when a commit mentions it, and only ever
+# forward. OUT of In Progress is manual, and happens only if the session that
+# pulled the issue also lands it AND remembers. A session that is interrupted,
+# reclaimed or simply ends leaves the row behind and nothing revisits it.
+#
+# TWO VERDICTS, because the column is stale in two different ways and they need
+# different evidence:
+#
+#   landed-unswept     In Progress and its ref is on `main`. DELEGATED to
+#                      `landed-check`, never recomputed here — see below.
+#   claimed-abandoned  In Progress and no ref on `main` and no PR attachment and
+#                      no remote branch for its `gitBranchName` and idle longer
+#                      than WIP_MAX_IDLE_DAYS.
+#
+# THE DELEGATION IS THE DESIGN, not politeness. CLOUD-469 §2: "If this grows its
+# own opinion about what 'landed' means, there are two authorities for one fact
+# and only the newer one decides — the CLOUD-351 shape. It calls `landed-check`
+# or it is wrong." So the landed half is a pipe into that task and a read of its
+# exit code and its lines. Re-implementing `git log --grep` here would be a
+# second authority that drifts silently the first time either is edited.
+#
+# WHY THE ABANDONED HALF NEEDS A BOUND, and why the bound is the whole gate. An
+# abandoned claim has nothing on `main` to be reachable, so `landed-check` is
+# structurally blind to it and always will be. Measured on CLOUD-113: a session
+# claimed it, built it, committed `68292fe` locally, and died to a quota
+# exhaustion before its first push. No branch, no PR, no attachment — the row sat
+# In Progress, assigned, with a plausible `startedAt`, indistinguishable from live
+# work. A later session pulled it and rebuilt it from scratch: two independent
+# implementations of one issue, CLOUD-49's shape, the duplicate `claim-check` and
+# `issue-guard` exist to prevent and could not see because there was never a PR.
+#
+# But a session that pulled an issue TEN MINUTES AGO also has no ref, no PR and
+# no branch. Without a staleness bound this verdict would name live work as dead,
+# which is worse than the stale column it is fixing — measured on this very board
+# 2026-08-20, where five of the twelve non-landed rows were live and a bound-free
+# predicate would have stranded all five. So `updatedAt` carries the bound. It is
+# not a heartbeat and does not pretend to be one; it is the only rolling signal a
+# board row has, and what it bounds is how long we keep believing a claimant that
+# has stopped producing evidence — the framing `mem:workflow/landing-loop` records
+# for the lease's rolling TTL, one signal shallower.
+#
+# WHY THIS REPORTS AND NEVER MOVES (CLOUD-469 §2). A state change is a decision.
+# An automatic drain would rebuild CLOUD-186's defect from the other side: that
+# automation moves a row on a mere mention, and the damage was precisely that
+# nobody chose it. Naming the rows is the deliverable; `board-move-guard` still
+# adjudicates every actual move.
+#
+# NOT IN THE hk GATE, the split `branch-age-check` and `lock-complete` already
+# made: the answer is a property of the WORLD (the remote's refs, the tracker's
+# column), not of the commit being judged. On the landing path it would fail
+# whichever PR happened to be in flight over somebody else's stale row — a
+# finding that PR did not cause and cannot fix. It runs by hand and on the
+# branch-hygiene clock.
+#
+# Both readings are injectable so the suite runs offline and with no `gh`:
+#   WIP_DRAIN_REFS   file of remote branch names, one a line
+#   WIP_DRAIN_TODAY  today as YYYY-MM-DD
+#
+# Exit 0 clean / 1 the column is stale / 2 could-not-look — never a silent pass.
+#
+# MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`. Each row
+# removes one conjunct, and the named case is the one that stops discriminating.
+#MUTANT abandoned-ignores-landed|s@is_landed "$id" && continue@false \&\& continue@|a landed row is not ALSO reported as abandoned — the verdicts are exclusive
+#MUTANT abandoned-ignores-pr|s@\[ "$has_pr" = true \] && continue@false \&\& continue@|a claim carrying a PR attachment is not abandoned
+#MUTANT abandoned-ignores-branch|s@in_refs "$branch" && continue@false \&\& continue@|a claim with a live remote branch is not abandoned
+#MUTANT abandoned-ignores-idle|s@\[ "$age" -gt "$max_idle" \] .*@true@|a claim touched today is not abandoned
+set -uo pipefail
+
+max_idle="${WIP_MAX_IDLE_DAYS:-2}"
+
+cannot_look() {
+	echo "::error:: in-progress-drain: $1" >&2
+	exit 2
+}
+
+here="$(cd "$(dirname "$0")" && pwd)"
+
+# --- the payload --------------------------------------------------------------
+if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+	cannot_look "stdin is empty; expected get_issue payloads"
+fi
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
+	! jq -e 'all(.[]; has("id") and has("status"))' <<<"$issues" >/dev/null 2>&1; then
+	cannot_look "stdin is not a set of get_issue payloads (need id and status per issue)"
+fi
+
+# CLOUD-783's lesson, applied at construction rather than after a quiet sweep: a
+# projected-away key must be a NAMED refusal, never a rule that silently scans
+# nothing. `landed-check` needs only id and status; the abandoned half needs all
+# three of these, and a payload without them cannot answer it.
+for key in attachments gitBranchName updatedAt; do
+	missing=$(jq -r --arg k "$key" '[.[] | select(.status == "In Progress") | select(has($k) | not) | .id] | join(" ")' <<<"$issues")
+	[ -n "$missing" ] || continue
+	cannot_look "no \`$key\` on In Progress issue(s): $missing. The claimed-abandoned verdict reads that key, so a payload without it cannot answer — re-fetch with \`get_issue\` (\`list_issues\` cannot project \`attachments\`)."
+done
+
+today="${WIP_DRAIN_TODAY:-$(date -u +%Y-%m-%d)}"
+
+# --- the remote's branch names ------------------------------------------------
+if [ -n "${WIP_DRAIN_REFS:-}" ]; then
+	refs=$(cat "$WIP_DRAIN_REFS" 2>/dev/null) ||
+		cannot_look "cannot read WIP_DRAIN_REFS ($WIP_DRAIN_REFS)"
+else
+	refs=$(git ls-remote --heads origin 2>/dev/null | sed 's@.*refs/heads/@@') ||
+		cannot_look "cannot list the remote's branches"
+	[ -n "$refs" ] ||
+		cannot_look "the remote reports no branches at all, which cannot be true of a repository with a trunk"
+fi
+
+# --- the landed half, delegated -----------------------------------------------
+#
+# `landed-check` names each landed row on stderr as "  <id>  In Progress -> In
+# Review" and exits 1; exit 0 is a clean board and exit 2 is could-not-look. Its
+# 2 is ours: if it cannot resolve `main`, neither half of this report is safe,
+# and the abandoned verdict in particular would call every landed row abandoned.
+landed_report=$("$here/landed-check" <<<"$issues" 2>&1)
+landed_status=$?
+case "$landed_status" in
+0 | 1) ;;
+*) cannot_look "landed-check could not judge the payload, so landedness is unknown and every row would read as abandoned. Its report: ${landed_report:-(none)}" ;;
+esac
+landed_ids=$(printf '%s\n' "$landed_report" | sed -n 's@^  \([A-Z][A-Z0-9]*-[0-9][0-9]*\)  In Progress -> In Review$@\1@p' | sort -u)
+
+# --- the abandoned half -------------------------------------------------------
+in_refs() {
+	[ -n "$1" ] && grep -qxF "$1" <<<"$refs"
+}
+is_landed() {
+	[ -n "$landed_ids" ] && grep -qxF "$1" <<<"$landed_ids"
+}
+
+# Days-since-epoch by the civil-calendar formula, integer arithmetic only.
+# `mktime` is a gawk extension mawk does not carry — the portability trap
+# `awk-regex-check` exists for. Lifted from `branch-age-check`, which is the
+# origin; a third copy should become a shared helper rather than a third lift.
+daynum() {
+	awk -v iso="$1" '
+		function days(y, m, d,   era, yoe, doy, doe) {
+			if (m <= 2) y -= 1
+			era = int((y >= 0 ? y : y - 399) / 400)
+			yoe = y - era * 400
+			doy = int((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1
+			doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+			return era * 146097 + doe - 719468
+		}
+		BEGIN {
+			s = substr(iso, 1, 10)
+			# Shape first, then split: `not-a-date` splits into three parts on
+			# the hyphen exactly as `2026-08-11` does, and the arithmetic would
+			# then answer a number instead of admitting it cannot read the value.
+			if (s !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) { print "NaN"; exit }
+			split(s, p, "-")
+			print days(p[1] + 0, p[2] + 0, p[3] + 0)
+		}'
+}
+
+now=$(daynum "$today")
+[ "$now" != NaN ] || cannot_look "cannot read today's date ('$today')"
+
+abandoned=""
+unreadable=""
+while IFS=$'\t' read -r id branch updated has_pr; do
+	[ -n "$id" ] || continue
+	is_landed "$id" && continue
+	[ "$has_pr" = true ] && continue
+	in_refs "$branch" && continue
+	d=$(daynum "$updated")
+	if [ "$d" = NaN ]; then
+		unreadable="$unreadable $id"
+		continue
+	fi
+	age=$((now - d))
+	[ "$age" -gt "$max_idle" ] || continue
+	abandoned="$abandoned $id"
+done < <(jq -r '
+	.[]
+	| select(.status == "In Progress")
+	| [ .id,
+	    (.gitBranchName // ""),
+	    (.updatedAt // ""),
+	    ([ .attachments[]? | .url // "" ] | any(test("/pull/[0-9]+"))) ]
+	| @tsv' <<<"$issues" | sort -u)
+
+# --- the report ---------------------------------------------------------------
+#
+# Pointer-only per non-negotiable rule 4: keys, verdict labels and counts. A body
+# never reaches this output, and the suite asserts that rather than trusting it.
+fail=0
+if [ -n "$landed_ids" ]; then
+	fail=1
+	echo "::error:: landed-unswept — In Progress while their commits are on main; landed is In Review (AGENTS.md):" >&2
+	printf '%s\n' "$landed_ids" | sed 's/^/  /' >&2
+fi
+if [ -n "$abandoned" ]; then
+	fail=1
+	echo "::error:: claimed-abandoned — In Progress with no ref on main, no PR, no remote branch, idle > ${max_idle}d:" >&2
+	for id in $abandoned; do echo "  $id" >&2; done
+fi
+if [ -n "$unreadable" ]; then
+	fail=1
+	echo "::error:: unreadable-updatedat — cannot date the claim, so staleness is unknown:" >&2
+	for id in $unreadable; do echo "  $id" >&2; done
+fi
+
+wip=$(jq -r '[.[] | select(.status == "In Progress")] | length' <<<"$issues")
+n_landed=$(grep -c . <<<"$landed_ids" || true)
+n_aband=0
+for id in $abandoned; do n_aband=$((n_aband + 1)); done
+echo "in-progress-drain: $wip In Progress — $n_landed landed-unswept, $n_aband claimed-abandoned"
+exit "$fail"
