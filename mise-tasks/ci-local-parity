@@ -206,6 +206,29 @@
 #      no release PRs exist to land — so this property refuses a missing WATCHER,
 #      never a missing lane.
 #
+#  16. A DECLARED TRIGGER CAN REACH A JOB. Measured on this file's own lane
+#      (CLOUD-692): `workflow_dispatch` was added to `auto-bot-land.yml` so the
+#      lane could be exercised without waiting on a cron that was running twenty
+#      minutes late, and the job's `if:` still admitted only `schedule` and
+#      `workflow_run`. The trigger existed, the run started, and the job skipped
+#      — a manual trigger that does nothing, which is a rule shipped without its
+#      mechanism and is invisible in exactly the way that matters: the run list
+#      shows a run, and only the job's conclusion says it did not happen.
+#
+#      THE PREDICATE IS NARROW ON PURPOSE, because a condition is an expression
+#      language and this is a text gate. It fires only where the answer is
+#      unambiguous: a job whose `if:` MENTIONS `github.event_name` at all is
+#      claiming to discriminate by event, so every trigger the workflow declares
+#      must be named in some job's condition — either by `event_name == '<t>'`,
+#      or, for `workflow_run`, by reading `github.event.workflow_run.*`, which
+#      can only be true under that event. A job with no `event_name` mention
+#      admits everything and answers for every trigger, so a workflow carrying
+#      one is not judged.
+#
+#      `schedule` AND `workflow_dispatch` ARE THE PAIR THIS CATCHES. They are the
+#      two triggers a workflow most often grows late, and the two whose absence
+#      from a condition produces a skipped run rather than a failure.
+#
 # Properties 1-7 are scoped to `pull_request`-triggered workflows: a scheduled or
 # release workflow is not on the landing path and they do not apply to it. 8, 9,
 # 10, 11 and 15 are the exceptions — a workflow racing itself, colliding with its
@@ -732,6 +755,35 @@ for lane in "$renovate|renovate/|branchPrefix" "$release_plz|release-plz-|pr_bra
 		problem "$lane_config runs a bot on \`$lane_prefix**\` and no workflow in $workflows filters on that prefix at its trigger — nothing readies, rebases or lands those heads, and the lane fails completely with nothing red. That is CLOUD-692: two ecosystems were handed over and the lander was not, so #493 needed a human and #503 reproduced it 84 seconds later."
 done
 
+# Property 16. Text over the two blocks that already exist here: the trigger list
+# from `on:`, and each job's `if:`. Comments are stripped first, so a trigger
+# named in prose cannot answer for one a condition admits.
+for wf in "$workflows"/*.yml; do
+	[ -e "$wf" ] || continue
+	wf_body=$(sed 's/[[:space:]]*#.*$//' "$wf")
+	# The declared triggers: two-space keys under `on:`, which is the same
+	# reading property 10 uses for the block.
+	declared_triggers=$(awk '/^on:/{p=1;next} /^[a-z]/{p=0} p' <<<"$wf_body" |
+		grep -Eo '^  [a-z_]+:' | tr -d ' :' | sort -u)
+	[ -n "$declared_triggers" ] || continue
+	# Every job condition, joined: the question is whether ANY job admits the
+	# trigger, not whether all of them do.
+	conditions=$(awk '/^jobs:/{p=1} p' <<<"$wf_body" | grep -E '^[[:space:]]+if:' -A 6 || true)
+	grep -q 'github\.event_name' <<<"$conditions" || continue
+	while IFS= read -r trigger; do
+		[ -n "$trigger" ] || continue
+		admitted=0
+		grep -qF "github.event_name == '$trigger'" <<<"$conditions" && admitted=1
+		# `workflow_run` is admitted by reading its payload, which is only
+		# populated under that event.
+		[ "$trigger" = workflow_run ] && grep -q 'github\.event\.workflow_run' <<<"$conditions" && admitted=1
+		# Pointer-only: the workflow and the trigger, never a line of the
+		# condition.
+		[ "$admitted" = 1 ] ||
+			problem "$wf declares the \`$trigger\` trigger and no job condition admits it — the run starts and every job skips, so the trigger exists and does nothing. Add it to the \`if:\`, or stop declaring it (CLOUD-692)."
+	done <<<"$declared_triggers"
+done
+
 # Property 11. Judged over the whole workflow set rather than the landing path,
 # because a workflow that lands a SHA is not itself on `pull_request`. Comment
 # lines are stripped first: this file's own remedy is described in prose in both
@@ -758,4 +810,4 @@ while IFS= read -r name; do
 done <<<"$have_names"
 
 [ "$fail" -eq 0 ] || exit 1
-echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger"
+echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger; every declared trigger can reach a job"

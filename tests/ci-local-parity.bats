@@ -881,6 +881,102 @@ renovate() {
 	[[ "$output" != *"runs a bot on \`renovate/**\`"* ]]
 }
 
+# --- property 16: a declared trigger can reach a job --------------------------
+
+@test "a trigger no job condition admits is refused, and named" {
+	# Measured on this repo's own bot lander: `workflow_dispatch` was added so the
+	# lane could be exercised without waiting on a late cron, the job `if:` still
+	# admitted only `schedule` and `workflow_run`, and the dispatched run SKIPPED.
+	# The trigger existed and did nothing, which the run list cannot show.
+	workflow ci
+	cat >"$WF/lander2.yml" <<-'EOF'
+		name: lander2
+
+		on:
+		  schedule:
+		    - cron: "7 * * * *"
+		  workflow_dispatch:
+
+		concurrency:
+		  group: lander2
+		  cancel-in-progress: false
+
+		jobs:
+		  land:
+		    if: github.event_name == 'schedule'
+		    runs-on: ubuntu-latest
+		    timeout-minutes: 3 # budget: grandfathered measured=2026-08-20
+		    steps:
+		      - run: ':'
+	EOF
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"declares the \`workflow_dispatch\` trigger and no job condition admits it"* ]]
+	[[ "$output" != *"declares the \`schedule\` trigger"* ]]
+}
+
+@test "the same workflow admitting both triggers passes" {
+	workflow ci
+	cat >"$WF/lander2.yml" <<-'EOF'
+		name: lander2
+
+		on:
+		  schedule:
+		    - cron: "7 * * * *"
+		  workflow_dispatch:
+
+		concurrency:
+		  group: lander2
+		  cancel-in-progress: false
+
+		jobs:
+		  land:
+		    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+		    runs-on: ubuntu-latest
+		    timeout-minutes: 3 # budget: grandfathered measured=2026-08-20
+		    steps:
+		      - run: ':'
+	EOF
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "workflow_run is admitted by reading its payload, not only by naming the event" {
+	# `github.event.workflow_run.*` is populated under that event alone, so a
+	# condition reading it is discriminating on the event by another spelling.
+	workflow ci
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"declares the \`workflow_run\` trigger"* ]]
+}
+
+@test "a job condition that mentions no event admits everything, so nothing is judged" {
+	# The narrowing that keeps this a text gate rather than an expression
+	# evaluator: a job with no `event_name` mention answers for every trigger.
+	workflow ci
+	cat >"$WF/lander2.yml" <<-'EOF'
+		name: lander2
+
+		on:
+		  schedule:
+		    - cron: "7 * * * *"
+		  workflow_dispatch:
+
+		concurrency:
+		  group: lander2
+		  cancel-in-progress: false
+
+		jobs:
+		  land:
+		    runs-on: ubuntu-latest
+		    timeout-minutes: 3 # budget: grandfathered measured=2026-08-20
+		    steps:
+		      - run: ':'
+	EOF
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
 # --- property 11: reading check status means deciding through checks-green ----
 
 # A workflow that lands a SHA. `endpoint=no` drops the check-runs read, which is

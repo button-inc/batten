@@ -139,8 +139,19 @@ env:
 
 jobs:
   fast-forward-bot-pr:
+    # EVERY DECLARED TRIGGER IS ADMITTED HERE, and `workflow_dispatch` was not
+    # when it was added — the workflow ran and the job skipped, so the manual
+    # trigger existed and did nothing. A trigger a condition cannot admit is a
+    # rule shipped without its mechanism; `ci-local-parity`'s property 16 now
+    # refuses one, which is the half that keeps this from happening again.
+    #
+    # The scheduled and manual paths are the same work asked for two ways: one on
+    # a clock, one by a person who needs the answer now. Only the `workflow_run`
+    # arm carries conditions, because that trigger fires on runs this lane has no
+    # interest in — a red CI, or a completion on a head it does not land.
     if: >-
       github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.head_branch, 'renovate/'))
@@ -167,7 +178,9 @@ jobs:
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT" = "schedule" ]; then
+          # `workflow_dispatch` resolves like the cron does: neither arrives
+          # holding a SHA, so both find the open head from the other end.
+          if [ "$EVENT" = "schedule" ] || [ "$EVENT" = "workflow_dispatch" ]; then
             pr=$(gh api "repos/$REPO/pulls?state=open&per_page=100" \
               --jq '[.[] | select(.head.ref | startswith("renovate/"))] | .[0] // {}')
             [ -n "$(jq -r '.number // empty' <<<"$pr")" ] || echo "no open renovate PR; nothing to land"
