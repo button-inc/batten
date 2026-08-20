@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.95](https://github.com/button-inc/batten/compare/v0.0.94...v0.0.95) - 2026-08-20
+
+### Added
+
+- *(config)* [**breaking**] declare agent-sourced facts, and resolve a check from one
+- *(hook)* [**breaking**] carry the tool result, and the fact an agent's command sourced
+- *(state)* withhold a spawning rule instead of losing the whole record
+
+### Fixed
+
+- *(receipt)* mark `rfc3339_utc` `#[must_use]`, as publishing it requires
+
+### Other
+
+- *(hook)* close the agent-sourced fact loop over the compiled binary
+
 ## [0.0.94](https://github.com/button-inc/batten/compare/v0.0.93...v0.0.94) - 2026-08-20
 
 ### Added
