@@ -245,18 +245,24 @@ fi
 # so a write after the read binds nothing, and this is the earliest writable
 # moment there is.
 #
-# AND IT IS STILL NOT EARLY ENOUGH — say so here rather than let a reader infer a
-# working mechanism from a running one. Three surfaces have now been tried and
-# measured: the generated config edited mid-session, this overlay written
-# mid-session, and this overlay present on disk BEFORE a session started (same
-# container, same disk, verified by mtime). All three left the identical call
-# refused. The refusal arrives from the CCR proxy, upstream of the local
-# permission layer, where no file this hook can write will reach it — upstream
-# anthropics/claude-code#61044 and #61015, and the capability gap CLOUD-312
-# tracks. What the projection is FOR, then, is the committed intent expressed
-# against the identity that actually attached: that is what `mcp-allow-check`'s
-# inert-rule predicate reads, and it is what makes that predicate closable rather
-# than a verdict no edit could satisfy.
+# AND IT DOES NOT STOP AN APPROVAL PROMPT — say so here rather than let a reader
+# infer a working mechanism from a running one. A claude.ai connector carries a
+# PER-TOOL control, and a tool set to `ask` prompts on every call: the client
+# reads that setting at startup and enforces it locally, in every permission mode,
+# with no remember-my-choice option, and — decisively — "Allow rules that match
+# the tool don't skip the prompt either" (code.claude.com/docs/en/mcp, per-tool
+# controls on claude.ai connectors). Measured here: the Linear connector's tools
+# are set to allow and its calls pass, the toolbox connector's 20 are set to ask
+# and every call prompts, same session and same transport. No file this hook
+# writes can change that, by design.
+#
+# So what the projection is FOR is the committed intent expressed against the
+# identity that actually attached: that is what `mcp-allow-check`'s inert-rule
+# predicate reads, and it is what makes that predicate closable rather than a
+# verdict no edit could satisfy. It is not a fix for prompting, and an earlier
+# version of this comment claiming the refusal came from the CCR proxy was wrong
+# — asserted from a brief, never verified, and falsified by the connector working
+# beside it (CLOUD-734).
 #
 # NEVER SETS `fail`, and deliberately not routed through `step`, for the reason
 # `reclaim-census` below is not: a stale committed rule is a finding about the
