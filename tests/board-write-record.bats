@@ -226,6 +226,63 @@ with_diff() { # a branch whose diff against origin/main touches ONE tracked file
 	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready -" ]]
 }
 
+# --- the update path asserts nothing about relations (CLOUD-781) --------------
+#
+# ONE BODY, TWO PATHS, so the pair differs only in whether an `id` is present in
+# the call. `save_issue` relations are APPEND-ONLY: on a create the `blockedBy`
+# argument is the whole relation set, and on a groom it is a patch, so an absent
+# argument means "unchanged", never "none". Synthesising `[]` from it asserted
+# the row had no blockers — a claim the recorder never checked — and the §8
+# clause citing a real one recorded `unready`.
+#
+# Measured 2026-08-20: a groom whose §8 cited a blocker recorded `unready`, and
+# the identical body re-saved with `blockedBy` restated (a no-op against the
+# tracker) recorded `ready`. `filed-here-check` then refused the lap of a branch
+# that had done exactly what that gate's third remedy tells it to do.
+
+# A §8 clause citing a blocker, over the suite's own Ready body.
+cites_a_blocker() {
+	ready_body | sed 's/\*\*Blockers (§8).\*\* None./**Blockers (§8).** `blockedBy` CLOUD-1./'
+}
+
+@test "a groom whose §8 cites a blocker is unjudgeable, not unready" {
+	# THE ROW CLOUD-781 EXISTS FOR, and it is red against the recorder as it
+	# shipped — the groom passes no `blockedBy`, exactly as a body-only edit does.
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'Just a sentence, no Ready block.')"
+	[ "$status" -eq 0 ]
+
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_a_blocker)" '' CLOUD-999)"
+	[ "$status" -eq 0 ]
+	run tail -1 "$(record)"
+	# `-` is "could not lint", which `filed-here-check` passes by design. Never
+	# `unready`, which is a verdict about a Ready block nothing could judge.
+	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z - -" ]]
+}
+
+@test "A CREATE CITING A BLOCKER IT DID NOT PASS IS STILL UNREADY" {
+	# THE ANTI-WEAKENING PIN. The toll that prices refinement lives on the create
+	# path, where the argument really is the whole relation set — so "no edges" is
+	# an answer there and the citation is a real violation. This case turns red if
+	# the omission above is applied to the create path, which is the one way this
+	# change could weaken the toll.
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$(cites_a_blocker)")"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" unready -" ]]
+}
+
+@test "a groom of a genuinely unready body still records unready" {
+	# The omission gives up ONE clause, not the verdict: §1 through §7 are judged
+	# from the body alone and are unaffected by what relations could not be seen.
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'Just a sentence, no Ready block.')"
+	[ "$status" -eq 0 ]
+
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'Still just a sentence, no Ready block.' '' CLOUD-999)"
+	[ "$status" -eq 0 ]
+	run tail -1 "$(record)"
+	[[ "$output" == *" unready -" ]]
+}
+
 # The exception is narrow on purpose: it grants nothing a fresh create would not
 # have granted, because the row is one this branch is already answerable for.
 # Anyone else's row is skipped exactly as it was.

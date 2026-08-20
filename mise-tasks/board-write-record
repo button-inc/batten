@@ -78,6 +78,10 @@
 # The mutation drops the relations synthesis, so a row whose §8 claims a blocker
 # lints as blocker-cited-without-relation and records `unready` — the false
 # refusal that would fire on the best-refined rows.
+# The mutation restores the shipped defect: synthesise on the update path too, so
+# a groom that adds a correct §8 clause is the write that records `unready` —
+# `filed-here-check` refusing the remedy it advertises (CLOUD-781).
+#MUTANT groom-synthesises-relations|s/^\tif \[ -z "\$existing" \]; then$/\tif true; then/|a groom whose §8 cites a blocker is unjudgeable, not unready
 #MUTANT relations-dropped|s/relations: \$rels/relations: {}/|claims a blocker still records a green verdict
 # The mutation restores the shipped defect: take the id from the response for a
 # comment too, so an issue-key column fills with comment uuids and sink 2 becomes
@@ -149,6 +153,7 @@ esac
 # fresh create would not have granted, and the verdict still comes from linting
 # the tracker's RESPONSE rather than from any caller's assertion. An update to
 # somebody else's row is skipped exactly as before.
+existing=""
 if [ "$kind" = issue ]; then
 	existing=$(printf '%s' "$raw" | jq -r '.tool_input.id // empty' 2>/dev/null) || exit 0
 	if [ -n "$existing" ]; then
@@ -222,16 +227,48 @@ if [ "$kind" = issue ]; then
 	# direction that rule calls the common case, linted `unready` here while
 	# passing when a human ran `ready-lint` by hand. Measured 2026-08-20: CLOUD-769
 	# recorded `unready` through four grooms for this and nothing else.
-	rels=$(printf '%s' "$raw" | jq -c '{
-	  blockedBy: [.tool_input.blockedBy[]? | {id: .}],
-	  blocks: [.tool_input.blocks[]? | {id: .}],
-	  relatedTo: [.tool_input.relatedTo[]? | {id: .}]
-	}' 2>/dev/null) || rels='{"blockedBy":[],"blocks":[],"relatedTo":[]}'
-	payload=$(jq -c --argjson rels "$rels" '{
-	  id: .id,
-	  description: (.description // ""),
-	  relations: $rels
-	}' <<<"$row" 2>/dev/null) || payload=""
+	# AND ONLY ON A CREATE (CLOUD-781). The argument is the whole relation set
+	# exactly once in a row's life: at creation, when there is nothing prior to
+	# append to. `save_issue` relations are APPEND-ONLY, so on an update the
+	# argument is a patch — a groom that touches only the body passes no
+	# `blockedBy` at all, and `[.tool_input.blockedBy[]?]` over an absent key
+	# yields `[]`. Synthesising that hands `ready-lint` a payload asserting THIS
+	# ROW HAS NO BLOCKERS, which is a claim nothing here checked, and under
+	# CLOUD-679's rule an empty-but-present key is an ANSWER — correctly believed.
+	# The defect is the assertion, not the gate.
+	#
+	# Measured 2026-08-20, one row, three writes: a groom whose §8 cited a real
+	# blocker recorded `unready`, and the identical body re-saved with
+	# `blockedBy` restated — a no-op against the tracker — recorded `ready`. The
+	# relation was on the tracker throughout; only this could not see it. So
+	# `filed-here-check` refused the lap of a branch that filed a row and then
+	# groomed it to Ready, which is that gate's own third remedy: the toll
+	# refusing the remedy it exists to reward.
+	#
+	# OMIT THE KEY, never synthesise a thinner one. There is no richer answer
+	# available — the update response carries no relations and a hook holds no
+	# tracker credential, the same bound `claim-check` documents — so the honest
+	# answers are "could not look" or a wrong one. Omitting fires
+	# `unjudgeable-relations`, this records `-`, and `filed-here-check` passes `-`
+	# by design. Three-valued, composing with the sibling gate rather than
+	# duplicating it.
+	if [ -z "$existing" ]; then
+		rels=$(printf '%s' "$raw" | jq -c '{
+		  blockedBy: [.tool_input.blockedBy[]? | {id: .}],
+		  blocks: [.tool_input.blocks[]? | {id: .}],
+		  relatedTo: [.tool_input.relatedTo[]? | {id: .}]
+		}' 2>/dev/null) || rels='{"blockedBy":[],"blocks":[],"relatedTo":[]}'
+		payload=$(jq -c --argjson rels "$rels" '{
+		  id: .id,
+		  description: (.description // ""),
+		  relations: $rels
+		}' <<<"$row" 2>/dev/null) || payload=""
+	else
+		payload=$(jq -c '{
+		  id: .id,
+		  description: (.description // "")
+		}' <<<"$row" 2>/dev/null) || payload=""
+	fi
 	# BY PATH, AND THE STATUS IS READ AS THREE ANSWERS RATHER THAN TWO.
 	#
 	# `mise run ready-lint` is the obvious call and is wrong here: a hook inherits
@@ -242,10 +279,13 @@ if [ "$kind" = issue ]; then
 	# is a verdict about the environment wearing the mask of a verdict about the
 	# row. Sibling tasks are addressed relative to this file for that reason.
 	#
-	# `ready-lint`'s contract is 0 pass / 1 the block is wrong / 2 the input was
-	# unreadable, so only 1 is a judgement. Anything else — 2, or a 127 from a
-	# missing interpreter — leaves the verdict `-`, which the gate reads as "not
-	# answered" rather than as a refusal.
+	# `ready-lint`'s contract is 0 pass / 1 the block is wrong / 2 the input could
+	# not be read OR could not be judged, so only 1 is a judgement. Anything else
+	# — 2, or a 127 from a missing interpreter — leaves the verdict `-`, which the
+	# gate reads as "not answered" rather than as a refusal. Since CLOUD-781 the
+	# update path reaches that 2 DELIBERATELY rather than only by accident: it
+	# omits the relations key, `unjudgeable-relations` fires, and `-` is the
+	# honest answer for a groom whose relations nothing here can see.
 	if [ -n "$payload" ]; then
 		printf '%s' "$payload" | "$(dirname -- "${BASH_SOURCE[0]}")/ready-lint" >/dev/null 2>&1
 		case $? in
