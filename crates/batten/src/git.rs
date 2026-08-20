@@ -964,7 +964,25 @@ pub fn update_ref(dir: &Path, name: &str, sha: &str) -> Result<()> {
 ///
 /// Failing to run `git` at all is an internal error (exit `3`).
 pub fn resolve_ref(dir: &Path, name: &str) -> Result<Option<String>> {
-    query_optional(dir, &["rev-parse", "--verify", "--quiet", name])
+    // `--end-of-options`, because `name` is caller-influenced: `baseline`'s
+    // caller passes `must_land_on` straight from config, which a branch can edit
+    // when no `--config-from` is in play. `head_commit` three functions above
+    // carries the token with the same `--verify`; this did not, and the omission
+    // was an oversight rather than the documented ref-PRINTING exception, which
+    // applies to `--abbrev-ref`/`--symbolic-full-name` and not here.
+    //
+    // Measured before adding it, so the severity is stated honestly rather than
+    // implied: this was **latent, not live**. An option-shaped `name` IS parsed
+    // as an option — `--local-env-vars` printed env var names — but `--verify`
+    // exits non-zero for anything that is not a single rev, and
+    // `query_optional` reads non-zero as `None`, so the caller already got the
+    // safe answer. `rev-parse` also has no file-writing option, so there is no
+    // `show`-shaped write here (CLOUD-718). The token makes that hold by
+    // construction instead of by two other functions' behaviour.
+    query_optional(
+        dir,
+        &["rev-parse", "--verify", "--quiet", "--end-of-options", name],
+    )
 }
 
 /// Remove the linked worktree at `path`, discarding its working tree.
@@ -1866,6 +1884,34 @@ mod tests {
             fs::read_to_string(repo.join("tracked.txt")).unwrap(),
             "edited\n"
         );
+    }
+
+    #[test]
+    fn an_option_shaped_ref_name_is_not_parsed_as_an_option() {
+        // `resolve_ref`'s `name` reaches it from config (`must_land_on`), which a
+        // branch can edit when no `--config-from` is in play. Without
+        // `--end-of-options` git parses an option-shaped name AS AN OPTION —
+        // measured: `--local-env-vars` printed environment variable names rather
+        // than being read as a rev.
+        //
+        // That was latent rather than live, and the case says so by asserting the
+        // property that makes it latent as well as the token that closes it:
+        // `--verify` exits non-zero for anything that is not a single rev, and
+        // `query_optional` reads non-zero as `None`. Both halves are pinned, so
+        // dropping the token alone does not make this go red — losing the `None`
+        // reading does, and that is the one that would actually hurt.
+        let repo = show_fixture("resolve-ref-option", "tracked.txt", b"x\n");
+        for name in ["--local-env-vars", "--git-dir", "--all", "--show-toplevel"] {
+            assert_eq!(
+                resolve_ref(&repo, name).unwrap(),
+                None,
+                "an option-shaped ref resolves to nothing, never to an option's output"
+            );
+        }
+        // And an ordinary ref still resolves, so the token did not break the
+        // read it protects.
+        let head = head_commit(&repo).unwrap();
+        assert_eq!(resolve_ref(&repo, "HEAD").unwrap().as_deref(), Some(&*head));
     }
 
     #[test]
