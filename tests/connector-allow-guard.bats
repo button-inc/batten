@@ -13,6 +13,18 @@
 setup() {
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/connector-allow-guard"
 	export BATTEN_MCP_CONFIG="$BATS_TEST_TMPDIR/mcp-config.json"
+	# A FIXTURE, NOT THE COMMITTED FILE. The guard invokes the resolver with no
+	# flags, so without this seam these rows read the repository's real permission
+	# rules and break whenever those change — measured: removing six unenforceable
+	# grants from `.claude/settings.json` turned the allow row red, and the row was
+	# asserting production config rather than the adapter's behaviour.
+	export BATTEN_MCP_SETTINGS="$BATS_TEST_TMPDIR/settings.json"
+	cat >"$BATTEN_MCP_SETTINGS" <<-'JSON'
+		{"permissions":{
+		  "allow":["mcp__Claude_Code_Remote__create_session"],
+		  "deny":["mcp__Claude_Code_Remote__send_later"]
+		}}
+	JSON
 	cat >"$BATTEN_MCP_CONFIG" <<-'JSON'
 		{"mcpServers":{
 		  "aaaaaaaa-1111-2222-3333-444444444444":{"url":"https://api.anthropic.com/v1/code/mcp/proxy?mcp_url=https%3A%2F%2Fmcp.linear.app%2Fmcp"},

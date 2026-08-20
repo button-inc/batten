@@ -72,7 +72,13 @@ TOOLBOX_ALIAS="Claude_Code_Remote"
 
 tool=""
 config="${BATTEN_MCP_CONFIG:-}"
-settings=".claude/settings.json"
+# The settings seam, symmetric with the config one above. `connector-allow-guard`
+# invokes this with neither flag, so without it a suite exercising the guard reads
+# the repository's REAL permission rules — and its rows then break whenever those
+# rules change, which is what happened when six unenforceable grants were removed
+# from the committed file. A test asserting production config is asserting the
+# wrong thing. `--settings` still wins over it.
+settings="${BATTEN_MCP_SETTINGS:-.claude/settings.json}"
 
 while [ $# -gt 0 ]; do
 	case "$1" in
