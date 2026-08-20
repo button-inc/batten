@@ -245,14 +245,79 @@ fn an_unknown_ref_is_a_usage_error() {
     // Exit 1, not 2. "I cannot read that ref" is a statement about the
     // invocation; a harness reading 2 would report a policy denial that never
     // happened (§7).
+    //
+    // Updated by CLOUD-718 rather than added to: this and the case below used to
+    // pin BOTH states against one hedged refusal ("no such ref, or the path is
+    // absent there"), so neither could assert what it was actually about. Each
+    // now takes its own half.
     let repo = pr_fixture("trust-unknown-ref", "version = 1\n", "version = 1\n", &[]);
     let output = run(&repo, &["check", "--config-from", "origin/nonexistent"]);
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty(), "stdout stays the answer channel");
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("origin/nonexistent"),
+        stderr.contains("origin/nonexistent"),
         "the refusal must name the ref"
     );
+    assert!(
+        !stderr.contains("batten.toml"),
+        "the ref is what failed; naming the config hedges about a file that was \
+         never looked for: {stderr}"
+    );
+}
+
+#[test]
+fn a_reference_that_spells_an_option_is_refused_and_writes_nothing() {
+    // CLOUD-718 end to end. `--config-from` is `global: true`, so this string
+    // reaches every verb — including `check`, which declares `Effect::Read` and
+    // therefore sits in the derived read-only allowlist a mediated agent may
+    // call with no permission prompt. As a shell-out the value below made `git
+    // show` exit 0, print nothing, and create a file, which is a `read` verb
+    // writing a caller-chosen path.
+    let repo = pr_fixture("trust-option-ref", "version = 1\n", "version = 1\n", &[]);
+    let before = listing(&repo);
+    let reference = format!("--output={}", repo.join("pwned.toml").display());
+
+    // Through the ENV form, which is the channel that matters. Clap refuses a
+    // `--`-prefixed value for `--config-from` on the command line, so the flag
+    // form never reached the loader — but `BATTEN_CONFIG_FROM` is applied by
+    // clap as a value and skips that check entirely, which is the issue's "it
+    // can be set without a command line at all". Testing only the flag would
+    // have asserted clap's argument parsing and called it a trust boundary.
+    let output = batten()
+        .args(["check"])
+        .current_dir(&repo)
+        .env("BATTEN_CONFIG_FROM", &reference)
+        .output()
+        .expect("run batten");
+    assert_eq!(output.status.code(), Some(1), "bad input, never a verdict");
+    assert!(output.stdout.is_empty(), "stdout stays the answer channel");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("pwned.toml"),
+        "the refusal must name the ref it could not honour"
+    );
+
+    // The whole listing, not a probe for one name: the old shell-out formatted
+    // `{reference}:{path}` into a single token, so the file it created was
+    // `pwned.toml:batten.toml` and a probe for `pwned.toml` would have passed
+    // against the defect.
+    assert_eq!(
+        listing(&repo),
+        before,
+        "a read-effect verb must leave the tree byte-identical"
+    );
+}
+
+/// Every entry in `dir`, sorted — the filesystem's own answer to "did anything
+/// appear", with no guess about what it would have been called.
+fn listing(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .expect("read the fixture directory")
+        .map(|entry| entry.expect("a directory entry").file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
 }
 
 #[test]
@@ -274,9 +339,18 @@ fn a_ref_with_no_config_is_a_usage_error() {
 
     let output = run(&repo, &["check", "--config-from", "origin/main"]);
     assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("batten.toml"),
+        stderr.contains("batten.toml"),
         "the refusal must name the path it could not read"
+    );
+    // The other half of the split (CLOUD-718): this ref resolves perfectly well,
+    // so a refusal that also offers "no such ref" leaves the operator guessing
+    // between a mistyped branch and a branch from before the config landed —
+    // two different repairs. CLOUD-720 builds last-known-good on the difference.
+    assert!(
+        !stderr.contains("no such ref"),
+        "the ref resolved; only the path was missing: {stderr}"
     );
 }
 

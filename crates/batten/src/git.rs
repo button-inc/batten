@@ -568,24 +568,51 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
 }
 
 /// Read a tracked file's contents at a git ref, without touching the working
-/// tree (`git show <reference>:<path>`).
+/// tree.
 ///
 /// This is the trust boundary behind `--config-from` (CLOUD-31): policy is read
 /// from a ref a pull request cannot edit, so a working-tree change that relaxes
 /// the rules cannot lower the bar it is judged by. It reads and never writes,
 /// which is what keeps the calling verb `read`.
 ///
-/// `path` is repo-relative and `/`-separated, as git addresses blobs. The
-/// discovery environment is scrubbed for the same reason [`repo_root`] scrubs
-/// it: an ambient `GIT_DIR` would answer from some *other* repository, and a
-/// trust boundary that can be redirected by an environment variable is not one.
+/// **In-process, and that is the security property** (CLOUD-718). This used to
+/// spell `git show {reference}:{path}`, interpolating a caller's `reference`
+/// into argv. `--config-from` is `global: true`, so that string reaches every
+/// verb from a flag or `BATTEN_CONFIG_FROM`, and a value of
+/// `--output=<path>` made `git show` exit `0`, print nothing, and **write a
+/// file** — a `read`-effect verb, in the derived read-only allowlist a mediated
+/// agent may call unprompted, induced to write a caller-chosen path. Carrying
+/// `--end-of-options` would have made that *refused*; there being no argv makes
+/// it *unrepresentable*, which is the right strength for a boundary whose whole
+/// job is to be un-influenceable by the change under review.
+///
+/// Two more defects closed as consequences rather than as separate care. A
+/// `reference:directory` printed a tree listing that `[epoch] tracked` would
+/// have hashed as file content; a blob lookup cannot return a tree. And "the
+/// ref does not resolve" and "the path is absent at that ref" were one message,
+/// where they are two answers here — CLOUD-720 needs to tell them apart to
+/// build last-known-good, and `the_two_unreadable_states_are_distinct` is what
+/// makes that a fact it inherits rather than a promise.
+///
+/// The scrub is structural too. Where the shell-out removed five environment
+/// variables by name, [`gix::open::Options::isolated`] declines system, global
+/// and environment config outright, and discovery runs with default options
+/// rather than the environment's — so an ambient `GIT_DIR` or
+/// `GIT_CEILING_DIRECTORIES` cannot redirect the answer, and no list has to be
+/// maintained for that to stay true. Discovery still walks *upwards* from
+/// `dir`, because callers pass a relative `"."` (`receipt.rs`) and because a
+/// linked worktree must resolve its own `HEAD`, not the main checkout's.
+///
+/// `path` is repo-relative and `/`-separated, as git addresses blobs.
 ///
 /// # Errors
 ///
-/// Returns a [`UsageError`] (→ exit `1`) when the ref does not exist, the path
-/// is absent at that ref, or the object is not a readable file — all bad input
-/// naming a ref this binary cannot honour, never a policy verdict. Returns an
-/// internal error when git itself cannot run or emits non-UTF-8.
+/// Returns a [`UsageError`] (→ exit `1`) when the ref does not resolve, the
+/// path is absent at that ref, the object there is not a file, or its bytes are
+/// not UTF-8 — all bad input naming config this binary cannot honour, never a
+/// policy verdict. The non-UTF-8 case is exit `1` rather than the internal `3`
+/// it used to be: §7 routes unreadable *config* to `1`, and `epoch.rs` already
+/// cites this function as the precedent for that.
 pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
     if !dir.is_dir() {
         return Err(UsageError::raise(format!(
@@ -593,29 +620,47 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
             dir.display()
         )));
     }
-    let mut command = command(dir);
-    // `--` is not accepted after a `rev:path` argument; the single token is
-    // already unambiguous to git, and refusing a `reference` that looks like an
-    // option is the caller's business (a leading `-` simply fails below).
-    command.arg("show").arg(format!("{reference}:{path}"));
-    // A trust boundary answers about *this* repository or it is not one, so the
-    // fences are scrubbed here too — the same rule `repo_root` follows, and a
-    // stricter one than a plain `query` needs.
-    for var in DISCOVERY_FENCES {
-        command.env_remove(var);
-    }
-    let output = command
-        .output()
-        .with_context(|| format!("run `git show {reference}:{path}`"))?;
-    if !output.status.success() {
-        // git's stderr distinguishes "unknown revision" from "path does not
-        // exist in that revision" in version-dependent prose. One deterministic
-        // message instead, naming both halves so the operator can tell which.
+    let repository = gix::discover_opts(
+        dir,
+        gix::discover::upwards::Options::default(),
+        gix::open::Options::isolated(),
+    )
+    .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))?;
+
+    // State one: the revspec does not resolve here. Deliberately its own
+    // message — gix's error is version-dependent prose in the same way git's
+    // stderr was, so it never reaches the caller, but the DISTINCTION does.
+    let resolved = repository
+        .rev_parse_single(reference)
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} in this repository")))?;
+    let tree = resolved
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} to a tree")))?;
+
+    // State two: the ref is good and the path is not there. A caller can act on
+    // the difference — one is a mistyped or unfetched ref, the other a branch
+    // from before the config landed.
+    let entry = tree
+        .lookup_entry_by_path(path)
+        .map_err(|_| UsageError::raise(format!("cannot read {path} at {reference}")))?
+        .ok_or_else(|| UsageError::raise(format!("{path} is absent at {reference}")))?;
+
+    // A tree at that path is refused rather than rendered. `config::CONFIG_FILE`
+    // cannot reach this, but `[epoch] tracked` can, and the epoch would have
+    // hashed a directory listing as though it were the file's content.
+    if !entry.mode().is_blob() {
         return Err(UsageError::raise(format!(
-            "cannot read {path} at {reference}: no such ref, or the path is absent there"
+            "{path} at {reference} is not a file"
         )));
     }
-    String::from_utf8(output.stdout).with_context(|| format!("decode {reference}:{path} as UTF-8"))
+
+    let object = entry
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read {path} at {reference}")))?;
+    String::from_utf8(object.data.clone())
+        .map_err(|_| UsageError::raise(format!("{path} at {reference} is not valid UTF-8")))
 }
 
 /// The `git` child every query in this module is built from: `-C dir`, with
@@ -1944,6 +1989,178 @@ mod tests {
                     path.display()
                 );
             }
+        }
+    }
+
+    /// A repository carrying one committed file, for the `show` cases below.
+    fn show_fixture(name: &str, path: &str, contents: &[u8]) -> PathBuf {
+        let repo = scratch(name);
+        git(&repo, &["init", "-q"]);
+        fs::write(repo.join(path), contents).unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "fixture"]);
+        repo
+    }
+
+    #[test]
+    fn an_option_shaped_reference_reads_nothing_and_writes_nothing() {
+        // CLOUD-718's measurement, inverted into a gate. As a shell-out this
+        // spelled `git show --output=<path>:batten.toml`, which git read as its
+        // own `--output` flag: exit 0, empty stdout, and the file CREATED. The
+        // caller is `--config-from`, which is `global: true` and reaches every
+        // `read`-effect verb, so this wrote a caller-chosen path from inside the
+        // derived read-only allowlist.
+        let repo = show_fixture("show-injection", "batten.toml", b"version = 1\n");
+        let reference = format!("--output={}", repo.join("pwned.toml").display());
+
+        let before = listing(&repo);
+        let err = show(&repo, &reference, "batten.toml").unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "a ref this binary cannot honour is bad input, not an internal failure"
+        );
+
+        // The companion assertion is a directory listing, not a judgement: the
+        // defect was a WRITE, so the test that matters asks the filesystem.
+        //
+        // It compares the WHOLE listing rather than probing one expected name,
+        // and that is the difference between a gate and a false green. The old
+        // shell-out formatted `{reference}:{path}` into a single token, so the
+        // file git created was `pwned.toml:batten.toml` — a probe for
+        // `pwned.toml` passes against the very defect this pins. Measured on the
+        // old shape, 2026-08-20: rc=0, empty stdout, one new directory entry.
+        assert_eq!(
+            listing(&repo),
+            before,
+            "a read-effect call must leave the tree byte-identical"
+        );
+    }
+
+    /// Every entry in `dir`, sorted — the filesystem's own answer to "did
+    /// anything appear", with no guess about what it would have been called.
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .expect("read the fixture directory")
+            .map(|entry| entry.expect("a directory entry").file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_two_unreadable_states_are_distinct() {
+        // CLOUD-720 builds last-known-good on this distinction, so it is pinned
+        // here rather than promised: an unresolvable ref and a resolvable ref
+        // carrying no such path must not produce the same error value. The
+        // shelled-out form emitted one message for both, deliberately, because
+        // git's own stderr told them apart only in version-dependent prose.
+        let repo = show_fixture("show-two-states", "batten.toml", b"version = 1\n");
+
+        let no_ref = show(&repo, "refs/heads/does-not-exist", "batten.toml")
+            .unwrap_err()
+            .to_string();
+        let no_path = show(&repo, "HEAD", "absent.toml").unwrap_err().to_string();
+
+        assert_ne!(
+            no_ref, no_path,
+            "the two states must be separable by the caller"
+        );
+
+        // Differing strings are NOT the property — the old shell-out emitted one
+        // template for both states and interpolated the caller's own ref and
+        // path into it, so the two rendered differently while saying the same
+        // undecidable thing ("no such ref, or the path is absent there"). A test
+        // asserting only inequality passes against that. What has to hold is
+        // that each message commits to ONE state: an unresolvable ref is not
+        // discussed in terms of the path, which is not the problem and may be
+        // perfectly present.
+        assert!(
+            no_ref.contains("does-not-exist"),
+            "the refusal names the ref: {no_ref}"
+        );
+        assert!(
+            !no_ref.contains("batten.toml"),
+            "an unresolvable ref must not hedge about the path: {no_ref}"
+        );
+        assert!(
+            no_path.contains("absent.toml") && no_path.contains("HEAD"),
+            "the refusal names the path and the ref it looked at: {no_path}"
+        );
+        assert!(
+            !no_path.contains("resolve"),
+            "an absent path must not hedge about the ref, which resolved: {no_path}"
+        );
+        // And the ordinary read still works, or the two refusals above prove
+        // only that everything fails.
+        assert_eq!(show(&repo, "HEAD", "batten.toml").unwrap(), "version = 1\n");
+    }
+
+    #[test]
+    fn a_directory_at_the_ref_is_refused_rather_than_listed() {
+        // `git show <ref>:<dir>` prints a TREE LISTING. Unreachable through
+        // `config::CONFIG_FILE`, reachable through `[epoch] tracked`, where the
+        // listing would have been hashed as though it were the file's content —
+        // a stable epoch over a surface nobody had read.
+        let repo = show_fixture("show-tree", "batten.toml", b"version = 1\n");
+        fs::create_dir_all(repo.join("nested")).unwrap();
+        fs::write(repo.join("nested/inner.toml"), "version = 1\n").unwrap();
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "a directory"]);
+
+        let err = show(&repo, "HEAD", "nested").unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        let text = err.to_string();
+        assert!(
+            !text.contains("inner.toml"),
+            "a refusal must not render the listing it refused: {text}"
+        );
+        // The file inside it still reads, so the refusal is about the KIND of
+        // object and not about the path being unreachable.
+        assert_eq!(
+            show(&repo, "HEAD", "nested/inner.toml").unwrap(),
+            "version = 1\n"
+        );
+    }
+
+    #[test]
+    fn non_utf8_content_at_the_ref_is_a_usage_error() {
+        // §7 routes unreadable *config* to exit 1; this was the internal 3,
+        // which a harness reads as "batten broke" rather than "your config is
+        // not readable". `epoch.rs` already cites this function as the
+        // precedent for the 1, so the code and the citation now agree.
+        let repo = show_fixture("show-non-utf8", "batten.toml", &[0xff, 0xfe, 0x00, 0x9f]);
+        let err = show(&repo, "HEAD", "batten.toml").unwrap_err();
+        assert!(
+            err.downcast_ref::<UsageError>().is_some(),
+            "unreadable config is exit 1, never the internal 3"
+        );
+        let text = err.to_string();
+        assert!(
+            !text.contains('\u{fffd}'),
+            "a refusal is a pointer, never the bytes it could not decode: {text}"
+        );
+    }
+
+    #[test]
+    fn gix_is_confined_to_this_module() {
+        // The successor to `show`'s `--end-of-options` assertion, which the
+        // Ready block asked for and which this change makes unspellable: there
+        // is no argv left to carry the token. What replaces it is the boundary
+        // that matters while `git.rs` is mid-migration (CLOUD-320's row) — two
+        // git backends coexist here ON PURPOSE and in ONE module, so the
+        // in-process half cannot spread across the crate without deleting the
+        // assertion that says it may not.
+        for (path, source) in crate_sources(true) {
+            if path.file_name().and_then(|n| n.to_str()) == Some("git.rs") {
+                continue;
+            }
+            assert!(
+                !source.contains("gix::"),
+                "{}: reaches gix directly; the in-process git backend is git.rs's \
+                 alone until CLOUD-320's migration finishes (CLOUD-718)",
+                path.display()
+            );
         }
     }
 
