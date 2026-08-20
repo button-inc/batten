@@ -52,7 +52,7 @@
 # and decides no verdict, so it has no "violation" to report.
 #
 # The mutations target the two conjuncts a caller cannot see for itself.
-#MUTANT merged-pr-keys-ignores-truncation|s@^if \[ "\$count" -ge "\$limit" \]; then@if false; then@|a result at the fetch limit is refused as truncated, never returned short
+#MUTANT merged-pr-keys-ignores-truncation|s@^if \[ "\$count" -ge "\$limit" \]; then@if false; then@|a reading at the fetch limit is refused as truncated, not returned short
 #MUTANT merged-pr-keys-accepts-empty|s@^if \[ "\$count" -eq 0 \]; then@if false; then@|an empty forge answer is could-not-look, never an empty evidence file
 set -euo pipefail
 
