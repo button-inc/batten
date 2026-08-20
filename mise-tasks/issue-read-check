@@ -206,7 +206,7 @@ fi
 # The mutation gives the absent arm a plausible open column instead of `-`, which
 # is the forgery this shape exists to refuse: a receipt asserting a row is open
 # when nothing was ever read about it, minted by sending LESS.
-#MUTANT absent-status-reads-open|s@seen_status="-"@seen_status="todo"@|an absent status must not read as an open row
+#MUTANT absent-status-reads-open|s@seen_status="-"@seen_status="todo"@|a payload with no status records no column
 if jq -e 'has("status") and (.status != null)' <<<"$payload" >/dev/null 2>&1; then
 	seen_status=$(jq -r '.status | ascii_downcase | gsub("[^a-z0-9]+"; "-")' <<<"$payload" 2>/dev/null) || seen_status="-"
 	[ -n "$seen_status" ] || seen_status="-"
