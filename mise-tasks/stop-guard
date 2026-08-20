@@ -79,25 +79,35 @@ active=$(printf '%s' "$raw" | "$field" stop-hook-active) || exit 0
 # dark, which is what it has been for this repository's entire life. Revisit by
 # gating on a moved HEAD if a session ever feels it.
 # Everything fails open: no path, no binary, no repo, an unwritable link.
-transcript=$(printf '%s' "$raw" | "$field" transcript-path) || transcript=""
+# The recorder rides `unlanded-check`'s bypass rather than one of its own: it
+# exists to feed that rule and nothing else, so a caller that switched the rule
+# off and still paid a tree walk and a store write per turn would be paying for
+# an answer nobody reads. `tests/stop-guard.bats` runs inside this checkout and
+# needs exactly that.
+transcript=""
+[ -n "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ] ||
+	transcript=$(printf '%s' "$raw" | "$field" transcript-path) || transcript=""
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
 if [ -n "$transcript" ] && [ -n "$root" ] && [ -r "$transcript" ]; then
 	ln -sfn "$transcript" "$root/.claude/.transcript.jsonl" 2>/dev/null || true
 fi
-for candidate in \
-	"${BATTEN_BIN:-}" \
-	"$root/target/release/batten" \
-	"$root/target/debug/batten" \
-	"$(command -v batten 2>/dev/null || true)"; do
-	if [ -n "$candidate" ] && [ -x "$candidate" ]; then
-		# Streams discarded, exit status ignored: this is an evaluation, not a
-		# verdict. `unlanded-check` below reads what it wrote, and a recorder
-		# that failed simply leaves nothing to read — which is silence, the
-		# correct answer for a hook that may never be the reason a turn stalls.
-		(cd "$root" 2>/dev/null && "$candidate" state record >/dev/null 2>&1) || true
-		break
-	fi
-done
+if [ -z "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ]; then
+	for candidate in \
+		"${BATTEN_BIN:-}" \
+		"$root/target/release/batten" \
+		"$root/target/debug/batten" \
+		"$(command -v batten 2>/dev/null || true)"; do
+		if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+			# Streams discarded, exit status ignored: this is an evaluation, not
+			# a verdict. `unlanded-check` below reads what it wrote, and a
+			# recorder that failed simply leaves nothing to read — which is
+			# silence, the correct answer for a hook that may never be the
+			# reason a turn stalls.
+			(cd "$root" 2>/dev/null && "$candidate" state record >/dev/null 2>&1) || true
+			break
+		fi
+	done
+fi
 
 # The turn's final response text, handed over directly — so this hook never opens
 # `transcript_path` and no session content is read beyond the message already
@@ -238,7 +248,10 @@ fi
 if [ -z "$reason" ]; then
 	filed_list="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check"
 	if [ -x "$filed_list" ]; then
-		rows=$("$filed_list" --checklist </dev/null 2>/dev/null) || true
+		# stderr, stdout discarded — rule 3's idiom exactly, and load-bearing:
+		# that file writes its own summary lines to stdout, so a stdout capture
+		# reads "no board writes recorded" as a checklist of one row.
+		rows=$("$filed_list" --checklist </dev/null 2>&1 >/dev/null) || true
 		if [ -n "$rows" ]; then
 			set_key=$(printf '%s' "$rows" | tr '\n' ' ')
 			set_file=""

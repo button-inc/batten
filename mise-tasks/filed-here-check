@@ -315,7 +315,12 @@ $path
 		case " $closes " in
 		*" $id "*) mark="closed-by-this-pr" ;;
 		esac
-		printf '%s %s\n' "$id" "$mark"
+		# STDERR, like `report` and for the same reason: this file's stdout
+		# carries its own summary lines, and a caller capturing stdout would read
+		# "no board writes recorded" as a checklist of one. The sibling
+		# `--advisory` mode already takes pointers off stderr, so both nudge
+		# modes are read the same way.
+		printf '%s %s\n' "$id" "$mark" >&2
 		listed=$((listed + 1))
 	done
 	[ "$listed" -gt 0 ] || exit 0

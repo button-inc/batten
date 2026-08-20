@@ -21,6 +21,14 @@ setup() {
 	# land` is `filed-here-check`'s own remedy 4, and `land` runs `verify`, which
 	# runs this suite. Same lesson as `tests/filed-here-check.bats`'s setup.
 	unset BATTEN_FILED_HERE_OVERLAP
+	# THE FOURTH RULE READS THE STORE AND PAYS FOR IT (CLOUD-97), and the same
+	# argument applies twice over: these cases run inside this checkout, which is
+	# routinely unlanded while the suite runs, and the recorder that feeds the rule
+	# is a tree walk plus a store write per invocation. Off by default through the
+	# gate's own bypass — which the recorder rides, so switching the rule off does
+	# not leave the walk being paid for an answer nobody reads — and turned back on
+	# explicitly by the cases that are about it, against a stub.
+	export BATTEN_UNLANDED_CHECK_BYPASS=1
 }
 
 # `punt_repo <recorded-path>` — a throwaway repo carrying one filed row that names
@@ -102,22 +110,38 @@ kicked() {
 
 # --- failure posture ---------------------------------------------------------
 
-@test "a clean final message is silent" {
+@test "a clean final message gets the closing question and nothing else" {
+	# THE CONTRACT THAT CHANGED (CLOUD-97). This case asserted SILENCE, and
+	# silence is the common case — which made the most valuable question the one
+	# never asked. Every rule in this file fires only on a shape somebody
+	# enumerated, and measured recall is the weak half of all of them; the bare
+	# question has no recall problem, and `finding-sink-check`'s header records
+	# it surfacing nine real findings in one session while carrying no
+	# information at all.
+	#
+	# What must still hold is that it is the ONLY thing said: a turn with nothing
+	# specific to point at must not also collect a pointer.
 	run stop 'Landed on main by fast-forward, CI green.'
-	! kicked "$output"
-	[ -z "$output" ]
+	kicked "$output"
+	[[ "$output" == *'"additionalContext":"done?"'* ]]
 	[ "$status" -eq 0 ]
 }
 
-@test "an absent last_assistant_message fails open" {
+@test "an absent last_assistant_message still ends in the closing question" {
+	# It costs the FIRST rule, whose input it is, and nothing else — the rules
+	# below read the transcript and the store, and the question reads neither. A
+	# turn that ended without a text block is still a turn that ended.
 	run bash -c "jq -nc '{stop_hook_active:false}' | $GUARD"
-	! kicked "$output"
+	[[ "$output" == *'"additionalContext":"done?"'* ]]
 	[ "$status" -eq 0 ]
 }
 
 @test "the bypass is honoured" {
+	# The whole registration, the closing question included: a bypass that still
+	# spoke would not be one.
 	BATTEN_STOP_GUARD_BYPASS=1 run stop 'Worth noting the receipt is stale.'
 	! kicked "$output"
+	[ -z "$output" ]
 }
 
 @test "the guard never exits non-zero, so it cannot surface as a hook error" {
@@ -176,18 +200,23 @@ stranded() {
 	[[ "$output" != *"finding-without-durable-write"* ]]
 }
 
-@test "a turn that strands nothing is silent" {
+@test "a turn that strands nothing falls through to the closing question" {
+	# What this case is about is that the SECOND rule stayed quiet, which is now
+	# asserted directly rather than through the absence of all output.
 	run stranded 'Rebased, pushed, and the gate is green.'
 	[ "$status" -eq 0 ]
-	[ -z "$output" ]
+	[[ "$output" != *"finding-without-durable-write"* ]]
+	[[ "$output" == *'"additionalContext":"done?"'* ]]
 }
 
-@test "an unreadable transcript is silent, not a kick" {
+@test "an unreadable transcript manufactures no advisory" {
 	# Fail open, like every other path in this guard: a missing file must not
-	# manufacture an advisory.
+	# manufacture an advisory. The closing question is not one — it is asked of
+	# every turn that earned no pointer, and asking it needs no transcript.
 	run stop 'Pushed and green.'
 	[ "$status" -eq 0 ]
-	[ -z "$output" ]
+	[[ "$output" != *"finding-without-durable-write"* ]]
+	[[ "$output" == *'"additionalContext":"done?"'* ]]
 }
 
 @test "the recursion bound still holds for the second rule" {
@@ -263,14 +292,15 @@ print('no matcher')"
 	[[ "$output" != *"CLOUD-900"* ]]
 }
 
-@test "a branch with no filed row is silent" {
+@test "a branch with no filed row names none" {
 	repo=$(punt_repo)
 	rm "$repo/.git/batten-receipts/board-writes.work"
 	cd "$repo" || return 1
 	unset BATTEN_FILED_HERE_BYPASS
 	run stop 'Landed on main by fast-forward, CI green.'
 	[ "$status" -eq 0 ]
-	[ -z "$output" ]
+	[[ "$output" != *"CLOUD-"* ]]
+	[[ "$output" == *'"additionalContext":"done?"'* ]]
 }
 
 # ONCE PER ROW PER BRANCH. A Stop hook sees no PR body, so it cannot tell a punt
@@ -282,10 +312,14 @@ print('no matcher')"
 	cd "$repo" || return 1
 	unset BATTEN_FILED_HERE_BYPASS
 	run stop 'Landed on main by fast-forward, CI green.'
-	[[ "$output" == *"CLOUD-900"* ]]
+	[[ "$output" == *"filed-over-own-diff"* ]]
 	run stop 'Landed on main by fast-forward, CI green.'
 	[ "$status" -eq 0 ]
-	[ -z "$output" ]
+	# The PUNT pointer is spent. The row may still be named by the fifth rule's
+	# checklist, which asks a different question about the same id and is
+	# suppressed on its own set — so the assertion is about this rule's marker,
+	# not about the id ever appearing again.
+	[[ "$output" != *"filed-over-own-diff"* ]]
 }
 
 @test "a second row still gets its own pointer after the first is spent" {
@@ -299,4 +333,162 @@ print('no matcher')"
 	run stop 'Landed on main by fast-forward, CI green.'
 	[[ "$output" == *"CLOUD-901"* ]]
 	[[ "$output" != *"CLOUD-900"* ]]
+}
+
+# --- the fourth rule: work not landed (CLOUD-97) ------------------------------
+#
+# The first rule here that reports repository state rather than inferring from
+# prose. It decides nothing itself, so these drive it through the same stub seam
+# `tests/unlanded-check.bats` uses: what is under test is stop-guard's ORDERING
+# and framing of the verdict, not the verdict.
+
+# `unlanded_stub <count>` — a fake `batten` whose `state list` reports an
+# unlanded finding on the branch of the repo under test.
+unlanded_stub() {
+	local repo="$1" count="$2"
+	local bin="$BATS_TEST_TMPDIR/batten-stub"
+	local branch
+	branch=$(git -C "$repo" symbolic-ref --quiet --short HEAD)
+	# IT DELEGATES EVERYTHING ELSE TO THE REAL BINARY, which is not optional:
+	# `payload-field` resolves `BATTEN_BIN` too, so a stub that answers only
+	# `state list` silently empties the payload every rule above reads — and the
+	# suite then measures the reader being broken rather than the rule being
+	# ordered. Cost one debugging round; stated here so it costs nobody another.
+	local real="$BATS_TEST_DIRNAME/../target/release/batten"
+	[ -x "$real" ] || real="$BATS_TEST_DIRNAME/../target/debug/batten"
+	{
+		echo '#!/usr/bin/env bash'
+		echo 'if [ "$1" = "state" ] && [ "$2" = "list" ]; then'
+		printf '\techo "abc123 completion.unlanded refs/heads/%s %s"\n' "$branch" "$count"
+		echo '	exit 0'
+		echo 'fi'
+		printf 'exec %s "$@"\n' "$real"
+	} >"$bin"
+	chmod +x "$bin"
+	printf '%s' "$bin"
+}
+
+# A repo with a commit its landing target does not have, plus no filed rows.
+plain_repo() {
+	local repo="$BATS_TEST_TMPDIR/plain"
+	rm -rf "$repo"
+	mkdir -p "$repo"
+	git -C "$repo" init --quiet --initial-branch=work
+	git -C "$repo" config user.email t@example.com
+	git -C "$repo" config user.name t
+	printf 'x\n' >"$repo/a.txt"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m base
+	printf '%s' "$repo"
+}
+
+@test "UNLANDED WORK AT A DECLARED STOPPING POINT IS POINTED AT" {
+	local repo bin
+	repo=$(plain_repo)
+	bin=$(unlanded_stub "$repo" 2)
+	run env -u BATTEN_UNLANDED_CHECK_BYPASS \
+		CLAUDE_PROJECT_DIR="$repo" BATTEN_BIN="$bin" \
+		bash -c "jq -nc '{stop_hook_active:false,last_assistant_message:\"Pushed.\"}' | $GUARD"
+	kicked "$output"
+	[[ "$output" == *"unlanded: 2 commit(s)"* ]]
+	[[ "$output" == *"Land it, or say what blocks it"* ]]
+	[ "$status" -eq 0 ]
+}
+
+@test "the unlanded pointer carries no transcript text and no store key" {
+	# Pointer, never payload: the verdict was derived from a session transcript,
+	# which is the largest piece of prose anywhere near this hook.
+	local repo bin
+	repo=$(plain_repo)
+	bin=$(unlanded_stub "$repo" 1)
+	run env -u BATTEN_UNLANDED_CHECK_BYPASS \
+		CLAUDE_PROJECT_DIR="$repo" BATTEN_BIN="$bin" \
+		bash -c "jq -nc '{stop_hook_active:false,last_assistant_message:\"Pushed.\"}' | $GUARD"
+	[[ "$output" != *"abc123"* ]]
+	[[ "$output" != *"refs/heads"* ]]
+}
+
+@test "the unlanded rule yields to the measured posture rule" {
+	# Precedence is earned, not asserted: `hedged-flag-framing` has 3/3 measured
+	# precision and this rule has no measurement yet, so a turn that earns both
+	# gets the measured one.
+	local repo bin
+	repo=$(plain_repo)
+	bin=$(unlanded_stub "$repo" 1)
+	run env -u BATTEN_UNLANDED_CHECK_BYPASS \
+		CLAUDE_PROJECT_DIR="$repo" BATTEN_BIN="$bin" \
+		bash -c "jq -nc '{stop_hook_active:false,last_assistant_message:\"Worth noting the receipt is stale.\"}' | $GUARD"
+	[[ "$output" == *"hedged-flag-framing"* ]]
+	[[ "$output" != *"unlanded:"* ]]
+}
+
+@test "landed work falls through to the closing question" {
+	local repo bin
+	repo=$(plain_repo)
+	bin=$(unlanded_stub "$repo" 0)
+	run env -u BATTEN_UNLANDED_CHECK_BYPASS \
+		CLAUDE_PROJECT_DIR="$repo" BATTEN_BIN="$bin" \
+		bash -c "jq -nc '{stop_hook_active:false,last_assistant_message:\"Landed.\"}' | $GUARD"
+	[[ "$output" == *'"additionalContext":"done?"'* ]]
+}
+
+# --- the fifth rule: the rows this branch spun off ----------------------------
+
+@test "EVERY ROW THE BRANCH FILED IS ENUMERATED FOR RE-EVALUATION" {
+	# Rule 3 asks which filed row names a file this branch has open — a measured,
+	# narrow predicate. This asks the broad question no predicate scores: for each
+	# row, by number, is it really independent work? So the assertion is that ALL
+	# of them are listed, including the ones rule 3 would never mention.
+	local repo="$BATS_TEST_TMPDIR/filed"
+	rm -rf "$repo"
+	mkdir -p "$repo/a"
+	git -C "$repo" init --quiet --initial-branch=work
+	git -C "$repo" config user.email t@example.com
+	git -C "$repo" config user.name t
+	printf 'x\n' >"$repo/a/one.rs"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m base
+	git -C "$repo" update-ref refs/remotes/origin/main HEAD
+	mkdir -p "$repo/.git/batten-receipts"
+	{
+		printf 'issue CLOUD-901 2026-08-19T00:00:00.000Z ready 0\n'
+		printf 'issue CLOUD-902 2026-08-19T00:00:00.000Z ready 0\n'
+	} >"$repo/.git/batten-receipts/board-writes.work"
+	run env -u BATTEN_FILED_HERE_BYPASS \
+		CLAUDE_PROJECT_DIR="$repo" \
+		bash -c "cd $repo && jq -nc '{stop_hook_active:false,last_assistant_message:\"Filed two.\"}' | $GUARD"
+	[[ "$output" == *"CLOUD-901"* ]]
+	[[ "$output" == *"CLOUD-902"* ]]
+	[[ "$output" == *"punt you could close here"* ]]
+}
+
+@test "the checklist repeats only when the set changes" {
+	# Suppressed on the SET, not per row: a checklist with rows hidden is not a
+	# checklist, and an unsuppressed one reprints itself every turn until nobody
+	# reads it. Filing another row asks the whole list again.
+	local repo="$BATS_TEST_TMPDIR/filed-set"
+	rm -rf "$repo"
+	mkdir -p "$repo/a"
+	git -C "$repo" init --quiet --initial-branch=work
+	git -C "$repo" config user.email t@example.com
+	git -C "$repo" config user.name t
+	printf 'x\n' >"$repo/a/one.rs"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m base
+	git -C "$repo" update-ref refs/remotes/origin/main HEAD
+	mkdir -p "$repo/.git/batten-receipts"
+	local record="$repo/.git/batten-receipts/board-writes.work"
+	printf 'issue CLOUD-901 2026-08-19T00:00:00.000Z ready 0\n' >"$record"
+
+	local invoke="cd $repo && jq -nc '{stop_hook_active:false,last_assistant_message:\"ok\"}' | $GUARD"
+	run env -u BATTEN_FILED_HERE_BYPASS CLAUDE_PROJECT_DIR="$repo" bash -c "$invoke"
+	[[ "$output" == *"CLOUD-901"* ]]
+
+	run env -u BATTEN_FILED_HERE_BYPASS CLAUDE_PROJECT_DIR="$repo" bash -c "$invoke"
+	[[ "$output" == *'"additionalContext":"done?"'* ]]
+
+	printf 'issue CLOUD-902 2026-08-19T00:00:00.000Z ready 0\n' >>"$record"
+	run env -u BATTEN_FILED_HERE_BYPASS CLAUDE_PROJECT_DIR="$repo" bash -c "$invoke"
+	[[ "$output" == *"CLOUD-901"* ]]
+	[[ "$output" == *"CLOUD-902"* ]]
 }
