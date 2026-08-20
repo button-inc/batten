@@ -59,6 +59,21 @@
 # rediscovered it or did not. It now runs here, by path — the way `graph-check`
 # itself calls `ready-lint` — so neither gate grows a copy of the other's
 # predicate and there is nothing to drift.
+#
+# THE COMPOSITION HAS A SEAM, and CLOUD-783 closed the half of it that was open.
+# `graph-check` refuses an unjudgeable payload; this task discards its exit code
+# (`|| true`, correctly — a per-issue violation is the payload, not the status)
+# and greps `^<id> <rule>`, which the set-keyed `graph unjudgeable-*` lines can
+# never match. So each key the gate decides on must be checked HERE, before the
+# gate is called. `attachments` always was; `description` and `relations` are the
+# two that were not, and a caller who omitted them got a sweep whose §8 scan and
+# graph-coherence half decided nothing while the tally read the same.
+#
+# The mutations are the two guards, one each. Dropping either restores the
+# silent-pass: the sweep proceeds and reports a movable list over a question
+# nothing answered.
+#MUTANT description-absence-is-silent|s/^for key in description relations; do$/for key in relations; do/|an In Review payload with no description is refused, and the ids are named
+#MUTANT relations-absence-is-silent|s/^for key in description relations; do$/for key in description; do/|an In Review payload with no relations is refused, and the ids are named
 set -euo pipefail
 
 # The marker an issue puts in its own body to hold itself open. One string, and
@@ -133,6 +148,44 @@ if [ -n "$missing" ]; then
 	echo "::error:: no \`attachments\` on In Review issue(s): $missing. The board gate reads that key to decide \`in-review-no-pr\`, so a payload without it cannot answer whether anything landed — re-fetch with attachments included." >&2
 	exit 2
 fi
+
+# CLOUD-783. THE SAME REFUSAL FOR THE OTHER TWO KEYS THE GATE DECIDES ON, because
+# protecting one of three is what let a cheaper fetch buy a quieter sweep.
+#
+# `graph-check` reports an absent `description` or `relations.blockedBy` as
+# unjudgeable — but keyed to its `graph` pseudo-id, deliberately, so that a
+# relations-free sweep does not convert every In Review issue into a refusal. That
+# keying is right there and wrong here: `refusal_for` greps `^<id> <rule>`, so it
+# never sees those lines, and the `|| true` below swallows the exit code they
+# raise. So the gate says "I could not look" and this task reports `N to move`.
+#
+# Measured 2026-08-20 on a 57-row sweep: dropping `includeRelations` cuts the
+# fetch by ~40% and nothing in this task's output says the difference. That makes
+# it reachable by ordinary cost pressure, not just by carelessness.
+#
+# PRESENCE, NEVER TRUTHINESS. An empty `description` and an explicit
+# `blockedBy: []` are DATA and are judged — the same distinction `graph-check`'s
+# own anti-vacuity comment draws. Only an absent key is "could not look".
+#
+# Not by reading `graph-check`'s exit code: that also fires for
+# `unjudgeable-milestone`, a legitimate absence on a sweep closure carrying no
+# Todo rows, so it would refuse every ordinary sweep.
+for key in description relations; do
+	missing=$(jq -r --arg k "$key" '[.[] | select(.status == "In Review") | select(has($k) | not) | .id] | join(" ")' <<<"$issues")
+	[ -n "$missing" ] || continue
+	case "$key" in
+	description)
+		reads="the §8 status-claim scan and the Ready-block delegation"
+		remedy="re-fetch with the description included"
+		;;
+	relations)
+		reads="\`blockedby-cycle\` and \`dangling-blocker\`"
+		remedy="re-fetch with \`includeRelations: true\`"
+		;;
+	esac
+	echo "::error:: no \`$key\` on In Review issue(s): $missing. The board gate reads that key to decide $reads, so a payload without it cannot answer — $remedy." >&2
+	exit 2
+done
 
 # Called by path, the way graph-check calls ready-lint: this stays a pure function
 # of stdin plus git, and the one definition of "honestly labelled" is composed
