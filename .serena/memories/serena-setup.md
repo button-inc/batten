@@ -39,9 +39,18 @@ why the first fix was validated green and Serena stayed absent anyway.
 
    **And MCP connections ARE retried** — this memory said they are not, on
    CLOUD-196's evidence. Measured 2026-08-19: after failures at 07:05:17 and
-   07:41:58, a third attempt fired unprompted at 14:30:15. The client also
-   aborts ~1.5 s _before_ its declared 30,000 ms, so a gate asserting the
-   effective budget must expect ~28.3 s and not 30.
+   07:41:58, a third attempt fired unprompted at 14:30:15.
+
+   **The startup budget is not this memory's to state** (CLOUD-769). It is
+   declared as `MCP_TIMEOUT` in `.claude/settings.json` and judged by `mise run
+mcp-timeout-budget`, which carries the floor, the measurement behind it, and the
+   dates — run it rather than reading a number here. This paragraph used to
+   restate the value and prescribe a gate derived from it, and both halves
+   rotted: the value was retracted across CLOUD-668/700/730, and the gate that
+   prescription described now exists and asserts the **observed** budget from
+   the client's own log instead. CLOUD-769 carries what was said and why it was
+   wrong. The discipline is the one the pin references above already follow —
+   name the owner, never quote its value.
 
 2. **Approval.** A `.mcp.json` server is project-scoped and needs per-project
    approval, closed by committing `"enabledMcpjsonServers": ["serena"]` in
@@ -78,12 +87,29 @@ config instead of opening the file that records what happened:
   code is **not** fixed at `-32000` — the next real occurrence was
   `CONNECT_TIMEOUT`. Judge the last `Connection failed` / `Successfully
 connected` record, not the presence of an error key or a literal code.
-- `/tmp/claude-code.log` for the harness side: the `Starting connection with
-timeout of 30000ms` line and its timestamp.
+- The `Starting connection with timeout of <declared>ms` line and its timestamp,
+  which the per-server `mcp-logs-<server>/*.jsonl` above carries as well as
+  `/tmp/claude-code.log`. `<declared>` is whatever `mise run mcp-timeout-budget`
+  reports; do not expect a literal here. **A reading below that is the finding,
+  not the baseline** — it means this container did not pick the declaration up,
+  which is the CLOUD-700 case CLOUD-730 leaves open, and the gate's effect half
+  is what catches it.
 - **A server absent from the tool list at the top of a turn may simply still be
   connecting.** Measured 2026-08-11: a healthy attach took 12.5s and the tools
   appeared mid-session. Do not conclude "absent" from an early snapshot — check
   the log, or just try a tool.
+- **A slow attach is usually the cold index, not a fault.** A cold container pays
+  a first rust-analyzer index (CLOUD-670, no persistent cache) while provisioning
+  runs, and healthy attaches spread over an order of magnitude because of it.
+  `mise-tasks/mcp-timeout-budget`'s header carries the measurement table and the
+  worst observed success; read it there rather than judging a duration by feel.
+- **`serverVersion` in the handshake record is NOT Serena's version, and it will
+  look like pin drift.** The `Connection established with capabilities` line
+  reports `{"name":"Serena","version":"…"}` taken from the `mcp` Python SDK, not
+  from Serena — measured 2026-08-20, it read a full major series above the
+  pinned version while `serena/__init__.py` and the installed `dist-info` both
+  agreed with the pin. `mise run mise-pin-agreement` is what judges the pin; a
+  version in this log record judges nothing.
 
 Only after the logs say the launch failed:
 
