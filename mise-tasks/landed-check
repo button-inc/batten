@@ -87,8 +87,8 @@
 # The mutations target each half of the disjunction. The first makes a bare
 # mention count again; the second drops the merged-PR half, which is the
 # under-report the 3% measurement predicts.
-#MUTANT landed-check-mention-is-a-landing|s@^if ! claimed_ids=.*@claimed_ids=$(jq -r '.[] | .id' <<<"$issues"); if false; then@|a commit that only CITES an id does not report it as landed
-#MUTANT landed-check-ignores-merged-prs|s@^			merged_ids=.*@			merged_ids=""@|an id whose closing key is only in a merged PR body is still reported
+#MUTANT landed-check-mention-is-a-landing|s@^if ! claimed_ids=.*@claimed_ids=$(jq -r '.[].id' <<<"$issues"); if false; then@|CLOUD-804: a commit citing an id as PRIOR ART does not land it
+#MUTANT landed-check-ignores-merged-prs|s@^if ! merged_ids=.*@merged_ids=""; if false; then@|CLOUD-804: commits on main with the key only in a MERGED PR body still land it
 set -euo pipefail
 
 merged_prs=""

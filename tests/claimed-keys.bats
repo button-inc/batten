@@ -252,3 +252,43 @@ Closes CLOUD-999"
 	[ "$status" -eq 0 ]
 	[ "$output" = "CLOUD-999" ]
 }
+
+# --- CLOUD-804: --closing-only, for a caller asking about a LOG ----------------
+#
+# `landed-check` asks "which keys does main's history CLAIM". The branch-name and
+# `Refs:` fallbacks answer "what does this branch claim", which is a different
+# question — and source 3 in particular is the exact citation signal CLOUD-480
+# was swept to In Review on. Opt-in, so every existing caller keeps the chain.
+
+@test "--closing-only does not fall through to a Refs: trailer" {
+	run "$KEYS" --closing-only --log "Refs: CLOUD-7" --branch "" --title "" </dev/null
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "--closing-only does not fall through to the branch name" {
+	run "$KEYS" --closing-only --log "" --branch "wenzowski/cloud-7-a-thing" --title "" </dev/null
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "--closing-only still answers on a closing keyword" {
+	run "$KEYS" --closing-only --log "Closes CLOUD-9" --branch "" --title "" </dev/null
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-9"* ]]
+}
+
+@test "without --closing-only the fallback chain is unchanged" {
+	run "$KEYS" --log "Refs: CLOUD-7" --branch "" --title "" </dev/null
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-7"* ]]
+}
+
+@test "--closing-only reads the log from stdin, which is how a 1.27MB history fits" {
+	# argv cannot carry main's log: measured 1272329 bytes, `Argument list too
+	# long`, exit 126 and zero keys — which a caller would read as "nothing
+	# claimed" (CLOUD-804).
+	run bash -c "printf 'Closes CLOUD-9' | $KEYS --closing-only --branch '' --title '' --log ''"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-9"* ]]
+}

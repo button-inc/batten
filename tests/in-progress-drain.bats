@@ -29,6 +29,17 @@ setup() {
 	: >"$REFS"
 	export WIP_DRAIN_REFS="$REFS"
 	export WIP_DRAIN_TODAY=2026-08-20
+	# The merged-PR evidence is the third injected world-reading (CLOUD-804).
+	# `landed-check` refuses without it rather than reporting a clean column, so
+	# a case that forgets it fails loudly instead of passing vacuously.
+	EV="$BATS_TEST_TMPDIR/merged-$BATS_TEST_NUMBER.tsv"
+	: >"$EV"
+	export DRAIN_MERGED_PRS="$EV"
+}
+
+# Records that a MERGED pull request $2 closed issue $1.
+merged_pr() {
+	printf '%s\t%s\n' "$1" "$2" >>"$EV"
 }
 
 # Adds a commit to main carrying $1 in its message.
@@ -57,7 +68,7 @@ drain() {
 @test "an In Progress issue whose commits are on main is landed-unswept" {
 	land "feat: work
 
-Refs: CLOUD-179"
+Closes CLOUD-179"
 	drain "[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"landed-unswept"* ]]
@@ -70,7 +81,7 @@ Refs: CLOUD-179"
 	# `abandoned-ignores-landed` mutation reddens.
 	land "feat: work
 
-Refs: CLOUD-179"
+Closes CLOUD-179"
 	drain "[$(row CLOUD-179 2026-01-01T10:00:00.000Z feat/x '')]"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"landed-unswept"* ]]
@@ -86,11 +97,34 @@ Refs: CLOUD-179"
 	# no way to tell, which is how CLOUD-480 sat wrong for 4.5 hours.
 	land "feat: work
 
-That is CLOUD-179's shape."
+Closes CLOUD-179"
 	drain "[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"CANDIDATES, not an adjudication"* ]]
 	[[ "$output" == *"board-move-guard"* ]]
+	# Landed is a fact about the COLUMN, never about completeness — that is
+	# `released`'s question and this must not appear to answer it.
+	[[ "$output" == *"released"* ]]
+}
+
+# The delegation carries CLOUD-804's precision through rather than re-deciding
+# it here. The fixture is verbatim from main's log on 2026-08-20, where it was
+# reported landed while the work sat in open PR #579.
+@test "a citation on main is not landed-unswept, through the delegation" {
+	land "feat(ci): verify the declared MSRV against the compiler it names
+
+on the newer compiler while the published claim quietly goes false. That is
+CLOUD-271's shape."
+	drain "[$(row CLOUD-271 2026-08-20T10:00:00.000Z feat/x 'https://github.com/o/r/pull/579')]"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"0 landed-unswept"* ]]
+}
+
+@test "a merged PR in the evidence lands a row with no closing key on main" {
+	land "fix(doctor): serialize the two repairs doctor's own graph races"
+	merged_pr CLOUD-201 339
+	drain "[$(row CLOUD-201 2026-08-20T10:00:00.000Z feat/x '')]"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-201"* ]]
 }
 
 @test "a clean board is exit 0 and says so" {
@@ -102,7 +136,7 @@ That is CLOUD-179's shape."
 @test "a row in another column is judged by neither verdict" {
 	land "feat: work
 
-Refs: CLOUD-179"
+Closes CLOUD-179"
 	drain '[{"id":"CLOUD-179","status":"In Review"}]'
 	[ "$status" -eq 0 ]
 }
@@ -213,7 +247,7 @@ Refs: CLOUD-179"
 	# for the rows that failed the ref test.
 	land "feat: work
 
-Refs: CLOUD-179"
+Closes CLOUD-179"
 	drain '[{"id":"CLOUD-179","status":"In Progress"}]'
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"landed-unswept"* ]]
@@ -226,7 +260,7 @@ Refs: CLOUD-179"
 	# carries a landed row that needs none.
 	land "feat: work
 
-Refs: CLOUD-179"
+Closes CLOUD-179"
 	drain '[{"id":"CLOUD-179","status":"In Progress"},{"id":"CLOUD-124","status":"In Progress"}]'
 	[ "$status" -eq 2 ]
 	[[ "$output" == *"CLOUD-124"* ]]
@@ -295,7 +329,7 @@ Refs: CLOUD-179"
 @test "both verdicts report together, each under its own label" {
 	land "feat: work
 
-Refs: CLOUD-179"
+Closes CLOUD-179"
 	drain "[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x ''),$(row CLOUD-124 2026-01-01T10:00:00.000Z feat/gone '')]"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"landed-unswept"* ]]
