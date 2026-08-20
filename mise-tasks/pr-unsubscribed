@@ -214,7 +214,12 @@ fi
 # And the fail-open must hold in the other direction. A `drop` that exits non-zero
 # on a status it did not like turns `land`'s first step into a wedge on every
 # clone whose session cannot reach the endpoint.
-#MUTANT drop-blocks-on-failure|s/^\techo "pr-unsubscribed: could not drop #\$pr's webhook subscription (\$1) — the manual path is unaffected"$/\tfail_input "could not drop #$pr ($1)"/|drop NEVER blocks
+# Anchored on BOTH tabs, because the line lives inside `give_up` inside the verb
+# block — a one-tab pattern matched nothing and `mutant` called it `inert`, which
+# is the right verdict and a quieter failure than an unappliable one. Anchored on
+# `echo` too, so the pattern cannot also rewrite this declaration line into a
+# top-level `fail_input` call.
+#MUTANT drop-blocks-on-failure|s@^\t\techo "pr-unsubscribed: could not drop.*@\t\tfail_input "could not drop"@|drop NEVER blocks
 if [ "$verb" = drop ]; then
 	give_up() { # give_up <pointer-only reason>
 		echo "pr-unsubscribed: could not drop #$pr's webhook subscription ($1) — the manual path is unaffected"
