@@ -1169,7 +1169,7 @@ rival_holds_for() { # <branch>
 }
 
 # ---------------------------------------------------------------------------
-# The receipt `ready-guard` reads (CLOUD-420 §4). Written from `swap`, which is
+# The receipt `ready-guard` reads (CLOUD-420 §3). Written from `swap`, which is
 # the lease's ONLY writer — acquire, renew, the heartbeat's steal path and
 # release all reach the remote through it — so one insertion covers every way
 # the lease can change hands, and no caller can take it without leaving one.

@@ -750,3 +750,89 @@ more hand-maintained thing to drift:
   nothing. Nothing gates this: a `PreToolUse` hook sees tool calls, not a
   reasoning step, the same limit CLOUD-200 records. Written down so the next
   survey inherits the question rather than the error.
+
+## PALM (ASE 2025), and the citation defect the survey found on the way
+
+Surveyed 2026-08-20 from a preprint on LLM-generated Rust unit tests, prompted
+under compiler feedback against MIR-derived path constraints. Four threads; three
+corroborate decisions already made here and **nothing was adopted from them**. The
+fourth found a live defect, and the useful part of this entry is which candidates
+the adoption test threw out.
+
+**What was load-bearing in the paper, and it is house-style §5 from outside.** The
+model is bounded by a computable artifact and adjudicated by a non-model oracle —
+rustc's exit code, then coverage instrumentation — looping until the oracle
+passes. Where it has no oracle, whether an assertion _means_ anything, it makes no
+claim at all, and its own threats-to-validity concede bug detection was out of
+scope. **The paper's weakest claim sits exactly where its oracle stops**, which is
+the transferable shape: an agent loop is worth what its non-model oracle is worth.
+
+**Corroborated, not adopted.** 72.30% average coverage against 70.94% for
+human-written tests, with 80 generated tests merged into open-source crates on
+that basis. That is this repo's threat model with numbers in it: coverage parity
+is reachable by a generator optimising compilation and coverage while asserting
+nothing about behaviour. It argues for keeping `[tasks.coverage]` a report and
+never a gate (CLOUD-111), and it is evidence on CLOUD-357 (`assertions-not-gutted`
+counts tokens) and CLOUD-480. The one gap nobody owned — CLOUD-418 excluded
+`crates/` from mutation proof — is now CLOUD-810.
+
+**Also corroborated: an acceptance count taken once and never re-measured.** The
+paper never checks whether the 80 merged tests still exist or still pass. This
+repo already splits merged from released (`landed-check`, `done-check`,
+CLOUD-192); the residue — nothing re-measures a claim after it lands — is
+CLOUD-633's shape.
+
+**Declined outright, and the reason is scope rather than merit.** The paper put 91
+machine-generated PRs into repos it does not own and says nothing about disclosing
+that; the precedent for how that ends is the UMN hypocrite-commits withdrawal,
+where the contributions were mass-reverted and the org banned, and rust-lang
+adopted an LLM policy on 2026-08-05 requiring disclosure and requiring tests.
+`attribution.rs` already models the two public surfaces as data. An
+_upstream-contribution_ posture — rules for contributing into a repo you do not
+own — is outside the scope reminder. Recorded so the next survey does not
+re-derive it.
+
+### The thread that found something, and it was not the thread it looked like
+
+The URL handed over was `arxiv.org/html/2506.09002v1`. v1 is superseded: the
+title changed, and the headline moved from 75.77% line coverage to 72.30%, with
+nothing at the v1 URL saying so. A stable pointer to a claim that moved — which
+generalises to **a coordinate into an authority the citer cannot see**, and
+`rules-drift` had already settled the shape for those: a claim that is PRESENT AND
+WRONG fails; an absent one stays free. Only the scope stopped at the repo boundary.
+
+Measured at `4183bc4`: 1,106 `§N` references in tracked files, pointing at **four**
+different things — 83 `house-style §N`, 49 `CLOUD-<n> §N` (20 distinct pairs, 17
+issues), 18 DoR/DoD clause refs qualified only by wording, 2 naming the attribution
+decision record. `ready-lint` already pays for that overload twice, anchoring on a
+label+tag pair because "the §N namespace is overloaded".
+
+CLOUD-420 was cited three times at a `§4` it does not have; the content meant is
+under its §3. CLOUD-809 is the gate, `mise-tasks/spec-ref-check`.
+
+Note the shape of that sentence: it names the key and the clause **apart**,
+because the gate cannot tell a citation from a description of one, and prose that
+documents a bad citation by reproducing it becomes an unfixable finding. The gate
+excludes only its own file and suite; everything else — this memory included —
+says it the long way.
+
+### Two candidates the adoption test threw out, which is why this entry exists
+
+- **A `house-style §N` existence predicate.** All 83 resolve. The issue first cited
+  CLOUD-244 and CLOUD-368 as instances and **neither is one**: CLOUD-244 is §2
+  disagreeing with the landed `SURFACE` (§2 exists, it said something wrong),
+  CLOUD-368 is §10 contradicting §0.3 (both exist). Content drift, not an absent
+  anchor. Citing them was CLOUD-794's mode 2 — _the anchor resolves but the fact
+  lives elsewhere_ — committed inside the issue filed to fix mode 2. Rule 1 holds:
+  no local failure, no adoption, **not even a cheap one**, and cheap was exactly
+  the argument that nearly carried it.
+- **A bare-`§N` ratchet**, the count non-increasing against `origin/main`. 1,020
+  name no target, but most are locally unambiguous, so the number is not a defect
+  count. Ratcheting it is `assertions-not-gutted` counting `assert` tokens — the
+  very anti-pattern the survey had just finished writing up. **A survey can import
+  the flaw it came to name**; the tell was that the metric was easy to compute and
+  nobody had said what a true positive looked like.
+
+The general form, since both rejections share it: **before shipping a count, say
+what a true positive is.** Neither candidate could, and the one predicate that
+survived names its own witness.

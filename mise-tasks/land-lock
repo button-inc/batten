@@ -456,7 +456,7 @@ swap() {
 	lease_receipt "${2:-}" || true
 }
 
-# `ready-guard`'s offline half (CLOUD-420 §4). The guard must not touch the
+# `ready-guard`'s offline half (CLOUD-420 §3). The guard must not touch the
 # network — it runs in a PreToolUse hook — so what it reads is this: the instant
 # this clone's lease expires, refreshed by every heartbeat. That makes the
 # receipt accurate to within one beat rather than to within one acquire.

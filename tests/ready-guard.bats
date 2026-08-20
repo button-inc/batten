@@ -43,7 +43,7 @@ receipts() {
 	mkdir -p "$RECEIPTS"
 	date -u +%FT%TZ >"$RECEIPTS/verify.$HEAD_SHA"
 	printf '%s' "${1:-$MAIN_SHA}" >"$RECEIPTS/linear-check.$HEAD_SHA"
-	# The landing lease (CLOUD-420 §4). Written by `land-lock`'s `swap` — its only
+	# The landing lease (CLOUD-420 §3). Written by `land-lock`'s `swap` — its only
 	# writer, so acquire, renew, the heartbeat's steal path and release all reach
 	# it — and refreshed on every beat, which is why a live one is the default here
 	# and a case that wants it absent or lapsed has to say so.
