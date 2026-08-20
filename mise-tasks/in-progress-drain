@@ -51,6 +51,23 @@
 # has stopped producing evidence — the framing `mem:workflow/landing-loop` records
 # for the lease's rolling TTL, one signal shallower.
 #
+# WHAT `updatedAt` CANNOT SEE, measured while first running this 2026-08-20 and
+# stated here because a reader will otherwise trust the bound further than it
+# goes. `updatedAt` advances on ANY write to the row — a label, a relation, a
+# comment — not only on evidence that the claim is alive. Adding `relatedTo`
+# links to CLOUD-469 in that same session reset CLOUD-124's timestamp from four
+# days stale to minutes old, and CLOUD-124 is one of the rows the verdict exists
+# to name. So a bulk edit launders a dead claim, and the drain then reports a
+# column cleaner than it is.
+#
+# It is still the right signal, because the alternatives are worse: `startedAt`
+# never moves and would call every long-running claim dead, and there is no
+# per-row heartbeat to read. What follows is that a ZERO here is weak evidence
+# where a non-zero is strong — this verdict can only ever under-report, never
+# over-report, which is the safe direction for a report that could otherwise
+# strand live work. Narrowing it to evidence-bearing writes needs a field the
+# tracker does not expose; that is a row of its own, not a knob.
+#
 # WHY THIS REPORTS AND NEVER MOVES (CLOUD-469 §2). A state change is a decision.
 # An automatic drain would rebuild CLOUD-186's defect from the other side: that
 # automation moves a row on a mere mention, and the damage was precisely that
