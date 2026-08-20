@@ -61,7 +61,7 @@
 # demanded a test that `--named` fails. It now forces the named set in the
 # DEFAULT path, which is the thing that must never happen and which `--named`
 # does not do.
-#MUTANT overlap-ignores-the-diff|s/^named_only = .*$/named_only = True/|the default mode intersects with the diff rather than reporting every named path
+#MUTANT overlap-ignores-the-diff|s/^named_only = .*$/named_only = True/|the default mode still intersects, so the same body reports nothing
 set -uo pipefail
 
 # `--named` reports what the body NAMES, with no diff term (CLOUD-774). The

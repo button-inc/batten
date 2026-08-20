@@ -86,12 +86,12 @@
 # The mutation stops asking the diff question at all, so every row records `-`
 # and `filed-here-check` reads "could not look" for a row filed straight over the
 # branch's own open files — phase 3 wired shut while every count still looks right.
-#MUTANT overlap-never-measured|s/^\t\toverlap=\$(printf .*$/\t\toverlap=-/|a row whose body names a tracked file records the paths it names
+#MUTANT overlap-never-measured|s/^\t\toverlap=\$(printf .*$/\t\toverlap=-/|a row whose body names a changed file records a non-zero overlap
 # The mutation drops `--named`, so the column falls back to the write-time
 # intersection — which is `0` for every row filed before its file is touched, the
 # defect CLOUD-774 exists to remove. Only a case that files with an EMPTY diff and
 # then checks can catch it.
-#MUTANT overlap-frozen-at-write-time|s@/board-diff-overlap" --named@/board-diff-overlap"@|a row filed before the diff exists still records the paths it names
+#MUTANT overlap-frozen-at-write-time|s@/board-diff-overlap" --named@/board-diff-overlap"@|A FILE THIS BRANCH HAS NOT TOUCHED IS STILL RECORDED
 set -uo pipefail
 
 #
