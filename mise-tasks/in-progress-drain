@@ -96,16 +96,6 @@ if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else
 	cannot_look "stdin is not a set of get_issue payloads (need id and status per issue)"
 fi
 
-# CLOUD-783's lesson, applied at construction rather than after a quiet sweep: a
-# projected-away key must be a NAMED refusal, never a rule that silently scans
-# nothing. `landed-check` needs only id and status; the abandoned half needs all
-# three of these, and a payload without them cannot answer it.
-for key in attachments gitBranchName updatedAt; do
-	missing=$(jq -r --arg k "$key" '[.[] | select(.status == "In Progress") | select(has($k) | not) | .id] | join(" ")' <<<"$issues")
-	[ -n "$missing" ] || continue
-	cannot_look "no \`$key\` on In Progress issue(s): $missing. The claimed-abandoned verdict reads that key, so a payload without it cannot answer — re-fetch with \`get_issue\` (\`list_issues\` cannot project \`attachments\`)."
-done
-
 today="${WIP_DRAIN_TODAY:-$(date -u +%Y-%m-%d)}"
 
 # --- the remote's branch names ------------------------------------------------
@@ -132,6 +122,25 @@ case "$landed_status" in
 *) cannot_look "landed-check could not judge the payload, so landedness is unknown and every row would read as abandoned. Its report: ${landed_report:-(none)}" ;;
 esac
 landed_ids=$(printf '%s\n' "$landed_report" | sed -n 's@^  \([A-Z][A-Z0-9]*-[0-9][0-9]*\)  In Progress -> In Review$@\1@p' | sort -u)
+
+# CLOUD-783's lesson, applied at construction rather than after a quiet sweep: a
+# projected-away key must be a NAMED refusal, never a rule that silently scans
+# nothing.
+#
+# DEMANDED OF THE ROWS ABOUT TO BE JUDGED, not of the column. A landed row is
+# already answered — `landed-check` decided it from `id` and `status` alone — and
+# demanding three more keys to re-answer it would refuse a sweep it has no
+# question about. That is the over-refusal twin of the silent scan, and it is
+# what makes the cheap staging possible at all: a projected `list_issues` over
+# the column, then `get_issue` only for the rows that failed the ref test.
+landed_json=$(jq -Rsc 'split("\n") | map(select(. != ""))' <<<"$landed_ids")
+unjudged=$(jq -c --argjson landed "$landed_json" \
+	'[.[] | select(.status == "In Progress") | select(.id as $i | $landed | index($i) | not) | .id]' <<<"$issues")
+for key in attachments gitBranchName updatedAt; do
+	missing=$(jq -r --arg k "$key" --argjson u "$unjudged" '[.[] | select(.id as $i | $u | index($i)) | select(has($k) | not) | .id] | join(" ")' <<<"$issues")
+	[ -n "$missing" ] || continue
+	cannot_look "no \`$key\` on unresolved In Progress issue(s): $missing. The claimed-abandoned verdict reads that key, so a payload without it cannot answer — re-fetch with \`get_issue\` (\`list_issues\` cannot project \`attachments\`)."
+done
 
 # --- the abandoned half -------------------------------------------------------
 in_refs() {

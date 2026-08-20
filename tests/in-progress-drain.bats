@@ -171,6 +171,34 @@ Refs: CLOUD-179"
 	[[ "$output" == *"CLOUD-124"* ]]
 }
 
+@test "a LANDED row is not demanded of those keys — it is already answered" {
+	# `landed-check` decides landedness from id and status alone. Demanding three
+	# more keys to re-answer a row it already resolved would refuse a sweep that
+	# has no question about it, and would break the cheap staging the issue
+	# specifies: a projected `list_issues` over the column, then `get_issue` only
+	# for the rows that failed the ref test.
+	land "feat: work
+
+Refs: CLOUD-179"
+	drain '[{"id":"CLOUD-179","status":"In Progress"}]'
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"landed-unswept"* ]]
+	[[ "$output" != *"::error:: in-progress-drain"* ]]
+}
+
+@test "an UNRESOLVED row missing a key is still exit 2, alongside a landed one" {
+	# The narrowing must not become a hole: a row the abandoned verdict has to
+	# judge still cannot be judged without its keys, even when the same payload
+	# carries a landed row that needs none.
+	land "feat: work
+
+Refs: CLOUD-179"
+	drain '[{"id":"CLOUD-179","status":"In Progress"},{"id":"CLOUD-124","status":"In Progress"}]'
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"CLOUD-124"* ]]
+	[[ "$output" != *"CLOUD-179"* ]]
+}
+
 @test "a row in another column is not demanded of those keys" {
 	# The keys are needed to judge a claim. A Done row is not being judged, so
 	# demanding them would refuse a sweep it has no question about — the
