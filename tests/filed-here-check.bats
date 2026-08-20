@@ -210,3 +210,165 @@ record() { printf '%s\n' "$@" >>"$RECORD"; }
 	[[ "$output" == *"1 row(s) filed"* ]]
 	[[ "$output" == *"2 comment(s)"* ]]
 }
+
+# --- the diff refusal (CLOUD-514, phase 3) -------------------------------------
+#
+# `filed-unrefined` prices REFINEMENT and its bound was stated honestly from the
+# day it shipped — "it does not compare the row to the diff". That bound was the
+# whole gap: a Ready block is prose, and prose is the currency an agent has
+# without limit. Measured 2026-08-20, four rows filed in three and a half minutes
+# and every one recorded `ready`.
+#
+# The fifth column is the recorder's `board-diff-overlap` reading, `<count>` then
+# the overlapping tracked paths.
+
+@test "a row naming a file this branch is changing stops the lap" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 crates/batten/src/git.rs"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff crates/batten/src/git.rs"* ]]
+}
+
+# THE OTHER DIRECTION (CLOUD-418). A refusal over every filed row is not a gate,
+# it is an outage, and this is the reading that separates the two.
+@test "a row naming only untouched files passes" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 0"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# THREE STATES HERE TOO. `-` is the recorder saying it could not look — no
+# `origin/main`, outside a checkout, a body the tracker did not return — and
+# reading it as a refusal turns a verdict about the environment into one about
+# the row.
+@test "a row the recorder could not measure passes" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready -"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# A RECORD WRITTEN BEFORE THIS COLUMN EXISTED HAS FOUR FIELDS. A branch cannot be
+# refused for a question its recorder was never able to ask, and the store lives
+# under `$GIT_DIR` where it cannot be migrated.
+@test "a four-field line predating the column is not refused" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+@test "every overlapping path is named, one pointer per line" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 2 a/one.rs b/two.rs"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff a/one.rs"* ]]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff b/two.rs"* ]]
+}
+
+# The two refusals are different facts about the same row and neither subsumes
+# the other, so a row can earn both and must report both.
+@test "a row that is both unrefined and over the diff reports both" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready 1 a/one.rs"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-unrefined"* ]]
+	[[ "$output" == *"CLOUD-900 filed-over-own-diff a/one.rs"* ]]
+}
+
+# LAST LINE WINS HERE TOO. The recorder writes a fresh line when a row this
+# branch filed is groomed, and a row rewritten to be about work elsewhere is the
+# second of the four remedies.
+@test "a later reading with no overlap supersedes an earlier one" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs" \
+		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready 0"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+@test "and a later reading WITH an overlap supersedes a clean one" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 0" \
+		"issue CLOUD-900 2026-08-19T01:00:00.000Z ready 1 a/one.rs"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"filed-over-own-diff a/one.rs"* ]]
+}
+
+# COMMENTS STAY UNGATED on this axis too. A comment on the row that already owns
+# the finding is sink 2 and the honest common case; pricing it pushes the
+# pressure toward silence.
+@test "a comment is never gated on the diff either" {
+	record "comment CLOUD-900 2026-08-19T00:00:00.000Z - 1 a/one.rs"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# THE REFUSAL HAS NO PROSE REMEDY, which is the load-bearing difference from
+# `filed-unrefined`: a Ready block is payable in typing and this is not.
+@test "the diff refusal names four remedies and none of them is writing more prose" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs"
+	run "$GATE"
+	[[ "$output" == *"Fix it here"* ]]
+	[[ "$output" == *"comment there"* ]]
+	[[ "$output" == *"after this lands"* ]]
+	[[ "$output" == *"BATTEN_FILED_HERE_OVERLAP=1"* ]]
+	[[ "$output" != *"ready-lint"* ]]
+}
+
+# POINTER, NEVER PAYLOAD (rule 4): a path is all the recorder ever wrote, so a
+# path is all this can name.
+@test "the diff refusal carries the id and one path and nothing else" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs"
+	run "$GATE"
+	[[ "$output" != *"2026-08-19T00:00:00.000Z"* ]]
+}
+
+# --- the override --------------------------------------------------------------
+#
+# Not folded into `BATTEN_FILED_HERE_BYPASS`: "this record is unreadable" and "I
+# meant to file this row against code I have open" are different decisions, and
+# the second is legitimate often enough — a row documenting the change you are
+# landing — to need a route that is not a blanket off-switch.
+
+@test "the override lets the diff refusal through" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs"
+	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# THE ONLY THING THAT MAKES IT WORTH HAVING. A blanket off-switch and a recorded
+# decision look identical to the branch and completely different to a reviewer.
+@test "the override records which rows it overrode" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs" \
+		"issue CLOUD-901 2026-08-19T00:00:00.000Z ready 1 b/two.rs"
+	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"BATTEN_FILED_HERE_OVERLAP"* ]]
+	[[ "$output" == *"CLOUD-900"* ]]
+	[[ "$output" == *"CLOUD-901"* ]]
+	run cat "$REPO/.git/batten-receipts/filed-here-overrides.work"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-900 CLOUD-901"* ]]
+}
+
+# It is the DIFF override, not a bypass: a row filed unrefined is still refused.
+@test "the override does not excuse an unrefined row" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready 1 a/one.rs"
+	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-900 filed-unrefined"* ]]
+	[[ "$output" != *"filed-over-own-diff"* ]]
+}
+
+# And it writes nothing when it overrode nothing — a receipt for a decision
+# nobody made reads as a decision somebody made.
+@test "the override records nothing when there was nothing to override" {
+	record "issue CLOUD-900 2026-08-19T00:00:00.000Z ready 0"
+	run env BATTEN_FILED_HERE_OVERLAP=1 "$GATE"
+	[ "$status" -eq 0 ]
+	[ ! -e "$REPO/.git/batten-receipts/filed-here-overrides.work" ]
+}

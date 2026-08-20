@@ -44,8 +44,24 @@
 # board does not have.
 #
 # POINTER-ONLY IS LOAD-BEARING HERE (non-negotiable 4), not decorative: the text
-# this reads is the entire issue body. Four fields reach the file — kind, id,
-# updatedAt, verdict — and nothing is ever printed.
+# this reads is the entire issue body. Five fields reach the file — kind, id,
+# updatedAt, verdict, and the diff overlap — and nothing is ever printed.
+#
+# THE FIFTH FIELD IS PHASE 3 (CLOUD-514), and it is what the first two phases
+# left out. The `verdict` column prices REFINEMENT: it asks whether the new row
+# was written to Ready. It cannot ask the question the issue's acceptance is
+# actually about — whether the row names code THIS BRANCH IS HOLDING OPEN —
+# because a Ready block is prose, and prose is the one currency an agent has
+# without limit. Measured 2026-08-20 on this branch: four rows filed in three and
+# a half minutes, twelve more spent writing four Ready blocks, and every one
+# recorded `ready`. The toll did not reverse the arithmetic; it certified it.
+#
+# So the overlap column records how many paths the row's body names that
+# `origin/main...HEAD` is also changing — `mise-tasks/board-diff-overlap`, which
+# owns the predicate and its measurement. It is recorded for a groom as well as a
+# create, for the same reason the verdict is: a later reading of the same row by
+# the same mechanism is simply the current one. Pointer-only holds by
+# construction there — only paths tracked in this repository can appear.
 #
 # FAILS OPEN AND SILENT on everything it cannot establish. A recorder that
 # blocked or noised a board write would cause the failure `finding-sink-check`
@@ -67,6 +83,10 @@
 # comment too, so an issue-key column fills with comment uuids and sink 2 becomes
 # unobservable while every count still looks right.
 #MUTANT comment-id-from-response|s/^if \[ "\$kind" = comment \]; then$/if false; then/|records the issue key its input names
+# The mutation stops asking the diff question at all, so every row records `-`
+# and `filed-here-check` reads "could not look" for a row filed straight over the
+# branch's own open files — phase 3 wired shut while every count still looks right.
+#MUTANT overlap-never-measured|s/^\t\toverlap=\$(printf .*$/\t\toverlap=-/|a row whose body names a changed file records a non-zero overlap
 set -uo pipefail
 
 #
@@ -218,10 +238,23 @@ if [ "$kind" = issue ]; then
 	fi
 fi
 
+# THE DIFF COLUMN. `-` is "could not look" here exactly as it is for the verdict:
+# outside a checkout, no `origin/main` to diff against, or a body the tracker did
+# not return. The description read is the tracker's RESPONSE, not the caller's
+# argument, so it is unforgeable for the same reason the verdict is.
+overlap=-
+if [ "$kind" = issue ]; then
+	description=$(jq -r '.description // empty' <<<"$row" 2>/dev/null) || description=""
+	if [ -n "$description" ]; then
+		overlap=$(printf '%s' "$description" | "$(dirname -- "${BASH_SOURCE[0]}")/board-diff-overlap" 2>/dev/null) || overlap=-
+	fi
+	[ -n "$overlap" ] || overlap=-
+fi
+
 mkdir -p "$git_dir/batten-receipts" 2>/dev/null || exit 0
 # Slashes are the one character a filename cannot carry; the substitution matches
 # every other branch-keyed receipt here.
 record="$git_dir/batten-receipts/board-writes.${branch//\//-}"
-printf '%s %s %s %s\n' "$kind" "$id" "$updated" "$verdict" >>"$record" 2>/dev/null || exit 0
+printf '%s %s %s %s %s\n' "$kind" "$id" "$updated" "$verdict" "$overlap" >>"$record" 2>/dev/null || exit 0
 
 exit 0

@@ -274,16 +274,28 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
 - `filed-here-check` is that stop's sibling, and the second half of CLOUD-514:
   `deferral-check` prices a decision left with no home, this prices a home opened
   instead of a fix. `board-write-record` (a `PostToolUse` body) records every row
-  this branch put on the board — kind, id, the tracker's `updatedAt`, and the
-  `ready-lint` verdict over the body the **tracker returned** — and `land` calls
-  this beside `deferral-check`, refusing when a row this branch CREATED was stored
-  `unready`. Three states rather than two: `ready` passes, `unready` refuses, and
+  this branch put on the board — kind, id, the tracker's `updatedAt`, the
+  `ready-lint` verdict over the body the **tracker returned**, and the diff
+  overlap — and `land` calls this beside `deferral-check`, refusing when a row
+  this branch CREATED was stored `unready`. Three states rather than two: `ready` passes, `unready` refuses, and
   `-` — the recorder could not lint — passes, because reading "not answered" as
   "refused" turns a verdict about the environment into one about the row.
   Comments are recorded and never gated: a comment on the row that already owns a
   finding is the honest common case, and pricing it pushes the pressure toward
-  silence, which is the failure `finding-sink-check` exists to catch. The verdict
-  is unforgeable by the author for the reason the receipt pattern usually is not —
+  silence, which is the failure `finding-sink-check` exists to catch.
+  **A second refusal prices PROXIMITY** (`filed-over-own-diff`, CLOUD-514 phase
+  3), because the first prices only refinement and a Ready block is prose —
+  measured, four rows filed in three and a half minutes and every one recorded
+  `ready`, so the toll certified the punts instead of reversing them. The
+  recorder's fifth column is `board-diff-overlap`: the tracked paths the row's
+  body names intersected with `origin/main...HEAD`, basenames resolved (exact
+  matching found none of the three real rows) and an ambiguous one resolving to
+  nothing. Non-zero stops the lap, and the load-bearing difference is that there
+  is **no prose remedy** — fix it here, comment on the row that owns it, file it
+  after landing from a clean tree, or `BATTEN_FILED_HERE_OVERLAP=1`, which
+  records which rows it overrode. It prices filing against **the diff** and
+  claims nothing wider: a punt about code the branch never touched is invisible
+  to it. The verdict is unforgeable by the author for the reason the receipt pattern usually is not —
   `ready-lint` over a payload the caller assembles was measured green three times
   against text in a local file, once under an id no row carried. Fails open on an
   absent record, and a branch predating the recorder can never have one: the store

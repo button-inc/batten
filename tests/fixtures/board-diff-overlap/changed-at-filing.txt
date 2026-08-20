@@ -1,0 +1,11 @@
+Cargo.lock
+Cargo.toml
+crates/batten/Cargo.toml
+crates/batten/src/git.rs
+crates/batten/tests/config_trust.rs
+fuzz/Cargo.lock
+mise-tasks/macos-link-check
+tests/fixtures/link-check/dormant-optional.json
+tests/fixtures/link-check/enabled-optional.json
+tests/fixtures/link-check/framework-crate.json
+tests/macos-link-check.bats

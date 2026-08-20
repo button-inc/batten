@@ -107,7 +107,7 @@ comment_event() {
 	[ "$status" -eq 0 ]
 	[ -f "$(record)" ]
 	run cat "$(record)"
-	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready" ]]
+	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready -" ]]
 }
 
 # THE ROW THIS DESIGN TURNS ON. `ready-lint`'s §8 rule cross-checks prose claiming
@@ -122,7 +122,7 @@ comment_event() {
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue "$body" CLOUD-1)"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" ready" ]]
+	[[ "$output" == *" ready -" ]]
 }
 
 @test "an unrefined row records a verdict of unready rather than being refused" {
@@ -130,7 +130,55 @@ comment_event() {
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
 	run cat "$(record)"
-	[[ "$output" == *" unready" ]]
+	[[ "$output" == *" unready -" ]]
+}
+
+# --- the diff column (CLOUD-514, phase 3) -------------------------------------
+#
+# The overlap is `-` everywhere above because a throwaway `git init` has no
+# `origin/main` to diff against — which is the fail-open reading, and the reason
+# every case that predates this column still holds. These two build the ref so
+# the column can carry a real answer, in both directions.
+with_diff() { # a branch whose diff against origin/main touches ONE tracked file
+	printf 'x\n' >"$REPO/keeper.rs"
+	printf 'y\n' >"$REPO/untouched.rs"
+	git -C "$REPO" add keeper.rs untouched.rs
+	git -C "$REPO" commit -q -m base
+	git -C "$REPO" update-ref refs/remotes/origin/main HEAD
+	git -C "$REPO" checkout -q -b work
+	printf 'x2\n' >"$REPO/keeper.rs"
+	git -C "$REPO" commit -q -am change
+}
+
+@test "a row whose body names a changed file records a non-zero overlap" {
+	with_diff
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'The bug is in keeper.rs:12.')"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 1 keeper.rs" ]]
+}
+
+# THE OTHER DIRECTION (CLOUD-418): a suite that only ever asserts the firing
+# cannot tell a working sensor from one that names every file in the repository.
+@test "a row naming only a file this branch never touched records a zero overlap" {
+	with_diff
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'The bug is in untouched.rs:12.')"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *" 0" ]]
+	[[ "$output" != *untouched.rs* ]]
+}
+
+# POINTER, NEVER PAYLOAD (non-negotiable 4). The recorder reads an entire issue
+# body; the only thing that may reach the file from it is a tracked path.
+@test "nothing from the body but a tracked path reaches the record" {
+	with_diff
+	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'keeper.rs leaks hunter2 for acct 00219.')"
+	[ "$status" -eq 0 ]
+	run cat "$(record)"
+	[[ "$output" == *keeper.rs* ]]
+	[[ "$output" != *hunter2* ]]
+	[[ "$output" != *00219* ]]
 }
 
 # An update is not a board write this branch is answerable for. Recording it
@@ -153,13 +201,13 @@ comment_event() {
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue 'Just a sentence, no Ready block.')"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == *" unready" ]]
+	[[ "$output" == *" unready -" ]]
 
 	run bash -c "'$REC' < $(event mcp__Linear__save_issue '' '' CLOUD-999)"
 	[ "$status" -eq 0 ]
 	[ "$(wc -l <"$(record)")" -eq 2 ]
 	run tail -1 "$(record)"
-	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready" ]]
+	[[ "$output" == "issue CLOUD-999 2026-08-13T00:00:00.000Z ready -" ]]
 }
 
 # The exception is narrow on purpose: it grants nothing a fresh create would not
@@ -209,7 +257,7 @@ comment_event() {
 	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment CLOUD-42)"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == "comment CLOUD-42 2026-08-13T00:00:00.000Z -" ]]
+	[[ "$output" == "comment CLOUD-42 2026-08-13T00:00:00.000Z - -" ]]
 }
 
 # The regression case, stated as a shape rather than a value: whatever a comment
@@ -236,7 +284,7 @@ comment_event() {
 	run bash -c "'$REC' < $(comment_event mcp__Linear__save_comment '' parentId)"
 	[ "$status" -eq 0 ]
 	run cat "$(record)"
-	[[ "$output" == "comment - 2026-08-13T00:00:00.000Z -" ]]
+	[[ "$output" == "comment - 2026-08-13T00:00:00.000Z - -" ]]
 }
 
 # CLOUD-178 measured the same connector under three names depending on the
