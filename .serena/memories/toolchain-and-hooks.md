@@ -326,6 +326,31 @@ Repairing an unpushed range is `git filter-branch --msg-filter 'sed -f <script>'
 <base>..HEAD` with the substitutions in a **file** — a `sed` expression written
 inline on the command line re-opens the same hole.
 
+## `.claude/.transcript.jsonl` is absent on a container's FIRST gate run
+
+Measured 2026-08-20, at one fixed HEAD with nothing else changed: with the
+symlink absent `mise run linear-check` exits **1** on
+`transcript: configured but not readable, so the rules that read it did not run`;
+recreate the symlink and the same command passes. So absent is a REFUSAL here,
+not the no-verdict outcome `batten.toml`'s `[transcript]` comment describes
+("resolves to `Capability::Absent` … changes no verdict"). One of the two is
+wrong; the comment and the behaviour disagree.
+
+Why it bites the first run specifically: `mise-tasks/stop-guard` is the only
+writer (`ln -sfn` from the Stop payload's `transcript_path`) and it fires at TURN
+END. A fresh container's first `verify`/`linear-check` therefore runs before any
+Stop hook has, which is precisely when an agent runs it. It reads as a rebase or
+a toolchain fault and costs turns before anyone looks at the symlink.
+
+Remedy in the moment — session-local, gitignored, the same target `stop-guard`
+would set, so it chooses no evidence:
+
+    ln -sfn ~/.claude/projects/<slug>/<session>.jsonl .claude/.transcript.jsonl
+
+Unfiled: the tracker was unreachable in the session that measured it
+(`mem:connector-allowlist-recovery`). It wants a row, and the fix is plausibly a
+`SessionStart` write beside the other things `session-start.sh` already asserts.
+
 ## The shell tasks' exit convention is the inverse of batten's
 
 Read before porting a `mise-tasks/*-check` program into the engine, or before
