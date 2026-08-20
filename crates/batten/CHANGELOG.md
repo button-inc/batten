@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.90](https://github.com/button-inc/batten/compare/v0.0.89...v0.0.90) - 2026-08-20
+
+### Fixed
+
+- *(git)* carry --end-of-options in resolve_ref, whose name comes from config
+- *(ratchet)* count the base side from tree bytes, not quoted ls-tree output
+
+### Other
+
+- *(git)* record which half of the module is in-process, and why
+
 ## [0.0.89](https://github.com/button-inc/batten/compare/v0.0.88...v0.0.89) - 2026-08-20
 
 ### Added
