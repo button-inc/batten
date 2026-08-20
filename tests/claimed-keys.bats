@@ -189,7 +189,14 @@ Measured against CLOUD-321.' </dev/null"
 
 # Replays the speculation's shape: the holder's keyed commit, then this branch's
 # own work on top, with the boundary between them named.
+# A KEYLESS BRANCH, which is what the incident ran on. `claimed-keys` ranks the
+# branch name above a `Refs:` trailer, so a fixture whose branch names an issue
+# answers from the branch under either arm and cannot discriminate — the first
+# version of these rows did exactly that and the mutation survived. The branch
+# that hit this in production was `claude/mcp-grants-bundle-xpji8t`, which carries
+# no key at all, and that is precisely why the adopted trailer got to decide.
 speculate_onto() { # speculate_onto <holder-commit-subject>
+	git checkout -q -b claude/keyless-bundle
 	commit "$1"
 	SPEC_BASE=$(git rev-parse HEAD)
 	commit "some work of this branch's own"
@@ -204,8 +211,10 @@ speculate_onto() { # speculate_onto <holder-commit-subject>
 Refs: CLOUD-718"
 	run bash -c "BATTEN_SPEC_BASE='$SPEC_BASE' '$KEYS' </dev/null"
 	[ "$status" -eq 0 ]
-	# The branch name still answers; the adopted key does not appear.
-	[ "$output" = "CLOUD-777" ]
+	# Nothing claims: the branch carries no key and the only keyed commit is the
+	# holder's. Under the mutation the range widens back and CLOUD-718 appears,
+	# which is the waiter racing the PR it is waiting on.
+	[ -z "$output" ]
 }
 
 @test "a key this branch authored is still claimed with a speculation live" {
