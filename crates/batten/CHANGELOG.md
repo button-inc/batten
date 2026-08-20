@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.91](https://github.com/button-inc/batten/compare/v0.0.90...v0.0.91) - 2026-08-20
+
+### Other
+
+- *(deps)* reach the constructor where it lives, and gate the pin that lied
+
 ## [0.0.90](https://github.com/button-inc/batten/compare/v0.0.89...v0.0.90) - 2026-08-20
 
 ### Fixed
