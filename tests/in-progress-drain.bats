@@ -343,3 +343,36 @@ Closes CLOUD-179"
 	drain "[$(row CLOUD-124 2026-01-01T10:00:00.000Z b ''),$(row CLOUD-9 2026-01-01T10:00:00.000Z a '')]"
 	[ "$output" = "$first" ]
 }
+
+# CLOUD-814: the drain gathers its own evidence when none is prepared, which is
+# what makes it runnable in a fresh clone. Every case above injects
+# DRAIN_MERGED_PRS and so never reaches this branch — that is what keeps the
+# suite offline — so the gather path needs its own case with the producer stubbed.
+@test "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" {
+	local stub="$BATS_TEST_TMPDIR/bin"
+	mkdir -p "$stub"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain" "$stub/in-progress-drain"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check" "$stub/landed-check"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys" "$stub/claimed-keys"
+	printf '#!/usr/bin/env bash\nprintf "CLOUD-179\\t42\\n"\n' >"$stub/merged-pr-keys"
+	chmod +x "$stub/merged-pr-keys"
+	land "fix: work with no closing key in the commit"
+	unset DRAIN_MERGED_PRS
+	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-179"* ]]
+}
+
+@test "a failed gather is could-not-look, never a short sweep" {
+	local stub="$BATS_TEST_TMPDIR/bin2"
+	mkdir -p "$stub"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain" "$stub/in-progress-drain"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check" "$stub/landed-check"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys" "$stub/claimed-keys"
+	printf '#!/usr/bin/env bash\nexit 2\n' >"$stub/merged-pr-keys"
+	chmod +x "$stub/merged-pr-keys"
+	unset DRAIN_MERGED_PRS
+	run bash -c "printf '%s' '[$(row CLOUD-179 2026-08-20T10:00:00.000Z feat/x '')]' | $stub/in-progress-drain"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"merged-pr-keys"* ]]
+}

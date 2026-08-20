@@ -178,12 +178,32 @@ now=$(daynum "$today")
 # Review" and exits 1; exit 0 is a clean board and exit 2 is could-not-look. Its
 # 2 is ours: if it cannot resolve `main`, neither half of this report is safe,
 # and the abandoned verdict in particular would call every landed row abandoned.
-# The merged-PR evidence is the caller's to supply and this task is a caller, so
-# it passes the flag straight through rather than deciding anything about it
-# (CLOUD-804). No default and no fallback: `landed-check` refuses without it, and
-# swallowing that here would rebuild the quiet short sweep it exists to stop.
+# The merged-PR evidence is the caller's to supply and this task is a caller
+# (CLOUD-804). `DRAIN_MERGED_PRS` names a prepared file; with none, this gathers
+# it via `merged-pr-keys` rather than refusing, which is what makes the drain
+# runnable in a fresh clone with no ad-hoc scripting (CLOUD-814 — the gap left by
+# shipping the consumer without a producer).
+#
+# GATHERING HERE IS NOT A CREDENTIAL LEAKING INTO A BOARD GATE. `landed-check` is
+# one of the six gh-free payload gates and stays untouched; this is the fetch
+# side of agents-fetch-gates-decide, and the fetch side is where a credential
+# belongs. The suite always injects `DRAIN_MERGED_PRS`, so no case reaches the
+# branch below and the suite stays offline.
+#
+# A failed gather is NOT swallowed into a short sweep: `merged-pr-keys` exits 2
+# on a truncated or empty forge answer, and that becomes this task's 2.
 drain_evidence=()
-[ -n "${DRAIN_MERGED_PRS:-}" ] && drain_evidence=(--merged-prs "$DRAIN_MERGED_PRS")
+if [ -n "${DRAIN_MERGED_PRS:-}" ]; then
+	drain_evidence=(--merged-prs "$DRAIN_MERGED_PRS")
+else
+	gathered="${TMPDIR:-/tmp}/merged-pr-keys.$$"
+	if ! "$here/merged-pr-keys" >"$gathered" 2>/dev/null; then
+		rm -f "$gathered"
+		cannot_look "no DRAIN_MERGED_PRS was set and \`merged-pr-keys\` could not gather the evidence itself. Run it directly to see why, or set DRAIN_MERGED_PRS to a prepared file."
+	fi
+	trap 'rm -f "$gathered"' EXIT
+	drain_evidence=(--merged-prs "$gathered")
+fi
 landed_report=$("$here/landed-check" "${drain_evidence[@]+"${drain_evidence[@]}"}" <<<"$issues" 2>&1)
 landed_status=$?
 case "$landed_status" in
