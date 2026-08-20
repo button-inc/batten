@@ -96,6 +96,65 @@ A finding was stated here and nothing durable was written. Go re-derive it and f
 	fi
 fi
 
+# THE THIRD RULE (CLOUD-774), AND IT IS LAST ON PURPOSE. It reports a state fact
+# rather than a phrasing tell: a row this branch filed names a file this branch is
+# changing, and the PR does not close it. `filed-here-check` already decides that
+# inside `land` — but `land` is where a runner is about to be spent, so the punt
+# surfaces at the most expensive moment available while the detection itself is a
+# `git diff --name-only` and a set intersection costing milliseconds. Running it
+# here puts the nudge at the end of the turn that created the punt, before any CI
+# minute is committed to it.
+#
+# PRECEDENCE IS EARNED, NOT ASSERTED. This file ranks its rules by MEASURED
+# precision — `hedged-flag-framing` leads at 3/3 against `finding-sink-check`'s
+# 1/1 — and this rule has no measurement yet, so it takes the bottom slot rather
+# than the top one its author would prefer. Revisit when it has a record.
+#
+# `--advisory` so a Stop hook can never block: exit 0 always, and the commit and
+# push path stays free, which is what survives a container reclaim.
+if [ -z "$reason" ]; then
+	filed="$(dirname -- "${BASH_SOURCE[0]}")/filed-here-check"
+	if [ -x "$filed" ]; then
+		# Pointer-only by that gate's own contract: an id and a tracked path, never
+		# a line of the row's body. stdin is closed rather than inherited, so no PR
+		# body reaches it here and no row is exempted by accident.
+		pointers=$("$filed" --advisory </dev/null 2>&1 >/dev/null) || true
+		# ONCE PER ROW PER BRANCH, and the reason is this file's own rule about not
+		# spending the channel. A Stop hook sees no PR body, so it cannot tell a
+		# punt from a row this branch is landing a fix for — and repeating the same
+		# pointer every turn for the rest of a session is precisely how "two nudges
+		# on one turn is how a channel stops being read" plays out over time. The
+		# turn the overlap first appears is the one that can still act cheaply,
+		# which is the whole point of moving this ahead of `land`.
+		#
+		# `land` is unaffected: `filed-here-check` there is the decision, it reads
+		# the PR body, and it does not consult this record.
+		if [ -n "$pointers" ]; then
+			seen_file=""
+			if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
+				branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) &&
+				[ -n "$branch" ] &&
+				mkdir -p "$git_dir/batten-receipts" 2>/dev/null; then
+				seen_file="$git_dir/batten-receipts/filed-here-nudged.${branch//\//-}"
+			fi
+			fresh=""
+			while IFS= read -r line; do
+				[ -n "$line" ] || continue
+				key=${line%% *}
+				if [ -n "$seen_file" ] && [ -f "$seen_file" ] && grep -qxF "$key" "$seen_file"; then
+					continue
+				fi
+				fresh="${fresh:+$fresh
+}$line"
+				[ -z "$seen_file" ] || printf '%s\n' "$key" >>"$seen_file" 2>/dev/null || true
+			done <<<"$pointers"
+			pointers=$fresh
+		fi
+		[ -z "$pointers" ] || reason="$pointers
+A row this branch filed names a file this branch is changing. Finish it now while the file is open, or make sure the PR body closes it when you land."
+	fi
+fi
+
 [ -n "$reason" ] || exit 0
 
 # The reply document, built without `jq` for the same reason the reads above

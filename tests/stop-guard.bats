@@ -8,6 +8,33 @@ setup() {
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/stop-guard"
 	SETTINGS="$BATS_TEST_DIRNAME/../.claude/settings.json"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
+	# THE THIRD RULE READS REPO STATE, NOT THE MESSAGE (CLOUD-774), and these cases
+	# run inside this checkout — so a punt row filed by the session running the
+	# suite would make every silence assertion below flap. Off by default through
+	# the gate's own bypass, and turned back on explicitly by the cases that are
+	# about it, which run against a throwaway repo instead.
+	export BATTEN_FILED_HERE_BYPASS=1
+}
+
+# `punt_repo <recorded-path>` — a throwaway repo carrying one filed row that names
+# a path the branch changes, which is the state the third rule exists to see.
+punt_repo() {
+	local repo="$BATS_TEST_TMPDIR/punt"
+	rm -rf "$repo"
+	mkdir -p "$repo/a" "$repo/.git"
+	git -C "$repo" init --quiet --initial-branch=work
+	git -C "$repo" config user.email t@example.com
+	git -C "$repo" config user.name t
+	printf 'x\n' >"$repo/a/one.rs"
+	git -C "$repo" add -A
+	git -C "$repo" commit -q -m base
+	git -C "$repo" update-ref refs/remotes/origin/main HEAD
+	printf 'changed\n' >>"$repo/a/one.rs"
+	git -C "$repo" commit -q -am change
+	mkdir -p "$repo/.git/batten-receipts"
+	printf 'issue CLOUD-900 2026-08-19T00:00:00.000Z ready 1 a/one.rs\n' \
+		>"$repo/.git/batten-receipts/board-writes.work"
+	printf '%s' "$repo"
 }
 
 # The real payload shape, captured from two live Stop invocations: 11 keys, of
@@ -195,4 +222,74 @@ for g in d['hooks']['Stop']:
     assert 'matcher' not in g, g
 print('no matcher')"
 	[ "$status" -eq 0 ]
+}
+
+# --- the punt rule (CLOUD-774) -------------------------------------------------
+
+@test "A FILED ROW NAMING THIS BRANCH'S OWN DIFF IS POINTED AT, BEFORE ANY CI" {
+	repo=$(punt_repo)
+	cd "$repo" || return 1
+	unset BATTEN_FILED_HERE_BYPASS
+	run stop 'Landed on main by fast-forward, CI green.'
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"CLOUD-900"* ]]
+	[[ "$output" == *"a/one.rs"* ]]
+}
+
+# POINTER, NEVER PAYLOAD — the same assertion the other two rules carry.
+@test "the punt pointer carries no prose from the row" {
+	repo=$(punt_repo)
+	cd "$repo" || return 1
+	unset BATTEN_FILED_HERE_BYPASS
+	run stop 'Landed on main by fast-forward, CI green.'
+	[[ "$output" != *"2026-08-19"* ]]
+	[[ "$output" != *"ready"* ]]
+}
+
+# ONE ADVISORY PER TURN, and this rule is last: a turn that also carries the
+# hedged-flag tell gets that one and not both.
+@test "the punt rule yields to the measured posture rule" {
+	repo=$(punt_repo)
+	cd "$repo" || return 1
+	unset BATTEN_FILED_HERE_BYPASS
+	run stop 'One thing I would flag: the retry budget looks wrong.'
+	[[ "$output" != *"CLOUD-900"* ]]
+}
+
+@test "a branch with no filed row is silent" {
+	repo=$(punt_repo)
+	rm "$repo/.git/batten-receipts/board-writes.work"
+	cd "$repo" || return 1
+	unset BATTEN_FILED_HERE_BYPASS
+	run stop 'Landed on main by fast-forward, CI green.'
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+# ONCE PER ROW PER BRANCH. A Stop hook sees no PR body, so it cannot tell a punt
+# from a row this branch is landing a fix for; repeating the pointer every turn is
+# how the channel stops being read. `land` is unaffected — the gate there reads the
+# body and does not consult this record.
+@test "the punt pointer fires once and then goes quiet for that row" {
+	repo=$(punt_repo)
+	cd "$repo" || return 1
+	unset BATTEN_FILED_HERE_BYPASS
+	run stop 'Landed on main by fast-forward, CI green.'
+	[[ "$output" == *"CLOUD-900"* ]]
+	run stop 'Landed on main by fast-forward, CI green.'
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "a second row still gets its own pointer after the first is spent" {
+	repo=$(punt_repo)
+	cd "$repo" || return 1
+	unset BATTEN_FILED_HERE_BYPASS
+	run stop 'Landed on main by fast-forward, CI green.'
+	[[ "$output" == *"CLOUD-900"* ]]
+	printf 'issue CLOUD-901 2026-08-19T00:00:00.000Z ready 1 a/one.rs\n' \
+		>>"$repo/.git/batten-receipts/board-writes.work"
+	run stop 'Landed on main by fast-forward, CI green.'
+	[[ "$output" == *"CLOUD-901"* ]]
+	[[ "$output" != *"CLOUD-900"* ]]
 }

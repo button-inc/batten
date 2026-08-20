@@ -125,6 +125,26 @@
 #MUTANT override-unrecorded|s/^\t\toverridden="\${overridden:+\$overridden }\$id"$/\t\toverridden="\$overridden"/|the override records which rows it overrode
 set -uo pipefail
 
+# `--advisory` RUNS THE SAME PREDICATE AND DECIDES NOTHING (CLOUD-774). The gate
+# lives inside `land`, which is where a runner is about to be spent — so the punt
+# surfaces at the most expensive moment available, after `verify`, when the
+# detection itself is a `git diff --name-only` and a set intersection costing
+# milliseconds. This mode is what lets the same computation run at the end of every
+# turn instead: it prints the pointers and exits 0, always, so nothing on the
+# commit or push path can be blocked by it.
+#
+# One implementation, not two. A second copy of the intersection would be a second
+# thing to drift, which is the defect this whole change is about.
+advisory=
+case "${1:-}" in
+--advisory) advisory=1 ;;
+"") ;;
+*)
+	echo "usage: filed-here-check [--advisory]  (PR body optional on stdin)" >&2
+	exit 2
+	;;
+esac
+
 [ -n "${BATTEN_FILED_HERE_BYPASS:-}" ] && exit 0
 
 # Outside a checkout there is no record and nothing to say. Same fail-open shape
@@ -322,7 +342,7 @@ if [ -n "$overridden" ]; then
 	echo "filed-here-check: diff overlap overridden (BATTEN_FILED_HERE_OVERLAP): $overridden"
 fi
 
-if [ "$overdiff" -ne 0 ]; then
+if [ "$overdiff" -ne 0 ] && [ -z "$advisory" ]; then
 	cat <<'REASON' >&2
 ::error:: filed-here-check: a row this branch filed names code this branch has open.
 
@@ -348,7 +368,7 @@ row's body names with `git diff --name-only origin/main...HEAD`.
 REASON
 fi
 
-if [ "$unrefined" -ne 0 ]; then
+if [ "$unrefined" -ne 0 ] && [ -z "$advisory" ]; then
 	cat <<'REASON' >&2
 ::error:: filed-here-check: a row this branch filed was never groomed to Ready.
 
@@ -368,6 +388,16 @@ Three ways forward, cheapest first:
 This judges no content and reads no tracker: it compares the verdict
 `board-write-record` stored at creation to `ready`.
 REASON
+fi
+
+# ADVISORY MODE DECIDES NOTHING (CLOUD-774). The pointers have already gone to
+# stderr through `report`; the long refusal blocks above are suppressed because a
+# nudge that reprints four remedies every turn is a channel nobody reads by the
+# third one. Exit 0 unconditionally: this runs at `Stop`, and a non-zero there
+# would put the punt check on the path that must stay free — committing and
+# pushing to a draft is what survives a container reclaim.
+if [ -n "$advisory" ]; then
+	exit 0
 fi
 
 [ "$violations" -eq 0 ] || exit 1
