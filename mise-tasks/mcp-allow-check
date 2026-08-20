@@ -35,11 +35,48 @@
 # because it spells a connector name the host has since changed, fails open and
 # silently. That distinction is the whole of its scope.
 #
-# Reads no network and no live MCP state — the settings file is the whole input,
-# so the same command answers the same way in a hook, on CI, and in a test.
+# Reads no network. The first three predicates take the settings file as their
+# whole input, so they answer the same way in a hook, on CI, and in a test; the
+# fourth (CLOUD-684) reads which servers this session attached and is gated
+# behind `--session` for exactly that reason.
+#
+# The declared exemption `hook-pin-check` honours, beside the assertion it
+# describes rather than in a list that could drift from it.
+#MUTANT allow-check-ignores-attachment|s/^\t\tgrep -qxF "\$rule_server" <<<"\$attached" \&\& continue$/\t\tcontinue/|while the session registered an identifier
+#PIN-OK: jq
 set -euo pipefail
 
-settings="${1:-.claude/settings.json}"
+# REGISTERED BY PATH on `UserPromptSubmit`, which does not get mise's env, so the
+# pinned `jq` becomes whatever the ambient PATH offers — or nothing. Every read
+# below falls back through `2>/dev/null`, so an absent jq would report a clean
+# settings file while checking none of it. That is the trade CLOUD-479 refuses:
+# a latency fix must not turn a pinned dependency into a silent fail-open.
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: mcp-allow-check: no jq on PATH — every read here would fail into a silent pass, so this gate is checking NOTHING. Run it through \`mise run mcp-allow-check\`, or install jq." >&2
+	exit 2
+fi
+
+# TWO SCOPES IN ONE FILE, and the flag is what keeps them apart. The first three
+# predicates are pure functions of the committed settings — properties of the
+# COMMIT, so they belong in the hk gate and in CI. The fourth reads which servers
+# this session attached, a property of the WORLD, and a commit gate that consulted
+# it would fail a branch for something the branch did not cause
+# (.claude/rules/toolchain.md, "which of the two it is"). So `--session` is
+# required to run it, and only the `UserPromptSubmit` registration passes it.
+session=0
+settings=".claude/settings.json"
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--session)
+		session=1
+		shift
+		;;
+	*)
+		settings="$1"
+		shift
+		;;
+	esac
+done
 
 # A missing or unparseable settings file is not this gate's business to
 # adjudicate; pkl-check and the JSON tooling own that. Fail open, loudly enough
@@ -188,5 +225,95 @@ while IFS= read -r rule; do
 	report "$rule — a deny on a host-supplied connector, whose exposed name the host chooses per registration episode (CLOUD-178). No suffix-matching guard covers \`$suffix\`, so this rule reads as a prohibition and enforces nothing the moment the connector comes back under a different name."
 done < <(jq -r '[.permissions.deny // [] | .[] | select(type == "string")] | .[]' "$settings")
 
-[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, and every deny on a host-supplied connector is backed by a suffix-matching guard"
+# --- an ALLOW rule naming a server that never attached (CLOUD-684) -----------
+#
+# The third predicate above judges a DENY that under-matches. This is its allow
+# counterpart, and the reason it can exist now when the header above says the
+# connector-name question "cannot be verified from the repo alone" is that the
+# session now offers a name-preserving source: the generated MCP config the host
+# writes per session, which keys every attached server by the identifier it
+# actually registered under.
+#
+# NOT THE LOG TREE, though CLOUD-684's Ready block says to read it. That is the
+# trap `mcp-attach-check`'s own header documents at length: `mcp-logs-<server>`
+# replaces every non-alphanumeric run with a hyphen, so `Claude_Code_Remote`
+# lands as `mcp-logs-Claude-Code-Remote` and a predicate comparing a rule's
+# server segment against those directory names reads the CORRECT spelling as a
+# misspelling. It fired, was read as confirmation, and the "fix" broke five
+# working allow rules and both denies (CLOUD-665, reverted the same day). That
+# header names the sources that DO preserve the name — "the tool names the
+# session actually exposes, or the injected MCP config" — and this reads the
+# second. The deviation is recorded on the issue rather than left to be
+# rediscovered.
+#
+# ONE READER, DECLARED RATHER THAN REIMPLEMENTED, which is what §1 actually
+# asks for: `mcp-grant-sync --attached` is the single definition of "which
+# identifiers are live", and `--resolve` the single definition of "which
+# committed label means which of them". Both are the projection's own
+# computation, exposed. A second definition of attached is the thing to avoid,
+# not a second file.
+#
+# WHY A PROJECTED RULE IS NOT INERT, and this is the difference between a gate
+# that can be closed and one that can only be switched off. A committed rule for
+# a host-supplied connector can NEVER name the live identifier — that is the
+# whole defect, and it is not fixable by editing the rule (a UUID-pinned
+# allowlist goes inert at the next reattach). So "names something not attached"
+# alone is a verdict no edit can ever satisfy. What CAN be satisfied is "and
+# nothing carries it": `mcp-grant-sync` re-projects the committed rule onto the
+# live identifier at session start, and a rule it could place is being enforced.
+# A rule that is neither live nor placeable is the finding — dead config, or a
+# glob-only label the projection has no literal tool to resolve by.
+#
+# Fails open with no live session — CI, a bare checkout, a different harness —
+# because an attached-server set is a property of the WORLD, not of the commit
+# (.claude/rules/toolchain.md's split), and a gate that cannot look must never
+# report a verdict it did not compute.
+#
+# Pointer-only per non-negotiable rule 4: the server segment and a count. Never
+# the tool segment — an MCP allow list names third-party surfaces.
+sync="$(dirname "$0")/mcp-grant-sync"
+attached=""
+carried=""
+if [ "$session" = 1 ] && [ -x "$sync" ]; then
+	# STDIN CLOSED, for the reason the `--covers` probe above closes it: a reader
+	# that does not understand the flag must not be left waiting on a payload
+	# that will never come.
+	# The SAME settings file this gate is judging, or `carried` would answer about
+	# the repo's real rules while the verdict is about a fixture's.
+	# The SAME settings file this gate is judging, or `carried` would answer about
+	# the repo's real rules while the verdict is about a fixture's. Which
+	# generated config the reader reads is `BATTEN_MCP_CONFIG`'s to say.
+	attached=$("$sync" --settings "$settings" --attached </dev/null 2>/dev/null || true)
+	carried=$("$sync" --settings "$settings" --resolve </dev/null 2>/dev/null | cut -f1)
+fi
+
+if [ -n "$attached" ]; then
+	seen_labels=""
+	while IFS= read -r rule; do
+		[ -n "$rule" ] || continue
+		case "$rule" in
+		mcp__*) ;;
+		*) continue ;;
+		esac
+		rule_server=${rule#mcp__}
+		rule_server=${rule_server%%__*}
+		# A glob in the server segment is the FIRST predicate's finding, already
+		# reported above; naming it twice would double-count one defect.
+		case "$rule_server" in
+		*'*'*) continue ;;
+		esac
+		# One finding per LABEL, not per rule: six rules naming one dead label are
+		# one thing to fix.
+		grep -qxF "$rule_server" <<<"$seen_labels" && continue
+		seen_labels="${seen_labels}${rule_server}
+"
+		# A declared server keeps the name this repo gave it.
+		grep -qxF "$rule_server" <<<"$declared" && continue
+		grep -qxF "$rule_server" <<<"$attached" && continue
+		grep -qxF "$rule_server" <<<"$carried" && continue
+		report "$rule_server — no server attached under this name this session and the projection could not place it, so every rule naming it grants nothing (CLOUD-684)"
+	done < <(jq -r '.[]' <<<"$allows")
+fi
+
+[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, every allow rule names a server this session can enforce it for, and every deny on a host-supplied connector is backed by a suffix-matching guard"
 exit "$fail"

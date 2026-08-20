@@ -91,8 +91,19 @@ fi
 settings=".claude/settings.json"
 mcp_json=".mcp.json"
 overlay=".claude/settings.local.json"
-config=""
+# The seam the suites use, in the shape `hook-pin-check` already established for
+# the same reason: a fixture must not inherit whatever is attached to the session
+# running the tests. `--config` still wins over it.
+config="${BATTEN_MCP_CONFIG:-}"
 dry_run=0
+# THE READER TWO GATES SHARE (CLOUD-684). `--attached` prints the server
+# identifiers this session actually registered, one per line; `--resolve` prints
+# `<committed label>\t<identifier>` for every label this projection could place.
+# Both are the same computation the projection already performs, exposed rather
+# than reimplemented — `mcp-allow-check` asks whether a committed rule names
+# something live, and a second definition of "attached" is what its sibling
+# gate's own header forbids. Neither mode writes anything.
+mode=project
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--settings)
@@ -115,8 +126,16 @@ while [ $# -gt 0 ]; do
 		dry_run=1
 		shift
 		;;
+	--attached)
+		mode=attached
+		shift
+		;;
+	--resolve)
+		mode=resolve
+		shift
+		;;
 	*)
-		echo "usage: mcp-grant-sync [--settings F] [--mcp-json F] [--config F] [--overlay F] [--dry-run]" >&2
+		echo "usage: mcp-grant-sync [--settings F] [--mcp-json F] [--config F] [--overlay F] [--dry-run|--attached|--resolve]" >&2
 		exit 2
 		;;
 	esac
@@ -140,7 +159,11 @@ if [ ! -f "$settings" ]; then
 	exit 0
 fi
 if [ -z "$config" ] || [ ! -r "$config" ]; then
-	echo "mcp-grant-sync: no generated MCP config — not a live session, nothing to project"
+	# A reader answers with an EMPTY SET rather than a sentence: its caller is a
+	# gate deciding whether a name is live, and prose on stdout would read as a
+	# server called "mcp-grant-sync:".
+	[ "$mode" = project ] &&
+		echo "mcp-grant-sync: no generated MCP config — not a live session, nothing to project"
 	exit 0
 fi
 if ! inventory=$(jq -c '[(.mcpServers // {}) | to_entries[] | {id: .key, tools: [((.value.tools // [])[] | .name)]}]' "$config" 2>/dev/null); then
@@ -163,9 +186,15 @@ declared=$( (
 	jq -r '(.mcpServers // {}) | keys[]' "$mcp_json" 2>/dev/null
 ) | sort -u)
 
+if [ "$mode" = attached ]; then
+	printf '%s\n' "$server_ids"
+	exit 0
+fi
+
 labels=$(jq -r '.[] | .rule | select(startswith("mcp__")) | sub("^mcp__"; "") | split("__")[0]' <<<"$rules" | sort -u)
 
 projected=""   # newline-separated `<kind> <rule>` pairs
+resolved=""    # newline-separated `<label>\t<identifier>` pairs, for --resolve
 touched_ids="" # server id prefixes that received a projection
 counts_allow=0
 counts_deny=0
@@ -230,6 +259,8 @@ for label in $labels; do
 		continue
 	fi
 	id="${matches[0]}"
+	resolved="${resolved}${label}	${id}
+"
 	touched_ids="${touched_ids}${touched_ids:+ }${id:0:8}"
 
 	while IFS=$'\t' read -r kind tool; do
@@ -244,6 +275,11 @@ for label in $labels; do
 		emit "$id" "$tool"
 	done < <(jq -r '.[] | [.kind, (.rule | split("__") | .[2:] | join("__"))] | @tsv' <<<"$label_rules")
 done
+
+if [ "$mode" = resolve ]; then
+	printf '%s' "$resolved"
+	exit 0
+fi
 
 new_allow=$(printf '%s' "$projected" | awk '$1 == "allow" {print $2}' | jq -R . | jq -sc .)
 new_deny=$(printf '%s' "$projected" | awk '$1 == "deny" {print $2}' | jq -R . | jq -sc .)

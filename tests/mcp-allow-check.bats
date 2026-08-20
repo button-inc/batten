@@ -6,6 +6,11 @@
 setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mcp-allow-check"
 	FIXTURE="$BATS_TEST_TMPDIR/settings.json"
+	# The fourth predicate reads the session's generated MCP config, found by
+	# glob when nothing says otherwise. Point every case at a path that does not
+	# exist, so a fixture cannot inherit whatever is attached to the session
+	# running the suite; the cases that mean to exercise it write one there.
+	export BATTEN_MCP_CONFIG="$BATS_TEST_TMPDIR/mcp-config.json"
 }
 
 # Writes a settings fixture whose permissions.allow is the given JSON array.
@@ -191,4 +196,103 @@ denies() {
 	denies '["Bash(rm -rf *)"]'
 	run "$GATE" "$FIXTURE"
 	[ "$status" -eq 0 ]
+}
+
+# --- the fourth predicate: an allow rule naming a server that never attached ---
+#
+# CLOUD-684. The attached set comes from the generated MCP config, read through
+# `mcp-grant-sync --attached` so the two gates share one definition of the name —
+# never from the log tree, whose directory names are sanitized and lossy
+# (CLOUD-665). `--config` points the reader at a fixture so these cases do not
+# assert about whatever is attached to the session running them.
+
+# A generated MCP config in the host's shape: server keys are the identifiers
+# actually registered, each with the tool inventory that identifies it.
+attached_config() { # attached_config <server-id> <tool>...
+	local id="$1"
+	shift
+	local tools="[]"
+	for t in "$@"; do
+		tools=$(jq -c --arg t "$t" '. + [{name: $t, permission_policy: "always_ask"}]' <<<"$tools")
+	done
+	jq -n --arg id "$id" --argjson tools "$tools" \
+		'{mcpServers: {($id): {type: "http", url: "https://api.example.invalid/mcp", headers: {authorization: "Bearer s3cr3t"}, tools: $tools}}}' >"$BATTEN_MCP_CONFIG"
+}
+
+@test "an allow rule naming a server that attached under that exact name passes" {
+	allow '["mcp__github__create_pull_request"]'
+	attached_config github create_pull_request
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+# THE DISCRIMINATOR (CLOUD-418, and CLOUD-684 §7b): the rule names the label, the
+# session registered a generated identifier, and no projection can place it
+# because a glob names no tool to identify the server by. This is the shape that
+# ships today and that no existing case can express.
+@test "an allow rule naming a label while the session registered an identifier is inert" {
+	allow '["mcp__Linear__*"]'
+	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue save_issue
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Linear"* ]]
+	[[ "$output" == *"grants nothing"* ]]
+}
+
+# The same label, one literal tool named beside the glob: now the projection can
+# identify the server by a tool name, so the grant is carried onto the live
+# identifier and the rule is not inert. This is the closable half — without it
+# the predicate would be a verdict no edit could ever satisfy, since a committed
+# rule cannot name an identifier that rotates.
+@test "a label the projection can place is not inert" {
+	allow '["mcp__Linear__*","mcp__Linear__get_issue"]'
+	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue save_issue
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a declared server is never judged inert — its name is the repo's own" {
+	enabled '["serena"]' '["mcp__serena__*"]'
+	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the inert finding carries no tool name, URL or header value" {
+	allow '["mcp__Linear__*"]'
+	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue save_issue
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"get_issue"* ]]
+	[[ "$output" != *"save_issue"* ]]
+	[[ "$output" != *"http"* ]]
+	[[ "$output" != *"s3cr3t"* ]]
+}
+
+# Six rules naming one dead label are one thing to fix, not six.
+@test "one finding per label, not per rule" {
+	allow '["mcp__Gone__alpha","mcp__Gone__beta","mcp__Gone__gamma"]'
+	attached_config 4db58e41-cd4e-4818-8922-46cf616593f4 get_issue
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[ "$(grep -c -- 'Gone' <<<"$output")" = "1" ]
+}
+
+# FAILS OPEN where it cannot look. An attached-server set is a property of the
+# world, and CI has no MCP session — a gate that reported inert there would fail
+# every rule in the file for a reason that is not about the commit.
+@test "no generated config means no verdict — the predicate is skipped, not assumed" {
+	allow '["mcp__Linear__*"]'
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+# The existing predicate is untouched by the new one: an enabled server with no
+# grant is still that finding, not an inert-rule finding.
+@test "an enabled server with no grant keeps its own verdict" {
+	enabled '["serena"]' '["mcp__github__create_pull_request"]'
+	attached_config github create_pull_request
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"every call to it prompts"* ]]
 }
