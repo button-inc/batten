@@ -9,7 +9,18 @@
 setup() {
 	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/finding-sink-check"
 	T="$BATS_TEST_TMPDIR/transcript.jsonl"
-	cd "$BATS_TEST_DIRNAME/.." || return 1
+	# CLOUD-775. The check now resolves a row's COLUMN from a read receipt under
+	# `$GIT_DIR`, so this suite must own the git dir it reads. Running in this
+	# repo's checkout — which is what stood here — would let a live session's
+	# receipts decide a case, and in the direction that matters: a real read of
+	# some open row would make a case pass for a reason the case never states.
+	# Same trap and same remedy as `tests/issue-read-check.bats`.
+	REPO="$BATS_TEST_TMPDIR/repo"
+	mkdir -p "$REPO"
+	git -C "$REPO" init --quiet
+	cd "$REPO" || return 1
+	RECEIPTS="$REPO/.git/batten-receipts"
+	mkdir -p "$RECEIPTS"
 }
 
 # One record per line, the shape the harness actually writes. `prompt` opens a
@@ -25,6 +36,21 @@ result() { jq -nc '{type:"user",isSidechain:false,message:{content:[{type:"tool_
 # `tool` above passes `input:{}`, so every existing row here is the id-less shape
 # and keeps its meaning unchanged.
 tool_with_id() { jq -nc --arg n "$1" '{type:"assistant",isSidechain:false,message:{content:[{type:"tool_use",name:$n,input:{id:"CLOUD-199"}}]}}' >>"$T"; }
+# CLOUD-775. Field 5 of the read receipt: the column `issue-read-check` saw when
+# this clone read the row. `-` is "the payload carried no status", which is a
+# different fact from "no receipt exists" and must reach the same verdict — that
+# is the whole safety direction, so both are rows below.
+read_receipt() { # read_receipt <key> <status-field>
+	printf '%s %s %s %s %s\n' "$1" "2026-08-20T00:00:00.000Z" "$(date -u +%s)" "-" "$2" \
+		>"$RECEIPTS/issue-read.$1"
+}
+# A call naming a row that already exists. `save_issue` names it `id`; a comment
+# names it `issueId`, and unless both resolve the column never reaches the exact
+# call CLOUD-475 was written about.
+tool_on_row() { # tool_on_row <tool-name> <field> <key>
+	jq -nc --arg n "$1" --arg f "$2" --arg k "$3" \
+		'{type:"assistant",isSidechain:false,message:{content:[{type:"tool_use",name:$n,input:{($f):$k}}]}}' >>"$T"
+}
 sub() { jq -nc --arg t "$1" '{type:"assistant",isSidechain:true,message:{content:[{type:"text",text:$t}]}}' >>"$T"; }
 sub_tool() { jq -nc --arg n "$1" '{type:"assistant",isSidechain:true,message:{content:[{type:"tool_use",name:$n,input:{}}]}}' >>"$T"; }
 
@@ -241,4 +267,39 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	run check
 	[ "$status" -eq 1 ]
 	[ -n "$output" ]
+}
+
+# --- CLOUD-775: the discriminator ---------------------------------------------
+#
+# THE PAIR IS THE POINT, and it is written before either gate moves. A fix that
+# silences BOTH rows is a regression wearing a fix's clothes: the first is
+# CLOUD-475's true positive, the second is the symmetric case the `has("id")`
+# proxy was always wrong about. Confirmed against the gate as it stood: the
+# terminal row already reported, the non-terminal one reported too — red.
+
+@test "CLOUD-775: an annotation on a TERMINAL row still reports — CLOUD-475 survives" {
+	# The case the whole rule exists for, now decided on the column the read saw
+	# rather than on the shape of the call. A comment onto the Done issue that
+	# shipped the defect is durably recorded and permanently unscheduled.
+	read_receipt CLOUD-199 done
+	prompt
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	tool_on_row "mcp__Linear__save_comment" issueId CLOUD-199
+	run check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"turn:1 finding-without-durable-write"* ]]
+}
+
+@test "CLOUD-775: an amendment to a NON-TERMINAL row is a home" {
+	# The other half. Adding the finding to a row that is still open schedules it:
+	# the board carries it, a sweep visits it, `done-check` gates it. The proxy
+	# reported this as a stranding, which is the false positive that gets a gate
+	# bypassed and then enforces nothing.
+	read_receipt CLOUD-199 in-progress
+	prompt
+	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	tool_on_row "mcp__Linear__save_issue" id CLOUD-199
+	run check
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
 }
