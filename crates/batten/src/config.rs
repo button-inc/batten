@@ -371,6 +371,67 @@ pub fn parse(text: &str, source: &str) -> Result<Config> {
     Ok(config)
 }
 
+/// Keys a **past** engine accepted and this one has retired, with the issue that
+/// retired each.
+///
+/// `deny_unknown_fields` is total on [`Config`], which is right for the working
+/// tree and wrong for a config read out of a git ref: the base was written under
+/// whatever engine landed it, so a key this build has since retired makes the
+/// whole file unparseable and [`parse_base`]'s caller reports "could not look"
+/// about a file nobody can fix. That is not a hypothetical — it is what retiring
+/// a key COSTS, measured on CLOUD-780: the change that removes `[worktree]`
+/// cannot land, because `config lint` judges it against an `origin/main` that
+/// still declares it, and no edit to either side resolves that.
+///
+/// A hand-kept census rather than a blanket leniency, and the difference is the
+/// point: an unknown key that was never a Batten key is still refused in a base
+/// ref exactly as in the working tree, so this buys the one case it names and
+/// nothing else. A row may be dropped once no supported base can carry it.
+///
+/// Retirement is also why nothing is lost by ignoring these: the key names no
+/// policy this build can read, so a comparison that cannot see it is not missing
+/// a verdict it could otherwise have reached.
+pub const RETIRED_KEYS: &[(&str, &str)] = &[(
+    "worktree",
+    "CLOUD-780: the pileup predicate and `worktree reclaim` retired with the git \
+     primitives they rested on",
+)];
+
+/// Parse a `batten.toml` read from a **git ref**, tolerating the keys
+/// [`RETIRED_KEYS`] names and nothing else.
+///
+/// [`trust::load_base`] is the one funnel every out-of-band config load passes
+/// through ([`crate::lint`], [`crate::epoch`], [`crate::resolve`]'s
+/// `--config-from`), so this is where the version skew between a ref and this
+/// build is answered — once, rather than per caller.
+///
+/// The stripped table is re-serialized and handed to [`parse`], so there is one
+/// validation path rather than two that could disagree. The accepted cost, and
+/// the only one: a schema error in a base config is attributed to `source`
+/// without its original line span, because the span belongs to bytes that no
+/// longer exist. A caller reading such an error is looking at a ref, not at a
+/// file they are editing.
+///
+/// # Errors
+///
+/// As [`parse`], plus a [`UsageError`] (→ exit `1`) when `text` is not TOML at
+/// all.
+///
+/// [`trust::load_base`]: crate::trust::load_base
+pub fn parse_base(text: &str, source: &str) -> Result<Config> {
+    let mut table: toml::Table = toml::from_str(text)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    // Nothing is reported when a key is dropped: the report this feeds is a
+    // comparison of two policies, and "the base declared a key this build no
+    // longer has" is a fact about the build rather than about either policy.
+    for (key, _why) in RETIRED_KEYS {
+        table.remove(*key);
+    }
+    let text = toml::to_string(&table)
+        .map_err(|err| UsageError::raise(format!("invalid config {source}: {err}")))?;
+    parse(&text, source)
+}
+
 /// The override surface: exactly what `batten.local.toml` may carry.
 ///
 /// A **second type**, not a second reading of [`Config`], and that is the whole
@@ -1081,6 +1142,48 @@ mod tests {
     fn unknown_key_is_a_usage_error() {
         let err = parse("version = 1\nbogus = true\n", "test").unwrap_err();
         assert!(is_usage_error(&err), "unknown key must be a usage error");
+    }
+
+    #[test]
+    fn a_retired_key_is_tolerated_in_a_base_ref_and_refused_in_the_working_tree() {
+        // The asymmetry IS the mechanism (CLOUD-780). A ref carries the config
+        // the engine of its day accepted; the working tree is judged by this
+        // one. Collapsing the two in either direction breaks something: refusing
+        // the base makes retiring a key unlandable, and tolerating the working
+        // tree makes a retired key silently inert in the file an author edits.
+        let text = "version = 1\n[worktree]\npileup_threshold = 3\n";
+
+        let base = parse_base(text, "origin/main:batten.toml")
+            .expect("a base carrying a retired key is still comparable");
+        assert_eq!(base.version, SUPPORTED_VERSION);
+
+        let err = parse(text, "batten.toml").unwrap_err();
+        assert!(
+            is_usage_error(&err),
+            "the working tree gets no such tolerance"
+        );
+    }
+
+    #[test]
+    fn a_base_ref_gets_no_tolerance_for_a_key_that_was_never_ours() {
+        // The census is what keeps this from being blanket leniency: only the
+        // keys `RETIRED_KEYS` names are dropped, so a typo in a base ref is the
+        // usage error it has always been.
+        let err = parse_base("version = 1\nbogus = true\n", "origin/main:batten.toml").unwrap_err();
+        assert!(is_usage_error(&err));
+    }
+
+    #[test]
+    fn every_retired_key_names_the_issue_that_retired_it() {
+        // A row nobody can date is a row nobody can drop, and dropping them once
+        // no supported base carries the key is how this list stays short.
+        for (key, why) in RETIRED_KEYS {
+            assert!(!key.is_empty(), "a retired key needs a name");
+            assert!(
+                why.contains("CLOUD-"),
+                "{key}: a retirement names the issue that decided it, got {why:?}"
+            );
+        }
     }
 
     #[test]

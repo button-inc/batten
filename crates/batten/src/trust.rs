@@ -79,7 +79,10 @@ use crate::waiver;
 /// about the *invocation*, never a policy verdict.
 pub fn load_base(dir: &Path, reference: &str) -> Result<Config> {
     let text = git::show(dir, reference, config::CONFIG_FILE)?;
-    config::parse(&text, &format!("{reference}:{}", config::CONFIG_FILE))
+    // `parse_base`, never `parse`: a ref carries the config the engine of its
+    // day accepted, and a key THIS build has retired must not make the whole
+    // comparison unreadable (`config::RETIRED_KEYS`).
+    config::parse_base(&text, &format!("{reference}:{}", config::CONFIG_FILE))
 }
 
 /// What kind of weakening a [`Weakening`] is, as a stable identifier.
