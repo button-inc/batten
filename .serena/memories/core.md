@@ -274,6 +274,25 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   `0` clean/allow, `1` usage, `2` the policy verdict — a `check` violation and a
   `hook` deny alike — `3` internal. The numbering makes fail-open structural, and
   a unit test asserts no failure code equals the deny code.
+- `facts.rs` — the fact model (CLOUD-757): what a fact **costs** and where it may
+  be **resolved**, as two independent axes rather than one ladder. `Cost`
+  (free/read/effect/stateful) prices resolution; `Surface` (hook/check/
+  verify-only) names the NARROWEST surface it may be resolved on. Independent
+  because the bound that bars forge state from the mediated path is CLOUD-747's
+  no-runtime assertion, not the price — forge facts are `read` x `verify-only`,
+  the pair a one-axis model cannot express. `Class::meet` composes on BOTH axes
+  (CLOUD-773): a derived fact is at most as cheap as its most expensive input and
+  at most as wide as its narrowest, so a `read`-class rule cannot silently
+  inherit an `effect`-class dependency. Every match is exhaustive with no
+  wildcard arm — the compiler gives totality, `tests/facts.rs`'s source scan
+  gives no-wildcard, because `_ => Cost::Free` compiles happily and classifies
+  every future fact as cheap. Each fact's class is a stated `const` beside it and
+  `Fact::class` returns that const rather than recomputing. `Look` states the
+  three-valued contract once — is / is-not / **could not look** — which is what
+  `hook::ReceiptFacts`'s `None` has meant since it shipped. `Surface::Check` is
+  the tree-surface boundary NAMED WHILE STILL EMPTY: everything `adjudicate`
+  consumes today is hook-resolvable, and the second axis exists for the facts
+  that are not landed yet.
 - `doctor.rs` — `batten doctor` (CLOUD-66), house-style §12's post-install
   self-check: can Batten do its job in this repository? Diagnoses only — it
   **never returns exit 2**, because every failure it can report (config absent,
