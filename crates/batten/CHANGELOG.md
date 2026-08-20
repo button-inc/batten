@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.89](https://github.com/button-inc/batten/compare/v0.0.88...v0.0.89) - 2026-08-20
+
+### Added
+
+- *(receipt)* [**breaking**] judge the claim receipt with one predicate, not two
+- *(trust)* compare every config key the census demanded a verdict for
+
+### Fixed
+
+- *(tests)* gate the StateHome import to unix, where its only callers are
+- *(config)* consult --config-from before the working file on every surface
+- *(git)* read the config ref in-process, so the ref is not argv
+
+### Other
+
+- *(receipt)* pin the -J document to the keying it judged
+- *(receipt)* pin both readers to one verdict, and the stale row that was green
+- *(trust)* split the comparison in two so each half stays readable
+- *(trust)* a both-directions case per compared key, and one that reaches the verb
+- *(trust)* fail on any config field with no weakening verdict
+- *(deps)* land the bot's PRs unattended, and retire the second bot
+
 ## [0.0.88](https://github.com/button-inc/batten/compare/v0.0.87...v0.0.88) - 2026-08-19
 
 ### Added
