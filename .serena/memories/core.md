@@ -424,27 +424,32 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   the bug. `upstream_of_head` therefore asks about a bare `@{upstream}` with no
   branch name interpolated, so there is no caller-influenced token in the argv
   and omitting the flag costs nothing.
-  **Mid-migration to in-process git (CLOUD-320's row, resolved to `gix` on a
-  measurement — CLOUD-718).** Two backends coexist here ON PURPOSE, and only
-  here: `gix_is_confined_to_this_module` is what stops the new one spreading
-  across the crate while the rest of the module still shells out. `show` is the
-  slice that landed — it opens the repository with `gix::open::Options::
-isolated()` (which declines system, global and environment config outright,
-  replacing the named-variable scrub structurally) and reads its blob through a
-  tree lookup. Three defects closed as consequences rather than as care: a ref
-  spelling an option cannot be argv so cannot write a file, a `<ref>:<dir>`
-  cannot return a listing for `[epoch] tracked` to hash as content, and
-  "unresolvable ref" and "path absent at that ref" became two answers rather than
-  one hedged message — the distinction CLOUD-720 builds last-known-good on. The
-  remaining slices are CLOUD-738 (ref/object reads, where the trap above is
-  DELETED rather than maintained), CLOUD-739 (patch identity on `gix-diff` +
-  `sha2`, which takes `DIFF_CONFIG`'s 20 keys and `DIFF_FLAGS`' 6 flags with it,
-  and is where the real behavioural risk sits) and CLOUD-740 (status, worktrees,
-  writes; then `no_second_git_invoker_exists` becomes "the crate spawns no
-  `git`"). `git2` is excluded by `macos-link-check` rule 1 — and that exclusion
-  is a COST, not a constraint: cross-linking Darwin frameworks needs an SDK the
-  build declines because macOS runners bill at 10x on a private repo, which
-  CLOUD-737 revisits when the repo goes public.
+  **Two backends, and the line between them is a DECISION, not an unfinished
+  migration (CLOUD-320's `git.rs` row).** `gix_is_confined_to_this_module` keeps
+  the in-process half from spreading across the crate. Read the module doc for
+  the full split; the rule is: **in-process only where a library makes a defect
+  unrepresentable.** Two qualified — `show`, whose argv carried a caller's ref so
+  `--config-from --output=<path>` made a `read` verb write a file (CLOUD-718),
+  and `count_at_rev`, which parsed `ls-tree` under the host's `core.quotePath` so
+  a ratchet spanning a non-ASCII path reported clean while a test was deleted
+  (CLOUD-749, CLOUD-328's class on a second axis). `show` also closed the
+  `<ref>:<dir>` tree listing and split "unresolvable ref" from "path absent at
+  that ref", which is what CLOUD-720 builds last-known-good on.
+  **Everything else stays shelled out, measured rather than deferred**, and
+  CLOUD-738/739/740 are closed on these grounds rather than pending: the other
+  reads take fixed argv with no caller token; `landing`'s two admitted defects
+  are INERT (a `PatchId` is only compared against one from the same binary in the
+  same run, and the whitespace collision biases safe), so rewriting what
+  `worktree`/`baseline`/`stop`/`receipt` rest on is risk with no return; and
+  `worktrees`/`stash_create` stay because gix 0.86 has **no `prunable` concept
+  and no stash API**, so re-deriving would make Batten a second answer to a
+  question git owns — CLOUD-46's deferral, and "adopt prior art; don't expand the
+  core". The latency case was measured and does not carry it: `key_facts` is the
+  only mediated-path spawn site, 6.7ms of a 100ms budget on two command shapes.
+  `git2` is excluded by `macos-link-check` rule 1 — a COST, not a constraint:
+  cross-linking Darwin frameworks needs an SDK the build declines because macOS
+  runners bill at 10x on a **private** repo, which CLOUD-737 revisits when the
+  repo goes public.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via
   `etcetera`; the segment derived at runtime, never baked in (rule 1). Since
   CLOUD-296 the segment is `<dir-name>-<12 hex>`, not the bare directory name: the

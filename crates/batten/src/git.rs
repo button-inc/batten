@@ -24,6 +24,41 @@
 //!
 //! # Merged-ness (CLOUD-36)
 //!
+//! # Two backends, and where the line is (CLOUD-320's `git.rs` row)
+//!
+//! Part of this module answers in-process through `gix`, part shells out, and
+//! the split is a **decision with measurements behind it** rather than a
+//! migration someone abandoned half-done. `gix_is_confined_to_this_module` keeps
+//! the in-process half from spreading across the crate.
+//!
+//! **In-process, because each had a defect a library makes unrepresentable.**
+//! [`show`] read a caller's ref out of argv, so `--config-from
+//! --output=<path>` made a `read`-effect verb write a file (CLOUD-718).
+//! [`count_at_rev`] parsed `ls-tree` under the host's `core.quotePath`, so a
+//! ratchet spanning a non-ASCII path reported clean while a test was deleted
+//! (CLOUD-749) — CLOUD-328's failure class on a second axis.
+//!
+//! **Shelled out, because migrating buys nothing an agent can observe.** The
+//! remaining reads take fixed argv with no caller-supplied token, or sit in
+//! `rev-parse`'s ref-PRINTING modes where the `--end-of-options` trap below
+//! lives and no caller string reaches the command line anyway. `landing` and
+//! patch identity stay too: the two defects their comments admit to are
+//! **inert** — the zlib instability cannot bite because a `PatchId` is only ever
+//! compared against one from the same binary in the same run, and the whitespace
+//! collision is deliberate and biases toward the safe answer — so rewriting the
+//! primitive that `worktree`, `baseline`, `stop` and `receipt` all rest on would
+//! be risk with no return. `worktrees` and `stash_create` stay because **git is
+//! the authority**: gix has no `prunable` concept and no stash API at all
+//! (measured against gix 0.86), and re-deriving either would make Batten a
+//! second answer to a question git already owns, which is what CLOUD-46's
+//! deferral exists to prevent and what the house rule "adopt prior art; don't
+//! expand the core" forbids.
+//!
+//! The latency argument for migrating more was measured and does not carry it:
+//! the only spawns on the mediated-call path are `key_facts`', and they cost
+//! **6.7ms** on a **100ms** budget for the two `requires_key` command shapes
+//! alone (`gh pr create`, `gh pr ready`) — a handful of calls per session.
+//!
 //! This module is also where "did this work land?" is answered, because every
 //! `git` process the crate spawns is spawned here — `no_second_git_invoker`
 //! below is the gate that keeps a second git-touching module, and therefore a

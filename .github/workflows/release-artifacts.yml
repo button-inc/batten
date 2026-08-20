@@ -11,7 +11,20 @@ name: release-artifacts
 #
 # EVERY LEG RUNS ON ubuntu-latest, deliberately — macOS included. GitHub bills
 # macOS runners at 10x and Windows at 2x on a private repo; this workflow uses
-# neither. `rustup target add` installs only the standard library, so each
+# neither.
+#
+# THAT IS A COST, NOT A CONSTRAINT, and the distinction is load-bearing because
+# the cost expires: GitHub-hosted runners are free and unmetered on PUBLIC
+# repositories, and the 10x multiplier applies to a private repo's
+# Linux-equivalent minute allowance. So the day this repository goes public
+# (CLOUD-585) the input that produced this whole strategy changes, and with it
+# the SDK question below, `macos-link-check`'s rule 1, and whether the Darwin
+# artifacts can be executed on Darwin at all (CLOUD-364). CLOUD-737 owns that
+# re-decision. Read this paragraph as pricing rather than as a limit — a later
+# reader being told a private-repo price about a public repo is the specific
+# mistake it exists to prevent.
+#
+# `rustup target add` installs only the standard library, so each
 # non-native target needs a LINKER supplied, which is what the two wrappers do:
 #
 #   cross     builds inside a per-target container carrying that target's
