@@ -173,8 +173,7 @@
       "mcp__Linear",
       "mcp__Linear__*",
       "mcp__Linear__get_issue",
-      "mcp__serena__*",
-      "mcp__github__unsubscribe_pr_activity"
+      "mcp__serena__*"
     ],
     "deny": [
       "mcp__Claude_Code_Remote__send_later",

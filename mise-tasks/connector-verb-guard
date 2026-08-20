@@ -27,12 +27,6 @@
 # WHAT IT DECIDES, and every one is an existing AGENTS.md rule rather than a new
 # one this file invents:
 #
-#   unsubscribe_pr_activity   ALLOW  — dropping a subscription only ever narrows
-#                                      what reaches the session, and `land`'s
-#                                      `pr-unsubscribed` gate REQUIRES the drop
-#                                      before a runner is spent. An enforced path
-#                                      that prompts on every PR is a path that
-#                                      gets worked around instead of satisfied.
 #   subscribe_pr_activity     DENY   — "No heartbeats … to babysit a PR."
 #   send_later                DENY   — "No heartbeats (`send_later`/Routines/
 #   create_trigger            DENY     timers) to babysit a PR … the ban is on
@@ -44,54 +38,81 @@
 # the other way — into a prompt a human sees — which is why `mcp-allow-check`'s
 # new predicate binds denies and not allows.
 #
-# THE SUBSTRING HAZARD, AND WHICH DEFENCE ACTUALLY CARRIES IT.
+# THE ALLOW ARM IS GONE, AND ITS REMOVAL IS THE FINDING (CLOUD-790). This file
+# used to pre-approve `unsubscribe_pr_activity`, on the reasoning that dropping a
+# subscription only narrows what reaches the session and that `land`'s
+# `pr-unsubscribed` gate requires the drop before a runner is spent — so it must
+# never wait on an approval. The reasoning was sound and the mechanism did not
+# work. CLOUD-765 measured that a claude.ai connector's per-tool control set to
+# `ask` prompts in every permission mode and that **a `PreToolUse` hook returning
+# `allow` does not skip that prompt**; this session's injected config sets every
+# toolbox tool, `unsubscribe_pr_activity` among them, to `always_ask`. So the arm
+# asserted an authority it did not hold, and a human paid one approval click per
+# landing while believing the file had removed it.
+#
+# What replaced it is an actor, not a louder claim: `pr-unsubscribed drop` makes
+# the call from a task, over the session-ingress-authenticated `/github/mcp`
+# route, where no permission control applies because no tool call is mediated. A
+# verb no agent needs to call needs no pre-approval, and an agent that calls it by
+# hand should see the prompt the connector is in fact going to show.
+#
+# `ALLOW_SUFFIXES` stays as an empty declaration rather than being deleted
+# outright, because `--covers-allow` publishes it to `mcp-allow-check`, whose
+# CLOUD-790 predicate refuses any suffix listed there that the live connector does
+# not set to `always_allow`. Re-adding a verb here is therefore gated by the same
+# measurement that removed this one, instead of by whoever reads this header.
+#
+# THE SUBSTRING HAZARD, AND WHAT NOW CARRIES IT ALONE.
 # `unsubscribe_pr_activity` ENDS WITH `subscribe_pr_activity`, so an unbounded
-# `*subscribe_pr_activity` test matches BOTH and denies the very call this file
-# exists to free — identical to the hazard `closing-key-check` records against
-# its own `DO-NOT-CLOSE` marker, where "the opt-out was unusable exactly when it
-# was written correctly, and it failed as the inverse of the author's intent
-# rather than as a refusal, which is the silent direction."
+# `*subscribe_pr_activity` test matches BOTH and denies a call this file has no
+# verdict on — identical to the hazard `closing-key-check` records against its own
+# `DO-NOT-CLOSE` marker, where "the opt-out was unusable exactly when it was
+# written correctly, and it failed as the inverse of the author's intent rather
+# than as a refusal, which is the silent direction."
 #
-# Two independent defences, and the first is the structural one: the deny arm is
-# LEFT-BOUNDED on `__`, so `…__unsubscribe_pr_activity` cannot match
+# There used to be two defences here and the allow arm was the redundant one. The
+# structural defence is the only one left and always was the mechanism: the deny
+# arm is LEFT-BOUNDED on `__`, so `…__unsubscribe_pr_activity` cannot match
 # `*__subscribe_pr_activity` at all — the boundary character is `u`, not `s`.
-# Testing the allow arm FIRST is the second, and it is redundancy rather than the
-# mechanism. Said plainly because an earlier draft of this header claimed the
-# ordering was what carried it, and the mutation run disproved that: with the
-# allow arm deleted the unsubscribe rows fail by going UNDECIDED, never by being
-# denied. Neither defence alone is observable through the other, which is why the
-# suite carries a row for the bound (`…_v2`, `resubscribe_…`) as well as the
-# ordering.
-#
-# ALLOW IS A DECISION HERE, not an omission, and it is why this is a by-path guard
-# rather than a `batten.toml` row. The engine models `Decision::Allow` as "emit
-# nothing, exit 0", which leaves the ordinary permission flow to prompt. Actually
-# pre-approving needs `hookSpecificOutput.permissionDecision: "allow"` on stdout,
-# a variant the engine has no representation for. That is a capability gap on
-# CLOUD-312's ledger — a missing decision variant, not a missing rule kind.
+# With the allow arm gone the suite's bound rows (`…_v2`, `resubscribe_…`, and
+# `unsubscribe_pr_activity` under both spellings) are load-bearing rather than
+# corroborating: they are what stands between this file and denying the wrong verb.
 #
 # Pointer-only (non-negotiable 4): the decision names the verb and the rule, never
 # the payload.
 #
 # `--covers` prints the tool suffixes this file decides, one per line, so
 # `mcp-allow-check` can bind a deny rule to its coverage without grepping this
-# file's `case` statements. One authority per fact.
+# file's `case` statements. One authority per fact. `--covers-allow` prints the
+# ALLOW half alone, which is the half a connector control can silently override —
+# see the CLOUD-790 note above.
 #
 # Exit 0 always — a guard renders its verdict in the JSON, never in the status.
 # FAILS OPEN on everything it cannot establish, and on BATTEN_CONNECTOR_VERB_BYPASS=1.
 #
-# The mutation drops the allow arm, so an unsubscribe falls through UNDECIDED and
-# the approval prompt this file exists to remove comes back. Every deny row still
-# passes under it — only the unsubscribe rows can catch it, which is what makes
-# them the suite's spine and why they are written under both spellings.
-#MUTANT unsubscribe-not-preapproved|s@^ALLOW_SUFFIXES=.*@ALLOW_SUFFIXES=""@|an unsubscribe must be pre-approved, not merely left to the permission flow
+# The mutation re-adds the removed allow arm, which is the regression CLOUD-790
+# cost a human one click per landing: the suffix reads as pre-approved here while
+# the connector prompts anyway. Only an unsubscribe row can catch it — every deny
+# row passes under it — which is why those rows stay in the suite under both
+# spellings even though this file no longer decides them.
+#MUTANT unsubscribe-repreapproved|s@^ALLOW_SUFFIXES=""@ALLOW_SUFFIXES="unsubscribe_pr_activity"@|a verb the connector sets to ask is not claimed as pre-approved
 set -uo pipefail
 
-ALLOW_SUFFIXES="unsubscribe_pr_activity"
+# Empty by measurement, not by omission — see the CLOUD-790 note above. Anything
+# added here must be a verb the live connector sets to `always_allow`, and
+# `mcp-allow-check` refuses the commit if it is not.
+ALLOW_SUFFIXES=""
 DENY_SUFFIXES="subscribe_pr_activity send_later create_trigger"
 
 if [ "${1:-}" = "--covers" ]; then
 	for suffix in $ALLOW_SUFFIXES $DENY_SUFFIXES; do
+		printf '%s\n' "$suffix"
+	done
+	exit 0
+fi
+
+if [ "${1:-}" = "--covers-allow" ]; then
+	for suffix in $ALLOW_SUFFIXES; do
 		printf '%s\n' "$suffix"
 	done
 	exit 0
@@ -127,12 +148,14 @@ decide() {
 	exit 0
 }
 
-# ALLOW FIRST. See the order note above: the deny suffix is a substring of this
-# one, so testing the other way round denies what this exists to permit.
+# ALLOW FIRST, and the loop is empty today. Kept ahead of the deny arm so a suffix
+# added back here cannot be caught by the deny arm's substring on its way in — the
+# ordering was never the defence against that (the `__` bound is), but a reader
+# adding a verb should not have to know which of the two is load-bearing.
 for suffix in $ALLOW_SUFFIXES; do
 	case "$tool" in
 	*__"$suffix" | "$suffix")
-		decide allow "connector-verb-guard: $suffix is pre-approved. Dropping a PR subscription only narrows what reaches this session, and \`mise run land\` refuses to land a PR whose subscription is still armed — so this must never wait on an approval. Record the drop afterwards: mise run pr-unsubscribed record <pr>."
+		decide allow "connector-verb-guard: $suffix is pre-approved by .claude/settings.json's committed policy, applied here by tool-name suffix so the verdict survives the exposed server name changing."
 		;;
 	esac
 done

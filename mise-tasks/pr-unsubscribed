@@ -17,36 +17,47 @@
 # ONE CI verdict. A review bot re-delivers its entire walkthrough comment on every
 # edit, so the price per event is the size of the largest comment on the PR.
 #
-# THE ACTOR DESIGN IS BLOCKED, AND THIS IS NOT IT (CLOUD-673). The obvious
-# mechanism is for `land` to make the call itself: `unsubscribe_pr_activity` is a
-# tool on the session's toolbox MCP server, an `http` endpoint under
-# `/v2/ccr-sessions/` carrying no bearer token, so a JSON-RPC `tools/call` looks
-# like a plain POST a task could make. It cannot. Measured 2026-08-18, that POST
-# is answered `401 authentication required` — at the toolbox endpoint and at the
-# `github` one, with the injected config's own header values, and identically when
-# forced through `$HTTPS_PROXY`. `no_proxy` carries `anthropic.com`, so requests to
-# that host bypass the agent proxy entirely and nothing injects a credential; the
-# two headers are routing identifiers, not authorization. A first cut of this
-# change shipped that POST anyway, behind a fail-open, and it removed exactly zero
-# subscriptions while its suite stayed green against a stubbed `curl` — a mechanism
-# that reads as coverage and is not, which is CLOUD-418's defect rebuilt by hand.
+# THE ACTOR DESIGN IS NOT BLOCKED, AND `drop` IS IT (CLOUD-790). CLOUD-673
+# concluded a task cannot reach the tool, from a `401 authentication required`
+# measured 2026-08-18 at the toolbox endpoint and at the `github` one, with the
+# injected config's own header values and identically when forced through
+# `$HTTPS_PROXY`. **That 401 was a missing `Authorization` header, not a missing
+# credential.** `mem:session-transcript-access` measured the container's own
+# session-ingress token authenticating `POST /v2/ccr-sessions/<id>/mcp` the next
+# day, and this file's reading was never revisited against it.
 #
-# SO THIS IS `claim-check`'s INVERSION, borrowed wholesale from
-# `issue-search-check` which borrowed it first: **the agent can do what the task
-# cannot.** The session's own tool call succeeds — that is how #397, #402 and #489
-# were each remedied — so the agent unsubscribes, this records that it happened
-# for THIS pull request in THIS session, and `land` refuses to spend a runner
-# until the record exists. The rule stops being prose and becomes an exit code,
-# without pretending to an effect nothing here can produce.
+# RE-MEASURED 2026-08-20, with `$CLAUDE_SESSION_INGRESS_TOKEN_FILE` as a bearer:
 #
-# THE HONEST LIMIT, stated because it will occur to every reader: this proves the
-# CALL WAS MADE for this PR, not that GitHub's subscription state is now empty.
-# Only the API can answer the latter and reaching it is CLOUD-673. The claim
-# receipt has the identical property — it attests that a read happened, not that
-# it was understood — and that was accepted there deliberately. The threat model
-# is honest error, not fabrication (AGENTS.md): an agent that pastes invented text
-# defeats this, and is outside it. What the gate forces is the ACTION, and the
-# action is the whole failure mode.
+#   POST /v2/ccr-sessions/<id>/mcp                          400 toolbox_mcp_server_id required
+#   POST /v2/ccr-sessions/<id>/mcp?toolbox_mcp_server_id=…  403 MCP server not allowed
+#   POST /v2/ccr-sessions/<id>/github/mcp                   200 — 55 tools
+#
+# `unsubscribe_pr_activity` is in that list, with input schema
+# `{owner, repo, pullNumber}` — every field `land` already holds. The toolbox
+# route stays shut to a worker principal and the **github** route is open, which
+# is the detail no re-reading of the old measurement would have produced:
+# CLOUD-673 probed `/github/mcp` too, but with no `Authorization` header, so both
+# routes answered identically and the difference between them was invisible.
+#
+# WHY THIS IS WORTH A POST RATHER THAN A TIDIER GATE. The agent-side call cannot
+# be pre-approved. The connector sets `unsubscribe_pr_activity` to `always_ask`,
+# and CLOUD-765 measured that such a tool prompts in every permission mode and
+# that a `PreToolUse` hook returning `allow` does not skip it. So the previous
+# design put a human click on the critical path of every landing, while the
+# harness ARMS the subscription with no click and no tool call at all — the
+# asymmetry a human finally objected to, and the whole of CLOUD-790.
+#
+# `record` SURVIVES AS THE FALLBACK, unchanged, and `check` is untouched. Where
+# `drop` cannot look — no injected config, no token file, no `curl`, any non-200 —
+# it prints the status and mints nothing, and `check` then demands the agent's own
+# tool call exactly as before. A fail-open actor in front of an unchanged gate is
+# the only shape that cannot make things worse than the day before it landed.
+#
+# THE HONEST LIMIT, narrower now but still real: a 200 from `tools/call` proves
+# the API accepted the call for THIS pull request, not that GitHub's subscription
+# state is observably empty. The threat model is honest error, not fabrication
+# (AGENTS.md). What the gate forces is the ACTION, and the action is the whole
+# failure mode.
 #
 # WHY IT FAILS OPEN OFF-HARNESS, and why that is the design rather than a caveat.
 # No injected client config means no session, therefore no subscription, therefore
@@ -63,6 +74,7 @@
 # in the filename, and the session half is why a fresh clone correctly refuses.
 #
 # Usage:
+#   mise run pr-unsubscribed drop <pr>     # makes the call itself; fails open
 #   mise run pr-unsubscribed record <pr>   # unsubscribe_pr_activity's answer on stdin
 #   mise run pr-unsubscribed check <pr>
 #
@@ -97,8 +109,8 @@ verb="${1:-}"
 pr="${2:-}"
 
 case "$verb" in
-record | check) ;;
-*) fail_input "usage: pr-unsubscribed record|check <pr>" ;;
+drop | record | check) ;;
+*) fail_input "usage: pr-unsubscribed drop|record|check <pr>" ;;
 esac
 
 case "$pr" in
@@ -140,6 +152,37 @@ receipt_present() {
 	[ -f "$(receipt_path "$session" "$1")" ]
 }
 
+# ONE MINTER FOR BOTH WRITERS. `drop` and `record` differ only in where the answer
+# came from — this endpoint's response body, or the agent's own tool call pasted
+# on stdin — and the receipt they leave must be identical, or `check` would be
+# reading two facts through one filename. Factored out when `drop` landed rather
+# than duplicated, so a change to the receipt's shape cannot apply to one path
+# and not the other.
+#
+# Pointer-only, in the receipt as well as on stdout: what was recorded, for which
+# PR, in which session, by which path, and a digest of the answer — never the
+# answer, which is a message about a webhook stream and has no business being
+# stored here.
+mint_receipt() { # mint_receipt <session> <pr> <answer> <via>
+	local session=$1 pr=$2 answer=$3 via=$4 digest
+
+	mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
+		fail_input "cannot create the receipt store"
+
+	digest=$(printf '%s' "$answer" | sha256sum 2>/dev/null | cut -c1-12) || digest=unhashed
+
+	{
+		echo "pr $pr"
+		echo "session $session"
+		echo "via $via"
+		echo "answer-sha256 $digest"
+		echo "answer-bytes ${#answer}"
+	} >"$(receipt_path "$session" "$pr")" 2>/dev/null ||
+		fail_input "cannot write the receipt for #$pr"
+
+	echo "pr-unsubscribed: recorded the drop of #$pr's webhook subscription via $via (answer $digest)"
+}
+
 if [ "$verb" = check ]; then
 	# The two passing readings are DIFFERENT FACTS and must not share a sentence.
 	# "Nothing to drop here" is not "this was dropped", and a gate that reports the
@@ -154,6 +197,95 @@ if [ "$verb" = check ]; then
 	fi
 	echo "pr-unsubscribed: #$pr — session $checked_session has dropped its webhook subscription"
 	exit 0
+fi
+
+# --- drop --------------------------------------------------------------------
+#
+# The actor. Everything here fails OPEN — every path that cannot establish its
+# input prints why and exits 0 without a receipt, leaving `check` to demand the
+# manual `record` exactly as before. That is not defensiveness: an actor that
+# could refuse would put a second way to wedge a landing in front of the gate it
+# exists to satisfy, and `land` runs this on every lap.
+#
+# The mutation mints a receipt whatever the endpoint answered, which is the whole
+# of the honest limit: a receipt must attest to an accepted call, not to an
+# attempted one. With it in place a 403 lands as silently as a 200.
+#MUTANT drop-mints-on-any-status|s/^\tif \[ "\$code" = 200 \] && \[ -n "\$body" \]; then$/\tif true; then/|a receipt is minted only for an accepted call
+# And the fail-open must hold in the other direction. A `drop` that exits non-zero
+# on a status it did not like turns `land`'s first step into a wedge on every
+# clone whose session cannot reach the endpoint.
+#MUTANT drop-blocks-on-failure|s/^\techo "pr-unsubscribed: could not drop #\$pr's webhook subscription (\$1) — the manual path is unaffected"$/\tfail_input "could not drop #$pr ($1)"/|a drop that cannot look does not block the landing
+if [ "$verb" = drop ]; then
+	give_up() { # give_up <pointer-only reason>
+		echo "pr-unsubscribed: could not drop #$pr's webhook subscription ($1) — the manual path is unaffected"
+		exit 0
+	}
+
+	# No session means no subscription, the same reading `check` and `record`
+	# already take off harness.
+	dropping_session=$(session_id) ||
+		give_up "no injected client config, so this clone has no session"
+
+	# THE CREDENTIAL IS ONE THE CONTAINER IS GIVEN, never one scraped from another
+	# process — the line CLOUD-673 drew and this keeps. It is read here and passed
+	# to `curl` on stdin via `--config`, so it never appears in a command line any
+	# `ps` can read, and it is never printed, logged, or written to the receipt.
+	token_file="${CLAUDE_SESSION_INGRESS_TOKEN_FILE:-}"
+	[ -n "$token_file" ] && [ -f "$token_file" ] ||
+		give_up "no session-ingress token file"
+
+	command -v curl >/dev/null 2>&1 || give_up "no curl on PATH"
+
+	# `{owner, repo, pullNumber}` is the tool's whole input schema. The remote is
+	# the authority on the first two; a shape this cannot parse is a clone this
+	# has no business guessing about.
+	remote=$(git remote get-url origin 2>/dev/null) ||
+		give_up "no origin remote"
+	slug=${remote#*github.com}
+	slug=${slug#:}
+	slug=${slug#/}
+	slug=${slug%.git}
+	owner=${slug%%/*}
+	repo=${slug#*/}
+	case "$owner/$repo" in
+	*[!A-Za-z0-9._/-]* | */*/* | */ | /*) give_up "origin is not a github owner/repo" ;;
+	esac
+	[ -n "$owner" ] && [ -n "$repo" ] || give_up "origin is not a github owner/repo"
+
+	# THE ROUTE IS `/github/mcp`, NOT THE TOOLBOX ONE — see the header's table.
+	# Overridable so the suite can point it at a stub without a credential or a
+	# network; the default is a public vendor address, committable by the same
+	# reasoning `connector-allow-resolve` records for its endpoint constant.
+	endpoint="${BATTEN_CCR_ENDPOINT:-https://api.anthropic.com}/v2/ccr-sessions/${dropping_session}/github/mcp"
+
+	body_file="$git_dir/batten-receipts/.drop-$$.body"
+	mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
+		give_up "cannot create the receipt store"
+
+	# `--config -` reads the header from stdin, keeping the bearer out of argv.
+	code=$(printf '%s\n' "header = \"Authorization: Bearer $(cat "$token_file")\"" |
+		curl -sS --max-time 30 -o "$body_file" -w '%{http_code}' \
+			--config - \
+			-X POST "$endpoint" \
+			-H 'Content-Type: application/json' \
+			-H 'Accept: application/json, text/event-stream' \
+			--data "$(printf '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"unsubscribe_pr_activity","arguments":{"owner":"%s","repo":"%s","pullNumber":%s}}}' "$owner" "$repo" "$pr")" 2>/dev/null) || code=""
+
+	body=$(cat "$body_file" 2>/dev/null) || body=""
+	rm -f "$body_file" 2>/dev/null
+
+	# An MCP error is carried in a 200 as `isError`, so the status alone is not the
+	# verdict — a tool that refused must not mint a receipt saying it complied.
+	case "$body" in
+	*'"isError":true'* | *'"isError": true'*) give_up "the tool reported an error (http ${code:-none})" ;;
+	esac
+
+	if [ "$code" = 200 ] && [ -n "$body" ]; then
+		mint_receipt "$dropping_session" "$pr" "$body" endpoint
+		exit 0
+	fi
+
+	give_up "http ${code:-none}"
 fi
 
 # --- record ------------------------------------------------------------------
@@ -200,20 +332,4 @@ if ! answer_names_pr; then
 	exit 1
 fi
 
-mkdir -p "$git_dir/batten-receipts" 2>/dev/null ||
-	fail_input "cannot create the receipt store"
-
-digest=$(printf '%s' "$answer" | sha256sum 2>/dev/null | cut -c1-12) || digest=unhashed
-
-# Pointer-only, in the receipt as well as on stdout: what was recorded, for which
-# PR, in which session, and a digest of the answer — never the answer, which is a
-# message about a webhook stream and has no business being stored here.
-{
-	echo "pr $pr"
-	echo "session $session"
-	echo "answer-sha256 $digest"
-	echo "answer-bytes ${#answer}"
-} >"$(receipt_path "$session" "$pr")" 2>/dev/null ||
-	fail_input "cannot write the receipt for #$pr"
-
-echo "pr-unsubscribed: recorded the drop of #$pr's webhook subscription (answer $digest)"
+mint_receipt "$session" "$pr" "$answer" agent

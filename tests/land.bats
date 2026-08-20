@@ -2712,12 +2712,17 @@ EOF
 
 # --- CLOUD-518: the webhook subscription the harness arms on every PR ----------
 #
-# `land` cannot drop it — the tool lives on the session's MCP endpoint and a POST
-# from a task is answered 401 (CLOUD-673) — so it refuses to spend a runner until
-# the agent has dropped it and `pr-unsubscribed` has recorded that for this PR.
-# The gate's own suite (tests/pr-unsubscribed.bats) covers the recording; these
-# rows are about the LANDING: that the refusal stops the lap before anything is
-# spent, and that a recorded drop is what lets a landing proceed.
+# `land` DOES drop it now (CLOUD-790). The 401 this block used to cite was a
+# missing `Authorization` header, not a missing credential: with the container's
+# session-ingress token as a bearer, `POST /v2/ccr-sessions/<id>/github/mcp`
+# serves `unsubscribe_pr_activity`. So `drop` runs first and `check` still
+# decides, because `drop` fails open on everything it cannot establish and the
+# agent's manual `record` remains the way through when it does.
+#
+# The gate's own suite (tests/pr-unsubscribed.bats) covers both the recording and
+# the actor; these rows are about the LANDING: that the drop is attempted for THIS
+# PR on every lap, that the refusal stops the lap before anything is spent, and
+# that a dropped subscription lets a landing proceed.
 #
 # Every other case in this file leaves `pr-unsubscribed` passing, which is both
 # the off-harness reading and the ordinary one — so nothing else in the suite is
@@ -2760,6 +2765,32 @@ EOF
 	[ "$status" -eq 0 ]
 	run grep -c '^run pr-unsubscribed check 150$' "$BATS_TEST_TMPDIR/misecalls"
 	[ "$output" -ge 1 ]
+}
+
+@test "CLOUD-790: the landing makes the unsubscribe call itself, for THIS PR" {
+	# The click this removes. Before CLOUD-790 the only way to satisfy the gate
+	# below was an agent tool call the connector sets to `always_ask` — one human
+	# approval per landing, against a subscription the harness armed with none.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	run grep -c '^run pr-unsubscribed drop 150$' "$BATS_TEST_TMPDIR/misecalls"
+	[ "$output" -ge 1 ]
+}
+
+@test "CLOUD-790: a drop that could not happen does not stop the landing itself" {
+	# `drop` fails open, so a session that cannot reach the endpoint must land
+	# exactly as it did before — refused by `check`, not by the actor in front of
+	# it. An actor that could refuse would be a second way to wedge a landing.
+	task_fails pr-unsubscribed
+	pr_state MERGED
+	local out="$BATS_TEST_TMPDIR/land.out" rc=0
+	run_timeout -k 1 20 "$LAND" >"$out" 2>&1 || rc=$?
+	output=$(cat "$out")
+	status=$rc
+	[ "$status" -eq 1 ]
+	# The refusal is the GATE's, naming the receipt — not a failure of the drop.
+	[[ "$output" == *"webhook subscription has not been dropped"* ]]
 }
 
 @test "CLOUD-518: a dropped subscription lets the landing proceed untouched" {

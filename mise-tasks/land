@@ -1024,17 +1024,30 @@ set -m
 # used. The remedy was an agent remembering, which is prose and therefore
 # feedforward only.
 #
-# The drop itself cannot happen here: the tool lives on the session's MCP endpoint
-# and a POST from a task is answered 401 (CLOUD-673). The AGENT can make that call
-# and does. So this is the `claim-check` inversion — the gate refuses to spend a
-# runner until the call has been made and recorded for THIS pull request — and it
-# sits here, before the singleton and the lease, so a refusal costs nothing at all
-# and the fix is one tool call away. Off harness there is no session and no
-# subscription, and `pr-unsubscribed` passes silently; that fail-open is why this
-# is safe to put on the critical path.
+# THE DROP HAPPENS HERE NOW (CLOUD-790). This block used to say the tool was
+# unreachable from a task, because a POST to the session's MCP endpoint answered
+# `401` (CLOUD-673) — and that 401 was a missing `Authorization` header, not a
+# missing credential. Re-measured 2026-08-20: with the container's own
+# session-ingress token as a bearer, `POST /v2/ccr-sessions/<id>/github/mcp`
+# answers 200 and serves `unsubscribe_pr_activity`. The toolbox route stays shut
+# to this principal (403), which is why `drop` takes the github one.
+#
+# That matters because the agent-side call could never be made silent: the
+# connector sets the verb to `always_ask`, and CLOUD-765 measured that a hook
+# returning `allow` does not skip that prompt. So the previous shape charged a
+# human one approval click per landing, while the harness ARMED the subscription
+# with no click and no tool call at all. `drop` closes that asymmetry.
+#
+# `drop` FAILS OPEN and `check` is unchanged, which is what keeps this safe on the
+# critical path: where the call cannot be made — off harness, no token, any
+# non-200 — nothing is minted, `check` refuses exactly as before, and the agent's
+# manual `record` is still the way through. The pair sits before the singleton and
+# the lease, so a refusal still costs nothing at all.
 #
 # The gate's own words reach the operator (CLOUD-407): it names the command that
 # mints the receipt, so this `die` adds only the landing's context.
+#MUTANT subscription-undropped|s/^mise run pr-unsubscribed drop "\$pr" || true$/true/|the landing makes the unsubscribe call itself
+mise run pr-unsubscribed drop "$pr" || true
 #MUTANT subscription-unenforced|s/^if ! mise run pr-unsubscribed check "\$pr"; then$/if false; then/|a session that has not dropped the subscription cannot land
 if ! mise run pr-unsubscribed check "$pr"; then
 	die "#$pr's webhook subscription has not been dropped, and the refusal above says how. Nothing has been spent — do that, then run land again."

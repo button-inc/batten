@@ -320,3 +320,117 @@ policy_config() { # policy_config <server-id> <tool>:<policy>...
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"every call to it prompts"* ]]
 }
+
+# --- a GUARD ALLOW ARM the connector cannot honour (CLOUD-790) ----------------
+#
+# WHY THE PREDICATE ABOVE COULD NOT COVER THIS, which is the finding rather than a
+# scoping note. It judges allow RULES, resolved through `connector-allow-resolve`,
+# which answers only for the toolbox alias. Measured 2026-08-20:
+# `unsubscribe_pr_activity` was `always_ask` on the live connector and prompted on
+# every landing, no rule in the committed file named it under that alias, and the
+# gate passed throughout. What claimed the pre-approval was a HOOK'S ALLOW ARM —
+# `hookSpecificOutput.permissionDecision: "allow"` — which is not a rule and is
+# invisible to a rule-shaped check.
+#
+# The fixture supplies its own guard directory, because in this repository the arm
+# is now empty (that is the fixed state) and a row reading the real guards would
+# exercise nothing.
+
+# A stand-in guard publishing one pre-approved suffix, in the `--covers-allow`
+# shape `connector-verb-guard` defines.
+guard_dir() { # guard_dir <suffix>...
+	GUARDS="$BATS_TEST_TMPDIR/guards"
+	mkdir -p "$GUARDS"
+	{
+		printf '%s\n' '#!/usr/bin/env bash'
+		printf '%s\n' '[ "${1:-}" = "--covers-allow" ] || exit 0'
+		for suffix in "$@"; do printf 'printf %s\\\\n %s\n' "'%s'" "$suffix"; done
+	} >"$GUARDS/fixture-guard"
+	chmod +x "$GUARDS/fixture-guard"
+	export BATTEN_GUARD_DIR="$GUARDS"
+}
+
+@test "CLOUD-790: a pre-approved suffix the connector sets to ask is refused" {
+	# THE DISCRIMINATOR. No allow rule names this tool anywhere — the whole point
+	# is that a hook, not a rule, made the claim.
+	allow '[]'
+	guard_dir unsubscribe_pr_activity
+	policy_config cccccccc-1111-2222-3333-444444444444 unsubscribe_pr_activity:always_ask
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"unsubscribe_pr_activity"* ]]
+	[[ "$output" == *"always_ask"* ]]
+	# The remedy is named, and it is not an edit to this repository.
+	[[ "$output" == *"Tool permissions"* ]]
+}
+
+@test "CLOUD-790: a pre-approved suffix the connector allows is silent" {
+	allow '[]'
+	guard_dir unsubscribe_pr_activity
+	policy_config cccccccc-1111-2222-3333-444444444444 unsubscribe_pr_activity:always_allow
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-790: a suffix on a server that is NOT the toolbox is judged too" {
+	# Unlike the rule predicate, this one spans every attached server: a hook
+	# decides by tool-name suffix and therefore has no server to be scoped to.
+	# Scoping it to the toolbox would rebuild the blindness it exists to fix.
+	allow '[]'
+	guard_dir list_issues
+	jq -n '{mcpServers: {"dddddddd-9999-8888-7777-666666666666": {url: "https://api.anthropic.com/v1/code/mcp/proxy?mcp_url=https%3A%2F%2Fmcp.linear.app%2Fmcp", tools: [{name: "list_issues", permission_policy: "always_ask"}]}}}' >"$BATTEN_MCP_CONFIG"
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"list_issues"* ]]
+}
+
+@test "CLOUD-790: a suffix the live config does not expose is not reported" {
+	# Absent is not `ask`. A verb the host is not serving this session says
+	# nothing about whether a hook could pre-approve it, and guessing would make
+	# the gate red for a reason no one can act on.
+	allow '[]'
+	guard_dir unsubscribe_pr_activity
+	policy_config cccccccc-1111-2222-3333-444444444444 list_sessions:always_ask
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-790: no pre-approved suffix at all is a PASS, not an error" {
+	# This repository's own state after the arm was removed. It must produce the
+	# summary line rather than dying on an empty match — the fail-shaped-as-pass
+	# that a `grep` with no hits caused under `set -e` while this was being built.
+	allow '[]'
+	GUARDS="$BATS_TEST_TMPDIR/empty-guards"
+	mkdir -p "$GUARDS"
+	export BATTEN_GUARD_DIR="$GUARDS"
+	policy_config cccccccc-1111-2222-3333-444444444444 unsubscribe_pr_activity:always_ask
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"every guard allow arm"* ]]
+}
+
+@test "CLOUD-790: without --session the guard arm is not judged" {
+	allow '[]'
+	guard_dir unsubscribe_pr_activity
+	policy_config cccccccc-1111-2222-3333-444444444444 unsubscribe_pr_activity:always_ask
+	run "$GATE" "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-790: no generated config means no verdict on the arm" {
+	allow '[]'
+	guard_dir unsubscribe_pr_activity
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-790: the finding is a pointer — no server key or URL" {
+	allow '[]'
+	guard_dir unsubscribe_pr_activity
+	policy_config cccccccc-1111-2222-3333-444444444444 unsubscribe_pr_activity:always_ask
+	run "$GATE" --session "$FIXTURE"
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"cccccccc"* ]]
+	[[ "$output" != *"http"* ]]
+	[[ "$output" != *"s3cr3t"* ]]
+}

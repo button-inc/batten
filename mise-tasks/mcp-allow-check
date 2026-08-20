@@ -319,5 +319,95 @@ if [ "$session" = 1 ] && [ -x "$resolve" ] && [ -n "$config" ] && [ -f "$config"
 	done < <(jq -r '(.mcpServers // {}) | keys[]' "$config" 2>/dev/null)
 fi
 
-[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, every allow rule names a tool the connector control lets it enforce, and every deny on a host-supplied connector is backed by a suffix-matching guard"
+# --- a GUARD ALLOW ARM the connector control cannot honour (CLOUD-790) --------
+#
+# THE PREDICATE ABOVE IS BLIND TO THIS, and the blindness is what it cost. It
+# judges allow RULES, resolved through `connector-allow-resolve`, which answers
+# only for the toolbox alias — every other endpoint is silence by design, because
+# translating a claude.ai connector's name would grant what the committed file
+# does not. So an `always_ask` tool is reported only if some rule in this file
+# names it under `mcp__Claude_Code_Remote__`.
+#
+# MEASURED 2026-08-20. `unsubscribe_pr_activity` was set to `always_ask` on the
+# live connector and prompted on every landing. No rule here named it under that
+# alias — the one committed grant spelled the `github` server, which the injected
+# config exposes with an empty `tools` array — so the predicate above passed, and
+# went on passing while a human clicked through one approval per PR. What actually
+# claimed the pre-approval was `connector-verb-guard`'s ALLOW ARM, which no gate
+# reads at all: a hook's `permissionDecision: "allow"` is not a rule in this file
+# and is not visible to a rule-shaped check.
+#
+# So this reads the arm. A guard publishes its pre-approved suffixes through
+# `--covers-allow` — the same declared-coverage contract the deny predicate uses,
+# for the same reason: grepping a neighbour's `case` statements would be a second
+# authority for a fact the guard already states. Each suffix is looked up in EVERY
+# injected server's tool list, not just the toolbox's, because a hook decides by
+# suffix and therefore spans every server the host exposed.
+#
+# ONE-DIRECTIONAL, like its neighbour. A tool the connector sets to `always_allow`
+# is silent; anything else is reported, since `ask` is the only other policy that
+# has been observed and a policy this file does not recognise is not one it should
+# assume a hook can beat. A DENY arm is never judged — a connector control chooses
+# ask versus allow and never widens a deny, so a deny arm enforces regardless.
+#
+# THE FINDING NAMES THE REMEDY, and the remedy is not an edit to this repository:
+# either the connector's Tool permissions change, or the arm comes out and the
+# work is done by something that is not a mediated tool call — which is what
+# `pr-unsubscribed drop` now is.
+#
+# Fails open with no live session, same as the predicate above and for the same
+# reason: a connector control is a property of the WORLD, not of the commit.
+#
+# Pointer-only per non-negotiable rule 4: the suffix, the policy token and a
+# count. Never a server key, a URL, or the `headers` block.
+#
+# The mutation accepts any policy, which is the whole predicate: with it in place
+# the `always_ask` arm that cost a click per landing reads as clean.
+#MUTANT guard-allow-ignores-policy|s/^\t\t\t\[ "\$arm_policy" = always_allow \] && continue$/\t\t\tcontinue/|a pre-approved suffix the connector sets to ask is refused
+if [ "$session" = 1 ] && [ -n "$config" ] && [ -f "$config" ]; then
+	# STDIN IS CLOSED FOR THE PROBE, for the reason the deny predicate records: a
+	# guard that does not know this flag falls through to its `raw=$(cat)` and
+	# blocks forever. The output is filtered to bare tool-name shapes so a usage
+	# line cannot inject a spurious suffix.
+	# EMPTY IS THE HEALTHY STATE and must not be an error. Today no guard
+	# pre-approves anything, so the `grep` matches nothing and exits 1 — under
+	# `set -e` that killed the whole gate silently, with no finding and no summary
+	# line, which is the fail-shaped-as-pass this file exists to refuse. The
+	# fallback is what keeps "nothing to judge" distinct from "could not judge".
+	# THE SEAM IS WHAT MAKES THIS TESTABLE AT ALL. Today no guard publishes a
+	# pre-approved suffix — that is the fixed state — so a suite reading the real
+	# guard directory would exercise nothing and pass whatever the predicate did.
+	# `BATTEN_GUARD_DIR` lets a fixture supply a guard that does publish one,
+	# which is the only way a row can discriminate. Production never sets it.
+	preapproved=$(for guard in "${BATTEN_GUARD_DIR:-$(dirname "$0")}"/*-guard; do
+		[ -x "$guard" ] || continue
+		"$guard" --covers-allow </dev/null 2>/dev/null || true
+	done | grep -E '^[a-z][a-z0-9_]*$' | sort -u) || preapproved=""
+
+	while IFS= read -r suffix; do
+		[ -n "$suffix" ] || continue
+		blocked=0
+		policies=""
+		while IFS= read -r arm_policy; do
+			[ -n "$arm_policy" ] || continue
+			[ "$arm_policy" = always_allow ] && continue
+			blocked=$((blocked + 1))
+			case " $policies " in
+			*" $arm_policy "*) ;;
+			*) policies="${policies}${policies:+,}$arm_policy" ;;
+			esac
+		done < <(jq -r --arg t "$suffix" '
+		  (.mcpServers // {})
+		  | to_entries[]
+		  | (.value.tools // [])
+		  | map(select(.name == $t))
+		  | .[]
+		  | .permission_policy // empty
+		' "$config" 2>/dev/null)
+		[ "$blocked" = 0 ] ||
+			report "$suffix — a guard pre-approves this tool, and the connector sets it to \`$policies\` on $blocked exposed server(s). A hook's \`permissionDecision: allow\` never skips that prompt, so the arm claims an authority it does not hold. Fix it at the connector's Tool permissions, or drop the arm and do the work off the mediated path (CLOUD-790)."
+	done <<<"$preapproved"
+fi
+
+[ "$fail" = 0 ] && echo "mcp-allow-check: every allow rule in $settings names a tool it can match, every enabled server has a grant, every allow rule names a tool the connector control lets it enforce, every guard allow arm names a tool the connector lets it pre-approve, and every deny on a host-supplied connector is backed by a suffix-matching guard"
 exit "$fail"
