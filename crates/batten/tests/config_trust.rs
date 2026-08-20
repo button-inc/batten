@@ -23,7 +23,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, StateHome, batten, git_in, scratch, stdout};
+use common::{Fixture, batten, git_in, scratch, stdout};
+// Only the `exec` cases below need it, and they are `cfg(unix)` — `batten exec`'s
+// process-group ownership is Unix-only, so the whole verb is. Ungated, this is an
+// unused import on the Windows triple, which `cross-check --all-targets` denies.
+#[cfg(unix)]
+use common::StateHome;
 
 /// A pull-request-shaped fixture: `base` committed and pinned as `origin/main`,
 /// then `working` written into the tree on top (committed, so the tree is clean
