@@ -1795,6 +1795,25 @@ $verify_tail"
 			else
 				echo "land: could not delete origin/$branch (already gone, or the remote refused) — the PR has landed either way." >&2
 			fi
+			# THE BRANCH'S FILING HISTORY IS SPENT (CLOUD-774), so the receipts
+			# keyed to its name go with it. Every row it filed is now landed,
+			# closed by the body, or recorded in the override log; keeping them
+			# would judge the NEXT piece of work on this branch name against rows
+			# that belong to this one.
+			#
+			# This is the event-driven half of scoping, and it exists because the
+			# obvious predicate does not work. Measured 2026-08-20: after a merge
+			# the old base is still an ancestor of HEAD, so "not an ancestor"
+			# cannot see a reset; and "equals the current base" excludes rows filed
+			# before any ordinary rebase. Neither separates a reset from a rebase.
+			# The merge does, exactly, and it is an event rather than an inference.
+			#
+			# Same posture as the branch delete above: a failure here is silent and
+			# harmless, because the landing already succeeded.
+			if git_dir=$(git rev-parse --git-dir 2>/dev/null); then
+				rm -f "$git_dir/batten-receipts/board-writes.${branch//\//-}" \
+					"$git_dir/batten-receipts/filed-here-nudged.${branch//\//-}" 2>/dev/null || true
+			fi
 			exit 0
 		fi
 
