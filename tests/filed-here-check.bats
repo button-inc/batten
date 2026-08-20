@@ -7,6 +7,16 @@
 # session's board writes. Same reasoning as `issue-search-guard.bats`.
 
 setup() {
+	# The caller's ambient environment must not reach a fixture, exactly as the
+	# git identity below must not. Both bypasses are set per-case with `env` where
+	# a case wants them; inherited, they silence the cases that assert the gate
+	# FIRES — and the whole suite passes while proving nothing (CLOUD-418).
+	#
+	# Not hypothetical: `BATTEN_FILED_HERE_OVERLAP=1 mise run land` is remedy 4 in
+	# this gate's own deny text, and it exports the variable into `verify`, which
+	# runs this suite. So the documented escape hatch reddened the suite that
+	# documents it, and the gate could not be overridden by the route it names.
+	unset BATTEN_FILED_HERE_OVERLAP BATTEN_FILED_HERE_BYPASS
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/filed-here-check"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	rm -rf "$REPO"
@@ -41,6 +51,22 @@ changes() {
 # The recorder's line shape, named once: kind, id, the tracker's updatedAt, the
 # stored `ready-lint` verdict.
 record() { printf '%s\n' "$@" >>"$RECORD"; }
+
+@test "an AMBIENT bypass does not silence the gate — setup owns the environment" {
+	# The suite self-test for its own setup. Both bypasses are exported here as a
+	# caller would have them; `setup` cleared them, so the gate must still refuse.
+	# Without this, a future setup that stops unsetting them turns every
+	# fires-correctly case green for the wrong reason and nothing notices.
+	# Asserted as setup's CONTRACT — the variables are absent by the time a body
+	# runs — rather than by exporting them here, which would only re-prove that
+	# the gate honours a bypass it can see.
+	[ -z "${BATTEN_FILED_HERE_OVERLAP:-}" ]
+	[ -z "${BATTEN_FILED_HERE_BYPASS:-}" ]
+	printf 'issue CLOUD-1 2026-01-01T00:00:00.000Z unready 0\n' >"$RECORD"
+	run "$GATE"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"CLOUD-1"* ]]
+}
 
 @test "a create recorded with an unready verdict stops the lap, and the refusal names the id" {
 	record "issue CLOUD-900 2026-08-19T00:00:00.000Z unready"
