@@ -37,6 +37,13 @@
 # comparison. Measured: PR #306 (`docs(agents): … (CLOUD-268)`) cites CLOUD-133
 # in one row of an evidence table and was reported as claiming it.
 #
+#   --closing-only    answer from source 1 ALONE — a closing keyword — and never
+#                     fall through to the branch name or a `Refs:` trailer.
+#                     For a caller asking about a LOG rather than a branch
+#                     (CLOUD-804): over `main`'s history the fallbacks answer a
+#                     different question, and source 3 in particular is the exact
+#                     citation signal CLOUD-480 was swept wrong on. Opt-in, so
+#                     every existing caller keeps the full chain.
 #   --branch <name>   the head branch, standing in for source 2
 #   --title <text>    the PR title, ALSO source 2 — for a PR you did not author
 #                     the title is the other self-declaration of what the work
@@ -56,6 +63,9 @@
 # never the prose they were extracted from (rule 4).
 # The mutation drops the speculation boundary, so a key carried only by an adopted
 # commit is claimed again and the waiter races the PR it is waiting on.
+# The mutation makes --closing-only fall through anyway, so a `Refs:` citation is
+# read as a claim — CLOUD-480's shape, which is the whole reason the flag exists.
+#MUTANT claimed-keys-closing-only-falls-through|s/^if \[ "\$closing_only" -eq 0 \]; then$/if true; then/|--closing-only does not fall through to a Refs: trailer
 #MUTANT claimed-keys-adopts-speculated|s/^\tif since=\$(spec_base_range); then$/\tif false; then/|a key carried only by a speculated commit is not claimed
 set -euo pipefail
 
@@ -74,6 +84,7 @@ extra=""
 [ -t 0 ] || extra=$(cat || true)
 
 explicit=0
+closing_only=0
 branch=""
 title=""
 log=""
@@ -93,6 +104,10 @@ while [ "$#" -gt 0 ]; do
 		esac
 		explicit=1
 		shift 2
+		;;
+	--closing-only)
+		closing_only=1
+		shift
 		;;
 	*)
 		echo "::error:: claimed-keys: unknown argument" >&2
@@ -141,8 +156,10 @@ if [ "$explicit" -eq 0 ]; then
 fi
 
 claimed=$(extract "$(grep -oiE "$CLAIM_RE" <<<"$extra $log" || true)")
-[ -n "$claimed" ] || claimed=$(extract "$branch $title")
-[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
+if [ "$closing_only" -eq 0 ]; then
+	[ -n "$claimed" ] || claimed=$(extract "$branch $title")
+	[ -n "$claimed" ] || claimed=$(extract "$(grep -oiE "Refs:[[:space:]]*CLOUD-[0-9]+" <<<"$log" || true)")
+fi
 
 [ -n "$claimed" ] && printf '%s\n' "$claimed"
 exit 0
