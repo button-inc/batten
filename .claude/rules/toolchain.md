@@ -302,7 +302,42 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   absent record, and a branch predating the recorder can never have one: the store
   lives under `$GIT_DIR`, is never committed, and dies with the container — which
   is also why no fleet-wide firing rate is measurable. Bypass:
-  `BATTEN_FILED_HERE_BYPASS=1`.
+  `BATTEN_FILED_HERE_BYPASS=1`. **`--checklist` is a third mode over the same
+  parse** (CLOUD-97): it enumerates EVERY row this branch filed, marks the ones
+  whose named paths intersect the diff, and asks the agent to affirm each is
+  independent work rather than a punt. A sibling of `--advisory`, never a
+  widening of it — that predicate is measured and mutation-gated, and retuning a
+  gate by editing the question it answers is not a refactor. Both nudge modes
+  print pointers on **stderr**, because this file's stdout carries its own
+  summary lines and a stdout capture reads "no board writes recorded" as a
+  checklist of one row.
+- `unlanded-check` is the end-of-turn half nobody had (CLOUD-97), and it decides
+  NOTHING: `completion.unlanded` — a completion marker in the session transcript
+  with no patch-id-equivalent commit on the landing target — is the engine's
+  verdict, minted by `batten state record`, and this reads the store and points
+  at it. A bash re-derivation would answer by ancestry where the engine answers
+  by patch identity, and a rebased-then-landed branch is clean to one and dirty
+  to the other. It reads the PLAIN `batten state list` rather than `-J` because a
+  by-path hook does not get mise's env and so has no pinned `jq`; the engine
+  already emits `<fingerprint> <rule> <ref> <count>`, which the shell can read.
+  Fail-closed on the observation — `skipped`/`errored` is not a finding — and
+  fail-open on everything else, since it runs inside a Stop hook. Once per HEAD
+  sha: the finding holds while the work is unlanded, so an unsuppressed rule
+  repeats one pointer every turn until nobody reads it, and a new commit is a new
+  answer to the question. Bypass: `BATTEN_UNLANDED_CHECK_BYPASS=1`, which the
+  `state record` call in `stop-guard` rides too — a caller who switched the rule
+  off should not still pay a tree walk per turn for an answer nobody reads.
+- **`stop-guard` ends every turn with a question now.** It ran four rules and
+  then exited silently, and silence is the common case — so the most valuable
+  thing it could say was the thing it never said. Each rule fires only on a shape
+  somebody enumerated and measured recall is the weak half of all of them; the
+  bare `done?` has no recall problem, and `finding-sink-check`'s header already
+  records it surfacing nine real findings in one session while carrying no
+  information at all. It is last and mutually exclusive with the rest: a turn
+  already handed a pointer has been asked something more specific. The cost is
+  one model round trip on a turn that would otherwise have ended, bounded to one
+  per turn by `stop_hook_active`; the registration went from ~28ms to
+  ~330-440ms, nearly all of it the `state record` call the fourth rule rests on.
 - **`claim-guard` is retired** (CLOUD-444); the pull-time half of the pair the
   key rule finishes (CLOUD-272) is now the `claim-needs-receipt` row in
   `batten.toml` — a `receipt` rule with `trigger = "write"` and `key = "branch"`.

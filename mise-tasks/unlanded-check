@@ -50,8 +50,12 @@
 #
 # MUTATION COVERAGE (CLOUD-418). `<slug>|<sed script>|<case name>`: applying
 # the script to a throwaway copy of this file must turn the named case RED.
-#MUTANT ref-never-matched|s@^\t\t\[ "\$ref" = .*@\t\t[ "$ref" = "$ref" ] || continue@|another branch's unlanded finding is not this turn's
-#MUTANT suppression-removed|s@^seen_file=.*@seen_file=""@|the pointer fires once per HEAD and then goes quiet
+# NO `|` IN A SCRIPT FIELD: the row is split on it, so a `||` inside a sed
+# expression silently eats the case name and the harness reports the wrong
+# defect. Deleting the guard line is the cleaner mutation anyway — it removes the
+# predicate rather than rewriting it into a tautology.
+#MUTANT ref-never-matched|s@^\t\[ "\$ref" = "\$context".*@@|another branch's finding is not this turn's
+#MUTANT suppression-removed|s@^\tseen_file="\$git_dir.*@\tseen_file=""@|it asks once per HEAD, then goes quiet
 set -uo pipefail
 
 [ -n "${BATTEN_UNLANDED_CHECK_BYPASS:-}" ] && exit 0

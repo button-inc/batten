@@ -622,9 +622,17 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   tests, so the row would have failed on its own documentation — anchor to a
   newline), and a glob spanning a SUBMODULE counts one side only (`ls-tree` sees a
   gitlink, the walker sees 228 files: base 637 vs working 1404, a gate that
-  cannot fail — CLOUD-328). `run_static` (read-effect, no process spawn) backs
-  `check`; `run_all` (every kind) backs `enforce`. `check` refuses a
-  command-executing rule rather than silently skipping it. Each rule pins a
+  cannot fail — CLOUD-328). **Three scan surfaces, and the third is the one
+  people miss.** `run_static` (read-effect, no process spawn) backs `check` and
+  REFUSES a command-executing rule rather than silently skipping it; `run_all`
+  (every kind) backs `enforce`; `run_recorded` backs `state record` and WITHHOLDS
+  a spawning kind into `Scan::not_evaluated`, where its findings hold. Skipping is
+  honest on the third and dishonest on the first for one structural reason — the
+  recorder folds `not_evaluated` into the store and `check` has only an exit code
+  — and the third exists because `run_static`'s refusal returns _before any work_,
+  so one `command` or `secrets` row cost the whole verb its store write, its GC
+  and its transcript detectors. That is why CLOUD-97 had never evaluated once in
+  this repository, which declares sixteen such rules. Each rule pins a
   required `severity` (`RuleSeverity`, no implicit fallback) and a separate
   `scope` (`RuleScope`, pinned default `tree`) — two axes that never conflate
   (CLOUD-61); `any_blocking` is where severity meets the exit contract. `scope`
@@ -1222,6 +1230,17 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   the command that does that is a consumer's (rule 1). Output is a transcript
   line, a marker token and a count; the raw session id reaches the store only
   inside `identity::sequence_fingerprint`.
+  **It first evaluated in this repository on 2026-08-20, and the gap is worth
+  remembering** because none of the four causes was visible from inside: no
+  `[transcript]` table (so the capability resolved `Unconfigured` and returned
+  silently), nothing invoking `state record`, `run_static` refusing that verb
+  outright over a spawning rule (see `rules.rs`), and nothing reading the store
+  back to an agent. A detector can be complete, tested and shipped and still
+  never run; "is it wired for consumer #1" is a separate question from "does it
+  work", and only the second one had an answer. It is wired now through
+  `mise-tasks/stop-guard`, which refreshes the transcript symlink from the Stop
+  payload, runs the recorder, and reports the finding via
+  `mise-tasks/unlanded-check`.
 - `session.rs` — session lineage and the durable resume point (CLOUD-83): the
   fourth question `store`/`findings`/`journal` leave open — **who is reading, and
   how far have they got**. A warm fork keeps everything that is out of process
