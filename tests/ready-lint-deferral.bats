@@ -117,10 +117,45 @@ issue() {
 	[[ "$output" == *"CLOUD-1:"* ]]
 }
 
-@test "a payload with no relations key is not a parse failure" {
-	jq -n '{id: "CLOUD-1", status: "Todo",
-    description: "## Ready\n\nA thing.\n\n## Done\n\nDeferred to CLOUD-61."}' >"$PAYLOAD"
+# CLOUD-679 REVERSED THE CASE THAT USED TO SIT HERE, and it is worth saying why
+# rather than quietly editing an expectation. It asserted exit 1 with
+# `deferral-cited-without-relation` over a payload that never carried the
+# relations to check against — the gate was not wrong about the bytes it was
+# handed, it was answering a question nobody had given it the data for. That is
+# the confusion CLOUD-251 drew a line through in `graph-check`, and this gate,
+# over the same payload shape, never got it.
+#
+# What that case was really pinning survives and is asserted below: a missing key
+# is NOT a parse failure. It is still not the top-of-file ".description" refusal,
+# and the id still resolves. Only which side of the 1/2 split "I could not look"
+# lands on has changed.
+#
+# ONE BODY, TWO PAYLOADS, differing only in the key — the same shape `issue()`
+# builds, so the §8 clause clears the floor and the relations gap is the SOLE
+# reason the verdict is incomplete. Without that clause
+# `ready-block-without-clauses` fires, and a judgeable violation correctly
+# outranks a gap, which would make this case pass for the wrong reason.
+defer_body() {
+	printf '## Ready\n\nA thing.\n\n### Blockers (§8)\n\nNone.\n\n## Done\n\nThe wiring is deferred to CLOUD-61.'
+}
+
+@test "a payload with no relations key is a gap, not a parse failure and not a verdict" {
+	jq -n --arg d "$(defer_body)" '{id: "CLOUD-1", status: "Todo", description: $d}' >"$PAYLOAD"
+	run "$GATE" <"$PAYLOAD"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"unjudgeable-relations"* ]]
+	[[ "$output" != *"deferral-cited-without-relation"* ]]
+	# Still parsed: the id resolved, so this is not the .description refusal.
+	[[ "$output" == *"CLOUD-1:"* ]]
+	[[ "$output" != *"not a get_issue payload"* ]]
+}
+
+@test "the same body with the key present and empty is still held to the board" {
+	# "No edges" is an answer, so the hand-off is one this board does not know
+	# about. Only the key differs from the case above.
+	jq -n --arg d "$(defer_body)" '{id: "CLOUD-1", status: "Todo",
+    relations: {blockedBy: [], relatedTo: []}, description: $d}' >"$PAYLOAD"
 	run "$GATE" <"$PAYLOAD"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"deferral-cited-without-relation"* ]]
+	[[ "$output" == *"deferral-cited-without-relation (CLOUD-61)"* ]]
 }

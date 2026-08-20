@@ -24,6 +24,16 @@
 # Input is a `get_issue(includeRelations: true)` JSON payload, not bare markdown,
 # because the §8 check is a cross-check: prose claiming a blocker is only true if
 # a matching `blockedBy` relation exists. The description alone cannot prove that.
+#
+# THE VOCABULARY, so a reader can tell a verdict from a gap without running it:
+# exit 1 carries rule ids — `no-ready-block`, `ready-block-without-clauses`,
+# `blocker-cited-without-relation`, `deferral-cited-without-relation`,
+# `bump-disagrees-with-type`, and the notation/opener reports. Exit 2 carries
+# `unjudgeable-relations` (CLOUD-679): the payload cites a dependency and carries
+# no `relations` key, so neither cross-check could run. That token is the sibling
+# of `graph-check`'s `unjudgeable-blockedby`, and borrowing it rather than
+# inventing a second one is the point — CLOUD-251 drew this line for that gate
+# and this one, over the same payload, never got it.
 set -euo pipefail
 
 payload=$(cat)
@@ -36,8 +46,32 @@ if ! description=$(jq -er '.description' <<<"$payload" 2>/dev/null); then
 fi
 
 id=$(jq -r '.id // "?"' <<<"$payload")
-# Relations are optional in the payload; their absence means "no blockers
-# declared", which is a legitimate state, not a parse failure.
+# ABSENT AND PRESENT-BUT-EMPTY ARE TWO DIFFERENT ANSWERS (CLOUD-679), and for
+# this file's whole life they were one empty string. The comment that used to sit
+# here said the right thing — "their absence means 'no blockers declared', which
+# is a legitimate state" — about the wrong condition: that is true of a payload
+# whose `relations` key is PRESENT and carries no edges, and false of one that
+# never carried the key. `[.relations.blockedBy[]?.id]` yields `[]` for both, so
+# a caller who fetched without `includeRelations` got every §8 and deferral
+# citation reported as `blocker-cited-without-relation` — the gate accusing a
+# correctly-refined issue of citing a phantom blocker, and implying a remedy
+# (add the relation) for a relation that already exists.
+#
+# Measured 2026-08-19, same bodies, only the key differing: CLOUD-326 produced
+# four violations with the key stripped and exit 0 with it injected, and its
+# `blockedBy` and both `relatedTo` edges were on the tracker throughout. The
+# CLOUD-633 pair is the control — the same run surfaced one GENUINE violation,
+# which the fix must not silence.
+#
+# So presence is read once, and it is `has`, never a count: "no edges" is an
+# answer, and only a missing key is a gap. This is CLOUD-251's split, in the
+# sibling gate over the same payload — `graph-check` got `unjudgeable-blockedby`
+# and this file got nothing.
+if jq -e 'has("relations") and (.relations != null)' <<<"$payload" >/dev/null 2>&1; then
+	relations_present=1
+else
+	relations_present=
+fi
 relations=$(jq -r '[.relations.blockedBy[]?.id] | join(" ")' <<<"$payload" 2>/dev/null || echo "")
 
 violations=0
@@ -47,6 +81,23 @@ violations=0
 report() {
 	echo "$id:$1 $2" >&2
 	violations=$((violations + 1))
+}
+
+# "I could not look" is counted SEPARATELY from "the block is wrong", because the
+# exit rule below is narrower than CLOUD-251's "2 outranks 1": exit 2 only when
+# the missing key is the SOLE reason the verdict is incomplete. A block carrying
+# a real defect is wrong regardless of what could not be seen, so mixing the two
+# counters would let a §6 disagreement hide behind a gap.
+#
+# The pointer is emitted once, at the tail, rather than per citation: the gap is
+# one fact about the payload, and a line per cited id would report the caller's
+# fetch as many findings. Pointer-only per non-negotiable rule 4 — the line and
+# the token, never the matched prose.
+unjudgeable=0
+unjudged_line=""
+unjudged() {
+	[ -n "$unjudged_line" ] || unjudged_line="$1"
+	unjudgeable=$((unjudgeable + 1))
 }
 
 # --- locate the Ready block ---------------------------------------------------
@@ -312,6 +363,16 @@ if [ -n "$blockers_start" ]; then
 	# means nothing is claimed, so there is nothing to hold the board to.
 	# shellcheck disable=SC2013  # word-splitting is the point: ids are bare tokens
 	for cited in $(sed -E 's/CLOUD-[0-9]+ \(closed\)//g' <<<"$claim" | grep -oE 'CLOUD-[0-9]+' | sort -u); do
+		# THE SCAN STILL RUNS, THE CROSS-CHECK DOES NOT (CLOUD-679). Finding the
+		# citation is what makes "the missing key is the SOLE reason" computable at
+		# all: a payload with no key and nothing cited lost nothing, and must stay
+		# exit 0 — CLOUD-526 declares that a caller may project everything but
+		# `.description` away, and every fixture in `tests/claim-check.bats` is
+		# exactly that shape.
+		if [ -z "$relations_present" ]; then
+			unjudged "$(line_of "$BLOCKERS_LABEL")"
+			continue
+		fi
 		# A blocker explicitly noted as closed is history, not a live claim:
 		# Linear drops the relation when the dependency resolves, so demanding
 		# one would fail every correctly-refined issue whose blocker landed.
@@ -360,6 +421,13 @@ while IFS= read -r hit; do
 	for cited in $(grep -oiE "($DEFER_RE)[^.]{0,40}?(CLOUD-[0-9]+)" <<<"$text" | grep -oE 'CLOUD-[0-9]+' | sort -u); do
 		# An issue may not defer to itself; that is a wording slip, not a hand-off.
 		[ "$cited" = "$id" ] && continue
+		# The same gap as §8 above, and it reached further: this rule scans the
+		# WHOLE description, so a key-stripped payload reported one phantom hand-off
+		# per citation anywhere in the body. CLOUD-326 measured three.
+		if [ -z "$relations_present" ]; then
+			unjudged "$lineno"
+			continue
+		fi
 		case " $all_relations " in
 		*" $cited "*) ;;
 		*) report "$lineno" "deferral-cited-without-relation ($cited)" ;;
@@ -367,8 +435,24 @@ while IFS= read -r hit; do
 	done
 done < <(grep -niE "($DEFER_RE)[^.]{0,40}?CLOUD-[0-9]+" <<<"$plain" || true)
 
+# THE ORDER IS THE RULE (CLOUD-679). A judgeable violation outranks a gap, which
+# is the opposite of CLOUD-251's "2 outranks 1" and deliberately so: the block is
+# wrong regardless of what could not be seen, and downgrading it to "could not
+# look" would launder a real defect behind a caller's thin fetch. The pointer
+# prints on both arms, so nothing this gate noticed is ever swallowed.
 if [ "$violations" -ne 0 ]; then
+	[ "$unjudgeable" -eq 0 ] || echo "$id:$unjudged_line unjudgeable-relations" >&2
 	echo "::error:: ready-lint: $violations violation(s) in $id — not Ready" >&2
 	exit 1
+fi
+# Exit 2 is this file's existing channel for "I could not read what I was given"
+# — the `.description` refusal at the top and the §6 version refusal above — and
+# a missing relations key is the same kind of answer. The count and the remedy,
+# never a verdict about the block. It never prints "satisfies", so no caller can
+# cite this run as a green.
+if [ "$unjudgeable" -ne 0 ]; then
+	echo "$id:$unjudged_line unjudgeable-relations" >&2
+	echo "::error:: ready-lint: $id cites $unjudgeable dependenc(ies) and this payload carries no relations key, so neither cross-check could run — refetch with get_issue(includeRelations: true)" >&2
+	exit 2
 fi
 echo "ready-lint: $id satisfies the checkable Ready clauses"

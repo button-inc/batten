@@ -638,3 +638,91 @@ defready_block() {
 	# contract, so a caller may project everything else away.
 	[ "$status" -eq 0 ]
 }
+
+# --- absent relations vs present-and-empty (CLOUD-679) ------------------------
+#
+# ONE FIXTURE BODY, DRIVEN FOUR WAYS, so every pair below differs only in the
+# payload key. That is the whole assertion: the defect was invisible precisely
+# because the two shapes produced identical verdicts, and a suite that varied the
+# body as well could not have told them apart either.
+#
+# Measured 2026-08-19 on real rows: CLOUD-326 produced four violations with the
+# key stripped and exit 0 with it injected, its `blockedBy` and both `relatedTo`
+# edges having been on the tracker the whole time. Case (a) is red against the
+# gate as it shipped — it exited 1 with `blocker-cited-without-relation`.
+
+# The same builder as `payload`, minus the `relations` key ENTIRELY. Not
+# `relations: {}` — that is case (b), and collapsing the two is the defect.
+keyless_payload() {
+	PAYLOAD="$BATS_TEST_TMPDIR/keyless.json"
+	jq -nc --arg d "$1" '{id: "CLOUD-999", description: $d}' >"$PAYLOAD"
+}
+
+# The one body the four cases judge.
+cites_a_blocker() {
+	block '* **Blockers (§8).** `blockedBy` CLOUD-29 (the loader this validates).'
+}
+
+@test "(a) no relations key is a gap, never blocker-cited-without-relation" {
+	keyless_payload "$(cites_a_blocker)"
+	lint
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"unjudgeable-relations"* ]]
+	[[ "$output" != *"blocker-cited-without-relation"* ]]
+	# Exit 2 never asserts the block is fine either — a caller cannot cite this
+	# run as a green.
+	[[ "$output" != *"satisfies"* ]]
+}
+
+@test "(b) relations present and empty is an answer, so the citation still reports" {
+	# "No edges" is a thing the payload SAYS. Only a missing key is a gap.
+	payload "$(cites_a_blocker)"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"blocker-cited-without-relation (CLOUD-29)"* ]]
+	[[ "$output" != *"unjudgeable-relations"* ]]
+}
+
+@test "(c) relations present and carrying the cited id passes" {
+	payload "$(cites_a_blocker)" CLOUD-29
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "(d) a judgeable violation outranks the gap: exit 1, not 2" {
+	# THE NARROWING, and the opposite of CLOUD-251's "2 outranks 1": the block is
+	# wrong regardless of what could not be seen. Reporting "could not look" here
+	# would hide a real defect behind a caller's thin fetch.
+	keyless_payload "$(block '* **Blockers (§8).** `blockedBy` CLOUD-29 (the loader).
+* **Commit / bump (§6).** `feat` → **minor**.')"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"bump-disagrees-with-type"* ]]
+	# The gap is still named — nothing this gate noticed is swallowed by the rank.
+	[[ "$output" == *"unjudgeable-relations"* ]]
+}
+
+@test "the deferral rule has the same gap, and it reached further" {
+	# §8 reads one span; this rule scans the WHOLE description, so a key-stripped
+	# payload reported one phantom hand-off per citation anywhere in the body.
+	keyless_payload "$(block '* **Blockers (§8).** None.')
+
+Out of scope: the loader itself, deferred to CLOUD-77."
+	lint
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"unjudgeable-relations"* ]]
+	[[ "$output" != *"deferral-cited-without-relation"* ]]
+}
+
+@test "a missing key costs nothing when the block cites nothing" {
+	# THE OTHER DIRECTION, and it is load-bearing rather than defensive: exit 2
+	# fires only where a citation actually went unadjudicated. CLOUD-526 declares
+	# that a caller may project everything but `.description` away, and every
+	# fixture in tests/claim-check.bats is a relations-free payload whose §8 says
+	# "None." Firing on absence alone would turn that whole contract into "could
+	# not look".
+	keyless_payload "$(block '* **Blockers (§8).** None.')"
+	lint
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"unjudgeable-relations"* ]]
+}
