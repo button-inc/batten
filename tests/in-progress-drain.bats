@@ -171,6 +171,25 @@ Refs: CLOUD-179"
 	[[ "$output" == *"CLOUD-124"* ]]
 }
 
+@test "a FRESH row is not demanded of attachments — the idle bound already resolved it" {
+	# This is the cost argument as a test. `list_issues` projects id, status,
+	# gitBranchName and updatedAt but CANNOT project attachments, so `get_issue`
+	# — which takes no field selection and drags the whole body — is the only
+	# source of the last key. Ordering the conjuncts by what is projectable means
+	# that fetch is paid only for rows that are landed-free AND past the bound.
+	# Measured on the live board 2026-08-20: 7 full fetches instead of 32.
+	drain '[{"id":"CLOUD-124","status":"In Progress","updatedAt":"2026-08-20T09:00:00.000Z"}]'
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"::error::"* ]]
+}
+
+@test "a stale row IS demanded of attachments — the narrowing is not a hole" {
+	drain '[{"id":"CLOUD-124","status":"In Progress","updatedAt":"2026-01-01T09:00:00.000Z"}]'
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"attachments"* ]]
+	[[ "$output" == *"CLOUD-124"* ]]
+}
+
 @test "a LANDED row is not demanded of those keys — it is already answered" {
 	# `landed-check` decides landedness from id and status alone. Demanding three
 	# more keys to re-answer a row it already resolved would refuse a sweep that
