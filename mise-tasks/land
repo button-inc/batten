@@ -1273,9 +1273,18 @@ $verify_tail"
 	# untouched. Checked per lap and before the ready block for the reason the
 	# deferral stop is: that block is conditional, and a lap that happened not to
 	# re-ready must not be a way through.
+	# THE BODY IS PIPED IN (CLOUD-774), which is what lets the gate exempt a row
+	# this PR CLOSES. Without it the gate fires on every row the branch filed and
+	# then fixed — their paths are in the diff by construction — so the honest
+	# file-then-fix path would need an override every time, and a routinely
+	# overridden gate is bypassed rather than satisfied.
+	#
+	# `$body` is already in hand from the deferral stop above; an empty one (the
+	# fetch failed) simply yields no exemption, which is the pre-CLOUD-774
+	# behaviour and refuses rather than waves through.
 	note_phase "filed-here-check(lap $lap)"
-	if ! mise run filed-here-check; then
-		die "#$pr filed a row that was never groomed to Ready. Fix it here and close the row, comment on the issue that already owns it, or groom the row and run land again."
+	if ! printf '%s' "$body" | mise run filed-here-check; then
+		die "#$pr filed a row that was never groomed to Ready, or names code this branch has open without closing it. Fix it here and close the row, comment on the issue that already owns it, or groom the row and run land again."
 	fi
 
 	# --- and the merge must actually move the board -------------------------

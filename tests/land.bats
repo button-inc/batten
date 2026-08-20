@@ -328,6 +328,12 @@ stub_mise() {
 	cat >"$STUB/mise" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"$BATS_TEST_TMPDIR/misecalls"
+# CLOUD-774: filed-here-check is fed the PR body so it can exempt a row this PR
+# closes. Recorded here so a case can assert the body actually arrives -- a gate
+# wired to read stdin that nobody pipes to is inert, and it shipped inert once.
+# NO BACKTICKS IN THIS HEREDOC: it is unquoted, so a backticked word is command
+# substitution and the comment would try to RUN the task it names.
+if [ "\$2" = filed-here-check ]; then cat >"$BATS_TEST_TMPDIR/filedhere.stdin"; fi
 rc="$BATS_TEST_TMPDIR/rc.mise.\$2"
 if [ -f "\$rc" ]; then
   code=\$(cat "\$rc")
@@ -1113,9 +1119,9 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 @test "a row this branch filed without grooming it stops before review is asked for" {
 	# CLOUD-514's stop, and the sibling of the one above: `deferral-check` prices
 	# a decision left with no home, this prices a home opened instead of a fix.
-	# The gate reads `board-write-record`'s own file rather than stdin, so there
-	# is no body to script here — the lever is the task's exit status, which is
-	# what `land` acts on.
+	# The gate reads `board-write-record`'s own file for the rows; the PR body
+	# reaches it on stdin (CLOUD-774) only so it can exempt a row this PR closes.
+	# The lever here is still the task's exit status, which is what `land` acts on.
 	#
 	# Asserted before the comment count for the reason every stop above is:
 	# stopping after asking for the merge would have already spent what the stop
@@ -1125,6 +1131,23 @@ runs_query_403() { : >"$BATS_TEST_TMPDIR/rc.runs"; }
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"filed a row that was never groomed to Ready"* ]]
 	[ "$(comments)" -eq 0 ]
+}
+
+# CLOUD-774. THE WIRE, not just the gate. `filed-here-check` grew a closing-key
+# exemption so a row this PR closes is not read as a punt — and that exemption is
+# inert unless `land` actually pipes the body to it. It shipped inert once: the
+# first landing after the gate changed refused two rows the PR closes, because the
+# call site still passed nothing on stdin.
+@test "THE PR BODY REACHES filed-here-check, or its exemption is inert" {
+	# The stub captures stdin BEFORE it consults the scripted exit code, so making
+	# the gate fail is a lever that stops the lap immediately and still proves what
+	# the call site handed it. Letting `land` run on would poll CI and never end.
+	pr_body "Closes CLOUD-900"
+	task_fails filed-here-check
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[ -f "$BATS_TEST_TMPDIR/filedhere.stdin" ]
+	[[ "$(cat "$BATS_TEST_TMPDIR/filedhere.stdin")" == *"Closes CLOUD-900"* ]]
 }
 
 @test "a body that names its issue but never closes it stops before review is asked for" {
