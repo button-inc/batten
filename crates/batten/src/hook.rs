@@ -2202,10 +2202,7 @@ fn matching_receipt_rows<'a>(policy: &'a Policy, envelope: &Envelope) -> Vec<&'a
             if tokens[program_index] != program {
                 continue;
             }
-            if !words
-                .windows(wanted.len().max(1))
-                .any(|w| w == wanted.as_slice())
-            {
+            if !operands_match(&words, &wanted) {
                 continue;
             }
             if let Some(contains) = rule.contains.as_deref()
@@ -2493,10 +2490,7 @@ fn matching_shape_rows<'a>(policy: &'a Policy, command: &str) -> Vec<&'a Rule> {
             if tokens[program_index] != program {
                 continue;
             }
-            if !words
-                .windows(wanted.len().max(1))
-                .any(|w| w == wanted.as_slice())
-            {
+            if !operands_match(&words, &wanted) {
                 continue;
             }
             // The extra literal is matched against the segment as written,
@@ -3060,6 +3054,50 @@ fn segments(command: &str) -> Vec<Segment> {
     out
 }
 
+/// Do a row's operand words appear, adjacent and in order, in this command's
+/// words?
+///
+/// **An empty operand list is the program alone, and matches any invocation of
+/// it** (CLOUD-401). The program equality the callers test just above has
+/// already decided such a row; there is nothing further to require, so
+/// `cargo --version` — whose words are empty once flags are dropped — matches
+/// too. The expression this replaced asked `windows(wanted.len().max(1))`, and
+/// the `.max(1)` (there to stop `windows(0)`, which panics) made every window
+/// one element long: no one-element window equals an empty slice, so a
+/// program-only row was skipped on every command. It loaded clean and gated
+/// nothing, which is the one failure a policy row must never have.
+///
+/// One function for BOTH matchers, deliberately. The arithmetic it replaces
+/// lived twice, character for character, and the second copy stayed silent for
+/// nine days after the first was measured — a shared authority is what stops
+/// the twin recurring. The cases stay per-matcher (`rules::validate` and the
+/// tests below), because sharing the decision must not also share the evidence.
+fn operands_match(words: &[&str], wanted: &[&str]) -> bool {
+    wanted.is_empty() || words.windows(wanted.len()).any(|window| window == wanted)
+}
+
+/// The wrapper programs [`effective_program`] looks through **unconditionally**.
+///
+/// Declared once because two surfaces read it: the matcher, to step past a
+/// wrapper and judge what it wraps, and [`crate::rules::validate`], to refuse a
+/// `pattern` naming one — by the time a pattern is compared the wrapper has
+/// already been stepped past, so `pattern = "nohup rm"` is a row that can never
+/// fire (CLOUD-401). A second copy of this list in the validator would drift,
+/// and a drifted copy refuses rows the matcher would have honoured.
+///
+/// `mise` is deliberately **not** here: only `mise exec`/`mise x` is looked
+/// through, so `mise run` is judged as `mise` and `pattern = "mise run"` is a
+/// row the matcher honours.
+const LOOKTHROUGH_WRAPPERS: [&str; 9] = [
+    "env", "command", "nice", "stdbuf", "timeout", "xargs", "sudo", "doas", "nohup",
+];
+
+/// Is this token a program [`effective_program`] always looks through?
+#[must_use]
+pub(crate) fn is_lookthrough_wrapper(token: &str) -> bool {
+    LOOKTHROUGH_WRAPPERS.contains(&token)
+}
+
 /// Find the index of the effective program in a segment's tokens: skip
 /// `VAR=value` env prefixes, then look through known wrapper programs so the
 /// wrapped program is judged, not the wrapper. Known wrappers only; anything
@@ -3078,8 +3116,7 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
             // wrapper can only ever find MORE real programs, which is the safe
             // direction. The detach it performs is read off the raw tokens by
             // `pipeline_rules`, precisely because this function hides it.
-            "env" | "command" | "nice" | "stdbuf" | "timeout" | "xargs" | "sudo" | "doas"
-            | "nohup" => {
+            wrapper if is_lookthrough_wrapper(wrapper) => {
                 i += 1;
                 // The wrapper's own flags, env assignments, and bare numeric
                 // arguments (timeout's duration) precede the wrapped program.
@@ -3113,7 +3150,7 @@ fn effective_program(tokens: &[&str]) -> Option<usize> {
     }
 }
 
-fn is_env_assignment(token: &str) -> bool {
+pub(crate) fn is_env_assignment(token: &str) -> bool {
     let mut chars = token.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
         && token
@@ -3731,6 +3768,79 @@ mod tests {
         assert!(is_deny("env GH_PAGER= gh pr merge"));
         assert!(is_deny("timeout 30 gh pr checks"));
         assert!(is_deny("FOO=bar gh pr merge"));
+    }
+
+    /// One program-only `shape` row and nothing else (CLOUD-401).
+    ///
+    /// Deliberately NOT shared with the receipt cases further down, and not
+    /// parameterised over a helper that serves both: the same window arithmetic
+    /// was wrong in two matchers, character for character, so a fix applied to
+    /// one site must leave the other site's cases red.
+    fn program_only_shape_policy() -> Policy {
+        Policy {
+            shapes: vec![shape("no-bare-cargo", "cargo", None)],
+            fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+            redirects: Vec::new(),
+        }
+    }
+
+    fn program_only_shape_denies(command: &str) -> bool {
+        matches!(
+            adjudicate(
+                &program_only_shape_policy(),
+                &envelope(command),
+                false,
+                &None,
+                &None,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Deny(_)
+        )
+    }
+
+    #[test]
+    fn a_program_only_shape_pattern_denies_any_invocation() {
+        // THE SILENT NO-OP REGRESSION. `pattern = "cargo"` reads as "any cargo
+        // invocation", loaded clean, was accepted by `validate` — and matched
+        // nothing, ever, because `windows(0.max(1))` compared one-element
+        // windows against an empty slice.
+        assert!(program_only_shape_denies("cargo test -p batten"));
+    }
+
+    #[test]
+    fn a_program_only_shape_pattern_denies_a_flags_only_invocation() {
+        // The second, independent path to the same silence: with every flag
+        // dropped these carry no operand words at all, so the flag-stripping
+        // must not be what decides them. An argument-less reach is still a
+        // reach.
+        assert!(program_only_shape_denies("cargo --version"));
+        assert!(program_only_shape_denies("cargo"));
+    }
+
+    #[test]
+    fn a_program_only_shape_pattern_does_not_reach_through_mise_run() {
+        // The sanctioned surface, and it stays open by the PROGRAM TOKEN rather
+        // than by luck: `mise run` names a task, so `effective_program` stops at
+        // `mise` and a row keyed on `cargo` never gets as far as its operands.
+        // This is the case that makes a program-only row usable at all — one
+        // that denied the mediated form too would ban the toolchain outright.
+        assert!(!program_only_shape_denies("mise run test"));
+        assert!(!program_only_shape_denies("mise run verify"));
+    }
+
+    #[test]
+    fn a_program_only_shape_pattern_fires_through_mise_exec() {
+        // `mise exec` IS looked through, so the effective program here is
+        // `cargo` and the row fires. Pinned as behaviour rather than left
+        // implicit, because it is the whole reason a "no bare cargo" row cannot
+        // be spelled `program == "cargo"`: that reading denies the mediated
+        // form, and the predicate has to be "reached WITHOUT a mise mediator".
+        assert!(program_only_shape_denies("mise exec -- cargo test"));
+        assert!(program_only_shape_denies(
+            "mise exec rust@1.85 -- cargo build"
+        ));
     }
 
     #[test]
@@ -4475,6 +4585,68 @@ mod tests {
             ),
             Decision::Allow
         );
+    }
+
+    /// The receipt twin of [`program_only_shape_policy`]: one row whose
+    /// **trigger** is a program alone (CLOUD-401).
+    ///
+    /// Its own row, its own policy, its own assertions. The receipt matcher
+    /// carried the identical defect and nothing in the tree exercised it,
+    /// because every committed `trigger` carries operands — so these cases must
+    /// be able to stay red while the shape cases above go green.
+    fn program_only_receipt_policy() -> Policy {
+        let mut rule = shape("cargo-needs-receipt", "cargo", None);
+        rule.kind = RuleKind::Receipt;
+        rule.reason = Some("prove the toolchain first".to_owned());
+        rule.checks = Some(vec!["toolchain".to_owned()]);
+        Policy {
+            shapes: vec![rule],
+            fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+            redirects: Vec::new(),
+        }
+    }
+
+    /// Does the program-only receipt row fire on this command? The one named
+    /// check is unresolved, so a row that fires denies and a row that does not
+    /// allows — which is exactly the silence being tested for.
+    fn program_only_receipt_fires(command: &str) -> bool {
+        matches!(
+            adjudicate(
+                &program_only_receipt_policy(),
+                &envelope(command),
+                false,
+                &Some(resolved(&[("toolchain", Validity::Missing)])),
+                &None,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Deny(_)
+        )
+    }
+
+    #[test]
+    fn a_program_only_receipt_trigger_fires_on_any_invocation() {
+        // The twin of the shape regression: a `receipt` row whose trigger names
+        // a program alone was inert too, so its precondition was never demanded
+        // — a gate that reads as present and asks for nothing.
+        assert!(program_only_receipt_fires("cargo test -p batten"));
+    }
+
+    #[test]
+    fn a_program_only_receipt_trigger_fires_on_a_flags_only_invocation() {
+        assert!(program_only_receipt_fires("cargo --version"));
+        assert!(program_only_receipt_fires("cargo"));
+    }
+
+    #[test]
+    fn a_program_only_receipt_trigger_does_not_reach_through_mise_run() {
+        assert!(!program_only_receipt_fires("mise run test"));
+    }
+
+    #[test]
+    fn a_program_only_receipt_trigger_fires_through_mise_exec() {
+        assert!(program_only_receipt_fires("mise exec -- cargo test"));
     }
 
     #[test]

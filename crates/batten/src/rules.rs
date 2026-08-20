@@ -1329,8 +1329,72 @@ impl Rule {
             Selector::new(glob)
                 .map_err(|err| UsageError::raise(format!("rule {}: {err}", self.id)))?;
         }
+        self.validate_command_pattern()?;
         self.validate_forbid_predicate()?;
         self.validate_remediation()
+    }
+
+    /// Refuse a `pattern` the command matcher cannot honour (CLOUD-401).
+    ///
+    /// The empty-operand fix closed one row that loaded into silence; this
+    /// closes the **class**. `hook::matching_shape_rows` and
+    /// `hook::matching_receipt_rows` compare a pattern against a command that
+    /// has already been normalised two ways — `effective_program` has stepped
+    /// past env assignments and look-through wrappers, and the operand words
+    /// have had every flag dropped — so a pattern naming what that
+    /// normalisation removes is a row that can never fire. It loads clean,
+    /// gates nothing, and reads as coverage, which is the exact defect
+    /// [`validate`]'s doc comment is written against.
+    ///
+    /// Refused here rather than in the per-kind column census because the
+    /// census is a const list of column NAMES: this depends on the value inside
+    /// the column. Both surfaces that key on a command line are covered — a
+    /// `shape` row's ban and a `receipt` row's trigger read the same pattern
+    /// through the same matcher (`Rule::trigger`), so a rule inert on one is
+    /// inert on the other.
+    ///
+    /// A program-only pattern is **valid**, and that is the point: it is the
+    /// reading `Rule::pattern`'s doc comment already invites, and the one this
+    /// validator must not take back.
+    fn validate_command_pattern(&self) -> anyhow::Result<()> {
+        // The kinds that key on a command line. A `write`-triggered receipt row
+        // is refused a `pattern` outright above, so it never reaches here.
+        let keys_on_a_command = self.kind == RuleKind::Shape
+            || (self.kind == RuleKind::Receipt
+                && self.receipt_trigger() == ReceiptTrigger::Command);
+        if !keys_on_a_command {
+            return Ok(());
+        }
+        if self.pattern.is_none() {
+            return Ok(());
+        }
+        // `trigger()` yields nothing for a pattern with no word in it, and a
+        // row it cannot read is a row the matcher skips.
+        let Some((program, wanted)) = self.trigger() else {
+            return Err(UsageError::raise(format!(
+                "rule {}: `pattern` names no program; a pattern of only whitespace matches no command",
+                self.id
+            )));
+        };
+        if crate::hook::is_lookthrough_wrapper(program) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `pattern` names the wrapper `{program}`, which the matcher looks THROUGH to judge the program it wraps; name that program instead",
+                self.id
+            )));
+        }
+        if crate::hook::is_env_assignment(program) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `pattern` starts with the environment assignment `{program}`, which the matcher steps past; name the program instead",
+                self.id
+            )));
+        }
+        if let Some(flag) = wanted.iter().find(|word| word.starts_with('-')) {
+            return Err(UsageError::raise(format!(
+                "rule {}: `pattern` requires the flag `{flag}`, and the matcher compares operand words with flags already dropped; use `contains` for a flag",
+                self.id
+            )));
+        }
+        Ok(())
     }
 
     /// `fix` and `no_fix_reason` are alternatives, never both (CLOUD-81).
@@ -4400,6 +4464,75 @@ mod tests {
             run_all(std::slice::from_ref(&rule), &dir)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// A `shape` row keyed on a command line, for the pattern-shape refusals.
+    fn shape_pattern(pattern: &str) -> Rule {
+        shape("row", pattern, "use the sanctioned path")
+    }
+
+    #[test]
+    fn a_program_only_pattern_is_valid_because_the_matcher_honours_it() {
+        // The reading `Rule::pattern`'s doc comment invites, and the one this
+        // validator must not take back: an empty operand list is "the program
+        // alone". Refusing it at load would turn the documented reading into a
+        // config error and leave the exact-program predicate inexpressible.
+        assert!(validate(&[shape_pattern("cargo")]).is_ok());
+        assert!(validate(&[shape_pattern("gh pr merge")]).is_ok());
+        // `mise run` is judged as `mise`, so this one the matcher DOES honour.
+        assert!(validate(&[shape_pattern("mise run land")]).is_ok());
+    }
+
+    #[test]
+    fn a_pattern_requiring_a_flag_is_refused() {
+        // The matcher compares operand words with every flag already dropped,
+        // so this row could never fire. Refused rather than loaded silent —
+        // that is the property, not the one empty-operand instance.
+        let err = validate(&[shape_pattern("cargo --version")]).unwrap_err();
+        assert!(err.downcast_ref::<UsageError>().is_some());
+        assert!(err.to_string().contains("--version"), "{err}");
+    }
+
+    #[test]
+    fn a_pattern_naming_a_looked_through_wrapper_is_refused() {
+        // `effective_program` steps past these to judge what they wrap, so a
+        // pattern naming one is compared against a program token that can never
+        // be the wrapper.
+        for pattern in ["nohup rm", "sudo rm", "timeout 30 cargo", "xargs rm"] {
+            let err = validate(&[shape_pattern(pattern)]).unwrap_err().to_string();
+            assert!(err.contains("looks THROUGH"), "{pattern}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_pattern_starting_with_an_env_assignment_is_refused() {
+        let err = validate(&[shape_pattern("GH_PAGER= gh pr merge")])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("environment assignment"), "{err}");
+    }
+
+    #[test]
+    fn a_whitespace_only_pattern_is_refused() {
+        let err = validate(&[shape_pattern("   ")]).unwrap_err().to_string();
+        assert!(err.contains("names no program"), "{err}");
+    }
+
+    #[test]
+    fn a_receipt_trigger_is_held_to_the_same_pattern_shape() {
+        // Both surfaces read the pattern through `Rule::trigger` and the same
+        // matcher, so a row inert as a `shape` is inert as a `receipt` trigger.
+        // Refusing only the kind that happened to be measured would leave the
+        // other half of the class open.
+        let mut rule = shape_pattern("cargo --version");
+        rule.kind = RuleKind::Receipt;
+        rule.checks = Some(vec!["toolchain".to_owned()]);
+        assert!(
+            validate(&[rule])
+                .unwrap_err()
+                .to_string()
+                .contains("--version")
         );
     }
 
