@@ -424,6 +424,27 @@ repo config > default`, declared as data in `SETTINGS` (per-key env var/flag),
   the bug. `upstream_of_head` therefore asks about a bare `@{upstream}` with no
   branch name interpolated, so there is no caller-influenced token in the argv
   and omitting the flag costs nothing.
+  **Mid-migration to in-process git (CLOUD-320's row, resolved to `gix` on a
+  measurement — CLOUD-718).** Two backends coexist here ON PURPOSE, and only
+  here: `gix_is_confined_to_this_module` is what stops the new one spreading
+  across the crate while the rest of the module still shells out. `show` is the
+  slice that landed — it opens the repository with `gix::open::Options::
+isolated()` (which declines system, global and environment config outright,
+  replacing the named-variable scrub structurally) and reads its blob through a
+  tree lookup. Three defects closed as consequences rather than as care: a ref
+  spelling an option cannot be argv so cannot write a file, a `<ref>:<dir>`
+  cannot return a listing for `[epoch] tracked` to hash as content, and
+  "unresolvable ref" and "path absent at that ref" became two answers rather than
+  one hedged message — the distinction CLOUD-720 builds last-known-good on. The
+  remaining slices are CLOUD-738 (ref/object reads, where the trap above is
+  DELETED rather than maintained), CLOUD-739 (patch identity on `gix-diff` +
+  `sha2`, which takes `DIFF_CONFIG`'s 20 keys and `DIFF_FLAGS`' 6 flags with it,
+  and is where the real behavioural risk sits) and CLOUD-740 (status, worktrees,
+  writes; then `no_second_git_invoker_exists` becomes "the crate spawns no
+  `git`"). `git2` is excluded by `macos-link-check` rule 1 — and that exclusion
+  is a COST, not a constraint: cross-linking Darwin frameworks needs an SDK the
+  build declines because macOS runners bill at 10x on a private repo, which
+  CLOUD-737 revisits when the repo goes public.
 - `state.rs` — out-of-tree state dir (`<data-dir>/<app>/<segment>/`, CLOUD-23), via
   `etcetera`; the segment derived at runtime, never baked in (rule 1). Since
   CLOUD-296 the segment is `<dir-name>-<12 hex>`, not the bare directory name: the
