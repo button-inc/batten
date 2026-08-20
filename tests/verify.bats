@@ -366,6 +366,42 @@ called() {
 	[[ "$output" != *"no VALID claim receipt"* ]]
 }
 
+@test "RECLAIM RUNS, and runs before the claim receipt is even looked at" {
+	# CLOUD-766. `target/deps` grows ~1.5-2 GB per lap and cargo reclaims nothing,
+	# so a multi-lap session runs the volume out — measured twice in one session.
+	# This is the only guard in the body whose failure the others cannot survive:
+	# with no disk, every question below answers "failed" for a reason that has
+	# nothing to do with the tree.
+	run_verify
+	[ "$status" -eq 0 ]
+	[ "$(called target-prune)" -eq 1 ]
+}
+
+@test "a volume that cannot be recovered is a STOP, not a lap" {
+	# `land` reads exit 2 as "main moved, try again", and nothing about a full
+	# volume improves by rebasing. Exit 1 is what stops it.
+	task_exits target-prune 1
+	run_verify
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"not enough disk"* ]]
+	# And it stops before spending anything below it.
+	[ "$(called linear-check)" -eq 0 ]
+	[ "$(called verify:gated)" -eq 0 ]
+}
+
+@test "the reclaim precedes the claim receipt in the mapper" {
+	# Ordering asserted textually as well as behaviourally: a later reader moving
+	# it below the receipt check would still pass the rows above, and would make
+	# the cheapest recoverable failure in the body answerable only after a
+	# question that cannot be answered without disk.
+	local prune_line claim_line
+	prune_line=$(grep -n 'mise run target-prune' <<<"$MAPPER" | head -1 | cut -d: -f1)
+	claim_line=$(grep -n 'receipt status claim' <<<"$MAPPER" | head -1 | cut -d: -f1)
+	[ -n "$prune_line" ]
+	[ -n "$claim_line" ]
+	[ "$prune_line" -lt "$claim_line" ]
+}
+
 @test "the receipt check precedes every other question in the mapper" {
 	# Ordering asserted textually as well as behaviourally: a later reader moving
 	# it below `linear-check` would still pass the cases above (both refuse), and

@@ -313,7 +313,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "msrv-pin-agreement,issue-read-check,cap-drift,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-grant-sync,mcp-allow-check"
+MUTANT_GATES = "msrv-pin-agreement,issue-read-check,cap-drift,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-grant-sync,mcp-allow-check,target-prune"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1052,6 +1052,24 @@ run = '''
 # manifests the lane owns, and its body names the row derived from that diff.
 # Widening the agent receipt to cover bots would have made it mean less
 # everywhere, which is the trust path CLOUD-431 exists to prevent.
+# RECLAIM BEFORE ANYTHING IS SPENT (CLOUD-766). `target/deps` grows ~1.5-2 GB per
+# lap — a rebase mints a new SHA, which changes every artifact's metadata hash,
+# and cargo never reclaims the superseded copy — so a session that lands more
+# than a couple of issues runs the volume out. Measured twice in one session.
+#
+# It is FIRST, ahead of even the claim receipt, because it is the only guard here
+# whose failure the others cannot survive: with no disk, every question below
+# answers "failed" for a reason that has nothing to do with the tree. Exhaustion
+# otherwise arrives as a rustc IO error inside a test run, under a `land` line
+# telling the author to fix their own diff.
+#
+# Exit 1 is "still short with nothing left to reclaim", which is a stop, not a
+# lap: `land` reads 2 as "main moved, try again" and nothing about a full volume
+# improves by rebasing.
+if ! mise run target-prune; then
+  echo "::error:: verify: not enough disk to run the gate, and pruning did not recover it — the refusal above names free space and the floor. No receipt written." >&2
+  exit 1
+fi
 claim_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 if [ -n "$claim_branch" ]; then
   # ONE PREDICATE, NOT A SECOND ONE WRITTEN IN SHELL (CLOUD-741).
