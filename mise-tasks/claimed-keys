@@ -54,6 +54,9 @@
 #
 # Output is the keys alone, uppercased and sorted, one per line — a pointer set,
 # never the prose they were extracted from (rule 4).
+# The mutation drops the speculation boundary, so a key carried only by an adopted
+# commit is claimed again and the waiter races the PR it is waiting on.
+#MUTANT claimed-keys-adopts-speculated|s/^\tif since=\$(spec_base_range); then$/\tif false; then/|a key carried only by a speculated commit is not claimed
 set -euo pipefail
 
 ISSUE_RE='CLOUD-[0-9]+'
@@ -98,9 +101,41 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 
+# THE COMMITS THIS BRANCH AUTHORED, WHICH IS NARROWER THAN THE ONES IT CARRIES
+# (CLOUD-748). `land`'s speculative linearization (CLOUD-369) rebases a waiting
+# branch onto the lease holder's published head, and says so plainly: it "puts
+# ANOTHER BRANCH'S unlanded commits into this branch's history". Those commits
+# carry the holder's `CLOUD-*` keys, and the holder has an open PR by
+# construction — so `claim-race-check`, reading this file, reported the waiter as
+# racing the very PR the speculation bet on. Measured twice in one session, on
+# CLOUD-718 and then CLOUD-719, each costing a full `verify`.
+#
+# It is not a race and it is not intermittent: the two gates were individually
+# correct and jointly unsatisfiable. `land` would have unwound the bet at the top
+# of the next lap, but a refused gate ends the lap, so the settle never ran.
+#
+# `BATTEN_SPEC_BASE` is the boundary, exported by `land` when it speculates and
+# cleared when it settles. It is the commit the branch was replayed ONTO, so
+# everything after it on HEAD is this branch's own work — not `spec_undo`, which
+# is HEAD *before* the rebase and is left off the branch entirely.
+#
+# HONOURED ONLY WHEN IT IS AN ANCESTOR OF HEAD, which is what makes a stale
+# export harmless: an unwound bet, a `land` that died, or an inherited variable
+# from an unrelated run all fail that test and the range falls back to
+# `origin/main`. The failure direction is the wider set, which is the one that
+# refuses — never the narrower one, which would silently stop catching races.
+spec_base_range() {
+	local base="${BATTEN_SPEC_BASE:-}"
+	[ -n "$base" ] || return 1
+	git merge-base --is-ancestor "$base" HEAD 2>/dev/null || return 1
+	printf '%s\n' "$base"
+}
+
 if [ "$explicit" -eq 0 ]; then
 	branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
-	if git rev-parse --verify -q origin/main >/dev/null 2>&1; then
+	if since=$(spec_base_range); then
+		log=$(git log --format='%B' "$since"..HEAD 2>/dev/null || true)
+	elif git rev-parse --verify -q origin/main >/dev/null 2>&1; then
 		log=$(git log --format='%B' origin/main..HEAD 2>/dev/null || true)
 	fi
 fi

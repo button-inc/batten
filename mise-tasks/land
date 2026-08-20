@@ -504,6 +504,20 @@ rate_limit_pause() {
 # passed on, the lease won by us, the lease unreadable.
 spec_base=
 spec_undo=
+
+# THE BOUNDARY, PUBLISHED TO THE CHILD (CLOUD-748). `verify` runs `claim-race-check`,
+# which reads `claimed-keys`, which cannot otherwise tell a commit this branch
+# authored from one this speculation adopted — so it reported the waiter as racing
+# the very PR the bet was placed on, twice in one session. These are shell
+# variables in this process; a child inherits only what is exported. Called at
+# every point the bet is placed or cleared, so the two can never disagree.
+publish_speculation() {
+	if [ -n "$spec_base" ]; then
+		export BATTEN_SPEC_BASE="$spec_base"
+	else
+		unset BATTEN_SPEC_BASE
+	fi
+}
 spec_main=
 # THE CONFLICT THE PROBE ALREADY COMPUTED (CLOUD-369). `speculate` learns, for
 # free, whether the holder's base applies to this branch — and until now that
@@ -580,6 +594,7 @@ unwind_speculation() {
 	spec_base=
 	spec_undo=
 	spec_main=
+	publish_speculation
 }
 
 settle_speculation() {
@@ -590,6 +605,7 @@ settle_speculation() {
 		spec_undo=
 		spec_main=
 		spec_pushed=0
+		publish_speculation
 		return 0
 	fi
 	if [ "$(git rev-parse origin/main)" = "$spec_main" ]; then
@@ -659,6 +675,7 @@ speculate() {
 	# "landed something else" are the same reading, and the bet would be unwound
 	# every lap while the holder was still perfectly on course.
 	spec_main=$(git rev-parse origin/main)
+	publish_speculation
 	echo "land: speculatively linearized onto $head_ref@$(git rev-parse --short "$base") — the main that is about to exist"
 }
 

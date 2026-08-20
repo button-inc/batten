@@ -175,3 +175,71 @@ Measured against CLOUD-321.' </dev/null"
 	[ "$status" -eq 2 ]
 	[[ "$output" != *"CLOUD-321"* ]]
 }
+
+# --- the commits a speculation lent this branch (CLOUD-748) -------------------
+#
+# `land` speculatively rebases a waiting branch onto the lease holder's published
+# head, which by design puts another branch's unlanded commits into this one's
+# history. Those commits carry the holder's keys, and the holder has an open PR by
+# construction — so `claim-race-check`, reading this file, reported the waiter as
+# racing the very PR the bet was placed on. Measured twice in one session.
+#
+# `BATTEN_SPEC_BASE` is the commit the branch was replayed ONTO, exported by
+# `land` while the bet is live.
+
+# Replays the speculation's shape: the holder's keyed commit, then this branch's
+# own work on top, with the boundary between them named.
+speculate_onto() { # speculate_onto <holder-commit-subject>
+	commit "$1"
+	SPEC_BASE=$(git rev-parse HEAD)
+	commit "some work of this branch's own"
+}
+
+@test "a key carried only by a speculated commit is not claimed" {
+	# THE DISCRIMINATOR (CLOUD-418, CLOUD-748 §7b). Before the boundary existed no
+	# fixture could express an adopted commit at all; `mise run mutant` drives this
+	# red through `claimed-keys-adopts-speculated`.
+	speculate_onto "fix(git): something else entirely
+
+Refs: CLOUD-718"
+	run bash -c "BATTEN_SPEC_BASE='$SPEC_BASE' '$KEYS' </dev/null"
+	[ "$status" -eq 0 ]
+	# The branch name still answers; the adopted key does not appear.
+	[ "$output" = "CLOUD-777" ]
+}
+
+@test "a key this branch authored is still claimed with a speculation live" {
+	# The CLOUD-230 race must keep being caught: narrowing the range must not
+	# narrow it past this branch's own commits.
+	speculate_onto "fix(git): the holder's work
+
+Refs: CLOUD-718"
+	commit "feat: mine
+
+Closes CLOUD-999"
+	run bash -c "BATTEN_SPEC_BASE='$SPEC_BASE' '$KEYS' </dev/null"
+	[ "$status" -eq 0 ]
+	[ "$output" = "CLOUD-999" ]
+}
+
+@test "with no speculation live the answer is exactly what it was" {
+	commit "fix: work
+
+Closes CLOUD-555"
+	run bash -c "'$KEYS' </dev/null"
+	[ "$status" -eq 0 ]
+	[ "$output" = "CLOUD-555" ]
+}
+
+# A STALE EXPORT MUST NOT NARROW THE SET, and the failure direction is the point:
+# an unwound bet, a dead `land`, or an inherited variable from an unrelated run
+# all fail the ancestry test and fall back to `origin/main`. Falling back to the
+# WIDER set refuses; silently narrowing would stop catching races.
+@test "a spec base that is not an ancestor of HEAD is ignored" {
+	commit "feat: mine
+
+Closes CLOUD-999"
+	run bash -c "BATTEN_SPEC_BASE=0000000000000000000000000000000000000000 '$KEYS' </dev/null"
+	[ "$status" -eq 0 ]
+	[ "$output" = "CLOUD-999" ]
+}
