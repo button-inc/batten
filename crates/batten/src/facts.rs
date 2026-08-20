@@ -852,3 +852,80 @@ pub fn rows_in(result: &serde_json::Value) -> Look<usize> {
 fn is_text_block(value: &serde_json::Value) -> bool {
     value.get("type").and_then(serde_json::Value::as_str) == Some("text")
 }
+
+/// One agent-sourced fact a consumer declares: its name, and the command whose
+/// output answers it.
+///
+/// # Why the command is CONFIG rather than a crate constant
+///
+/// Non-negotiable rule 1. `gh pr list --search …` names a forge, a query syntax
+/// and a workflow — all of them a consumer's facts, none of them the engine's.
+/// The core knows that an agent-sourced fact has a name and a command; which
+/// command answers which question is `batten.toml`'s.
+///
+/// # One value, read twice, which is the point
+///
+/// The same string is the command the deny asks the agent to run AND the command
+/// the record is checked against. That is deliberate and is the lesson of the two
+/// issues this one follows: CLOUD-779 and CLOUD-601 were both a harness-level
+/// declaration kept in step BY HAND with the reachability it implied, and both
+/// drifted. A fix text and a verification target that could disagree would be the
+/// same defect a third time, on a surface where the disagreement is a forged
+/// fact rather than a silent allow.
+#[derive(
+    Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
+#[serde(deny_unknown_fields)]
+pub struct Declared {
+    /// The fact's name — the token a `receipt` row's `checks` list refers to,
+    /// and the key its record is stored under.
+    pub name: String,
+    /// The command whose output answers it, verbatim.
+    ///
+    /// Read twice, and the same bytes both times: it is what the deny tells the
+    /// agent to run, and what the stored record is compared against.
+    pub command: String,
+}
+
+/// Refuse a malformed `[[fact]]` table (CLOUD-776).
+///
+/// Three ways a row can be wrong, and each would make a gate that cannot fire —
+/// CLOUD-253's shape, which is why a table nothing validates is itself refused:
+///
+/// * an **empty name** has no `checks` token to be referred to by, so no rule
+///   could ever select it;
+/// * an **empty command** would tell the agent to run nothing and then verify a
+///   record against nothing, which no record can satisfy;
+/// * a **duplicate name** is two answers to one question, and the lookup takes
+///   the first — so the second row is silently dead config.
+///
+/// # Errors
+///
+/// Returns a [`crate::error::UsageError`] (→ exit `1`) naming the offending row.
+/// Pointer-only: the fact's NAME, never its command, which is a consumer's
+/// argv and may carry anything.
+pub fn validate(facts: &[Declared]) -> anyhow::Result<()> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for fact in facts {
+        if fact.name.trim().is_empty() {
+            return Err(crate::error::UsageError::raise(
+                "a `[[fact]]` row declares an empty `name`, so no `checks` entry could refer to it",
+            ));
+        }
+        if fact.command.trim().is_empty() {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` declares an empty `command`: the deny would ask the agent to \
+                 run nothing, and no record could satisfy it",
+                fact.name
+            )));
+        }
+        if !seen.insert(fact.name.as_str()) {
+            return Err(crate::error::UsageError::raise(format!(
+                "`[[fact]]` `{}` is declared twice; the lookup takes the first, so the second \
+                 row is config that can never fire",
+                fact.name
+            )));
+        }
+    }
+    Ok(())
+}

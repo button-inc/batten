@@ -174,6 +174,22 @@ pub struct Config {
     /// [`MutatingVerb::redirect`]: crate::verbs::MutatingVerb::redirect
     #[serde(default, rename = "redirect", skip_serializing_if = "Vec::is_empty")]
     pub redirects: Vec<crate::redirect::Redirect>,
+    /// The agent-sourced facts this repository declares (CLOUD-776): a name, and
+    /// the command whose output answers it.
+    ///
+    /// The channel these open is the one that removes a choice rather than making
+    /// it. A fact the engine cannot reach used to mean *the engine spawns* or *we
+    /// implement less*; a declared fact means the gate denies with
+    /// [`crate::refusal::Fix::Run`], the AGENT's own tool runs the command, and
+    /// the harness hands the bytes back on the post-tool event. Batten executes
+    /// nothing, so house-style §5's read promise is untouched.
+    ///
+    /// Consumer-specific by nature, which is why the rows live here and never in
+    /// the crate (non-negotiable rule 1): `gh pr list --search …` names a forge, a
+    /// query syntax and a workflow, and the engine knows only that a fact has a
+    /// name and a command.
+    #[serde(default, rename = "fact", skip_serializing_if = "Vec::is_empty")]
+    pub facts: Vec<crate::facts::Declared>,
     /// Output predicates over a wrapped command's captured streams (CLOUD-117):
     /// literals that, found in `batten exec`'s output, promote a lying exit `0`
     /// to a violation. Consumer-specific by nature — which warning means
@@ -545,6 +561,7 @@ fn parse_ungated(text: &str, source: &str) -> Result<Config> {
     // whose expiry nobody could read. Refusing at load is what makes "every
     // waiver carries an expiry" true of the resolved config rather than aspirational.
     crate::waiver::validate(&config.waivers)?;
+    crate::facts::validate(&config.facts)?;
     // `[budget]` is a table rather than a list, so the census below (which scans
     // `Vec<T>` fields) does not reach it — but the failure it guards against is
     // the same one: a table that parses and gates nothing. A `[budget]` header
@@ -672,6 +689,7 @@ impl Config {
             epoch: None,
             verbs: Vec::new(),
             redirects: Vec::new(),
+            facts: Vec::new(),
             markers: Vec::new(),
             exec: None,
             exec_patterns: Vec::new(),
@@ -928,6 +946,7 @@ mod tests {
         ("exec_patterns", "crate::outputs::validate("),
         ("provisions", "crate::provision::validate("),
         ("waivers", "crate::waiver::validate("),
+        ("facts", "crate::facts::validate("),
     ];
 
     /// Tables proven well formed somewhere else, each with the reason. Listing

@@ -454,6 +454,49 @@ fn receipt_path(repo_root: &str, check: &str) -> Result<std::path::PathBuf> {
 /// guard has, and the one CLOUD-312 §5 preserves end to end. It is deliberately
 /// distinct from `Some(Missing)`, which is a real verdict about a real
 /// repository and denies.
+/// Read one agent-sourced fact's record, if it exists and parses (CLOUD-776).
+///
+/// The I/O half, at the boundary — the deciding half is [`crate::facts::sourced`]
+/// and is pure. Unreadable and unparseable both answer `None`, which that
+/// function turns into [`crate::facts::Look::CouldNotLook`]: fail closed to *we
+/// do not know*, never to a fact.
+#[must_use]
+pub fn sourced_record(name: &str) -> Option<crate::facts::Sourced> {
+    let git_dir = git::query(
+        Path::new("."),
+        &["rev-parse", "--absolute-git-dir"],
+        "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
+    )
+    .ok()?;
+    let path = crate::facts::sourced_path(Path::new(git_dir.trim()), name);
+    crate::facts::Sourced::parse(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Write one agent-sourced fact's record (CLOUD-776).
+///
+/// The only write this channel makes, and it carries a COUNT rather than the
+/// buffer it was derived from (rule 4): a command's stdout can hold anything, so
+/// nothing under the state root may reproduce it.
+///
+/// # Errors
+///
+/// Propagates a failure to locate the git dir or to write the record. A caller on
+/// the mediated path treats that as *could not record* and allows — a hook that
+/// cannot write a fact must not become the reason work stops.
+pub fn record_sourced(name: &str, record: &crate::facts::Sourced) -> Result<()> {
+    let git_dir = git::query(
+        Path::new("."),
+        &["rev-parse", "--absolute-git-dir"],
+        "not a git repository, so there is nowhere an agent-sourced fact could be recorded",
+    )?;
+    let path = crate::facts::sourced_path(Path::new(git_dir.trim()), name);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, record.render())?;
+    Ok(())
+}
+
 pub(crate) fn verdicts(
     checks: &BTreeMap<String, ReceiptKey>,
 ) -> Option<BTreeMap<String, Validity>> {
@@ -758,7 +801,7 @@ pub fn hex_sha256(bytes: &[u8]) -> String {
 /// leaves no git trace, which is why [`crate::waiver`] does evaluate a clock — at
 /// its boundary, with the date threaded in as data. Different claims, different
 /// invalidators (CLOUD-208).
-pub(crate) fn rfc3339_utc(unix_seconds: u64) -> String {
+pub fn rfc3339_utc(unix_seconds: u64) -> String {
     let date = crate::waiver::Date::from_unix_seconds(unix_seconds);
     let second_of_day = unix_seconds % 86_400;
     let (hour, minute, second) = (

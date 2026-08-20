@@ -110,6 +110,13 @@
         "$ref": "#/$defs/OutputPattern"
       }
     },
+    "fact": {
+      "description": "The agent-sourced facts this repository declares (CLOUD-776): a name, and\nthe command whose output answers it.\n\nThe channel these open is the one that removes a choice rather than making\nit. A fact the engine cannot reach used to mean *the engine spawns* or *we\nimplement less*; a declared fact means the gate denies with\n[`crate::refusal::Fix::Run`], the AGENT's own tool runs the command, and\nthe harness hands the bytes back on the post-tool event. Batten executes\nnothing, so house-style §5's read promise is untouched.\n\nConsumer-specific by nature, which is why the rows live here and never in\nthe crate (non-negotiable rule 1): `gh pr list --search …` names a forge, a\nquery syntax and a workflow, and the engine knows only that a fact has a\nname and a command.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Declared"
+      }
+    },
     "fail_on_warning": {
       "description": "Whether a `warn`-severity finding is promoted to a violation (CLOUD-49).\nAbsent means \"this file does not speak to the setting\", which is what\nlets [`crate::resolve`] attribute the effective value to the layer that\nactually set it. Policy-bearing, so an override may only turn it *on*\n(§8): `false` over a committed `true` is refused, never applied.",
       "type": [
@@ -457,6 +464,25 @@
       "additionalProperties": false,
       "required": [
         "subject_pattern"
+      ]
+    },
+    "Declared": {
+      "description": "One agent-sourced fact a consumer declares: its name, and the command whose\noutput answers it.\n\n# Why the command is CONFIG rather than a crate constant\n\nNon-negotiable rule 1. `gh pr list --search …` names a forge, a query syntax\nand a workflow — all of them a consumer's facts, none of them the engine's.\nThe core knows that an agent-sourced fact has a name and a command; which\ncommand answers which question is `batten.toml`'s.\n\n# One value, read twice, which is the point\n\nThe same string is the command the deny asks the agent to run AND the command\nthe record is checked against. That is deliberate and is the lesson of the two\nissues this one follows: CLOUD-779 and CLOUD-601 were both a harness-level\ndeclaration kept in step BY HAND with the reachability it implied, and both\ndrifted. A fix text and a verification target that could disagree would be the\nsame defect a third time, on a surface where the disagreement is a forged\nfact rather than a silent allow.",
+      "type": "object",
+      "properties": {
+        "command": {
+          "description": "The command whose output answers it, verbatim.\n\nRead twice, and the same bytes both times: it is what the deny tells the\nagent to run, and what the stored record is compared against.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The fact's name — the token a `receipt` row's `checks` list refers to,\nand the key its record is stored under.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "command"
       ]
     },
     "Defects": {

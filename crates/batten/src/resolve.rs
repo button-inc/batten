@@ -300,6 +300,16 @@ pub struct Resolved {
     /// authority never named and can never change what a committed row says.
     #[serde(rename = "redirect")]
     pub redirects: Vec<crate::redirect::Redirect>,
+    /// The agent-sourced facts the authority declares (CLOUD-776).
+    ///
+    /// **Authority-only**, and that is a security property rather than a
+    /// consistency one — the same reason `[[hook.action]]` is. The declared
+    /// command is what a deny tells the agent to run AND what the stored record
+    /// is verified against, so a `batten.local.toml` able to add a row could
+    /// point a gate at a command whose output it chooses, and the gate would
+    /// accept it as a fact.
+    #[serde(rename = "fact")]
+    pub facts: Vec<crate::facts::Declared>,
     /// The suppression-marker table, consumer data the authority supplies.
     #[serde(rename = "marker")]
     pub markers: Vec<crate::markers::Marker>,
@@ -694,6 +704,7 @@ pub fn resolve_with_env(
         rules: repo.rules.clone(),
         exec_patterns: repo.exec_patterns.clone(),
         redirects: repo.redirects.clone(),
+        facts: repo.facts.clone(),
         waivers: repo.waivers.clone(),
     };
 
@@ -793,6 +804,7 @@ struct Tables {
     rules_source: Contributors,
     exec_patterns: Vec<crate::outputs::OutputPattern>,
     redirects: Vec<crate::redirect::Redirect>,
+    facts: Vec<crate::facts::Declared>,
     waivers: Vec<crate::waiver::Waiver>,
 }
 
@@ -1094,6 +1106,7 @@ fn assemble(
         epoch: repo.epoch.clone(),
         verbs: repo.verbs.clone(),
         redirects: tables.redirects,
+        facts: tables.facts,
         markers: repo.markers.clone(),
         exec: repo.exec,
         exec_patterns: tables.exec_patterns,
@@ -1160,6 +1173,11 @@ fn attribution(
         ),
         ("exec", authority_set(repo.exec.is_some())),
         ("redirect", authority_set(!repo.redirects.is_empty())),
+        // Authority-only, like `hook.action` and for the same security reason: a
+        // declared command is what a deny asks the agent to run AND what the
+        // record is verified against, so a local file able to add a row could
+        // point a gate at output it chooses (CLOUD-776).
+        ("fact", authority_set(!repo.facts.is_empty())),
         ("waiver", authority_set(!repo.waivers.is_empty())),
         ("budget", authority_set(repo.budget.is_some())),
         ("must_land_on", authority_set(repo.must_land_on.is_some())),

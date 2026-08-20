@@ -1804,6 +1804,15 @@ pub struct Policy {
     /// is why it sits beside `protected` rather than inside it and why no
     /// raise-only clamp applies to it.
     redirects: Vec<Redirect>,
+    /// The agent-sourced facts this repository declares (CLOUD-776).
+    ///
+    /// Carried on the policy for the reason `verbs` and `protected` are: the
+    /// boundary needs them to resolve a check, and the refusal needs the declared
+    /// command so the fix text and the verification target are ONE value. Two
+    /// copies of that string is the defect CLOUD-779 and CLOUD-601 both were —
+    /// a declaration kept in step by hand with what it implies — and here the
+    /// drift would not be a silent allow but a forged fact.
+    facts: Vec<crate::facts::Declared>,
 }
 
 impl Policy {
@@ -1821,6 +1830,7 @@ impl Policy {
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
+            facts: Vec::new(),
         }
     }
 
@@ -1850,6 +1860,7 @@ impl Policy {
             verbs: resolved.verbs.clone(),
             protected: PathSet::includes("protected", &resolved.protected)?,
             redirects: resolved.redirects.clone(),
+            facts: resolved.facts.clone(),
         })
     }
 
@@ -1870,6 +1881,24 @@ impl Policy {
     #[must_use]
     pub const fn harness(&self) -> Harness {
         self.harness
+    }
+
+    /// Every agent-sourced fact this repository declares (CLOUD-776).
+    #[must_use]
+    pub fn declared_facts(&self) -> &[crate::facts::Declared] {
+        &self.facts
+    }
+
+    /// The agent-sourced fact this check names, if the consumer declared one
+    /// (CLOUD-776).
+    ///
+    /// The one authority for both halves: the boundary asks it what command to
+    /// verify a record against, and [`receipt_refusal`] asks it what command to
+    /// tell the agent to run. A check naming no declared fact answers `None` and
+    /// is an ordinary receipt, which is what keeps this additive.
+    #[must_use]
+    pub fn agent_fact(&self, check: &str) -> Option<&crate::facts::Declared> {
+        self.facts.iter().find(|fact| fact.name == check)
     }
 
     /// The receipt names this **command** needs proved, deduplicated.
@@ -2318,7 +2347,12 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
         for check in rule.checks.iter().flatten() {
             let verdict = facts.get(check).copied().unwrap_or(Validity::Missing);
             if verdict != Validity::Valid {
-                return Decision::Deny(receipt_refusal(rule, check, verdict));
+                return Decision::Deny(receipt_refusal(
+                    rule,
+                    check,
+                    verdict,
+                    policy.agent_fact(check),
+                ));
             }
         }
     }
@@ -2331,7 +2365,12 @@ fn receipt_rules(policy: &Policy, envelope: &Envelope, facts: &ReceiptFacts) -> 
 /// about the receipt, and the remedy is the row's declared `reason` — the same
 /// contract a shape row keeps (CLOUD-122). Pointer-only: the check name and a
 /// verdict token, never the receipt's contents.
-fn receipt_refusal(rule: &Rule, check: &str, verdict: Validity) -> Refusal {
+fn receipt_refusal(
+    rule: &Rule,
+    check: &str,
+    verdict: Validity,
+    sourced: Option<&crate::facts::Declared>,
+) -> Refusal {
     let cause = match verdict {
         // The cause names what the receipt is keyed to (CLOUD-444), because that
         // is what the reader has to act on: "no receipt for this commit" sends
@@ -2354,7 +2393,18 @@ fn receipt_refusal(rule: &Rule, check: &str, verdict: Validity) -> Refusal {
         // verdict. Stated rather than unwrapped so the match stays total.
         Validity::Valid => format!("`{check}` is valid"),
     };
-    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+    // An agent-sourced fact's remedy is the DECLARED COMMAND, not the row's
+    // prose (CLOUD-776). That is what makes the loop close: the agent is told
+    // exactly the command whose output will be accepted, and it is the same
+    // string the record is then verified against. A row's `reason` here would be
+    // a second wording of the same thing, free to drift from what is checked —
+    // and a fix that asks for one command while the gate accepts another is how
+    // a forged fact gets a legitimate-looking path.
+    let fix = match sourced {
+        Some(fact) => Fix::Run(fact.command.clone()),
+        None => Fix::declared(rule.reason.as_deref()),
+    };
+    Refusal::new(&rule.id, cause, fix)
 }
 
 /// The id-free half of the pipeline verdict: which shape a command commits.
@@ -3606,6 +3656,7 @@ mod tests {
     fn protected_policy_with(verbs: Vec<MutatingVerb>, redirects: Vec<Redirect>) -> Policy {
         Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,
@@ -3636,6 +3687,7 @@ mod tests {
     fn gh_policy() -> Policy {
         Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
@@ -3895,6 +3947,7 @@ mod tests {
     fn program_only_shape_policy() -> Policy {
         Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![shape("no-bare-cargo", "cargo", None)],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -3968,6 +4021,7 @@ mod tests {
         rule.require_via = Some(crate::rules::RequireVia::Mise);
         Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4327,6 +4381,7 @@ mod tests {
         rule.severity = Some(RuleSeverity::Allow);
         let policy = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4354,6 +4409,7 @@ mod tests {
 
         let advisory = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule.clone()],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4375,6 +4431,7 @@ mod tests {
 
         let promoted = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: true,
             verbs: Vec::new(),
@@ -4404,6 +4461,7 @@ mod tests {
         // config never states.
         let policy = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![
                 shape("first", "gh pr merge", None),
                 shape("second", "gh pr merge", None),
@@ -4445,6 +4503,7 @@ mod tests {
         rule.policy_url = Some("https://example.invalid/policy".to_owned());
         let policy = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4501,6 +4560,7 @@ mod tests {
         rule.checks = Some(vec!["verify".to_owned(), "linear-check".to_owned()]);
         Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4542,6 +4602,7 @@ mod tests {
         rule.checks = Some(vec!["claim".to_owned()]);
         Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4792,6 +4853,7 @@ mod tests {
         rule.checks = Some(vec!["toolchain".to_owned()]);
         Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -5442,6 +5504,7 @@ mod tests {
         );
         let no_paths = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
@@ -5521,6 +5584,7 @@ mod tests {
         let verbs = vec![verb("rm", None)];
         let guarding = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: verbs.clone(),
@@ -5530,6 +5594,7 @@ mod tests {
         };
         let elsewhere = Policy {
             harness: Harness::ExitCode,
+            facts: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,

@@ -1687,6 +1687,22 @@ fn run_hook(
     // the gate (CLOUD-312). The cheap-refusals-first ordering is intact — a
     // bypassed call, and a payload that is neither a command nor a write, still
     // never touch config.
+    // THE OTHER HALF OF THE LOOP (CLOUD-776). A gate denied with `Fix::Run`; the
+    // agent ran that command with its own binary; the harness is handing the
+    // result back right now. Record what it said, so the retry has a fact.
+    //
+    // Before the config load below and deliberately cheap when irrelevant: the
+    // recorder asks whether this call carries a result at all before it asks
+    // policy anything, so a post-tool event for any other command — which is
+    // nearly all of them, now that batten is registered on every surface — does
+    // no config work here.
+    //
+    // Failure is silent by design. A hook that cannot write a fact must not
+    // become the reason work stops; the retry will simply deny again with the
+    // same `Fix::Run`, which is the safe direction and a visible one.
+    if envelope.event == hook::Event::PostTool && !envelope.command.is_empty() {
+        record_agent_fact(overrides, &envelope);
+    }
     let (policy, waivers) = if bypass || (envelope.command.is_empty() && envelope.writes.is_none())
     {
         (hook::Policy::declaring_nothing(harness), Vec::new())
@@ -1711,10 +1727,46 @@ fn run_hook(
     // selected, so a repository declaring none pays nothing for it.
     let required = policy.required_checks_for(&envelope);
     let judgeable = envelope.writes.as_deref().is_none_or(receipt::judgeable);
+    // An AGENT-SOURCED check is resolved from its own record rather than from the
+    // receipt store (CLOUD-776), so the two are split before either is read: a
+    // repository whose required checks are all agent-sourced must not pay
+    // `receipt::verdicts`'s git work for questions it is not asking.
+    let (sourced, receipted): (Vec<_>, Vec<_>) = required
+        .iter()
+        .partition(|(check, _)| policy.agent_fact(check).is_some());
+    let receipted: std::collections::BTreeMap<_, _> = receipted
+        .into_iter()
+        .map(|(check, key)| (check.clone(), *key))
+        .collect();
     let receipts: hook::ReceiptFacts = if required.is_empty() || !judgeable {
         None
     } else {
-        receipt::verdicts(&required)
+        let mut verdicts = if receipted.is_empty() {
+            // Nothing to ask the receipt store. An EMPTY map rather than `None`:
+            // `None` is "could not look" and allows, and here we looked — there
+            // simply were no receipt-keyed checks among the ones required.
+            Some(std::collections::BTreeMap::new())
+        } else {
+            receipt::verdicts(&receipted)
+        };
+        // Each agent-sourced check, decided by the pure predicate over the record
+        // the boundary just read. `Look::Is` is the only answer that satisfies a
+        // check; never-ran and command-mismatch both arrive as `Missing`, which
+        // is the deny that carries the `Fix::Run` asking for the command.
+        if let Some(verdicts) = verdicts.as_mut() {
+            for (check, _) in sourced {
+                let Some(declared) = policy.agent_fact(check) else {
+                    continue;
+                };
+                let record = receipt::sourced_record(check);
+                let verdict = match facts::sourced(record.as_ref(), &declared.command) {
+                    facts::Look::Is(_) => receipt::Validity::Valid,
+                    facts::Look::IsNot | facts::Look::CouldNotLook => receipt::Validity::Missing,
+                };
+                verdicts.insert(check.clone(), verdict);
+            }
+        }
+        verdicts
     };
     // The key evidence (CLOUD-446), resolved on the same terms and for the same
     // reason: two git queries a pure `adjudicate` cannot make, spent only when a
@@ -2076,6 +2128,56 @@ fn drain_advisories(
 /// this engine exists to catch. It surfaces as a [`UsageError`] — exit `1`, loud
 /// on stderr, and structurally not a deny, because §7 spends `2` on the verdict
 /// alone.
+/// Record an agent-sourced fact, if this post-tool call is one a declared fact
+/// asked for (CLOUD-776).
+///
+/// The command comparison is byte equality against the DECLARED command, the same
+/// value [`facts::sourced`] later verifies the record against — so a call that
+/// merely resembles the request records nothing, rather than recording something
+/// the reader would then have to reject.
+///
+/// Rule 4 is satisfied here rather than downstream: [`facts::rows_in`] reduces
+/// the buffer to a count at this boundary, and the count is what is written. No
+/// byte of a tool's stdout — the likeliest place in the envelope for a secret —
+/// reaches disk.
+///
+/// Every failure is silent. A hook that cannot record a fact must not become the
+/// reason work stops: the next attempt denies again with the same `Fix::Run`,
+/// which is the safe direction and one the agent can see.
+fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
+    // An unrecognised buffer shape is `CouldNotLook` and records NOTHING. Writing
+    // a zero here would turn a shape this build cannot read into the fact "there
+    // are none", which is the guessed-envelope failure the whole capability table
+    // exists to prevent.
+    let facts::Look::Is(rows) = facts::rows_in(&envelope.result) else {
+        return;
+    };
+    let Ok((policy, _)) = load_policy(overrides, hook::Harness::ExitCode) else {
+        return;
+    };
+    let Some(declared) = policy
+        .declared_facts()
+        .iter()
+        .find(|declared| declared.command == envelope.command)
+    else {
+        return;
+    };
+    let record = facts::Sourced {
+        command: declared.command.clone(),
+        // The clock is read HERE, at the boundary, for the reason every other
+        // clock read in this crate is: a predicate that read one would stop being
+        // a pure function of its inputs. The stamp is provenance beside the
+        // answer — `facts::sourced` never consults it.
+        seen_at: receipt::rfc3339_utc(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since_epoch| since_epoch.as_secs()),
+        ),
+        rows,
+    };
+    let _ = receipt::record_sourced(&declared.name, &record);
+}
+
 fn load_policy(
     overrides: &Overrides,
     harness: hook::Harness,

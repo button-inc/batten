@@ -143,6 +143,24 @@ pub enum WeakeningKind {
     /// A `[[verb]]` row is gone, so a mutating tool call is no longer mediated
     /// at the `PreToolUse` boundary (CLOUD-36).
     VerbRemoved,
+    /// An agent-sourced fact's declared command changed (CLOUD-776).
+    ///
+    /// The one weakening on this table whose payoff is a FORGED FACT rather than
+    /// a skipped gate. The declared command is read twice — it is what the deny
+    /// asks the agent to run, and what the stored record is verified against — so
+    /// a branch that rewrites it to something trivial makes the gate ask for that
+    /// trivial thing, accept its output, and pass. Compared as a byte change for
+    /// the reason `RulePredicateChanged` is: there is no ranking of two commands,
+    /// only "this is not what the trusted file said".
+    FactCommandChanged,
+    /// An agent-sourced fact was removed (CLOUD-776).
+    ///
+    /// Reported for completeness rather than danger: a `receipt` row naming a
+    /// fact nobody declares can never be satisfied, so the removal TIGHTENS. It
+    /// is on the table because a reader comparing two configs should see the row
+    /// vanish rather than infer it, and because "tightening" is a judgement the
+    /// census should state rather than assume.
+    FactRemoved,
     /// A `[[marker]]` row is gone, so its suppressions stop being counted.
     MarkerRemoved,
     /// An `[[exec_pattern]]` row is gone, so a lying exit `0` carrying it stops
@@ -219,6 +237,8 @@ impl WeakeningKind {
         WeakeningKind::MinVersionLowered,
         WeakeningKind::EpochPathRemoved,
         WeakeningKind::VerbRemoved,
+        WeakeningKind::FactCommandChanged,
+        WeakeningKind::FactRemoved,
         WeakeningKind::MarkerRemoved,
         WeakeningKind::ExecPatternRemoved,
         WeakeningKind::ProvisionRemoved,
@@ -256,6 +276,8 @@ impl WeakeningKind {
             WeakeningKind::MinVersionLowered => "min-version-lowered",
             WeakeningKind::EpochPathRemoved => "epoch-path-removed",
             WeakeningKind::VerbRemoved => "verb-removed",
+            WeakeningKind::FactCommandChanged => "fact-command-changed",
+            WeakeningKind::FactRemoved => "fact-removed",
             WeakeningKind::MarkerRemoved => "marker-removed",
             WeakeningKind::ExecPatternRemoved => "exec-pattern-removed",
             WeakeningKind::ProvisionRemoved => "provision-removed",
@@ -365,6 +387,13 @@ pub const CENSUS: &[FieldCoverage] = &[
     FieldCoverage {
         field: "verbs",
         coverage: Coverage::Compared(&[WeakeningKind::VerbRemoved]),
+    },
+    FieldCoverage {
+        field: "facts",
+        coverage: Coverage::Compared(&[
+            WeakeningKind::FactCommandChanged,
+            WeakeningKind::FactRemoved,
+        ]),
     },
     FieldCoverage {
         field: "redirects",
@@ -653,6 +682,36 @@ fn entry_weakenings(base: &Config, working: &Config) -> Vec<Weakening> {
         &verb_entries(working),
         "verb",
     ));
+
+    // The agent-sourced facts (CLOUD-776). Removal is reported and is a
+    // tightening; a CHANGED command is the dangerous direction, because the same
+    // string is both what the agent is told to run and what the record is checked
+    // against — so rewriting it to something trivial makes the gate ask for the
+    // trivial thing and then accept it.
+    found.extend(removed_entries(
+        WeakeningKind::FactRemoved,
+        &ids(base.facts.iter().map(|fact| fact.name.clone())),
+        &ids(working.facts.iter().map(|fact| fact.name.clone())),
+        "fact",
+    ));
+    for base_fact in &base.facts {
+        if let Some(working_fact) = working
+            .facts
+            .iter()
+            .find(|candidate| candidate.name == base_fact.name)
+            && working_fact.command != base_fact.command
+        {
+            // Pointer-only (rule 4): the fact's name and two digests, never the
+            // commands — one of which is the trusted file's and one of which is
+            // whatever a branch wrote.
+            found.push(Weakening {
+                kind: WeakeningKind::FactCommandChanged,
+                key: format!("fact[{}].command", base_fact.name),
+                base: column_token(&serde_json::Value::String(base_fact.command.clone())),
+                working: column_token(&serde_json::Value::String(working_fact.command.clone())),
+            });
+        }
+    }
 
     found.extend(removed_entries(
         WeakeningKind::MarkerRemoved,
@@ -2268,5 +2327,76 @@ mod tests {
                 kind.as_str()
             );
         }
+    }
+
+    #[test]
+    fn a_rewritten_fact_command_is_a_weakening() {
+        // The one weakening whose payoff is a FORGED FACT rather than a skipped
+        // gate (CLOUD-776). The declared command is read twice — it is what the
+        // deny asks the agent to run, and what the stored record is verified
+        // against — so a branch that rewrites it to something trivial makes the
+        // gate ask for the trivial thing and then accept its output.
+        let mut base = Config::declaring_nothing();
+        base.facts = vec![crate::facts::Declared {
+            name: "claimed-key".to_owned(),
+            command: "gh pr list --state open".to_owned(),
+        }];
+        let mut working = base.clone();
+        working.facts[0].command = "echo '[]'".to_owned();
+
+        let found = weakenings(&base, &working);
+        let kinds: Vec<WeakeningKind> = found.iter().map(|weakening| weakening.kind).collect();
+        assert!(
+            kinds.contains(&WeakeningKind::FactCommandChanged),
+            "got: {kinds:?}"
+        );
+        // Pointer-only (rule 4): the fact's name and two digests, never either
+        // command — one of which is whatever a branch wrote.
+        let changed = found
+            .iter()
+            .find(|weakening| weakening.kind == WeakeningKind::FactCommandChanged)
+            .expect("the weakening is present");
+        assert_eq!(changed.key, "fact[claimed-key].command");
+        assert!(changed.base.starts_with("sha256:"), "got: {}", changed.base);
+        assert!(
+            !changed.working.contains("echo"),
+            "the command must not be reproduced; got: {}",
+            changed.working
+        );
+    }
+
+    #[test]
+    fn an_unchanged_fact_command_is_not_reported() {
+        // The other direction, so the case above discriminates rather than
+        // firing on any config carrying a fact at all.
+        let mut base = Config::declaring_nothing();
+        base.facts = vec![crate::facts::Declared {
+            name: "claimed-key".to_owned(),
+            command: "gh pr list --state open".to_owned(),
+        }];
+        let working = base.clone();
+        assert!(weakenings(&base, &working).is_empty());
+    }
+
+    #[test]
+    fn a_removed_fact_is_reported_and_is_a_tightening() {
+        // Reported for completeness rather than danger: a `receipt` row naming a
+        // fact nobody declares can never be satisfied, so the removal tightens.
+        // It is on the table because a reader comparing two configs should see
+        // the row vanish rather than infer it.
+        let mut base = Config::declaring_nothing();
+        base.facts = vec![crate::facts::Declared {
+            name: "claimed-key".to_owned(),
+            command: "gh pr list --state open".to_owned(),
+        }];
+        let working = Config::declaring_nothing();
+        let kinds: Vec<WeakeningKind> = weakenings(&base, &working)
+            .iter()
+            .map(|weakening| weakening.kind)
+            .collect();
+        assert!(
+            kinds.contains(&WeakeningKind::FactRemoved),
+            "got: {kinds:?}"
+        );
     }
 }
