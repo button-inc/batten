@@ -567,6 +567,36 @@ pub fn root_commits(dir: &Path) -> Result<Vec<String>> {
     Ok(found)
 }
 
+/// Open the repository containing `dir`, isolated from the ambient environment.
+///
+/// The one in-process entry point, so every gix caller in this module gets the
+/// same isolation rather than each remembering to ask for it (CLOUD-718).
+///
+/// **The scrub is structural here, not a maintained list.**
+/// [`gix::open::Options::isolated`] declines system, global and environment
+/// configuration outright, and discovery runs with default options rather than
+/// the environment's — so an ambient `GIT_DIR` or `GIT_CEILING_DIRECTORIES`
+/// cannot redirect the answer, and no constant has to be kept current for that
+/// to stay true. Do **not** reach for `discover_with_environment_overrides`: it
+/// re-admits exactly what the scrub exists to refuse.
+///
+/// Discovery walks *upwards* from `dir`, deliberately: callers pass a relative
+/// `"."` (`receipt.rs`), and a linked worktree must resolve its own `HEAD`
+/// rather than the main checkout's.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `dir` is not inside a repository
+/// this binary can open.
+fn open(dir: &Path) -> Result<gix::Repository> {
+    gix::discover_opts(
+        dir,
+        gix::discover::upwards::Options::default(),
+        gix::open::Options::isolated(),
+    )
+    .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))
+}
+
 /// Read a tracked file's contents at a git ref, without touching the working
 /// tree.
 ///
@@ -620,12 +650,7 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
             dir.display()
         )));
     }
-    let repository = gix::discover_opts(
-        dir,
-        gix::discover::upwards::Options::default(),
-        gix::open::Options::isolated(),
-    )
-    .map_err(|_| UsageError::raise(format!("{} is not a git repository", dir.display())))?;
+    let repository = open(dir)?;
 
     // State one: the revspec does not resolve here. Deliberately its own
     // message — gix's error is version-dependent prose in the same way git's
@@ -1184,10 +1209,6 @@ pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
     query_optional(dir, &["rev-parse", "--symbolic-full-name", "@{upstream}"])
 }
 
-/// The `ls-tree` mode of a **gitlink**: a submodule, recorded as one entry
-/// naming a commit in another repository rather than as the files inside it.
-const GITLINK_MODE: &str = "160000";
-
 /// Count occurrences of `pattern` across files matching `glob` at `rev`
 /// (CLOUD-55).
 ///
@@ -1225,11 +1246,18 @@ const GITLINK_MODE: &str = "160000";
 /// count held, and reporting zero would read as "nothing was deleted" having
 /// looked at nothing.
 pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<usize> {
-    let listing = query(
-        dir,
-        &["ls-tree", "-r", "--end-of-options", rev],
-        &format!("ratchet base {rev:?} does not resolve to a tree in this repository"),
-    )?;
+    let repository = open(dir)?;
+    let unresolved = || {
+        UsageError::raise(format!(
+            "ratchet base {rev:?} does not resolve to a tree in this repository"
+        ))
+    };
+    let resolved = repository.rev_parse_single(rev).map_err(|_| unresolved())?;
+    let tree = resolved
+        .object()
+        .map_err(|_| unresolved())?
+        .peel_to_tree()
+        .map_err(|_| unresolved())?;
 
     // The same compiled matcher the working-tree half uses, built once for the
     // whole listing rather than re-parsed per entry (CLOUD-214). Sharing the
@@ -1237,31 +1265,49 @@ pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<
     // path" a single implementation.
     let selector = crate::rules::Selector::new(glob)?;
 
+    // A recorded traversal rather than parsed `ls-tree` output, which is what
+    // fixes CLOUD-749: the recorder hands back the path as BYTES, so
+    // `core.quotePath` — git's default, and a legal local setting either way —
+    // cannot reach the answer. Under the old read a non-ASCII path arrived as
+    // `"caf\303\251.rs"`, quotes and octal escapes included, and the glob
+    // silently failed to match it. The working-tree half walks with `ignore` and
+    // sees the real path, so the two halves selected different files and the
+    // ratchet reported a delta nobody made — CLOUD-328's failure class on a
+    // second axis, in the same function.
+    let mut recorder = gix::traverse::tree::Recorder::default();
+    tree.traverse()
+        .breadthfirst(&mut recorder)
+        .map_err(|_| UsageError::raise(format!("cannot walk the tree at {rev:?}")))?;
+
     let mut total = 0;
-    for entry in listing.lines().filter(|line| !line.is_empty()) {
-        // `<mode> SP <type> SP <object> TAB <path>`. The tab is the one
-        // separator a path cannot contain unquoted, so splitting on it is what
-        // keeps a path with a space in it whole.
-        let Some((meta, path)) = entry.split_once('\t') else {
-            continue;
-        };
-        if meta.split_whitespace().next() == Some(GITLINK_MODE) {
+    for entry in recorder.records {
+        // A gitlink is skipped, explicitly. `crate::rules::tree_files` stops at a
+        // nested repository, so this half must not count one either or the two
+        // sides select different sets (CLOUD-328). The mode is a typed value
+        // here rather than a string compared against `160000`.
+        if entry.mode.is_commit() {
             continue;
         }
+        if !entry.mode.is_blob() {
+            continue;
+        }
+        // A path that is not UTF-8 cannot be matched by a glob a consumer wrote
+        // as a Rust string, so it contributes zero — the same reading
+        // `changed_paths` already gives such a path, rather than a lossy
+        // conversion that would match something nobody named.
+        let Ok(path) = std::str::from_utf8(&entry.filepath) else {
+            continue;
+        };
         if !selector.matches(path) {
             continue;
         }
-        // `show <rev>:<path>`. The path comes from `ls-tree` at the same rev, so
-        // it exists by construction; a read that fails anyway is treated as an
-        // empty file rather than aborting, for the same reason non-UTF-8 is.
-        let Ok(bytes) = query_bytes(
-            dir,
-            &["show", &format!("{rev}:{path}")],
-            "read a file at the ratchet base",
-        ) else {
+        // A read that fails is treated as an empty file rather than aborting,
+        // for the same reason non-UTF-8 content is: an unrelated asset must not
+        // be able to disable the gate.
+        let Ok(object) = repository.find_object(entry.oid) else {
             continue;
         };
-        let Ok(text) = String::from_utf8(bytes) else {
+        let Ok(text) = std::str::from_utf8(&object.data) else {
             continue;
         };
         total += text.matches(pattern).count();

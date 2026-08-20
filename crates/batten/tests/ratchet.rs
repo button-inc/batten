@@ -314,3 +314,92 @@ fn a_ratchet_also_evaluates_under_enforce() {
     common::write(&dir, "src/lib.rs", "#[test]\nfn one() {}\n");
     assert_eq!(run(&dir, &["enforce"]).status.code(), Some(2));
 }
+
+// --- the base and worktree halves must count the same paths (CLOUD-749) ------
+//
+// CLOUD-328 established the shape: a ratchet whose two halves select different
+// path sets produces a gate that cannot fail. That was the submodule axis. This
+// is the second axis on the same function — path *quoting*.
+//
+// `count_at_rev` reads `ls-tree` through plain `query`, so quoting is whatever
+// the host's `git config` says. Under git's default `core.quotePath=true` a
+// non-ASCII path arrives as `"caf\303\251.rs"` — literal quotes, octal escapes —
+// and the glob silently fails to match it. The working-tree half walks with
+// `ignore` and gets the real path, so it matches. The two halves disagree about
+// which files exist, and the delta they report is fiction.
+
+/// A ratchet repo whose base carries a non-ASCII path inside the glob.
+fn accented_repo(name: &str, config: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(config)
+        // Two matching files, one of them named in a way git will quote.
+        .file("src/lib.rs", BASE_SRC)
+        .file("src/café.rs", BASE_SRC)
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    dir
+}
+
+#[test]
+fn a_non_ascii_path_is_counted_on_the_base_side_too() {
+    // The base carries four `#[test]` across two files; the working tree deletes
+    // one of the two in the ACCENTED file. If the base side cannot see that file
+    // it counts 2 where the tree counts 3 — an increase — and a `non_decreasing`
+    // ratchet reports clean while a test was deleted. The gate cannot fail.
+    let dir = accented_repo(
+        "ratchet-non-ascii",
+        &ratchet_config("#[test]", "non_decreasing", "deny"),
+    );
+    common::write(
+        &dir,
+        "src/café.rs",
+        "#[test]\nfn one() {\n    assert!(true);\n}\n",
+    );
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the base side must see the accented file, or a deletion inside it is \
+         invisible. stdout: {:?}",
+        stdout(&output)
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("4->3"),
+        "both halves counted the same file set, so the counts are 4 and 3: {text:?}"
+    );
+}
+
+#[test]
+fn the_base_count_does_not_move_with_the_hosts_quote_path_setting() {
+    // The property that makes the count host-independent. `core.quotePath` is a
+    // legal local setting, so two developers must not get different verdicts for
+    // the same commit — which is what reading a quoting-dependent format through
+    // an unpinned `query` buys.
+    let mut verdicts = Vec::new();
+    for (name, setting) in [("ratchet-quote-on", "true"), ("ratchet-quote-off", "false")] {
+        let dir = accented_repo(name, &ratchet_config("#[test]", "non_decreasing", "deny"));
+        git_in(&dir, &["config", "core.quotePath", setting]);
+        common::write(
+            &dir,
+            "src/café.rs",
+            "#[test]\nfn one() {\n    assert!(true);\n}\n",
+        );
+        verdicts.push((setting, check(&dir).status.code(), stdout(&check(&dir))));
+    }
+    let [
+        (on_setting, on_code, on_text),
+        (off_setting, off_code, off_text),
+    ] = <[_; 2]>::try_from(verdicts).expect("two runs");
+    assert_eq!(
+        on_code, off_code,
+        "core.quotePath={on_setting} and ={off_setting} must reach the same verdict"
+    );
+    assert_eq!(
+        on_text, off_text,
+        "and report the same counts — a host setting must not move a ratchet"
+    );
+}
