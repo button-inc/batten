@@ -151,6 +151,13 @@ const DECLARATION: &[Canary] = &[
 /// budget is deliberately set to overflow so `policy budget` renders its
 /// per-file breakdown rather than staying silent, and the ledger and transcript
 /// give `defects query` and `check`'s transcript view something to read.
+///
+/// The `shape` row is `pattern = "rm"` with `contains = "-rf"` rather than the
+/// two-word `pattern = "rm -rf"` it used to be. The matcher compares operand
+/// words with every flag already dropped, so the old spelling could never fire
+/// — the mediated call below was allowed and the sweep over its output proved
+/// nothing. `rules::validate` now refuses that shape at load (CLOUD-401), and
+/// this is the spelling it names.
 fn authority(spawning: bool) -> String {
     let mut config = format!(
         "version = 1\n\
@@ -188,7 +195,8 @@ fn authority(spawning: bool) -> String {
          kind = \"shape\"\n\
          scope = \"mediated_call\"\n\
          severity = \"deny\"\n\
-         pattern = \"rm -rf\"\n\
+         pattern = \"rm\"\n\
+         contains = \"-rf\"\n\
          reason = \"remove it through the surface that owns it\"\n\
          \n\
          [[waiver]]\n\
