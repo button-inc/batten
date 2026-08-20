@@ -84,6 +84,19 @@ local gate = new Mapping<String, Step> {
     glob = List("Cargo.toml", "renovate.json5")
     check = "mise run cap-drift"
   }
+  // The sibling question about the same two files, asked of the RESOLUTION
+  // rather than the requirement (CLOUD-767). `cap-drift` decides whether the
+  // manifest and the bot config agree about what may be proposed;
+  // `digest-major-agreement` decides whether what was actually resolved still
+  // composes. A caret requirement is silent on the second, which is why this
+  // reads `Cargo.lock` and that one does not.
+  //
+  // The rule it carries was a `Cargo.toml` comment asserting something untrue
+  // for as long as `gix` had been a dependency. Prose is feedforward only.
+  ["digest-major-agreement"] {
+    glob = List("Cargo.toml", "Cargo.lock")
+    check = "mise run digest-major-agreement"
+  }
   // `coverage` and `scorecard` emit a number for a human and must never gate a
   // branch — a coverage threshold rewards line-touching, and scorecard scores
   // deliberate design decisions (trunk-based review, the landing lease's

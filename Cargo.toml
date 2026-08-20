@@ -55,10 +55,21 @@ clap_mangen = "0.3"
 etcetera = "0.11"
 # Secret-class identity inputs are HMAC-keyed (CLOUD-123): an unkeyed digest of a
 # matched secret is an offline-guessing oracle, because secrets are often
-# low-entropy and a journalled hash cannot be expunged. Pinned to the 0.12 line,
-# not 0.13, deliberately: 0.12 requires `digest ^0.10.3`, which is the `digest`
-# the vendored `sha2 = "0.10"` already resolves to, while 0.13 wants `digest 0.11`
-# and would put two majors of the same hashing substrate in the tree.
+# low-entropy and a journalled hash cannot be expunged.
+#
+# MOVES WITH `sha2` BELOW, ALWAYS. `hmac` and `sha2` each pull a `digest`, and the
+# constructor `keyed_span` calls lives on a trait that moved between `digest`
+# majors — so bumping one without the other splits our own two crates across two
+# `digest` lines and the workspace stops compiling. `digest-major-agreement`
+# decides this over the committed `Cargo.lock`; it is not a comment you have to
+# remember.
+#
+# WHAT THIS PIN IS *NOT* DEFENDING, corrected 2026-08-20 (CLOUD-767). It used to
+# say the older line kept "two majors of the same hashing substrate" out of the
+# tree. That has been false since `gix` arrived: `gix-hash` pulls `sha2 0.11` and
+# therefore `digest 0.11`, so both majors are already vendored whatever we pin. A
+# lockfile grep is the whole proof, and the claim survived unchallenged only
+# because it was prose — which is the argument for the gate above being a gate.
 hmac = "0.12"
 # The 32 bytes behind that HMAC key (CLOUD-59). A dependency rather than a
 # `/dev/urandom` read because the workspace forbids `unsafe` and supports
@@ -191,6 +202,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Finding-identity fingerprints (CLOUD-123): SHA-256 preimages, and NFC
 # canonicalization so macOS NFD checkouts fingerprint identically to Linux.
+#
+# The other half of the pair `hmac` above describes: these two resolve `digest`
+# and must resolve the same major of it. Bump them together or not at all.
 sha2 = "0.10"
 toml = "1.1"
 unicode-normalization = "0.1"

@@ -112,6 +112,11 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+// `KeyInit` through `hmac::digest` rather than `hmac` itself: `hmac` re-exports
+// the `digest` crate and `Mac`, but not the constructor trait (CLOUD-767). The
+// path is the same in both major lines of the hashing substrate, which is what
+// lets this file compile against either.
+use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
@@ -839,7 +844,7 @@ pub fn secret_code_fingerprint(
 /// [`UsageError`] (exit `1`), because an unreachable invariant breaking is Batten's
 /// fault, never the caller's malformed input.
 fn keyed_span(key: &IdentityKey, content: &str) -> anyhow::Result<[u8; 32]> {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key.bytes).map_err(|_| {
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&key.bytes).map_err(|_| {
         anyhow::anyhow!("identity: a 32-byte HMAC key was rejected as a key length")
     })?;
     mac.update(content.as_bytes());
@@ -1480,7 +1485,7 @@ mod tests {
         // Hand-built preimage rather than a golden hex string, so this fails if
         // the construction changes rather than recording what it emits today.
         let content = normalize_span(SECRET_SPAN, SpanNormalization::Verbatim);
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&[1u8; 32]).unwrap();
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(&[1u8; 32]).unwrap();
         mac.update(content.as_bytes());
         let inner: [u8; 32] = mac.finalize().into_bytes().into();
 
