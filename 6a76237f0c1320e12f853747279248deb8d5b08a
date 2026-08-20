@@ -1,0 +1,5 @@
+metric=wall-clock runner=ubuntu-latest
+path=noop p50=1.89 p95=1.97 mean=1.9 runs=100
+path=check p50=2.43 p95=2.51 mean=2.44 runs=100
+path=hook p50=3.76 p95=4.07 mean=3.79 runs=100
+path=wired p50=8.45 p95=9.1 mean=8.57 runs=100
