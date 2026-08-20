@@ -218,6 +218,113 @@ rule() {
 	}
 }
 
+# --- the groomed admission (CLOUD-789) ---------------------------------------
+#
+# The one thing that turns a refusal into a pass, and it is deliberately NOT a
+# flag: the decision has to have been groomed onto the issue before the work
+# started. Two sources have to agree, and each is checked from the side it can
+# actually answer from — the claim receipt where it exists, the commit trailer
+# everywhere, including CI where no receipt was ever written.
+
+# Record what a groom put in the branch's claim receipt, in `claim-check`'s own
+# spelling. The issue key is provenance and is deliberately not part of the pair.
+groom() {
+	local dir branch
+	dir=$(git -C "$ROOT" rev-parse --git-dir)
+	branch=$(git -C "$ROOT" symbolic-ref --short HEAD)
+	mkdir -p "$ROOT/$dir/batten-receipts"
+	printf 'CLOUD-1\nweakens CLOUD-1 %s %s\n' "$1" "$2" \
+		>"$ROOT/$dir/batten-receipts/claim.${branch//\//-}"
+}
+
+# Put a `Weakens:` trailer on a commit ahead of origin/main, which is the range
+# the gate reads. An empty commit, because what is being asserted is the trailer
+# and not what the commit changed.
+trailer() {
+	git -C "$ROOT" -c user.email=t@t -c user.name=t commit -q --allow-empty \
+		-m "chore: a change that weakens deliberately" -m "Weakens: $1 $2"
+}
+
+# The pair the fixture's weakening reports, so a test never re-derives it.
+SEVERITY_SMELL="severity-lowered"
+SEVERITY_KEY="rule[no-todo].severity"
+
+@test "a groomed clause plus a matching commit trailer admits the weakening" {
+	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
+	groom "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	trailer "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"admitted $SEVERITY_SMELL $SEVERITY_KEY"* ]]
+}
+
+@test "a commit trailer the groom does not name is refused" {
+	# The half that makes this a gate rather than a self-served flag: an author
+	# who writes the trailer without having groomed the decision gets nothing.
+	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
+	groom "some-other-smell" "$SEVERITY_KEY"
+	trailer "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"$SEVERITY_SMELL"* ]]
+	[[ "$output" != *"admitted"* ]]
+}
+
+@test "a groomed clause with no commit trailer is refused" {
+	# Both sources, not either: the receipt dies with the container, so a groom
+	# that never reached a commit is a decision CI could never see.
+	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
+	groom "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
+	[ "$status" -eq 2 ]
+	[[ "$output" != *"admitted"* ]]
+}
+
+@test "with no claim receipt the trailer alone admits, which is CI's shape" {
+	# CI checks out a fresh clone: `.git/batten-receipts/` was never written
+	# there, and refusing on its absence would fail every branch whose local run
+	# already proved the strong half. The output says which half it checked.
+	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
+	trailer "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"no claim receipt here"* ]]
+}
+
+@test "an admission is keyed to the smell AND the key, not to either alone" {
+	# A groom that admits one relaxation must not admit a different one at the
+	# same key, nor the same one somewhere else.
+	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
+	groom "$SEVERITY_SMELL" "protected[somewhere/else]"
+	trailer "$SEVERITY_SMELL" "protected[somewhere/else]"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
+	[ "$status" -eq 2 ]
+	[[ "$output" != *"admitted"* ]]
+}
+
+@test "one unadmitted smell keeps the whole run a verdict" {
+	# Per-smell admission, all-or-nothing verdict: admitting the groomed one must
+	# not carry the ungroomed one through with it.
+	arm_base "version = 1$(rule no-todo deny)$(rule no-fixme deny)" \
+		"version = 1$(rule no-todo warn)$(rule no-fixme warn)"
+	groom "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	trailer "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"rule[no-fixme].severity"* ]]
+}
+
+@test "the admission reports a pointer, never the clause's prose" {
+	# Non-negotiable rule 4, and it bites here specifically: the reason half of a
+	# `**Weakens:**` clause is free prose on an issue that may name anything.
+	arm_base "version = 1$(rule no-todo deny)" "version = 1$(rule no-todo warn)"
+	groom "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	trailer "$SEVERITY_SMELL" "$SEVERITY_KEY"
+	CONFIG_LINT_BASE=origin/main run "$CHECK"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"a change that weakens deliberately"* ]]
+}
+
 # --- the claims this file makes about the rest of the system ------------------
 
 @test "the rationale claims no caller that grep cannot find" {

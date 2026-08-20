@@ -633,6 +633,31 @@ if git_dir=$(git rev-parse --git-dir 2>/dev/null) &&
 		if [ "$takeover" -ne 0 ]; then
 			echo "takeover $takeover refusal(s) overridden (BATTEN_CLAIM_TAKEOVER): $overridden"
 		fi
+		# THE GROOMED WEAKENINGS (CLOUD-789), and this is the line that makes
+		# "the decision predates the work" computable rather than asserted.
+		#
+		# `config-lint` refuses every base-ref weakening and carries no flag that
+		# admits one, deliberately (CLOUD-236): a relaxation an author asserts at
+		# PR time is a rubber stamp, because this repository reviews AFTER merge.
+		# Its header names the only admissible source — the grooming-time record
+		# — and this is where that record is captured, at the one moment a gate
+		# has the groomed body in front of it and the work has not started.
+		#
+		# Captured HERE rather than read later for the reason the whole receipt
+		# exists: afterwards, nothing recovers what the claimant had in front of
+		# them. A body re-read at lint time is a body that may have been rewritten
+		# since, and the tracker mints `updatedAt` forward, so the revision this
+		# receipt already names is the pin.
+		#
+		# Pointer-only, as the rest of this file: a smell id and the config key it
+		# sits at, never the clause's prose or the reason it gives.
+		jq -r '
+			.[] as $issue
+			| (($issue.description // "") | split("\n")[])
+			| select(test("^[[:space:]]*([*-][[:space:]]*)?\\*\\*Weakens:\\*\\*[[:space:]]"))
+			| capture("\\*\\*Weakens:\\*\\*[[:space:]]+`(?<smell>[a-z0-9.-]+)`[[:space:]]+at[[:space:]]+`(?<key>[^`]+)`")
+			| "weakens \($issue.id) \(.smell) \(.key)"
+		' <<<"$issues" 2>/dev/null || true
 		echo "claimed-at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 		jq -r '[.[] | "updated-at \(.id) \(.updatedAt // "-")"] | .[]' <<<"$issues"
 		# THE BASE THIS CLAIM WAS MADE AGAINST (CLOUD-516). A branch NAME outlives

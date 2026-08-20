@@ -242,6 +242,44 @@ setup_repo() {
 	[ ! -f "$RECEIPT" ]
 }
 
+@test "a groomed Weakens clause reaches the receipt as a pointer" {
+	# CLOUD-789. `config-lint` refuses every base-ref weakening and has no flag
+	# that admits one; the only admissible source is a decision groomed onto the
+	# issue BEFORE the work started. This is the one moment a gate holds the
+	# groomed body with no code yet written, so this is where that decision is
+	# captured — afterwards nothing recovers what the claimant had in front of
+	# them.
+	setup_repo
+	body=$'**Refinement — Ready**\n\n* **Source of truth (§1).** here.\n* **Weakens:** `severity-lowered` at `rule[no-todo].severity` — the rule it guarded is retired.\n* **Blockers (§8).** None.'
+	run bash -c "$(declare -f payload); payload CLOUD-789 Todo '' '' \"\$1\" | (cd '$REPO' && $CHECK)" _ "$body"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$RECEIPT")" == *"weakens CLOUD-789 severity-lowered rule[no-todo].severity"* ]]
+	# Pointer-only (non-negotiable rule 4): the reason half of the clause is free
+	# prose on an issue that may name anything, and it must not reach a file the
+	# next reader greps.
+	[[ "$(cat "$RECEIPT")" != *"the rule it guarded is retired"* ]]
+}
+
+@test "a body with no Weakens clause records no admission" {
+	# Silence is the default. A receipt that admitted something nobody groomed
+	# would make the gate above self-serving.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-272 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$(cat "$RECEIPT")" != *"weakens "* ]]
+}
+
+@test "the id list stays line 1 with a clause recorded" {
+	# The receipt grew a line, and line 1 is the id list every existing reader
+	# parses (the engine's claim row reads only the file's existence, but the
+	# `--adopt` path and a human debugging a refusal both read by position).
+	setup_repo
+	body=$'**Refinement — Ready**\n\n* **Weakens:** `severity-lowered` at `rule[x].severity` — reason.\n* **Blockers (§8).** None.'
+	run bash -c "$(declare -f payload); payload CLOUD-789 Todo '' '' \"\$1\" | (cd '$REPO' && $CHECK)" _ "$body"
+	[ "$status" -eq 0 ]
+	[ "$(head -1 "$RECEIPT")" = "CLOUD-789" ]
+}
+
 @test "unreadable stdin mints nothing either" {
 	setup_repo
 	run bash -c "printf 'not json' | (cd '$REPO' && $CHECK)"
