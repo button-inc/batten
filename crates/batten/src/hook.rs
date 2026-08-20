@@ -3806,6 +3806,7 @@ mod tests {
     /// one site must leave the other site's cases red.
     fn program_only_shape_policy() -> Policy {
         Policy {
+            harness: Harness::ExitCode,
             shapes: vec![shape("no-bare-cargo", "cargo", None)],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -3878,6 +3879,7 @@ mod tests {
         let mut rule = shape("no-bare-cargo", "cargo", None);
         rule.require_via = Some(crate::rules::RequireVia::Mise);
         Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4701,6 +4703,7 @@ mod tests {
         rule.reason = Some("prove the toolchain first".to_owned());
         rule.checks = Some(vec!["toolchain".to_owned()]);
         Policy {
+            harness: Harness::ExitCode,
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
