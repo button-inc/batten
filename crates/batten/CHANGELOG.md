@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.93](https://github.com/button-inc/batten/compare/v0.0.92...v0.0.93) - 2026-08-20
+
+### Added
+
+- *(rules)* [**breaking**] require_via, so "never a bare cargo" is a gate rather than prose
+- *(rules)* [**breaking**] a document fact — TOML, YAML, JSON and JSON5, three-valued
+- *(hook)* [**breaking**] dispatch the protected-write gate on a neutral Operation
+
+### Fixed
+
+- *(hook)* give this branch's test policies the harness field
+- *(hook)* a program-only pattern fires, on both matchers
+
+### Other
+
+- *(pointer-only)* spell the corpus shape row so the matcher can honour it
+
 ## [0.0.92](https://github.com/button-inc/batten/compare/v0.0.91...v0.0.92) - 2026-08-20
 
 ### Added
