@@ -439,6 +439,19 @@ mentions this issue", which is not "work began" — a commit can continue,
 document, cite or defer. It only ever moves forward into In Progress, so it
 dragged an issue back out of In Review and left two others stranded (CLOUD-186).
 
+`mise run spec-ref-check` is the same pattern aimed at the tree rather than the
+board: it refuses a `CLOUD-<n> §N` citation in a tracked file when the piped issue
+declares no clause `N`. Enumerate what to fetch with
+`git grep -hoE "CLOUD-[0-9]+'?s? §[0-9]+"` and pipe those `get_issue` payloads.
+It **refutes and never confirms**, which is load-bearing rather than stylistic: a
+Ready block may legitimately omit a clause — CLOUD-45 has no §4, CLOUD-80 no §3 or
+§5 — so a sparse set is not a defect and a citation of a missing one is. Sub-numbers
+resolve to their parent. An issue cited but absent from the payload is exit `2`,
+never a silent pass. The transcription hazard CLOUD-469 records runs the OPPOSITE
+way here than in `graph-check`: a shortened body carries fewer clause labels, so it
+manufactures findings rather than hiding them — which is why a projected
+`list_issues` is not a valid input, its descriptions being truncated.
+
 `batten attribution` enforces the attribution decision record (CLOUD-268) over
 produced commits (CLOUD-274): no vendor identity in `author`/`committer`, no
 co-authorship-form model identity, no vendor session URL, no marketing formula.
