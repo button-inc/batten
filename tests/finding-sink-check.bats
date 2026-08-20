@@ -303,3 +303,99 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
 }
+
+@test "CLOUD-775: a row this clone has no recorded read of is not a home" {
+	# The direction the whole arm rests on. "Could not look" must land on the same
+	# side as "closed", or it becomes the cheapest way to buy silence: skip the
+	# read, annotate anything, pass.
+	prompt
+	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	tool_on_row "mcp__Linear__save_issue" id CLOUD-404
+	run check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"turn:1 finding-without-durable-write"* ]]
+}
+
+@test "CLOUD-775: a receipt that recorded no column is not a home either" {
+	# The receipt exists and its fifth field is `-`, which is what
+	# `issue-read-check` writes for a payload carrying no status. Sending less on
+	# the read must not buy silence here — that is the direction stated on the arm
+	# that records it, and this is the row that holds it.
+	read_receipt CLOUD-405 -
+	prompt
+	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	tool_on_row "mcp__Linear__save_issue" id CLOUD-405
+	run check
+	[ "$status" -eq 1 ]
+}
+
+@test "CLOUD-775: an unrecognised column is not a home" {
+	# The OPEN set is enumerated and the terminal one is not, so a column nobody
+	# here has heard of falls to not-a-home. A new board state cannot buy silence
+	# before someone has decided that it should.
+	read_receipt CLOUD-406 archived
+	prompt
+	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	tool_on_row "mcp__Linear__save_issue" id CLOUD-406
+	run check
+	[ "$status" -eq 1 ]
+}
+
+@test "CLOUD-775: a comment on an OPEN row is a home, named by issueId" {
+	# The class reaches comments, and it has to: `save_comment` is the exact call
+	# CLOUD-475 was written about, and it names its target `issueId`. Without that
+	# spelling the column never reaches the case at all, and the rule would only
+	# ever have been about `save_issue`.
+	read_receipt CLOUD-407 todo
+	prompt
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	tool_on_row "mcp__Linear__save_comment" issueId CLOUD-407
+	run check
+	[ "$status" -eq 0 ]
+	[ -z "$output" ]
+}
+
+@test "CLOUD-775: every open column the board carries is a home" {
+	# Enumerated rather than sampled, because the set IS the predicate: a column
+	# dropped from it silently converts a working practice into a false positive,
+	# and nothing else in this suite would notice.
+	local column
+	for column in backlog todo in-progress in-review; do
+		: >"$T"
+		read_receipt CLOUD-408 "$column"
+		prompt
+		say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+		tool_on_row "mcp__Linear__save_issue" id CLOUD-408
+		run check
+		[ "$status" -eq 0 ] || {
+			echo "column $column should be a home" >&2
+			return 1
+		}
+	done
+}
+
+@test "CLOUD-775: outside a checkout every row reads as closed" {
+	# `row_class` resolves the receipt store once, and an absent git dir is a
+	# cannot-look for every row at once. It fails to the reporting side, like the
+	# rest of them.
+	cd "$BATS_TEST_TMPDIR" || return 1
+	read_receipt CLOUD-409 todo
+	prompt
+	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	tool_on_row "mcp__Linear__save_issue" id CLOUD-409
+	run env GIT_CEILING_DIRECTORIES="$BATS_TEST_TMPDIR" bash -c "cd '$BATS_TEST_TMPDIR' && printf '%s' '$T' | '$CHECK'"
+	[ "$status" -eq 1 ]
+}
+
+@test "CLOUD-775: an id that is not an issue key is not a home" {
+	# A UUID cannot be resolved to a receipt without a tracker credential, which is
+	# the same cannot-look `issue-read-guard` meets on the same parameter. It
+	# allows there, because denying a legitimate update over a spelling is the
+	# false-positive rate that gets a guard bypassed; it REPORTS here, because this
+	# one only ever nudges and the cost of a nudge is a sentence.
+	prompt
+	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	tool_on_row "mcp__Linear__save_issue" id "7f3a-not-a-key"
+	run check
+	[ "$status" -eq 1 ]
+}

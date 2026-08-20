@@ -84,25 +84,76 @@ CITATION='([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_-]+\.(rs|toml|yml|yaml|ba
 # UNSCHEDULED. The gate written to catch a stranded finding was cleared by the
 # exact act that strands it.
 #
-# The naive fix — "refuse a comment on a Done issue" — is UNCOMPUTABLE here. No
-# tracker credential exists in a hook, exactly as it does not for `claim-check`,
-# so the target's state cannot be looked up. The predicate therefore keys on the
-# CALL SHAPE, which the transcript already carries:
+# The naive fix — "refuse a comment on a Done issue" — LOOKED uncomputable here,
+# and for one release it was: no tracker credential exists in a hook, exactly as
+# it does not for `claim-check`, so the target's state cannot be FETCHED. The
+# predicate keyed on the CALL SHAPE instead —
 #
 #   OPENS a row    `save_issue` with NO `id` — a created issue is open by
 #                  construction, so this needs no state lookup at all.
 #   ANNOTATES      `save_comment`, and `save_issue` WITH an `id`. Both attach to a
-#                  row that already exists and may be terminal. Feedback, not a home.
+#                  row that already exists and MAY be terminal.
 #
-# A finding's home must include at least one opens-a-row write. Memory and document
-# writes keep their current standing, deliberately: a memory is read on demand at
-# its trigger, which is a different destination with a different reader, and this
-# rule does not reopen that question.
+# — and "may be terminal" is where that proxy is wrong (CLOUD-775). It is right
+# about the case it was built for and wrong about the symmetric one: adding the
+# finding to a row that is still OPEN schedules the work exactly as filing does.
+# The board carries it, a sweep visits it, `done-check` gates it. Reporting that
+# as a stranding is the false positive that gets a gate bypassed, after which it
+# enforces nothing.
 #
-# The names carry a `#id`/`#noid` suffix stamped by pass 2 below, so the two
-# classes are distinguishable without a second read of the transcript.
+# WHAT REPLACES THE PROXY IS NOT A FETCH — it is a file this clone already wrote.
+# `issue-read-check` records the column it saw on every read, and
+# `issue-read-guard` denies `save_issue` without a fresh receipt for that row, so
+# by the time anything annotates a row a receipt for it EXISTS. `row_class` below
+# reads its fifth field. The question stays uncomputable by lookup and becomes
+# computable by record, which is the move `claim-check` already makes.
+#
+# THREE CLASSES, AND ONLY `open` IS NEW. `noid` is the created row, unchanged.
+# `open` is an amendment to a row whose recorded column is one the board still
+# carries. Everything else — a terminal column, an unrecognised one, a row with
+# no receipt, a call outside a checkout — is NOT a home, and the collapse is
+# deliberate: a row that could not be looked up must be indistinguishable IN
+# EFFECT from a closed one, or "could not look" becomes the cheapest way to buy
+# silence. The receipt's own `-` is on that side too, so a caller who reads a row
+# while sending no status gains nothing by having sent less.
+#
+# Memory and document writes keep their current standing, deliberately: a memory
+# is read on demand at its trigger, which is a different destination with a
+# different reader, and this rule does not reopen that question.
+#
+# The names carry a `#<class>` suffix stamped by pass 2 and `row_class` below, so
+# the classes are distinguishable without a second read of the transcript.
+#
+# The mutation drops the column from the open-row class, so it accepts any column
+# at all — which reopens the hole from the other side: an annotation on a Done row
+# reads as a home again and CLOUD-475's true positive dies. It rewrites the
+# SUFFIX rather than the whole assignment because the alternation cannot survive
+# the round trip — `mutant` splits its rows on `|`, so no script may contain one.
+#MUTANT terminal-row-is-a-home|s@#open\$'@#'@|CLOUD-775: an annotation on a TERMINAL row still reports
 OPENS_A_ROW='save_issue#noid$'
+AMENDS_AN_OPEN_ROW='save_(issue|comment)#open$'
 OTHER_DURABLE='(save_document|write_memory|edit_memory|rename_memory)#'
+
+# The receipt store, resolved once. An absent git dir is a cannot-look for every
+# row at once, and it lands on the not-a-home side with the rest of them.
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || git_dir=""
+
+# The board's OPEN set is what is enumerated, never the terminal one. A column
+# nobody here has heard of falls through to `terminal`, so a new board state
+# cannot buy silence before someone has decided that it should.
+row_class() { # row_class <key-or-empty> -> noid / open / terminal
+	case "$1" in
+	"") echo noid && return ;;
+	[A-Z]*-[0-9]*) ;;
+	*) echo terminal && return ;;
+	esac
+	[ -n "$git_dir" ] || { echo terminal && return; }
+	column=$(awk 'NR==1{print $5}' "$git_dir/batten-receipts/issue-read.$1" 2>/dev/null) || column=""
+	case "$column" in
+	backlog | todo | in-progress | in-review) echo open ;;
+	*) echo terminal ;;
+	esac
+}
 
 # ONLY THE TURN THAT JUST ENDED, AND ONLY THAT TURN IS READ. Judging the whole
 # transcript is what the first wiring did, and running it live exposed the defect
@@ -164,8 +215,8 @@ if [ -n "$start" ]; then
 	    | select(type == "object")
 	    | if .type == "text" then "T" + ((.text // "") | gsub("\n"; " "))
 	      elif .type == "tool_use" then "U" + (.name // "") + "#" +
-	             (if ((.input // {}) | type) == "object" and ((.input // {}) | has("id"))
-	              then "id" else "noid" end)
+	             ((.input // {}) | if type == "object"
+	              then ((.id // .issueId // "") | tostring) else "" end)
 	      else empty end
 	  ' 2>/dev/null); then
 		echo "::error:: transcript is not readable JSONL: $transcript" >&2
@@ -182,13 +233,18 @@ if [ -n "$start" ]; then
 	if [ -n "$tools" ]; then
 		while IFS= read -r name; do
 			[ -n "$name" ] || continue
-			# ONE alternation, not two greps joined by `||`. The two classes stay
-			# separate variables above because they are separate ideas and the
-			# mutation row keys on one of them, but they are matched in a single
-			# pass — `pipefail-grep-check` reads the `||` as a producer piped into
-			# an early-exiting grep, and it is right to: under `pipefail` that
-			# shape is how a MATCH comes to report failure.
-			if grep -qE "($OPENS_A_ROW|$OTHER_DURABLE)" <<<"${name#U}"; then
+			# Pass 2 stamped the ROW KEY after the `#`. Which column that row was in
+			# is a fact about this clone's own receipts rather than about the
+			# transcript, so it is resolved here and not there.
+			name="${name#U}"
+			name="${name%%#*}#$(row_class "${name#*#}")"
+			# ONE alternation, not three greps joined by `||`. The classes stay
+			# separate variables above because they are separate ideas and a
+			# mutation row keys on each, but they are matched in a single pass —
+			# `pipefail-grep-check` reads the `||` as a producer piped into an
+			# early-exiting grep, and it is right to: under `pipefail` that shape
+			# is how a MATCH comes to report failure.
+			if grep -qE "($OPENS_A_ROW|$AMENDS_AN_OPEN_ROW|$OTHER_DURABLE)" <<<"$name"; then
 				clean=1
 				break
 			fi
@@ -216,5 +272,5 @@ fi
 # reproduces the confusion it is meant to clear, because an author who commented
 # the finding onto its source issue correctly believes they wrote it down. What
 # they are missing is an OPEN ROW, so that is what the message asks for.
-echo "finding-sink-check: the last of $turns turn(s) cited path:line evidence and opened no row for it. A comment annotates; it does not schedule. File an open issue for the work and link it \`relatedTo\` the source." >&2
+echo "finding-sink-check: the last of $turns turn(s) cited path:line evidence and gave it no OPEN row. Writing to a row that is closed — or to one this clone has recorded no read of — records the finding without scheduling it. File an open issue for the work and link it \`relatedTo\` the source, or put it on a row that is still open, recording the read first with \`mise run issue-read-check\`." >&2
 exit 1
