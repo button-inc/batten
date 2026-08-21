@@ -305,6 +305,50 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	if [[ "$type_token" == *'!'* ]] || grep -qE 'BREAKING CHANGE:' <<<"$bump_line"; then
 		breaking=1
 	fi
+	# --- the negative break claim must name a surface (CLOUD-842) -------------
+	#
+	# `batten` IS BOTH A BINARY AND A LIBRARY, so "breaking" names two different
+	# objects and §6 has one word for them:
+	#
+	#   the CONSUMER surface — `batten.toml` rows, exit codes, output shape —
+	#     gated by `derived-check`, `schema-check` and the CLI suites;
+	#   the LIBRARY surface — the `pub` Rust API — gated by `mise run semver`.
+	#
+	# Five rows of the CLOUD-839 bundle declared "not `!`" and every one of them
+	# was reasoning CORRECTLY about the first: no `batten.toml` breaks, the bare
+	# string `deny` path is preserved, widening `scopes` removes no pairing. All
+	# true, and none of it is what `cargo-semver-checks` measures. The change
+	# landed as `1f9b41c2 feat(policy)!` — CLOUD-832/833/836/837/647.
+	#
+	# THE PREDICATE IS ABOUT THE CLAIM'S SHAPE, NEVER ITS TRUTH. At refinement
+	# time there is no diff to compare, so "is this actually breaking" is not
+	# computable here and a gate that guessed would be a judge (CLOUD-93). What
+	# IS decidable from the body alone is whether the denial said which object it
+	# denied about. A row may claim either surface; a row claiming neither is
+	# claiming both, and it cannot have checked the second.
+	#
+	# THE QUALIFIER MUST ATTACH TO THE DENIAL, NOT MERELY SHARE THE LINE, and
+	# CLOUD-832 is exactly why. Its clause reads
+	#   "Not `!`: the string `deny` path is preserved, so no consumer shape breaks"
+	# — the word `consumer` IS on that line, forty characters downstream, as part
+	# of the reasoning rather than as the scope of the denial. A bare
+	# "does `consumer` appear anywhere" test passes the one row this clause exists
+	# to refuse, which is the vacuous pass in a narrower disguise. So the surface
+	# word must FOLLOW the denial token across nothing but a connective: the
+	# repaired spelling is "Not `!` for the consumer surface: …".
+	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+	BREAK_DENIAL='not[[:space:]]+`?!`?|not[[:space:]]+breaking|non-?breaking|no[[:space:]]+break[a-z]*'
+	# The connective set is an alternation rather than a bracket expression: an
+	# em dash is multibyte, and a bracket expression is bytewise in the C locale,
+	# so `[-—,:]` would match one of its own bytes and read as a match nobody wrote.
+	BREAK_QUALIFIED="(${BREAK_DENIAL})[[:space:]]*(-|—|,|:)?[[:space:]]*(for|to|on|in|of)?[[:space:]]*(the[[:space:]]+)?(consumer|library)"
+	# The mutation demotes the refusal to a note, which is the whole failure this
+	# clause exists to reverse: the five landed rows were silent, not warned.
+	#MUTANT break-claim-refusal-is-a-note|s@report "\$(line_of "\$BUMP_LABEL")" .unqualified-break-claim.*@:@|without naming a surface
+	if grep -qiE "$BREAK_DENIAL" <<<"$bump_line" && ! grep -qiE "$BREAK_QUALIFIED" <<<"$bump_line"; then
+		# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
+		report "$(line_of "$BUMP_LABEL")" 'unqualified-break-claim (say which surface: `consumer` or `library` — `mise run semver` decides the library half)'
+	fi
 	# "none" is a valid explicit answer — a Linear-only or repo-config change
 	# lands no commit at all, and demanding a type there would force a lie.
 	declared=$(grep -oiE 'major|minor|patch|no bump|none' <<<"$bump_line" | head -n1 | tr '[:upper:]' '[:lower:]' || true)

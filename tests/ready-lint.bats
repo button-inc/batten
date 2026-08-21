@@ -208,8 +208,12 @@ block() {
 # `refactor` and a `feat` case here would prove nothing.
 
 @test "a §6 clause denying a break is not read as declaring one" {
+	# The denial names its surface (CLOUD-842) so this case stays about CLOUD-852's
+	# property alone — that a DENIAL does not set expected=major. An unqualified
+	# spelling now has its own refusal, and pinning both on one payload would make
+	# either defect able to hide behind the other.
 	local d
-	d=$(block '* **Commit / bump (§6).** `refactor(facts)` — **no bump**. Not `!`: no public signature changes.')
+	d=$(block '* **Commit / bump (§6).** `refactor(facts)` — **no bump**. Not `!` for the library API: no public signature changes.')
 	payload "$d"
 	lint
 	[ "$status" -eq 0 ]
@@ -235,6 +239,81 @@ block() {
 	lint
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"bump-disagrees-with-type"* ]]
+}
+
+# --- §6's negative break claim must name which surface it means ---------------
+#
+# CLOUD-842. `batten` is both a binary and a library, so "breaking" names two
+# objects and §6 has one word for them. Five rows (CLOUD-832/833/836/837/647)
+# declared "not `!`" about the CONSUMER surface — correctly — and the change
+# landed as `feat(policy)!` because `cargo-semver-checks` measures the other one.
+#
+# Every case below uses a `no bump` type. That is the discriminator, not a
+# stylistic choice: below 0.1.0 a releasable type collapses to `patch` at the
+# collapse arm, so a `feat` fixture answers the same whether or not this clause
+# fired, and would prove nothing about it.
+
+@test "a §6 clause denying a break without naming a surface is refused" {
+	local d
+	d=$(block '* **Commit / bump (§6).** `refactor` — **no bump**. Not breaking: internal only.')
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"unqualified-break-claim"* ]]
+}
+
+@test "a denial qualified as consumer-facing passes" {
+	local d
+	d=$(block '* **Commit / bump (§6).** `refactor` — **no bump**. Not `!` for the consumer surface: no `batten.toml` row changes.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a denial qualified as the library API passes" {
+	local d
+	d=$(block '* **Commit / bump (§6).** `refactor` — **no bump**. Not `!` for the library API: no `pub` signature moves.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "a §6 clause making no breakage claim is untouched" {
+	# The non-behaviour that keeps this from becoming a demand that every row
+	# discuss semver. Most of the corpus is this shape.
+	local d
+	d=$(block '* **Commit / bump (§6).** `ci` → **no bump**.')
+	payload "$d"
+	lint
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-832's §6 as written reproduces the refusal" {
+	# THE CORPUS CASE, verbatim from the row this issue was filed against — the
+	# instance the clause exists for, and a fixture that cannot reproduce it is
+	# not evidence (CLOUD-418).
+	#
+	# It is also the case that refutes the cheap predicate: the word `consumer` IS
+	# on this line, in "so no consumer shape breaks", forty characters after the
+	# denial and as part of the reasoning rather than as its scope. A gate asking
+	# only "does `consumer` appear anywhere" passes the one row it exists to refuse.
+	local d
+	d=$(block '* **Commit / bump (§6).** `feat(policy)` — **patch until** `0.1.0`. Not `!`: the string `deny` path is preserved, so no consumer shape breaks.')
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"unqualified-break-claim"* ]]
+}
+
+@test "the refusal carries no prose from the clause" {
+	# Pointer-only per non-negotiable rule 4: an issue body can carry customer
+	# detail, and a lint that echoed the clause would leak it through CI logs.
+	local d
+	d=$(block '* **Commit / bump (§6).** `refactor` — **no bump**. Not breaking: ACME-12345 stays wired.')
+	payload "$d"
+	lint
+	[ "$status" -eq 1 ]
+	[[ "$output" != *"ACME-12345"* ]]
 }
 
 @test "a no-bump type does not collapse to patch below 0.1.0" {
