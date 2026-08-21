@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/step-receipt
+# subject: mise-tasks/step-receipt.sh
 # CLOUD-424. The per-step receipt's key function is pure, so it gets a decision
 # table: identical inputs hit; a changed input file, command, tool version or
 # argument misses; and every way a key can fail to compute — an unresolvable
@@ -13,7 +13,7 @@
 # table — so every component of the key is a lever this suite pulls alone.
 
 setup() {
-	SR="$BATS_TEST_DIRNAME/../mise-tasks/step-receipt"
+	SR="$BATS_TEST_DIRNAME/../mise-tasks/step-receipt.sh"
 	mkdir -p "$BATS_TEST_TMPDIR/bin" "$BATS_TEST_TMPDIR/repo"
 	cat >"$BATS_TEST_TMPDIR/bin/mise" <<-'EOF'
 		#!/bin/sh
@@ -240,10 +240,10 @@ pass_once() {
 	# on the runner spelling, so it says what is wrong rather than that something is.
 	run grep -c 'mise run step-receipt' "$BATS_TEST_DIRNAME/../mise.toml"
 	[ "$output" -eq 0 ]
-	run grep -c 'mise run step-receipt' "$BATS_TEST_DIRNAME/../mise-tasks/darwin-link"
+	run grep -c 'mise run step-receipt' "$BATS_TEST_DIRNAME/../mise-tasks/darwin-link.sh"
 	[ "$output" -eq 0 ]
 	# Anti-vacuity: the call sites still exist. A file that stopped gating its
 	# steps entirely would pass the two rows above and buy nothing.
-	run grep -c 'mise-tasks/step-receipt check' "$BATS_TEST_DIRNAME/../mise.toml"
+	run grep -c 'mise-tasks/step-receipt.sh check' "$BATS_TEST_DIRNAME/../mise.toml"
 	[ "$output" -ge 8 ]
 }

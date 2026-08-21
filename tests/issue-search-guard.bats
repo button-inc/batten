@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/issue-search-guard
+# subject: mise-tasks/issue-search-guard.sh
 # CLOUD-505. The guard that demands the search receipt.
 #
 # Split from `issue-search-check.bats` for the reason the claim gate is split from
@@ -12,8 +12,8 @@
 # a real session.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-search-check"
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/issue-search-guard"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-search-check.sh"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/issue-search-guard.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet

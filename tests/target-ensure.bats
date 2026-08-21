@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/target-ensure
+# subject: mise-tasks/target-ensure.sh
 # target-ensure: the single locked effect through which every rustup target
 # install flows (CLOUD-220). The decision half (ok/missing/stale) is
 # doctor-check's and has its own suite; these tests pin the effect half — the
@@ -7,7 +7,7 @@
 # toolchain, plus the sweep that keeps this the ONLY live `rustup target add`.
 
 setup() {
-	ENSURE="$BATS_TEST_DIRNAME/../mise-tasks/target-ensure"
+	ENSURE="$BATS_TEST_DIRNAME/../mise-tasks/target-ensure.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	SYSROOT="$BATS_TEST_TMPDIR/sysroot"
 	STATE="$BATS_TEST_TMPDIR/state"
@@ -153,7 +153,7 @@ hold_lock() { # <seconds>
 
 @test "AN EMPTY PID FILE IS HELD, NEVER FREE — absence of evidence is not evidence" {
 	# The subtlest rule this idiom asserts, and it had no row until CLOUD-428
-	# generalised the idiom into `mise-tasks/singleton` and went looking for one.
+	# generalised the idiom into `mise-tasks/singleton.sh` and went looking for one.
 	# An empty pid file is a holder caught between its `mkdir` and its write, not
 	# a corpse; reading it as free is how two processes both believe they won,
 	# which is the CLOUD-220 rollback this lock exists to prevent.

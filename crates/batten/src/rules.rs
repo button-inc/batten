@@ -661,6 +661,7 @@ impl RuleKind {
                 "documents",
                 "sources",
                 "lines",
+                "line_sources",
                 "severity",
                 "predicate_severity",
                 "identity_key",
@@ -1326,6 +1327,27 @@ pub struct Rule {
     /// that structurally rather than by review.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<String>,
+    /// The files a tree-scoped policy row hands its bundle as lines, **selected
+    /// by glob** (CLOUD-864).
+    ///
+    /// [`Rule::lines`] is to this what [`Rule::documents`] is to
+    /// [`Rule::sources`], and the pair landed asymmetric: CLOUD-850 gave the
+    /// parsed half a glob and the unparsed half kept literal paths only. That
+    /// leaves the fact model's widest surface reachable only by naming every
+    /// path — and the gates that need LINES rather than a parsed document are
+    /// precisely the ones reading many files, since `Format::for_path` answers
+    /// `None` for source text.
+    ///
+    /// Measured need: the shebang rule this column was added for decides over
+    /// **137** shell programs. Enumerating them is a list that goes stale the
+    /// next time one is added, silently and green — the failure the declaration
+    /// bound is supposed to prevent, reintroduced by the spelling.
+    ///
+    /// Same [`Selector`], same union semantics, same stated-skip on a glob that
+    /// matches nothing. Additive: `lines` is unchanged and stays right for a row
+    /// naming one or two paths.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_sources: Vec<String>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -1868,6 +1890,12 @@ impl Rule {
                 self.id
             )));
         }
+        if self.scope == RuleScope::MediatedCall && !self.line_sources.is_empty() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `line_sources` selects files and a mediated call judges a command, not a tree",
+                self.id
+            )));
+        }
         if self.scope == RuleScope::MediatedCall && !self.lines.is_empty() {
             return Err(UsageError::raise(format!(
                 "rule {}: `lines` is what a `scope = \"tree\"` row hands its bundle; \
@@ -1954,7 +1982,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 31] {
+    fn columns(&self) -> [(&'static str, bool); 32] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1990,6 +2018,7 @@ impl Rule {
             ("verdict", self.verdict.is_some()),
             ("filters", self.filters.is_some()),
             ("substitutes", self.substitutes.is_some()),
+            ("line_sources", !self.line_sources.is_empty()),
         ]
     }
 
@@ -3283,7 +3312,7 @@ pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquir
 /// The most documents one run may acquire before it refuses (CLOUD-850).
 ///
 /// **A backstop, not a tuned threshold, and the distinction is the whole
-/// justification.** `mise-tasks/perf-assert` budgets four paths and deliberately
+/// justification.** `mise-tasks/perf-assert.sh` budgets four paths and deliberately
 /// budgets no `check` path, on a reason that is sound and stays: *"`check` is
 /// bounded by the repository it is pointed at — a tree walk over a large
 /// consumer repo is legitimately slower and no ceiling here could tell that
@@ -3358,8 +3387,39 @@ fn refuse_over_budget(acquired: usize, limit: usize) -> anyhow::Result<()> {
 /// A [`UsageError`] (→ exit `1`) for a `sources` pattern `globset` cannot parse,
 /// which is bad config and is refused rather than allowed to select nothing.
 pub(crate) fn declared_documents(rule: &Rule, files: &[String]) -> anyhow::Result<Vec<String>> {
-    let mut declared: BTreeSet<String> = rule.documents.iter().cloned().collect();
-    for pattern in &rule.sources {
+    select_declared(&rule.documents, &rule.sources, files)
+}
+
+/// Every path a row hands its bundle as **lines**: its literal [`Rule::lines`]
+/// plus everything its [`Rule::line_sources`] globs select (CLOUD-864).
+///
+/// [`declared_documents`]'s sibling, and it exists because the two columns that
+/// landed together did not land symmetric. `documents` got a glob spelling in
+/// CLOUD-850 and `lines` did not, which leaves the unparsed half of the fact
+/// model reachable only by naming every path — and the gates that need lines are
+/// exactly the ones over many files. Enumerating 137 shell programs in a row is
+/// a list that goes stale the next time one is added, silently, green.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) for a pattern `globset` cannot parse, matching
+/// `declared_documents` rather than selecting nothing.
+pub(crate) fn declared_lines(rule: &Rule, files: &[String]) -> anyhow::Result<Vec<String>> {
+    select_declared(&rule.lines, &rule.line_sources, files)
+}
+
+/// The literal-plus-glob union both declaration pairs resolve through.
+///
+/// One implementation rather than two, so `lines` cannot drift from `documents`
+/// in how a pattern is matched — which is the drift that produced the asymmetry
+/// this function exists to close.
+fn select_declared(
+    literals: &[String],
+    patterns: &[String],
+    files: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let mut declared: BTreeSet<String> = literals.iter().cloned().collect();
+    for pattern in patterns {
         // `Selector` — the one matcher, `literal_separator(true)` — never a
         // second implementation (CLOUD-850). A policy row was the single kind
         // excluded from it, and it is the kind the retirement migrates onto.
@@ -3399,10 +3459,15 @@ pub(crate) fn acquire_declared(
     // the whole rule set first, because the cache is shared: one path asked for
     // both ways would otherwise be acquired as whichever row was seen first,
     // which is an answer that depends on rule order.
+    //
+    // Resolved through `declared_lines` rather than read raw, so a glob spelling
+    // reaches this set too (CLOUD-864). A row whose pattern will not parse
+    // contributes nothing here and is reported on the per-rule path below, which
+    // is the same treatment `declared_documents` gets three lines down.
     let lines_paths: BTreeSet<String> = rules
         .iter()
         .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
-        .flat_map(|rule| rule.lines.iter().cloned())
+        .flat_map(|rule| declared_lines(rule, files).unwrap_or_default())
         .collect();
     for rule in rules
         .iter()
@@ -3415,7 +3480,8 @@ pub(crate) fn acquire_declared(
         let Ok(declared) = declared_documents(rule, files) else {
             continue;
         };
-        for path in declared.into_iter().chain(rule.lines.iter().cloned()) {
+        let declared_line_paths = declared_lines(rule, files).unwrap_or_default();
+        for path in declared.into_iter().chain(declared_line_paths) {
             if cache.contains_key(&path) {
                 // THE CACHE, and the assertion `documents_acquired` makes: N
                 // rows over one path is ONE read and ONE parse.
@@ -3625,7 +3691,12 @@ fn policy_rule(
     if declared.is_empty() && !rule.sources.is_empty() {
         return Some(NotObserved::RuleSkipped);
     }
-    let (input, not_acquired) = tree_document(documents, &declared, &rule.lines, tracked);
+    // `ok()?` rather than `?`: this function returns `Option<NotObserved>`, and a
+    // malformed glob is refused by `validate` before any rule evaluates — so a
+    // failure here is a row this surface does not own, treated the same way
+    // `declared_documents` is treated a few lines up.
+    let declared_line_paths = declared_lines(rule, tracked).ok()?;
+    let (input, not_acquired) = tree_document(documents, &declared, &declared_line_paths, tracked);
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
         // handed a document the tree does not carry has not established anything
@@ -5743,6 +5814,7 @@ mod tests {
             documents: Vec::new(),
             sources: Vec::new(),
             lines: Vec::new(),
+            line_sources: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

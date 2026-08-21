@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/issue-read-check
+# subject: mise-tasks/issue-read-check.sh
 # CLOUD-508. The half that records how fresh a read of an issue was.
 #
 # Split from `issue-read-guard.bats` for the reason `claim-check` is split from
@@ -11,7 +11,7 @@
 # repo's checkout would mint receipts that authorise a real session's writes.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-read-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-read-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ready-guard
+# subject: mise-tasks/ready-guard.sh
 # The gate that ships with "verify and linear-check before readying".
 #
 # Readying starts CI, so a missed step is paid for in CI minutes and a red run on
@@ -14,7 +14,7 @@
 # about the guard.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/ready-guard"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/ready-guard.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	cd "$REPO" || return 1
@@ -251,7 +251,7 @@ landing_commit() {
 }
 
 @test "the refusal names no file to edit back" {
-	# A message that says "fix mise-tasks/land" is the instruction that produces
+	# A message that says "fix mise-tasks/land.sh" is the instruction that produces
 	# the repair. It must point at a rebase and at the memory, never at an edit.
 	receipts
 	landing_commit

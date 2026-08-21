@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/pipefail-grep-check
+# subject: mise-tasks/pipefail-grep-check.sh
 # `producer | grep -q P` under `set -o pipefail` can return FAILURE on a match:
 # grep exits at the first hit, a producer still writing dies of SIGPIPE, and
 # pipefail promotes 141 to the pipeline's status. The successful case is the one
@@ -15,7 +15,7 @@
 # only feeds non-matching input never sees it.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/pipefail-grep-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/pipefail-grep-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	mkdir -p "$REPO/mise-tasks"
 	cd "$REPO" || return 1
@@ -26,7 +26,7 @@ setup() {
 
 # Writes $1 as a task body and stages it, since the gate reads tracked files.
 task() {
-	printf '%s\n' "$1" >mise-tasks/t
+	printf '%s\n' "$1" >mise-tasks/t.sh
 	git add -A
 }
 
@@ -35,7 +35,7 @@ task() {
 git log --format="%B" origin/main..HEAD | grep -qiE "$ISSUE_RE" && exit 0'
 	run "$GATE"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"mise-tasks/t:2"* ]]
+	[[ "$output" == *"mise-tasks/t.sh:2"* ]]
 }
 
 @test "the here-string fix passes" {
@@ -87,7 +87,7 @@ producer | grep -E PATTERN'
 @test "an || before grep is not a pipe" {
 	# CLOUD-852. The scan was `\|[[:space:]]*grep`, which matches the SECOND bar
 	# of `a || grep -q ...` — so a here-string form, the very remedy this gate
-	# recommends, was reported as the defect. Measured on `mise-tasks/ready-lint`,
+	# recommends, was reported as the defect. Measured on `mise-tasks/ready-lint.sh`,
 	# whose line pipes nothing.
 	task 'set -euo pipefail
 [[ "$tok" == *x* ]] || grep -qE PATTERN <<<"$line"'
@@ -136,7 +136,7 @@ producer | grep -q "s3://acct-1234567890/secret"'
 }
 
 @test "an untracked file is not judged — the gate reads committed bytes" {
-	printf 'set -euo pipefail\nproducer | grep -q P\n' >mise-tasks/t
+	printf 'set -euo pipefail\nproducer | grep -q P\n' >mise-tasks/t.sh
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }

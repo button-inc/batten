@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/doctor
+# subject: mise-tasks/doctor.sh
 # CLOUD-201's remaining half: doctor's two REPAIRS, run concurrently.
 #
 # `verify` reaches doctor twice from one invocation — through `cross-check`, and
@@ -20,7 +20,7 @@
 # even if both had repaired.
 
 setup() {
-	DOCTOR="$BATS_TEST_DIRNAME/../mise-tasks/doctor"
+	DOCTOR="$BATS_TEST_DIRNAME/../mise-tasks/doctor.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	DATA="$BATS_TEST_TMPDIR/mise"
@@ -29,7 +29,7 @@ setup() {
 
 	# The git-hook half (CLOUD-476) reads this clone's hooks directory, so the
 	# fixture gets its own probe-honouring pair — the shape
-	# `.claude/hooks/git-hook` installs. Without them doctor's hook check would
+	# `.claude/hooks/git-hook.sh` installs. Without them doctor's hook check would
 	# set `status=1` and every assertion below would fail for a reason that has
 	# nothing to do with the repairs under test. `CI` is unset for the mirror of
 	# that reason: doctor SKIPS the hook check under CI, so the runner's own

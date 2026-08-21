@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ntia-check
+# subject: mise-tasks/ntia-check.sh
 # ntia-check's decision table (CLOUD-580): does the derived SBOM meet the NTIA/CISA
 # minimum elements, and — the half that can rot silently — is the verdict really the
 # checker's exit code rather than its report?
@@ -17,13 +17,13 @@
 # checker on every gate run.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/ntia-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/ntia-check.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"
 	export PATH
 
-	# The tree `mise-tasks/sbom` scans: a manifest to read the version from is all
+	# The tree `mise-tasks/sbom.sh` scans: a manifest to read the version from is all
 	# it needs, since the catalog comes from the stubbed syft.
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT"
@@ -45,7 +45,7 @@ setup() {
 	stub_batten
 }
 
-# A `syft` that writes the two documents `mise-tasks/sbom` asks for. Sentinel:
+# A `syft` that writes the two documents `mise-tasks/sbom.sh` asks for. Sentinel:
 #   syft.fails   exit non-zero, so no document can be derived
 stub_syft() {
 	cat >"$STUB/syft" <<EOF

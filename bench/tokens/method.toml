@@ -2,7 +2,7 @@
 #
 # Every constant a published figure depends on lives here, with its source and
 # the date it was read, so a reader can check the arithmetic against the primary
-# rather than trusting the harness. `mise-tasks/token-bench` bakes none of it in: a
+# rather than trusting the harness. `mise-tasks/token-bench.sh` bakes none of it in: a
 # price or a divisor written into a program is a number nobody re-derives.
 #
 # WHY THIS FILE IS NOT IN `crates/batten`. Provider prices and benchmark

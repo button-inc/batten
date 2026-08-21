@@ -163,7 +163,7 @@ fn the_spec_carries_the_new_verbs_with_their_declared_effects() {
 // CLOUD-171 renders at publish time, so there is no second copy to diff).
 
 /// The command paths whose pages this repository commits, read from the derived
-/// list rather than enumerated: `mise-tasks/man-pages` is the one authority for
+/// list rather than enumerated: `mise-tasks/man-pages.sh` is the one authority for
 /// which pages exist, and a list re-typed here would be a second one.
 fn committed_pages() -> Vec<(PathBuf, String)> {
     let dir = at_root("man");

@@ -1,6 +1,6 @@
 //! The `hook` adjudicator (CLOUD-202): the agent-neutral envelope, the
 //! wrapper-lookthrough command parser, and the first policy table, ported from
-//! the battle-tested shell guards (`mise-tasks/gh-guard-check` et al.).
+//! the battle-tested shell guards (`mise-tasks/gh-guard-check.sh` et al.).
 //!
 //! Three layers, deliberately separated:
 //!
@@ -4186,6 +4186,7 @@ mod tests {
             documents: Vec::new(),
             sources: Vec::new(),
             lines: Vec::new(),
+            line_sources: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,
@@ -6564,7 +6565,7 @@ deny contains "refused by the module" if {
         // Asserted behaviourally rather than by grepping the source. A grep is
         // what `verbs::the_source_bakes_in_no_verb` uses, and it works there
         // because a verb name is a short token. A *path* is not: the module doc
-        // legitimately cites `mise-tasks/gh-guard-check` as the provenance of
+        // legitimately cites `mise-tasks/gh-guard-check.sh` as the provenance of
         // this port, and prose examples name paths too, so a grep either fails on
         // documentation or needs an escape clause loose enough to pass always.
         // Both were tried; both were worse than the property itself.

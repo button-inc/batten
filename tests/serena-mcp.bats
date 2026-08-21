@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/serena-mcp
+# subject: mise-tasks/serena-mcp.sh
 # CLOUD-714. The shim exists to answer one question — did the client actually
 # execute the configured command — so the suite's job is to prove the record is
 # written, that it is written BEFORE the launch rather than after it, and that
@@ -7,7 +7,7 @@
 # that keeps this from drifting into a supervisor.
 
 setup() {
-	SHIM="$BATS_TEST_DIRNAME/../mise-tasks/serena-mcp"
+	SHIM="$BATS_TEST_DIRNAME/../mise-tasks/serena-mcp.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init -q
@@ -93,7 +93,7 @@ shim() { (cd "$REPO" && "$SHIM" "$@"); }
 @test "the shim is what .mcp.json launches, so the ledger is populated in real sessions" {
 	# Non-negotiable 2: a mechanism nothing invokes is half a change.
 	run jq -r '.mcpServers.serena.command' "$BATS_TEST_DIRNAME/../.mcp.json"
-	[ "$output" = "mise-tasks/serena-mcp" ]
+	[ "$output" = "mise-tasks/serena-mcp.sh" ]
 }
 
 @test "the launch args stay in .mcp.json, so the pin gate still reads them" {

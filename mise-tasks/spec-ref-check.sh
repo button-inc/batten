@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every `CLOUD-<n> §N` citation in the tree names a clause that issue actually carries (reads get_issue payloads on stdin)"
+#
+# CLOUD-809. A `§N` in this tree points at four different things, and only one of
+# them was ever checkable from here. Measured at 4183bc4, 2026-08-20, over every
+# tracked file: 1,106 section references, of which 83 are `house-style §N`, 49 are
+# `CLOUD-<n> §N`, 18 name a DoR/DoD clause in prose, and 2 name the attribution
+# decision record. Nothing read any of them.
+#
+# THE ONE THAT FIRES, and it fired immediately. Three files cited `CLOUD-420 §4`:
+#
+#   mise-tasks/land-lock.sh:459   tests/land-lock.bats:1172   tests/ready-guard.bats:46
+#
+# CLOUD-420's Ready block carries §1, §2, §3, §6 and §8. There is no §4, and the
+# content all three meant — `ready-guard`'s offline half, the lease receipt — is
+# under its §3. Two of CLOUD-794's three citation modes at once: the anchor does
+# not exist, and the fact lives elsewhere. Live on `main`, invisible to everything.
+#
+# WHY NOT THE OTHER THREE TARGETS. A `house-style §N` predicate was designed and
+# CUT: all 83 resolve, and the two incidents that looked like instances are not —
+# CLOUD-244 is §2 disagreeing with the landed SURFACE (§2 exists, it said
+# something wrong) and CLOUD-368 is §10 contradicting §0.3 (both exist). Content
+# drift, not an absent anchor. mem:prior-art-and-issue-hygiene rule 1: no local
+# failure, no adoption, not even a cheap one. When one appears this extends by one
+# payload — the loop below does not care what kind of thing it is checking.
+#
+# A BARE-`§N` RATCHET WAS ALSO CUT. 1,020 of the 1,106 name no target, but most
+# are locally unambiguous — a DoR clause inside a Ready block, a house-style ref
+# in a file whose header already named the document. Ratcheting that count is
+# `assertions-not-gutted` counting `assert` tokens (CLOUD-357): a number that
+# rises without the property improving, which is the defect this gate's own issue
+# was filed against.
+#
+# REFUTES, NEVER CONFIRMS — `done-check`'s posture, and load-bearing rather than
+# stylistic. CLOUD-45 and CLOUD-33 legitimately omit §4 entirely and are correctly
+# Ready, so a sparse clause set is not a defect. A CITATION of a clause that is
+# not there is. This says nothing about whether a resolving citation is apt; that
+# is CLOUD-794's mode 2 and is not computable.
+#
+# OVER-DECLARING IS THE SAFE DIRECTION, so a clause-label line contributes EVERY
+# `(§N)` on it, not just the tag that matched. A label like
+# `**Engine gap, per §2 (§3).**` names two numbers and only one is its tag;
+# reading both can only make this gate report LESS. A guard with false positives
+# gets bypassed, and a bypassed guard enforces nothing.
+#
+# INPUT IS STDIN, for `done-check`'s reason verbatim: agents fetch, gates decide.
+# No tracker credential exists in a hook or in CI, so this is a pure function of
+# stdin — nothing that can hang, rate-limit, or fail differently in the sandbox.
+# Bounded: 17 distinct issues are cited today, one payload set.
+#
+# NOT IN `hk.pkl`, `verify`, OR CI, and that is the same fact rather than a
+# separate choice. No stdin-payload gate is wired there — `done-check`,
+# `graph-check`, `ready-lint`, `claim-check` and `released` are all agent-driven —
+# because CI has no credential to fetch with. Wiring this into the gate step would
+# hand it empty stdin and exit 2 on every run.
+#
+# A CITED ISSUE MISSING FROM THE PAYLOAD IS EXIT 2, NEVER 0. An unfetched issue
+# looks exactly like an issue with no defects, and CLOUD-189 is this repo's
+# instance of a gate reporting green on a precondition that never ran.
+#
+# THE PAYLOAD MUST BE `get_issue` OUTPUT VERBATIM, and this gate fails in the
+# UNSAFE direction if it is not. CLOUD-469 records the hazard for the board gates
+# generally — with no tracker credential inside the gate, payloads reach stdin
+# only by an agent transcribing, and "the cheap way to satisfy the gate is also
+# the way to defeat it". `graph-check` defeats toward exit 0; this one defeats
+# toward exit 1: a shortened body carries fewer clause LABELS, so every citation
+# of a dropped clause is reported as absent. That is a false positive, and this
+# file's own argument is that a guard with false positives gets bypassed.
+#
+# Two consequences, both deliberate. A projected `list_issues` is NOT a valid
+# input — it truncates descriptions, which is precisely the shortening above, and
+# the shape assertion cannot tell a truncated body from a terse one. And the real
+# fix is not a knob here: it is an assembler holding a credential, which is
+# CLOUD-469's own conclusion and CLOUD-312's capability gap. Linked rather than
+# worked around.
+#
+# Output is pointer-only per non-negotiable rule 4, and here that is the security
+# property rather than a style: issue bodies carry decision history and customer
+# detail, so this emits `path:line`, the key and the clause number, and never a
+# byte of a body. Sorted, so re-running is byte-stable.
+#
+# THE COST, STATED RATHER THAN HIDDEN: the clause pattern below re-derives
+# `ready-lint`'s `CLAUSE_LABEL`. `ready-lint` returns an exit code, not the clause
+# set, so it cannot be composed — CLOUD-773's gap, where 57 of 126 tasks invoke
+# siblings over a three-state channel. This is one more derivation site.
+#
+# Exit 0 every citation resolves / 1 one does not / 2 could not look — the
+# `*-check` convention, which is the INVERSE of batten's own contract
+# (mem:toolchain-and-hooks).
+#
+# The mutation makes every clause read as present, so the absent one is never
+# reported and the CLOUD-420 regression goes quiet.
+#MUTANT clause-always-present|s/! is_declared "\$clause" "\$declared"/false/|does not carry is reported
+# And the cannot-look arm: with the emptiness test dead, an issue nobody fetched
+# passes as though it had been checked — CLOUD-189's shape in this gate.
+#MUTANT unfetched-issue-passes|s/\[ -z "\$body" \]/false/|absent from the payload set is exit 2
+set -uo pipefail
+
+cd "${SPEC_REF_ROOT:-$(git rev-parse --show-toplevel)}" || {
+	echo "::error:: spec-ref-check: no repository root to scan" >&2
+	exit 2
+}
+
+# Exit 2 is "I could not read the input", distinct from exit 1 "a citation is
+# wrong" — a caller piping the wrong thing must not look like a clean tree.
+if ! payload=$(cat) || [ -z "${payload//[[:space:]]/}" ]; then
+	echo "::error:: spec-ref-check: stdin is empty; expected get_issue payloads" >&2
+	exit 2
+fi
+if ! issues=$(jq -sc 'if length == 1 and (.[0] | type == "array") then .[0] else . end' <<<"$payload" 2>/dev/null) ||
+	! jq -e 'type == "array" and length > 0 and all(.[]; type == "object" and has("id") and has("description"))' <<<"$issues" >/dev/null 2>&1; then
+	echo "::error:: spec-ref-check: stdin is not a set of get_issue payloads (need id and description per issue)" >&2
+	exit 2
+fi
+
+# `ready-lint`'s clause anchor, re-derived (see the header): a bolded label at the
+# start of a line, or a heading, carrying a parenthesised clause tag. A bare `(§N)`
+# in prose is a cross-reference, not a declaration, which is the distinction that
+# stops a Ready block's own house-style citations from inventing clauses.
+CLAUSE_LABEL='^[[:space:]]*([*-][[:space:]]*)?\*\*[^*]*\((§|clause )[0-9]+\)|^#{2,6}[[:space:]]+[^#]*\((§|clause )[0-9]+\)'
+
+# Every clause number a body declares, one per line. Reads the label lines, then
+# takes every tag on them — the over-declaring bias the header argues for.
+declared_clauses() {
+	grep -E "$CLAUSE_LABEL" <<<"$1" 2>/dev/null |
+		grep -oE '\((§|clause )[0-9]+\)' 2>/dev/null |
+		grep -oE '[0-9]+' 2>/dev/null |
+		sort -un
+}
+
+is_declared() { grep -qxF "$1" <<<"$2"; }
+
+# The scan skips this gate and its suite: both carry the CLOUD-420 §4 pair as
+# documentation and as a fixture, and a gate that reported its own regression
+# witness would be unfixable. `attribution-check` excludes itself for the same
+# reason.
+findings=0
+unjudgeable=0
+first_finding=1
+first_gap=1
+
+# Read the whole citation set once, into a variable. Not an optimisation: under
+# `pipefail` a `git ls-files … | xargs grep` feeding a loop that exits early takes
+# SIGPIPE and the status becomes that signal, which done-check's header records as
+# a silent false green this repo keeps meeting in new disguises.
+citations=$(
+	git ls-files -z \
+		':!:mise-tasks/spec-ref-check.sh' \
+		':!:tests/spec-ref-check.bats' |
+		xargs -0 grep -HnIoE "CLOUD-[0-9]+('s)? §[0-9]+(\.[0-9]+)?" 2>/dev/null |
+		sort -u
+)
+
+while IFS= read -r hit; do
+	[ -n "$hit" ] || continue
+	# `path:line:CLOUD-420 §4` — the match is the last field, the pointer the rest.
+	where="${hit%:*}"
+	cite="${hit##*:}"
+	key=$(grep -oE 'CLOUD-[0-9]+' <<<"$cite")
+	# A sub-number resolves to its parent: `CLOUD-326 §8.1` names a nested point,
+	# and the parent is what the Ready block labels.
+	clause=$(grep -oE '§[0-9]+' <<<"$cite" | tr -d '§')
+	[ -n "$key" ] && [ -n "$clause" ] || continue
+
+	body=$(jq -r --arg k "$key" 'map(select(.id == $k)) | .[0].description // ""' <<<"$issues" 2>/dev/null)
+	if [ -z "$body" ]; then
+		[ "$first_gap" = 1 ] && {
+			echo "::error:: spec-ref-check: cited issues are absent from the piped payload set, so their citations could not be judged. Fetch them and pipe again — an unfetched issue looks exactly like a clean one (CLOUD-189):" >&2
+			first_gap=0
+		}
+		echo "  $where $key unjudgeable-issue" >&2
+		unjudgeable=$((unjudgeable + 1))
+		continue
+	fi
+
+	declared=$(declared_clauses "$body")
+	if ! is_declared "$clause" "$declared"; then
+		[ "$first_finding" = 1 ] && {
+			echo "::error:: spec-ref-check: citations name a clause their issue does not carry. Cite the clause that holds the content, or the issue's own §N if it moved (CLOUD-809):" >&2
+			first_finding=0
+		}
+		echo "  $where $key §$clause absent-issue-clause" >&2
+		findings=$((findings + 1))
+	fi
+done <<<"$citations"
+
+# A finding outranks a gap, deliberately and against CLOUD-251's "2 outranks 1":
+# a citation this gate PROVED wrong is wrong whatever else it could not see, and
+# reporting exit 2 would let a real defect hide behind an unfetched sibling.
+if [ "$findings" -gt 0 ]; then
+	exit 1
+fi
+if [ "$unjudgeable" -gt 0 ]; then
+	exit 2
+fi
+
+echo "spec-ref-check: every CLOUD-<n> §N citation resolves"
+exit 0

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/hook-pin-check
+# subject: mise-tasks/hook-pin-check.sh
 # CLOUD-479. The issue's own trap, made computable.
 #
 # Registering a hook by path saves ~185ms of task-runner startup per call and
@@ -13,7 +13,7 @@
 # whole job is reading committed text and there is nothing else to stub.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/hook-pin-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/hook-pin-check.sh"
 	SETTINGS="$BATS_TEST_TMPDIR/settings.json"
 	MANIFEST="$BATS_TEST_TMPDIR/mise.toml"
 	TASKS="$BATS_TEST_TMPDIR/mise-tasks"
@@ -36,7 +36,7 @@ task() {
 
 @test "a by-path hook shelling out to a pinned tool is refused, and both are named" {
 	task guard 'raw=$(cat); printf "%s" "$raw" | jq -r ".x"'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"guard jq"* ]]
@@ -44,7 +44,7 @@ task() {
 
 @test "the refusal names all three ways out, since a deny with no exit is a wall" {
 	task guard 'jq -r ".x" <<<"{}"'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[[ "$output" == *"mise run"* ]]
 	[[ "$output" == *"payload-field"* ]]
@@ -66,7 +66,7 @@ task() {
 
 @test "a by-path hook using no pinned tool passes" {
 	task guard 'grep -q x /dev/null || true'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 0 ]
 }
@@ -79,7 +79,7 @@ task() {
 	task guard '#PIN-OK: jq
 command -v jq >/dev/null || exit 0
 jq -r ".x" <<<"{}"'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 0 ]
 }
@@ -87,7 +87,7 @@ jq -r ".x" <<<"{}"'
 @test "an exemption for a DIFFERENT tool does not cover this one" {
 	task guard '#PIN-OK: zizmor
 jq -r ".x" <<<"{}"'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"guard jq"* ]]
@@ -99,14 +99,14 @@ jq -r ".x" <<<"{}"'
 	# as a dependency would refuse the very change it exists to reward.
 	task guard '# jq was dropped here on purpose; see payload-field.
 printf "%s" ok'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 0 ]
 }
 
 @test "a tool named as a substring of another word is not a call" {
 	task guard 'echo "jquery is not jq" >/dev/null'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 0 ]
 }
@@ -116,7 +116,7 @@ printf "%s" ok'
 	# the first time someone adds one.
 	printf '[tools]\n"aqua:koalaman/shellcheck" = "0.11.0"\n' >"$MANIFEST"
 	task guard 'shellcheck x'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"guard shellcheck"* ]]
@@ -140,14 +140,14 @@ printf "%s" ok'
 
 @test "a manifest with no [tools] is exit 2 — could not look, never a verdict" {
 	printf '[env]\nX = "1"\n' >"$MANIFEST"
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[ "$status" -eq 2 ]
 }
 
 @test "output is pointer-only — the task and the tool, never a line of either file" {
 	task guard 'SECRETXYZZY=1; jq -r ".x" <<<"{}"'
-	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard'
+	registers '$CLAUDE_PROJECT_DIR/mise-tasks/guard.sh'
 	gate
 	[[ "$output" != *"SECRETXYZZY"* ]]
 }

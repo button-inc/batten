@@ -175,11 +175,11 @@ gix = { version = "0.86", default-features = false, features = [
 # declares a `links` key and `macos-link-check` rule 1 is cleared without an
 # exception.
 #
-# THAT SENTENCE IS NO LONGER A PROMISE (CLOUD-831). `mise-tasks/evaluator-
+# THAT SENTENCE IS NO LONGER A PROMISE (CLOUD-831). `mise-tasks/evaluator-.sh
 # closure-check` re-runs it on every gate invocation, and the `[[rule]]` row
 # `evaluator-closure-io-free` in `batten.toml` is what makes a firing a refusal.
 # The nine names live in the gate rather than being restated here a third time —
-# `mise-tasks/rules-drift`'s lesson is that a constant copied with nothing
+# `mise-tasks/rules-drift.sh`'s lesson is that a constant copied with nothing
 # holding the copies in agreement drifts, and this comment's own package count
 # was the proof: it read 45, measured 2026-08-20 by hand, against a graph that
 # resolved otherwise the same week.
@@ -195,7 +195,7 @@ gix = { version = "0.86", default-features = false, features = [
 # The count is REPORTED and never asserted. Which of the nine are absent is a
 # property of this commit and is gated; how many packages upstream resolves to
 # is a property of the world, and gating it would fire on every legitimate bump
-# (`mise-tasks/lock-complete`'s split, applied here).
+# (`mise-tasks/lock-complete.sh`'s split, applied here).
 #
 # `coverage` is not optional either, and not for reporting. Regorus refuses a
 # conflict or a recursion at EVALUATION, never at `add_policy` — five cases,

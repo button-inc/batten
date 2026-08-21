@@ -919,7 +919,7 @@ fn the_armed_comparison_still_reports_a_single_tree_smell() {
     // The two classes compose rather than replace each other. This is what the
     // task-level bypass is bounded against: armed, one invocation can report a
     // base-ref weakening AND a property of the commit, and a hatch for the first
-    // must not quietly cover the second (`mise-tasks/config-lint`).
+    // must not quietly cover the second (`mise-tasks/config-lint.sh`).
     let repo = pr_fixture(
         "armed-both-classes",
         &format!(

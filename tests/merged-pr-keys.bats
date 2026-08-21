@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/merged-pr-keys
+# subject: mise-tasks/merged-pr-keys.sh
 #
 # CLOUD-814. Every case drives the forge reading through MERGED_PR_KEYS_SOURCE,
 # so the suite runs offline with no `gh` and no network — the shape
 # `tests/branch-age-check.bats` uses for BRANCH_AGE_PRS.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/merged-pr-keys"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/merged-pr-keys.sh"
 	SRC="$BATS_TEST_TMPDIR/src-$BATS_TEST_NUMBER.json"
 	export MERGED_PR_KEYS_SOURCE="$SRC"
 	# Well above every fixture's size, so a case that is not ABOUT truncation

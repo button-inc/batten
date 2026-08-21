@@ -17,7 +17,7 @@ author: Button Inc.
 # `.github/workflows/test.yml` invokes exactly that bare form so the claim is
 # executed rather than asserted.
 #
-# WHY IT DOWNLOADS A RELEASE ASSET RATHER THAN BUILDING. `mise-tasks/dist` already
+# WHY IT DOWNLOADS A RELEASE ASSET RATHER THAN BUILDING. `mise-tasks/dist.sh` already
 # produces one archive per target on every release, named `batten-v<version>-
 # <target>`, and that name is a contract (house-style §12, CLOUD-65). Building
 # here would compile a binary nobody attested, on whatever toolchain the runner
@@ -107,7 +107,7 @@ runs:
 
         # awk with `exit`, never `sed … | head -n1`: under `pipefail` an early
         # exiting consumer can SIGPIPE the producer and turn a successful read
-        # into a failed pipeline. Same idiom `mise-tasks/ci-local-parity` uses to
+        # into a failed pipeline. Same idiom `mise-tasks/ci-local-parity.sh` uses to
         # read a single manifest key.
         version="$INPUT_VERSION"
         if [ -z "$version" ]; then
@@ -125,7 +125,7 @@ runs:
           exit 1
         }
 
-        # `mise-tasks/dist` keys the archive off the TARGET TRIPLE, so the
+        # `mise-tasks/dist.sh` keys the archive off the TARGET TRIPLE, so the
         # mapping below is the one place a runner is turned into an asset name.
         # musl on Linux deliberately: it is the statically linked build, so it
         # runs on any runner image regardless of its glibc.

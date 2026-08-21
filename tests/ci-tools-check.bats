@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ci-tools-check
+# subject: mise-tasks/ci-tools-check.sh
 # The gate that ships with the narrowed CI tool sets (AGENTS.md non-negotiable
 # 2). ci.yml installs a per-job `install_args` list instead of the whole
 # toolchain, which is the single biggest CI speed-up available — and it buys
@@ -19,7 +19,7 @@ setup() {
 	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
 	# tools a stock macOS does not ship (CLOUD-282).
 	load helpers
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/ci-tools-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/ci-tools-check.sh"
 	WORKFLOW="$BATS_TEST_TMPDIR/ci.yml"
 	CONFIG="$BATS_TEST_TMPDIR/mise.toml"
 

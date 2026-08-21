@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/reclaim-census
+# subject: mise-tasks/reclaim-census.sh
 # reclaim-census: what was in flight when a container was replaced? (CLOUD-451)
 #
 # The question decides whether occupancy is the right lever at all, and it was
@@ -21,7 +21,7 @@
 # (CLOUD-418).
 
 setup() {
-	CENSUS="$BATS_TEST_DIRNAME/../mise-tasks/reclaim-census"
+	CENSUS="$BATS_TEST_DIRNAME/../mise-tasks/reclaim-census.sh"
 	REPO="$BATS_TEST_TMPDIR/clone"
 	mkdir -p "$REPO"
 	git -C "$REPO" init -q .
@@ -240,7 +240,7 @@ at() { (cd "$REPO" && "$CENSUS" "$@"); }
 # --- the call sites, so the wiring cannot go dead unnoticed -------------------
 
 @test "land-lock's hold loop records a beat and every stop it chooses" {
-	LOCK="$BATS_TEST_DIRNAME/../mise-tasks/land-lock"
+	LOCK="$BATS_TEST_DIRNAME/../mise-tasks/land-lock.sh"
 	run grep -c 'beat_note x' "$LOCK"
 	# Four paths where the loop chooses to stop: holder gone, stalled, lease
 	# lost, lease lapsed. A new exit added without a record is a silent gap.
@@ -254,6 +254,6 @@ at() { (cd "$REPO" && "$CENSUS" "$@"); }
 	# finish; the loop never runs another statement, so its last record stays an
 	# `h`. Without this line every successful landing would later read as
 	# "the container died under active work".
-	run grep -c 'note x land-stopped' "$BATS_TEST_DIRNAME/../mise-tasks/land"
+	run grep -c 'note x land-stopped' "$BATS_TEST_DIRNAME/../mise-tasks/land.sh"
 	[ "$output" -eq 1 ]
 }

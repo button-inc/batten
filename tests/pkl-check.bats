@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/pkl-check
+# subject: mise-tasks/pkl-check.sh
 # CLOUD-406. `hk.pkl:14` amends a pkl PACKAGE uri, so pkl resolves the `hk`
 # package over the network on every evaluation — a second dependency beside the
 # `hk` binary `mise.lock` pins, and unpinned at runtime. Measured in CI on run
@@ -24,7 +24,7 @@
 # the measurement" shape `tests/land-lock.bats` already uses.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/pkl-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/pkl-check.sh"
 	HK="$BATS_TEST_DIRNAME/../hk.pkl"
 
 	# pkl's DEFAULT cache, which is the one that matters: hk evaluates `hk.pkl`

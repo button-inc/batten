@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/perf-pair
+# subject: mise-tasks/perf-pair.sh
 # Static properties of the paired driver.
 #
 # The measurement itself needs two release builds and a worktree, so it is not
@@ -8,7 +8,7 @@
 # looks like something else.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/perf-pair"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/perf-pair.sh"
 }
 
 # THE MEASURED DEFECT (CLOUD-172). Both arms used to run in the repo root, so
@@ -51,7 +51,7 @@ setup() {
 	# Read the BUDGETS block itself rather than grepping for names: the first
 	# entry shares its line with the assignment, so a name-anchored count silently
 	# loses it — which this case caught on its first run.
-	budgeted=$(sed -n "/^BUDGETS='/,/'$/p" "$BATS_TEST_DIRNAME/../mise-tasks/perf-assert" |
+	budgeted=$(sed -n "/^BUDGETS='/,/'$/p" "$BATS_TEST_DIRNAME/../mise-tasks/perf-assert.sh" |
 		tr -d "'" | sed 's/^BUDGETS=//' | grep -cE '^[a-z]+ [0-9]+$')
 	paired=$(grep -cE '^pair (noop|check|hook|wired|passthrough) ' "$TASK")
 	# perf-assert budgets the gated paths only; `check` is measured and ungated,

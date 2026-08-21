@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ready-lint
+# subject: mise-tasks/ready-lint.sh
 # ready-lint's decision table (CLOUD-179), driven by get_issue-shaped payloads.
 #
 # The cases that matter are the ones prose cannot fake: a blocker asserted in §8
@@ -10,7 +10,7 @@
 # (CLOUD-33) omits §4.
 
 setup() {
-	LINT="$BATS_TEST_DIRNAME/../mise-tasks/ready-lint"
+	LINT="$BATS_TEST_DIRNAME/../mise-tasks/ready-lint.sh"
 }
 
 # Writes a get_issue payload to $PAYLOAD: $1 description, rest are blockedBy ids.
@@ -375,7 +375,7 @@ block() {
 @test "a disagreeing declaration beside a code span is still refused" {
 	# The clause must not decay into one that never fires: an unrelated span on
 	# the line does not buy a pass for a bump that genuinely disagrees.
-	payload "$(block '* **Commit / bump (§6).** `mise-tasks/ready-lint`; `feat` → **major**.')"
+	payload "$(block '* **Commit / bump (§6).** `mise-tasks/ready-lint.sh`; `feat` → **major**.')"
 	lint
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"bump-disagrees-with-type"* ]]
@@ -388,8 +388,8 @@ lint_at_version() {
 	local v="$1"
 	mkdir -p "$BATS_TEST_TMPDIR/root/mise-tasks"
 	printf '[workspace.package]\nversion = "%s"\n' "$v" >"$BATS_TEST_TMPDIR/root/Cargo.toml"
-	cp "$LINT" "$BATS_TEST_TMPDIR/root/mise-tasks/ready-lint"
-	run bash -c "'$BATS_TEST_TMPDIR/root/mise-tasks/ready-lint' <'$PAYLOAD'"
+	cp "$LINT" "$BATS_TEST_TMPDIR/root/mise-tasks/ready-lint.sh"
+	run bash -c "'$BATS_TEST_TMPDIR/root/mise-tasks/ready-lint.sh' <'$PAYLOAD'"
 }
 
 @test "the arrows fire again at 0.1.0 and above" {
@@ -410,8 +410,8 @@ lint_at_version() {
 	# that cannot establish its own regime must refuse to answer.
 	payload "$(block '* **Commit / bump (§6).** `feat` → **patch**.')"
 	mkdir -p "$BATS_TEST_TMPDIR/noroot/mise-tasks"
-	cp "$LINT" "$BATS_TEST_TMPDIR/noroot/mise-tasks/ready-lint"
-	run bash -c "'$BATS_TEST_TMPDIR/noroot/mise-tasks/ready-lint' <'$PAYLOAD'"
+	cp "$LINT" "$BATS_TEST_TMPDIR/noroot/mise-tasks/ready-lint.sh"
+	run bash -c "'$BATS_TEST_TMPDIR/noroot/mise-tasks/ready-lint.sh' <'$PAYLOAD'"
 	[ "$status" -eq 2 ]
 }
 
@@ -419,8 +419,8 @@ lint_at_version() {
 	# The version is read inside the clause, so a §6-less body lints anywhere.
 	payload "$(block '* **Blockers (§8).** None.')"
 	mkdir -p "$BATS_TEST_TMPDIR/bare/mise-tasks"
-	cp "$LINT" "$BATS_TEST_TMPDIR/bare/mise-tasks/ready-lint"
-	run bash -c "'$BATS_TEST_TMPDIR/bare/mise-tasks/ready-lint' <'$PAYLOAD'"
+	cp "$LINT" "$BATS_TEST_TMPDIR/bare/mise-tasks/ready-lint.sh"
+	run bash -c "'$BATS_TEST_TMPDIR/bare/mise-tasks/ready-lint.sh' <'$PAYLOAD'"
 	[ "$status" -eq 0 ]
 }
 
@@ -854,7 +854,7 @@ Out of scope: the loader itself, deferred to CLOUD-77."
 
 @test "a §7 introducing a deny gate with no replay is refused" {
 	local d
-	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "deny"`.\n')
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check.sh` at `severity = "deny"`.\n')
 	payload "$(block "$d")"
 	lint
 	[ "$status" -eq 1 ]
@@ -863,7 +863,7 @@ Out of scope: the loader itself, deferred to CLOUD-77."
 
 @test "a deny gate that reports its replay passes" {
 	local d
-	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "deny"`.\n  Replay over `git rev-list origin/main`: 412 commits examined, 3 firings, 0 false positives.\n')
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check.sh` at `severity = "deny"`.\n  Replay over `git rev-list origin/main`: 412 commits examined, 3 firings, 0 false positives.\n')
 	payload "$(block "$d")"
 	lint
 	[ "$status" -eq 0 ]
@@ -874,7 +874,7 @@ Out of scope: the loader itself, deferred to CLOUD-77."
 	# it: a `warn` that fires often is noise a reader can weigh, where a `deny` that
 	# fires often stops the fleet.
 	local d
-	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "warn"`.\n')
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check.sh` at `severity = "warn"`.\n')
 	payload "$(block "$d")"
 	lint
 	[ "$status" -eq 0 ]
@@ -901,7 +901,7 @@ Out of scope: the loader itself, deferred to CLOUD-77."
 
 @test "the deny-without-replay report carries no line of the block" {
 	local d
-	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check` at `severity = "deny"`.\n')
+	d=$(printf '* **Test obligation (§7).** A new `mise-tasks/example-check.sh` at `severity = "deny"`.\n')
 	payload "$(block "$d")"
 	lint
 	[ "$status" -eq 1 ]

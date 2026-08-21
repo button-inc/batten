@@ -21,7 +21,7 @@ rust = { version = "1.97.1", components = "rustfmt,clippy" }
 hk = "1.54.0"                                                # git-hook runner (see hk.pkl)
 "aqua:cli/cli" = "2.97"                                      # gh — reads CI checks (repo scope bundles checks-read) and drives PRs; `gh pr checks --watch`
 "aqua:EmbarkStudios/cargo-deny" = "0.20"                     # dependency license/advisory policy (deny.toml)
-"aqua:anchore/syft" = "1.42"                                 # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom)
+"aqua:anchore/syft" = "1.42"                                 # SBOM of the tagged source: cargo-deny judges that tree, this inventories it (mise-tasks/sbom.sh)
 "aqua:release-plz/release-plz" = "0.3"                       # conventional-commit-driven semver + changelog
 "aqua:jqlang/jq" = "1.7"                                     # JSON for shell tasks — reads the PreToolUse payload in `gh-guard`
 # The measurement instrument for `mise run perf` (CLOUD-207). Batten runs as a
@@ -92,7 +92,7 @@ hk = "1.54.0"                                                # git-hook runner (
 # resolve this crate's dependencies. That is a property of the TOOL, not of the
 # crate, not of the floor — and since CLOUD-593 the floor tracks the pin above,
 # so this tool's own requirement is the only number in play. Reasoning in
-# `mise-tasks/semver`.
+# `mise-tasks/semver.sh`.
 "github:obi1kenobi/cargo-semver-checks" = "0.50.0"
 # mise-tasks/ holds real bash programs, so they get the same lint+format
 # treatment Rust gets: shellcheck is their clippy, shfmt their rustfmt.
@@ -158,7 +158,7 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # fewer is the failure this swap could hide, and it is asserted rather than
 # eyeballed.
 "github:nextest-rs/nextest" = "cargo-nextest-0.9.104"
-# The binary-level SBOM's producer (CLOUD-263). `mise-tasks/sbom` inventories the
+# The binary-level SBOM's producer (CLOUD-263). `mise-tasks/sbom.sh` inventories the
 # repository at the tag; syft against a plain Rust binary recovers ZERO
 # rust-crate packages, because a Rust binary carries no dependency metadata unless
 # something puts it there. `cargo auditable` puts it there — a `dep-v0` linker
@@ -208,7 +208,7 @@ uv = "0.8"                                          # fast Rust installer the pi
 # (CLOUD-611).
 #
 # WHAT THAT COSTS, stated because it is strictly weaker than every other pin
-# here: `mise-tasks/lock-complete` exempts the `pipx:` backend by design (those
+# here: `mise-tasks/lock-complete.sh` exempts the `pipx:` backend by design (those
 # backends "resolve through their own package manager and lock no URLs at all"),
 # so this pin binds a VERSION but not BYTES. `uv`'s `--require-hashes`
 # resolution is the reachable mitigation if a version-only pin is ever judged
@@ -411,9 +411,9 @@ description = "Clippy with warnings denied"
 # Receipt-gated (CLOUD-424): unchanged sources under an unchanged clippy are a
 # verdict already held.
 run = '''
-if ./mise-tasks/step-receipt check lint:clippy; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check lint:clippy; then exit 0; fi
 if ! cargo clippy --all-targets --all-features -- -D warnings; then exit 1; fi
-./mise-tasks/step-receipt record lint:clippy || true
+./mise-tasks/step-receipt.sh record lint:clippy || true
 '''
 
 [tasks."lint:fmt"]
@@ -423,9 +423,9 @@ description = "rustfmt in check mode"
 # so routing it here costs no scoping.
 # Receipt-gated (CLOUD-424), same shape as lint:clippy.
 run = '''
-if ./mise-tasks/step-receipt check lint:fmt; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check lint:fmt; then exit 0; fi
 if ! cargo fmt --all --check; then exit 1; fi
-./mise-tasks/step-receipt record lint:fmt || true
+./mise-tasks/step-receipt.sh record lint:fmt || true
 '''
 
 [tasks."lint:toml"]
@@ -610,13 +610,13 @@ description = "Run the Rust workspace test suite"
 # suite — and the record is an economy whose failure must never fail a suite
 # that passed.
 run = '''
-if ./mise-tasks/step-receipt check test:cargo; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check test:cargo; then exit 0; fi
 if ! cargo nextest run --workspace; then exit 1; fi
-./mise-tasks/step-receipt record test:cargo || true
+./mise-tasks/step-receipt.sh record test:cargo || true
 '''
 
 # `[tasks.msrv]` IS RETIRED (CLOUD-593), replaced by
-# `mise-tasks/msrv-pin-agreement`.
+# `mise-tasks/msrv-pin-agreement.sh`.
 #
 # It compiled the whole workspace a second time, at a second toolchain, to
 # answer "do the floor and the pin disagree?" — ~32-50s per PR plus a rustup
@@ -637,15 +637,15 @@ description = "cargo-deny: licenses, advisories, sources"
 # on this branch: CI still runs the full check on every PR, which is the same
 # split lock-currency already made.
 run = '''
-if ./mise-tasks/step-receipt check deny; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check deny; then exit 0; fi
 if ! cargo deny check; then exit 1; fi
-./mise-tasks/step-receipt record deny || true
+./mise-tasks/step-receipt.sh record deny || true
 '''
 
 [tasks."build:release"]
 description = "Build the release binary the hook registrations execute"
 # The one place the hook's binary is produced, so `install:local`,
-# `session-start.sh` and `mise-tasks/perf` name a task rather than three copies
+# `session-start.sh` and `mise-tasks/perf.sh` name a task rather than three copies
 # of a cargo line that could drift in their flags.
 #
 # Release, not debug, and not `cargo run`: this runs on EVERY mediated tool call.
@@ -710,15 +710,15 @@ description = "Consumer #1: evaluate the committed batten.toml with batten's own
 # run under `set -e`, and a gate that could not install its own scanner must not
 # go on to report on a tree it never scanned.
 run = '''
-if ./mise-tasks/step-receipt check batten-check; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check batten-check; then exit 0; fi
 if ! cargo run --quiet -p batten -- provision apply; then exit 1; fi
 if ! cargo run --quiet -p batten -- enforce; then exit 1; fi
-./mise-tasks/step-receipt record batten-check || true
+./mise-tasks/step-receipt.sh record batten-check || true
 '''
 
 [tasks.policy-budget]
 description = "Gate: the always-loaded context (AGENTS.md + anything else declared always-load) fits its token budget"
-# The successor to `mise-tasks/context-budget`, deleted with CLOUD-50. The whole
+# The successor to `mise-tasks/context-budget.sh`, deleted with CLOUD-50. The whole
 # predicate — which files are counted, what is stripped before counting, and both
 # thresholds — is now `[budget.instructions]` in batten.toml, so the gate is
 # config a reviewer can read rather than arithmetic buried in a shell script.
@@ -745,7 +745,7 @@ description = "Regenerate the committed man pages from the command surface"
 # Same shape as `completions`: the binary emits on stdout only, so `generate`
 # stays a read-effect verb (§5) and the redirect lives here, in the caller.
 #
-# The page list comes from `mise-tasks/man-pages` — the one authority for which
+# The page list comes from `mise-tasks/man-pages.sh` — the one authority for which
 # pages exist and what each is called — so this task never enumerates verbs and
 # a row added to the surface is written with no edit here.
 #
@@ -766,7 +766,7 @@ while IFS=$'\t' read -r file path; do
   else
     cargo run --quiet -p batten -- generate man >"$file"
   fi
-done < <(mise-tasks/man-pages)
+done < <(mise-tasks/man-pages.sh)
 echo "man: regenerated $(find man -type f -name '*.1' | wc -l) page(s) from the surface"
 '''
 
@@ -807,9 +807,9 @@ description = "Static-analyse the GitHub Actions workflows (dangerous triggers, 
 # the world, it changes with no diff, and it belongs on a clock — which is
 # `.github/workflows/zizmor-advisories.yml`, beside lock-currency and ci-drift.
 run = '''
-if ./mise-tasks/step-receipt check zizmor; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check zizmor; then exit 0; fi
 if ! zizmor --offline --min-severity high .github/ action.yml; then exit 1; fi
-./mise-tasks/step-receipt record zizmor || true
+./mise-tasks/step-receipt.sh record zizmor || true
 '''
 
 [tasks.zizmor-advisories]
@@ -872,7 +872,7 @@ depends = ["doctor"]
 run = '''
 # Receipt-gated (CLOUD-424): a hit skips the target install too — the verdict
 # is about the sources, and the toolchain half lives in the key.
-if ./mise-tasks/step-receipt check cross-check; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check cross-check; then exit 0; fi
 for t in x86_64-pc-windows-gnu; do
   # Guarded because task bodies do not run under `set -e`: with more than one
   # triple in the list, a failed target install would otherwise be masked by a
@@ -911,7 +911,7 @@ for t in x86_64-pc-windows-gnu; do
     exit 1
   fi
 done
-./mise-tasks/step-receipt record cross-check || true
+./mise-tasks/step-receipt.sh record cross-check || true
 '''
 
 [tasks.hk-version]
@@ -1006,7 +1006,7 @@ depends = ["doctor --no-targets"]
 # repo, so the honest input set is the whole tracked tree — a rebase that
 # changed no bytes still skips, and any content change anywhere re-runs.
 run = '''
-if ./mise-tasks/step-receipt check test:bats; then exit 0; fi
+if ./mise-tasks/step-receipt.sh check test:bats; then exit 0; fi
 expected=$(git grep -c '^@test ' -- 'tests/*.bats' | awk -F: '{s+=$2} END{print s+0}')
 if [ "$expected" -lt 1 ]; then
   echo "::error:: test:bats: counted $expected @test declarations under tests/ — the count this run is judged against could not be computed, so the run cannot be trusted to have covered the suite." >&2
@@ -1037,7 +1037,7 @@ if [ "$ran" != "$expected" ]; then
   exit 1
 fi
 echo "test:bats: $ran/$expected cases, $workers workers"
-./mise-tasks/step-receipt record test:bats || true
+./mise-tasks/step-receipt.sh record test:bats || true
 '''
 
 [tasks.hooks]
@@ -1426,7 +1426,7 @@ shell = "bash -c"                                                   # uses ${sha
 # release-plz is free to change.
 run = '''
 fail=0
-keys="$(git rev-parse --show-toplevel)/mise-tasks/claimed-keys"
+keys="$(git rev-parse --show-toplevel)/mise-tasks/claimed-keys.sh"
 for sha in $(git rev-list --no-merges "${BASE_SHA:?}..${HEAD_SHA:?}"); do
   subject=$(git show -s --format=%s "$sha")
   # The subject-convention half is NOT here: it is `commit-check`, above in

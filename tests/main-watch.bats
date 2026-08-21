@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/main-watch
+# subject: mise-tasks/main-watch.sh
 # The second half of a landing lap's wait (CLOUD-240): "is this SHA still
 # landable", raced against `ci-wait`'s "is this SHA green".
 #
@@ -12,7 +12,7 @@ setup() {
 	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
 	# tools a stock macOS does not ship (CLOUD-282).
 	load helpers
-	WATCH="$BATS_TEST_DIRNAME/../mise-tasks/main-watch"
+	WATCH="$BATS_TEST_DIRNAME/../mise-tasks/main-watch.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

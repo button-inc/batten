@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/board-payloads
+# subject: mise-tasks/board-payloads.sh
 #
 # CLOUD-782. Every case drives a FIXTURE transcript, never the live one. A case
 # reading the real session would pass for the wrong reason and could never fail:
@@ -8,7 +8,7 @@
 # `transcript-corpus-check` records for its own root.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/board-payloads"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/board-payloads.sh"
 	T="$BATS_TEST_TMPDIR/transcript.jsonl"
 	OUT="$BATS_TEST_TMPDIR/out-$BATS_TEST_NUMBER"
 	export BATTEN_TRANSCRIPT_FILE="$T"

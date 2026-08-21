@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/nonverdict-scan
+# subject: mise-tasks/nonverdict-scan.sh
 # CLOUD-484. The measuring half: which recent required-check failures never reached
 # a verdict. `gh` is stubbed with canned HTTP responses, the `tests/ci-wait.bats`
 # idiom, because two of the properties under test are about the REQUEST (was
@@ -7,7 +7,7 @@
 # 304 keep the previous reading, or read as an empty window).
 
 setup() {
-	SCAN="$BATS_TEST_DIRNAME/../mise-tasks/nonverdict-scan"
+	SCAN="$BATS_TEST_DIRNAME/../mise-tasks/nonverdict-scan.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

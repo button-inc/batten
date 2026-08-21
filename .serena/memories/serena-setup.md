@@ -10,7 +10,7 @@ Project-scoped Serena MCP server (LSP-backed semantic navigation/edits). Wired i
 `.mcp.json`. It does **not** "just start" on a cold container — see "Two gates"
 below. Pinned like every tool: `"pipx:serena-agent"`
 in `mise.toml [tools]` (pipx backend installs with pinned `uv`), version in
-`mise.lock`. `.mcp.json` launches it through `mise-tasks/serena-mcp`, a shim
+`mise.lock`. `.mcp.json` launches it through `mise-tasks/serena-mcp.sh`, a shim
 that records the spawn and then `exec`s the scoped, pinned launch line the file
 still carries verbatim: `mise exec pipx:serena-agent@<v> -- serena
 start-mcp-server --context claude-code --project .`. The argv stayed in
@@ -35,7 +35,7 @@ why the first fix was validated green and Serena stayed absent anyway.
    answers** (CLOUD-714). `mise install` guarantees the files exist; it never
    reads them, and Serena still spends ~1.2 s importing 2,664 `.py` files before
    it opens its own log. That gap is why an absent serena log is _not_ proof the
-   process never ran, and why `mise-tasks/serena-mcp` records the spawn.
+   process never ran, and why `mise-tasks/serena-mcp.sh` records the spawn.
 
    **And MCP connections ARE retried** — this memory said they are not, on
    CLOUD-196's evidence. Measured 2026-08-19: after failures at 07:05:17 and
@@ -101,7 +101,7 @@ connected` record, not the presence of an error key or a literal code.
 - **A slow attach is usually the cold index, not a fault.** A cold container pays
   a first rust-analyzer index (CLOUD-670, no persistent cache) while provisioning
   runs, and healthy attaches spread over an order of magnitude because of it.
-  `mise-tasks/mcp-timeout-budget`'s header carries the measurement table and the
+  `mise-tasks/mcp-timeout-budget.sh`'s header carries the measurement table and the
   worst observed success; read it there rather than judging a duration by feel.
 - **`serverVersion` in the handshake record is NOT Serena's version, and it will
   look like pin drift.** The `Connection established with capabilities` line

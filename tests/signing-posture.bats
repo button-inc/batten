@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/signing-posture
+# subject: mise-tasks/signing-posture.sh
 # CLOUD-669. The not-signing posture, in force rather than recorded.
 #
 # Every case runs inside a throwaway `git init`, because the subject IS git
@@ -13,7 +13,7 @@
 # the header into the object directly, which is exactly what the gate reads.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/signing-posture"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/signing-posture.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	# `main` from the start, so no row has to force a branch into place later:

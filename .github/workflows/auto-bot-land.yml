@@ -35,7 +35,7 @@ name: auto-bot-land
 # THE GREEN PREDICATE IS `checks-green`, NOT A COPY OF IT (CLOUD-391). This job
 # decided green with a hand-rolled `select(.conclusion != "skipped")`, which counts
 # a wholly skipped set as zero outstanding — i.e. green — and #261 landed on
-# precisely that set. The predicate has one home, `mise-tasks/checks-green`, scoped
+# precisely that set. The predicate has one home, `mise-tasks/checks-green.sh`, scoped
 # to $CI_REQUIRED_CHECKS rather than to "every check-run on the SHA", so a third
 # party's check gets neither a vote nor a veto. Dispatching it through `mise run`
 # is why this job checks out and installs the toolchain at all.

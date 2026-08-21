@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/done-check
+# subject: mise-tasks/done-check.sh
 # `Done` on this board means released, and the tracker's GitHub integration keys
 # it on the merge. Between those two events sits a whole release cycle, so every
 # issue reads Done from the moment it lands — while shipped in nothing.
@@ -17,7 +17,7 @@
 # tag is conclusive, so refuting is all it does.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/done-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/done-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	# The developer's global git config must not reach a fixture repo
 	# (CLOUD-282) — `init.defaultBranch` and `commit.gpgsign` both leak in and

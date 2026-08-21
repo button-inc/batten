@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/token-bench mise-tasks/token-bench-check
+# subject: mise-tasks/token-bench.sh mise-tasks/token-bench-check.sh
 # bench-check's decision table (CLOUD-119): does the committed benchmark table
 # still reproduce, and does every published figure state its method?
 #
@@ -11,8 +11,8 @@
 # nothing the suite has not already built.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/token-bench-check"
-	BENCH="$BATS_TEST_DIRNAME/../mise-tasks/token-bench"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/token-bench-check.sh"
+	BENCH="$BATS_TEST_DIRNAME/../mise-tasks/token-bench.sh"
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT"

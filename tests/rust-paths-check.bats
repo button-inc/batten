@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/rust-paths-check
+# subject: mise-tasks/rust-paths-check.sh
 # The gate that ships with `rust.yml`'s `paths:` filter (AGENTS.md non-negotiable
 # 2). The filter is what makes the four Rust jobs ABSENT rather than `skipped` on
 # a diff they cannot judge, and absence is a state `checks-green` accepts by
@@ -11,7 +11,7 @@
 
 setup() {
 	load helpers
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/rust-paths-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/rust-paths-check.sh"
 	WF="$BATS_TEST_TMPDIR/rust.yml"
 	filter '"crates/**"' '"Cargo.toml"' '"Cargo.lock"' '"rust-toolchain*"' \
 		'"deny.toml"' '"mise.toml"' '"mise.lock"' '".github/workflows/rust.yml"'

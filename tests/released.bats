@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/released
+# subject: mise-tasks/released.sh
 # The predicate behind In Review -> Done (CLOUD-174), and its refusal (CLOUD-257).
 #
 # `released` resolves refs from a tag's commit range, so it answers "did a tag
@@ -10,7 +10,7 @@
 # issue carrying the hold marker is reported HELD and the run exits 1.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/released"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/released.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	cd "$REPO" || return 1

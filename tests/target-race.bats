@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/darwin-link mise-tasks/doctor
+# subject: mise-tasks/darwin-link.sh mise-tasks/doctor.sh
 # The CLOUD-220 reproduction: two processes mutating one rustup toolchain must
 # converge, not mutually roll back. Hermetic — a stub toolchain models rustup's
 # documented non-atomicity deterministically (a real-toolchain race would be
@@ -13,8 +13,8 @@
 
 setup() {
 	REPO="$BATS_TEST_DIRNAME/.."
-	DOCTOR="$REPO/mise-tasks/doctor"
-	LINK="$REPO/mise-tasks/darwin-link"
+	DOCTOR="$REPO/mise-tasks/doctor.sh"
+	LINK="$REPO/mise-tasks/darwin-link.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	SYSROOT="$BATS_TEST_TMPDIR/sysroot"
 	STATE="$BATS_TEST_TMPDIR/state"

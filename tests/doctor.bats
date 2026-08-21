@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/doctor
+# subject: mise-tasks/doctor.sh
 # doctor's torn-install check (CLOUD-182): a mise tool version whose bin
 # symlinks point at a payload that no longer exists must be detected from the
 # ARTIFACTS — mise's own record says "installed" and `mise install` no-ops on
@@ -10,7 +10,7 @@
 # for), and the bats submodule half runs against the real checkout.
 
 setup() {
-	DOCTOR="$BATS_TEST_DIRNAME/../mise-tasks/doctor"
+	DOCTOR="$BATS_TEST_DIRNAME/../mise-tasks/doctor.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	DATA="$BATS_TEST_TMPDIR/mise"
 	mkdir -p "$STUB" "$DATA/installs"
@@ -41,7 +41,7 @@ EOF
 }
 
 # A hook that honours the probe and answers it successfully — the shape
-# .claude/hooks/git-hook installs.
+# .claude/hooks/git-hook.sh installs.
 healthy_hooks() {
 	local name
 	for name in pre-commit commit-msg; do

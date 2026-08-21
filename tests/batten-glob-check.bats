@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/batten-glob-check
+# subject: mise-tasks/batten-glob-check.sh
 # CLOUD-224. `batten-check`'s glob is a second authority over a set batten.toml
 # already defines, and a second authority narrows silently: add a `[[rule]]`
 # whose glob names a path outside the list and the step simply stops running for
@@ -10,7 +10,7 @@
 # found nothing, a subsumption that is too generous — not the happy path.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/batten-glob-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/batten-glob-check.sh"
 	CONFIG="$BATS_TEST_TMPDIR/batten.toml"
 	HOOKS="$BATS_TEST_TMPDIR/hk.pkl"
 }

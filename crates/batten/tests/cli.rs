@@ -5128,7 +5128,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // only ever produce one finding per rule.
     fs::create_dir_all(dirty.join("mise-tasks")).expect("create fixture task dir");
     fs::write(
-        dirty.join("mise-tasks/seed"),
+        dirty.join("mise-tasks/seed.sh"),
         "printf x | sed -zE 's/a/b/'\n\
          sed -i 's/a/b/' file\n\
          mapfile -t lines < <(printf 'x')\n\
@@ -5146,7 +5146,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     // below is line 2.
     fs::write(
         dirty.join("tests/seed.bats"),
-        "# subject: mise-tasks/seed\n\tgit branch -f main\n",
+        "# subject: mise-tasks/seed.sh\n\tgit branch -f main\n",
     )
     .expect("write fixture suite");
 
@@ -5171,11 +5171,11 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "mise-tasks/seed:1 no-gnu-sed-z\n\
-         mise-tasks/seed:2 no-gnu-sed-in-place\n\
-         mise-tasks/seed:3 no-bash4-mapfile\n\
-         mise-tasks/seed:4 no-gnu-xargs-r\n\
-         mise-tasks/seed:5 no-util-linux-flock\n\
+        "mise-tasks/seed.sh:1 no-gnu-sed-z\n\
+         mise-tasks/seed.sh:2 no-gnu-sed-in-place\n\
+         mise-tasks/seed.sh:3 no-bash4-mapfile\n\
+         mise-tasks/seed.sh:4 no-gnu-xargs-r\n\
+         mise-tasks/seed.sh:5 no-util-linux-flock\n\
          tests/seed.bats:2 no-branch-f-main\n",
         "one sorted pointer per banned construct, and nothing else"
     );
@@ -5193,7 +5193,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     let home = committed_config_fixture_git(&clean);
     fs::create_dir_all(clean.join("mise-tasks")).expect("create clean task dir");
     fs::write(
-        clean.join("mise-tasks/seed"),
+        clean.join("mise-tasks/seed.sh"),
         "printf x | perl -0777 -pe 's/a/b/'\n\
          sed -i.bak 's/a/b/' file\n\
          while IFS= read -r l; do :; done < <(printf 'x\\n')\n\
@@ -5203,7 +5203,7 @@ fn the_committed_portability_rules_fire_on_every_banned_shape() {
     fs::create_dir_all(clean.join("tests")).expect("create clean test dir");
     fs::write(
         clean.join("tests/seed.bats"),
-        "# subject: mise-tasks/seed\n\tgit branch main\n",
+        "# subject: mise-tasks/seed.sh\n\tgit branch main\n",
     )
     .expect("write clean suite");
 
@@ -5977,7 +5977,7 @@ fn a_config_declaring_no_budget_is_a_usage_error_not_a_silent_pass() {
 #[test]
 fn this_repos_own_budget_is_pinned_so_raising_it_is_a_visible_diff() {
     // The acceptance's "pinned deliberately". These numbers are the bar the
-    // deleted `mise-tasks/context-budget` carried, restated for a `<=`
+    // deleted `mise-tasks/context-budget.sh` carried, restated for a `<=`
     // boundary — the shell gate failed AT 200 lines, so 199 is the same bar.
     // Changing either one means changing this test in the same diff, which is
     // what makes the change a decision rather than a drift.

@@ -27,7 +27,7 @@
 //! differ per machine and would defeat byte-stability (§6) while leaking the
 //! layout of someone's disk into a log (rule 4).
 //!
-//! Not to be confused with `mise-tasks/doctor`, which gates *this repository's*
+//! Not to be confused with `mise-tasks/doctor.sh`, which gates *this repository's*
 //! own provisioning (the bats submodule, rustup cross targets). That one is
 //! repo tooling; this is the product verb.
 
@@ -751,7 +751,7 @@ mod tests {
         let mut wiring = complete_wiring();
         wiring["hooks"]["Stop"] = serde_json::json!([
             { "hooks": [{ "type": "command", "command": hook::wiring_command(hook::Harness::ClaudeCode) }] },
-            { "hooks": [{ "type": "command", "command": "/home/someone/mise-tasks/stop-guard" }] },
+            { "hooks": [{ "type": "command", "command": "/home/someone/mise-tasks/stop-guard.sh" }] },
         ]);
         let row = claude_row("hooks-sibling", &wiring);
         assert!(

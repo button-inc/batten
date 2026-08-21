@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/board-move-guard
+# subject: mise-tasks/board-move-guard.sh
 # CLOUD-512. The guard that demands a move to In Review be ADJUDICATED.
 #
 # The rows are written so that a gate testing mere receipt EXISTENCE — which is
@@ -13,8 +13,8 @@
 # authorise a real session's board writes.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/board-move-guard"
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/graph-check"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/board-move-guard.sh"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/graph-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet

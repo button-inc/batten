@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/verified
+# subject: mise-tasks/verified.sh
 # The verdict as an artifact keyed to the commit, rather than a remembered exit
 # code. The receipt already existed and nothing read it; every consumer read the
 # exit status, which an ordinary pipe destroys.
@@ -10,7 +10,7 @@
 # idiom, because no exit code is consulted at all.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/verified"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/verified.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	# The developer's global git config must not reach a fixture repo
 	# (CLOUD-282). `init.defaultBranch=main` is the leak this suite tripped on —

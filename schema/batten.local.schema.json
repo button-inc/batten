@@ -385,6 +385,13 @@
           "description": "Which predicate to apply to the matched files.",
           "$ref": "#/$defs/RuleKind"
         },
+        "line_sources": {
+          "description": "The files a tree-scoped policy row hands its bundle as lines, **selected\nby glob** (CLOUD-864).\n\n[`Rule::lines`] is to this what [`Rule::documents`] is to\n[`Rule::sources`], and the pair landed asymmetric: CLOUD-850 gave the\nparsed half a glob and the unparsed half kept literal paths only. That\nleaves the fact model's widest surface reachable only by naming every\npath — and the gates that need LINES rather than a parsed document are\nprecisely the ones reading many files, since `Format::for_path` answers\n`None` for source text.\n\nMeasured need: the shebang rule this column was added for decides over\n**137** shell programs. Enumerating them is a list that goes stale the\nnext time one is added, silently and green — the failure the declaration\nbound is supposed to prevent, reintroduced by the spelling.\n\nSame [`Selector`], same union semantics, same stated-skip on a glob that\nmatches nothing. Additive: `lines` is unchanged and stays right for a row\nnaming one or two paths.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "lines": {
           "description": "The files a tree-scoped policy row hands its bundle as **lines**\n(CLOUD-846).\n\n[`Rule::documents`]'s unparsed sibling, and the ceiling it lifts was\nmeasured: of the 20 tree-scoped gates, 8 read structured config and 12\nread content no fact could carry — 4 markdown, 5 `.bats`/`.rs`/`.pkl`\nsource, 3 no file literals at all. `Format::for_path` answers `None` for\nevery one of those, so the path landed in `missing` and the row skipped.\n\nThe value is `input.tree.lines[<path>]`, an array of strings. A path that\ncannot be read stays in `missing` — **could-not-look, never an empty\narray**, which is the distinction that keeps CLOUD-251's vacuous pass out:\na file nobody could read and a file with no matching line are not the same\nanswer.\n\n**Bounded by declaration, exactly as `documents` is.** A row reads the\npaths it names and no others.\n\n**Rule 4 is what picks this shape over raw text.** A module may SEE a\nline; a finding may not CARRY one. Lines are the widest shape that cannot\nput content into a finding by accident, and `tests/pointer_only.rs` holds\nthat structurally rather than by review.",
           "type": "array",
@@ -445,7 +452,8 @@
           ],
           "enum": [
             "commit-hygiene",
-            "trunk-based"
+            "trunk-based",
+            "shell-hygiene"
           ]
         },
         "reads": {

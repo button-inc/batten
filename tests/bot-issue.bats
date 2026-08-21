@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/bot-issue
+# subject: mise-tasks/bot-issue.sh
 # CLOUD-693. A bot proposes work with no issue and no session, so every lifecycle
 # gate refuses it by construction. `bot-issue` is the step that turns the proposal
 # into a refined row before the lifecycle sees it — and the rows below are the
@@ -20,7 +20,7 @@
 # assert it rather than test it.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/bot-issue"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/bot-issue.sh"
 	STUB="$BATS_TEST_TMPDIR/stub"
 	mkdir -p "$STUB"
 	export PATH="$STUB:$PATH"
@@ -213,7 +213,7 @@ stubs() { stub_gh; }
 	run "$TASK" derive 7
 	[ "$status" -eq 0 ]
 	printf '%s' "$output" >"$BATS_TEST_TMPDIR/payload.json"
-	run "$BATS_TEST_DIRNAME/../mise-tasks/ready-lint" <"$BATS_TEST_TMPDIR/payload.json"
+	run "$BATS_TEST_DIRNAME/../mise-tasks/ready-lint.sh" <"$BATS_TEST_TMPDIR/payload.json"
 	[ "$status" -eq 0 ]
 }
 

@@ -857,7 +857,7 @@ decision record. `ready-lint` already pays for that overload twice, anchoring on
 label+tag pair because "the §N namespace is overloaded".
 
 CLOUD-420 was cited three times at a `§4` it does not have; the content meant is
-under its §3. CLOUD-809 is the gate, `mise-tasks/spec-ref-check`.
+under its §3. CLOUD-809 is the gate, `mise-tasks/spec-ref-check.sh`.
 
 Note the shape of that sentence: it names the key and the clause **apart**,
 because the gate cannot tell a citation from a description of one, and prose that

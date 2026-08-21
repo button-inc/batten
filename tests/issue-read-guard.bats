@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/issue-read-guard
+# subject: mise-tasks/issue-read-guard.sh
 # CLOUD-508. The guard that demands the read receipt be RECENT.
 #
 # The rows below are written so that a gate testing mere existence — which is
@@ -7,8 +7,8 @@
 # questions — fails exactly one of them. That row is the incident.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-read-check"
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/issue-read-guard"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-read-check.sh"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/issue-read-guard.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet

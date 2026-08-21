@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the IO-free evaluator test is shown able to FAIL — it must go red when regorus's `http` feature is on (CLOUD-831, CLOUD-418)"
+#
+# CLOUD-418's obligation, made runnable rather than promised.
+# `no_evaluator_feature_admits_io` asserts a policy module cannot reach
+# `http.send`. Under the shipped feature set that is true, so the test is green —
+# and a green test proves nothing about whether it can DISCRIMINATE. If regorus
+# silently stopped registering the builtin, or the fixture stopped compiling, or
+# the assertion were reworded into a tautology, the test would stay green over an
+# evaluator that had lost the property entirely.
+#
+# So this builds the same test with the `probe-evaluator-io` feature on — which
+# turns `regorus/http` on and nothing else — and REQUIRES IT TO FAIL. A probe
+# build that passes is the finding.
+#
+# THE PROBE FEATURE COSTS THE CLOSURE NOTHING, which is what makes running this
+# affordable and what stops it weakening the gate it defends. `regorus`'s `http`
+# feature is `[]` — a bare feature gating only the builtin's registration — so
+# `Cargo.lock` is byte-identical with it on or off, and
+# `evaluator-closure-check`'s walk (default features, activated edges) cannot see
+# it. Measured 2026-08-21; the rejected `regorus/jsonschema` half and why it is
+# not here are recorded in `crates/batten/Cargo.toml`.
+#
+# RECEIPT-GATED (CLOUD-424), because a feature toggle forces a fresh compile of
+# the crate and its test binary — the one case where the ~0.3s a check/record
+# pair costs is obviously dwarfed. Same inputs, same command, same toolchain ⇒
+# same verdict.
+#
+# The mutation drops the inversion, so a probe build that PASSES — the test no
+# longer discriminating, which is the whole finding — reads as success.
+#MUTANT io-probe-not-inverted|s/^\tprobe_passed=yes$/\tprobe_passed=no/|the test PASSES is the finding
+# And the second, which is the subtler one: drop the "did it actually RUN" arm
+# and any non-zero exit — a compile error above all — reads as the discrimination
+# this gate is looking for.
+#MUTANT io-probe-trusts-the-exit-code|s/^ran_and_failed=no$/ran_and_failed=yes/|failed to COMPILE
+set -uo pipefail
+
+# Guarded by hand, because this body deliberately runs without `set -e` — the
+# probe build is EXPECTED to exit non-zero and errexit would take the whole task
+# down on the gate's own pass. A `cd` that failed silently would leave every path
+# below reading some other directory, which is the shape `.claude/rules/
+# toolchain.md` names: a gate that reports on state it never reached.
+cd "${EVALUATOR_ROOT:-$(git rev-parse --show-toplevel)}" || {
+	echo "::error:: evaluator-io-check: could not reach the repository root, so there is nothing to probe" >&2
+	exit 1
+}
+
+# The test the probe must falsify. Named once: it is the argument to the probe
+# build, the string the verdict is read from, and the pointer the refusal prints
+# — three spellings of it is how a rename turns this gate silent instead of red.
+readonly PROBE_TEST=no_evaluator_feature_admits_io
+
+# The probe invocation. Overridable so `tests/evaluator-io-check.bats` can drive
+# both verdicts without a two-minute rebuild per case — the decision this task
+# makes is the inversion, and that is what the suite has to exercise. Read-only,
+# never set outside the suite.
+if [ -n "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
+	# shellcheck disable=SC2206 # deliberate word-splitting: the override is an argv
+	PROBE_CMD=($EVALUATOR_IO_PROBE_CMD)
+else
+	PROBE_CMD=(
+		cargo test --quiet -p batten
+		--features probe-evaluator-io
+		--test policy_modules
+		"$PROBE_TEST"
+		-- --include-ignored
+	)
+fi
+
+if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
+	if ./mise-tasks/step-receipt.sh check evaluator-io-check; then exit 0; fi
+fi
+
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+
+# THE INVERSION IS THE GATE. A probe build that SUCCEEDS means the test stayed
+# green with `http` on — so it discriminates nothing and is coverage theatre,
+# which is the exact shape CLOUD-418 exists to refuse.
+#
+# The verdict is read into a variable rather than branched on inline, matching
+# `ran_and_failed` below: these are the gate's two decisions, and having both
+# spelled the same way is what makes it obvious that neither is the exit code
+# taken at face value.
+probe_passed=no
+if "${PROBE_CMD[@]}" >"$log" 2>&1; then
+	probe_passed=yes
+fi
+
+if [ "$probe_passed" = yes ]; then
+	echo "::error:: evaluator-io-check: \`no_evaluator_feature_admits_io\` PASSED with regorus's \`http\` feature enabled, so it does not discriminate — a test that is green whether or not the evaluator can reach the network is not evidence that it cannot." >&2
+	echo "  crates/batten/tests/policy_modules.rs no_evaluator_feature_admits_io" >&2
+	echo "Either the assertion has been reworded into something the probe cannot falsify, or the fixture no longer reaches \`http.send\`. Fix the test, not this gate." >&2
+	exit 2
+fi
+
+# A NON-ZERO EXIT IS NOT YET THE ANSWER, and this is the arm a gate written to
+# the obvious shape gets wrong. `cargo test` exits non-zero for a compile error,
+# an unresolved feature, an absent toolchain and a panic in another test — every
+# one of which would read as "the probe falsified the assertion" and hand this
+# gate a pass it did not earn. Worse, it is a pass that gets MORE likely as the
+# crate breaks, so the gate would be loudest exactly when it was lying.
+#
+# So the verdict is the test harness's own line, not the exit code: the named
+# test must have RUN and FAILED. Anything else is could-not-look and exits 1,
+# which is the config-or-usage class rather than a policy verdict (§7).
+# The `failures:` LISTING rather than the per-test line, because the per-test
+# line is not stable across harness modes: plain prints `test <name> ... FAILED`
+# and `--quiet` prints `<name> --- FAILED`. The listing under `failures:` is one
+# indented name in both, and anchoring on it is what stops this arm going quietly
+# could-not-look the day someone adds or drops `--quiet`.
+ran_and_failed=no
+if grep -q '^test result: FAILED' "$log" && grep -qx "[[:space:]]\{1,\}${PROBE_TEST}" "$log"; then
+	ran_and_failed=yes
+fi
+if [ "$ran_and_failed" != yes ]; then
+	echo "::error:: evaluator-io-check: the probe build did not run \`no_evaluator_feature_admits_io\` to a failure — it exited non-zero for some other reason (a compile error, an unresolved feature, an absent toolchain). That is could-not-look, and reading it as the discrimination this gate is looking for would make the gate pass more reliably the more broken the crate got." >&2
+	echo "  crates/batten/tests/policy_modules.rs no_evaluator_feature_admits_io" >&2
+	echo "Run it yourself to see the real error: cargo test -p batten --features probe-evaluator-io --test policy_modules no_evaluator_feature_admits_io -- --include-ignored" >&2
+	exit 1
+fi
+
+# It failed, which is the pass. Pointer-only: the test name and the verdict,
+# never the probe build's output — that log carries module bodies and paths, and
+# rule 4 admits neither into a gate's stdout.
+if [ -z "${EVALUATOR_IO_PROBE_CMD:-}" ]; then
+	./mise-tasks/step-receipt.sh record evaluator-io-check || true
+fi
+echo "evaluator-io-check: no_evaluator_feature_admits_io goes red under --features probe-evaluator-io, so it discriminates"

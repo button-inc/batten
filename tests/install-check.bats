@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/install-check
+# subject: mise-tasks/install-check.sh
 # The gate that makes CLOUD-65's three acceptance clauses computable.
 #
-# What it is defending is a rename. `mise-tasks/dist` decides what a release
+# What it is defending is a rename. `mise-tasks/dist.sh` decides what a release
 # archive is called; `install.sh` and `[package.metadata.binstall]` each resolve
 # an asset BY THAT NAME, from a machine that has never seen this repository. So
 # a change to the naming rule that forgets one of the readers is green in CI,
@@ -16,12 +16,12 @@
 # a symlink mutates the repository it is run from.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/install-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/install-check.sh"
 	SRC="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT/mise-tasks" "$ROOT/crates/batten" "$ROOT/.github/workflows"
 	cp "$SRC/install.sh" "$ROOT/install.sh"
-	cp "$SRC/mise-tasks/dist" "$ROOT/mise-tasks/dist"
+	cp "$SRC/mise-tasks/dist.sh" "$ROOT/mise-tasks/dist.sh"
 	cp "$SRC/Cargo.toml" "$ROOT/Cargo.toml"
 	cp "$SRC/crates/batten/Cargo.toml" "$ROOT/crates/batten/Cargo.toml"
 	WORKFLOW="$ROOT/.github/workflows/release-artifacts.yml"
@@ -71,7 +71,7 @@ write_workflow() {
 
 @test "THE DEFECT: renaming the archive in dist breaks the install path" {
 	write_workflow
-	sed -i "s/'%s-v%s-%s'/'%s_%s_%s'/" "$ROOT/mise-tasks/dist"
+	sed -i "s/'%s-v%s-%s'/'%s_%s_%s'/" "$ROOT/mise-tasks/dist.sh"
 	run "$CHECK"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"install.sh asks for"* ]]

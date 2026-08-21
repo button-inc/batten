@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/timeout-drift
+# subject: mise-tasks/timeout-drift.sh
 # The world half of CLOUD-266: is each committed budget still true?
 #
 # Driven entirely through a stubbed `gh`, so every verdict is reachable without a
@@ -8,7 +8,7 @@
 # blocks, which is a property of where it runs, not of what it computes.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/timeout-drift"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/timeout-drift.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	WORKFLOWS="$BATS_TEST_TMPDIR/workflows"
 	mkdir -p "$STUB" "$WORKFLOWS"

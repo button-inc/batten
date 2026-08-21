@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/digest-major-agreement
+# subject: mise-tasks/digest-major-agreement.sh
 # CLOUD-767. The rule this gate carries used to be a comment in `Cargo.toml`, and
 # the comment asserted something false: that pinning `hmac = "0.12"` kept one
 # major of the hashing substrate in the tree. `gix-hash` had already put `sha2
@@ -15,7 +15,7 @@
 # Every case is offline: two fixture files and no network, no cargo, no registry.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/digest-major-agreement"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/digest-major-agreement.sh"
 	MANIFEST="$BATS_TEST_TMPDIR/Cargo.toml"
 	LOCK="$BATS_TEST_TMPDIR/Cargo.lock"
 }

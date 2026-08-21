@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/derived-check mise-tasks/man-pages
+# subject: mise-tasks/derived-check.sh mise-tasks/man-pages.sh
 # derived-check's decision table (CLOUD-27, CLOUD-69): does every committed
 # artifact derived from the command surface — the shell completions and the man
 # pages — still match what the binary emits?
@@ -12,8 +12,8 @@
 # nothing the suite has not already built.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/derived-check"
-	PAGES="$BATS_TEST_DIRNAME/../mise-tasks/man-pages"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/derived-check.sh"
+	PAGES="$BATS_TEST_DIRNAME/../mise-tasks/man-pages.sh"
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT"

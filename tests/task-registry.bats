@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/task-registry
+# subject: mise-tasks/task-registry.sh
 # task-registry: the writer half of CLOUD-425. These tests pin the record — the
 # fields, the atomic rewrite, and the two degradations that matter: a phase
 # update for a task that never registered must not fabricate one, and an
@@ -8,7 +8,7 @@
 # lives there, because it is a property of the answer rather than the record.
 
 setup() {
-	REG="$BATS_TEST_DIRNAME/../mise-tasks/task-registry"
+	REG="$BATS_TEST_DIRNAME/../mise-tasks/task-registry.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	cd "$REPO" || exit 1

@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/land-divergence-assert
+# subject: mise-tasks/land-divergence-assert.sh
 # CLOUD-492. The deciding half: is the landing loop's divergence from linear under
 # budget? A pure function of records on stdin — no network, no token — which is
 # what lets it run in the hk gate on every commit while the measurement runs on a
 # clock.
 
 setup() {
-	ASSERT="$BATS_TEST_DIRNAME/../mise-tasks/land-divergence-assert"
+	ASSERT="$BATS_TEST_DIRNAME/../mise-tasks/land-divergence-assert.sh"
 }
 
 # A `window` summary with everything at its ideal, so each case varies exactly one

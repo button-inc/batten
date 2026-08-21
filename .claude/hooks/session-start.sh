@@ -170,7 +170,7 @@ step batten-build mise run install:local
 # gate at all.
 #
 # The answer is not to run `hk install` but to install a hook this repo owns:
-# `.claude/hooks/git-hook` resolves `hk` through `mise exec --`, which is the
+# `.claude/hooks/git-hook.sh` resolves `hk` through `mise exec --`, which is the
 # form that works here, and refuses to re-enter a gate that is already running.
 # Both properties are its own file's to explain; this step owns only the WHEN.
 #
@@ -182,7 +182,7 @@ install_git_hooks() {
 	local root hooks src name
 	root=$(git rev-parse --show-toplevel) || return 1
 	hooks=$(git rev-parse --git-path hooks) || return 1
-	src="$root/.claude/hooks/git-hook"
+	src="$root/.claude/hooks/git-hook.sh"
 	[ -x "$src" ] || {
 		echo "no executable hook body at $src" >&2
 		return 1
@@ -279,7 +279,7 @@ fi
 # epochs, never a plan or a prompt body.
 # Relative, because this script has already `cd`ed to the repo root above, and
 # `CLAUDE_PROJECT_DIR` is only conditionally set, which `set -u` would fault on.
-census="mise-tasks/reclaim-census"
+census="mise-tasks/reclaim-census.sh"
 if [ -x "$census" ]; then
 	"$census" record-boot >/dev/null 2>&1 || true
 	if verdict=$("$census" report 2>/dev/null); then

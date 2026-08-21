@@ -165,7 +165,7 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   only when asked is a gate nobody runs. The absent `[budget]` table reads two
   ways ON PURPOSE: `check` measures nothing (a repo declaring no budget has none
   to fail), `policy budget` is exit 1 (a report that measured nothing must not
-  print `0`) — two callers, two honest readings. The successor to `mise-tasks/context-budget`, deleted in the same
+  print `0`) — two callers, two honest readings. The successor to `mise-tasks/context-budget.sh`, deleted in the same
   change: two gates counting one surface by different rules is the drift this
   engine exists to refuse. The estimate is bytes/4 over what actually **loads** —
   YAML frontmatter and block-level HTML comments stripped first, by a byte scan
@@ -226,7 +226,7 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   against a real one. Drift is SYMMETRIC and signed (`+` host, `-` config): a
   stale name the config claims is what a downstream reader waits on forever.
   Consumer #1's row is `required_checks = ["final"]` with no method key, matching
-  the live ruleset. The fetch lives in `mise-tasks/ci-drift` on a SCHEDULE
+  the live ruleset. The fetch lives in `mise-tasks/ci-drift.sh` on a SCHEDULE
   (`.github/workflows/ci-drift.yml`), not the landing path — `lock-currency`'s
   recorded lesson: a remote round trip there fails whichever PR is in flight for a
   change it did not cause.
@@ -335,7 +335,7 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   `config lint` is deliberately _not_ a diagnostic: a smell is exit 2 there, and
   folding it in would answer the same question two ways. Checks report a stable
   reason id, never the error text, so `--json` is byte-stable and carries no
-  filesystem path. Distinct from `mise-tasks/doctor`, which gates this repo's own
+  filesystem path. Distinct from `mise-tasks/doctor.sh`, which gates this repo's own
   provisioning.
 - `epoch.rs` — `config_epoch` (CLOUD-32): a SHA-256 over the governing config
   surface, so two records carrying the same epoch were produced under provably
@@ -1246,9 +1246,9 @@ judge_fingerprint`, its own domain tag), so a caller can reference content it
   back to an agent. A detector can be complete, tested and shipped and still
   never run; "is it wired for consumer #1" is a separate question from "does it
   work", and only the second one had an answer. It is wired now through
-  `mise-tasks/stop-guard`, which refreshes the transcript symlink from the Stop
+  `mise-tasks/stop-guard.sh`, which refreshes the transcript symlink from the Stop
   payload, runs the recorder, and reports the finding via
-  `mise-tasks/unlanded-check`.
+  `mise-tasks/unlanded-check.sh`.
 - `session.rs` — session lineage and the durable resume point (CLOUD-83): the
   fourth question `store`/`findings`/`journal` leave open — **who is reading, and
   how far have they got**. A warm fork keeps everything that is out of process

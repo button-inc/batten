@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/land-divergence
+# subject: mise-tasks/land-divergence.sh
 # CLOUD-492. The measuring half. `gh` is stubbed with canned HTTP responses, the
 # `tests/ci-wait.bats` idiom, because the properties under test are about the
 # REQUEST (was `If-None-Match` actually sent), about a response with no body at
@@ -7,8 +7,8 @@
 # about being a prefix (does `total_count` catch the API's 1000-item cap).
 
 setup() {
-	SCAN="$BATS_TEST_DIRNAME/../mise-tasks/land-divergence"
-	ASSERT="$BATS_TEST_DIRNAME/../mise-tasks/land-divergence-assert"
+	SCAN="$BATS_TEST_DIRNAME/../mise-tasks/land-divergence.sh"
+	ASSERT="$BATS_TEST_DIRNAME/../mise-tasks/land-divergence-assert.sh"
 	ROOT="$BATS_TEST_DIRNAME/.."
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"

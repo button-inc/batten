@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/perf-compare
+# subject: mise-tasks/perf-compare.sh
 # The regression gate's decision, exercised without building anything.
 #
 # Same separation as tests/perf-assert.bats, and the same reason: producing a
@@ -9,7 +9,7 @@
 # dead would look exactly like a regression gate.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/perf-compare"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/perf-compare.sh"
 	# The DEFAULT threshold is what most cases below assert, so it has to be
 	# pinned rather than inherited. `perf-compare` reads
 	# `${BENCH_REGRESSION_RATIO:-1.30}`, and that override is a documented input

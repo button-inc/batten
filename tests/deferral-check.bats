@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/deferral-check
+# subject: mise-tasks/deferral-check.sh
 # A deferred decision that lands with no ticket (CLOUD-323).
 #
 # The failure is measured, not imagined: two open decisions landed on `main`
@@ -27,7 +27,7 @@
 # already checked out fails, and it passes in CI today only because the runner's
 # git still defaults to `master` (CLOUD-282).
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/deferral-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/deferral-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git init -q -b claude/cloud-777-fixture "$REPO"

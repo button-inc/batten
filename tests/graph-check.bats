@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/graph-check
+# subject: mise-tasks/graph-check.sh
 # graph-check's decision table (CLOUD-175): the two board predicates from
 # mem:workflow/board-states as exit codes, graph coherence, and the frontier as
 # a by-product. Fixtures are get_issue-shaped payloads built with jq.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/graph-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/graph-check.sh"
 	BOARD="$BATS_TEST_TMPDIR/board.json"
 	# EVERY CASE RUNS IN A THROWAWAY REPO, because the gate now mints the
 	# board-move receipt CLOUD-512's guard reads. Run from this checkout, the

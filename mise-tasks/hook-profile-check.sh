@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the two-tier hk gate is wired so the slow tier still runs under check/CI (CLOUD-509)"
+#
+# CLOUD-509. Six steps dominate the hk gate — 111.1s total, 100.3s of it
+# `test:bats` at nproc=4 — so they declare `profiles = List("slow")`, hk.pkl
+# enables `slow` at the config layer, and `.claude/hooks/git-hook.sh` disables it
+# with `--profile '!slow'` for the one path paid per commit.
+#
+#   slow-tier-empty            no step declares the slow profile — the tier is gone
+#   profiled-step-not-in-check a slow step does NOT run under `check`, so CI skips it
+#   hook-missing-profile-flag  the git hook stopped disabling the tier, so commits are slow
+#
+# WHAT THIS GATE DOES NOT DO, and the reasoning matters because the obvious
+# version is wrong. It does NOT hold a list of "the expensive steps" and assert
+# each declares the profile. Such a list would be a SECOND AUTHORITY over a set
+# `hk.pkl` already defines (non-negotiable 6), and it would go stale in the
+# silent direction: add an expensive step, forget the list, gate stays green.
+# Worse, it is not even computable — "expensive" is a wall-clock property, and
+# this gate judges committed bytes. The cost question runs on a clock instead
+# (`hook-latency-drift`), which is the gate/clock split .claude/rules/toolchain.md
+# prescribes.
+#
+# THE FALSE GREEN THIS EXISTS FOR is the other direction entirely. A latency
+# split can fail two ways, and they are not symmetric:
+#
+#   * the slow tier stops being skipped at pre-commit — commits get slow again.
+#     Annoying, loud, self-correcting. NOT a correctness problem.
+#   * the slow tier stops running under `check` — clippy, the test suite and
+#     `batten-check` silently vanish from `mise run ci`, `verify` and CI. Green
+#     everywhere, nothing tested. That is the one that must be impossible.
+#
+# Deleting the config-level `profiles` line, misspelling a profile name on one
+# step, or a future hk changing the resolution order all produce the second
+# failure with no other symptom. So the load-bearing assertion is
+# `profiled-step-not-in-check`, and it is derived entirely from hk.pkl via the
+# plan — nothing is written down twice.
+#
+# WHY THE PLAN, NOT A TIMING: `hk check --plan` prints what WOULD run without
+# running it, so selection is readable as data. A timing cannot tell a skipped
+# step from a cached one, which is exactly the confusion this gate must not
+# have. Same argument as tests/hk-selection.bats, which this shares a subject
+# with.
+#
+# Exit 0 pass, 1 violation, 2 could-not-look. `2` is the `lock-complete`
+# doctrine — the gate could not read what it was asked to judge — and NOT the
+# batten binary's table, where 2 is the policy verdict.
+set -euo pipefail
+
+# The profile name, written once. Everything below derives from it, so renaming
+# the tier is a one-line change here plus hk.pkl.
+PROFILE="slow"
+
+# Pointer-only per non-negotiable rule 4: a step name, a rule id, and where the
+# declaration lives. Never a step's command line and never its output.
+violations=0
+report() {
+	echo "::error:: $1" >&2
+	violations=$((violations + 1))
+}
+
+scratch="$(mktemp -d)"
+cleanup() { rm -rf "$scratch"; }
+trap cleanup EXIT
+
+# The two plans this gate judges. Everything past this block is a pure function
+# of those two JSON documents, which is what makes the decision table testable:
+# with two path arguments the suite supplies them directly and `hk` is never
+# invoked. Same fixture-mode bargain `timeout-check` makes — explicit arguments
+# win, and without them the real subject is read.
+full="$scratch/full.json"
+fast="$scratch/fast.json"
+
+readable() { # $1 = file, $2 = what it is, for the message
+	if ! jq -e 'has("steps") and (.steps | length) > 0' <"$1" >/dev/null 2>&1; then
+		echo "::error:: hook-profile-check: the $2 plan carried no parseable steps. A plan this gate cannot read is unreadable input, not a clean tree." >&2
+		exit 2
+	fi
+}
+
+if [ "$#" -eq 2 ]; then
+	for path in "$@"; do
+		if [ ! -f "$path" ]; then
+			echo "::error:: hook-profile-check: $path not found" >&2
+			exit 2
+		fi
+	done
+	cp "$1" "$full"
+	cp "$2" "$fast"
+elif [ "$#" -eq 0 ]; then
+	# `hk` resolves hk.pkl from the working directory, so pin it rather than
+	# inheriting whatever directory a caller happened to be in.
+	root=$(git rev-parse --show-toplevel 2>/dev/null || true)
+	if [ -z "$root" ]; then
+		echo "::error:: hook-profile-check: not inside a git repository, so hk.pkl cannot be located." >&2
+		exit 2
+	fi
+	cd "$root"
+
+	# stderr is discarded on purpose: hk writes a progress line ("Fetching all
+	# files in repo") to it, and merging the streams would put that line in front
+	# of the JSON. Each call is its own statement so its exit status is read here
+	# rather than swallowed by a pipeline.
+	if ! hk check --all --plan --json >"$full" 2>/dev/null; then
+		echo "::error:: hook-profile-check: \`hk check --all --plan --json\` failed, so the gate could not read the plan it judges." >&2
+		exit 2
+	fi
+	if ! hk check --all --plan --json --profile "!$PROFILE" >"$fast" 2>/dev/null; then
+		echo "::error:: hook-profile-check: \`hk check --all --plan --json --profile '!$PROFILE'\` failed, so the gate could not read the plan it judges." >&2
+		exit 2
+	fi
+else
+	echo "::error:: hook-profile-check: expected no arguments (judge this repo) or exactly two (a full plan and a no-$PROFILE plan, for fixtures); got $#." >&2
+	exit 2
+fi
+
+readable "$full" "full"
+readable "$fast" "no-$PROFILE"
+
+# The slow tier, DERIVED rather than declared: a step hk excludes for a missing
+# profile when the profile is off is, by construction, a step that declared it.
+# `profile_exclude` is the JSON `reasons[].kind` (snake_case ReasonKind), which
+# is NOT the kebab-case `profile-not-enabled` that names the same condition in
+# the `display_skip_reasons` setting — two namespaces for one idea, and only the
+# former appears here.
+slow_steps=$(jq -r '
+	.steps[]
+	| select(.status == "skipped")
+	| select(any(.reasons[]?; .kind == "profile_exclude"))
+	| .name
+' <"$fast" | sort)
+
+# ANTI-VACUITY. Zero slow steps means the tier evaporated — every step would be
+# running at pre-commit, and every assertion below would pass over an empty set.
+# A gate that cannot find its own subject has not verified anything, so this is
+# exit 2 rather than a pass. Same refusal `mise-action-floor` makes when no pin
+# of its action exists.
+if [ -z "${slow_steps//[[:space:]]/}" ]; then
+	echo "::error:: hook-profile-check: no step is excluded by \`--profile '!$PROFILE'\`, so the $PROFILE tier does not exist. Either hk.pkl declares no \`profiles = List(\"$PROFILE\")\` on any step, or the profile no longer resolves — in both cases there is nothing here to judge." >&2
+	exit 2
+fi
+
+# THE LOAD-BEARING ASSERTION. Every slow step must still be selected by the
+# `check` hook, which is the mapping `mise run ci` -> `hk check --all` drives and
+# therefore what `verify` and CI run. A slow step missing THERE is the false
+# green: the check has silently stopped running everywhere that matters.
+total=0
+while IFS= read -r step; do
+	[ -n "$step" ] || continue
+	total=$((total + 1))
+	status=$(jq -r --arg s "$step" '.steps[] | select(.name == $s) | .status' <"$full")
+	if [ "$status" != "included" ]; then
+		# The declaration's line, for the pointer. Absent is not fatal — the
+		# verdict is the plan's, and this only makes the message actionable.
+		# Absent in fixture mode, where there is no hk.pkl to point into.
+		where=$(grep -n "\[\"$step\"\]" hk.pkl 2>/dev/null | head -n1 | cut -d: -f1 || true)
+		report "hook-profile-check: hk.pkl:${where:-0} step \`$step\` declares the \`$PROFILE\` profile but is \`${status:-absent}\` under the \`check\` hook — so \`mise run ci\`, \`verify\` and CI all skip it. profiled-step-not-in-check"
+	fi
+done <<<"$slow_steps"
+
+# THE ECONOMY HALF, and it cannot be asked of the plans. The tier is DERIVED
+# from the no-profile plan's exclusions, so "a tier member still included there"
+# is unrepresentable by construction — an earlier draft asserted exactly that and
+# the branch was unreachable, which its own test caught. What actually decides
+# whether a commit is fast is whether the hook still passes the flag, and that is
+# a property of a file rather than of a plan.
+#
+# Skipped in fixture mode: the suite drives plan documents, and there is no hook
+# to read. The repo-mode run is where this fires.
+if [ "$#" -eq 0 ]; then
+	hook=".claude/hooks/git-hook.sh"
+	if [ ! -f "$hook" ]; then
+		echo "::error:: hook-profile-check: $hook is missing, so whether pre-commit disables the $PROFILE tier cannot be read." >&2
+		exit 2
+	fi
+	# THE INVOCATION LINE, not the file. Matching anywhere in the file passes on
+	# the explanatory comment that names the very flag being checked — measured:
+	# deleting the flag from the command left this green, because the comment
+	# above it still spelled it. So: non-comment lines that actually run the
+	# hook, and the flag must be on one of them.
+	#
+	# A here-string, not a pipe into grep: an early-exiting grep SIGPIPEs its
+	# producer and `pipefail` promotes 141, so a MATCH would report failure.
+	hook_body=$(grep -v '^[[:space:]]*#' "$hook" | grep 'hk run' || true)
+	if [ -z "${hook_body//[[:space:]]/}" ]; then
+		echo "::error:: hook-profile-check: $hook runs no \`hk run\` command, so which profile a commit gets cannot be read." >&2
+		exit 2
+	fi
+	if ! grep -q -- "--profile" <<<"$hook_body" || ! grep -q -- "!$PROFILE" <<<"$hook_body"; then
+		report "hook-profile-check: $hook invokes \`hk run\` without \`--profile '!$PROFILE'\`, so every commit runs the $PROFILE tier again. The tier is still correct and CI is unaffected — this is the economy, not the coverage. hook-missing-profile-flag"
+	fi
+fi
+
+if [ "$violations" -gt 0 ]; then
+	echo "::error:: hook-profile-check: $violations problem(s) in the two-tier gate. The \`$PROFILE\` tier must be SKIPPED by the pre-commit hook and RUN by \`check\`; a tier missing from \`check\` means CI is not running it at all." >&2
+	exit 1
+fi
+
+echo "hook-profile-check: $total step(s) in the $PROFILE tier, every one still selected by \`check\` and skipped at pre-commit"

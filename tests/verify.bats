@@ -3,7 +3,7 @@
 # CLOUD-407. `verify`'s exit code is a two-valued question with one narrow
 # answer: 2 means "main moved under this branch, lap and try again", and every
 # other failure means "stop, something about this tree is wrong". `land` is
-# hard-wired to that reading (`mise-tasks/land`, the lap-on-2 arm), so a second
+# hard-wired to that reading (`mise-tasks/land.sh`, the lap-on-2 arm), so a second
 # way to produce a 2 is not a cosmetic defect — it is `land` lapping to its
 # backstop over a real refusal it was built to stop on.
 #

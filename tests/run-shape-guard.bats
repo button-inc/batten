@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/run-shape-guard
+# subject: mise-tasks/run-shape-guard.sh
 # The two shapes the engine cannot express, and what is NOT here is the point.
 #
 # This suite used to cover five predicates. The three that discard a verdict — a
@@ -17,7 +17,7 @@
 # literal.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard.sh"
 	# THE DECODER IS STUBBED, through `payload-field`'s own documented seam, and
 	# it is not a convenience — it is what makes this suite runnable under
 	# `mutant` at all. That task copies TRACKED FILES ONLY into a temp tree and
@@ -280,8 +280,8 @@ bg_guard() { # the same call, marked run_in_background
 fixture_guard() { # fixture_guard <mise.toml body>
 	FIXTURE="$BATS_TEST_TMPDIR/tree"
 	mkdir -p "$FIXTURE/mise-tasks"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard" \
-		"$BATS_TEST_DIRNAME/../mise-tasks/payload-field" "$FIXTURE/mise-tasks/"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard.sh" \
+		"$BATS_TEST_DIRNAME/../mise-tasks/payload-field.sh" "$FIXTURE/mise-tasks/"
 	printf '%s\n' "$1" >"$FIXTURE/mise.toml"
 }
 
@@ -291,7 +291,7 @@ fixture_guard() { # fixture_guard <mise.toml body>
 # is none to find at all. These rows vary the task table and nothing else.
 fguard() { # fguard <command>
 	jq -nc --arg c "$1" '{tool_input: {command: $c}}' |
-		"$FIXTURE/mise-tasks/run-shape-guard"
+		"$FIXTURE/mise-tasks/run-shape-guard.sh"
 }
 
 TASKS='[tasks."lint:clippy"]

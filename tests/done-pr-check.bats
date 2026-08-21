@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/done-pr-check
+# subject: mise-tasks/done-pr-check.sh
 # done-pr-check: an issue may become Done only if none of its own pull requests is
 # still open (CLOUD-468).
 #
@@ -18,7 +18,7 @@ setup() {
 	# Mutating the tracked file in place makes a corrupted commit reachable from
 	# any concurrent `git add -A` — which staged a mutant into a pushed commit
 	# on 2026-08-12 (recorded on CLOUD-418). Unset in every normal run.
-	DONE="${DONE_UNDER_TEST:-$BATS_TEST_DIRNAME/../mise-tasks/done-pr-check}"
+	DONE="${DONE_UNDER_TEST:-$BATS_TEST_DIRNAME/../mise-tasks/done-pr-check.sh}"
 }
 
 # One issue, given its attachment numbers and the PR states the caller fetched.

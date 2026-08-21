@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/cap-drift
+# subject: mise-tasks/cap-drift.sh
 # CLOUD-593. An MSRV cap lives in two files — the manifest bound and the bot-side
 # rule mirroring it — and nothing kept them in step. The bot side is
 # `renovate.json5`'s `packageRules[].allowedVersions` since CLOUD-660 retired
@@ -14,7 +14,7 @@
 # only covered it would pass on the half-lift.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/cap-drift"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/cap-drift.sh"
 	MANIFEST="$BATS_TEST_TMPDIR/Cargo.toml"
 	BOT="$BATS_TEST_TMPDIR/renovate.json5"
 }

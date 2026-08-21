@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/skill-check
+# subject: mise-tasks/skill-check.sh
 # skill-check's decision table (CLOUD-213): the shipped skill's budget, its verb
 # vocabulary, and the exit table it restates, as exit codes.
 #
@@ -14,7 +14,7 @@
 # invocation inside every assertion.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/skill-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/skill-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	SKILL="$ROOT/skills/batten/SKILL.md"
 	VENDOR="$ROOT/.claude/skills/batten/SKILL.md"

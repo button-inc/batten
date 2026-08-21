@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/hook-matcher-check
+# subject: mise-tasks/hook-matcher-check.sh
 # CLOUD-471. A `[[verb]]` naming a tool the `PreToolUse` matcher does not deliver
 # is dead config: the row loads, `verbs::validate` accepts it, and the host never
 # spawns the hook, so the symptom is an allow indistinguishable from a pass.
@@ -11,7 +11,7 @@
 # judged against its own name — not the happy path.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/hook-matcher-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/hook-matcher-check.sh"
 	SETTINGS="$BATS_TEST_TMPDIR/settings.json"
 	CONFIG="$BATS_TEST_TMPDIR/batten.toml"
 	# The engine's own declaration of which tools write. Read from the real
@@ -135,7 +135,7 @@ gate() { run "$GATE" "$SETTINGS" "$CONFIG" "$SOURCE"; }
 	# The other PreToolUse entries in the committed file register `mise-tasks/*`
 	# guards with their own matchers. Reading one of those as coverage would be
 	# this gate answering about a process the engine never runs.
-	printf '{"hooks":{"PreToolUse":[{"matcher":"Bash|Write","hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard"}]}]}}\n' >"$SETTINGS"
+	printf '{"hooks":{"PreToolUse":[{"matcher":"Bash|Write","hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard.sh"}]}]}}\n' >"$SETTINGS"
 	declares Write
 
 	gate

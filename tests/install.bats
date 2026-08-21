@@ -28,7 +28,7 @@ setup() {
 	mkdir -p "$FIX/repos/button-inc/batten/releases/tags" "$FIX/releases/assets"
 
 	# The payload a release carries: one archive holding `batten` at its root,
-	# which is what `mise-tasks/dist` produces.
+	# which is what `mise-tasks/dist.sh` produces.
 	mkdir -p "$BATS_TEST_TMPDIR/stage"
 	printf '#!/bin/sh\necho fixture-batten\n' >"$BATS_TEST_TMPDIR/stage/batten"
 	tar -czf "$FIX/releases/assets/1" -C "$BATS_TEST_TMPDIR/stage" batten

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/awk-regex-check
+# subject: mise-tasks/awk-regex-check.sh
 # A pattern passed through `awk -v` goes through assignment escape processing
 # before awk sees it as a regex, and what that does to a backslash is undefined
 # across implementations. gawk strips `\(` to `(`; mawk keeps it.
@@ -14,7 +14,7 @@
 # is invisible to any static check.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/awk-regex-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/awk-regex-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	mkdir -p "$REPO/mise-tasks"
 	cd "$REPO" || return 1
@@ -25,7 +25,7 @@ setup() {
 
 # Writes $1 as a task body and stages it, since the gate reads tracked files.
 task() {
-	printf '#!/usr/bin/env bash\n%s\n' "$1" >mise-tasks/subject
+	printf '#!/usr/bin/env bash\n%s\n' "$1" >mise-tasks/subject.sh
 	git add -A
 }
 
@@ -45,7 +45,7 @@ task() {
 @test "the report names file and line, not the whole command" {
 	task 'x=$(awk -v re="$L" '"'"'$0 ~ re'"'"')'
 	run "$GATE"
-	[[ "$output" == *"mise-tasks/subject:2"* ]]
+	[[ "$output" == *"mise-tasks/subject.sh:2"* ]]
 }
 
 @test "match() is regex position too" {
@@ -89,7 +89,7 @@ task() {
 }
 
 @test "an untracked file is not judged — the gate reads what is committed" {
-	printf '#!/usr/bin/env bash\nx=$(awk -v re="$L" '"'"'$0 ~ re'"'"')\n' >mise-tasks/untracked
+	printf '#!/usr/bin/env bash\nx=$(awk -v re="$L" '"'"'$0 ~ re'"'"')\n' >mise-tasks/untracked.sh
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/timeout-check
+# subject: mise-tasks/timeout-check.sh
 # The commit half of CLOUD-266: every workflow job's `timeout-minutes` carries a
 # budget comment that justifies it.
 #
@@ -10,7 +10,7 @@
 # a gate everything fails on day one is a gate that gets reverted on day one.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/timeout-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/timeout-check.sh"
 	WF="$BATS_TEST_TMPDIR/wf.yml"
 }
 

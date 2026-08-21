@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: .claude/hooks/git-hook
+# subject: .claude/hooks/git-hook.sh
 # The installed git hook body (CLOUD-476), which is checked in precisely so it
 # can be asserted here rather than only through an installation.
 #
@@ -10,7 +10,7 @@
 # from in there recurses — measured as a hung `git commit`, 2026-08-12).
 
 setup() {
-	HOOK="$BATS_TEST_DIRNAME/../.claude/hooks/git-hook"
+	HOOK="$BATS_TEST_DIRNAME/../.claude/hooks/git-hook.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	CALLS="$BATS_TEST_TMPDIR/mise-calls"
 	mkdir -p "$STUB"
@@ -36,14 +36,14 @@ EOF
 	# so every case goes through a link named like the real installation rather
 	# than through the file's own path.
 	HOOK="$BATS_TEST_TMPDIR/pre-commit"
-	ln -s "$BATS_TEST_DIRNAME/../.claude/hooks/git-hook" "$HOOK"
+	ln -s "$BATS_TEST_DIRNAME/../.claude/hooks/git-hook.sh" "$HOOK"
 }
 
 # A pid that is certainly not live: the shell that printed it has exited.
 dead_pid() { bash -c 'echo $$'; }
 
 @test "the hook body is executable and checked in" {
-	[ -x "$BATS_TEST_DIRNAME/../.claude/hooks/git-hook" ]
+	[ -x "$BATS_TEST_DIRNAME/../.claude/hooks/git-hook.sh" ]
 }
 
 @test "hk is resolved through mise, never bare — the failure that blocked installing a hook at all" {
@@ -90,7 +90,7 @@ dead_pid() { bash -c 'echo $$'; }
 @test "the hook dispatches on the name it is invoked as" {
 	# One body, two hooks: hk.pkl defines pre-commit and commit-msg, and the
 	# installation symlinks both to this file.
-	ln -s "$BATS_TEST_DIRNAME/../.claude/hooks/git-hook" "$BATS_TEST_TMPDIR/commit-msg"
+	ln -s "$BATS_TEST_DIRNAME/../.claude/hooks/git-hook.sh" "$BATS_TEST_TMPDIR/commit-msg"
 	run "$BATS_TEST_TMPDIR/commit-msg" .git/COMMIT_EDITMSG
 	[ "$status" -eq 0 ]
 	# The hook's own arguments still reach hk, after the profile flag the two-tier

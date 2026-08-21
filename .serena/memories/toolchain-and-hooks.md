@@ -100,7 +100,7 @@ so the fix is a selector, never a `--shell` flag and never per-file directives.
 always-loaded set exceeds its budget. Since CLOUD-50 this is the engine, not a
 shell task: the counted set and both thresholds are `[budget.instructions]` in
 `batten.toml` (`paths`, `max_tokens`, optional `max_lines`), so a reviewer reads
-the gate as config rather than as arithmetic in bash. `mise-tasks/context-budget`
+the gate as config rather than as arithmetic in bash. `mise-tasks/context-budget.sh`
 and its `BATTEN_CONTEXT_BUDGET`/`BATTEN_CONTEXT_LINE_TARGET` overrides are gone —
 a budget you can lower with an env var is not a budget.
 
@@ -347,7 +347,7 @@ not the no-verdict outcome `batten.toml`'s `[transcript]` comment describes
 ("resolves to `Capability::Absent` … changes no verdict"). One of the two is
 wrong; the comment and the behaviour disagree.
 
-Why it bites the first run specifically: `mise-tasks/stop-guard` is the only
+Why it bites the first run specifically: `mise-tasks/stop-guard.sh` is the only
 writer (`ln -sfn` from the Stop payload's `transcript_path`) and it fires at TURN
 END. A fresh container's first `verify`/`linear-check` therefore runs before any
 Stop hook has, which is precisely when an agent runs it. It reads as a rebase or

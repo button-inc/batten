@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/fanout-guard
+# subject: mise-tasks/fanout-guard.sh
 # fanout-guard's decision table (CLOUD-287): a subagent spawn's reading manifest
 # and prompt budget as a PreToolUse verdict. Fixtures are real git trees, since
 # the manifest conjunct intersects the prompt with `git ls-files`.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/fanout-guard"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/fanout-guard.sh"
 	SETTINGS="$BATS_TEST_DIRNAME/../.claude/settings.json"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT/.serena/memories/workflow" "$ROOT/mise-tasks"
@@ -15,7 +15,7 @@ setup() {
 	for f in AGENTS.md one.md two.md three.md four.md five.md; do
 		echo x >"$ROOT/$f"
 	done
-	echo x >"$ROOT/mise-tasks/land"
+	echo x >"$ROOT/mise-tasks/land.sh"
 	echo x >"$ROOT/.serena/memories/workflow/agent-fanout.md"
 	git -C "$ROOT" add -A
 	git -C "$ROOT" commit -qm x
@@ -153,7 +153,7 @@ d = json.load(open('$SETTINGS'))
 groups = [g for g in d['hooks']['PreToolUse'] if g.get('matcher') == 'Task']
 assert groups, [g.get('matcher') for g in d['hooks']['PreToolUse']]
 cmds = [h['command'] for g in groups for h in g['hooks']]
-assert any(c.endswith('/mise-tasks/fanout-guard') for c in cmds), cmds
+assert any(c.endswith('/mise-tasks/fanout-guard.sh') for c in cmds), cmds
 "
 	[ "$status" -eq 0 ]
 }

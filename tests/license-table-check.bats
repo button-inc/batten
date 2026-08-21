@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/license-table-check
+# subject: mise-tasks/license-table-check.sh
 # The gate that ships with the license-table release precondition (CLOUD-325).
 #
 # The precondition was prose for the table's whole life and nothing failed while
@@ -9,7 +9,7 @@
 # every per-row assertion by having no rows to check.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/license-table-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/license-table-check.sh"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/attestation-check
+# subject: mise-tasks/attestation-check.sh
 # attestation-check's decision table (CLOUD-583). The case that carries the whole
 # design is `THE GAP IS NOT A VERDICT`: `gh attestation verify` exits 1 both for
 # an artifact with no provenance and for a repository the platform never offered
@@ -14,7 +14,7 @@
 # covers the other half.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/attestation-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/attestation-check.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/module-map-check
+# subject: mise-tasks/module-map-check.sh
 # module-map-check's decision table (CLOUD-194): mem:core's completeness as an
 # exit code. Fixtures are real git trees, since the gate walks `git ls-files`.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/module-map-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/module-map-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	MAP="$ROOT/.serena/memories/core.md"
 	mkdir -p "$ROOT/.serena/memories" "$ROOT/crates/demo/src"

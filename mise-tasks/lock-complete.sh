@@ -1,0 +1,418 @@
+#!/usr/bin/env bash
+#MISE description="Gate: mise.lock has no partial or bogus platform entry — a pure function of the committed lockfile, no network, no write"
+#
+# Replaces the completeness half of `lock-check`, which could not answer the
+# question it was named for. That gate ran `mise lock` (a remote round trip) and
+# rewrote the tracked lockfile, then diffed it — so its verdict was "did upstream
+# change since the last commit", not "is this file complete". Regenerate-and-diff
+# detects drift only: `mise lock` never removes or repairs an existing entry, so
+# a lockfile that is stably wrong passes forever. It did. `ubi:rust-cross/
+# cargo-zigbuild` carried one platform key, `linux-x64-cargo-zigbuild`, with a
+# checksum and no url — the exact partial entry lock-check's own comment names —
+# and lock-check reported "complete and current" over it on every run.
+#
+# This asks the completeness question directly, of the committed bytes:
+#
+#   unknown-platform-key   a platform key outside the set mise actually emits,
+#                          which is install-time residue rather than a lock
+#   required-not-installable  a required platform with no block, or a block
+#                          carrying no url to install from
+#   unlocked-tool          a `[tools]` key in mise.toml with no lockfile entry
+#                          at all — the omission every clause above is blind to,
+#                          because each of them judges an entry that is PRESENT
+#
+# The url check is deliberately scoped to REQUIRED platforms. mise emits a
+# provenance-only stub for a platform upstream ships no artifact for — zizmor's
+# two musl entries are exactly that, and `mise lock` regenerates them — so
+# failing on every url-less block would fail this repo for a decision upstream
+# made. That is the same defect as the gate being replaced, one level down.
+# The distinguishing test is whether `mise lock` reproduces the entry: it does
+# for the musl stubs, and does not for the cargo-zigbuild key below.
+#
+# A tool with NO platform block is judged on its BACKEND, not on the absence.
+# The npm, pipx and core:rust backends resolve through their own package manager
+# and lock no URLs at all, so for them it is exempt; a backend that fetches a
+# release asset could lock one, so for them it means unlocked. Keying this on
+# the absence alone is what let `ubi:rust-cross/cargo-zigbuild` sit here with a
+# bare version and no checksum, passing on every run (CLOUD-281) — the same
+# shape as the defect this gate replaced, one level down. Partiality, below, is
+# still only meaningful for a tool that locks at least one platform.
+#
+# Currency — "would regenerating produce something different?" — is a question
+# about upstream, not about the commit, so it does not belong on the landing
+# path. It runs on a schedule instead (.github/workflows/lock-currency.yml).
+#
+# WHICH BYTES (CLOUD-227). "The committed bytes" above was the intent; the code
+# read `mise.lock` from the WORKING TREE, and those differ on any machine that
+# has installed since checkout — which here is every cold provisioning run, since
+# `mise install` writes the residue key itself (CLOUD-223). The verdict was
+# therefore a property of the machine, and the split was invisible: the `ci` job
+# is the only one running this gate and its install list deliberately excludes
+# cargo-zigbuild, so CI could never see the residue, while every agent sandbox
+# installs the full set and failed this gate on its first command, for a reason
+# no branch caused. That is `lock-check`'s original defect one level down — a
+# verdict coming from the environment rather than from the change.
+#
+# So with no argument this gates the INDEX (`git show :mise.lock`): exactly the
+# bytes a commit would carry, identical in CI and in a sandbox, immune to
+# whatever an installer wrote afterwards. An explicit path still wins, which is
+# how the bats suite drives fixtures.
+#
+# The mutation drops the component boundary from the stale-lock comparison, so a
+# pin of `1.9` reads as satisfied by a locked `1.97.1`. That is the plausible
+# wrong spelling of "the lock extends the pin" — it is what a plain prefix test
+# gives you — and it silently accepts exactly the pin `mise install --locked`
+# would reject, which is the whole failure the clause was added for.
+#MUTANT stale-lock-prefix-not-boundary|s/{locked#"\$wantversion".}/{locked#"\$wantversion"}/|the extension must be at a component boundary, not a string prefix
+set -euo pipefail
+
+# `label` is what the pointers name; `lockfile` is where the bytes are read from.
+# They differ only for the index, whose blob has no path of its own.
+if [ "$#" -gt 0 ]; then
+	lockfile="$1"
+	label="$1"
+	if [ ! -f "$lockfile" ]; then
+		echo "::error:: $lockfile not found" >&2
+		exit 2
+	fi
+else
+	label="mise.lock"
+	lockfile="$(mktemp)"
+	trap 'rm -f "$lockfile"' EXIT
+	# A read of the object store, not of the network and not of the tree.
+	if ! git show :mise.lock >"$lockfile" 2>/dev/null; then
+		echo "::error:: mise.lock is not in the index — run from the repo, or pass a path" >&2
+		exit 2
+	fi
+fi
+
+# The platform keys mise emits. Anything else in that position was written by an
+# install on some contributor's machine, not by a lock.
+KNOWN='linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl macos-x64 macos-arm64 windows-x64'
+
+# Where this repo's tools actually get installed: CI runners are ubuntu-latest
+# (linux-x64), agent sandboxes and arm runners are linux-arm64, contributors are
+# on Apple silicon. musl, macos-x64 and windows are welcome but not demanded —
+# upstream not shipping one of those is not this repo's defect.
+REQUIRED="${BATTEN_LOCK_PLATFORMS:-linux-x64 linux-arm64 macos-arm64}"
+
+fail=0
+
+# lockfile-writes-enabled: mise.toml must not re-enable install-time lockfile
+# writes. Every residue key this gate rejects was written by an install, so the
+# gate is only half a mechanism while any `mise install` can produce one — and
+# the per-caller opt-out this repo tried first (MISE_LOCKFILE=false in the
+# session-start hook) cannot reach a caller it does not own, which is exactly
+# how a sandbox's own provisioning kept dirtying the tree afterwards. `[settings]
+# lockfile = false` denies the write to everyone; this is what keeps it false.
+#
+# Read from the index for the same reason the lockfile is (CLOUD-227), and
+# skipped in fixture mode, where the argument names the bytes under test.
+if [ "$#" -eq 0 ]; then
+	# A repo with no staged mise.toml has no setting to enforce, and `git show`
+	# exits non-zero there — which under `pipefail` would abort this gate on the
+	# lockfile question it was actually asked. Read it in its own step so that
+	# absence is a value, not a failure. Read once: the unlocked-tool clause
+	# below reads the same bytes for its [tools] table.
+	toml=$(git show :mise.toml 2>/dev/null || true)
+	enabled=$(printf '%s\n' "$toml" | awk '
+		/^\[settings\]/ { in_settings = 1; next }
+		/^\[/           { in_settings = 0 }
+		in_settings && /^[[:space:]]*lockfile[[:space:]]*=[[:space:]]*(true|1)[[:space:]]*$/ {
+			print NR
+		}
+	')
+	if [ -n "$enabled" ]; then
+		echo "::error:: mise.toml re-enables install-time lockfile writes, so any \`mise install\` can write the residue this gate rejects (CLOUD-223):" >&2
+		echo "  mise.toml:$enabled: [settings] lockfile — set it false; the scheduled \`lock-check\` opts back in with MISE_LOCKFILE=true" >&2
+		fail=1
+	fi
+
+	# workflow-unlocked-install: the other half of that setting. `lockfile =
+	# false` turns off the whole lockfile feature, not only the write, so
+	# mise-action's `mise install --locked` fails outright with "locked mode
+	# requires lockfile to be enabled" — measured on every job of run
+	# 31243967285. A workflow therefore has to set MISE_LOCKFILE itself, and one
+	# that forgets does not fail loudly: mise-action only passes `--locked` when
+	# it detects a lockfile, so the job installs UNLOCKED and goes green. That is
+	# a checksum check silently dropped, which is exactly the class this gate
+	# exists for.
+	wf_missing=""
+	while IFS= read -r wf; do
+		[ -n "$wf" ] || continue
+		body=$(git show ":$wf" 2>/dev/null || true)
+		case $body in
+		*mise-action*) ;;
+		*) continue ;;
+		esac
+		case $body in
+		*MISE_LOCKFILE*) ;;
+		*) wf_missing="$wf_missing $wf" ;;
+		esac
+	done <<<"$(git ls-files '.github/workflows/*.yml' 2>/dev/null || true)"
+	if [ -n "$wf_missing" ]; then
+		echo "::error:: a workflow installs with mise-action but does not set MISE_LOCKFILE, so it installs UNLOCKED and passes (CLOUD-223):" >&2
+		for wf in $wf_missing; do
+			echo "  $wf: add \`MISE_LOCKFILE: \"true\"\` to the workflow's env" >&2
+		done
+		fail=1
+	fi
+fi
+
+# The backends that resolve a version through their own package manager and lock
+# no URLs of their own. Written once because two clauses ask the same question of
+# it — "this tool locks nothing" is the whole truth for these and a defect for
+# everything else — and a second copy is exactly how the two would come to
+# disagree about which tools are excused.
+#
+# It is an allowlist, so an unrecognised backend is REQUIRED to lock: a backend
+# added later is checked by default, and only a deliberate edit here excuses it.
+# An empty backend matches nothing, which is what leaves the "declares no
+# backend" case below reachable.
+backend_locks_nothing() {
+	case $1 in
+	npm:* | pipx:* | cargo:* | go:* | gem:* | core:rust) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+# `reported` tracks this clause's own header, separately from `fail` — which any
+# earlier clause may already have set, and did once: keying the header off `fail`
+# silently swallowed it and left these pointers printing under no heading.
+reported=0
+report() {
+	if [ "$reported" = 0 ]; then
+		echo "::error:: mise.lock has entries that cannot be installed from (see mem:toolchain-and-hooks):" >&2
+		reported=1
+	fi
+	printf '  %s\n' "$1" >&2
+	fail=1
+}
+
+# One record per tool: the tool name, then each platform key it locks and
+# whether that block carried a url. Pointer-only — no checksums, no URLs echoed.
+parsed=$(awk '
+	/^\[\[tools\./ {
+		if (tool != "") print "END\t" tool
+		line = $0
+		sub(/^\[\[tools\./, "", line); sub(/\]\]$/, "", line); gsub(/"/, "", line)
+		tool = line; print "TOOL\t" tool "\t" NR
+		platform = ""; next
+	}
+	/^\[tools\./ && /platforms\./ {
+		line = $0
+		# The key is the quoted "platforms.<name>" segment, whether or not the
+		# tool name itself is quoted.
+		if (match(line, /"platforms\.[^"]+"/)) {
+			platform = substr(line, RSTART + 11, RLENGTH - 12)
+			print "PLAT\t" tool "\t" platform "\t" NR
+		}
+		next
+	}
+	/^\[/ { platform = "" ; next }
+	# `backend` appears only in a tool header table; a platform table carries
+	# checksum/url/url_api and never this key.
+	/^backend = / && platform == "" && tool != "" {
+		line = $0
+		sub(/^backend = /, "", line); gsub(/"/, "", line)
+		print "BACK\t" tool "\t" line
+		next
+	}
+	# `version` sits in the tool header table, beside `backend`; a platform table
+	# carries checksum/url/url_api and never this key.
+	/^version = / && platform == "" && tool != "" {
+		line = $0
+		sub(/^version = /, "", line); gsub(/"/, "", line)
+		print "VERS\t" tool "\t" line
+		next
+	}
+	/^url = / && platform != "" { print "URL\t" tool "\t" platform }
+	END { if (tool != "") print "END\t" tool }
+' "$lockfile")
+
+tools=$(awk -F'\t' '$1=="TOOL"{print $2"\t"$3}' <<<"$parsed")
+
+# unlocked-tool: a `[tools]` key in mise.toml with NO lockfile entry at all
+# (CLOUD-333). Every clause above judges an entry that is PRESENT, so the whole
+# gate was blind to the omission — and the omission is the one failure mode a
+# local run structurally cannot see. `[settings] lockfile = false` (CLOUD-223)
+# means nothing here ever installs `--locked`, so an unlocked tool installs fine
+# on this machine forever; every mise-action workflow sets MISE_LOCKFILE and
+# mise-action passes `--locked` whenever a lockfile exists, so CI is the only
+# observer. It fails at the INSTALL step, before a single gate runs, in every
+# job whose install list names the tool — measured on PR #272, where `msrv` and
+# `commit-lint` went red for a `cargo-msrv` pin neither of them owns, past a
+# fully green `mise run verify`.
+#
+# Index mode only, like the two mise.toml clauses above: an explicit path names
+# the lockfile bytes under test and makes no claim about the repo's mise.toml.
+if [ "$#" -eq 0 ]; then
+	# The [tools] table's keys and their line numbers. Same parse as
+	# `mise-tasks/ci-tools-check.sh` — enter on the `[tools]` header, leave on the
+	# next table, take the text left of the first `=`, trim and unquote — with NR
+	# carried through for the pointer. The two are not merged: that one reads the
+	# WORKTREE (it is answering a question about a workflow file beside it) and
+	# needs no line numbers, and a shared parser would have to serve both.
+	# The pinned VERSION travels with the key, for the stale-lock clause below.
+	# Two spellings, both in this table today: a bare string (`hk = "1.54.0"`) and
+	# an inline table (`rust = { version = "1.97.1", components = "..." }`). The
+	# inline form's `version` is on the key's own line even when the table spans
+	# several, which is what makes a line-oriented read of it correct.
+	declared=$(printf '%s\n' "$toml" | awk '
+		/^\[tools\]/ { in_tools = 1; next }
+		/^\[/        { in_tools = 0 }
+		in_tools && !/^[[:space:]]*#/ {
+			eq = index($0, "=")
+			if (eq == 0) next
+			key = substr($0, 1, eq - 1)
+			gsub(/^[ \t]+|[ \t]+$/, "", key)
+			gsub(/^"|"$/, "", key)
+			if (key == "") next
+			rest = substr($0, eq + 1)
+			version = ""
+			if (match(rest, /version[ \t]*=[ \t]*"[^"]*"/)) {
+				version = substr(rest, RSTART, RLENGTH)
+				sub(/^version[ \t]*=[ \t]*"/, "", version); sub(/"$/, "", version)
+			} else if (match(rest, /^[ \t]*"[^"]*"/)) {
+				version = substr(rest, RSTART, RLENGTH)
+				gsub(/[ \t"]/, "", version)
+			}
+			print key "\t" NR "\t" version
+		}
+	')
+
+	reported_unlocked=0
+	reported_stale=0
+	while IFS=$'\t' read -r want wantline wantversion; do
+		[ -n "$want" ] || continue
+		# There is no lockfile entry to read a `backend` from — that absence is
+		# the whole finding — so the backend comes from the KEY, which is how mise
+		# spells it: a `<backend>:` prefix is the backend itself, and a bare name
+		# is a registry name whose core form is `core:<name>`. Only `core:rust` is
+		# exempt among those, so every other bare name (node, pkl, zig, uv, hk,
+		# zizmor) is required to lock — the fail-closed direction, and the true
+		# one: all six lock today.
+		#
+		# The exemption is inherited from the url question above, and it is a
+		# LENIENCE here rather than a necessity: this repo's `npm:prettier` and
+		# `pipx:serena-agent` do carry version-only lock entries, so requiring
+		# presence of them would pass too. Kept because the acceptance criteria
+		# name these three backends, and because a false negative on a tool that
+		# locks no url is the smaller of the two errors.
+		case $want in
+		*:*) backend="$want" ;;
+		*) backend="core:$want" ;;
+		esac
+		backend_locks_nothing "$backend" && continue
+
+		if ! awk -F'\t' -v t="$want" '$1=="TOOL" && $2==t {found=1} END{exit !found}' <<<"$parsed"; then
+			if [ "$reported_unlocked" = 0 ]; then
+				echo "::error:: a [tools] entry has no mise.lock entry, so every CI job that installs it fails before any gate runs (CLOUD-333):" >&2
+				reported_unlocked=1
+			fi
+			# Pointer-only: the tool and where it was declared, never a lockfile byte.
+			# The remedy names `lock-check` rather than the raw regeneration
+			# command, for two reasons: it is the single sanctioned lockfile
+			# writer (everything else is denied by `[settings] lockfile = false`),
+			# and spelling the command out here would put the literal in an
+			# executable line, where the suite's "makes no network call" assertion
+			# reads it as this gate fetching. That assertion is a string match on
+			# purpose — coarse, and worth keeping coarse.
+			echo "  mise.toml:$wantline: $want — declared in [tools] with no $label entry; regenerate with \`mise run lock-check\` and commit the result" >&2
+			fail=1
+			continue
+		fi
+
+		# stale-lock: the entry EXISTS and names a different version from the
+		# pin. `unlocked-tool` above cannot see this — it asks whether a row is
+		# there — and the row being there is exactly what makes this invisible:
+		# `[settings] lockfile = false` means no local install ever passes
+		# `--locked`, so a stale row installs fine here forever while CI, which
+		# does pass it, dies at the install step in EVERY job before a gate runs.
+		#
+		# Measured on this branch: `[tools] rust` moved to 1.97.1, `mise.lock`
+		# still said 1.85.0, `mise run verify` was fully green, and all nine
+		# required checks went red on `Failed to install core:rust@1.97.1:
+		# rust@1.97.1 is not in the lockfile`. Same shape as CLOUD-333's
+		# omission, one field along.
+		#
+		# SATISFACTION, NOT EQUALITY, and the difference is what most pins here
+		# are: `node = "24"` locks 24.19.0 and `"aqua:cli/cli" = "2.97"` locks
+		# 2.97.0, so a raw comparison would refuse this repo's own tree on the
+		# majority of its table. The locked version satisfies the pin when it IS
+		# the pin or extends it at a component boundary.
+		#
+		# A pin that is not a plain dotted version — a range, a channel name — is
+		# skipped rather than guessed at. That is the same lenience the backend
+		# exemption above takes, and for the same reason: a false negative here
+		# is smaller than a gate that refuses a spelling it does not understand,
+		# and there is no such pin in this table today.
+		locked=$(awk -F'\t' -v t="$want" '$1=="VERS" && $2==t {print $3; exit}' <<<"$parsed")
+		[ -n "$locked" ] || continue
+		[ -n "$wantversion" ] || continue
+		case $wantversion in
+		'' | *[!0-9.]*) continue ;;
+		esac
+		if [ "$locked" != "$wantversion" ] && [ "${locked#"$wantversion".}" = "$locked" ]; then
+			if [ "$reported_stale" = 0 ]; then
+				echo "::error:: a [tools] pin names a version its $label entry does not, so \`mise install --locked\` fails in every CI job before any gate runs (CLOUD-593):" >&2
+				reported_stale=1
+			fi
+			# Pointer-only: the tool, both versions, and where the pin was
+			# declared. Never a checksum, a url, or any other lockfile byte.
+			echo "  mise.toml:$wantline: $want — pinned $wantversion, $label has $locked; regenerate with \`mise run lock-check\` and commit the result" >&2
+			fail=1
+		fi
+	done <<<"$declared"
+fi
+
+while IFS=$'\t' read -r tool toolline; do
+	[ -n "$tool" ] || continue
+	plats=$(awk -F'\t' -v t="$tool" '$1=="PLAT" && $2==t {print $3"\t"$4}' <<<"$parsed")
+	# No platform block at all. Whether that is fine depends on the BACKEND, not
+	# on the absence itself — and keying it on the absence is how `ubi:
+	# rust-cross/cargo-zigbuild` passed this gate for its whole life while
+	# locking a bare version and no checksum, the one tool here installed from an
+	# unverified download (CLOUD-281). The exempt backends resolve through their
+	# own package manager and CANNOT lock a url; a fetch-an-asset backend can, so
+	# for one of those "locks nothing" means unlocked, not exempt.
+	#
+	# The exempt list is `backend_locks_nothing`, shared with the unlocked-tool
+	# clause above so the two cannot disagree about which backends are excused.
+	if [ -z "$plats" ]; then
+		backend=$(awk -F'\t' -v t="$tool" '$1=="BACK" && $2==t {print $3; exit}' <<<"$parsed")
+		backend_locks_nothing "$backend" && continue
+		if [ -z "$backend" ]; then
+			report "$label:$toolline: $tool — locks no platform and declares no backend, so what it installs cannot be determined"
+		else
+			report "$label:$toolline: $tool — backend \`$backend\` fetches a release asset but locks no platform, so it installs an unverified download"
+		fi
+		continue
+	fi
+
+	known_seen=""
+	while IFS=$'\t' read -r plat platline; do
+		[ -n "$plat" ] || continue
+		if ! grep -qw -- "$plat" <<<"$KNOWN"; then
+			report "$label:$platline: $tool — platform key \`$plat\` is not one mise emits; this is install-time residue, not a lock"
+			continue
+		fi
+		known_seen="$known_seen $plat"
+		# Only a REQUIRED platform must be installable; a url-less block for any
+		# other platform is mise recording that upstream ships no artifact there.
+		grep -qw -- "$plat" <<<"$REQUIRED" || continue
+		if ! awk -F'\t' -v t="$tool" -v p="$plat" '$1=="URL" && $2==t && $3==p {found=1} END{exit !found}' <<<"$parsed"; then
+			report "$label:$platline: $tool — platform \`$plat\` has no url, so nothing can be installed from it"
+		fi
+	done <<<"$plats"
+
+	# Partiality is only meaningful once a tool locks at least one real platform.
+	[ -n "$known_seen" ] || continue
+	for want in $REQUIRED; do
+		grep -qw -- "$want" <<<"$known_seen" ||
+			report "$label:$toolline: $tool — locked for other platforms but not \`$want\`, which this repo installs on"
+	done
+done <<<"$tools"
+
+[ "$fail" = 0 ] && echo "lock-complete: every locked tool in $label installs on $REQUIRED"
+exit "$fail"

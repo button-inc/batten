@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/claim-race-check
+# subject: mise-tasks/claim-race-check.sh
 # `claim-race-check`'s decision table (CLOUD-446, half two).
 #
 # This is `tests/issue-guard.bats`' duplicate-claim corpus, re-aimed at the gate
@@ -19,7 +19,7 @@
 # the state of the board rather than on the gate's logic.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/claim-race-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/claim-race-check.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

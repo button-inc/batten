@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/checks-green
+# subject: mise-tasks/checks-green.sh
 # The one definition of "is this SHA green" (CLOUD-346), exercised through the
 # injected reading so every case runs offline — no `gh`, no stub, no network.
 #
@@ -10,7 +10,7 @@
 # matching the workflows.
 
 setup() {
-	GREEN="$BATS_TEST_DIRNAME/../mise-tasks/checks-green"
+	GREEN="$BATS_TEST_DIRNAME/../mise-tasks/checks-green.sh"
 	export SHA=deadbeef
 }
 

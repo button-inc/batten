@@ -19,7 +19,7 @@ CI, hk, and your shell run byte-identical commands. Per clone: `mise install`,
 `.claude/hooks/session-start.sh` now performs and `doctor` asserts (CLOUD-476),
 so none of the three is left to a human remembering a prose list. Not `hk
 install`: its generated hook calls `hk` bare, which does not resolve where
-mise's shims are off PATH, so the installed body is `.claude/hooks/git-hook` —
+mise's shims are off PATH, so the installed body is `.claude/hooks/git-hook.sh` —
 which also refuses to re-enter a gate that is already running, the recursion
 that hung a commit when `doctor` first tried to execute a hook from inside the
 gate.
@@ -80,7 +80,7 @@ blob ids), its task body read from `mise tasks info`, its tools' live
 cheap. This is not test-impact selection: nothing is inferred, and any key that
 cannot be computed runs the step (fail closed). Under CI the cache neither hits
 nor records — CI confirms independently. Spec table and rationale in
-`mise-tasks/step-receipt`; decision table in `tests/step-receipt.bats`. Wrap a
+`mise-tasks/step-receipt.sh`; decision table in `tests/step-receipt.bats`. Wrap a
 step only when its cost dwarfs the ~0.3s a check/record pair costs.
 
 Two defects got it here (CLOUD-235, then CLOUD-238), and the second is the
@@ -104,7 +104,7 @@ block: only the clauses _present_ (restating all eight is forbidden by the DoR
 doc), and it holds §8 to `blockedBy` _claims_ against the real relations. Every
 token it anchors on — which openers name a block, which line is the `(§6)`
 clause rather than a house-style cross-reference, which code span is the commit
-type — is defined once, in `mise-tasks/ready-lint`'s comments beside the pattern
+type — is defined once, in `mise-tasks/ready-lint.sh`'s comments beside the pattern
 that implements it. Read it there; a restatement here is a copy that drifts, and
 CLOUD-290 was an author rediscovering the real grammar by experiment. `mise run
 claim-check` is the pull-time half: pipe the payload for the issue you mean to
@@ -213,7 +213,7 @@ mediating.
 
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision
-  table in `mise-tasks/gh-guard-check`, gated by `mise run test:bats`. Reads
+  table in `mise-tasks/gh-guard-check.sh`, gated by `mise run test:bats`. Reads
   (`gh pr view`/`list`/`create`, `gh pr ready`, `gh api`, `gh run view`) are not
   blocked. Bypass: `BATTEN_GH_GUARD_BYPASS=1`.
 - **`memory-guard` is retired** (CLOUD-442), and what it denied is now the

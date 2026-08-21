@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/reference-check
+# subject: mise-tasks/reference-check.sh
 # reference-check's decision table (CLOUD-171): do the rendered CLI reference and
 # the command spec name exactly the same flags, in both directions?
 #
 # The gate renders the reference itself, so a fixture cannot supply a doctored
 # one by writing a file — there is nothing on disk for it to read. What CAN be
-# doctored is the render, so most cases stub `mise-tasks/render/cli` with a
+# doctored is the render, so most cases stub `mise-tasks/render/cli.sh` with a
 # script that emits a reference of the suite's choosing, and the gate is pointed
 # at that copy of the task directory.
 #
@@ -19,7 +19,7 @@
 
 setup() {
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
-	REAL="$REPO/mise-tasks/reference-check"
+	REAL="$REPO/mise-tasks/reference-check.sh"
 	export CARGO_TARGET_DIR="$REPO/target"
 
 	# A copy of the task dir whose `render/cli` the suite controls. The gate
@@ -27,8 +27,8 @@ setup() {
 	# beside a stubbed renderer is what swaps one out.
 	TASKS="$BATS_TEST_TMPDIR/mise-tasks"
 	mkdir -p "$TASKS/render"
-	cp "$REAL" "$TASKS/reference-check"
-	CHECK="$TASKS/reference-check"
+	cp "$REAL" "$TASKS/reference-check.sh"
+	CHECK="$TASKS/reference-check.sh"
 	export REFERENCE_ROOT="$REPO"
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/mutant
+# subject: mise-tasks/mutant.sh
 # The gate on the gates (CLOUD-418): a declared mutation must make a NAMED case in
 # the gate's own suite go red, and a mutation nothing catches is the defect.
 #
@@ -13,7 +13,7 @@
 # records for its own throwaway repo.
 
 setup() {
-	MUTANT="$BATS_TEST_DIRNAME/../mise-tasks/mutant"
+	MUTANT="$BATS_TEST_DIRNAME/../mise-tasks/mutant.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO/mise-tasks" "$REPO/tests"
 	# The runner, borrowed rather than re-vendored: it is the same binary either
@@ -28,14 +28,14 @@ setup() {
 # A toy gate with one real decision, and a suite that asserts it. `$1` overrides
 # the threshold so a case can make the gate wrong on purpose.
 toy_gate() {
-	cat >"$REPO/mise-tasks/toy" <<EOF
+	cat >"$REPO/mise-tasks/toy.sh" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
 LIMIT=${1:-10}
 [ "\${1:-0}" -le "\$LIMIT" ] || exit 1
 exit 0
 EOF
-	chmod +x "$REPO/mise-tasks/toy"
+	chmod +x "$REPO/mise-tasks/toy.sh"
 }
 
 toy_suite() {
@@ -47,11 +47,11 @@ toy_suite() {
 	cat >"$REPO/tests/toy.bats" <<-'EOF'
 		#!/usr/bin/env bats
 		@test "over the limit is refused" {
-			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 99
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 99
 			[ "$status" -eq 1 ]
 		}
 		@test "under the limit passes" {
-			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 1
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 1
 			[ "$status" -eq 0 ]
 		}
 	EOF
@@ -59,7 +59,7 @@ toy_suite() {
 
 # `<slug>|<sed script>|<case name>`, inserted where a real gate carries it.
 declare_mutant() {
-	sed -i "2i #MUTANT $1" "$REPO/mise-tasks/toy"
+	sed -i "2i #MUTANT $1" "$REPO/mise-tasks/toy.sh"
 }
 
 commit() {
@@ -171,10 +171,10 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	toy_suite
 	declare_mutant 'limit-removed|s/^LIMIT=10$/LIMIT=1000/|over the limit is refused'
 	commit
-	before=$(git -C "$REPO" hash-object mise-tasks/toy)
+	before=$(git -C "$REPO" hash-object mise-tasks/toy.sh)
 	run_mutant
 	[ "$status" -eq 0 ]
-	[ "$(git -C "$REPO" hash-object mise-tasks/toy)" = "$before" ]
+	[ "$(git -C "$REPO" hash-object mise-tasks/toy.sh)" = "$before" ]
 	[ -z "$(git -C "$REPO" status --porcelain)" ]
 }
 
@@ -189,11 +189,11 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	# Now break the gate further and rewrite the suite WITHOUT committing.
 	cat >>"$REPO/tests/toy.bats" <<-'EOF'
 		@test "an uncommitted case is exercised" {
-			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 50
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 50
 			[ "$status" -eq 1 ]
 		}
 	EOF
-	sed -i 's/^#MUTANT .*/#MUTANT fresh|s\/^LIMIT=10$\/LIMIT=1000\/|an uncommitted case is exercised/' "$REPO/mise-tasks/toy"
+	sed -i 's/^#MUTANT .*/#MUTANT fresh|s\/^LIMIT=10$\/LIMIT=1000\/|an uncommitted case is exercised/' "$REPO/mise-tasks/toy.sh"
 	run_mutant
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"every one caught"* ]]
@@ -210,7 +210,7 @@ run_mutant() { cd "$REPO" && run "$MUTANT"; }
 	cat >"$REPO/tests/toy.bats" <<-'EOF'
 		#!/usr/bin/env bats
 		@test "over the limit is refused" {
-			run "$BATS_TEST_DIRNAME/../mise-tasks/toy" 99
+			run "$BATS_TEST_DIRNAME/../mise-tasks/toy.sh" 99
 			[ "$status" -eq 99 ]
 		}
 	EOF

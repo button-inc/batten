@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/report-only-check
+# subject: mise-tasks/report-only-check.sh
 # CLOUD-582. `coverage` and `scorecard` are reports, not gates, and until this
 # gate existed the only thing keeping them off the landing path was that nobody
 # had added them to it — a decision held by a comment, which is feedforward with
@@ -10,7 +10,7 @@
 # a `pull_request` workflow (what CI spends a runner on per push).
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/report-only-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/report-only-check.sh"
 	MANIFEST="$BATS_TEST_TMPDIR/mise.toml"
 	WORKFLOWS="$BATS_TEST_TMPDIR/workflows"
 	mkdir -p "$WORKFLOWS"

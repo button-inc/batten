@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/container-preflight
+# subject: mise-tasks/container-preflight.sh
 # The container preflight (CLOUD-261): the gate that asks whether this container
 # can do the work at all, as opposed to whether the toolchain installed.
 #
@@ -11,7 +11,7 @@
 # one.
 
 setup() {
-	PREFLIGHT="$BATS_TEST_DIRNAME/../mise-tasks/container-preflight"
+	PREFLIGHT="$BATS_TEST_DIRNAME/../mise-tasks/container-preflight.sh"
 	HOOK="$BATS_TEST_DIRNAME/../.claude/hooks/session-start.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"

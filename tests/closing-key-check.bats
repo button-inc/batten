@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/closing-key-check
+# subject: mise-tasks/closing-key-check.sh
 # The board's In Review column is written by the tracker's merged-event
 # automation, and that automation fires only for a CLOSING pull request. A PR
 # that merely mentions its issue links, attaches, and moves nothing.
@@ -14,7 +14,7 @@
 # can pass while the thing it was built for still fails.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/closing-key-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/closing-key-check.sh"
 }
 
 @test "the measured failing body — named, never closed — is refused" {

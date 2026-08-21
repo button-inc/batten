@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/in-progress-drain
+# subject: mise-tasks/in-progress-drain.sh
 # CLOUD-469. `landed-check` computes the right predicate and nothing calls it, so
 # the In Progress column has no drain and only grows — 39 rows for one assignee on
 # 2026-08-12, still 32 on 2026-08-20 with 20 of them behind git.
@@ -12,7 +12,7 @@
 # than the stale column it fixes.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	# The developer's global git config must not reach a fixture repo (CLOUD-282);
 	# `init.defaultBranch` and `commit.gpgsign` are the two that have leaked here.
@@ -352,9 +352,9 @@ Closes CLOUD-179"
 @test "with no DRAIN_MERGED_PRS the drain gathers evidence rather than refusing" {
 	local stub="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain" "$stub/in-progress-drain"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check" "$stub/landed-check"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys" "$stub/claimed-keys"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys"
 	printf '#!/usr/bin/env bash\nprintf "CLOUD-179\\t42\\n"\n' >"$stub/merged-pr-keys"
 	chmod +x "$stub/merged-pr-keys"
 	land "fix: work with no closing key in the commit"
@@ -367,9 +367,9 @@ Closes CLOUD-179"
 @test "a failed gather is could-not-look, never a short sweep" {
 	local stub="$BATS_TEST_TMPDIR/bin2"
 	mkdir -p "$stub"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain" "$stub/in-progress-drain"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check" "$stub/landed-check"
-	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys" "$stub/claimed-keys"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/in-progress-drain.sh" "$stub/in-progress-drain"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh" "$stub/landed-check"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh" "$stub/claimed-keys"
 	printf '#!/usr/bin/env bash\nexit 2\n' >"$stub/merged-pr-keys"
 	chmod +x "$stub/merged-pr-keys"
 	unset DRAIN_MERGED_PRS

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/alive
+# subject: mise-tasks/alive.sh
 # alive: the reader half of CLOUD-425. The decision table below is the whole
 # point of the issue — a backgrounded task's state was previously knowable only
 # by reading its log and running `pgrep`, which on 2026-08-12 reported a dead
@@ -11,8 +11,8 @@
 #   nothing   — nothing registered, which is not the same as could-not-look (2)
 
 setup() {
-	ALIVE="$BATS_TEST_DIRNAME/../mise-tasks/alive"
-	REG="$BATS_TEST_DIRNAME/../mise-tasks/task-registry"
+	ALIVE="$BATS_TEST_DIRNAME/../mise-tasks/alive.sh"
+	REG="$BATS_TEST_DIRNAME/../mise-tasks/task-registry.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	cd "$REPO" || exit 1

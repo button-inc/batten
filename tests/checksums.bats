@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/checksums
+# subject: mise-tasks/checksums.sh
 # The producer half of CLOUD-278: the manifest a release publishes, hashed from
 # the release's own assets read back after upload.
 #
@@ -11,7 +11,7 @@
 # every name-level check while pinning not a single byte.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/checksums"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/checksums.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

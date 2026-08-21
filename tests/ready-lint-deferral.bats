@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ready-lint
+# subject: mise-tasks/ready-lint.sh
 # Deferral claims held to the board, the same predicate §8 applies to blockers.
 #
 # An issue that says an obligation is someone else's — "deferred to CLOUD-N" —
@@ -12,7 +12,7 @@
 # off, and a lint that punished them would push authors to stop cross-referencing.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ready-lint"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ready-lint.sh"
 	PAYLOAD="$BATS_TEST_TMPDIR/issue.json"
 }
 

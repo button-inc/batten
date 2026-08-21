@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/publish-credential-check
+# subject: mise-tasks/publish-credential-check.sh
 # CLOUD-109's gate: this repository cannot publish to a registry with a
 # long-lived credential.
 #
@@ -19,7 +19,7 @@
 # from.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/publish-credential-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/publish-credential-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	export BATTEN_RELEASE_PLZ_CONFIG="$ROOT/release-plz.toml"
 	export BATTEN_WORKFLOW_DIR="$ROOT/.github/workflows"

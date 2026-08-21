@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/config-lint
+# subject: mise-tasks/config-lint.sh
 # config-lint's decision table (CLOUD-87, CLOUD-236): does this repository's
 # batten.toml carry a policy smell, and — when the caller supplies a base ref —
 # does this branch weaken policy against it?
@@ -11,7 +11,7 @@
 # the fixture compiles nothing the suite has not already built.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/config-lint"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/config-lint.sh"
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT"

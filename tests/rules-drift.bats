@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/rules-drift
+# subject: mise-tasks/rules-drift.sh
 # CLOUD-506. Each case builds a fixture rules tree, a fixture settings file and a
 # fixture task, so the predicate is exercised over text the gate has never seen —
 # and two cases run it over this repo's real files, which is the only assertion
@@ -11,7 +11,7 @@
 # completeness would enforce the opposite of the rule. Three cases hold that.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/rules-drift"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/rules-drift.sh"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT/rules" "$ROOT/tasks"
 	# `git ls-files` is the file list, so the fixture is a real repo — the same

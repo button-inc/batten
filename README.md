@@ -503,7 +503,7 @@ action in the path:
 - run: batten check
 ```
 
-The asset name is a contract, not a convenience — `mise-tasks/dist` builds it and
+The asset name is a contract, not a convenience — `mise-tasks/dist.sh` builds it and
 the release workflow uploads it under exactly that name — so this stays correct
 independently of the Action.
 

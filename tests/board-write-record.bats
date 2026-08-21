@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/board-write-record
+# subject: mise-tasks/board-write-record.sh
 # CLOUD-514 phase 1. The recorder that answers "what did this branch put on the
 # board, and was a new row refined when it was filed".
 #
@@ -8,7 +8,7 @@
 # running in this repo's checkout would write records for a real session.
 
 setup() {
-	REC="$BATS_TEST_DIRNAME/../mise-tasks/board-write-record"
+	REC="$BATS_TEST_DIRNAME/../mise-tasks/board-write-record.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet

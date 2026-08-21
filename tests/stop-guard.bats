@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/stop-guard
+# subject: mise-tasks/stop-guard.sh
 # The Stop hook body: one bounded re-prompt per turn, and fail-open everywhere
 # else. CLOUD-187 is why this suite carries the wiring assertion too — a hook that
 # lands mid-session is not in that session's wiring, so the suite is the only
 # in-session proof that the entry exists at all.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/stop-guard"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/stop-guard.sh"
 	SETTINGS="$BATS_TEST_DIRNAME/../.claude/settings.json"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 	# THE THIRD RULE READS REPO STATE, NOT THE MESSAGE (CLOUD-774), and these cases
@@ -172,7 +172,7 @@ stranded() {
 }
 
 @test "a turn that strands a finding is pointed at, and the turn still ends" {
-	run stranded 'The wiring is missing at mise-tasks/stop-guard:55.'
+	run stranded 'The wiring is missing at mise-tasks/stop-guard.sh:55.'
 	[ "$status" -eq 0 ]
 	kicked "$output"
 	[[ "$output" == *"turn:1"* ]]
@@ -183,20 +183,20 @@ stranded() {
 	# The design in one assertion. Returning the prose makes this a mirror, and a
 	# mirror is cleared by restating — the double-write CLOUD-200 and CLOUD-248
 	# exist to kill. A coordinate can only be answered by going to look.
-	run stranded 'Broken at mise-tasks/land:200 and SENTINELXYZZY marks it.'
+	run stranded 'Broken at mise-tasks/land.sh:200 and SENTINELXYZZY marks it.'
 	[[ "$output" != *"SENTINELXYZZY"* ]]
 	[[ "$output" != *"Broken at"* ]]
 }
 
 @test "the advisory says what to do, since a coordinate alone is not an instruction" {
-	run stranded 'Broken at mise-tasks/land:200.'
+	run stranded 'Broken at mise-tasks/land.sh:200.'
 	[[ "$output" == *"file it"* ]]
 }
 
 @test "the shipped rule keeps precedence when both would fire" {
 	# One nudge per turn. Two is how a channel stops being read, and the enforcing
 	# rule has the higher measured precision.
-	run stranded 'Broken at mise-tasks/land:200.' 'Worth noting the receipt is stale.'
+	run stranded 'Broken at mise-tasks/land.sh:200.' 'Worth noting the receipt is stale.'
 	[[ "$output" == *"hedged-flag-framing"* ]]
 	[[ "$output" != *"finding-without-durable-write"* ]]
 }
@@ -224,7 +224,7 @@ stranded() {
 	local t="$BATS_TEST_TMPDIR/active.jsonl"
 	: >"$t"
 	jq -nc '{type:"user",isSidechain:false,message:{content:"go"}}' >>"$t"
-	jq -nc '{type:"assistant",isSidechain:false,message:{content:[{type:"text",text:"Broken at mise-tasks/land:200."}]}}' >>"$t"
+	jq -nc '{type:"assistant",isSidechain:false,message:{content:[{type:"text",text:"Broken at mise-tasks/land.sh:200."}]}}' >>"$t"
 	run bash -c "jq -nc --arg p '$t' '{hook_event_name:\"Stop\",session_id:\"s\",cwd:\".\",transcript_path:\$p,stop_hook_active:true,last_assistant_message:\"x\"}' | '$GUARD'"
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]
@@ -244,7 +244,7 @@ d = json.load(open('$SETTINGS'))
 cmds = [h['command'] for g in d['hooks']['Stop'] for h in g['hooks']]
 entry = [c for c in cmds if 'stop-guard' in c]
 assert entry, cmds
-assert entry[0].endswith('/mise-tasks/stop-guard'), entry
+assert entry[0].endswith('/mise-tasks/stop-guard.sh'), entry
 assert 'mise run' not in entry[0], entry
 print('registered')"
 	[ "$status" -eq 0 ]

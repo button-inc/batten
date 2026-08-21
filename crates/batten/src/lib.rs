@@ -1393,7 +1393,12 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
         // own shape, and the reason neither surface needs a fixture key.
         let declared = rules::declared_documents(rule, &tracked)?;
         let (input, not_acquired) =
-            rules::tree_document(&documents, &declared, &rule.lines, &tracked);
+            rules::tree_document(
+                &documents,
+                &declared,
+                &rules::declared_lines(rule, &tracked)?,
+                &tracked,
+            );
         if !not_acquired.is_empty() {
             // Pointer-only (rule 4): the PATH and its stated cause, never a byte
             // of the document. The cause is CLOUD-849's — before it, all four
@@ -1738,8 +1743,8 @@ const UNDECODABLE_PAYLOAD: &str =
 ///
 /// The failure a caller genuinely must NOT miss — the binary being absent
 /// entirely — cannot reach this function, and since CLOUD-824 there is no
-/// launcher to report it either. `mise-tasks/stop-guard` and
-/// `mise-tasks/contract-drift` still carry that half themselves, which is the
+/// launcher to report it either. `mise-tasks/stop-guard.sh` and
+/// `mise-tasks/contract-drift.sh` still carry that half themselves, which is the
 /// shape they always had; what is gone is the shell copy they inherited it from.
 ///
 /// Exit is always `Success`: this renders no verdict, so it has none to signal.

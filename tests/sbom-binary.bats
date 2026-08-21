@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/sbom-binary
+# subject: mise-tasks/sbom-binary.sh
 # sbom-binary's decision table (CLOUD-263). The case that carries the design is
 # `THE NEGATIVE SELF-TEST`: an inventory of a binary that carries no dependency
 # data is an empty document that exits 0, which is the vacuous green CLOUD-258
@@ -13,7 +13,7 @@
 # `mise run dist` binary (85 packages) before this suite was written.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/sbom-binary"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/sbom-binary.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

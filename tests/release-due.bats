@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/release-due
+# subject: mise-tasks/release-due.sh
 # CLOUD-319. The debounce on `auto-release-land`'s automated `/fast-forward`:
 # land once `main` has been quiet for 30 minutes, or once the last release is 24h
 # old, whichever comes first.
@@ -11,7 +11,7 @@
 # happens to be authenticated.
 
 setup() {
-	DUE="$BATS_TEST_DIRNAME/../mise-tasks/release-due"
+	DUE="$BATS_TEST_DIRNAME/../mise-tasks/release-due.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	# Any call to `gh` from a fully-injected run is the bug this catches.

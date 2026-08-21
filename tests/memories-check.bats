@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/memories-check
+# subject: mise-tasks/memories-check.sh
 # memories-check's decision table (CLOUD-183, CLOUD-291): the memory graph's
 # edges as exit codes. Fixtures are real git trees, since the gate walks
 # `git ls-files`.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/memories-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/memories-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	MEM="$ROOT/.serena/memories"
 	mkdir -p "$MEM/workflow"

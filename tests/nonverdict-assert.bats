@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/nonverdict-assert
+# subject: mise-tasks/nonverdict-assert.sh
 # CLOUD-484. The decider half of the non-verdict-failure sensor: how many recent CI
 # jobs failed without reaching a verdict, judged against a budget.
 #
@@ -9,7 +9,7 @@
 # theirs.
 
 setup() {
-	ASSERT="$BATS_TEST_DIRNAME/../mise-tasks/nonverdict-assert"
+	ASSERT="$BATS_TEST_DIRNAME/../mise-tasks/nonverdict-assert.sh"
 	export BATTEN_NONVERDICT_MAX=2
 }
 

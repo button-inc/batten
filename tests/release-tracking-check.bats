@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/release-tracking-check
+# subject: mise-tasks/release-tracking-check.sh
 # release-tracking-check's decision table (CLOUD-618).
 #
 # Every case below is a shape that leaves the release job GREEN while a tagged
@@ -14,7 +14,7 @@
 # change ships, or the table below is a decision procedure for nothing.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/release-tracking-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/release-tracking-check.sh"
 	WORKFLOW="$BATS_TEST_TMPDIR/release-plz.yml"
 	clean_workflow >"$WORKFLOW"
 	export BATTEN_RELEASE_WORKFLOW="$WORKFLOW"

@@ -30,7 +30,7 @@ git submodule update --init  # tests/bats — the shell test runner
 Prefer the last line: it performs every per-clone step, and `mise run doctor`
 fails afterwards if one did not take. Install the hooks that way rather than
 with `hk install` — hk's generated hook calls `hk` bare, which resolves only
-where mise's shims are on PATH, and `.claude/hooks/git-hook` resolves it through
+where mise's shims are on PATH, and `.claude/hooks/git-hook.sh` resolves it through
 `mise exec --` and refuses to re-enter a gate that is already running.
 
 ## Development

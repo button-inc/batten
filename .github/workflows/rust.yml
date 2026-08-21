@@ -86,7 +86,7 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
       # justification lives there; it is fetched from `main` rather than from
       # this head, so a clone carrying stale rules cannot dodge the predicate by
       # carrying a stale copy of it. An unreadable body runs — fail open, which
@@ -98,13 +98,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
           # head did not touch it — and the staleness row reads exactly that file.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
           body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
           # `|| exit 0` on BOTH lines, and the second is the one that was missing
           # (CLOUD-420). A fetch that fails is handled; a fetch that SUCCEEDS with
           # something that is not shell was not — a truncated body, a proxy error
@@ -168,7 +168,7 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
       # justification lives there; it is fetched from `main` rather than from
       # this head, so a clone carrying stale rules cannot dodge the predicate by
       # carrying a stale copy of it. An unreadable body runs — fail open, which
@@ -180,13 +180,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
           # head did not touch it — and the staleness row reads exactly that file.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
           body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
           # `|| exit 0` on BOTH lines, and the second is the one that was missing
           # (CLOUD-420). A fetch that fails is handled; a fetch that SUCCEEDS with
           # something that is not shell was not — a truncated body, a proxy error
@@ -234,7 +234,7 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
       # justification lives there; it is fetched from `main` rather than from
       # this head, so a clone carrying stale rules cannot dodge the predicate by
       # carrying a stale copy of it. An unreadable body runs — fail open, which
@@ -251,13 +251,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
           # head did not touch it — and the staleness row reads exactly that file.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
           body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
           # `|| exit 0` on BOTH lines, and the second is the one that was missing
           # (CLOUD-420). A fetch that fails is handled; a fetch that SUCCEEDS with
           # something that is not shell was not — a truncated body, a proxy error
@@ -358,7 +358,7 @@ jobs:
       # step's. Read from the pinned binary rather than assumed:
       # `windows_default_inline_shell_args` is "cmd /c", against
       # "sh -c -o errexit" on unix. `[tasks."test:cargo"]` declares no `shell`
-      # and its body is bash — `if ./mise-tasks/step-receipt check …; then`
+      # and its body is bash — `if ./mise-tasks/step-receipt.sh check …; then`
       # — so under cmd the task dies before cargo is ever reached.
       #
       # Set here rather than in mise.toml because this is the only job in the
@@ -378,7 +378,7 @@ jobs:
       # branch is not authorised to make should cost the rounding rather than a
       # matrix. Body fetched from `main`, never from this head, and `|| exit 0`
       # on both lines so a body that will not parse cannot red the first step of
-      # every job. Every justification lives in `mise-tasks/ci-lease-precondition`.
+      # every job. Every justification lives in `mise-tasks/ci-lease-precondition.sh`.
       - name: Landing lease precondition
         # EXPLICIT, for the reason test.yml states at its own Windows legs: a
         # `run:` step with no `shell:` takes the runner's default, which is
@@ -392,13 +392,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
           # head did not touch it — and the staleness row reads exactly that file.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
           body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
           bash -c "$body" || exit 0
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -509,5 +509,5 @@ jobs:
       # (CLOUD-662) reads `[tasks."test:cargo"]`'s single cargo statement through
       # `mise tasks info` and refuses when this line is not `mise exec -- ` plus
       # that statement, so the two spellings can no longer drift apart silently.
-      # `mise-tasks/no-doctests` covers the half nextest does not run.
+      # `mise-tasks/no-doctests.sh` covers the half nextest does not run.
       - run: mise exec -- cargo nextest run --workspace

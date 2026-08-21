@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/egress-check
+# subject: mise-tasks/egress-check.sh
 # The pure decision behind the container preflight (CLOUD-261): given the ambient
 # proxy environment, can mise's own release resolver reach api.github.com?
 #
@@ -9,7 +9,7 @@
 # doctor-check, and the same payoff: the verdict is testable without a proxy.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/egress-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/egress-check.sh"
 }
 
 @test "the check is executable" {

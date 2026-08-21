@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/stop-posture-check
+# subject: mise-tasks/stop-posture-check.sh
 # The one output-posture tell AGENTS.md names literally, as an exit code. The
 # cases that matter are the negative ones: a message QUOTING the tell must not be
 # judged as making it, which is the exact trap `run-shape-guard` fell into twice
 # before its scrubber covered line-wrapped spans.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/stop-posture-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/stop-posture-check.sh"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
 

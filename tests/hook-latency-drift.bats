@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/hook-latency-drift
+# subject: mise-tasks/hook-latency-drift.sh
 # CLOUD-509. The decision table for `hook-latency-drift`, the clock half of the
 # two-tier gate.
 #
@@ -10,7 +10,7 @@
 # the measurement itself is the runner's job, not the suite's.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/hook-latency-drift"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/hook-latency-drift.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

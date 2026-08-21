@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/branch-age-check
+# subject: mise-tasks/branch-age-check.sh
 # The ticking clock on a branch's life (CLOUD-349).
 #
 # Both readings are injected, so every case runs offline and with no `gh`: the
@@ -13,7 +13,7 @@
 # hygiene it never measured.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/branch-age-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/branch-age-check.sh"
 	REFS="$BATS_TEST_TMPDIR/refs.tsv"
 	PRS="$BATS_TEST_TMPDIR/prs.txt"
 	export BRANCH_AGE_REFS="$REFS" BRANCH_AGE_PRS="$PRS" BRANCH_AGE_TODAY=2026-08-11

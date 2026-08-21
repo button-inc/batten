@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/evaluator-closure-check
+# subject: mise-tasks/evaluator-closure-check.sh
 # The closure half of CLOUD-831's pin, and the reason it takes a metadata
 # fixture rather than only running against the real tree.
 #
@@ -11,7 +11,7 @@
 # produced by editing the real manifest at all.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/evaluator-closure-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/evaluator-closure-check.sh"
 	META="$BATS_TEST_TMPDIR/metadata.json"
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/singleton
+# subject: mise-tasks/singleton.sh
 # singleton: one <task> per clone (CLOUD-428). Measured 2026-08-12 — three
 # concurrent `land` processes on one branch and two lease heartbeats, running
 # against each other for ~30 minutes, because the landing lease is re-entrant
@@ -10,7 +10,7 @@
 # and the refusal names the pid rather than saying "already running".
 
 setup() {
-	SINGLE="$BATS_TEST_DIRNAME/../mise-tasks/singleton"
+	SINGLE="$BATS_TEST_DIRNAME/../mise-tasks/singleton.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	cd "$REPO" || exit 1

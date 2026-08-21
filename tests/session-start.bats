@@ -196,6 +196,6 @@ print('registered')
 		# A symlink, not a copy: a copy is a second authority that goes stale the
 		# moment the checked-in body changes, and doctor would keep passing over it.
 		[ -L "$hooks/$name" ]
-		[ "$(readlink "$hooks/$name")" = "$root/.claude/hooks/git-hook" ]
+		[ "$(readlink "$hooks/$name")" = "$root/.claude/hooks/git-hook.sh" ]
 	done
 }

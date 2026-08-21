@@ -197,7 +197,7 @@ jobs:
       # `cargo-zigbuild` (proven, 85 rust-crate packages recovered from a stripped
       # `dist` binary against 0 from an unwrapped one), and could not be probed
       # against `cross` because that wrapper needs a Docker daemon the probe
-      # container had none of. `mise-tasks/dist` wraps exactly the same two, so a
+      # container had none of. `mise-tasks/dist.sh` wraps exactly the same two, so a
       # `cross` leg would produce a document cataloging nothing — which
       # `sbom-binary` correctly refuses. The five container legs join when someone
       # runs the same local probe where Docker exists.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/with-lock
+# subject: mise-tasks/with-lock.sh
 # The mutual-exclusion primitive itself (CLOUD-201), extracted from
 # `target-ensure` so `doctor` could hold the same kind of lock without a second
 # copy of its edge cases. Those edges are the whole reason it has a suite: a
@@ -11,7 +11,7 @@
 # primitive alone.
 
 setup() {
-	WITH_LOCK="$BATS_TEST_DIRNAME/../mise-tasks/with-lock"
+	WITH_LOCK="$BATS_TEST_DIRNAME/../mise-tasks/with-lock.sh"
 	LOCK="$BATS_TEST_TMPDIR/lock"
 	LOG="$BATS_TEST_TMPDIR/log"
 }

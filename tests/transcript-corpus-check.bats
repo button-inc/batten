@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/transcript-corpus-check
+# subject: mise-tasks/transcript-corpus-check.sh
 # transcript-corpus-check: is there a corpus of independent session transcripts?
 # (CLOUD-388)
 #
@@ -16,7 +16,7 @@
 # stops a later edit turning a count into a quotation.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/transcript-corpus-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/transcript-corpus-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/projects"
 	mkdir -p "$ROOT"
 	export BATTEN_TRANSCRIPT_ROOT="$ROOT"

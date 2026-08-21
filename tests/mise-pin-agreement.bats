@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/mise-pin-agreement
+# subject: mise-tasks/mise-pin-agreement.sh
 # mise-pin-agreement (CLOUD-316). .mcp.json launches Serena through a scoped
 # `mise exec`, which is the fix; the pin it must then repeat is the fix's cost.
 # Both halves are gated here, and the SHAPE case is the load-bearing one: a
@@ -7,7 +7,7 @@
 # only compared versions would report "nothing to check" and pass the defect.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mise-pin-agreement"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mise-pin-agreement.sh"
 	TOML="$BATS_TEST_TMPDIR/mise.toml"
 	MCP="$BATS_TEST_TMPDIR/.mcp.json"
 	cat >"$TOML" <<-'EOF'
@@ -91,7 +91,7 @@ scoped_mcp() { # scoped_mcp <version>
 # green while the property it exists for went unchecked.
 @test "A SHIMMED LAUNCH IS STILL CHECKED — the selector is argv, not the command name" {
 	cat >"$MCP" <<-'EOF'
-		{"mcpServers":{"serena":{"command":"mise-tasks/serena-mcp","args":["exec","--","serena","start-mcp-server"]}}}
+		{"mcpServers":{"serena":{"command":"mise-tasks/serena-mcp.sh","args":["exec","--","serena","start-mcp-server"]}}}
 	EOF
 	run "$GATE" "$MCP" "$TOML"
 	[ "$status" -eq 1 ]
@@ -100,7 +100,7 @@ scoped_mcp() { # scoped_mcp <version>
 
 @test "a shimmed launch that IS scoped passes, and its pin is still read" {
 	cat >"$MCP" <<-'EOF'
-		{"mcpServers":{"serena":{"command":"mise-tasks/serena-mcp","args":["exec","pipx:serena-agent@1.6.1","--","serena","start-mcp-server"]}}}
+		{"mcpServers":{"serena":{"command":"mise-tasks/serena-mcp.sh","args":["exec","pipx:serena-agent@1.6.1","--","serena","start-mcp-server"]}}}
 	EOF
 	run "$GATE" "$MCP" "$TOML"
 	[ "$status" -eq 0 ]

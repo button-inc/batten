@@ -38,7 +38,7 @@ Three independent sources, all necessary:
 ## 3. Bundle by file domain, and order within the bundle
 
 Group tickets into chains where **one session owns one file domain end to end**.
-Two tickets that read as unrelated but both edit `mise-tasks/land` belong in the
+Two tickets that read as unrelated but both edit `mise-tasks/land.sh` belong in the
 same bundle, sequenced — never in two, racing.
 
 Order within a bundle by real dependency, cheapest-enabling-first: the ticket

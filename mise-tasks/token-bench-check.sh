@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+#MISE description="Gate: the committed benchmark table is what a fresh run produces, and no figure in it lacks a method (CLOUD-119)"
+#
+# A benchmark whose numbers nobody else can reproduce is a marketing artifact.
+# This is the mechanism that makes "reproducible" a checkable claim rather than an
+# invitation — non-negotiable rule 2: a rule without a runnable gate is half a
+# change.
+#
+# TWO PREDICATES, ONE EXIT CODE, and they fail in opposite directions:
+#
+#   token-bench-drift        the committed bench/tokens/RESULTS.md is not what `mise run token-bench`
+#                      produces from the committed fixtures. Either someone edited
+#                      a published number by hand, or the engine's output changed
+#                      and the table still claims the old one. Both are the same
+#                      defect: a figure nothing re-derives.
+#   token-bench-unmethodical a capability section carries a figure without the four
+#                      things every figure must state — workload, baseline, run
+#                      count, method — or reports "not measured" with no reason.
+#
+# WHY THE HONESTY GATE RE-READS THE ARTIFACT rather than trusting the generator.
+# `mise-tasks/token-bench.sh` is what formats the rows, so a gate implemented inside it
+# would be a program checking its own arithmetic. The predicate here is over the
+# published bytes, which is the thing a reader actually sees, so a generator bug
+# that dropped a method line fails here instead of shipping.
+#
+# PURE AND OFFLINE. It builds nothing the working tree does not already describe,
+# reaches no network, and writes nothing outside a scratch dir — a property of
+# this commit, not of the world (.claude/rules/toolchain.md, gate-vs-schedule).
+set -euo pipefail
+
+# Resolved before the `cd`, because the regeneration below runs the sibling
+# program by path rather than through `mise run`. Same reason `completions-check`
+# calls the binary directly: the gate must be runnable against a scratch root
+# that carries the artifact under judgement and no task runner of its own.
+here=$(cd "$(dirname "$0")" && pwd)
+
+root=${TOKEN_BENCH_ROOT:-$(git rev-parse --show-toplevel)}
+cd "$root"
+
+committed=bench/tokens/RESULTS.md
+
+violations=0
+report() { # pointer-only (rule 4): file:line then the rule id
+	echo "$1 $2" >&2
+	violations=$((violations + 1))
+}
+
+if [ ! -f "$committed" ]; then
+	report "$committed:0" "token-bench-missing"
+	echo "::error:: token-bench-check: no committed results table; run 'mise run token-bench'" >&2
+	exit 1
+fi
+
+# --- the honesty gate ---------------------------------------------------------
+#
+# Read the committed bytes as sections and hold each to the contract. Anchored on
+# the headings the generator emits, so a section that stops emitting its method
+# line fails here rather than becoming a number with no provenance.
+section=""
+line_no=0
+has_question=0
+has_baseline=0
+has_method=0
+has_figure=0
+has_reason=0
+
+close_section() {
+	[ -n "$section" ] || return 0
+	if [ "$has_figure" -eq 1 ]; then
+		# A figure obliges all four. `has_method` covers run count too: the
+		# generator writes them on the same line, and splitting the assertion
+		# would let one survive the other's removal.
+		[ "$has_question" -eq 1 ] || report "$committed:$section_line" "token-bench-unmethodical (no question)"
+		[ "$has_baseline" -eq 1 ] || report "$committed:$section_line" "token-bench-unmethodical (no baseline)"
+		[ "$has_method" -eq 1 ] || report "$committed:$section_line" "token-bench-unmethodical (no method or run count)"
+	elif [ "$has_reason" -ne 1 ]; then
+		# No figure and no reason is the silent gap — a capability that reads as
+		# covered because nothing says it is not. Worse than a stated gap, because
+		# nobody chose it.
+		report "$committed:$section_line" "token-bench-unmethodical (no figure and no stated reason)"
+	fi
+}
+
+while IFS= read -r line; do
+	line_no=$((line_no + 1))
+	case $line in
+	'### '*)
+		close_section
+		section=${line#'### '}
+		section_line=$line_no
+		has_question=0
+		has_baseline=0
+		has_method=0
+		has_figure=0
+		has_reason=0
+		;;
+	'## '*)
+		close_section
+		section=""
+		;;
+	'**Question.**'*) has_question=1 ;;
+	'**Baseline**'*) has_baseline=1 ;;
+	'**Method.** measured;'*'runs per arm'*) has_method=1 ;;
+	'**not measured**'*)
+		# A reason is the text after the em dash. The marker alone is not one.
+		case $line in
+		'**not measured** — '?*) has_reason=1 ;;
+		esac
+		;;
+	'| baseline |'* | '| batten |'*) has_figure=1 ;;
+	esac
+done <"$committed"
+close_section
+
+if [ "$violations" -ne 0 ]; then
+	echo "::error:: token-bench-check: $violations published figure(s) lack the method every figure must state. A number with no workload, baseline, run count and method is the claim this benchmark exists to beat." >&2
+	exit 1
+fi
+
+# --- the reproducibility diff -------------------------------------------------
+#
+# Regenerate into a scratch file rather than over the committed one: a gate that
+# rewrites the tree it is judging cannot fail twice, and would launder drift into
+# a clean second run.
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+if ! TOKEN_BENCH_ROOT="$root" TOKEN_BENCH_OUT="$scratch/RESULTS.md" "$here/token-bench.sh" >"$scratch/bench.log" 2>&1; then
+	echo "::error:: token-bench-check: the benchmark could not be re-run; see the output below" >&2
+	cat "$scratch/bench.log" >&2
+	exit 1
+fi
+
+# Pointer-only: the gate names the file that drifted, never the diff body — the
+# remedy is always the same one command, so the bytes add nothing.
+if ! cmp -s "$committed" "$scratch/RESULTS.md"; then
+	report "$committed:0" "token-bench-drift"
+	echo "::error:: token-bench-check: the committed results table is not what a fresh run produces; run 'mise run token-bench'" >&2
+	exit 1
+fi
+
+echo "token-bench-check: the committed results table reproduces, and every published figure states its method"

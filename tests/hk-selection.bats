@@ -124,7 +124,7 @@ status_default() {
 }
 
 @test "every slow-tier step is skipped when the profile is off" {
-	# The pre-commit economy. `.claude/hooks/git-hook` passes exactly this flag,
+	# The pre-commit economy. `.claude/hooks/git-hook.sh` passes exactly this flag,
 	# so this is the selection a commit actually gets.
 	for step in cargo-clippy test test:bats batten-check token-bench-check sbom-check; do
 		[ "$(status_at_profile "$step" '!slow')" = "skipped" ]

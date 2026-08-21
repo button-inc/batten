@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/connector-allow-guard
+# subject: mise-tasks/connector-allow-guard.sh
 # CLOUD-191. The `PreToolUse` adapter over `connector-allow-resolve`. The decision
 # and its degradations are that file's suite; this one grades the envelope — that
 # a verdict reaches the host in the shape the host acts on.
@@ -12,7 +12,7 @@
 # its own third value.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/connector-allow-guard"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/connector-allow-guard.sh"
 	export BATTEN_MCP_CONFIG="$BATS_TEST_TMPDIR/mcp-config.json"
 	# A FIXTURE, NOT THE COMMITTED FILE. The guard invokes the resolver with no
 	# flags, so without this seam these rows read the repository's real permission

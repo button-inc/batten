@@ -24,7 +24,7 @@
 /.claude/worktrees/
 /.claude/.cc-writes/
 # The session transcript symlink `[transcript]` in batten.toml names (CLOUD-97).
-# Refreshed per turn by mise-tasks/stop-guard from the Stop payload; committing
+# Refreshed per turn by mise-tasks/stop-guard.sh from the Stop payload; committing
 # it would put a whole session's prose in the tree.
 /.claude/.transcript.jsonl
 

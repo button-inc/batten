@@ -1,16 +1,16 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/unlanded-check
+# subject: mise-tasks/unlanded-check.sh
 # The end-of-turn unlanded rule (CLOUD-97): report the verdict the engine already
 # reached, decide nothing, and ask once per HEAD.
 #
 # Every case drives the gate through a STUB `batten` on `BATTEN_BIN` — the seam
-# `mise-tasks/linear-check` documents and this gate shares. That
+# `mise-tasks/linear-check.sh` documents and this gate shares. That
 # is not a convenience: the point of this gate is that it computes no landedness
 # of its own, so a suite that had to mint a real finding would be testing the
 # engine's detector rather than this file's reading of it.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/unlanded-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/unlanded-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	rm -rf "$REPO"
 	mkdir -p "$REPO"

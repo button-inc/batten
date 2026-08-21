@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/render/cli
+# subject: mise-tasks/render/cli.sh
 # render:cli's decision table (CLOUD-171): does the publish-time CLI reference
 # get produced, named, and kept out of the tree?
 #
@@ -14,7 +14,7 @@
 # committed surface still renders.
 
 setup() {
-	RENDER="$BATS_TEST_DIRNAME/../mise-tasks/render/cli"
+	RENDER="$BATS_TEST_DIRNAME/../mise-tasks/render/cli.sh"
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	OUT="$BATS_TEST_TMPDIR/out"
 	export RENDER_CLI_OUT_DIR="$OUT"

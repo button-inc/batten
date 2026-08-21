@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/linear-check
+# subject: mise-tasks/linear-check.sh
 # linear-check's fail-closed contract, exercised through a stub `git` so the case
 # that matters — a fetch that fails, leaving a stale `origin/main` on disk — is
 # reproducible without unplugging the network.
@@ -14,7 +14,7 @@
 # still leaves a receipt behind would keep authorising `gh pr ready`.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/linear-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/linear-check.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	GITDIR="$BATS_TEST_TMPDIR/gitdir"
 	mkdir -p "$STUB" "$GITDIR"

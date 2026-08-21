@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/issue-search-check
+# subject: mise-tasks/issue-search-check.sh
 # CLOUD-505. The search receipt. The guard that demands it is
 # `tests/issue-search-guard.bats` — `mutant` derives a suite from the gate's own
 # name, so the decision and its adapter each need their own file.
@@ -10,7 +10,7 @@
 # a real session.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-search-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/issue-search-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	git -C "$REPO" init --quiet

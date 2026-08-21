@@ -2,9 +2,9 @@
 //! passed, with an expiry condition that is a git fact.
 //!
 //! The behavioural spec is the bash receipt system this module ports —
-//! `mise.toml`'s `verify` body and `mise-tasks/linear-check` write receipts
-//! keyed to the exact HEAD they validated, and `mise-tasks/ready-guard` /
-//! `mise-tasks/verified` honour them only while HEAD and the recorded
+//! `mise.toml`'s `verify` body and `mise-tasks/linear-check.sh` write receipts
+//! keyed to the exact HEAD they validated, and `mise-tasks/ready-guard.sh` /
+//! `mise-tasks/verified.sh` honour them only while HEAD and the recorded
 //! `origin/main` still match. An amend, a rebase, or a main that moved all
 //! invalidate a receipt instead of letting it silently keep counting. Port,
 //! don't redesign: this module changes where a receipt lives and what shape it
@@ -574,7 +574,7 @@ fn own_commit_count(main: &str) -> Option<usize> {
 /// The filename a branch-keyed receipt takes: `<check>.<branch>`, with every
 /// path separator replaced.
 ///
-/// **A crate↔task contract, not an internal detail.** `mise-tasks/claim-check`
+/// **A crate↔task contract, not an internal detail.** `mise-tasks/claim-check.sh`
 /// mints this file and this reads it, so the two spellings must agree exactly or
 /// the gate silently reports a missing receipt for one that exists — a deny on a
 /// claim that was made. A slash is the one character a filename cannot carry and
@@ -654,7 +654,7 @@ fn branch_validity(git_dir: &str, check: &str, branch: &str, head: &str, own: us
 
 /// The `base <sha>` line a claim receipt carries, or `None` when it carries none.
 ///
-/// Matched by KEY rather than by line number: `mise-tasks/claim-check` writes the
+/// Matched by KEY rather than by line number: `mise-tasks/claim-check.sh` writes the
 /// id list on line 1 and has already grown two more fields under it (CLOUD-431),
 /// so a positional reader would break on the next one. `-` is the task's own
 /// spelling for "origin/main did not resolve when I minted this" and reads as
@@ -1299,7 +1299,7 @@ mod tests {
     fn the_branch_receipt_filename_matches_the_minting_task() {
         // The crate↔task contract (CLOUD-444), pinned as a grep in the
         // `hook::tests::the_redirect_pseudo_program_token_is_declared_not_implied`
-        // idiom. `mise-tasks/claim-check` writes this file and this module reads
+        // idiom. `mise-tasks/claim-check.sh` writes this file and this module reads
         // it; if the two spellings drift, the gate reports a missing receipt for
         // one that exists — a deny on a claim that was actually made, which no
         // in-crate test could catch on its own.
@@ -1308,7 +1308,7 @@ mod tests {
         // literal to look for is the prefix plus that substitution.
         let task = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../mise-tasks/claim-check"
+            "/../../mise-tasks/claim-check.sh"
         ))
         .expect("read the minting task");
         assert!(
@@ -1325,7 +1325,7 @@ mod tests {
         assert_eq!(branch_receipt_name("claim", "main"), "claim.main");
     }
 
-    /// A receipt body in the shape `mise-tasks/claim-check` mints, so the reader
+    /// A receipt body in the shape `mise-tasks/claim-check.sh` mints, so the reader
     /// is exercised against the real format rather than a convenient one.
     fn minted(base: Option<&str>) -> String {
         let mut body = String::from(
@@ -1452,7 +1452,7 @@ mod tests {
         // as baseless and denies every edit.
         let task = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../mise-tasks/claim-check"
+            "/../../mise-tasks/claim-check.sh"
         ))
         .expect("read the minting task");
         assert!(

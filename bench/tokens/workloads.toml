@@ -2,7 +2,7 @@
 #
 # One table per capability. A workload names the QUESTION an agent is trying to
 # answer, the step sequence a typical agent runs to answer it without Batten, and
-# the step sequence it runs with Batten. `mise-tasks/token-bench` executes both arms
+# the step sequence it runs with Batten. `mise-tasks/token-bench.sh` executes both arms
 # against the committed fixture and counts the bytes each puts into a context
 # window; it invents no step and no assumption of its own.
 #

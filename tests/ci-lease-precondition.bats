@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ci-lease-precondition
+# subject: mise-tasks/ci-lease-precondition.sh
 # ci-lease-precondition: the runner's half of the landing lease (CLOUD-420).
 #
 # Two questions, asked in order, and the first is the one the lease itself cannot
@@ -20,7 +20,7 @@
 # through its own remedy. Every case asserts status 0, including the failures.
 
 setup() {
-	PRECOND="$BATS_TEST_DIRNAME/../mise-tasks/ci-lease-precondition"
+	PRECOND="$BATS_TEST_DIRNAME/../mise-tasks/ci-lease-precondition.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"
@@ -53,7 +53,7 @@ setup() {
 	stub_gh
 }
 
-# What `contents/mise-tasks/land?ref=<head sha>` returns.
+# What `contents/mise-tasks/land.sh?ref=<head sha>` returns.
 head_land() { printf '%s\n' "$1" >"$BATS_TEST_TMPDIR/head-land"; }
 
 # The `land-lock` this fetches from trunk IS a stub — which is the whole trick
@@ -78,10 +78,10 @@ case "\$url" in
   */cancel)
     [ ! -e "\$t/cancel-refused" ] || exit 1
     echo "\$url" >>"\$t/cancels" ;;
-  *contents/mise-tasks/land-lock*)
+  *contents/mise-tasks/land-lock.sh*)
     [ ! -e "\$t/land-lock-unreadable" ] || exit 1
     cat "\$t/land-lock" ;;
-  *contents/mise-tasks/land*)
+  *contents/mise-tasks/land.sh*)
     [ ! -e "\$t/head-land-unreadable" ] || exit 1
     cat "\$t/head-land" ;;
   *) exit 1 ;;

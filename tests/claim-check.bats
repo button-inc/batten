@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/claim-check
+# subject: mise-tasks/claim-check.sh
 # The pull-time half of the board discipline (CLOUD-230).
 #
 # `issue-guard` proves an issue was looked up *at some point*; it fires on `gh pr
@@ -13,7 +13,7 @@
 # stdin — no tracker credential, no network, nothing to stub.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/claim-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/claim-check.sh"
 	# OUTSIDE ANY CLONE by default, which is what the header above claims these
 	# cases are: a pure function of stdin. They were not — cwd was whatever the
 	# runner was invoked from, i.e. this repository, so every pullable case minted

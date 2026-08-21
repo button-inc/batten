@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/connector-verb-guard
+# subject: mise-tasks/connector-verb-guard.sh
 # CLOUD-178. The guard that decides the harness-connector verbs by tool-name
 # SUFFIX, so the verdict survives the exposed server name changing.
 #
@@ -29,7 +29,7 @@
 # With the allow arm gone that bound is the sole defence, which is why they stay.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/connector-verb-guard"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/connector-verb-guard.sh"
 }
 
 # The payload goes through a FILE and the helper prints its path — embedding JSON

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/renovate-config-validator
+# subject: mise-tasks/renovate-config-validator.sh
 # The second of CLOUD-655's two predicates. `ci-local-parity`'s property 13
 # decides that the four CI-cost keys are PRESENT with the values that make them
 # work; this decides that the file around them is one Renovate will accept.
@@ -10,7 +10,7 @@
 # `[tools] rust` reached twelve releases stale.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/renovate-config-validator"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/renovate-config-validator.sh"
 	CONFIG="$BATS_TEST_TMPDIR/renovate.json5"
 	export RENOVATE_CONFIG="$CONFIG"
 }

@@ -1,0 +1,465 @@
+#!/usr/bin/env bash
+#MISE description="Gate: every row this branch put on the board was refined at creation (reads the recorder's own file; pointer-only)"
+#
+# CLOUD-514, phase 2 — the gate `board-write-record` was shipped to make
+# specifiable. That file is the sensor and gates nothing; this is the half that
+# prices the punt, and until it existed the issue was a log with no gate, which
+# non-negotiable 2 calls sensor only.
+#
+# THE ARITHMETIC IT REVERSES. Every other gate here prices FAILING to record
+# something: `finding-sink-check` fails a turn that cites evidence and writes
+# nothing, `deferral-check` fails a PR that defers without naming an issue.
+# Filing satisfies all of them in seconds while finishing costs a diff, a suite
+# and a landing — so spinning a defect in the branch's own diff out onto the
+# board is cheaper than fixing it, and the board becomes the escape hatch every
+# guardrail points at. Making the new row cost a complete Ready block is what
+# flips that, without anything judging whether a given spin-off was lazy.
+#
+# TWO REFUSALS NOW, AND THE SECOND IS THE ONE THE ISSUE'S ACCEPTANCE ASKED FOR.
+#
+# `filed-unrefined` (above) prices REFINEMENT. Its bound was stated honestly in
+# this header from the day it shipped — "it does not compare the row to the diff"
+# — and that bound turned out to be the whole gap. A Ready block is prose, and
+# prose is the one currency an agent has without limit: measured 2026-08-20, four
+# rows filed in three and a half minutes, twelve more spent writing four §1–§8
+# blocks, and the recorder stored `ready` for every one. The toll did not reverse
+# the arithmetic. It certified the punts.
+#
+# `filed-over-own-diff` prices PROXIMITY instead, which is what CLOUD-514's
+# acceptance is about: "the cheapest path through the gate for a defect in the
+# branch's own diff is to fix it." A row spun out of code you have open is a
+# different object from a row about work elsewhere, and only the first is a punt.
+# The predicate is a set intersection over two file lists — the paths the body
+# names, the paths `origin/main...HEAD` changes — computed by the recorder via
+# `mise-tasks/board-diff-overlap.sh`, which owns it and its measurement.
+#
+# THE LOAD-BEARING DIFFERENCE FROM THE FIRST REFUSAL: there is no prose remedy.
+# The ways out are fix it here, stop touching that file, file it after landing
+# from a clean tree, or take a recorded override a human can see. None of those
+# is payable in typing, which is the property `filed-unrefined` lacked.
+#
+# WHAT IT STILL DOES NOT DO, because non-negotiable 3 forbids it: it scores no
+# prose, compares no semantics and decides nothing about whether a spin-off was
+# lazy. It reads five fields the recorder wrote and compares two of them to
+# literals. No tracker read — a gate inside `land` has no credential, which is
+# `claim-check`'s "agents fetch, gates decide" split.
+#
+# THE RESIDUAL, stated rather than discovered later: this prices filing against
+# THE DIFF. A punt about code the branch never touched is invisible to it, and so
+# is a row filed before the file is touched. It closes the case that happened
+# four times in one session and claims nothing wider.
+#
+# THE VERDICT IS THE TRACKER'S, NOT THE AUTHOR'S. `ready-lint` over a payload the
+# caller assembles is forgeable and was measured to be — green three times over
+# text in a local file during this issue's own refinement, once under the id
+# `CLOUD-NEW` for a row that did not exist. The recorder does not have that
+# problem: it lints the tracker's RESPONSE to the create. This gate only reads
+# what that lint returned.
+#
+# THREE STATES, NOT TWO. `ready` passes, `unready` refuses, and `-` — the
+# recorder could not lint, because `ready-lint` exited 2 or could not run at all —
+# PASSES. Mapping "not answered" onto "refused" would turn a verdict about the
+# environment into a verdict about the row, which is the exact confusion the
+# recorder's own three-way status read exists to avoid.
+#
+# COMMENTS ARE RECORDED AND NEVER GATED. A comment on the row that already owns a
+# finding is sink 2, the honest common case, and pricing it would push the
+# pressure toward silence — the failure `finding-sink-check` exists to catch.
+# Deliberate friction belongs on the impulsive path only.
+#
+# FAILS OPEN on everything it cannot establish — outside a checkout, a detached
+# HEAD, no record at all. A branch that predates the recorder has no file, and
+# retrofitting one is impossible: the store lives under `$GIT_DIR`, is never
+# committed, and dies with the container.
+#
+# POINTER, NEVER PAYLOAD (rule 4): a refusal names the id, and for the diff
+# refusal one tracked path. The recorder never wrote a title or a body, so there
+# is none here to leak, and only a path tracked in this repository can reach the
+# overlap column at all.
+#
+# `BATTEN_FILED_HERE_OVERLAP=1` mints over the diff refusals and RECORDS WHICH
+# ONES, the `BATTEN_CLAIM_TAKEOVER` idiom. It is not folded into
+# `BATTEN_FILED_HERE_BYPASS`, because "this record is unreadable" and "I meant to
+# file this row against code I have open" are different decisions, and the second
+# is legitimate often enough to need a route that is not a blanket off-switch —
+# the row that documents a change you are landing, for one. The override is worth
+# having only if it leaves a trace: it writes what it overrode to
+# `$GIT_DIR/batten-receipts/filed-here-overrides.<branch>` and prints the same on
+# stdout, so a reviewer sees a decision rather than a silence.
+#
+# Usage: mise run filed-here-check   (no input; the record is on disk)
+#
+# Exit 0 every filed row was refined, or nothing to check / 1 a row was filed
+# unrefined — `deferral-check`'s contract, so `land` stops the lap the same way.
+#
+# The mutation lets an unrefined row through, which is the whole gate: the toll
+# stops being payable and filing is cheap again.
+#MUTANT unready-passes|s/^\tunready) ;;$/\tunready) continue ;;/|stops the lap
+# The mutation gates comments too, so sink 2 — a durable comment on the row that
+# already owns the finding — costs the same as filing and the pressure runs
+# toward saying nothing at all.
+#MUTANT comments-gated|s/^\t\tcontinue$/\t\t:/|a recorded comment is never gated
+# The mutation reads "not answered" as a refusal, so a row the recorder could not
+# lint — mise unresolvable from the tool call's cwd, `ready-lint` exiting 2 —
+# stops the lap over the environment rather than over the row.
+#MUTANT unanswered-refused|s/^\t\*) continue ;; # not answered/\t*) ;; # not answered/|could not lint is not a refusal
+# The mutation makes the accumulator keep every reading rather than the last, so
+# a row groomed to Ready still carries its creation-time `unready` and is refused
+# for it — the state that held PR #525 with the third remedy unreachable.
+#MUTANT first-verdict-wins|s/^\trebuilt=""$/\trebuilt="\$latest"/|a groom recorded after the create supersedes it
+# The mutation lets a row filed over the branch's own open files through, which is
+# the entire second refusal: spinning a defect out of code you are holding open
+# goes back to being free.
+#MUTANT overlap-passes|s/^\t\treport "\$id filed-over-own-diff.*$/\t\t:/|a row naming a file this branch is changing stops the lap
+# The mutation reads a zero count as an overlap, so a row that names only files
+# this branch never touched is refused — the false positive that would make the
+# gate unusable and get it switched off.
+#MUTANT zero-overlap-refused|s/^\t0) continue ;;$/\t0) ;;/|a row naming only untouched files passes
+# The mutation reads "could not look" as a refusal, so a branch with no
+# `origin/main` to diff against — a fresh clone, a detached recorder — is stopped
+# over the environment rather than over the row.
+#MUTANT overlap-unanswered-refused|s/^\t-) continue ;;$/\t-) ;;/|a row the recorder could not measure passes
+# The override must stay OPT-IN and must stay RECORDED. Dropping the record turns
+# a visible decision into a silence, which is the state the override exists to
+# avoid.
+#MUTANT override-unrecorded|s/^\t\toverridden="\${overridden:+\$overridden }\$id"$/\t\toverridden="\$overridden"/|the override records which rows it overrode
+set -uo pipefail
+
+# `--advisory` RUNS THE SAME PREDICATE AND DECIDES NOTHING (CLOUD-774). The gate
+# lives inside `land`, which is where a runner is about to be spent — so the punt
+# surfaces at the most expensive moment available, after `verify`, when the
+# detection itself is a `git diff --name-only` and a set intersection costing
+# milliseconds. This mode is what lets the same computation run at the end of every
+# turn instead: it prints the pointers and exits 0, always, so nothing on the
+# commit or push path can be blocked by it.
+#
+# One implementation, not two. A second copy of the intersection would be a second
+# thing to drift, which is the defect this whole change is about.
+#
+# `--checklist` IS A THIRD QUESTION OVER THE SAME PARSE, not a wider `--advisory`.
+# That mode's predicate is measured and mutation-gated — it fires on rows whose
+# body names a file this branch is changing — and widening it to every row would
+# retune a gate by editing the question it answers. The checklist asks something
+# genuinely different: not "which of these is a punt" but "here is every row you
+# spun off, say for each that it is really independent work". No predicate scores
+# that; the agent does, which is why this prints and never refuses.
+advisory=
+checklist=
+case "${1:-}" in
+--advisory) advisory=1 ;;
+--checklist) checklist=1 ;;
+"") ;;
+*)
+	echo "usage: filed-here-check [--advisory|--checklist]  (PR body optional on stdin)" >&2
+	exit 2
+	;;
+esac
+
+[ -n "${BATTEN_FILED_HERE_BYPASS:-}" ] && exit 0
+
+# Outside a checkout there is no record and nothing to say. Same fail-open shape
+# as the recorder, so the pair cannot disagree about where the file lives.
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+[ -n "$git_dir" ] || exit 0
+branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
+[ -n "$branch" ] || exit 0
+
+# Slashes are the one character a filename cannot carry; the substitution must
+# match `board-write-record`'s spelling exactly, or the gate reads a file the
+# recorder never wrote and passes everything.
+record="$git_dir/batten-receipts/board-writes.${branch//\//-}"
+
+if [ ! -r "$record" ]; then
+	echo "filed-here-check: no board writes recorded on \"$branch\""
+	exit 0
+fi
+
+violations=0
+unrefined=0
+overdiff=0
+creates=0
+comments=0
+overridden=""
+report() { # pointer-only: an id, and for the diff refusal one tracked path
+	echo "$1" >&2
+	violations=$((violations + 1))
+	case "${2:-}" in
+	unrefined) unrefined=$((unrefined + 1)) ;;
+	overdiff) overdiff=$((overdiff + 1)) ;;
+	esac
+}
+
+# THE LAST VERDICT PER ID WINS, NOT EVERY LINE (CLOUD-514). The recorder now
+# writes a fresh line when a row this branch filed is groomed, and reading every
+# line would leave the creation-time `unready` standing beside the `ready` that
+# supersedes it — which is the state this gate refused for the whole of PR #525,
+# with the remedy it prints unreachable. A later line is a later reading of the
+# same row by the same mechanism, so it is simply the current one.
+#
+# `creates` still counts CREATE lines, so the pass line reports how many rows the
+# branch filed rather than how many times they were linted.
+#
+# `_` for the updatedAt column: it is the recorder's forgery-resistant half and
+# this gate has no use for it, and naming it `_` is what keeps the linter from
+# reading a deliberate placeholder as a dead variable.
+#
+# THE FIFTH COLUMN IS OPTIONAL BY CONSTRUCTION. A record written before phase 3
+# has four fields, so `overlap` reads empty — which becomes `-`, "could not
+# look", and passes. A branch cannot be refused for a question its recorder was
+# never able to ask.
+latest=""
+while read -r kind id _ verdict overlap; do
+	[ -n "$kind" ] || continue
+	case "$kind" in
+	comment)
+		comments=$((comments + 1))
+		continue
+		;;
+	issue) ;;
+	*) continue ;; # a line the recorder did not write: skip, never judge
+	esac
+	[ -n "$id" ] || continue
+	# A create is the first line for an id; anything after it is a re-lint of the
+	# same row, so the count must not move.
+	case " $latest " in
+	*" $id="*) ;;
+	*) creates=$((creates + 1)) ;;
+	esac
+	# Rebuild the accumulator with this id's entry replaced, so the last line read
+	# is the one that survives.
+	rebuilt=""
+	for entry in $latest; do
+		case "$entry" in
+		"$id="*) ;;
+		*) rebuilt="${rebuilt:+$rebuilt }$entry" ;;
+		esac
+	done
+	# `<count> <path>...` from the recorder, comma-joined so one entry stays one
+	# shell word. Absent or blank is `-`, the same "could not look" the verdict
+	# column already draws.
+	packed=${overlap:--}
+	packed=${packed// /,}
+	latest="${rebuilt:+$rebuilt }$id=${verdict:--}=${packed}"
+done <"$record"
+
+# THE INTERSECTION HAPPENS HERE NOW, NOT AT WRITE TIME (CLOUD-774). The column
+# holds the paths the row NAMES; the diff it is judged against is read fresh. The
+# old shape froze a fact about the diff at the instant the row was filed, and rows
+# are filed before any file is touched — AGENTS.md says claim before writing code
+# — so the compliant order recorded `0` every time and this refusal could never
+# see the punt it exists for. Measured 2026-08-20: CLOUD-770 filed at 06:27 with
+# an empty diff recorded `0` and kept it, while the identical row groomed after an
+# edit recorded a real overlap.
+#
+# Read once, outside the loop; a failure is "could not look", which passes every
+# row rather than refusing on a question this could not ask.
+changed_now=$(git diff --name-only origin/main...HEAD 2>/dev/null) || changed_now=""
+
+# THE ROWS THIS PR CLOSES ARE EXEMPT, and without this the change inverts the
+# gate. Recomputing against the landing diff fires on a row the branch filed AND
+# THEN FIXED, because its paths are in the diff by construction — so every honest
+# file-then-fix would need the override, and a routinely-overridden gate is
+# bypassed rather than satisfied. Worse, the cheapest way to dodge it becomes not
+# filing the row at all, which is the property the board exists for in a container
+# that can be reclaimed at any moment.
+#
+# `closing-key-check --list` is CALLED rather than copied: it owns `$CLOSING_VERBS`,
+# and a second copy of that regex would be one value in two files with no gate
+# holding them equal — the defect CLOUD-769 and CLOUD-770 are about, which makes
+# duplicating it inside this change self-refuting. No stdin means no exemption, so
+# a hand-run stays a pure function of the receipt and the diff.
+closes=""
+if [ ! -t 0 ]; then
+	pr_body=$(timeout 1s cat 2>/dev/null) || pr_body=""
+	if [ -n "$pr_body" ]; then
+		lister="$(dirname -- "${BASH_SOURCE[0]}")/closing-key-check"
+		[ -x "$lister" ] && closes=$(printf '%s' "$pr_body" | "$lister" --list 2>/dev/null) || closes=""
+	fi
+fi
+
+# THE CHECKLIST, and it exits before either refusal pass because it is not one.
+# It enumerates every row this branch filed, marks the ones whose named paths
+# intersect the branch's own diff, and asks the agent to affirm each is genuinely
+# independent work rather than a punt it could have closed. The marking is the
+# same intersection the refusal below computes — one implementation, read twice —
+# but the VERDICT is the reader's, which is why this reports and returns 0.
+#
+# Pointer-only, and here it does real work: an id, a marker token, nothing from
+# the row's body. Handing back the row's own prose would make this a mirror, and
+# a mirror is cleared by restating it (`finding-sink-check`'s recorded lesson).
+# An id can only be answered by going and reading the row.
+if [ -n "$checklist" ]; then
+	listed=0
+	for entry in $latest; do
+		id=${entry%%=*}
+		rest=${entry#*=}
+		overlap=${rest#*=}
+		mark="filed"
+		case "$overlap" in
+		[1-9]*,*)
+			paths=${overlap#*,}
+			for path in ${paths//,/ }; do
+				case "
+$changed_now
+" in
+				*"
+$path
+"*)
+					mark="names-this-diff"
+					break
+					;;
+				esac
+			done
+			;;
+		esac
+		case " $closes " in
+		*" $id "*) mark="closed-by-this-pr" ;;
+		esac
+		# STDERR, like `report` and for the same reason: this file's stdout
+		# carries its own summary lines, and a caller capturing stdout would read
+		# "no board writes recorded" as a checklist of one. The sibling
+		# `--advisory` mode already takes pointers off stderr, so both nudge
+		# modes are read the same way.
+		printf '%s %s\n' "$id" "$mark" >&2
+		listed=$((listed + 1))
+	done
+	[ "$listed" -gt 0 ] || exit 0
+	exit 1
+fi
+
+for entry in $latest; do
+	id=${entry%%=*}
+	rest=${entry#*=}
+	verdict=${rest%%=*}
+	case "$verdict" in
+	unready) ;;
+	ready) continue ;;
+	*) continue ;; # not answered — see the three-states note above
+	esac
+	report "$id filed-unrefined" unrefined
+done
+
+# THE DIFF REFUSAL, in its own pass because a row can earn both: "never groomed
+# to Ready" and "names code this branch is holding open" are different facts, and
+# neither subsumes the other.
+for entry in $latest; do
+	id=${entry%%=*}
+	rest=${entry#*=}
+	overlap=${rest#*=}
+	# THREE STATES, exactly as the verdict column has: `-` is the recorder saying
+	# it could not look and passes, `0` is a measurement that found nothing and
+	# passes, and a count with at least one path after it is a row with paths to
+	# intersect. Anything else is a line this reader cannot parse, which is skipped
+	# and never judged.
+	case "$overlap" in
+	-) continue ;;
+	0) continue ;;
+	[1-9]*,*) ;;
+	*) continue ;;
+	esac
+	# A row the PR closes is the opposite of a punt: it is the work landing.
+	case "
+$closes
+" in
+	*"
+$id
+"*) continue ;;
+	esac
+	named=${overlap#*,}
+	paths=""
+	saved_ifs=$IFS
+	IFS=,
+	for path in $named; do
+		case "
+$changed_now
+" in
+		*"
+$path
+"*) paths="${paths:+$paths,}$path" ;;
+		esac
+	done
+	IFS=$saved_ifs
+	[ -n "$paths" ] || continue
+	if [ -n "${BATTEN_FILED_HERE_OVERLAP:-}" ]; then
+		overridden="${overridden:+$overridden }$id"
+		continue
+	fi
+	saved_ifs=$IFS
+	IFS=,
+	for path in $paths; do
+		report "$id filed-over-own-diff $path" overdiff
+	done
+	IFS=$saved_ifs
+done
+
+# THE OVERRIDE LEAVES A TRACE, which is the only thing that makes it worth having
+# (the `BATTEN_CLAIM_TAKEOVER` idiom). A blanket off-switch and a recorded
+# decision look identical to the branch and completely different to a reviewer.
+if [ -n "$overridden" ]; then
+	line="filed-here-override $(date -u +%Y-%m-%dT%H:%M:%SZ) $overridden"
+	mkdir -p "$git_dir/batten-receipts" 2>/dev/null &&
+		printf '%s\n' "$line" >>"$git_dir/batten-receipts/filed-here-overrides.${branch//\//-}" 2>/dev/null
+	echo "filed-here-check: diff overlap overridden (BATTEN_FILED_HERE_OVERLAP): $overridden"
+fi
+
+if [ "$overdiff" -ne 0 ] && [ -z "$advisory" ]; then
+	cat <<'REASON' >&2
+::error:: filed-here-check: a row this branch filed names code this branch has open.
+
+That is the punt CLOUD-514 is about. A defect you found in your own diff is a
+defect you are already holding the file for, so spinning it onto the board is
+cheaper than fixing it — and the board becomes the escape hatch every other
+guardrail points at.
+
+There is deliberately NO PROSE REMEDY here. `filed-unrefined` charges a Ready
+block, and a Ready block is payable in typing; this one is not. Four ways
+forward:
+
+  1. Fix it here. You have the file open.
+  2. If it belongs to a row that already exists, comment there — comments are
+     recorded and never gated.
+  3. File it after this lands, from a clean tree, when it is no longer your diff.
+  4. If you mean it — a row documenting the change you are landing, say — run
+     `BATTEN_FILED_HERE_OVERLAP=1 mise run land`. It records which rows it
+     overrode, so this reads as a decision rather than as a silence.
+
+This judges no content and reads no tracker: it intersects the tracked paths the
+row's body names with `git diff --name-only origin/main...HEAD`.
+REASON
+fi
+
+if [ "$unrefined" -ne 0 ] && [ -z "$advisory" ]; then
+	cat <<'REASON' >&2
+::error:: filed-here-check: a row this branch filed was never groomed to Ready.
+
+Filing is the third sink and the most expensive one on purpose: a new row costs a
+complete Ready block — source of truth, a computable predicate, effect, output
+contract, commit type, test obligation, blockers. That price is what stops a
+defect in this branch's own diff from being cheaper to spin off than to fix.
+
+Three ways forward, cheapest first:
+
+  1. Fix it here, and close the row you filed. Nothing to record, nothing to gate.
+  2. If it belongs to a row that already exists, comment there instead — comments
+     are recorded and never gated.
+  3. Groom the row above to Ready and re-run `land`. `mise run ready-lint` is the
+     same check, run against the tracker's own response to your edit.
+
+This judges no content and reads no tracker: it compares the verdict
+`board-write-record` stored at creation to `ready`.
+REASON
+fi
+
+# ADVISORY MODE DECIDES NOTHING (CLOUD-774). The pointers have already gone to
+# stderr through `report`; the long refusal blocks above are suppressed because a
+# nudge that reprints four remedies every turn is a channel nobody reads by the
+# third one. Exit 0 unconditionally: this runs at `Stop`, and a non-zero there
+# would put the punt check on the path that must stay free — committing and
+# pushing to a draft is what survives a container reclaim.
+if [ -n "$advisory" ]; then
+	exit 0
+fi
+
+[ "$violations" -eq 0 ] || exit 1
+
+echo "filed-here-check: $creates row(s) filed on \"$branch\", $comments comment(s) — every filed row was refined at creation and none names this branch's own diff"

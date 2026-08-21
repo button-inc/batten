@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/perf-assert
+# subject: mise-tasks/perf-assert.sh
 # The decision half of CLOUD-207's latency mechanism, exercised without ever
 # measuring anything.
 #
@@ -11,7 +11,7 @@
 # would look exactly like a published latency number.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/perf-assert"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/perf-assert.sh"
 	README="$BATS_TEST_TMPDIR/README.md"
 	# The published table this gate holds its own budgets against. Written per
 	# test so a case can make it disagree; the real file is asserted separately.

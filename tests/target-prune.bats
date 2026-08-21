@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/target-prune
+# subject: mise-tasks/target-prune.sh
 # CLOUD-766. `target/deps` retained a full artifact set per build hash and
 # nothing reclaimed it, so a session that lands more than a couple of issues runs
 # out of disk — measured twice in one session, at ~1.5-2 GB per `land` lap.
@@ -16,7 +16,7 @@
 # ran a build.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/target-prune"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/target-prune.sh"
 	ROOT="$BATS_TEST_TMPDIR/target"
 	mkdir -p "$ROOT/debug/deps"
 	# CLOUD-778: free space is an INPUT, so the fixture sets it. Without this the

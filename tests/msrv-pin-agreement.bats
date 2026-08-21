@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/msrv-pin-agreement
+# subject: mise-tasks/msrv-pin-agreement.sh
 # CLOUD-593. The floor is a derived copy of the toolchain pin, so the two must
 # agree — and this gate REPLACES `mise run msrv`, which answered the same
 # question by compiling the workspace a second time at a second toolchain.
@@ -14,7 +14,7 @@
 # false-positive rate that gets a gate switched off.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/msrv-pin-agreement"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/msrv-pin-agreement.sh"
 	MANIFEST="$BATS_TEST_TMPDIR/Cargo.toml"
 	TOOLS="$BATS_TEST_TMPDIR/mise.toml"
 	RENOVATE="$BATS_TEST_TMPDIR/renovate.json5"

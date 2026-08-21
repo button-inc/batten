@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/mcp-timeout-budget
+# subject: mise-tasks/mcp-timeout-budget.sh
 # CLOUD-668. The MCP startup budget is declared and measured, never the host
 # default.
 #
@@ -10,7 +10,7 @@
 # default` is the load-bearing case rather than `refuses an absent key`.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mcp-timeout-budget"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mcp-timeout-budget.sh"
 	S="$BATS_TEST_TMPDIR/settings.json"
 	LOGS="$BATS_TEST_TMPDIR/logs"
 }

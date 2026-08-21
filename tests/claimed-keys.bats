@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/claimed-keys
+# subject: mise-tasks/claimed-keys.sh
 # The claim derivation, split out of `issue-guard` when `deferral-check` needed
 # the same answer (CLOUD-338). Two guards disagreeing about which issue a PR
 # claims would be worse than either misfiring, and a second copy is how that
@@ -11,7 +11,7 @@
 # using the key `issue-guard` had forced onto the PR.
 
 setup() {
-	KEYS="$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys"
+	KEYS="$BATS_TEST_DIRNAME/../mise-tasks/claimed-keys.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	# `git init -b`, never `git branch -f`: forcing the checked-out branch fails,

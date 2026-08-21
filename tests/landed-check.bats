@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/landed-check
+# subject: mise-tasks/landed-check.sh
 # The tracker's open-side automation moves an issue to In Progress when a commit
 # mentions it, which is not the same predicate as "work on this issue began" —
 # and it only ever moves forward into that column, never out.
@@ -12,7 +12,7 @@
 # has landed, and AGENTS.md defines landed-on-main as In Review.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/landed-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/landed-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	# The developer's global git config must not reach a fixture repo
 	# (CLOUD-282). `init.defaultBranch=main` is the leak this suite tripped on —

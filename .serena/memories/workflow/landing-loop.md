@@ -1,6 +1,6 @@
 # The landing loop, and why its shape looks like breakage from an old clone
 
-Read this **before** changing anything under `mise-tasks/land*`, `ci-wait`,
+Read this **before** changing anything under `mise-tasks/land.sh*`, `ci-wait`,
 `main-watch`, `checks-green`, or `tests/land*.bats`. Three things here read as
 defects to an agent on a clone that predates them, and each is the change:
 

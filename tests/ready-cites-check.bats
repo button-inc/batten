@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ready-cites-check
+# subject: mise-tasks/ready-cites-check.sh
 # CLOUD-826's decision table: a Ready block's citations against the tree.
 #
 # The two CLOUD-740 fixtures are FETCHED, not invented — `tests/fixtures/
@@ -8,7 +8,7 @@
 # only red because the real tree really does carry a fixture quoting the citation.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ready-cites-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ready-cites-check.sh"
 	REPO="$BATS_TEST_DIRNAME/.."
 	FIX="$BATS_TEST_DIRNAME/fixtures/ready-cites-check"
 	# THE SUITE MUST NOT SATISFY ITS OWN CITATIONS. The two cases below run against

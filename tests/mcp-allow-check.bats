@@ -1,11 +1,11 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/mcp-allow-check
+# subject: mise-tasks/mcp-allow-check.sh
 # The gate over MCP allow rules: a permission rule that matches no tool name is
 # silent by construction, so the failure it causes (an approval prompt on every
 # call) never points back at the settings file that caused it.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mcp-allow-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/mcp-allow-check.sh"
 	FIXTURE="$BATS_TEST_TMPDIR/settings.json"
 	# The fourth predicate reads the session's generated MCP config, found by
 	# glob when nothing says otherwise. Point every case at a path that does not

@@ -81,7 +81,7 @@ local gate = new Mapping<String, Step> {
   // absent for the whole session, which takes `.serena/memories/**` with it.
   // The measurement table lives in the task's own header.
   ["mcp-timeout-budget"] {
-    glob = List(".claude/settings.json", "mise-tasks/mcp-timeout-budget")
+    glob = List(".claude/settings.json", "mise-tasks/mcp-timeout-budget.sh")
     check = "mise run mcp-timeout-budget"
   }
   // The floor is a derived copy of the toolchain pin (CLOUD-593), so the two
@@ -135,7 +135,7 @@ local gate = new Mapping<String, Step> {
   // `[tasks.verify]` nor any `pull_request` workflow. Kept separate from that
   // gate because the two fail for opposite reasons and one deny cannot say both.
   ["report-only-check"] {
-    glob = List(".github/workflows/*.yml", "mise.toml", "mise-tasks/report-only-check")
+    glob = List(".github/workflows/*.yml", "mise.toml", "mise-tasks/report-only-check.sh")
     check = "mise run report-only-check"
   }
   // Enforces the "research goes to Linear, not a repo docs/ tree" directive as
@@ -207,7 +207,7 @@ local gate = new Mapping<String, Step> {
   // would let the `--profile` flag be deleted from the hook with nothing red —
   // the step would not even run for that commit.
   ["hook-profile-check"] {
-    glob = List("hk.pkl", ".claude/hooks/git-hook")
+    glob = List("hk.pkl", ".claude/hooks/git-hook.sh")
     check = "mise run hook-profile-check"
   }
   // `.claude/rules/rust.md` carries no module tree — it defers to mem:core as
@@ -287,7 +287,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/hook.rs",
         "crates/batten/src/surface.rs",
         ".claude/settings.json",
-        "mise-tasks/hooks-wiring-check",
+        "mise-tasks/hooks-wiring-check.sh",
       )
     check = "mise run hooks-wiring-check"
   }
@@ -311,7 +311,7 @@ local gate = new Mapping<String, Step> {
         "crates/batten/src/cli.rs",
         "crates/batten/src/render.rs",
         "crates/batten/src/spec.rs",
-        "mise-tasks/render/cli",
+        "mise-tasks/render/cli.sh",
       )
     check = "mise run reference-check"
   }
@@ -337,8 +337,8 @@ local gate = new Mapping<String, Step> {
       List(
         "bench/tokens/*",
         "bench/tokens/fixtures/**",
-        "mise-tasks/token-bench",
-        "mise-tasks/token-bench-check",
+        "mise-tasks/token-bench.sh",
+        "mise-tasks/token-bench-check.sh",
         "crates/batten/src/output.rs",
         "crates/batten/src/findings.rs",
         "crates/batten/src/outputs.rs",
@@ -443,7 +443,7 @@ local gate = new Mapping<String, Step> {
     glob =
       List(
         "install.sh",
-        "mise-tasks/dist",
+        "mise-tasks/dist.sh",
         "crates/batten/Cargo.toml",
         "Cargo.toml",
         ".github/workflows/release-artifacts.yml",
@@ -476,7 +476,7 @@ local gate = new Mapping<String, Step> {
   // judge. The batten.toml row's glob names only the script — that one is the
   // rule's subject, and `batten-glob-check` must be able to prove it covered.
   ["release-tracking-check"] {
-    glob = List(".github/workflows/release-plz.yml", "mise-tasks/release-tracking-check")
+    glob = List(".github/workflows/release-plz.yml", "mise-tasks/release-tracking-check.sh")
     check = "mise run release-tracking-check"
   }
   // An MCP allow rule that matches no tool name grants nothing and says nothing
@@ -510,7 +510,7 @@ local gate = new Mapping<String, Step> {
         ".claude/settings.json",
         "batten.toml",
         "crates/batten/src/hook.rs",
-        "mise-tasks/hook-matcher-check",
+        "mise-tasks/hook-matcher-check.sh",
       )
     check = "mise run hook-matcher-check"
   }
@@ -643,7 +643,7 @@ local gate = new Mapping<String, Step> {
       List(
         "skills/**",
         ".claude/skills/**",
-        "mise-tasks/skill-check",
+        "mise-tasks/skill-check.sh",
         "crates/batten/src/surface.rs",
         "crates/batten/src/exit.rs",
       )
@@ -898,7 +898,7 @@ fail_fast = false
 //   * every hk entry point — `hk check --all`, `hk fix --all`, CI, and any bare
 //     `hk` a human types — is slow-enabled by default, including one added in
 //     future by someone who never reads this comment;
-//   * `.claude/hooks/git-hook` passes `--profile '!slow'`, whose CLI value wholly
+//   * `.claude/hooks/git-hook.sh` passes `--profile '!slow'`, whose CLI value wholly
 //     supplants this list for that one process, so the six skip at pre-commit.
 //
 // Inverted — steps opting IN and the call sites enabling — a forgotten flag on

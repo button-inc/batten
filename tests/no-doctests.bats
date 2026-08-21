@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/no-doctests
+# subject: mise-tasks/no-doctests.sh
 # The gate that ships with the nextest swap (AGENTS.md non-negotiable 2,
 # CLOUD-813). `[tasks."test:cargo"]` runs `cargo nextest run`, which does not
 # execute doctests. That was safe to land only because the class is empty here —
@@ -16,7 +16,7 @@
 
 setup() {
 	load helpers
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/no-doctests"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/no-doctests.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO/crates/x/src"
 	cd "$REPO" || return 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/pr-unsubscribed
+# subject: mise-tasks/pr-unsubscribed.sh
 # CLOUD-518's mechanism: the webhook subscription the harness arms on every PR
 # this repo opens, which AGENTS.md forbids babysitting and nothing enforced.
 #
@@ -23,7 +23,7 @@
 # suite can hold a per-session credential.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/pr-unsubscribed"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/pr-unsubscribed.sh"
 	# A throwaway repository, so a receipt can never land in the real `.git`.
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ci-wait
+# subject: mise-tasks/ci-wait.sh
 # ci-wait's reading of a check-run set, exercised through a stub `gh` so the
 # cases that matter — an all-skipped set, a red set, a conditional 304 — are
 # reproducible without waiting on real CI.
@@ -14,7 +14,7 @@ setup() {
 	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
 	# tools a stock macOS does not ship (CLOUD-282).
 	load helpers
-	WAIT="$BATS_TEST_DIRNAME/../mise-tasks/ci-wait"
+	WAIT="$BATS_TEST_DIRNAME/../mise-tasks/ci-wait.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"
@@ -222,7 +222,7 @@ green_body() {
 	stub_gh
 	response resp.1 'W/"a"' '{"check_runs":[{"status":"in_progress","conclusion":null,"name":"ci"}]}'
 	response resp.last 'W/"b"' "$(green_body)"
-	reg="$BATS_TEST_DIRNAME/../mise-tasks/task-registry"
+	reg="$BATS_TEST_DIRNAME/../mise-tasks/task-registry.sh"
 	(cd "$repo" && "$reg" register land 4242 "ci-wait(lap 1)")
 	run bash -c "cd '$repo' && BATTEN_TASK_PID=4242 '$WAIT'"
 	[ "$status" -eq 0 ]

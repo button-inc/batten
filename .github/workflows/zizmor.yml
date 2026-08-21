@@ -82,7 +82,7 @@ jobs:
       # CLOUD-420: THE LANDING LEASE, ENFORCED WHERE THE MONEY IS SPENT.
       # First step, before any checkout or toolchain install, because a run this
       # branch is not authorised to make should cost the rounding rather than a
-      # matrix. The body is `mise-tasks/ci-lease-precondition` and every
+      # matrix. The body is `mise-tasks/ci-lease-precondition.sh` and every
       # justification lives there; it is fetched from `main` rather than from
       # this head, so a clone carrying stale rules cannot dodge the predicate by
       # carrying a stale copy of it. An unreadable body runs — fail open, which
@@ -94,13 +94,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           LEASE_HEAD_REF: ${{ github.head_ref }}
           # The HEAD sha, never `github.sha`: on a pull_request event that is the
-          # merge commit, which carries trunk's `mise-tasks/land` whenever this
+          # merge commit, which carries trunk's `mise-tasks/land.sh` whenever this
           # head did not touch it — and the staleness row reads exactly that file.
           LEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           LEASE_RUN_ID: ${{ github.run_id }}
         run: |
           body=$(gh api -H "Accept: application/vnd.github.raw" \
-            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition?ref=main") || exit 0
+            "repos/$GH_REPO/contents/mise-tasks/ci-lease-precondition.sh?ref=main") || exit 0
           # `|| exit 0` on BOTH lines, and the second is the one that was missing
           # (CLOUD-420). A fetch that fails is handled; a fetch that SUCCEEDS with
           # something that is not shell was not — a truncated body, a proxy error

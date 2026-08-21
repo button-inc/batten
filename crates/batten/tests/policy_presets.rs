@@ -199,7 +199,7 @@ fn every_advertised_preset_name_actually_loads() {
 /// shortcut: `batten.toml`'s rule-1 `forbid` rows glob `crates/**`, so every
 /// embedded preset source is ALREADY scanned on every gate invocation. Adding a
 /// second scanner over the same paths with the same patterns would be the
-/// two-authorities-that-drift shape `mise-tasks/rules-drift` exists to warn
+/// two-authorities-that-drift shape `mise-tasks/rules-drift.sh` exists to warn
 /// about — and the patterns themselves cannot be restated in this crate anyway,
 /// since naming them here is the violation.
 ///

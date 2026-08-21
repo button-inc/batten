@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/board-diff-overlap
+# subject: mise-tasks/board-diff-overlap.sh
 # CLOUD-514, phase 3. The sensor that answers "how many paths does this row's
 # body name that the branch is also changing".
 #
@@ -9,7 +9,7 @@
 # session's own diff and its verdicts would change commit by commit.
 
 setup() {
-	SENSOR="$BATS_TEST_DIRNAME/../mise-tasks/board-diff-overlap"
+	SENSOR="$BATS_TEST_DIRNAME/../mise-tasks/board-diff-overlap.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	rm -rf "$REPO"
 	mkdir -p "$REPO/src" "$REPO/other" "$REPO/mise-tasks"
@@ -23,7 +23,7 @@ setup() {
 	# The ambiguity fixture: one basename, two tracked paths.
 	printf 'c\n' >"$REPO/src/mod.rs"
 	printf 'd\n' >"$REPO/other/mod.rs"
-	printf 'e\n' >"$REPO/mise-tasks/macos-link-check"
+	printf 'e\n' >"$REPO/mise-tasks/macos-link-check.sh"
 	git -C "$REPO" add -A
 	git -C "$REPO" commit -q -m base
 	git -C "$REPO" update-ref refs/remotes/origin/main HEAD
@@ -61,9 +61,9 @@ changing() {
 # A task file has no extension at all, so neither of the two shapes above reaches
 # it. Bodies name one in backticks; that is the third arm.
 @test "a backticked task name with no extension resolves" {
-	changing mise-tasks/macos-link-check
+	changing mise-tasks/macos-link-check.sh
 	run bash -c "printf '%s' 'The gate is \`macos-link-check\`.' | '$SENSOR'"
-	[ "$output" = "1 mise-tasks/macos-link-check" ]
+	[ "$output" = "1 mise-tasks/macos-link-check.sh" ]
 }
 
 @test "two named changed files are both reported, sorted" {
@@ -222,7 +222,7 @@ replay_repo() {
 	[ "$output" = "1 crates/batten/src/git.rs" ]
 
 	run bash -c "'$SENSOR' < '$fixtures/CLOUD-737.md'"
-	[ "$output" = "1 mise-tasks/macos-link-check" ]
+	[ "$output" = "1 mise-tasks/macos-link-check.sh" ]
 }
 
 # THE CONTROL, and without it the case above is not a measurement. The same three

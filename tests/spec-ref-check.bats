@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/spec-ref-check
+# subject: mise-tasks/spec-ref-check.sh
 # CLOUD-809. Every case runs against a throwaway tree via `SPEC_REF_ROOT`, never
 # this checkout: the gate scans `git ls-files`, so a suite running here would be
 # judging the repository's own live citations and would go red or green for
@@ -10,7 +10,7 @@
 # credential is a test CI cannot run.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/spec-ref-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/spec-ref-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO/mise-tasks"
 	git -C "$REPO" init --quiet
@@ -33,20 +33,20 @@ JSON
 
 # Stage a tracked file carrying the given lines, and run the gate over it.
 scan() {
-	printf '%s\n' "$@" >"$REPO/mise-tasks/subject"
+	printf '%s\n' "$@" >"$REPO/mise-tasks/subject.sh"
 	git -C "$REPO" add -A
 	git -C "$REPO" commit -q -m fixture
 	run env SPEC_REF_ROOT="$REPO" bash -c "'$CHECK' < '$PAYLOAD'"
 }
 
 # THE REGRESSION WITNESS, and it is a real defect rather than an invented one:
-# `CLOUD-420 §4` was cited at mise-tasks/land-lock:459, tests/land-lock.bats:1172
+# `CLOUD-420 §4` was cited at mise-tasks/land-lock.sh:459, tests/land-lock.bats:1172
 # and tests/ready-guard.bats:46 on `main`, and CLOUD-420 has no §4. The content
 # meant is under its §3. This case is why the gate exists; it must never pass.
 @test "a citation naming a clause the issue does not carry is reported with its pointer" {
 	scan "# the offline half (CLOUD-420 §4)"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"mise-tasks/subject:1 CLOUD-420 §4 absent-issue-clause"* ]]
+	[[ "$output" == *"mise-tasks/subject.sh:1 CLOUD-420 §4 absent-issue-clause"* ]]
 }
 
 @test "a citation naming a clause the issue does carry passes" {
@@ -93,7 +93,7 @@ scan() {
 }
 
 @test "empty stdin is exit 2" {
-	printf '# nothing to see\n' >"$REPO/mise-tasks/subject"
+	printf '# nothing to see\n' >"$REPO/mise-tasks/subject.sh"
 	git -C "$REPO" add -A
 	git -C "$REPO" commit -q -m fixture
 	run env SPEC_REF_ROOT="$REPO" bash -c "'$CHECK' < /dev/null"
@@ -102,7 +102,7 @@ scan() {
 }
 
 @test "stdin that is not a get_issue payload set is exit 2" {
-	printf '# nothing to see\n' >"$REPO/mise-tasks/subject"
+	printf '# nothing to see\n' >"$REPO/mise-tasks/subject.sh"
 	git -C "$REPO" add -A
 	git -C "$REPO" commit -q -m fixture
 	run env SPEC_REF_ROOT="$REPO" bash -c "printf '[{\"id\":\"CLOUD-1\"}]' | '$CHECK'"
@@ -132,7 +132,7 @@ scan() {
 # is unfixable — the finding would survive every correction.
 @test "the gate does not report its own header or suite" {
 	mkdir -p "$REPO/tests"
-	cp "$CHECK" "$REPO/mise-tasks/spec-ref-check"
+	cp "$CHECK" "$REPO/mise-tasks/spec-ref-check.sh"
 	cp "$BATS_TEST_DIRNAME/spec-ref-check.bats" "$REPO/tests/spec-ref-check.bats"
 	scan "# no section references here"
 	[ "$status" -eq 0 ]

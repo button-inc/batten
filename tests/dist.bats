@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/dist
+# subject: mise-tasks/dist.sh
 #
 # The `dist` task's contract. The archive NAME is the part other things depend
 # on — CLOUD-65's `cargo binstall` path resolves a release asset by name — so the
@@ -12,7 +12,7 @@
 # end-to-end proof.
 
 setup() {
-	DIST="${BATS_TEST_DIRNAME}/../mise-tasks/dist"
+	DIST="${BATS_TEST_DIRNAME}/../mise-tasks/dist.sh"
 	# Source the script's functions without running main: everything below main
 	# is pure, and `main "$@"` with no args would exit 1.
 	# shellcheck disable=SC1090

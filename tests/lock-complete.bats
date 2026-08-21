@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/lock-complete
+# subject: mise-tasks/lock-complete.sh
 # The completeness half of the old lock-check, asked directly of the committed
 # bytes instead of by regenerating over the network and diffing.
 #
@@ -9,7 +9,7 @@
 # cargo-zigbuild residue is case 2 below.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/lock-complete"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/lock-complete.sh"
 	LOCK="$BATS_TEST_TMPDIR/mise.lock"
 }
 

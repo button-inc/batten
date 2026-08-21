@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/perf-record
+# subject: mise-tasks/perf-record.sh
 # The series writer, exercised against throwaway repositories.
 #
 # It writes — a git note — so unlike its two siblings it cannot be a pure
@@ -8,7 +8,7 @@
 # the suite runs in the gate like any other.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/perf-record"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/perf-record.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$REPO"
 	cd "$REPO" || return 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/land
+# subject: mise-tasks/land.sh
 # land's driver loop and its stopping conditions, exercised through stub `gh`,
 # `git` and `mise` so every one of them is reachable without a real PR.
 #
@@ -37,7 +37,7 @@ setup() {
 	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
 	# tools a stock macOS does not ship (CLOUD-282).
 	load helpers
-	REAL_LAND="$BATS_TEST_DIRNAME/../mise-tasks/land"
+	REAL_LAND="$BATS_TEST_DIRNAME/../mise-tasks/land.sh"
 	# CLOUD-434: the program under test launches with bats' fd 3 closed, in ONE
 	# place rather than at every call site. A backgrounded descendant that
 	# outlives its reap otherwise holds the TAP stream, and bats-exec-file waits
@@ -1311,7 +1311,7 @@ Refs: CLOUD-192"
 	# defect would pressure the next author to delete the explanation.
 	local leaked=""
 	for c in timed_out action_required cancelled; do
-		for f in mise-tasks/land mise-tasks/checks-green; do
+		for f in mise-tasks/land.sh mise-tasks/checks-green.sh; do
 			[ "$(grep -vE '^[[:space:]]*#' "$BATS_TEST_DIRNAME/../$f" | grep -c "\"$c\"")" -eq 0 ] ||
 				leaked="$leaked $f:$c"
 		done

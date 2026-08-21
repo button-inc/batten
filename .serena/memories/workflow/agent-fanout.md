@@ -346,7 +346,7 @@ invisible until they bite:
 
 The partition is by **file domain**, not by topic, and it is only real if it
 reads open PRs' file lists rather than their titles. Two issues that read as
-unrelated but both edit `mise-tasks/land` are one issue for dispatch purposes.
+unrelated but both edit `mise-tasks/land.sh` are one issue for dispatch purposes.
 
 ## A fan-out that drafts rather than lands
 

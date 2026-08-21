@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/contract-drift
+# subject: mise-tasks/contract-drift.sh
 # The remind-once hook over an instruction-surface snapshot (CLOUD-187).
 #
 # The defect it closes is measured, not hypothetical: `issue-guard` landed
@@ -15,7 +15,7 @@
 # satisfied by reading the hook's own output instead of the file.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/contract-drift"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/contract-drift.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 
 	# A fixture repo carrying the same surface shape the real one does, so the
@@ -28,7 +28,7 @@ setup() {
 	printf 'a rule\n' >"$REPO/.claude/rules/rust.md"
 	printf '{"hooks":{}}\n' >"$REPO/.claude/settings.json"
 	printf 'amends "hk@1.0.0"\n' >"$REPO/hk.pkl"
-	printf '#!/usr/bin/env bash\ntrue\n' >"$REPO/mise-tasks/some-gate"
+	printf '#!/usr/bin/env bash\ntrue\n' >"$REPO/mise-tasks/some-gate.sh"
 	printf 'ignored/\n' >"$REPO/.gitignore"
 	git -C "$REPO" add -A
 	git -C "$REPO" commit -qm "seed"
@@ -123,10 +123,10 @@ drift() {
 
 @test "a newly tracked contract file is drift" {
 	drift
-	printf '#!/usr/bin/env bash\ntrue\n' >"$REPO/mise-tasks/brand-new-gate"
-	git -C "$REPO" add mise-tasks/brand-new-gate
+	printf '#!/usr/bin/env bash\ntrue\n' >"$REPO/mise-tasks/brand-new-gate.sh"
+	git -C "$REPO" add mise-tasks/brand-new-gate.sh
 	run drift
-	[[ "$output" == *"mise-tasks/brand-new-gate"* ]]
+	[[ "$output" == *"mise-tasks/brand-new-gate.sh"* ]]
 }
 
 @test "a contract file that stopped being tracked is drift too" {
@@ -141,7 +141,7 @@ drift() {
 	# Tracked files are the contract; scratch is not. Judging untracked paths
 	# would fire on every working file an agent opens.
 	drift
-	printf 'scratch\n' >"$REPO/mise-tasks/notes-in-progress"
+	printf 'scratch\n' >"$REPO/mise-tasks/notes-in-progress.sh"
 	run drift
 	[ "$status" -eq 0 ]
 	[ -z "$output" ]

@@ -137,7 +137,7 @@ mutation = "change it in a pull request — this file is the policy authority ev
 # path no committed value can name. A layered override would let a branch point
 # the detector at evidence of its choosing, which is the weakening `trust.rs`
 # compares committed bytes for. So the committed value stays fixed and the
-# INDIRECTION moves out of the config: `mise-tasks/stop-guard` refreshes this
+# INDIRECTION moves out of the config: `mise-tasks/stop-guard.sh` refreshes this
 # path from the Stop payload's own `transcript_path` at each turn end. The
 # authority names one file forever; which session it is, is the host's fact.
 #
@@ -350,7 +350,7 @@ mise.toml, so a green local run can mean nothing. Use `mise run <task>` (\
 # — is not here and cannot be: it needs `gh pr list` plus a `gh pr view` per
 # competitor, and `RuleKind::scopes` pairs every spawning kind with
 # `RuleScope::Tree` alone. It lands as a `tree`-scoped `command` rule under
-# `batten enforce`, which is why `mise-tasks/issue-guard` still exists.
+# `batten enforce`, which is why `mise-tasks/issue-guard.sh` still exists.
 [[rule]]
 id = "pr-names-an-issue"
 kind = "shape"
@@ -482,6 +482,56 @@ judged."""
 # The two tables are the consumer's, and they hang off the rule rather than the
 # config root because they are what this rule is DEFINED OVER — a global table
 # would be a second authority with no other reader.
+# A shell program says so in its name (CLOUD-864/CLOUD-865). Measured on this
+# tree: 143 tracked files begin with a shell shebang and end in neither `.sh` nor
+# `.bash`, 136 of them under `mise-tasks/`.
+#
+# THE COST IS PAID PER TOOL, WHICH IS WHY IT IS A RULE AND NOT A PREFERENCE. hk's
+# shellcheck reaches them, because its builtin selector does shebang detection —
+# `hk check --all --step shellcheck -v` batches 146 files. A syntax matcher
+# pointed at the directory scans nothing and exits `0` — CLOUD-310 measured that
+# against this tree and owns the per-component disposition. Serena's bash LSP
+# matches none of them either: `FilenameMatcher(".sh", ".bash")` is
+# extension-only, and `add_extensions` is wired for two other languages alone.
+# Two of three silently blind,
+# independently — and hk.pkl documents the dependency as a JUSTIFICATION for the
+# naming rather than as the risk it is.
+#
+# A PRESET RATHER THAN A LOCAL MODULE because nothing in the predicate is this
+# repository's: any tree with extensionless shell pays the same toll with every
+# instrument it adopts. The consumer's contribution is the glob and the excludes.
+#
+# `line_sources` rather than `lines`: the rule decides over 137 programs, and a
+# row naming them one by one is a list that goes stale the next time somebody
+# adds a task — silently, green, which is the failure the declaration bound
+# exists to prevent.
+[[rule]]
+id = "shell-names-its-language"
+kind = "policy"
+scope = "tree"
+preset = "shell-hygiene"
+severity = "deny"
+#
+# THE DECLARATION IS THE EXCLUSION, and nothing else is needed. Six of the 143
+# extensionless shell files in this tree are FIXTURES — probes for this exact
+# class, which a gate must still handle and which a rename would delete as test
+# data. They sit under `tests/fixtures/` and `crates/**/fixtures/`, and no glob
+# below selects them: `Selector` sets `literal_separator(true)`, so `*.sh` does
+# not cross a `/` and neither of the two directory globs reaches a fixture tree.
+# A row reads the paths it names and no others, which is the bound doing the work
+# an exclusion list would otherwise do badly.
+#
+# `.bats` is deliberately absent: those carry `#!/usr/bin/env bats`, which is not
+# a shell interpreter, so selecting 145 more files would buy 145 reads and zero
+# findings. Whether shellcheck should read them is CLOUD-382's question, not this
+# row's.
+line_sources = ["mise-tasks/**", ".claude/hooks/**", "*.sh"]
+reason = """
+Name a shell program `.sh` (or `.bash`). A shebang is a content selector: only \
+tools that read the first line find it, and one that does not covers the file \
+silently and exits 0. An extension is the portable selector every instrument \
+honours."""
+
 # The substitution family of the same kind (CLOUD-864). Measured over one
 # session's transcript: 34 of 38 Bash calls had a first-class tool that does the
 # job, and `Read`/`Grep`/`Glob` were used ZERO times — 15 `head -N`, 13 `grep`,
@@ -1158,7 +1208,7 @@ redirect = "change the file through the surface that owns it"
 #
 # Every agent pays AGENTS.md on every turn whether or not a word of it applies,
 # so its size is a per-turn tax rather than a style question. This table is the
-# successor to `mise-tasks/context-budget`, deleted in the same change — never
+# successor to `mise-tasks/context-budget.sh`, deleted in the same change — never
 # two gates counting the same surface by different rules.
 #
 # `files` is consumer-specific by nature: which files are always loaded is a
@@ -1366,7 +1416,7 @@ scope = "tree"
 # published inventory DESCRIBES this tree; these two ask whether it is USABLE by
 # whoever receives it — the NTIA 2021 minimum elements and CISA's 2024 FSCT
 # minimum expectation, which is what a procurement review actually checks.
-# `mise-tasks/ntia-check` carries the reasoning and the measurements; what belongs
+# `mise-tasks/ntia-check.sh` carries the reasoning and the measurements; what belongs
 # here is why this is TWO rows at two severities.
 #
 # The clause set is the tool's, named by its own `--comply` flag: no clause list
@@ -1409,7 +1459,7 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 
 # Release provenance, adopted as `gh attestation verify` (CLOUD-583, CLOUD-279
 # verdict 1 — `slsa-verifier` is redundant against the same absent provenance and
-# `cosign` has no signing identity here). `mise-tasks/attestation-check` carries
+# `cosign` has no signing identity here). `mise-tasks/attestation-check.sh` carries
 # the design; what belongs here is why this is ONE row and which half it runs.
 #
 # THE OFFLINE HALF, and that is the whole of the wiring decision. Whether a
@@ -1437,14 +1487,14 @@ no_fix_reason = "the missing fields do not exist in a cargo lockfile, so no comm
 # resolves only where a mise.toml is findable, so a row matching a fixture reports
 # the launcher rather than the tree. Two suites caught the two wider spellings —
 # `tests/prebuilt-lint.bats` copies `mise.toml` and the workflows into its fixture,
-# and `cli.rs`'s portability case writes a `mise-tasks/seed` — and neither failure
+# and `cli.rs`'s portability case writes a `mise-tasks/seed.sh` — and neither failure
 # had anything to do with attestation. CLOUD-614 carries the general defect; naming
 # the file the row exists to run is what makes the trigger and the mechanism the
 # same object rather than a coincidence.
 [[rule]]
 id = "release-attestation-precondition"
 kind = "command"
-glob = "mise-tasks/attestation-check"
+glob = "mise-tasks/attestation-check.sh"
 check = "mise run attestation-check --precondition"
 severity = "deny"
 scope = "tree"
@@ -1484,7 +1534,7 @@ no_fix_reason = "install the pinned `gh` (`mise install aqua:cli/cli`) or supply
 [[rule]]
 id = "release-tracking-check"
 kind = "command"
-glob = "mise-tasks/release-tracking-check"
+glob = "mise-tasks/release-tracking-check.sh"
 check = "mise run release-tracking-check"
 severity = "deny"
 scope = "tree"
@@ -1567,7 +1617,7 @@ severity = "deny"
 [[rule]]
 id = "evaluator-closure-io-free"
 kind = "command"
-glob = "mise-tasks/evaluator-closure-check"
+glob = "mise-tasks/evaluator-closure-check.sh"
 check = "mise run evaluator-closure-check"
 severity = "deny"
 scope = "tree"
@@ -1602,7 +1652,7 @@ severity = "deny"
 [[rule]]
 id = "claim-not-raced"
 kind = "command"
-glob = "mise-tasks/claim-race-check"
+glob = "mise-tasks/claim-race-check.sh"
 check = "mise run claim-race-check"
 severity = "deny"
 scope = "tree"

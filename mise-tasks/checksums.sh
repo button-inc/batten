@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+#MISE description="Effect: derive the SHA256 manifest of a release's own assets, read back after upload"
+#
+# CLOUD-278. A release carried no checksum of any kind: `mise-tasks/dist.sh` printed
+# `archive=`/`binary=` and nothing else, and `mise-tasks/sbom.sh`'s header said it
+# outright — no SPDX, no CycloneDX, no checksum file. Every downstream packaging
+# channel wants one: a Homebrew formula pins it, an aqua/mise registry entry
+# carries it, and `cargo binstall` resolves assets whose integrity nobody checks.
+# It is also the floor beneath CLOUD-264's signature decision and independent of
+# it — a signature over bytes that are not otherwise pinned does two jobs badly.
+#
+# THE ASSET LIST IS THE RELEASE'S OWN, read back after upload. Not a list this
+# script restates, and not one the workflow restates either. Two reasons, and the
+# second is the load-bearing one:
+#
+#   The seven `dist` legs are independent and `fail-fast: false`, so no single
+#   leg can see the whole release and none can produce a whole-release manifest.
+#
+#   A manifest derived from what is actually published covers a NEW asset with no
+#   edit here. CLOUD-264's signature, or anything else a later job starts
+#   uploading, is in the manifest the moment it is on the release — which is the
+#   same "one list, and it is the workflow's" property `release-assets-check`
+#   already holds for the matrix targets.
+#
+# The name is `SHA256SUMS` and the format is `sha256sum`'s own, so verifying is
+# the ordinary tool with no flags: `sha256sum -c SHA256SUMS` in a directory of
+# downloaded assets. A manifest a packager needs a wrapper to read is not one.
+#
+#   mise run checksums v0.0.40
+#   mise run checksums            # the latest release
+#   mise run checksums --names    # what a release calls it, with no download
+#
+# Exit 0 written / 1 could not produce one / 2 could not look — the tag lookup
+# shares `release-assets-check`'s split so a network blip never reads as an empty
+# release.
+set -euo pipefail
+
+# The asset name. One authority: `release-assets-check` asks `--names` rather
+# than spelling it a second time, the way it already asks `sbom --names`.
+readonly MANIFEST=SHA256SUMS
+
+# Where the manifest lands. Overridable so a caller can stage it outside the
+# tree; git-ignored either way, like `dist/` and `sbom/`.
+OUT_DIR="${CHECKSUMS_OUT_DIR:-checksums}"
+SUMS="${OUT_DIR}/${MANIFEST}"
+
+# Answered before the tag lookup and before any network, so a gate can ask from
+# any directory and pay nothing for the answer.
+if [ "${1:-}" = "--names" ]; then
+	echo "sums=$SUMS"
+	exit 0
+fi
+
+# An empty first argument is "no tag", not a tag named "": the release workflow
+# passes `"$TAG"` quoted, so the argument always arrives.
+tag="${1:-}"
+if [ -z "$tag" ]; then
+	if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null) || [ -z "$tag" ]; then
+		echo "::error:: checksums: no tag given and no latest release readable. Pass one: mise run checksums <tag>" >&2
+		exit 2
+	fi
+fi
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+
+# gh writes progress to stderr already; its stdout goes there too so the KEY=VALUE
+# channel this script owns cannot be polluted by a future gh that prints on it.
+if ! gh release download "$tag" --dir "$scratch" --clobber >&2; then
+	echo "::error:: checksums: cannot download the assets of release $tag, so there is nothing to hash. That is a lookup failure, not an empty release." >&2
+	exit 2
+fi
+
+# A manifest must never hash itself. Re-running against a release that already
+# carries one would otherwise digest the previous run's output, and the file
+# could never be reproduced from the release it describes.
+rm -f "$scratch/$MANIFEST"
+
+# LC_ALL=C so the order is byte order on every machine: two runs over one release
+# produce identical bytes, which is what makes the published artifact a function
+# of the release rather than of who cut it.
+#
+# A `read` loop rather than `mapfile` (CLOUD-282): `mapfile` is bash 4 and macOS
+# ships 3.2, so it would die here on the one platform whose release artifacts
+# this manifest covers. `no-bash4-mapfile` in batten.toml is the standing gate —
+# it caught this line the day the file landed.
+assets=()
+while IFS= read -r asset; do
+	assets+=("$asset")
+done < <(cd "$scratch" && shopt -s nullglob && for f in *; do printf '%s\n' "$f"; done | LC_ALL=C sort)
+
+if [ "${#assets[@]}" -eq 0 ]; then
+	echo "::error:: checksums: release $tag carries no assets to hash. A manifest that covers nothing is indistinguishable from no manifest, so none is written." >&2
+	exit 1
+fi
+
+# Written inside the scratch directory first and moved into place only on success:
+# a failed run must not leave a truncated manifest for the upload step to publish.
+# Safe to write there — the argument list is already fixed, so this file is not
+# among the ones being hashed.
+if ! (cd "$scratch" && LC_ALL=C sha256sum -- "${assets[@]}" >"$MANIFEST"); then
+	echo "::error:: checksums: could not hash the assets of release $tag, so no manifest was produced." >&2
+	exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+mv "$scratch/$MANIFEST" "$SUMS"
+
+echo "checksums: $tag — ${#assets[@]} asset(s) hashed" >&2
+
+# stdout is the answer: a pointer to the artifact, never its bytes (rule 4).
+# KEY=VALUE so the release workflow appends it to $GITHUB_OUTPUT unchanged.
+echo "sums=$SUMS"

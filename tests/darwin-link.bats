@@ -1,12 +1,12 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/darwin-link
+# subject: mise-tasks/darwin-link.sh
 #
 # The gate with no false negatives: it links the Darwin targets rather than
 # type-checking them, so a dependency needing an Apple SDK fails here instead of
 # in the release workflow after a tag is cut.
 
 setup() {
-	LINK="${BATS_TEST_DIRNAME}/../mise-tasks/darwin-link"
+	LINK="${BATS_TEST_DIRNAME}/../mise-tasks/darwin-link.sh"
 	cd "${BATS_TEST_DIRNAME}/.." || return 1
 }
 

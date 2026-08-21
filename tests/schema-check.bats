@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/schema-check
+# subject: mise-tasks/schema-check.sh
 # schema-check's decision table (CLOUD-33): does the committed JSON Schema still
 # match what the binary derives from the config types?
 #
@@ -10,7 +10,7 @@
 # so the fixture compiles nothing the suite has not already built.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/schema-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/schema-check.sh"
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	ROOT="$BATS_TEST_TMPDIR/repo"
 	mkdir -p "$ROOT"

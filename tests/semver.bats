@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/semver
+# subject: mise-tasks/semver.sh
 # The decision table for `mise run semver` (CLOUD-102).
 #
 # The gate's subject — "does the API delta match the bump release-plz will
@@ -19,7 +19,7 @@
 # same class one layer up). The probe caught it; this case keeps it caught.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/semver"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/semver.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	BIN="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$REPO" "$BIN"

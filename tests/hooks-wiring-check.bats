@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/hooks-wiring-check
+# subject: mise-tasks/hooks-wiring-check.sh
 #
 # `hooks-wiring-check`'s decision table (CLOUD-62, widened by CLOUD-777).
 #
@@ -40,7 +40,7 @@
 # are asserted green in the same run.
 setup() {
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
-	GATE="$REPO/mise-tasks/hooks-wiring-check"
+	GATE="$REPO/mise-tasks/hooks-wiring-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/root"
 	WIRING="$ROOT/.claude/settings.json"
 	# Empty by default, so a fixture is judged against ITSELF rather than against
@@ -255,14 +255,14 @@ codex-cli $ROOT/.codex/hooks.json -"
 		    "Stop": [
 		      {
 		        "hooks": [
-		          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/mise-tasks/stop-guard" }
+		          { "type": "command", "command": "$CLAUDE_PROJECT_DIR/mise-tasks/stop-guard.sh" }
 		        ]
 		      }
 		    ]
 		  }
 		}
 	JSON
-	DECLARED="mise-tasks/stop-guard CLOUD-312"
+	DECLARED="mise-tasks/stop-guard.sh CLOUD-312"
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-event-unregistered"* ]]
@@ -420,7 +420,7 @@ with_sibling() { # <event> <sibling command>
 }
 
 @test "a PreToolUse command that does not reach the engine is a violation" {
-	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard'
+	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard.sh'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-sibling-command"* ]]
@@ -432,30 +432,30 @@ with_sibling() { # <event> <sibling command>
 	# so a bare count would name a problem nobody can act on. The drift case above
 	# withholds its command for the opposite reason: the remedy there is the same
 	# single edit whatever the command said.
-	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard'
+	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard.sh'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"issue-read-guard"* ]]
 }
 
 @test "a declared sibling passes, and the declaration names who retires it" {
-	DECLARED="mise-tasks/issue-read-guard CLOUD-312"
-	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard'
+	DECLARED="mise-tasks/issue-read-guard.sh CLOUD-312"
+	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard.sh'
 	run gate
 	[ "$status" -eq 0 ]
 }
 
 @test "a declaration naming no issue is itself a violation, so the hatch is never silent" {
-	DECLARED="mise-tasks/issue-read-guard"
-	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard'
+	DECLARED="mise-tasks/issue-read-guard.sh"
+	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard.sh'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-declaration-unowned"* ]]
 }
 
 @test "a declaration whose key is not a CLOUD row is unowned, not merely present" {
-	DECLARED="mise-tasks/issue-read-guard someday"
-	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard'
+	DECLARED="mise-tasks/issue-read-guard.sh someday"
+	with_sibling PreToolUse '$CLAUDE_PROJECT_DIR/mise-tasks/issue-read-guard.sh'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-declaration-unowned"* ]]
@@ -465,7 +465,7 @@ with_sibling() { # <event> <sibling command>
 	# The direction that keeps a retirement honest: land the deletion, delete the
 	# row. Left behind, it is a standing licence the next command with a similar
 	# path inherits without anyone deciding to grant it.
-	DECLARED="mise-tasks/retired-long-ago CLOUD-312"
+	DECLARED="mise-tasks/retired-long-ago.sh CLOUD-312"
 	complete_wiring
 	run gate
 	[ "$status" -eq 1 ]
@@ -478,7 +478,7 @@ with_sibling() { # <event> <sibling command>
 	# old scope note was not wrong about its own state — it declined to price
 	# retiring a recorder like retiring a decision table — and the decision
 	# reprices both: nothing else registers a hook.
-	with_sibling Stop '$CLAUDE_PROJECT_DIR/mise-tasks/stop-guard'
+	with_sibling Stop '$CLAUDE_PROJECT_DIR/mise-tasks/stop-guard.sh'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-sibling-command"* ]]

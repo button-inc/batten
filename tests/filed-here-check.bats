@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/filed-here-check
+# subject: mise-tasks/filed-here-check.sh
 # CLOUD-514, phase 2. The gate that prices filing over fixing.
 #
 # Every test runs inside a throwaway `git init`, because the subject IS the git
@@ -18,7 +18,7 @@ setup() {
 	# runs this suite. So the documented escape hatch reddened the suite that
 	# documents it, and the gate could not be overridden by the route it names.
 	unset BATTEN_FILED_HERE_OVERLAP BATTEN_FILED_HERE_BYPASS
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/filed-here-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/filed-here-check.sh"
 	REPO="$BATS_TEST_TMPDIR/repo"
 	rm -rf "$REPO"
 	mkdir -p "$REPO"

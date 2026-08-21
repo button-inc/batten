@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/sbom-check
+# subject: mise-tasks/sbom-check.sh
 # sbom-check's decision table (CLOUD-262): does the derived inventory describe the
 # tree it claims to, and is it a function of the source rather than of the clock?
 #
@@ -14,7 +14,7 @@
 # also asserts the committed toolchain and the real tree still satisfy the gate.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/sbom-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/sbom-check.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"

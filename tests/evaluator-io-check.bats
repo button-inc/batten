@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/evaluator-io-check
+# subject: mise-tasks/evaluator-io-check.sh
 # The decision `evaluator-io-check` makes is ONE THING — the inversion — and this
 # suite is over that decision rather than over a two-minute rebuild.
 #
@@ -9,7 +9,7 @@
 # way round, and that is the half a rebuild would tell you nothing extra about.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/evaluator-io-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/evaluator-io-check.sh"
 }
 
 # THE LOAD-BEARING CASE. A probe build in which the test PASSES means the test

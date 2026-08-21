@@ -409,7 +409,7 @@ redirect = "change the file through the surface that owns it"
 #
 # Every agent pays AGENTS.md on every turn whether or not a word of it applies,
 # so its size is a per-turn tax rather than a style question. This table is the
-# successor to `mise-tasks/context-budget`, deleted in the same change — never
+# successor to `mise-tasks/context-budget.sh`, deleted in the same change — never
 # two gates counting the same surface by different rules.
 #
 # `files` is consumer-specific by nature: which files are always loaded is a

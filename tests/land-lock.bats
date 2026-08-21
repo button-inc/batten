@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/land-lock
+# subject: mise-tasks/land-lock.sh
 # land-lock: the rolling lease that serialises landing (CLOUD-393). The whole
 # point of the task is an atomicity claim — two sessions must not both hold it —
 # and a stubbed git cannot test that claim at all, since the atomicity IS git's.
@@ -22,7 +22,7 @@ setup() {
 	# Mutating the tracked file in place makes a corrupted commit reachable from
 	# any concurrent `git add -A`, which staged a mutant into a pushed commit on
 	# 2026-08-12 (recorded on CLOUD-418). Unset in every normal run.
-	LOCK="${LAND_LOCK_UNDER_TEST:-$BATS_TEST_DIRNAME/../mise-tasks/land-lock}"
+	LOCK="${LAND_LOCK_UNDER_TEST:-$BATS_TEST_DIRNAME/../mise-tasks/land-lock.sh}"
 	BARE="$BATS_TEST_TMPDIR/remote.git"
 	MINE="$BATS_TEST_TMPDIR/mine"
 	RIVAL="$BATS_TEST_TMPDIR/rival"
@@ -72,7 +72,7 @@ teardown() {
 	# process for one teardown, never a wedged file. Within-file execution is
 	# serial and no other suite runs the real land-lock, so the match cannot
 	# reach a sibling test's processes.
-	pkill -f 'mise-tasks/land-lock hold' 2>/dev/null || true
+	pkill -f 'mise-tasks/land-lock.sh hold' 2>/dev/null || true
 }
 
 @test "an unheld lease reports unheld, and says so at exit 0" {
@@ -616,13 +616,13 @@ EOF
 # never hold this file's TAP stream.
 
 # A stand-in land: a process whose cmdline passes the identity check (its path
-# ends mise-tasks/land) at a pid the test controls. stdout is detached so the
+# ends mise-tasks/land.sh) at a pid the test controls. stdout is detached so the
 # command substitution reading the pid returns instead of waiting out the sleep.
 fake_land() {
 	mkdir -p "$BATS_TEST_TMPDIR/mise-tasks"
-	printf '#!/usr/bin/env bash\nsleep 60\n' >"$BATS_TEST_TMPDIR/mise-tasks/land"
-	chmod +x "$BATS_TEST_TMPDIR/mise-tasks/land"
-	"$BATS_TEST_TMPDIR/mise-tasks/land" >/dev/null 2>&1 3>&- &
+	printf '#!/usr/bin/env bash\nsleep 60\n' >"$BATS_TEST_TMPDIR/mise-tasks/land.sh"
+	chmod +x "$BATS_TEST_TMPDIR/mise-tasks/land.sh"
+	"$BATS_TEST_TMPDIR/mise-tasks/land.sh" >/dev/null 2>&1 3>&- &
 	echo $!
 }
 
@@ -732,7 +732,7 @@ wait_for_beat() { # <lease sha as it stood before the beat>
 @test "a pid recycled into something that is not a land reads as gone" {
 	# Existence is not identity: this clone measurably wrapped its pid space
 	# inside 20 minutes, so a live pid may be somebody else entirely. The probe
-	# reads /proc/<pid>/cmdline, and anything that is not a mise-tasks/land is
+	# reads /proc/<pid>/cmdline, and anything that is not a mise-tasks/land.sh is
 	# a dead holder — failing toward release, the cheap direction.
 	run lock "$MINE" acquire
 	[ "$status" -eq 0 ]

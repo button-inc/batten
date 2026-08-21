@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/mise-action-floor
+# subject: mise-tasks/mise-action-floor.sh
 # CLOUD-404. The gate that stops a pin sliding back behind the toolchain install
 # action's download retry.
 #
@@ -13,7 +13,7 @@
 # because a truncated sha would not exercise the 40-hex pattern the gate matches.
 
 setup() {
-	TASK="$BATS_TEST_DIRNAME/../mise-tasks/mise-action-floor"
+	TASK="$BATS_TEST_DIRNAME/../mise-tasks/mise-action-floor.sh"
 	WF="$BATS_TEST_TMPDIR/wf"
 	mkdir -p "$WF"
 }

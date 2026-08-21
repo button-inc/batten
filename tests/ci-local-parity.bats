@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/ci-local-parity
+# subject: mise-tasks/ci-local-parity.sh
 # The gate that keeps CI a confirmation rather than a discovery (CLOUD-240).
 #
 # Each case is a fixture workflow directory plus a fixture manifest, so the
@@ -11,7 +11,7 @@ setup() {
 	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
 	# tools a stock macOS does not ship (CLOUD-282).
 	load helpers
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ci-local-parity"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/ci-local-parity.sh"
 	WF="$BATS_TEST_TMPDIR/workflows"
 	MANIFEST="$BATS_TEST_TMPDIR/mise.toml"
 	RELEASE_PLZ="$BATS_TEST_TMPDIR/release-plz.toml"
@@ -569,7 +569,7 @@ fanin() {
 
 @test "a job that starts without asking the landing lease is refused, and named" {
 	# CLOUD-420. The lease serialises landing, but it was enforced only inside
-	# `mise-tasks/land` — so anything else pushing to a ready PR bought a full
+	# `mise-tasks/land.sh` — so anything else pushing to a ready PR bought a full
 	# matrix without ever touching the lock. Four concurrent matrices ran that
 	# way on 2026-08-12 while the lease changed hands three times, every holder
 	# honouring it.

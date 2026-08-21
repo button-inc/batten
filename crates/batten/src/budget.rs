@@ -35,7 +35,7 @@
 //!
 //! ## Succession
 //!
-//! This module replaces `mise-tasks/context-budget`, deleted in the same change.
+//! This module replaces `mise-tasks/context-budget.sh`, deleted in the same change.
 //! Two gates counting the same surface by different rules is the drift a policy
 //! engine must not model, so the shell task's `hk` wiring moved onto this verb
 //! rather than running beside it. Its optional line predicate came along as

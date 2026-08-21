@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/tree-clean
+# subject: mise-tasks/tree-clean.sh
 # The precondition under `verify`'s receipt: a receipt keyed to HEAD may only be
 # written when the bytes validated WERE the bytes at HEAD (CLOUD-277).
 #
@@ -10,8 +10,8 @@
 # snapshot that would not compile); the one this gate exists for passes quietly.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/tree-clean"
-	VERIFIED="$BATS_TEST_DIRNAME/../mise-tasks/verified"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/tree-clean.sh"
+	VERIFIED="$BATS_TEST_DIRNAME/../mise-tasks/verified.sh"
 	REPO="$BATS_TEST_TMPDIR/repo-$BATS_TEST_NUMBER"
 	git init -q "$REPO"
 	cd "$REPO" || return 1

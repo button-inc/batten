@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/land-lock-check
+# subject: mise-tasks/land-lock-check.sh
 # land-lock-check: the scheduled half of the landing lease (CLOUD-393).
 #
 # `land-lock` fails SAFE — an unparseable lease reads as held, so a stray push
@@ -12,7 +12,7 @@
 # same reason: a gate whose verdict needs the network is a gate nothing tests.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/land-lock-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/land-lock-check.sh"
 	NOW=1000000
 	export LAND_LOCK_NOW="$NOW" LAND_LOCK_TTL=120
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/macos-link-check
+# subject: mise-tasks/macos-link-check.sh
 #
 # The gate that keeps the SDK-free macOS build buildable. Its whole value is
 # firing BEFORE a release, so the cases below pin both directions: it passes on
@@ -7,7 +7,7 @@
 # appears — a gate that only ever passes is indistinguishable from no gate.
 
 setup() {
-	CHECK="${BATS_TEST_DIRNAME}/../mise-tasks/macos-link-check"
+	CHECK="${BATS_TEST_DIRNAME}/../mise-tasks/macos-link-check.sh"
 	cd "${BATS_TEST_DIRNAME}/.." || return 1
 }
 

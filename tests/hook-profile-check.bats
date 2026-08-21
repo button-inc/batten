@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/hook-profile-check
+# subject: mise-tasks/hook-profile-check.sh
 # CLOUD-509. The decision table for `hook-profile-check`.
 #
 # The gate reads two `hk check --plan --json` documents — the full plan and the
@@ -14,7 +14,7 @@
 # make checkable.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/hook-profile-check"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/hook-profile-check.sh"
 	FULL="$BATS_TEST_TMPDIR/full.json"
 	FAST="$BATS_TEST_TMPDIR/fast.json"
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/release-assets-check
+# subject: mise-tasks/release-assets-check.sh
 # The gate that ships with CLOUD-258's fix: a release must carry one archive per
 # target the dist matrix builds.
 #
@@ -12,7 +12,7 @@ setup() {
 	# tests/helpers.bash: `sed_i` / `run_timeout`, standing in for GNU
 	# tools a stock macOS does not ship (CLOUD-282).
 	load helpers
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/release-assets-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/release-assets-check.sh"
 	STUB="$BATS_TEST_TMPDIR/bin"
 	mkdir -p "$STUB"
 	PATH="$STUB:$PATH"
@@ -92,7 +92,7 @@ add_manifest_entry() {
 # version, so a literal here would rot at the next release bump — the same reason
 # the matrix above is read from the workflow instead of restated.
 binary_sbom() { # $1 = target
-	"$BATS_TEST_DIRNAME/../mise-tasks/sbom-binary" --names "$1" | sed -nE 's#^sbom=.*/##p'
+	"$BATS_TEST_DIRNAME/../mise-tasks/sbom-binary.sh" --names "$1" | sed -nE 's#^sbom=.*/##p'
 }
 
 complete() {
@@ -370,7 +370,7 @@ complete() {
 	# One authority for the name. The literal scrape recognises `.json` operands
 	# only, so widening it to admit an extensionless asset was the alternative
 	# this deliberately avoids.
-	run mise-tasks/checksums --names
+	run mise-tasks/checksums.sh --names
 	[ "$status" -eq 0 ]
 	[ "$output" = "sums=checksums/SHA256SUMS" ]
 }

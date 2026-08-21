@@ -50,7 +50,7 @@
 //!   rather than testing a string in a manifest, so it stays true when the
 //!   feature arrives by Cargo's cross-graph feature unification rather than by
 //!   an edit. Shown able to fail under `--features probe-evaluator-io`.
-//! * `mise-tasks/evaluator-closure-check`, wired as `batten.toml`'s
+//! * `mise-tasks/evaluator-closure-check.sh`, wired as `batten.toml`'s
 //!   `evaluator-closure-io-free` row, is the CLOSURE half: it walks the resolved
 //!   graph from the `regorus` node and refuses any of the nine IO-bearing crates
 //!   the manifest names becoming reachable.
@@ -239,6 +239,17 @@ const PRESETS: &[(&str, &[(&str, &str)])] = &[
         &[(
             "<preset:trunk-based>/no-force-push.rego",
             include_str!("policy/presets/trunk-based/no-force-push.rego"),
+        )],
+    ),
+    // The first TREE-scoped preset (CLOUD-864). The two above judge a command;
+    // this one judges files, which is why it is the one that needed `lines` to
+    // reach paths by glob — a practice about 143 files cannot be a row that
+    // names 143 paths.
+    (
+        "shell-hygiene",
+        &[(
+            "<preset:shell-hygiene>/shebang-names-its-language.rego",
+            include_str!("policy/presets/shell-hygiene/shebang-names-its-language.rego"),
         )],
     ),
 ];

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/gh-guard mise-tasks/gh-guard-check
+# subject: mise-tasks/gh-guard.sh mise-tasks/gh-guard-check.sh
 # The gate that ships with the gh guard (AGENTS.md non-negotiable 2): the policy
 # table must block exactly the hand-rolled shapes and nothing else.
 #
@@ -9,8 +9,8 @@
 # MESSAGE quoted the blocked verbs.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/gh-guard-check"
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/gh-guard"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/gh-guard-check.sh"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/gh-guard.sh"
 }
 
 # --- blocked: shapes a task already encapsulates ------------------------------

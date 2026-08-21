@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/finding-sink-check
+# subject: mise-tasks/finding-sink-check.sh
 # CLOUD-252. The stranded finding: a turn cites `path:line` evidence and writes
 # nothing durable, so the finding dies with the chat.
 #
@@ -8,7 +8,7 @@
 # it reads `last_assistant_message`, under half a turn's assistant prose.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/finding-sink-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/finding-sink-check.sh"
 	T="$BATS_TEST_TMPDIR/transcript.jsonl"
 	# CLOUD-775. The check now resolves a row's COLUMN from a read receipt under
 	# `$GIT_DIR`, so this suite must own the git dir it reads. Running in this
@@ -59,7 +59,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 
 @test "THE STRANDED FINDING: path:line evidence with no durable write is reported" {
 	prompt
-	say 'The guard is wrong at mise-tasks/land:200 and nothing covers it.'
+	say 'The guard is wrong at mise-tasks/land.sh:200 and nothing covers it.'
 	run check
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"turn:1 finding-without-durable-write"* ]]
@@ -67,7 +67,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 
 @test "the same turn with a tracker write is clean" {
 	prompt
-	say 'The guard is wrong at mise-tasks/land:200 and nothing covers it.'
+	say 'The guard is wrong at mise-tasks/land.sh:200 and nothing covers it.'
 	tool "mcp__Linear__save_issue"
 	run check
 	[ "$status" -eq 0 ]
@@ -101,7 +101,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# The state of the target cannot be looked up: no tracker credential exists in
 	# a hook, exactly as for `claim-check`. So this keys on the CALL SHAPE.
 	prompt
-	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard.sh:106.'
 	tool "mcp__Linear__save_comment"
 	run check
 	[ "$status" -eq 1 ]
@@ -118,7 +118,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# it a rule rather than a habit — and it must pass, or the gate punishes the
 	# correct behaviour.
 	prompt
-	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard.sh:106.'
 	tool "mcp__Linear__save_comment"
 	tool "mcp__Linear__save_issue"
 	run check
@@ -131,7 +131,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# trivially evaded by editing the source issue's own body, which schedules
 	# nothing and is the same stranding in a different spelling.
 	prompt
-	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 	tool_with_id "mcp__Linear__save_issue"
 	run check
 	[ "$status" -eq 1 ]
@@ -150,7 +150,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# The conjunct is *durable*, not *any tool use*. A turn that greps and reports
 	# is exactly the stranded case.
 	prompt
-	say 'Found it at mise-tasks/released:82.'
+	say 'Found it at mise-tasks/released.sh:82.'
 	tool "Bash"
 	tool "mcp__Linear__get_issue"
 	run check
@@ -181,7 +181,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# If it did, this one turn would split and the fragment carrying the write
 	# would clear while the fragment carrying the prose fired.
 	prompt
-	say 'Broken at mise-tasks/land:200.'
+	say 'Broken at mise-tasks/land.sh:200.'
 	tool "Bash"
 	result
 	tool "mcp__Linear__save_issue"
@@ -193,7 +193,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# The whole design in one assertion. Handing the prose back makes this a
 	# mirror, and a mirror is cleared by restating rather than by re-deriving.
 	prompt
-	say 'The defect is at mise-tasks/land:200 — SENTINELXYZZY is the distinctive marker.'
+	say 'The defect is at mise-tasks/land.sh:200 — SENTINELXYZZY is the distinctive marker.'
 	run check
 	[ "$status" -eq 1 ]
 	[[ "$output" != *"SENTINELXYZZY"* ]]
@@ -207,7 +207,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# session. A stale pointer is unactionable, so it trains the reader to skip the
 	# channel — the exact failure this mechanism exists to avoid.
 	prompt
-	say 'Broken at mise-tasks/land:200.'
+	say 'Broken at mise-tasks/land.sh:200.'
 	prompt
 	say 'Fixed and pushed, nothing further.'
 	run check
@@ -220,7 +220,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	prompt
 	say 'Rebased and pushed.'
 	prompt
-	say 'Broken at mise-tasks/land:200.'
+	say 'Broken at mise-tasks/land.sh:200.'
 	run check
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"turn:2"* ]]
@@ -264,7 +264,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# The counterpart. Every clean case above would also pass against a check that
 	# always exits 0; this asserts the firing path is real.
 	prompt
-	say 'At mise-tasks/stop-guard:1 the wiring is absent.'
+	say 'At mise-tasks/stop-guard.sh:1 the wiring is absent.'
 	run check
 	[ "$status" -eq 1 ]
 	[ -n "$output" ]
@@ -284,7 +284,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# shipped the defect is durably recorded and permanently unscheduled.
 	read_receipt CLOUD-199 done
 	prompt
-	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard.sh:106.'
 	tool_on_row "mcp__Linear__save_comment" issueId CLOUD-199
 	run check
 	[ "$status" -eq 1 ]
@@ -298,7 +298,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# bypassed and then enforces nothing.
 	read_receipt CLOUD-199 in-progress
 	prompt
-	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 	tool_on_row "mcp__Linear__save_issue" id CLOUD-199
 	run check
 	[ "$status" -eq 0 ]
@@ -310,7 +310,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# side as "closed", or it becomes the cheapest way to buy silence: skip the
 	# read, annotate anything, pass.
 	prompt
-	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 	tool_on_row "mcp__Linear__save_issue" id CLOUD-404
 	run check
 	[ "$status" -eq 1 ]
@@ -324,7 +324,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# that records it, and this is the row that holds it.
 	read_receipt CLOUD-405 -
 	prompt
-	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 	tool_on_row "mcp__Linear__save_issue" id CLOUD-405
 	run check
 	[ "$status" -eq 1 ]
@@ -336,7 +336,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# before someone has decided that it should.
 	read_receipt CLOUD-406 archived
 	prompt
-	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 	tool_on_row "mcp__Linear__save_issue" id CLOUD-406
 	run check
 	[ "$status" -eq 1 ]
@@ -349,7 +349,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# ever have been about `save_issue`.
 	read_receipt CLOUD-407 todo
 	prompt
-	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard:106.'
+	say 'run-shape-guard misses the bats path at mise-tasks/run-shape-guard.sh:106.'
 	tool_on_row "mcp__Linear__save_comment" issueId CLOUD-407
 	run check
 	[ "$status" -eq 0 ]
@@ -365,7 +365,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 		: >"$T"
 		read_receipt CLOUD-408 "$column"
 		prompt
-		say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+		say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 		tool_on_row "mcp__Linear__save_issue" id CLOUD-408
 		run check
 		[ "$status" -eq 0 ] || {
@@ -382,7 +382,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	cd "$BATS_TEST_TMPDIR" || return 1
 	read_receipt CLOUD-409 todo
 	prompt
-	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 	tool_on_row "mcp__Linear__save_issue" id CLOUD-409
 	run env GIT_CEILING_DIRECTORIES="$BATS_TEST_TMPDIR" bash -c "cd '$BATS_TEST_TMPDIR' && printf '%s' '$T' | '$CHECK'"
 	[ "$status" -eq 1 ]
@@ -395,7 +395,7 @@ check() { printf '%s' "$T" | "$CHECK"; }
 	# false-positive rate that gets a guard bypassed; it REPORTS here, because this
 	# one only ever nudges and the cost of a nudge is a sentence.
 	prompt
-	say 'The ordering key is wrong at mise-tasks/checks-green:164.'
+	say 'The ordering key is wrong at mise-tasks/checks-green.sh:164.'
 	tool_on_row "mcp__Linear__save_issue" id "7f3a-not-a-key"
 	run check
 	[ "$status" -eq 1 ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/run-shape-guard
+# subject: mise-tasks/run-shape-guard.sh
 # Neutralising text that *describes* the shapes rather than performing them.
 #
 # Every case here is one the guard denied while it was being written. A guard
@@ -8,7 +8,7 @@
 # documentation heredocs — precisely where these shapes get written down.
 
 setup() {
-	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard"
+	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard.sh"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
 

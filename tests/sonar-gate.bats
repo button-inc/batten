@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# subject: mise-tasks/sonar-gate
+# subject: mise-tasks/sonar-gate.sh
 # The external analyzer's verdict on a SHA (CLOUD-441), exercised through the
 # injected reading so every case runs offline — no `gh`, no stub, no network.
 #
@@ -8,7 +8,7 @@
 # task, and the task is where the name belongs.
 
 setup() {
-	GATE="$BATS_TEST_DIRNAME/../mise-tasks/sonar-gate"
+	GATE="$BATS_TEST_DIRNAME/../mise-tasks/sonar-gate.sh"
 	export SHA=deadbeef
 	export SONAR_CHECK_NAME="SonarCloud Code Analysis"
 }
