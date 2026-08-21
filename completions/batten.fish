@@ -946,7 +946,8 @@ cwd\t'The host\'s working directory'
 stop-hook-active\t'Whether this is a re-entered `Stop` hook'
 last-assistant-message\t'The assistant\'s last message'
 transcript-path\t'The path to the session transcript'
-prompt\t'The prompt a subagent spawn commits a fresh context window to'"
+prompt\t'The prompt a subagent spawn commits a fresh context window to'
+run-in-background\t'Whether the host was asked to run this call in the background'"
 complete -c batten -n "__fish_batten_using_subcommand payload; and __fish_seen_subcommand_from field" -l strictness -d 'Raise how strictly gates apply (an override may only tighten policy)' -r -f -a "permissive\t'Advisory: findings are reported without failing the run'
 standard\t'The default: a finding is a violation'
 strict\t'Everything `Standard` fails on, plus anything advisory'"

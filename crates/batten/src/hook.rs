@@ -1439,6 +1439,30 @@ pub enum Field {
     /// `enum_no_repr_variant_discriminant_changed` — a break — and this addition
     /// is patch-compatible only at the end. The order carries no meaning.
     Prompt,
+    /// Whether the host was asked to run this call in the background.
+    ///
+    /// `"true"` or `"false"`, never the flag's own JSON spelling: the caller is
+    /// a shell script comparing against a literal, and a decoder that echoed
+    /// `True` or `1` for some host would move the per-harness normalization out
+    /// of here and into every script.
+    ///
+    /// THE SECOND MEMBER READ OUT OF [`Envelope::input`], and the less exposed
+    /// of the two. The allowlist's safety argument is that it can never name
+    /// [`Envelope::input`] wholesale, because a tool input is among the likeliest
+    /// places in this engine for a secret to appear (non-negotiable rule 4); a
+    /// boolean projection of one named key cannot carry one. Absent reads as
+    /// absent rather than as `false` — "the host did not say" and "the host said
+    /// no" are the same decision for every caller today, but collapsing them
+    /// here would make them inseparable for one that is not.
+    ///
+    /// CLOUD-613 named this as a fact the mediated envelope hides, which is why
+    /// `run-shape-guard`'s surviving families could not be expressed as config
+    /// rows. It is hidden no longer; growing this allowlist is the deliberate
+    /// edit the type's own doc calls for, and CLOUD-821 is the caller that
+    /// needed it.
+    ///
+    /// APPENDED, never inserted, for the reason stated on [`Field::Prompt`].
+    RunInBackground,
 }
 
 impl Field {
@@ -1459,7 +1483,7 @@ impl Field {
             Field::Cwd => envelope.cwd.as_ref().map(|path| path.display().to_string()),
             Field::StopHookActive => envelope.stop_active.map(|active| active.to_string()),
             Field::LastAssistantMessage => envelope.last_message.clone(),
-            // The one member read out of `input`, and only ever this key. A
+            // Read out of `input`, and only ever this key. A
             // non-string value reads as absent rather than as its debug
             // rendering: a caller counting characters must never be handed
             // `{"a":1}` and told it is a prompt.
@@ -1469,6 +1493,16 @@ impl Field {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             Field::TranscriptPath => envelope.transcript.clone(),
+            // The second member read out of `input`, and only ever this key.
+            // Two spellings because the hosts disagree the same way they do
+            // over `tool_response`/`toolResponse`, and a caller must not have
+            // to know which host it is behind.
+            Field::RunInBackground => envelope
+                .input
+                .get("run_in_background")
+                .or_else(|| envelope.input.get("runInBackground"))
+                .and_then(Value::as_bool)
+                .map(|flag| flag.to_string()),
         };
         value.filter(|text| !text.is_empty())
     }
