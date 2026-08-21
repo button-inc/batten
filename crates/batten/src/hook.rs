@@ -2914,10 +2914,11 @@ fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Deci
 /// exactly the defect CLOUD-757 exists to prevent.
 ///
 /// **Which facts appear is `Class`'s answer, not this function's.**
-/// [`crate::facts::Surface::Hook`] is the predicate; `Document` and
-/// `AgentSourced` are absent because the model says they are not resolvable
-/// here, and if that classification changes this function follows it rather
-/// than being edited to agree.
+/// [`crate::facts::Surface::Hook`] is the predicate, and `Document` is the one
+/// variant it excludes today — the model says it is not resolvable here. If that
+/// classification changes this function follows it rather than being edited to
+/// agree, which is what
+/// `every_hook_resolvable_fact_is_projected_under_its_own_token` decides.
 ///
 /// # It costs no resolution, and that is measured rather than argued
 ///
@@ -5053,8 +5054,18 @@ mod tests {
     /// `Module` with no compiled engine is not a thing the boundary can produce
     /// and a test that fabricated one would be exercising a state the loader
     /// refuses.
-    fn module_policy(source: &str) -> Policy {
-        let dir = std::env::temp_dir().join(format!("batten-hook-policy-{}", std::process::id()));
+    ///
+    /// **Keyed by CASE as well as by process.** Every caller writes `gate.rego`,
+    /// so a directory keyed on the pid alone is shared by all of them — and the
+    /// stock harness runs a file's cases as threads in ONE process, so one case
+    /// can overwrite the module between another's write and its `policy::load`.
+    /// That surfaces as an intermittent wrong-module failure which reads as a
+    /// policy defect rather than as a fixture collision. `cargo nextest`, which
+    /// `test:cargo` uses, forks per case and hides it; the hazard is real for
+    /// anyone running the suite any other way.
+    fn module_policy(case: &str, source: &str) -> Policy {
+        let dir =
+            std::env::temp_dir().join(format!("batten-hook-policy-{case}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("scratch");
         std::fs::write(dir.join("gate.rego"), source).expect("write module");
         let row: Rule = serde_json::from_value(serde_json::json!({
@@ -5213,7 +5224,7 @@ violation contains {
 	input.facts.receipts.verify == "stale-head"
 }
 "#;
-        let policy = module_policy(READS_A_RECEIPT);
+        let policy = module_policy("projected-fact", READS_A_RECEIPT);
         let stale = {
             let mut verdicts = std::collections::BTreeMap::new();
             verdicts.insert("verify".to_owned(), crate::receipt::Validity::StaleHead);
@@ -5342,7 +5353,7 @@ deny contains "refused by the module" if {
     contains(input.call.command, "forbidden")
 }
 "#;
-        let policy = module_policy(DENIES_A_COMMAND);
+        let policy = module_policy("adjudication-chain", DENIES_A_COMMAND);
 
         let decision = adjudicate(
             &policy,
