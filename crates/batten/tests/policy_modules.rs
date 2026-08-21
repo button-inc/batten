@@ -16,6 +16,9 @@
 //! empty deny set, and it must never be read as a deny either — a gate that
 //! refuses where it could not look becomes the reason work cannot proceed.
 
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::fs;
 use std::path::Path;
 
@@ -59,7 +62,7 @@ deny contains "a write, refused by the module" if {
 
 /// Direct recursion. Accepted by `add_policy`, refused when queried — which is
 /// the whole reason `load` queries.
-const CYCLIC: &str = r#"
+const CYCLIC: &str = r"
 package batten
 
 import rego.v1
@@ -67,7 +70,7 @@ import rego.v1
 deny contains msg if {
     deny[msg]
 }
-"#;
+";
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("batten-policy-{name}-{}", std::process::id()));
