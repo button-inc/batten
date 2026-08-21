@@ -173,6 +173,22 @@ local gate = new Mapping<String, Step> {
   ["license-table-check"] {
     check = "mise run license-table-check"
   }
+  // The mechanism CLOUD-847 shipped without (CLOUD-860). That row landed
+  // `.coderabbit.yaml` after measuring what each key buys — a formal
+  // CHANGES_REQUESTED review so a verdict exists at all, review on drafts so it
+  // exists in the phase that costs nothing, and `gitleaks` kept because
+  // `mise run ci` is `if: draft == false` and a draft would otherwise have no
+  // secret scanning. Nothing then held the file to those readings, and the
+  // failure is silent in the worst direction: reviews simply stop, which looks
+  // exactly like nobody having pushed.
+  //
+  // Globbed on the one file it reads, unlike its glob-less neighbours above: a
+  // commit touching nothing else cannot change the answer, so the whole-index
+  // scan they need would only cost time here.
+  ["coderabbit-config-check"] {
+    glob = List(".coderabbit.yaml")
+    check = "mise run coderabbit-config-check"
+  }
   // The two-tier gate ships with its mechanism (non-negotiable 2). The steps
   // below marked `profiles = List("slow")` are skipped at pre-commit and run by
   // `check`, and the dangerous direction is not the obvious one: a tier that
