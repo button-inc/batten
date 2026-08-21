@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.98](https://github.com/button-inc/batten/compare/v0.0.97...v0.0.98) - 2026-08-21
+
+### Added
+
+- *(gate)* declare every suite's subject and delete the waiver
+- *(rules)* [**breaking**] let a ratchet admit a decrease when the subject died
+
+### Other
+
+- *(rules)* pin retires_with on the case a blanket waiver cannot express
+- *(rules)* decide the concurrency posture, and measure the number it rested on
+- *(lint)* gate a new shell-out arriving, with the verdict on the line
+
 ## [0.0.97](https://github.com/button-inc/batten/compare/v0.0.96...v0.0.97) - 2026-08-21
 
 ### Added
