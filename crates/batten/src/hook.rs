@@ -344,6 +344,28 @@ pub struct Capabilities {
     /// [`AskReach::enforced_on`] is where Batten can reach it, and
     /// [`Capabilities::ask_reachable`] is the only question a dispatch asks.
     pub ask: AskReach,
+    /// Where a **non-blocking** message to the model is actually delivered on
+    /// this host (CLOUD-461).
+    ///
+    /// The third channel, and the one the engine had no way to express. `ask`
+    /// and the deny both answer *may this call proceed*; an advisory answers
+    /// nothing — it carries context to the model and the call proceeds either
+    /// way. `contract-drift` is the worked instance: a drift notice is not a
+    /// refusal, and the only model-facing channel `PreToolUse` offers is exit 2,
+    /// which blocks (CLOUD-97 and CLOUD-219 each ruled that out independently).
+    ///
+    /// Event-scoped for the same reason [`AskReach`] is, and here the reason is
+    /// sharper: the channel is a property of the MOMENT rather than of the host.
+    /// Claude Code delivers `additionalContext` at a batch boundary and at
+    /// session start and says nothing about it on the pre-tool event, so a
+    /// per-host bool could not express where an advisory actually lands.
+    ///
+    /// A host with no reachable surface produces **nothing** — never a deny, and
+    /// never a fallback that blocks. That asymmetry is the mirror of
+    /// [`encode_ask`]'s: an unreachable escalation degrades to a refusal because
+    /// proceeding would invert the policy, and an unreachable advisory degrades
+    /// to silence because refusing would invent one.
+    pub advisory: AdvisoryReach,
     /// Whether a stop-family event can veto completion.
     ///
     /// **`false` on every surveyed host, Claude included** — all of them can only
@@ -529,12 +551,22 @@ pub enum Capability {
     ExposesSessionId,
     /// [`AttributionCapabilities::config_surface`].
     AttributionConfigSurface,
+    /// [`Capabilities::advisory`] (CLOUD-461).
+    ///
+    /// **Appended rather than slotted beside [`Capability::Ask`]**, where it
+    /// belongs by meaning. `semver` reads a reordered variant as
+    /// `enum_no_repr_variant_discriminant_changed`, so declaration order is an
+    /// API fact and grouping is a readability one. [`Capability::ALL`] and
+    /// [`Capability::DISPATCH`] carry the grouping — they are the order output
+    /// is rendered in, and they are free to say what this list cannot.
+    Advisory,
 }
 
 impl Capability {
     /// Every scalar capability, so a census is derived rather than hand-kept.
     pub const ALL: &'static [Capability] = &[
         Capability::Ask,
+        Capability::Advisory,
         Capability::StopVetoesCompletion,
         Capability::TimeoutFailsOpen,
         Capability::NeedsFailClosedConfig,
@@ -551,6 +583,7 @@ impl Capability {
     /// it fails.
     pub const DISPATCH: &'static [Capability] = &[
         Capability::Ask,
+        Capability::Advisory,
         Capability::StopVetoesCompletion,
         Capability::TimeoutFailsOpen,
         Capability::NeedsFailClosedConfig,
@@ -582,6 +615,7 @@ impl Capability {
     pub const fn as_str(self) -> &'static str {
         match self {
             Capability::Ask => "ask",
+            Capability::Advisory => "advisory",
             Capability::StopVetoesCompletion => "stop-vetoes-completion",
             Capability::TimeoutFailsOpen => "timeout-fails-open",
             Capability::NeedsFailClosedConfig => "needs-fail-closed-config",
@@ -646,6 +680,52 @@ impl AskReach {
     }
 }
 
+/// Where a non-blocking message to the model is delivered on one host, and what
+/// that host declares (CLOUD-461).
+///
+/// [`AskReach`]'s shape, applied to the advisory channel, and event-scoped for a
+/// stronger reason than `ask` needed. `ask` is event-scoped because one host's
+/// four pre-tool events disagree; this is event-scoped because **the channel
+/// belongs to the moment**. Claude Code documents `additionalContext` at the
+/// batch boundary — *"inject context once for the whole batch"* — and this
+/// repository has run it there and at `SessionStart` and `Stop`; the pre-tool
+/// event offers no such field at all, only the verdict. So "does this host have
+/// an advisory channel" is not a question with one answer.
+///
+/// The events are the **host's own spellings**, for the reason [`AskReach`]
+/// gives: normalizing them would erase the granularity the fact lives at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AdvisoryReach {
+    /// The host event spellings on which an emitted advisory actually reaches
+    /// the model.
+    ///
+    /// Empty means Batten cannot speak to the model on this host without
+    /// deciding something — which resolves to **silence** at the boundary, never
+    /// to a deny. An advisory that degraded to a refusal would invent a verdict
+    /// nobody asked for, which is the exact inversion [`encode_ask`] refuses in
+    /// the other direction.
+    pub delivered_on: &'static [&'static str],
+    /// What the evidence says about the host itself, with its citation in the
+    /// row's own comment.
+    ///
+    /// Distinct from `delivered_on` for the reason [`AskReach::declared`] is:
+    /// the gap between what a host has and where Batten can reach it must be
+    /// **stated** rather than merely true — see `ADVISORY_GAPS`.
+    pub declared: Declaration,
+}
+
+impl AdvisoryReach {
+    /// The row for a host Batten cannot speak to without deciding something.
+    #[must_use]
+    pub const fn unreachable(declared: Declaration) -> AdvisoryReach {
+        AdvisoryReach {
+            delivered_on: &[],
+            declared,
+        }
+    }
+}
+
 impl Capabilities {
     /// Whether this host emits `event`.
     #[must_use]
@@ -666,6 +746,19 @@ impl Capabilities {
         self.ask.enforced_on.contains(&raw_event)
     }
 
+    /// Whether an advisory emitted at this host's `raw_event` reaches the model.
+    ///
+    /// **The one authority the advisory dispatch consults**, so no emitter
+    /// reconstructs the answer from a host name — which is the drift
+    /// [`Capabilities::ask_reachable`] was extracted to stop, one channel over.
+    ///
+    /// The comparison is on the host's own spelling, so it answers correctly for
+    /// a host whose events do not agree with each other about the channel.
+    #[must_use]
+    pub fn advisory_reachable(&self, raw_event: &str) -> bool {
+        self.advisory.delivered_on.contains(&raw_event)
+    }
+
     /// What this host declares for one scalar capability.
     ///
     /// The projection that makes the table's second axis rangeable. The `bool`
@@ -677,6 +770,7 @@ impl Capabilities {
     pub const fn declares(&self, capability: Capability) -> Declaration {
         match capability {
             Capability::Ask => self.ask.declared,
+            Capability::Advisory => self.advisory.declared,
             Capability::StopVetoesCompletion => measured(self.stop_vetoes_completion),
             Capability::TimeoutFailsOpen => measured(self.timeout_fails_open),
             Capability::NeedsFailClosedConfig => measured(self.needs_fail_closed_config),
@@ -967,6 +1061,25 @@ impl Harness {
                     enforced_on: &["PreToolUse"],
                     declared: Declaration::Yes,
                 },
+                // The three surfaces this repository has actually run an
+                // advisory on, which is why they and not the other five are
+                // listed. `PostToolBatch` is documented for exactly this —
+                // "return additionalContext via hookSpecificOutput to inject
+                // context once for the whole batch" — and CLOUD-187 measured the
+                // entry firing; `SessionStart` seeds the same notice; `Stop`
+                // carries `stop-guard`'s, whose header records all three
+                // channels verified by probe.
+                //
+                // `PostToolUse` and `UserPromptSubmit` are documented to accept
+                // the field and are NOT listed, because nothing here has probed
+                // them. That is the `Unknown`-versus-`No` discipline applied to
+                // a surface rather than a host: an unprobed surface left out
+                // costs silence, and one guessed in costs a channel that
+                // swallows notices without saying so. `ADVISORY_GAPS` states it.
+                advisory: AdvisoryReach {
+                    delivered_on: &["PostToolBatch", "SessionStart", "Stop"],
+                    declared: Declaration::Yes,
+                },
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1007,6 +1120,11 @@ impl Harness {
                     enforced_on: &["beforeShellExecution", "beforeMCPExecution"],
                     declared: Declaration::Yes,
                 },
+                // `Unknown`, not `No`: M1 surveys this host's verdict vocabulary
+                // and carries no row for a non-blocking message to the model at
+                // all, so the evidence does not answer. Recorded as a gap rather
+                // than guessed into either value.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: true,
@@ -1025,6 +1143,10 @@ impl Harness {
                 // (CLOUD-757's three-valued discipline); guessing is not, so
                 // `enforced_on` is empty until a primary-doc fetch fills it.
                 ask: AskReach::unreachable(Declaration::Unknown),
+                // Same evidentiary state as this host's `ask` row and for the
+                // same reason: the output object is unconfirmed by primary
+                // docs, so no envelope can be emitted without guessing one.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: true,
                 needs_fail_closed_config: false,
@@ -1037,6 +1159,18 @@ impl Harness {
                 // here — degrading to *allow* would turn "ask a human" into "go
                 // ahead".
                 ask: AskReach::unreachable(Declaration::No),
+                // `Yes` on the host and reachable on nothing, which is the one
+                // shape `ADVISORY_GAPS` exists for. Gemini's documented "Golden
+                // Rule" treats unparseable stdout as a `systemMessage` — a
+                // non-blocking message to the model, so the host demonstrably
+                // HAS the channel. Batten cannot reach it: the only door is
+                // writing bytes this host's own `stdout_must_stay_clean` row
+                // forbids, and no documented in-band field carries one.
+                // Declaring `Unknown` here would be the easier answer and the
+                // false one — the evidence answers, and what it answers is that
+                // the gap is Batten's rather than the host's. CLOUD-44's
+                // per-host emitter shim is what would close it.
+                advisory: AdvisoryReach::unreachable(Declaration::Yes),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1049,6 +1183,9 @@ impl Harness {
                 // supported yet" in the docs. Advertised is not available, and
                 // that is a measurement rather than a gap — hence `No`.
                 ask: AskReach::unreachable(Declaration::No),
+                // The survey names this host's verdict fields and no advisory
+                // one. Unanswered, so `Unknown`.
+                advisory: AdvisoryReach::unreachable(Declaration::Unknown),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -1060,6 +1197,11 @@ impl Harness {
                 // Not a host: the channel is the exit status alone, which has no
                 // third value to carry an escalation. Measured, not unsurveyed.
                 ask: AskReach::unreachable(Declaration::No),
+                // `No`, and measured for the same reason: an exit status has no
+                // room for a message. This is the normalized envelope Batten
+                // itself defines, so the shape IS the answer rather than a gap
+                // in somebody else's documentation.
+                advisory: AdvisoryReach::unreachable(Declaration::No),
                 stop_vetoes_completion: false,
                 timeout_fails_open: false,
                 needs_fail_closed_config: false,
@@ -4080,6 +4222,46 @@ pub fn encode_claude_deny(event: &str, reason: &str) -> serde_json::Result<Strin
     encode_claude_verdict(event, "deny", reason)
 }
 
+/// Claude Code's advisory payload: the `hookSpecificOutput.additionalContext`
+/// object the host reads from stdout on exit 0 (CLOUD-461).
+///
+/// **A different object from [`ClaudeVerdict`], not a variant of it**, and the
+/// separation is the contract rather than a serde detail. A verdict body carries
+/// `permissionDecision`; this one structurally cannot, so an advisory has no
+/// field a refusal could occupy and no code path can turn one into the other by
+/// passing a different word. That is the same property `Finding` has for matched
+/// bytes (non-negotiable rule 4) — structural, not disciplined.
+///
+/// Field order is struct order, so the emission is byte-stable (§6).
+#[derive(Serialize)]
+struct ClaudeAdvice<'a> {
+    #[serde(rename = "hookSpecificOutput")]
+    hook_specific_output: ClaudeAdviceInner<'a>,
+}
+
+#[derive(Serialize)]
+struct ClaudeAdviceInner<'a> {
+    #[serde(rename = "hookEventName")]
+    hook_event_name: &'a str,
+    #[serde(rename = "additionalContext")]
+    additional_context: &'a str,
+}
+
+/// Encode an advisory for the Claude Code adapter.
+///
+/// # Errors
+///
+/// Serialization of this fixed shape cannot practically fail; the `Result` is
+/// the honest signature for a serde boundary.
+pub fn encode_claude_advice(event: &str, context: &str) -> serde_json::Result<String> {
+    serde_json::to_string(&ClaudeAdvice {
+        hook_specific_output: ClaudeAdviceInner {
+            hook_event_name: event,
+            additional_context: context,
+        },
+    })
+}
+
 /// Cursor's verdict body, shared by every token it documents.
 ///
 /// A different shape for a different reason than Claude's: Cursor documents no
@@ -4213,6 +4395,88 @@ pub fn encode_ask(
         }
     }
 }
+
+/// Encode an **advisory** body for `harness`, or `None` where no non-blocking
+/// channel to the model is reachable on this surface (CLOUD-461).
+///
+/// `None` is the caller's instruction to say **nothing to the model**. It is
+/// never a deny and never a verdict of any kind, and that asymmetry is the whole
+/// clause — the exact mirror of [`encode_ask`]'s. An unreachable escalation
+/// degrades to a refusal because proceeding would inverta policy somebody
+/// wrote; an unreachable advisory degrades to silence because refusing would
+/// invent a policy nobody wrote. A drift notice that blocked a call would be the
+/// deny CLOUD-97 and CLOUD-219 each ruled out.
+///
+/// **The capability table is consulted first, and asked about THIS EVENT.** The
+/// channel is a property of the moment rather than of the host: Claude Code
+/// delivers `additionalContext` at a batch boundary and offers no such field on
+/// the pre-tool event, where the only model-facing channel is exit 2. Asking the
+/// host-level question would put an advisory on a surface that discards it,
+/// which is indistinguishable from a notice nobody wrote.
+///
+/// A `None` here costs a line the model does not see. It never costs a verdict,
+/// so there is no degradation direction to forbid — which is why this function
+/// has no counterpart to [`encode_ask`]'s hard-deny instruction.
+///
+/// # Errors
+///
+/// Serialization of these fixed shapes cannot practically fail; the `Result` is
+/// the honest signature for a serde boundary.
+pub fn encode_advice(
+    harness: Harness,
+    event: &str,
+    context: &str,
+) -> serde_json::Result<Option<String>> {
+    // The table, consulted before the shape, and asked about this event.
+    if !harness.capabilities().advisory_reachable(event) {
+        return Ok(None);
+    }
+    match harness {
+        Harness::ClaudeCode => encode_claude_advice(event, context).map(Some),
+        // No reachable surface, and stated rather than wildcarded so a row that
+        // ever gains a `delivered_on` entry has to come back here and answer for
+        // its wire shape. Cursor documents a verdict body and no advisory one;
+        // Copilot's output object is unconfirmed; Gemini's only advisory channel
+        // is the stdout its own `stdout_must_stay_clean` row forbids; Codex is
+        // unsurveyed; the neutral adapter has an exit status and nothing else.
+        Harness::Cursor
+        | Harness::CopilotCli
+        | Harness::GeminiCli
+        | Harness::CodexCli
+        | Harness::ExitCode => Ok(None),
+    }
+}
+
+/// Surfaces where an advisory is documented and Batten does not use it,
+/// **stated** (CLOUD-461).
+///
+/// `ASK_GAPS`' discipline applied to the third channel, and it is worth the
+/// table for a reason `ask` did not have: an advisory that goes nowhere is
+/// **silent by design**, so the failure mode of a wrong row here is a notice
+/// nobody ever sees and nobody can tell from a notice nobody wrote. A deny that
+/// fails to reach a host is loud; this is not.
+///
+/// The census over `Harness::ALL` fails when a host declares the channel and
+/// reaches none of it and no row says so, **and** when a row here no longer
+/// describes a gap — so probing a surface fails until its row is removed.
+///
+/// `pub` because being readable IS the mechanism.
+pub const ADVISORY_GAPS: &[(Harness, &str)] = &[
+    (
+        Harness::ClaudeCode,
+        "`PostToolUse` and `UserPromptSubmit` are documented to accept \
+         `additionalContext` and are NOT in `delivered_on`, because nothing here \
+         has probed them. Listing an unprobed surface costs a notice that \
+         vanishes silently; leaving it out costs only silence.",
+    ),
+    (
+        Harness::GeminiCli,
+        "the documented \"Golden Rule\" treats unparseable stdout as a \
+         `systemMessage`, which is an advisory channel whose only door is the \
+         stdout this host's `stdout_must_stay_clean` row forbids. CLOUD-44's \
+         per-host emitter shim is what would reach it.",
+    ),
+];
 
 /// Hosts whose declared escalation and reachable escalation disagree, **stated**.
 ///
@@ -7364,6 +7628,160 @@ deny contains "refused by the module" if {
         let two = encode_claude_deny("PreToolUse", "reason").expect("serializes");
         assert_eq!(one, two);
         assert!(one.contains("\"permissionDecision\":\"deny\""));
+    }
+
+    // ---------------------------------------------------------------------
+    // CLOUD-461: the advisory channel.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn the_claude_advice_shape_is_byte_stable() {
+        let one = encode_claude_advice("PostToolBatch", "context").expect("serializes");
+        let two = encode_claude_advice("PostToolBatch", "context").expect("serializes");
+        assert_eq!(one, two);
+        assert_eq!(
+            one,
+            "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolBatch\",\
+             \"additionalContext\":\"context\"}}",
+            "the advisory body is pinned by bytes, not by substring (§6)"
+        );
+    }
+
+    /// An advisory can never carry a verdict, and that is structural.
+    ///
+    /// Fails by: giving [`ClaudeAdvice`] a `permissionDecision` field, or routing
+    /// the advisory through [`encode_claude_verdict`] to "reuse the envelope".
+    /// Both would compile and both would let a notice refuse a call — the thing
+    /// CLOUD-97 and CLOUD-219 each ruled out independently, arriving through a
+    /// serde detail rather than through a decision.
+    #[test]
+    fn an_advisory_body_has_no_field_a_verdict_could_occupy() {
+        let body = encode_claude_advice("PostToolBatch", "context").expect("serializes");
+        assert!(!body.contains("permissionDecision"));
+        assert!(!body.contains("permissionDecisionReason"));
+        // And the two objects are genuinely different shapes rather than one
+        // shape with a field omitted, so no caller can turn one into the other.
+        let verdict = encode_claude_deny("PreToolUse", "reason").expect("serializes");
+        assert!(!verdict.contains("additionalContext"));
+    }
+
+    /// The channel is asked about the EVENT, never about the host.
+    ///
+    /// Fails by: making `advisory_reachable` a per-host bool, or listing
+    /// `PreToolUse` in Claude Code's `delivered_on`. Either would put a notice on
+    /// the one surface whose only model-facing channel is exit 2 — where an
+    /// advisory is either discarded or becomes the deny this issue exists to
+    /// avoid.
+    #[test]
+    fn an_advisory_is_silent_on_a_surface_that_would_not_deliver_it() {
+        let claude = Harness::ClaudeCode;
+        assert!(claude.capabilities().advisory_reachable("PostToolBatch"));
+        assert!(!claude.capabilities().advisory_reachable("PreToolUse"));
+        assert_eq!(
+            encode_advice(claude, "PreToolUse", "context").expect("serializes"),
+            None,
+            "the pre-tool surface offers no advisory field, so nothing is emitted"
+        );
+        assert!(
+            encode_advice(claude, "PostToolBatch", "context")
+                .expect("serializes")
+                .is_some()
+        );
+    }
+
+    /// An unreachable advisory degrades to SILENCE, never to a verdict.
+    ///
+    /// The mirror of `encode_ask`'s hard-deny instruction, and the asymmetry is
+    /// the point: degrading an escalation to an allow would invert a policy
+    /// somebody wrote, and degrading an advisory to a deny would invent one
+    /// nobody wrote.
+    ///
+    /// Fails by: giving any non-Claude arm of [`encode_advice`] a body, or making
+    /// the `None` path return an `Err`.
+    #[test]
+    fn an_advisory_on_a_host_with_no_channel_is_silence_rather_than_a_deny() {
+        for harness in Harness::ALL {
+            if *harness == Harness::ClaudeCode {
+                continue;
+            }
+            for (_, spelling) in harness.wiring().map_or(&[][..], |w| w.spellings) {
+                assert_eq!(
+                    encode_advice(*harness, spelling, "context").expect("serializes"),
+                    None,
+                    "{}: no advisory channel is declared here, so nothing may be emitted \
+                     on `{spelling}`",
+                    harness.as_str()
+                );
+            }
+        }
+    }
+
+    /// Every host that declares the channel reaches some of it, or the gap is
+    /// **stated**.
+    ///
+    /// `ASK_GAPS`' census one channel over, and it matters more here: an advisory
+    /// that goes nowhere is silent by design, so a wrong row produces a notice
+    /// nobody sees and nobody can distinguish from a notice nobody wrote.
+    ///
+    /// Fails by: probing `PostToolUse` into Claude Code's `delivered_on` without
+    /// deleting its `ADVISORY_GAPS` row, or adding a `delivered_on` entry to a
+    /// host whose row says it has none.
+    #[test]
+    fn a_declared_advisory_is_delivered_somewhere_or_the_gap_is_stated() {
+        for harness in Harness::ALL {
+            let capabilities = harness.capabilities();
+            let declared = capabilities.declares(Capability::Advisory);
+            let stated = ADVISORY_GAPS.iter().any(|(row, _)| row == harness);
+
+            // `No` and `Unknown` both mean nothing is reachable, for opposite
+            // reasons, and NEITHER states a gap. A gap is a disagreement between
+            // what a host has and what Batten reaches — measured-absent has
+            // nothing to disagree with, and unsurveyed has nothing to disagree
+            // *from*. `declared` already carries the difference, and duplicating
+            // it in a second table is how the two answers come to drift.
+            if matches!(declared, Declaration::No | Declaration::Unknown) {
+                assert!(
+                    capabilities.advisory.delivered_on.is_empty(),
+                    "{}: declares `{}` and delivers an advisory anyway — a channel \
+                     nothing measured cannot be one something reaches",
+                    harness.as_str(),
+                    declared.as_str()
+                );
+                assert!(
+                    !stated,
+                    "{}: declares `{}`, which is not a gap between a host and Batten; \
+                     the unanswered state IS the record",
+                    harness.as_str(),
+                    declared.as_str()
+                );
+                continue;
+            }
+
+            // Every host a row names must actually have something unreached: a
+            // stale citation is the failure this table exists to prevent, and it
+            // is invisible without this half.
+            let events = capabilities.events.len();
+            let reached = capabilities.advisory.delivered_on.len();
+            if stated {
+                assert!(
+                    reached < events,
+                    "{}: ADVISORY_GAPS names it and every emitted surface is already \
+                     delivered on — remove the row rather than leaving the citation",
+                    harness.as_str()
+                );
+            } else {
+                assert!(
+                    reached > 0,
+                    "{}: declares the channel, reaches none of it, and states no gap. \
+                     A gap must be STATED, never merely true",
+                    harness.as_str()
+                );
+            }
+        }
+        assert!(
+            !ADVISORY_GAPS.is_empty(),
+            "the census is vacuous if no row exists to judge"
+        );
     }
 
     // ---------------------------------------------------------------------

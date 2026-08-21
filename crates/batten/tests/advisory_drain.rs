@@ -221,16 +221,52 @@ fn watermark(home: &Path) -> Option<(u64, String)> {
     None
 }
 
-/// The drain payload on stderr, with Batten's own `batten: ` notes removed —
-/// those are messages *about* Batten and travel on a different channel by
-/// construction (`output::message` vs `output::verdict`).
+/// The drain payload, read off **whichever channel this host delivers it on**
+/// (CLOUD-461).
+///
+/// It was stderr unconditionally, and that was the defect rather than the
+/// contract: on Claude Code stderr is not shown to the model on exit 0, so the
+/// one thing in the engine whose purpose is to report findings back to the agent
+/// was reporting them where the agent could not read them. A host that declares
+/// an advisory channel now gets the payload in-band on stdout; one that declares
+/// none keeps stderr, where it is the operator's.
+///
+/// Reading both here keeps every case below about the **state machine** — how
+/// many drains, coalesced or not, which event wakes it — rather than about the
+/// channel. Which channel each host uses is one fact, owned by
+/// `the_advisory_reaches_the_model_in_band_where_the_host_delivers_it` alone, so
+/// moving it does not mean editing twenty assertions.
+///
+/// Batten's own `batten: ` notes are removed either way: those are messages
+/// *about* Batten and travel on a different channel by construction
+/// (`output::message` vs `output::verdict`).
 fn payload(output: &Output) -> Vec<String> {
-    common::stderr(output)
-        .lines()
+    let text = advisory_context(output).unwrap_or_else(|| common::stderr(output));
+    text.lines()
         .filter(|line| !line.starts_with("batten: "))
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// The `additionalContext` of the advisory document on stdout, if there is one.
+///
+/// `None` means this host emitted no in-band advisory — either it declares no
+/// channel, or nothing was drained. The two are distinguished by the caller, not
+/// here: an empty payload is the same claim on either channel.
+fn advisory_context(output: &Output) -> Option<String> {
+    let raw = common::stdout(output);
+    if raw.trim().is_empty() {
+        return None;
+    }
+    let document: serde_json::Value = serde_json::from_str(&raw)
+        .expect("anything Batten writes to stdout on a hook surface is one JSON document");
+    Some(
+        document["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .expect("an advisory document carries additionalContext")
+            .to_owned(),
+    )
 }
 
 #[test]
@@ -255,9 +291,71 @@ fn a_post_tool_event_drains_the_store_as_pointer_lines() {
         "a pointer, never the matched content"
     );
 
-    // Nothing goes to stdout: on this host stdout is the decision channel, and a
-    // stray byte there is a document the host would try to read as one.
-    assert!(common::stdout(&first).is_empty());
+    // Stdout carries exactly ONE document, and it is an advisory rather than a
+    // verdict (CLOUD-461). The premise this assertion used to carry — "a stray
+    // byte on stdout is a document the host would try to read as one" — is
+    // right, and the conclusion drawn from it was wrong: the host reading it as
+    // a document is precisely how a notice reaches the model. What must hold is
+    // that the document cannot decide anything.
+    let raw = common::stdout(&first);
+    assert_eq!(raw.lines().count(), 1, "one boundary, one document");
+    let document: serde_json::Value = serde_json::from_str(&raw).expect("stdout is one document");
+    assert_eq!(
+        document["hookSpecificOutput"]["hookEventName"],
+        "PostToolBatch"
+    );
+    assert!(
+        document["hookSpecificOutput"]["permissionDecision"].is_null(),
+        "an advisory has no field a verdict could occupy — it cannot refuse a call"
+    );
+    assert!(
+        !raw.contains("TODO"),
+        "pointer-only survives the change of channel (rule 4)"
+    );
+}
+
+#[test]
+fn the_advisory_reaches_the_model_in_band_where_the_host_delivers_it() {
+    // CLOUD-461, and the one case that owns the CHANNEL. Two harnesses, one
+    // payload each at their own boundary: the host that declares
+    // `additionalContext` gets the finding in-band on stdout, where the model
+    // reads it; the host that declares no channel keeps it on stderr, which is
+    // the operator's and is where it silently sat for every host before this.
+    //
+    // Fails by: routing the drain back through `output::verdict(err, ..)`
+    // unconditionally, or giving `exit-code` a `delivered_on` entry.
+    let (repo, home) = drained_fixture("drain-channel", "");
+
+    let claude = hook_as(&repo, &home, "claude-code", &post_tool_batch("s1"));
+    assert_eq!(
+        claude.status.code(),
+        Some(0),
+        "an advisory never changes the exit code"
+    );
+    let context = advisory_context(&claude).expect("claude-code delivers additionalContext");
+    assert!(
+        context.contains("no-todo"),
+        "the finding travels in band: {context}"
+    );
+    assert!(
+        !common::stderr(&claude)
+            .lines()
+            .any(|line| line.contains("no-todo")),
+        "and it is not ALSO on stderr — two copies of one notice is two channels to keep in step"
+    );
+
+    let neutral = hook_as(&repo, &home, "exit-code", &post_tool("s2"));
+    assert_eq!(neutral.status.code(), Some(0));
+    assert!(
+        advisory_context(&neutral).is_none(),
+        "a host declaring no channel emits no in-band document"
+    );
+    assert!(
+        common::stderr(&neutral)
+            .lines()
+            .any(|line| line.contains("no-todo")),
+        "its finding stays on the operator's stream rather than being dropped"
+    );
 }
 
 #[test]

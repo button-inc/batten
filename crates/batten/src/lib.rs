@@ -1835,7 +1835,7 @@ fn run_hook(
     // — an advisory surface at an event that cannot refuse anything is
     // structurally unable to block (house-style §0.3).
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
-        drain_advisories(&envelope, overrides, mode, err)?;
+        drain_advisories(harness, &envelope, overrides, mode, out, err)?;
     }
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
@@ -2141,10 +2141,47 @@ fn fire_actions(
 /// A drain failure is **fail-loud and never a deny**: the error propagates to the
 /// binary boundary as an ordinary failure, where §7 spends `1`/`3`, neither of
 /// which any host reads as a refusal.
+/// Put one advisory in front of the model, on whichever channel this host
+/// actually delivers (CLOUD-461).
+///
+/// **The choice is the capability table's, asked about this event's host
+/// spelling**, so no caller reconstructs it from a harness name. `Some` body
+/// means the host reads an in-band document on exit 0 and the advisory goes to
+/// **stdout**; `None` means it declares no such channel and the text stays on
+/// stderr, where it is the operator's rather than the model's.
+///
+/// **Never a verdict, on either branch.** [`hook::encode_advice`] emits an
+/// object with no `permissionDecision` field, the exit code is untouched, and
+/// this runs only at a boundary where `adjudicate` has already returned
+/// `Allow` — so stdout carries at most one document per invocation and none of
+/// them can refuse a call. An advisory surface that could block would be a gate
+/// (house-style §0.3), and `drain.rs` states that as its own contract.
+fn emit_advisory(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+    text: &str,
+) -> Result<()> {
+    match hook::encode_advice(harness, &envelope.raw_event, text)? {
+        Some(body) => {
+            writeln!(out, "{body}")?;
+        }
+        // No reachable channel: silence toward the model, and the text stays on
+        // the operator's stream. Not a deny and not an error — an advisory that
+        // degraded to either would invent a verdict nobody wrote, which is the
+        // mirror of the inversion `encode_ask` refuses.
+        None => output::verdict(err, text)?,
+    }
+    Ok(())
+}
+
 fn drain_advisories(
+    harness: hook::Harness,
     envelope: &hook::Envelope,
     overrides: &Overrides,
     mode: Mode,
+    out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<()> {
     // The repository, resolved through the one finder (CLOUD-824). This read
@@ -2272,10 +2309,17 @@ fn drain_advisories(
     {
         let _ = journal::merge(&dir)?;
     }
+    // The channel, chosen by the capability table rather than by this module
+    // (CLOUD-461). Until it existed the drain wrote to **stderr**, which on
+    // Claude Code is not shown to the model on exit 0 — so the one thing in the
+    // engine whose entire purpose is to report findings back to the agent was
+    // reporting them where the agent could not read them. `emit_advisory` puts
+    // both outcomes on the surface the host actually delivers, and keeps stderr
+    // for the hosts that declare no channel, where it is still the operator's.
     if emitted {
-        output::verdict(err, &drain::render(&drained))?;
+        emit_advisory(harness, envelope, out, err, &drain::render(&drained))?;
     } else if repeat && !drained.lines.is_empty() {
-        output::verdict(err, drain::UNCHANGED)?;
+        emit_advisory(harness, envelope, out, err, drain::UNCHANGED)?;
     }
 
     // Volume and suppression counts are the operator's, not the agent's: they
