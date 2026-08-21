@@ -23,12 +23,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-use common::{Fixture, batten, git_in, scratch, stdout};
-// Only the `exec` cases below need it, and they are `cfg(unix)` — `batten exec`'s
-// process-group ownership is Unix-only, so the whole verb is. Ungated, this is an
-// unused import on the Windows triple, which `cross-check --all-targets` denies.
-#[cfg(unix)]
-use common::StateHome;
+use common::{Fixture, StateHome, batten, git_in, scratch, stdout};
 
 /// A pull-request-shaped fixture: `base` committed and pinned as `origin/main`,
 /// then `working` written into the tree on top (committed, so the tree is clean
@@ -845,5 +840,311 @@ fn exec_without_the_flag_declares_no_patterns_in_a_config_less_tree() {
         output.status.code(),
         Some(0),
         "the child's own exit code passes through untouched"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The offline last-known-good lifecycle (CLOUD-720).
+//
+// The matrix §2 asks for: three ref states — unreachable, resolvable with no
+// config, resolvable with config — crossed with `[trust] offline_fallback`.
+// Every cell is decided by the compiled binary's exit code and its
+// messaging-channel line, never by reading the code.
+// ---------------------------------------------------------------------------
+
+/// A base config carrying one rule, and the offline key when `offline` is set.
+fn trusting(offline: bool) -> String {
+    let key = if offline {
+        "[trust]\noffline_fallback = true\n"
+    } else {
+        ""
+    };
+    format!("version = 1\n{key}{}", rule("no-todo", "deny"))
+}
+
+/// Run `batten` in `repo` with its state directory pointed at `state`.
+///
+/// The pin lives in the per-repository state directory, so a test that did not
+/// isolate it would read whatever this machine's real one happens to hold — and
+/// would write into it.
+fn run_stateful(repo: &Path, state: &Path, args: &[&str]) -> Output {
+    batten()
+        .args(args)
+        .current_dir(repo)
+        .state_dir(state)
+        .output()
+        .expect("run batten")
+}
+
+/// The one pin file under an isolated state root, or `None` if none was written.
+///
+/// Found by walking rather than by recomputing `state::derive_repo_name`: a test
+/// that reimplemented the naming would pass while the binary wrote somewhere
+/// else entirely, which is the assertion inverting itself.
+fn pin_path(state: &Path) -> Option<PathBuf> {
+    let root = state.join("batten");
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let candidate = entry.path().join("trust-pin.json");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Make `origin/main` unreachable, the way a depth-1 `actions/checkout` does.
+///
+/// The consequence this issue exists for is not hypothetical: `git show
+/// origin/main:batten.toml` never fetches, so a default checkout has no
+/// `origin/main` at all and the trust mechanism exited `1` — a code §7 tells a
+/// mediating harness to read as "fail loud, do not block".
+fn unfetch_base(repo: &Path) {
+    git_in(repo, &["update-ref", "-d", "refs/remotes/origin/main"]);
+}
+
+#[test]
+fn a_run_that_reaches_a_verdict_records_the_config_it_was_judged_by() {
+    let repo = pr_fixture(
+        "trust-pin-minted",
+        &trusting(true),
+        &trusting(true),
+        &[("clean.rs", "fn main() {}\n")],
+    );
+    let state = scratch("trust-pin-minted-state");
+
+    let output = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(0));
+    let pin = pin_path(&state).expect("a run that reached a verdict records its pin");
+    let text = fs::read_to_string(&pin).expect("read the pin");
+    assert!(
+        text.contains("offline_fallback"),
+        "the pin carries the config's bytes, not a digest of them: {text}"
+    );
+    assert!(
+        text.contains("origin/main"),
+        "the pin names the ref it was minted for, so it cannot answer for another"
+    );
+}
+
+#[test]
+fn a_run_that_never_reached_a_verdict_records_nothing() {
+    // "Validated" is scoped to what one run PROVED. `check` refuses a rule kind
+    // that spawns a process before it begins (`rules::run_static`), so this run
+    // loads the base config perfectly well and then stops — and a config that
+    // merely parsed proved less than the pin claims about it.
+    let base = format!(
+        "version = 1\n[trust]\noffline_fallback = true\n\n[[rule]]\nid = \"spawns\"\nkind = \
+         \"command\"\nrun = \"true\"\n"
+    );
+    let repo = pr_fixture("trust-pin-no-verdict", &base, &base, &[]);
+    let state = scratch("trust-pin-no-verdict-state");
+
+    let output = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a spawning kind is refused on the read surface"
+    );
+    assert!(
+        pin_path(&state).is_none(),
+        "a run that could not reach a verdict must record no pin"
+    );
+}
+
+#[test]
+fn an_unreachable_ref_refuses_when_the_key_is_off() {
+    // The pin exists and is perfectly valid. The key is what decides, and it is
+    // read off the PINNED config — so a repository that never opted in gets the
+    // strict answer no matter what this clone happens to have cached.
+    let repo = pr_fixture(
+        "trust-offline-key-off",
+        &trusting(false),
+        &trusting(false),
+        &[],
+    );
+    let state = scratch("trust-offline-key-off-state");
+    let minted = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(minted.status.code(), Some(0));
+    assert!(pin_path(&state).is_some(), "the first run minted a pin");
+
+    unfetch_base(&repo);
+    let output = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty(), "stdout stays the answer channel");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("origin/main"),
+        "the refusal names the ref: {stderr}"
+    );
+    assert!(
+        !stderr.contains("last validated"),
+        "nothing was served, so nothing may announce a degrade: {stderr}"
+    );
+}
+
+#[test]
+fn an_unreachable_ref_is_served_from_the_pin_when_the_key_is_on() {
+    // The §4 degrade, and the only state that may take it. stdout must be
+    // byte-identical to the run that reached the ref — a caller parsing findings
+    // sees no new shape — and the degrade must be visible on stderr, because a
+    // silent one is the failure this whole lifecycle exists to prevent.
+    let repo = pr_fixture(
+        "trust-offline-served",
+        &trusting(true),
+        &trusting(true),
+        &[("dirty.rs", "// TODO: later\n")],
+    );
+    let state = scratch("trust-offline-served-state");
+    let reached = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(
+        reached.status.code(),
+        Some(2),
+        "the rule fires on the working tree, and that verdict is what gets pinned"
+    );
+
+    let pin = pin_path(&state).expect("the first run minted a pin");
+    let before = fs::read_to_string(&pin).expect("read the pin");
+
+    unfetch_base(&repo);
+    let served = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(
+        served.status.code(),
+        Some(2),
+        "the pinned policy still judges the run; degrading is not passing"
+    );
+    assert_eq!(
+        stdout(&served),
+        stdout(&reached),
+        "stdout is byte-identical to the run that reached the ref (§6)"
+    );
+    let stderr = String::from_utf8_lossy(&served.stderr);
+    assert!(
+        stderr.contains("last validated config"),
+        "a degrade announces itself on the messaging channel: {stderr}"
+    );
+    assert!(
+        stderr.contains("origin/main"),
+        "the notice names the ref that went unreachable: {stderr}"
+    );
+
+    // And a served run does not refresh what served it: one validation cannot
+    // keep re-attesting to itself while the ref stays unreachable.
+    assert_eq!(
+        fs::read_to_string(&pin).expect("read the pin"),
+        before,
+        "a run served from the pin must not rewrite the pin"
+    );
+}
+
+#[test]
+fn a_ref_that_resolves_with_no_config_never_degrades() {
+    // The asymmetry the whole typed split exists for. The pin here is valid, the
+    // key is on, and the answer is still a refusal — because a ref that resolves
+    // and declares no `batten.toml` is a branch choosing its own policy, which
+    // is the substitution `--config-from` exists to defeat.
+    let repo = pr_fixture(
+        "trust-offline-absent",
+        &trusting(true),
+        &trusting(true),
+        &[],
+    );
+    let state = scratch("trust-offline-absent-state");
+    let minted = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(minted.status.code(), Some(0));
+    assert!(pin_path(&state).is_some(), "the first run minted a pin");
+
+    // Move `origin/main` onto a commit that carries no config at all.
+    fs::remove_file(repo.join("batten.toml")).expect("remove the config");
+    git_in(&repo, &["add", "-A"]);
+    git_in(&repo, &["commit", "-q", "-m", "before batten"]);
+    git_in(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    fs::write(repo.join("batten.toml"), trusting(true)).expect("restore the working config");
+
+    let output = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("batten.toml"),
+        "the refusal names the path it could not read: {stderr}"
+    );
+    assert!(
+        !stderr.contains("last validated config"),
+        "no fallback path reaches a ref that resolves: {stderr}"
+    );
+}
+
+#[test]
+fn a_pin_whose_bytes_do_not_match_its_digest_refuses() {
+    // Self-verification, and the reason an unreadable pin is LOUD where an
+    // unreadable epoch cache is silent: the cache is an optimization, and this
+    // is the policy the run would be judged by.
+    let repo = pr_fixture("trust-pin-tampered", &trusting(true), &trusting(true), &[]);
+    let state = scratch("trust-pin-tampered-state");
+    let minted = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(minted.status.code(), Some(0));
+    let pin = pin_path(&state).expect("the first run minted a pin");
+
+    let text = fs::read_to_string(&pin).expect("read the pin");
+    fs::write(
+        &pin,
+        text.replace("offline_fallback = true", "offline_fallback = false"),
+    )
+    .expect("tamper with the pin");
+
+    unfetch_base(&repo);
+    let output = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("digest"),
+        "a pin that fails its own check refuses and says why: {stderr}"
+    );
+    assert!(
+        !stderr.contains("last validated config"),
+        "an unverified pin is never served: {stderr}"
+    );
+}
+
+#[test]
+fn a_pin_minted_for_another_ref_is_not_this_refs_answer() {
+    let repo = pr_fixture("trust-pin-other-ref", &trusting(true), &trusting(true), &[]);
+    let state = scratch("trust-pin-other-ref-state");
+    let minted = run_stateful(&repo, &state, &["check", "--config-from", "origin/main"]);
+    assert_eq!(minted.status.code(), Some(0));
+    assert!(pin_path(&state).is_some(), "the first run minted a pin");
+
+    let output = run_stateful(&repo, &state, &["check", "--config-from", "origin/release"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("origin/release"),
+        "the refusal names the ref that was asked for: {stderr}"
+    );
+    assert!(
+        !stderr.contains("last validated config"),
+        "a pin for `origin/main` must not answer for `origin/release`: {stderr}"
+    );
+}
+
+#[test]
+fn turning_the_offline_fallback_on_is_reported_as_a_weakening() {
+    // The escape hatch policed by the mechanism it would open: the base ref
+    // refuses offline, the working tree opts in, and `check` names the key.
+    let repo = pr_fixture(
+        "trust-offline-weakening",
+        &trusting(false),
+        &trusting(true),
+        &[],
+    );
+    let output = run(&repo, &["check", "--config-from", "origin/main"]);
+    let stdout = stdout(&output);
+    assert!(
+        stdout.contains("batten.toml:trust.offline_fallback false→true"),
+        "the delta names the key, pointer-only: {stdout}"
+    );
+    assert!(
+        stdout.contains("config-from origin/main: 1 weakened"),
+        "and the summary counts it: {stdout}"
     );
 }

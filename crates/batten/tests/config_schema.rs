@@ -449,6 +449,10 @@ fn the_override_schema_describes_only_keys_the_loader_honours() {
         "defects",
         "provision",
         "transcript",
+        // CLOUD-720. Sharper than its neighbours, for `hook`'s reason: turning
+        // `[trust] offline_fallback` on LOWERS the bar, so there is no reading
+        // of §8's raise-only rule under which an uncommitted file may set it.
+        "trust",
     ] {
         assert!(
             !properties.contains_key(authority_only),
@@ -564,6 +568,25 @@ fn an_authority_only_key_in_the_local_file_is_refused_by_name() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("epoch"), "the refusal must name the key");
+}
+
+#[test]
+fn the_offline_fallback_cannot_be_turned_on_by_an_uncommitted_file() {
+    // The escape hatch has to be a COMMITTED decision (CLOUD-720). Enabling it
+    // lets an unreachable base ref be answered from a pin rather than refusing,
+    // which is a lower bar — and §8 admits no raise-only reading of a key whose
+    // only direction is downward. `deny_unknown_fields` on the override type is
+    // what makes the refusal total, so nothing here is a maintained list.
+    let dir = repo_with_local(
+        "override-trust",
+        "version = 1\n",
+        "version = 1\n[trust]\noffline_fallback = true\n",
+    );
+    let output = show_in(&dir);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("trust"), "the refusal must name the key");
+    assert!(output.stdout.is_empty(), "a refusal printed a document");
 }
 
 #[test]
