@@ -28,10 +28,19 @@ run-name: "fast-forward #${{ github.event.issue.number }} @${{ github.event.comm
 # main is moved to the PR's existing head commit, unchanged — when a maintainer
 # comments `/fast-forward` on the PR.
 #
-# It is safe under the branch ruleset: the push only succeeds if the PR head is a
-# fast-forward of main (linear, no rewrite) AND that exact SHA already has the
-# required checks green. Nothing weakens the gate; this is just the honest merge
-# GitHub declines to offer.
+# The push is safe under the branch ruleset in ONE respect only: it succeeds only
+# if the PR head is a fast-forward of main — linear, no rewrite. That half holds.
+#
+# THE OTHER HALF DID NOT, and this comment used to claim it did: "that exact SHA
+# already has the required checks green. Nothing weakens the gate." Measured
+# false on PR #624, 2026-08-21 (CLOUD-853). A DRAFT head grades no checks at all
+# — every `pull_request` workflow here is draft-gated, so CI skips — and the
+# ruleset admitted the empty set as satisfying "required checks green". `main`
+# moved to a SHA that had never run a single job. Absent is not green, which is
+# the same reading CLOUD-327/334/335/336 fixed inside `ci-wait`; all four taught
+# `land` not to ask, and none of them locked the door. The draft refusal below is
+# that lock, decided HERE rather than delegated to the ruleset, because the
+# ruleset is the thing measured not to hold.
 
 on:
   issue_comment:
@@ -58,13 +67,76 @@ permissions:
 
 jobs:
   fast-forward:
+    # `startsWith`, NEVER `contains` (CLOUD-853). `contains` is unanchored, so
+    # the token fired from anywhere in the body — mid-sentence, inside backticks,
+    # inside a quotation of somebody else's comment. Measured on PR #624,
+    # 2026-08-21: a comment discussing *where a review gate should sit*, whose
+    # text included "the gate belongs between `ready` and `/fast-forward`",
+    # merged that PR. The repository's own design discussion was executable, and
+    # every artifact that has to NAME the trigger to be about it — `land`,
+    # `mem:workflow/landing-loop`, CLOUD-853's body — was a live round.
+    #
+    # This is the file's own threat model, finally applied to both uses of the
+    # field. Twenty lines up it already says `github.event.comment.body` is
+    # "attacker-controlled and is the template injection zizmor exists to
+    # refuse", and honours that for `run-name`'s interpolation. Untrusted enough
+    # not to reach a template is untrusted enough that an unanchored substring of
+    # it must not authorise a merge; injection-into-output and
+    # authorisation-from-input are the same distrust.
+    #
+    # ANCHORED IS EXACT FOR THE ONE REAL CALLER: `land` posts
+    # `-f body="/fast-forward"`, the bare token and nothing else, so this admits
+    # every genuine landing byte-for-byte. It fails CLOSED on a leading space or
+    # newline, which is the right direction — GitHub expressions have no `trim`
+    # and no regex, so a looser anchor would have to be hand-rolled here, and the
+    # cost of refusing a hand-typed comment with a stray space is one retype.
     if: >-
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '/fast-forward') &&
+      startsWith(github.event.comment.body, '/fast-forward') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
     runs-on: ubuntu-latest
     timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
     steps:
+      # A DRAFT HEAD GRADES NO CHECKS, so "required checks green" is vacuous on
+      # it and the ruleset lets the push through (CLOUD-853, measured on #624).
+      # Refused here rather than left to the ruleset, because the ruleset is
+      # precisely the thing measured not to hold.
+      #
+      # The refusal is a FAILED run on purpose, not a skip: `land` reads
+      # "concludes anything but success" as a refusal and laps, so a draft that
+      # somehow reaches this path unwinds through the loop that already exists
+      # rather than through a new signal nothing reads (CLOUD-235/238/456). It
+      # is unreachable from `land` itself, which readies before it comments —
+      # this catches a comment from any other OWNER/MEMBER/COLLABORATOR.
+      #
+      # `gh api` for the draft bit, not `github.event.issue.draft`: the event
+      # payload is a snapshot from when the comment was written, and the
+      # question is whether the PR is a draft NOW, at merge time.
+      #
+      # Interpolations go through `env:`, never inline into `run:` — the rule
+      # this file states at the top and the reason `run-name` carries integers
+      # only. None of these three is attacker-controlled, and they use the safe
+      # shape anyway so the next line added here inherits it.
+      - name: refuse a draft — its head has graded no checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          draft=$(gh api "repos/$REPO/pulls/$PR" --jq .draft)
+          if [ "$draft" != "false" ]; then
+            # Pointer-only: the PR number and the reason, never the comment body
+            # — echoing the body into a new comment is how a substring trigger
+            # re-arms itself, which is the defect this row also fixes.
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$(
+              printf '%s' "Refusing to fast-forward #$PR: it is a draft, so no required check has graded its head. \`main\` must not advance to a SHA CI never ran on (CLOUD-853). Mark it ready for review, let CI grade the head, then ask again."
+            )" >/dev/null
+            echo "::error:: refusing #$PR: draft head, no graded checks (CLOUD-853)"
+            exit 1
+          fi
+          echo "#$PR is ready for review; its head is eligible to be graded."
+
       # `# v1.0.0`, NOT `# v1`, and the difference is load-bearing rather than
       # pedantic (CLOUD-676). Upstream publishes exactly one tag — `v1.0.0` —
       # with no floating major, unlike `actions/checkout` and

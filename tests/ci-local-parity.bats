@@ -1431,3 +1431,92 @@ on_runner() {
 	[[ "$output" == *"yielded no"* ]]
 	[[ "$output" == *"could-not-look, not clean"* ]]
 }
+
+# --- CLOUD-853: the comment-triggered merge path, unjudged until it merged ----
+#
+# Both properties sit ABOVE the `pull_request` filter in the gate, and that
+# placement is the finding as much as the rules are: an `issue_comment` workflow
+# never reaches that filter, so `fast-forward.yml` — the one workflow that moves
+# `main` — was exempt from every property this suite enforces while reading as
+# covered. Measured on PR #624, 2026-08-21: merged 42 seconds after opening, as
+# a draft, with no CI run of any kind.
+#
+# The fixture is a minimal comment-triggered lander rather than a copy of the
+# real file, for the reason the header states: the predicate is exercised over
+# text the gate has never seen.
+comment_lander() {
+	cat >"$WF/ff.yml" <<-EOF
+		name: ff
+
+		on:
+		  issue_comment:
+		    types: [created]
+
+		concurrency:
+		  group: ff-\${{ github.event.issue.number }}
+		  cancel-in-progress: false
+
+		jobs:
+		  ff:
+		    if: >-
+		      github.event.issue.pull_request &&
+		      $1(github.event.comment.body, '/fast-forward')
+		    runs-on: ubuntu-latest
+		    timeout-minutes: 5 # budget: grandfathered measured=2026-08-10
+		    steps:
+		      - run: '$2'
+		      - uses: some/lander@v1
+		        with:
+		          merge: true
+	EOF
+}
+
+@test "an anchored comment trigger that also reads draft state passes" {
+	workflow ci
+	comment_lander startsWith 'gh api repos/o/r/pulls/1 --jq .draft'
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-853: an UNANCHORED comment trigger is refused, because prose naming the token fires it" {
+	# THE DISCRIMINATING ROW for defect 1, and the one that is red against the
+	# workflow as it stood on 2026-08-21. `contains` is a substring test, so a
+	# comment merely discussing the trigger invokes it — which is how #624
+	# merged itself out of a sentence about where a review gate should sit.
+	workflow ci
+	comment_lander contains 'gh api repos/o/r/pulls/1 --jq .draft'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ff.yml"* ]]
+	[[ "$output" == *"unanchored"* ]]
+	[[ "$output" == *"startsWith"* ]]
+	[[ "$output" == *"CLOUD-853"* ]]
+}
+
+@test "CLOUD-853: a comment-triggered merge that never reads draft state is refused" {
+	# THE DISCRIMINATING ROW for defect 2. A draft head grades no checks, and the
+	# branch ruleset admits that empty set as satisfying "required checks green"
+	# — measured on #624, not assumed. So delegating the draft question to the
+	# ruleset is the same as not asking it. CLOUD-327/334/335/336 each fixed this
+	# absent-is-not-green reading inside `ci-wait`, which is `land` deciding not
+	# to ask; none of them constrained the push.
+	workflow ci
+	comment_lander startsWith ':'
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"ff.yml"* ]]
+	[[ "$output" == *"draft"* ]]
+	[[ "$output" == *"CLOUD-853"* ]]
+}
+
+@test "a comment-triggered workflow that does NOT merge is not asked the draft question" {
+	# ANTI-VACUITY for property 13's scope. The rule is about a merge path, so a
+	# comment-triggered workflow that merges nothing must pass without a draft
+	# read — otherwise the property is really "every issue_comment workflow",
+	# which would refuse shapes it has no argument against.
+	workflow ci
+	comment_lander startsWith ':'
+	sed_i 's/          merge: true/          merge: false/' "$WF/ff.yml"
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}

@@ -360,6 +360,38 @@ for wf in "$workflows"/*.yml; do
 		problem "$wf filters on workflow_run.head_branch in a job condition but its trigger declares no branches: filter — a job \`if:\` is evaluated after the run already exists, so every non-matching completion still creates a run and then skips it."
 	fi
 
+	# Properties 12 and 13 (CLOUD-853), above the filter because an
+	# `issue_comment` workflow never reaches it — which is exactly how a merge
+	# path went eleven months unjudged while every `pull_request` property was
+	# enforced. Both were measured on PR #624, 2026-08-21, which merged to `main`
+	# 42 seconds after opening, as a draft, having run no CI at all.
+	#
+	# 12 — A COMMENT-TRIGGERED PREDICATE MUST BE ANCHORED. `contains` is an
+	# unanchored substring test, so the token fires from mid-sentence, from
+	# inside backticks, from a quoted block. That makes the repository's own
+	# writing about a trigger an invocation of it, and every artifact that has to
+	# name the token to be about it a live round. Stated as a predicate over the
+	# FIELD rather than a rule about `/fast-forward`, because the defect is the
+	# unanchored read of an attacker-controlled body, not the one token that
+	# happened to be read that way.
+	if grep -q 'contains(github\.event\.comment\.body' "$wf"; then
+		problem "$wf predicates on github.event.comment.body with contains(), which is unanchored — the token fires from anywhere in the body, so prose merely naming it triggers the workflow. Use startsWith() (CLOUD-853, measured on #624)."
+	fi
+
+	# 13 — A COMMENT-TRIGGERED MERGE MUST DECIDE THE DRAFT QUESTION ITSELF. A
+	# draft head grades no checks here, every `pull_request` workflow being
+	# draft-gated, and the branch ruleset admits that empty set as satisfying
+	# "required checks green" — measured, not assumed. So a merge path that
+	# delegates the draft question to the ruleset has no draft check at all.
+	# CLOUD-327/334/335/336 each fixed this same absent-is-not-green reading
+	# inside `ci-wait`, which is `land` DECIDING not to ask; none of them
+	# constrained the push, which is what actually enforces.
+	if grep -q '^  issue_comment:' <<<"$triggers" &&
+		grep -q 'merge:[[:space:]]*true' "$wf" &&
+		! grep -q '\.draft' "$wf"; then
+		problem "$wf merges on an issue_comment and never reads the PR's draft state — a draft head has graded no checks, and the ruleset treats that empty set as green, so this can advance main to a SHA CI never ran on (CLOUD-853, measured on #624)."
+	fi
+
 	grep -q '^  pull_request:' <<<"$triggers" || continue
 	checked=$((checked + 1))
 
