@@ -588,3 +588,238 @@ violation contains {"rule": "reads-real-keys", "msg": "x"} if {
     batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
         .expect("`documents` is emitted, however it is spelled");
 }
+
+// --- the lines fact (CLOUD-846) ---------------------------------------------
+
+/// A row declaring a file for line-reading.
+fn lines_row(id: &str, bundle: &str, lines: &[&str]) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "kind": "policy",
+        "scope": "tree",
+        "bundle": bundle,
+        "lines": lines,
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped policy row declaring `lines`")
+}
+
+/// (a) A module decides over a `.bats` file's lines — a format `facts::Format`
+/// parses none of, and one of the five source-text gates CLOUD-846 counted as
+/// unmigratable.
+#[test]
+fn a_module_decides_over_the_lines_of_an_unparseable_file() {
+    let root = scratch("lines-deny");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "no-focused-case"
+
+violation contains {"rule": "no-focused-case", "msg": "a focused case is committed"} if {
+  some line in input.tree.lines["suite.bats"]
+  startswith(line, "@focus")
+}
+"#,
+    );
+    fs::write(
+        root.join("suite.bats"),
+        "#!/usr/bin/env bats\n@focus\n@test \"a case\" {\n  true\n}\n",
+    )
+    .expect("fixture");
+
+    let scan = scan(
+        &root,
+        &[lines_row("repo-policy", "policy/", &["suite.bats"])],
+    );
+    assert_eq!(
+        scan.findings.len(),
+        1,
+        "the predicate decided over lines of a file no parser knows: {:?}",
+        scan.findings
+    );
+    assert_eq!(scan.findings[0].rule, "no-focused-case");
+}
+
+/// The discriminator: green when the line is absent. Without it the case above
+/// passes on a predicate that denies unconditionally.
+#[test]
+fn the_same_line_predicate_is_green_when_the_line_is_absent() {
+    let root = scratch("lines-clean");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "no-focused-case"
+
+violation contains {"rule": "no-focused-case", "msg": "a focused case is committed"} if {
+  some line in input.tree.lines["suite.bats"]
+  startswith(line, "@focus")
+}
+"#,
+    );
+    fs::write(
+        root.join("suite.bats"),
+        "#!/usr/bin/env bats\n@test \"a case\" {\n  true\n}\n",
+    )
+    .expect("fixture");
+
+    let scan = scan(
+        &root,
+        &[lines_row("repo-policy", "policy/", &["suite.bats"])],
+    );
+    assert!(
+        scan.findings.is_empty(),
+        "the predicate decides both ways: {:?}",
+        scan.findings
+    );
+    assert!(
+        !scan.not_evaluated.contains_key("repo-policy"),
+        "and it EVALUATED — a skip here would make the case above pass for the \
+         wrong reason"
+    );
+}
+
+/// (b) **The load-bearing one.** A declared path the tree lacks is
+/// could-not-look, NOT an empty array.
+///
+/// An empty array is a predicate that finds nothing and reports clean, which is
+/// CLOUD-251's vacuous pass — and on this fact it would be the default, because
+/// "no lines" is a perfectly ordinary value.
+#[test]
+fn a_lines_path_the_tree_lacks_is_could_not_look_and_not_an_empty_array() {
+    let root = scratch("lines-absent");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "no-focused-case"
+
+violation contains {"rule": "no-focused-case", "msg": "a focused case is committed"} if {
+  some line in input.tree.lines["suite.bats"]
+  startswith(line, "@focus")
+}
+"#,
+    );
+    // `suite.bats` is deliberately absent.
+
+    let scan = scan(
+        &root,
+        &[lines_row("repo-policy", "policy/", &["suite.bats"])],
+    );
+    assert!(
+        scan.not_evaluated.contains_key("repo-policy"),
+        "the row reports COULD NOT LOOK. An empty array would have let the \
+         predicate run, find nothing and report clean — a gate that cannot see \
+         its subject saying the subject is fine"
+    );
+    assert!(
+        scan.findings.is_empty(),
+        "and it produced no finding either: could-not-look is neither a pass \
+         nor a violation"
+    );
+}
+
+/// (d) The demonstration §7(d) asks for: one of the four markdown gates
+/// re-expressed as a line predicate, end to end.
+///
+/// **`closing-key-check`'s predicate, not its retirement.** The bash gate stays
+/// live and nothing is deleted — the 82-gate migration is CLOUD-843 and is
+/// dispatched separately. What §7(d) actually needs is the claim "lines is
+/// enough for these" shown rather than argued, and what would falsify it is a
+/// markdown gate's predicate failing to express as a line predicate. This
+/// expresses it.
+#[test]
+fn a_markdown_gates_predicate_expresses_as_a_line_predicate() {
+    let root = scratch("lines-markdown");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "closes-a-key"
+
+has_closing_key if {
+  some line in input.tree.lines["PULL_REQUEST_BODY.md"]
+  startswith(line, "Refs: CLOUD-")
+}
+
+violation contains {"rule": "closes-a-key", "msg": "the body closes no issue key"} if {
+  not has_closing_key
+}
+"#,
+    );
+    fs::write(
+        root.join("PULL_REQUEST_BODY.md"),
+        "# A change\n\nSome prose about it.\n",
+    )
+    .expect("a body closing no key");
+
+    let denied = scan(
+        &root,
+        &[lines_row(
+            "repo-policy",
+            "policy/",
+            &["PULL_REQUEST_BODY.md"],
+        )],
+    );
+    assert_eq!(
+        denied.findings.len(),
+        1,
+        "a markdown gate's predicate decided over lines: findings={:?} not_evaluated={:?}",
+        denied.findings,
+        denied.not_evaluated
+    );
+
+    // And the other way, or the demonstration shows only that it can deny.
+    let root = scratch("lines-markdown-ok");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "closes-a-key"
+
+has_closing_key if {
+  some line in input.tree.lines["PULL_REQUEST_BODY.md"]
+  startswith(line, "Refs: CLOUD-")
+}
+
+violation contains {"rule": "closes-a-key", "msg": "the body closes no issue key"} if {
+  not has_closing_key
+}
+"#,
+    );
+    fs::write(
+        root.join("PULL_REQUEST_BODY.md"),
+        "# A change\n\nSome prose about it.\n\nRefs: CLOUD-846\n",
+    )
+    .expect("a body closing a key");
+
+    let cleared = scan(
+        &root,
+        &[lines_row(
+            "repo-policy",
+            "policy/",
+            &["PULL_REQUEST_BODY.md"],
+        )],
+    );
+    assert!(
+        cleared.findings.is_empty(),
+        "and it is green on a body that does close one: {:?}",
+        cleared.findings
+    );
+}

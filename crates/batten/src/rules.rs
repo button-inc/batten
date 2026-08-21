@@ -635,6 +635,7 @@ impl RuleKind {
                 "preset",
                 "documents",
                 "sources",
+                "lines",
                 "severity",
                 "predicate_severity",
                 "identity_key",
@@ -1276,6 +1277,30 @@ pub struct Rule {
     /// tree that satisfies the predicate are otherwise the same green.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
+    /// The files a tree-scoped policy row hands its bundle as **lines**
+    /// (CLOUD-846).
+    ///
+    /// [`Rule::documents`]'s unparsed sibling, and the ceiling it lifts was
+    /// measured: of the 20 tree-scoped gates, 8 read structured config and 12
+    /// read content no fact could carry — 4 markdown, 5 `.bats`/`.rs`/`.pkl`
+    /// source, 3 no file literals at all. `Format::for_path` answers `None` for
+    /// every one of those, so the path landed in `missing` and the row skipped.
+    ///
+    /// The value is `input.tree.lines[<path>]`, an array of strings. A path that
+    /// cannot be read stays in `missing` — **could-not-look, never an empty
+    /// array**, which is the distinction that keeps CLOUD-251's vacuous pass out:
+    /// a file nobody could read and a file with no matching line are not the same
+    /// answer.
+    ///
+    /// **Bounded by declaration, exactly as `documents` is.** A row reads the
+    /// paths it names and no others.
+    ///
+    /// **Rule 4 is what picks this shape over raw text.** A module may SEE a
+    /// line; a finding may not CARRY one. Lines are the widest shape that cannot
+    /// put content into a finding by accident, and `tests/pointer_only.rs` holds
+    /// that structurally rather than by review.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -1788,6 +1813,40 @@ impl Rule {
                      would never be read",
                 self.id
             )));
+        }
+        // `sources` and `lines` are tree columns for the same reason `documents`
+        // is, and they were added to `permits` without this — so a mediated-call
+        // row could declare either and have it silently never read.
+        if self.scope == RuleScope::MediatedCall && !self.sources.is_empty() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `sources` is what a `scope = \"tree\"` row hands its bundle; \
+                 on the mediated call the input is the call's own facts, so this list \
+                 would never be read",
+                self.id
+            )));
+        }
+        if self.scope == RuleScope::MediatedCall && !self.lines.is_empty() {
+            return Err(UsageError::raise(format!(
+                "rule {}: `lines` is what a `scope = \"tree\"` row hands its bundle; \
+                 on the mediated call the input is the call's own facts, so this list \
+                 would never be read",
+                self.id
+            )));
+        }
+        // A MALFORMED SELECTOR IS A CONFIG FAULT, REFUSED HERE. `acquire_declared`
+        // and `policy_rule` both discard the error `declared_documents` returns —
+        // deliberately, because by then the run is under way — so without this the
+        // row would be SILENTLY SKIPPED under `check` while `policy test` (which
+        // propagates it) hard-failed. A bad pattern disabling a gate quietly is
+        // the exact failure CLOUD-845 and CLOUD-850 exist to close, and adding a
+        // column without this check reopened it for the new field.
+        for pattern in &self.sources {
+            Selector::new(pattern).map_err(|err| {
+                UsageError::raise(format!(
+                    "rule {}: `sources` pattern `{pattern}` is not valid: {err}",
+                    self.id
+                ))
+            })?;
         }
         // A DECLARED DOCUMENT THIS BUILD CAN NEVER PARSE IS A CONFIG FAULT, not
         // a verdict (CLOUD-845). It used to be neither: `tree_document` checked
@@ -3016,11 +3075,28 @@ impl NotAcquired {
     }
 }
 
-/// A declared document, acquired — or the stated reason it was not.
+/// What a caller wants a declared file read AS (CLOUD-846).
+///
+/// The reason this is a parameter rather than a second function: [`acquire`] is
+/// the ONE place this crate opens a declared file, and
+/// `tests::one_document_acquisition_exists` is what keeps it one. A separate
+/// `acquire_lines` would be a second boundary with its own error mapping — the
+/// exact shape CLOUD-849 collapsed three of.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Want {
+    /// Parsed into the canonical tree, by the stated format.
+    Parsed(crate::facts::Format),
+    /// Split into lines, unparsed (CLOUD-846).
+    Lines,
+}
+
+/// A declared file, acquired — or the stated reason it was not.
 #[derive(Debug)]
 pub(crate) enum Acquired {
     /// Parsed into the one canonical tree CLOUD-772 landed.
     Parsed(crate::facts::Node),
+    /// The file's lines, in order, with line endings removed.
+    Lines(Vec<String>),
     /// Not acquired, and why.
     No(NotAcquired),
 }
@@ -3063,12 +3139,8 @@ pub fn documents_acquired() -> usize {
 ///
 /// `format` is `None` when the caller could not classify the extension; that is
 /// [`NotAcquired::UnknownFormat`] and costs no I/O.
-pub(crate) fn acquire_document(
-    root: &Path,
-    rel_path: &str,
-    format: Option<crate::facts::Format>,
-) -> Acquired {
-    let Some(format) = format else {
+pub(crate) fn acquire(root: &Path, rel_path: &str, want: Option<Want>) -> Acquired {
+    let Some(want) = want else {
         // Before any I/O, deliberately: an extension this build cannot parse is
         // a config fault, and opening the file first would spend a read to
         // learn nothing.
@@ -3092,18 +3164,31 @@ pub(crate) fn acquire_document(
     let Ok(text) = String::from_utf8(bytes) else {
         return Acquired::No(NotAcquired::Unreadable);
     };
-    // THE ONE `Format::read` CALL IN THE CRATE. `one_document_acquisition_exists`
-    // asserts that by counting this needle, so a second parse pair cannot land
-    // without the gate going red.
-    match format.read(&text) {
-        crate::facts::Look::Is(node) => Acquired::Parsed(node),
-        // A file that will not parse says nothing about what it contains, which
-        // is `Format::read`'s own three-valued contract. `IsNot` rides here for
-        // the reason `document_in_file` already gives: the arm exists so the
-        // type stays total, and what it must never resolve to is silence.
-        crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
-            Acquired::No(NotAcquired::Unparsed)
-        }
+    match want {
+        // LINES ARE NOT PARSED, so there is no `Unparsed` arm to reach: any text
+        // splits into lines, and a file that could not be read as text was
+        // already `Unreadable` above. That asymmetry is the point of the fact —
+        // it is what lets markdown, `.bats` and Rust source reach a predicate at
+        // all.
+        //
+        // `lines()` drops the terminator and handles CRLF, so a module's line
+        // numbers are the ones an editor shows and a Windows checkout does not
+        // change the answer.
+        Want::Lines => Acquired::Lines(text.lines().map(ToOwned::to_owned).collect()),
+        // THE ONE `Format::read` CALL IN THE CRATE.
+        // `one_document_acquisition_exists` asserts that by counting this
+        // needle, so a second parse pair cannot land without the gate going red.
+        Want::Parsed(format) => match format.read(&text) {
+            crate::facts::Look::Is(node) => Acquired::Parsed(node),
+            // A file that will not parse says nothing about what it contains,
+            // which is `Format::read`'s own three-valued contract. `IsNot` rides
+            // here for the reason `document_in_file` already gives: the arm
+            // exists so the type stays total, and what it must never resolve to
+            // is silence.
+            crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                Acquired::No(NotAcquired::Unparsed)
+            }
+        },
     }
 }
 
@@ -3130,6 +3215,21 @@ pub(crate) fn acquire_document(
 /// raising its own ceiling would be a consumer switching off the only bound this
 /// surface has.
 const READ_BUDGET: usize = 10_000;
+
+/// What a declared path should be read as: lines if a row asked for lines,
+/// otherwise the parse its extension names (CLOUD-846).
+///
+/// `None` is [`NotAcquired::UnknownFormat`] — an extension this build has no
+/// parser for, asked for as a document. A path asked for as LINES never lands
+/// there, which is the ceiling this fact lifts: `Format::for_path` returning
+/// `None` was the whole reason 12 of the 20 tree-scoped gates had no fact to
+/// decide over.
+pub(crate) fn want_for(path: &str, as_lines: bool) -> Option<Want> {
+    if as_lines {
+        return Some(Want::Lines);
+    }
+    crate::facts::Format::for_path(path).map(Want::Parsed)
+}
 
 /// Refuse a run whose declared read set has passed `limit` (CLOUD-850).
 ///
@@ -3207,6 +3307,15 @@ pub(crate) fn acquire_declared(
     files: &[String],
 ) -> anyhow::Result<BTreeMap<String, Acquired>> {
     let mut cache: BTreeMap<String, Acquired> = BTreeMap::new();
+    // Which declared paths any row wants as LINES (CLOUD-846). Collected across
+    // the whole rule set first, because the cache is shared: one path asked for
+    // both ways would otherwise be acquired as whichever row was seen first,
+    // which is an answer that depends on rule order.
+    let lines_paths: BTreeSet<String> = rules
+        .iter()
+        .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
+        .flat_map(|rule| rule.lines.iter().cloned())
+        .collect();
     for rule in rules
         .iter()
         .filter(|rule| rule.kind == RuleKind::Policy && rule.scope == RuleScope::Tree)
@@ -3218,7 +3327,7 @@ pub(crate) fn acquire_declared(
         let Ok(declared) = declared_documents(rule, files) else {
             continue;
         };
-        for path in declared {
+        for path in declared.into_iter().chain(rule.lines.iter().cloned()) {
             if cache.contains_key(&path) {
                 // THE CACHE, and the assertion `documents_acquired` makes: N
                 // rows over one path is ONE read and ONE parse.
@@ -3232,7 +3341,7 @@ pub(crate) fn acquire_declared(
             // consumer's file names, and a refusal that printed it would put the
             // shape of a private tree into an error message.
             refuse_over_budget(cache.len(), READ_BUDGET)?;
-            let acquired = acquire_document(root, &path, crate::facts::Format::for_path(&path));
+            let acquired = acquire(root, &path, want_for(&path, lines_paths.contains(&path)));
             cache.insert(path, acquired);
         }
     }
@@ -3283,9 +3392,11 @@ pub(crate) fn acquire_declared(
 pub(crate) fn tree_document(
     cache: &BTreeMap<String, Acquired>,
     documents: &[String],
+    lines: &[String],
     tracked: &[String],
 ) -> (String, Vec<(String, NotAcquired)>) {
     let mut parsed = serde_json::Map::new();
+    let mut read_lines = serde_json::Map::new();
     let mut missing = Vec::new();
     // The same set as `missing`, carrying WHY (CLOUD-845). `missing` stays a
     // bare path list in the document because that is what a module reads; the
@@ -3309,7 +3420,30 @@ pub(crate) fn tree_document(
                 missing.push(path.clone());
                 causes.push((path.clone(), *why));
             }
-            None => {
+            // Acquired as LINES by another row's declaration, or not declared.
+            // Neither is a parsed document, and neither is an empty one.
+            Some(Acquired::Lines(_)) | None => {
+                missing.push(path.clone());
+                causes.push((path.clone(), NotAcquired::Absent));
+            }
+        }
+    }
+    for path in lines {
+        match cache.get(path) {
+            Some(Acquired::Lines(text)) => {
+                read_lines.insert(path.clone(), serde_json::json!(text));
+            }
+            // COULD NOT LOOK, NEVER AN EMPTY ARRAY (CLOUD-846 §2). A file
+            // nobody could read and a file with no matching line are different
+            // answers, and collapsing them is CLOUD-251's vacuous pass: the
+            // predicate would find nothing and report clean.
+            Some(Acquired::No(why)) => {
+                missing.push(path.clone());
+                causes.push((path.clone(), *why));
+            }
+            // A path acquired as something else, or not declared. Neither is a
+            // readable line set, and neither is an empty one.
+            Some(Acquired::Parsed(_)) | None => {
                 missing.push(path.clone());
                 causes.push((path.clone(), NotAcquired::Absent));
             }
@@ -3336,6 +3470,7 @@ pub(crate) fn tree_document(
         let value = match *fact {
             crate::facts::Fact::Document => serde_json::Value::Object(std::mem::take(&mut parsed)),
             crate::facts::Fact::Tracked => serde_json::json!(tracked),
+            crate::facts::Fact::Lines => serde_json::Value::Object(std::mem::take(&mut read_lines)),
             // Hook-surface facts, filtered above. Stated as an arm so a
             // reclassification has to come through here.
             crate::facts::Fact::Bypass
@@ -3402,7 +3537,7 @@ fn policy_rule(
     if declared.is_empty() && !rule.sources.is_empty() {
         return Some(NotObserved::RuleSkipped);
     }
-    let (input, not_acquired) = tree_document(documents, &declared, tracked);
+    let (input, not_acquired) = tree_document(documents, &declared, &rule.lines, tracked);
     if !not_acquired.is_empty() {
         // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
         // handed a document the tree does not carry has not established anything
@@ -4394,7 +4529,7 @@ fn document_in_file(
     // `Ok(())`, but EACCES/EISDIR is now a could-not-look FINDING rather than
     // `Err` → exit 3. A gate that cannot look reports; it does not abort the
     // run it was one row of.
-    let outcome = acquire_document(root, rel_path, Some(format));
+    let outcome = acquire(root, rel_path, Some(Want::Parsed(format)));
     let reason = match &outcome {
         // The tree does not carry it. Not this row's business and not a
         // finding — unchanged.
@@ -4406,6 +4541,10 @@ fn document_in_file(
         Acquired::No(
             NotAcquired::Unparsed | NotAcquired::Unreadable | NotAcquired::UnknownFormat,
         ) => Some(DOCUMENT_UNREADABLE),
+        // Unreachable: this site always asks for `Want::Parsed`. An arm rather
+        // than a wildcard so a caller that ever asks for lines here has to
+        // decide what a node path means over them.
+        Acquired::Lines(_) => Some(DOCUMENT_UNREADABLE),
         Acquired::Parsed(document) => match document.at(node_path) {
             crate::facts::Look::IsNot => Some(DOCUMENT_NODE_ABSENT),
             crate::facts::Look::CouldNotLook => Some(DOCUMENT_UNREADABLE),
@@ -4539,8 +4678,11 @@ fn derive_one(rule: &Rule, root: &Path, files: &[String]) -> crate::facts::Look<
     // fail to acquire was already `CouldNotLook` here, and still is. What moves
     // is that the four causes are now *stated* in one place rather than three
     // `let ... else` arms that happened to agree.
-    match acquire_document(root, path, Some(format)) {
-        Acquired::No(_) => Look::CouldNotLook,
+    match acquire(root, path, Some(Want::Parsed(format))) {
+        // Unreachable: this site always asks for `Want::Parsed`. An arm rather
+        // than a wildcard, so a caller that ever asks for lines here has to
+        // decide what a node path means over them.
+        Acquired::No(_) | Acquired::Lines(_) => Look::CouldNotLook,
         Acquired::Parsed(document) => match document.at(node_path) {
             Look::Is(node) => match node.scalar() {
                 Some(value) => Look::Is(value),
@@ -5059,8 +5201,7 @@ mod tests {
         // is that the cause is the declaration, not the filesystem.
         std::fs::write(dir.join("prose.md"), "# heading\n").unwrap();
 
-        let acquire =
-            |name: &str| super::acquire_document(&dir, name, crate::facts::Format::for_path(name));
+        let acquire = |name: &str| super::acquire(&dir, name, super::want_for(name, false));
 
         assert!(
             matches!(acquire("good.toml"), super::Acquired::Parsed(_)),
@@ -5118,7 +5259,7 @@ mod tests {
     /// The keys `tree_document` actually emits, read off a real build of it.
     fn emitted_tree_keys(_root: &std::path::Path) -> Vec<String> {
         let empty: BTreeMap<String, super::Acquired> = BTreeMap::new();
-        let (input, _) = super::tree_document(&empty, &[], &[]);
+        let (input, _) = super::tree_document(&empty, &[], &[], &[]);
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("the input is JSON");
         let tree = parsed
             .get("tree")
@@ -5504,6 +5645,7 @@ mod tests {
             preset: None,
             documents: Vec::new(),
             sources: Vec::new(),
+            lines: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

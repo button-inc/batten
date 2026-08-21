@@ -385,6 +385,13 @@
           "description": "Which predicate to apply to the matched files.",
           "$ref": "#/$defs/RuleKind"
         },
+        "lines": {
+          "description": "The files a tree-scoped policy row hands its bundle as **lines**\n(CLOUD-846).\n\n[`Rule::documents`]'s unparsed sibling, and the ceiling it lifts was\nmeasured: of the 20 tree-scoped gates, 8 read structured config and 12\nread content no fact could carry — 4 markdown, 5 `.bats`/`.rs`/`.pkl`\nsource, 3 no file literals at all. `Format::for_path` answers `None` for\nevery one of those, so the path landed in `missing` and the row skipped.\n\nThe value is `input.tree.lines[<path>]`, an array of strings. A path that\ncannot be read stays in `missing` — **could-not-look, never an empty\narray**, which is the distinction that keeps CLOUD-251's vacuous pass out:\na file nobody could read and a file with no matching line are not the same\nanswer.\n\n**Bounded by declaration, exactly as `documents` is.** A row reads the\npaths it names and no others.\n\n**Rule 4 is what picks this shape over raw text.** A module may SEE a\nline; a finding may not CARRY one. Lines are the widest shape that cannot\nput content into a finding by accident, and `tests/pointer_only.rs` holds\nthat structurally rather than by review.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "module": {
           "description": "The registered policy module this rule evaluates, as a repository-relative\npath (CLOUD-647). [`RuleKind::Policy`] only.\n\n**Registration, never discovery.** §8 forbids the upward directory walk\nand the `conf.d` merge; naming the module here, in the one committed\nauthority, is the opposite of both, and the list of registered modules is\nitself reviewable data. Globbing a policy directory would be the thing §8\nrefuses, and is why this is a path per row rather than a directory key.\n\nThe path is what a reader reviews and what `[epoch] tracked` should hash;\nthe module's SOURCE never appears in any emitted document, because a\nrendered policy body is a payload and rule 4 admits only pointers.",
           "type": [

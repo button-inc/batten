@@ -3012,6 +3012,11 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
             // landed, which is the property working: a new fact cannot join the
             // model and go silently unprojected here.
             crate::facts::Fact::Tracked => None,
+            // Not resolvable on the mediated call, and stated rather than
+            // wildcarded so a reclassification must come through here: reading a
+            // file of unbounded size is unbounded in the input exactly as
+            // parsing one is, and the 100ms budget is per call (CLOUD-846).
+            crate::facts::Fact::Lines => None,
         };
         if let Some(value) = projected {
             projected_facts.insert(fact.as_str().to_owned(), value);
@@ -4077,6 +4082,7 @@ mod tests {
             preset: None,
             documents: Vec::new(),
             sources: Vec::new(),
+            lines: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,

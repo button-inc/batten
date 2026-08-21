@@ -316,6 +316,8 @@ pub enum Fact {
     /// it unstated is how a module author writes a predicate about the index and
     /// gets an answer about the checkout.
     Tracked,
+    /// A declared file's lines, unparsed.
+    Lines,
     /// What a command the AGENT ran said, read off the post-tool result buffer
     /// (CLOUD-776).
     AgentSourced,
@@ -372,6 +374,34 @@ pub const DOCUMENT: Class = Class::new(Cost::Read, Surface::Check);
 /// because none is read.
 pub const TRACKED: Class = Class::new(Cost::Read, Surface::Check);
 
+/// [`Fact::Lines`] — a declared file's lines, unparsed (CLOUD-846).
+///
+/// `read` x `check`, beside [`DOCUMENT`] and [`TRACKED`], and **Tree/Check only
+/// is stated here rather than inherited**: reading a file of unbounded size is
+/// unbounded in the input exactly as parsing one is, and CLOUD-689's 100ms
+/// budget is per mediated call. This must never be repointed at
+/// [`Surface::Hook`] to serve a hook body that wants to read a file.
+///
+/// **Why lines and not raw text, and why not matches.** Measured, 12 of the 20
+/// tree-scoped gates read content no fact could carry — markdown, `.bats`, Rust
+/// source — so the ceiling was not four formats' worth of parsing but the
+/// absence of any unstructured fact at all. Of the three shapes:
+///
+/// * **raw text** is the widest and the worst for rule 4: a policy body holding
+///   a file's contents is one `msg` away from a payload in a finding, which is
+///   why [`crate::policy::Module`] deliberately holds no `source`;
+/// * **matches** — the engine applies a declared pattern — is narrowest, and it
+///   moves the predicate half back OUT of Rego, which is what the retirement
+///   exists to stop;
+/// * **lines** is the widest shape that cannot put content into a finding by
+///   accident. A module can decide *line 42 matched* and report the path and the
+///   number; the content stays on the engine's side of the boundary.
+///
+/// **Not a fifth parser.** The four markdown gates read tables and headings out
+/// of prose; under a lines fact they are line predicates like the rest. A
+/// markdown AST would be a parser per prose convention.
+pub const LINES: Class = Class::new(Cost::Read, Surface::Check);
+
 /// [`Fact::AgentSourced`] — a small record under the git dir, written by the
 /// boundary from bytes the harness already handed it (CLOUD-776).
 ///
@@ -398,6 +428,7 @@ impl Fact {
         Fact::Waived,
         Fact::Document,
         Fact::Tracked,
+        Fact::Lines,
         Fact::AgentSourced,
     ];
 
@@ -412,6 +443,7 @@ impl Fact {
             Fact::Waived => "waived",
             Fact::Document => "document",
             Fact::Tracked => "tracked",
+            Fact::Lines => "lines",
             Fact::AgentSourced => "agent-sourced",
         }
     }
@@ -434,6 +466,7 @@ impl Fact {
             Fact::Waived => WAIVED,
             Fact::Document => DOCUMENT,
             Fact::Tracked => TRACKED,
+            Fact::Lines => LINES,
             Fact::AgentSourced => AGENT_SOURCED,
         }
     }
@@ -463,6 +496,7 @@ impl Fact {
         match self {
             Fact::Document => Some("documents"),
             Fact::Tracked => Some("tracked"),
+            Fact::Lines => Some("lines"),
             // Hook-surface facts. The tree engine resolves none of them, and
             // naming them here as `None` is what lets the correspondence test
             // assert the emitted key set in BOTH directions rather than only

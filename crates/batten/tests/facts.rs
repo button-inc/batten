@@ -11,7 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use batten::facts::{
-    AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, KEYS, Look, RECEIPTS, STOP, Surface,
+    AGENT_SOURCED, BYPASS, Class, Cost, DOCUMENT, Fact, KEYS, LINES, Look, RECEIPTS, STOP, Surface,
     TRACKED, WAIVED,
 };
 
@@ -92,6 +92,7 @@ fn every_fact_returns_its_stated_const() {
             Fact::Waived => WAIVED,
             Fact::Document => DOCUMENT,
             Fact::Tracked => TRACKED,
+            Fact::Lines => LINES,
             Fact::AgentSourced => AGENT_SOURCED,
         }
     };
@@ -101,7 +102,7 @@ fn every_fact_returns_its_stated_const() {
     // rather than quietly shrinking the census.
     assert_eq!(
         Fact::ALL.len(),
-        8,
+        9,
         "the census covers every fact; update this count deliberately when the \
          model gains or loses one"
     );
@@ -126,7 +127,7 @@ fn every_class_arm_names_its_own_const() {
     // GREEN, including CLOUD-834's projection census, which sees only the
     // surface.
     //
-    // That is not a hypothetical shape. `Read` x `Hook` holds FIVE of the eight
+    // That is not a hypothetical shape. `Read` x `Hook` holds FIVE of the nine
     // facts today — `Receipts`, `Keys`, `Stop`, `Waived`, `AgentSourced` — so
     // twenty of the possible repointings among them are value-identical, and
     // every one would ship silently. The defect it hides is a fact whose
