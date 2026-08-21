@@ -1785,8 +1785,17 @@ fn hook_allows_when_no_authority_is_configured() {
     // directory the agent is in, most of which are not Batten repositories. An
     // absent authority is therefore the empty policy, not an error: nothing
     // declared, nothing denied, silently.
-    let dir = repo_with_config("hook-no-authority", "");
-    fs::remove_file(dir.join("batten.toml")).expect("remove the authority");
+    //
+    // OUTSIDE ANY REPOSITORY SINCE CLOUD-824, and the move is the point rather
+    // than a workaround. This used to delete `batten.toml` from a fixture under
+    // `target/tmp` — inside THIS repository — and read the result as "no
+    // authority". It is not: the hook now resolves the repository when the cwd
+    // carries no authority of its own, which is exactly the subdirectory case the
+    // deleted launcher's `cd` existed to cover, so the old fixture was asserting
+    // fail-open over a directory that has an authority one level up. The claim
+    // this case actually makes needs a directory no repository encloses, which is
+    // what `scratch_outside_tree` is for.
+    let dir = common::scratch_outside_tree("hook-no-authority", "not-a-repository");
     let output = run_hook_in(
         &dir,
         "claude-code",

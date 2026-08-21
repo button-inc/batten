@@ -1530,9 +1530,10 @@ const UNDECODABLE_PAYLOAD: &str =
 /// never meant to judge.
 ///
 /// The failure a caller genuinely must NOT miss — the binary being absent
-/// entirely — cannot reach this function, and is the launcher's job to report
-/// loudly. `mise-tasks/stop-guard` and `mise-tasks/contract-drift` carry that
-/// half, copied from `.claude/hooks/batten-hook.sh`.
+/// entirely — cannot reach this function, and since CLOUD-824 there is no
+/// launcher to report it either. `mise-tasks/stop-guard` and
+/// `mise-tasks/contract-drift` still carry that half themselves, which is the
+/// shape they always had; what is gone is the shell copy they inherited it from.
 ///
 /// Exit is always `Success`: this renders no verdict, so it has none to signal.
 fn run_hook_field(
@@ -1840,7 +1841,13 @@ fn fire_actions(
     if bypass || envelope.event == hook::Event::PreTool {
         return Ok(());
     }
-    let here = Path::new(".");
+    // The REPOSITORY's authority, not the cwd's (CLOUD-824). Same reading as
+    // `load_policy` below and for the same reason: an action table is a
+    // per-repository declaration, and reading it from a linked worktree's
+    // checkout would fire a different set depending on which ref that worktree
+    // sits on. Resolved after the two refusals above, so a bypassed or pre-tool
+    // call still pays nothing.
+    let here = hook_authority_root();
     if !here.join(config::CONFIG_FILE).exists() {
         return Ok(());
     }
@@ -1889,7 +1896,12 @@ fn drain_advisories(
     mode: Mode,
     err: &mut dyn Write,
 ) -> Result<()> {
-    let here = Path::new(".");
+    // The repository, resolved through the one finder (CLOUD-824). This read
+    // asked TWO different questions before: whether an authority sits in the cwd,
+    // and where the repository is — so in a linked worktree with no committed
+    // authority of its own the drain returned early while the store it wanted was
+    // bound perfectly well one directory up.
+    let here = hook_authority_root();
     if !here.join(config::CONFIG_FILE).exists() {
         return Ok(());
     }
@@ -2105,11 +2117,66 @@ fn record_agent_fact(overrides: &Overrides, envelope: &hook::Envelope) {
     let _ = receipt::record_sourced(&declared.name, &record);
 }
 
+/// The directory `batten hook` reads its authority from (CLOUD-824).
+///
+/// **Never the session's cwd on its own.** `load_policy` reads `./batten.toml`
+/// with no upward walk, so whichever directory this answers *is* which authority
+/// governs a mediated call — and a hook fires wherever the agent happens to be
+/// standing. Until this existed the answer came from a `cd` in a shell launcher
+/// (`.claude/hooks/batten-hook.sh`, deleted by CLOUD-824): a second repo-root
+/// resolver outside the single-implementation gate CLOUD-34 built, and one that
+/// asked the *wrong git question*. It took the WORKTREE's toplevel where
+/// [`git::repo_root`] answers with the repository's shared root, which in a
+/// linked worktree is the **main** checkout. [`git`]'s module doc names both
+/// spellings and is the one module allowed to; what matters here is that they
+/// differ — measured on a constructed pair, two different directories. So from a
+/// linked worktree whose checkout carries no `batten.toml` the launcher landed on
+/// `Policy::declaring_nothing` and every mediated call was allowed, silently.
+/// That is verbatim the state the launcher's own comment called the `cd` "the
+/// whole defence" against.
+///
+/// **[`anchor`], not a bare [`git::repo_root`], and that is the correction the
+/// suite forced.** The first attempt here answered `repo_root` unconditionally,
+/// on the reading that CLOUD-34's "stable across worktrees" makes the shared root
+/// the only honest answer. Ten hook cases went red and were right to: a directory
+/// that carries its own `batten.toml` and happens to sit inside another
+/// repository — every fixture under `target/tmp`, and a nested project in real
+/// life — had its authority ignored in favour of the outer repository's. What
+/// CLOUD-34's invariant governs is per-repository **state**, which lives under
+/// the shared dir and is untouched by this. So the rule is the one the crate
+/// already has: an authority in this directory answers for it, and otherwise the
+/// repository does. Reusing it is also the point — `check` and `hook` disagreeing
+/// about which directory is "here" would be a second authority on the question
+/// this row exists to give one answer to.
+///
+/// The §2 fixture still decides correctly under it, which is what makes the reuse
+/// legitimate rather than convenient: a linked worktree with no `batten.toml`
+/// falls through to the repository's, and so does a subdirectory like
+/// `crates/batten` — the case the launcher's `cd` was actually written for.
+///
+/// **Resolved once per process, and lazily.** Once, because three callers asking
+/// the same question would spend three lookups on the hottest path in the binary.
+/// Lazily, because a pass-through — a read tool, no command, no writes — reaches
+/// no config reader at all, and CLOUD-777's acceptance is that such a call costs
+/// no more than the published `noop` figure. [`anchor`] also stats before it
+/// spawns, so the ordinary case (a session standing at the root) asks git
+/// nothing.
+///
+/// **A directory this cannot resolve is the cwd, not an error.** `batten hook` is
+/// registered once and then mediates every call in whatever directory the agent
+/// is in, most of them outside any repository; refusing there would make Batten
+/// the reason ordinary work stops (CLOUD-70) — the same fail-open posture the
+/// launcher had at this exact point (`|| exit 0`), and [`anchor`]'s own fallback.
+fn hook_authority_root() -> &'static Path {
+    static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(anchor)
+}
+
 fn load_policy(
     overrides: &Overrides,
     harness: hook::Harness,
 ) -> Result<(hook::Policy, Vec<waiver::Waiver>)> {
-    let here = std::path::Path::new(".");
+    let here = hook_authority_root();
     // THE FLAG IS CONSULTED BEFORE THE FILE (CLOUD-719). The zero-config
     // short-circuit below is correct in its own right — `batten hook` runs in
     // directories that are not Batten repositories, and refusing there would

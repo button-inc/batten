@@ -643,8 +643,8 @@ if ! cargo deny check; then exit 1; fi
 '''
 
 [tasks."build:release"]
-description = "Build the release binary the PreToolUse hook executes"
-# The one place the hook's binary is produced, so `.claude/hooks/batten-hook.sh`,
+description = "Build the release binary the hook registrations execute"
+# The one place the hook's binary is produced, so `install:local`,
 # `session-start.sh` and `mise-tasks/perf` name a task rather than three copies
 # of a cargo line that could drift in their flags.
 #
@@ -654,6 +654,39 @@ description = "Build the release binary the PreToolUse hook executes"
 # the working tree, disqualifying on the hottest path in the binary. The gates
 # keep `cargo run` for exactly the reason stated at `batten-check` below.
 run = "cargo build --quiet --release -p batten"
+
+[tasks."install:local"]
+description = "Put the built binary where the hook registrations resolve it — `install.sh`'s own destination"
+depends = ["build:release"]
+# CLOUD-824. This is the half of `.claude/hooks/batten-hook.sh` that was never a
+# hook concern: the launcher carried a four-candidate search (`BATTEN_BIN`,
+# `target/release`, `target/debug`, PATH) because "there is no `batten` on PATH
+# here and nothing puts `target/release` on it." That is an INSTALL concern
+# wearing a hook's clothes, and the other four harnesses never had it — they
+# invoke `batten hook --harness <h>` directly and always did.
+#
+# So the launcher's search is replaced by putting the binary where a search would
+# have ended. The destination is `install.sh:224`'s, character for character, so
+# a developer clone and a released install resolve the same name from the same
+# place rather than through two different rules.
+#
+# THE NO-BINARY CASE STILL REACHES A HUMAN, and through a louder channel than the
+# one it replaces. The launcher failed open with a stderr line and a
+# once-per-session `$TMPDIR` marker, which is the quietest report this repository
+# produces; this step runs inside `session-start.sh`'s `step`, which emits
+# `::error::`, a log pointer, and a non-zero exit. At hook time, a `batten` that
+# is not there is a command the host cannot run, which every supported host
+# reports through its own channel.
+# `sh`, not bash: mise runs a task body through `sh -c`, so `set -o pipefail` is
+# an illegal option here. There is no pipeline in this body to protect, and
+# `set -eu` is the portable half that matters.
+run = """
+set -eu
+dest="${BATTEN_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}"
+mkdir -p "$dest"
+install -m 0755 target/release/batten "$dest/batten"
+echo "install:local: batten -> $dest/batten"
+"""
 
 [tasks.batten-check]
 description = "Consumer #1: evaluate the committed batten.toml with batten's own engine against this repository"

@@ -801,13 +801,21 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
 /// The command a host's registration invokes.
 ///
 /// Neutral on purpose, and this is where non-negotiable rule 1 bites (CLOUD-62):
-/// this repository's own wiring runs `.claude/hooks/batten-hook.sh`, a launcher
-/// that `cd`s so `load_policy` finds the authority, resolves a binary that is not
-/// on PATH, and fails open — all things `settings.json` cannot express. That
-/// launcher is a CONSUMER's fact, and naming its path here would put a specific
-/// consumer's file layout in the repo-agnostic core. So the emitter names the
-/// binary and the harness, and a consumer's own gate is where the indirection is
-/// resolved.
+/// a consumer that needs an indirection in front of the binary resolves it in
+/// that consumer's own gate, because naming its file layout here would put a
+/// specific consumer's paths in the repo-agnostic core. So the emitter names the
+/// binary and the harness, and nothing else.
+///
+/// **This repository ran such an indirection and no longer does** (CLOUD-824).
+/// `.claude/hooks/batten-hook.sh` existed to `cd` so `load_policy` found the
+/// authority and to resolve a binary that was not on PATH — two things
+/// `settings.json` cannot express, and both binary defects paid for in shell.
+/// The `cd` asked git for the WORKTREE's root where [`crate::git::repo_root`]
+/// answers the repository's, so it defended against the wrong directory; that
+/// job is the binary's now, in [`crate::git`], which names both spellings and is
+/// the one module allowed to. The search was an install concern. What the
+/// paragraph above still says is unchanged, and it is what keeps the emitter able
+/// to serve a consumer that does need one.
 fn wiring_command(harness: Harness) -> String {
     format!("batten hook --harness {}", harness.as_str())
 }
@@ -1582,9 +1590,11 @@ impl Field {
 /// Returns `None` for an undecodable payload AND for an absent field, which is
 /// the fail-open contract the callers already have — they read an empty answer
 /// and allow. The distinction a caller DOES need is "the extractor is missing
-/// entirely", and that is not expressible in this return type: it is the
-/// launcher's job, loudly, the way `.claude/hooks/batten-hook.sh` reports a
-/// missing binary.
+/// entirely", and that is not expressible in this return type. Since CLOUD-824
+/// there is no launcher to report it: an absent binary is a command the host
+/// cannot run, which every supported host reports through its own channel, and
+/// this consumer's provisioning (`mise run install:local`, from
+/// `session-start.sh`) fails loudly at the moment it could still be fixed.
 #[must_use]
 pub fn field(harness: Harness, raw: &str, field: Field) -> Option<String> {
     field.read(&decode(harness, raw)?)

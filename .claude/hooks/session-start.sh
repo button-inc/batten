@@ -139,15 +139,25 @@ step submodules git submodule update --init --recursive
 # log pointer, and a non-zero exit at the end.
 step doctor mise run doctor
 
-# The binary the `PreToolUse` hook executes (CLOUD-312). Built HERE, in the
-# synchronous provisioning window, for the same reason the steps above are: a
-# fresh container has no `target/`, and `.claude/hooks/batten-hook.sh` fails
-# OPEN when it finds none — so without this a session would start with policy
-# unenforced, which is a state the guards it replaced could not reach. The
-# launcher still says so loudly if this step did not run or did not succeed;
-# belt and braces, because a silent unmediated session is the failure with no
-# symptom.
-step batten-build mise run build:release
+# The binary every hook registration executes (CLOUD-312). Built and INSTALLED
+# here, in the synchronous provisioning window, for the same reason the steps
+# above are: a fresh container has no `target/`, so without this a session would
+# start with policy unenforced — a state the guards it replaced could not reach.
+#
+# `install:local` rather than `build:release` since CLOUD-824. The registrations
+# used to name `.claude/hooks/batten-hook.sh`, a launcher whose four-candidate
+# binary search let a session run with `target/release` and nothing else; they
+# now name `batten` directly, as the other four harnesses always did, so the
+# binary has to be somewhere PATH resolves. `install:local` puts it at
+# `install.sh`'s own destination.
+#
+# THIS STEP IS NOW THE WHOLE "no binary" REPORT, and it is louder than what it
+# replaces. The launcher failed open with a stderr line and a once-per-session
+# `$TMPDIR` marker — the quietest report this repository produces. `step` emits
+# `::error::`, the log pointer, and a non-zero exit, so a session that cannot
+# mediate says so at the moment it could still be fixed rather than on the first
+# tool call.
+step batten-build mise run install:local
 
 # The third per-clone step from AGENTS.md, performed at last (CLOUD-476).
 #

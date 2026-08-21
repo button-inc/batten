@@ -172,11 +172,16 @@ restate its count here), each failing open on anything it can't parse. Most are
 `PreToolUse`; the ones that are not name their event below, and the settings
 file is what says how many that is:
 
-**`PreToolUse` is now ONE entry — the engine** (`.claude/hooks/batten-hook.sh`
-→ `batten hook --harness claude-code`), reading the `mediated_call` rows of
-`batten.toml` and nothing else (CLOUD-312). Six `mise run` launches per Bash
-call cost a measured 1.247 s serial / 605 ms concurrent to do milliseconds of
-policy, ~93% of it task-runner startup (CLOUD-435).
+**`PreToolUse` is now ONE entry — the engine** (`batten hook --harness
+claude-code`), reading the `mediated_call` rows of `batten.toml` and nothing
+else (CLOUD-312). Six `mise run` launches per Bash call cost a measured 1.247 s
+serial / 605 ms concurrent to do milliseconds of policy, ~93% of it task-runner
+startup (CLOUD-435). **It is a direct invocation since CLOUD-824**, as the other
+four harnesses always were: the `.claude/hooks/batten-hook.sh` launcher it used
+to route through was a second repo-root resolver in bash, asking
+`--show-toplevel` where `git::repo_root` asks the common dir — so from a linked
+worktree it read the wrong authority, or none, and allowed every mediated call
+silently.
 
 **What that leaves unenforced, so you self-enforce it rather than assume
 coverage.** The engine carries the `gh` lifecycle, the protected-path gate over
@@ -197,10 +202,14 @@ payload on stdin). The bullets below describe every
 guard's predicate; which of them a hook actually fires is the settings file's
 answer, not this list's.
 
-**A missing binary fails open, loudly.** `session-start.sh` builds it
-(`mise run build:release`); if that did not run, the launcher emits an
-`::error::` line every call and a `systemMessage` once per session. Silence
-means it is mediating.
+**A missing binary fails open, and the report moved forward** (CLOUD-824).
+`session-start.sh` builds AND installs it (`mise run install:local`, whose
+destination is `install.sh`'s own), so a failure is an `::error::` line, a log
+pointer and a non-zero exit at provisioning time — where it can still be fixed —
+rather than the launcher's per-call stderr line and once-per-session
+`systemMessage`. At hook time a `batten` that is not there is a command the host
+cannot run, reported through the host's own channel. Silence still means it is
+mediating.
 
 - `gh-guard` denies `gh pr merge`, `gh pr checks`, `gh run watch` and a
   hand-typed `/fast-forward` comment, naming the task to use instead. Decision

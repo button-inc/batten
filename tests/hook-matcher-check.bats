@@ -20,16 +20,16 @@ setup() {
 	SOURCE="$BATS_TEST_DIRNAME/../crates/batten/src/hook.rs"
 }
 
-# A settings file whose one PreToolUse entry invokes the engine through the
-# committed launcher, with the given matcher.
+# A settings file whose one PreToolUse entry invokes the engine directly — the
+# committed shape since CLOUD-824 deleted the launcher — with the given matcher.
 wired_with() {
-	printf '{"hooks":{"PreToolUse":[{"matcher":"%s","hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook.sh"}]}]}}\n' \
+	printf '{"hooks":{"PreToolUse":[{"matcher":"%s","hooks":[{"type":"command","command":"batten hook --harness claude-code"}]}]}}\n' \
 		"$1" >"$SETTINGS"
 }
 
 # The same, with no `matcher` key at all — which the host reads as match-all.
 wired_with_no_matcher() {
-	printf '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook.sh"}]}]}}\n' \
+	printf '{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"batten hook --harness claude-code"}]}]}}\n' \
 		>"$SETTINGS"
 }
 

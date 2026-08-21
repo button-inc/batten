@@ -64,9 +64,12 @@ RULE_ID="completion.unlanded"
 
 cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}" 2>/dev/null || exit 0
 
-# The same resolution chain `.claude/hooks/batten-hook.sh` uses, and for its
-# reason: there is no `batten` on PATH here, and a `cargo run` per turn end would
-# contend for the target-dir lock `hk.pkl` deliberately serialises.
+# The resolution chain `.claude/hooks/batten-hook.sh` used before CLOUD-824
+# deleted it, kept here for the reason that launcher had one: a `cargo run` per
+# turn end would contend for the target-dir lock `hk.pkl` deliberately
+# serialises. `mise run install:local` now puts `batten` on PATH, so the last
+# candidate is the ordinary answer and the two before it are the fallback for a
+# clone that has built but not installed.
 bin=""
 for candidate in \
 	"${BATTEN_BIN:-}" \

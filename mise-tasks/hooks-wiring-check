@@ -16,18 +16,33 @@
 # file, never the file. The other three hosts do define a hooks-only file, and
 # `WiringFile` is what records which is which.
 #
-# THE LAUNCHER INDIRECTION LIVES HERE, DELIBERATELY (CLOUD-62). Claude Code's
-# committed wiring does not run `batten hook` directly; it runs
-# `.claude/hooks/batten-hook.sh`, a launcher that `cd`s so `load_policy` finds
-# the authority (there is no upward walk), resolves a binary that is not on
-# PATH, and fails open — none of which `settings.json` can express. That
-# launcher is THIS consumer's fact. Emitting its path from `crates/batten` would
-# put a specific consumer's file layout in the repo-agnostic core, which
-# non-negotiable rule 1 forbids: "a grep for a specific consumer's names must
-# return zero hits." So the binary emits the neutral `batten hook --harness <h>`
-# and the resolution happens here, in the consumer's own gate, where the fact
-# belongs. It is declared PER HARNESS in the table below, so a host with no
-# launcher is held to the derived command exactly.
+# THE LAUNCHER INDIRECTION IS GONE, AND THE COLUMN THAT RESOLVED IT STAYS
+# (CLOUD-824). This paragraph used to argue for the indirection, and the argument
+# was sound about the two jobs it named:
+#
+#   *"Claude Code's committed wiring does not run `batten hook` directly; it runs
+#   `.claude/hooks/batten-hook.sh`, a launcher that `cd`s so `load_policy` finds
+#   the authority (there is no upward walk), resolves a binary that is not on
+#   PATH, and fails open — none of which `settings.json` can express."*
+#
+# Both jobs were binary defects paid for in shell. The `cd` asked
+# `--show-toplevel`, the WORKTREE's root, where `git::repo_root` answers the
+# repository's — so from a linked worktree the launcher read the wrong
+# `batten.toml`, or none, and allowed every mediated call silently. That is now
+# `lib.rs`'s `hook_authority_root`, inside CLOUD-34's single-implementation gate.
+# The binary search is `mise run install:local`, an install concern rather than a
+# hook one. So all five harnesses are held to the derived command exactly, and
+# claude-code stops being the one host running a different, less-tested entry
+# path than every other.
+#
+# THE COLUMN SURVIVES WITH NOTHING IN IT, and that is deliberate rather than
+# leftover. What made the emitter's neutrality necessary has not changed: naming
+# a consumer's file layout from `crates/batten` is what non-negotiable rule 1
+# forbids ("a grep for a specific consumer's names must return zero hits"), so a
+# consumer that DOES need an indirection resolves it here, in its own gate. The
+# column being all `-` today is a measurement, not a reason to delete the
+# affordance — and `HOOKS_WIRING_HARNESSES` is what lets the suite point it at a
+# fixture that uses one.
 #
 # ---------------------------------------------------------------------------
 # WHAT CLOUD-777 CHANGED, and why each note it reverses is quoted rather than
@@ -78,7 +93,7 @@ cd "${HOOKS_WIRING_ROOT:-$(git rev-parse --show-toplevel)}"
 # AN ARGUMENT, for the reason `HOOKS_WIRING_DECLARED` is one: the decision is the
 # part worth testing, and it only tests if the suite can point it at a table that
 # disagrees with the fixtures in front of it.
-HARNESSES="${HOOKS_WIRING_HARNESSES-claude-code .claude/settings.json batten-hook.sh
+HARNESSES="${HOOKS_WIRING_HARNESSES-claude-code .claude/settings.json -
 cursor .cursor/hooks.json -
 copilot-cli .github/hooks/batten.json -
 gemini-cli .gemini/settings.json -

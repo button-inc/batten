@@ -4,7 +4,7 @@
 # reached, decide nothing, and ask once per HEAD.
 #
 # Every case drives the gate through a STUB `batten` on `BATTEN_BIN` — the seam
-# `.claude/hooks/batten-hook.sh` documents and `linear-check` already uses. That
+# `mise-tasks/linear-check` documents and this gate shares. That
 # is not a convenience: the point of this gate is that it computes no landedness
 # of its own, so a suite that had to mint a real finding would be testing the
 # engine's detector rather than this file's reading of it.

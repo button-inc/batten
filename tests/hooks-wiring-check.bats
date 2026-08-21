@@ -56,7 +56,7 @@ gate() {
 			HOOKS_WIRING_DECLARED="$DECLARED" "$GATE")
 }
 
-# A COMPLETE claude-code wiring: batten once on each of the seven events that
+# A COMPLETE claude-code wiring: batten once on each of the eight events that
 # host emits, no matcher. This is the baseline every mutation below departs from,
 # and its completeness is the point — under CLOUD-777 a partial wiring is not a
 # smaller green, it is red.
@@ -66,7 +66,8 @@ complete_wiring() { # <command>
 		import json, sys
 		path, command = sys.argv[1], sys.argv[2]
 		events = ["PreToolUse", "PostToolUse", "Stop", "SessionStart",
-		          "TaskCompleted", "ConfigChange", "PostToolBatch"]
+		          "TaskCompleted", "ConfigChange", "PostToolBatch",
+		          "UserPromptSubmit"]
 		hooks = {e: [{"hooks": [{"type": "command", "command": command}]}] for e in events}
 		open(path, "w").write(json.dumps({"hooks": hooks}, indent=2) + "\n")
 	PY
@@ -99,7 +100,14 @@ mutate_event() { # <event> <matcher|second> <value>
 	PY
 }
 
-@test "the launcher stands in for the derived command — that indirection is the point" {
+# THE AFFORDANCE, NOT THIS REPOSITORY'S WIRING. CLOUD-824 deleted
+# `.claude/hooks/batten-hook.sh`, so every committed row is `-` and held to the
+# derived command exactly. The column survives because the reason for it does:
+# naming a consumer's file layout from `crates/batten` is what non-negotiable
+# rule 1 forbids, so a consumer that DOES need an indirection resolves it in its
+# own gate — and the only way that decision is testable is a fixture that uses
+# one, which is what `HOOKS_WIRING_HARNESSES` is for.
+@test "a declared launcher stands in for the derived command — that indirection is the point" {
 	complete_wiring '$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook.sh'
 	run gate
 	[ "$status" -eq 0 ]
@@ -229,7 +237,38 @@ mutate_event() { # <event> <matcher|second> <value>
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"PreToolUse"* ]]
 	[[ "$output" == *"Stop"* ]]
-	[[ "$output" == *"7 wiring violation(s)"* ]]
+	[[ "$output" == *"8 wiring violation(s)"* ]]
+}
+
+# THE INSTANCE, ASSERTED OVER THE COMMITTED TABLE (CLOUD-824 §7). Every case
+# above runs against a fixture, which is what makes the launcher affordance
+# testable and also what makes it unable to say anything about THIS repository.
+# This one reads the gate's own default table: no harness declares a launcher, so
+# no shell can sit in front of the engine and decide which directory it reads its
+# authority from. That is the class the deleted launcher belonged to — a shell
+# resolver only becomes the engine's root-decider by being invoked in its place —
+# and it is closed by the table rather than by the file being gone.
+#
+# `.claude/hooks/session-start.sh` still asks git for a root and is deliberately
+# NOT covered: it resolves which checkout to PROVISION, not which authority to
+# adjudicate against, and in a linked worktree the worktree is the right answer to
+# that question. Reading the two as one class is what let the launcher's `cd`
+# survive review.
+@test "no harness declares a launcher, so no shell fronts the engine here" {
+	local table
+	table=$(sed -n '/^HARNESSES="\${HOOKS_WIRING_HARNESSES-/,/}"$/p' "$GATE")
+	[ -n "$table" ]
+	# Field 3 is the launcher column; every row must be `-`.
+	run bash -c "printf '%s' \"\$1\" | sed -e 's/^HARNESSES=.*HARNESSES-//' -e 's/}\"\$//' | awk 'NF{print \$3}'" _ "$table"
+	[ "$status" -eq 0 ]
+	[ -n "$output" ]
+	while read -r launcher; do
+		[ "$launcher" = "-" ] || {
+			echo "a harness row declares the launcher '$launcher'" >&2
+			return 1
+		}
+	done <<<"$output"
+	[ ! -e "$BATS_TEST_DIRNAME/../.claude/hooks/batten-hook.sh" ]
 }
 
 # --- the harness census -------------------------------------------------------
