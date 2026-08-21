@@ -45,7 +45,9 @@ imports `clap::Command` bare, so the token names two different types in this
 crate. Counting the sites with `grep` gave 14; a syntax-only matcher gives 11,
 because a call expression looks the same whichever type it names. The answer is
 neither, and reaching for a scanner is what produced both of the wrong turns
-CLOUD-743 records. The same applies to reading a deny message that
+CLOUD-743 records. This is the one case, not the general rule: which instrument
+answers which class of whole-tree question is `.claude/rules/scanning.md`. The
+same applies to reading a deny message that
 points at somebody else's remedy (CLOUD-437).
 
 ## Concurrency posture — one authority, a verdict per row

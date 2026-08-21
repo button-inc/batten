@@ -188,6 +188,7 @@ Use mise for everything; never a bare `cargo`/`export`/one-off install.
 | `rust.md`        | editing `crates/**` — library/binary split, lints, test shape, layout                                                                        |
 | `toolchain.md`   | editing `mise.toml`, `mise-tasks/`, `hk.pkl`, `tests/*.bats`, workflows — setup, the gate, the lifecycle tasks and their `PreToolUse` guards |
 | `commits.md`     | touching release config — Conventional Commits detail, fast-forward landing, release-plz                                                     |
+| `scanning.md`    | asking a whole-tree question — text vs syntax vs names, and which instrument answers which                                                   |
 
 ## Scope reminder
 
