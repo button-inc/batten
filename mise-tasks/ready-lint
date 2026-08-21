@@ -336,6 +336,14 @@ if bump_line=$(grep -iE "$BUMP_LABEL" <<<"$block" | head -n1); then
 	# to refuse, which is the vacuous pass in a narrower disguise. So the surface
 	# word must FOLLOW the denial token across nothing but a connective: the
 	# repaired spelling is "Not `!` for the consumer surface: …".
+	#
+	# ONE QUALIFIED DENIAL ON THE LINE IS ENOUGH, and that is deliberate. A
+	# corrected clause quotes its own history — the repaired spelling followed by
+	# a note about the unqualified one it used to carry — so demanding that EVERY
+	# denial token on the line be qualified would refuse the repair this clause
+	# exists to produce. The bias is `spec-ref-check`'s, stated there for
+	# over-declaring: the loose direction reports LESS, and a gate with false
+	# positives gets bypassed.
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not a subshell
 	BREAK_DENIAL='not[[:space:]]+`?!`?|not[[:space:]]+breaking|non-?breaking|no[[:space:]]+break[a-z]*'
 	# The connective set is an alternation rather than a bracket expression: an
