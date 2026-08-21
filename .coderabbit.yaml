@@ -4,11 +4,17 @@
 # obtainable while a PR is still a draft — the phase AGENTS.md sizes as "iterate
 # at zero CI cost", because every job in ci.yml is `if: draft == false`.
 #
-# Two arms, one line apart. This commit is arm A: the documented default
-# (`drafts: false`) made explicit, so the probe PR opens under the regime every
-# PR here has always had. Arm B flips it to `true`. CodeRabbit reads this file
-# from the feature branch under review, so both arms run without landing
-# anything on main.
+# Two arms, one line apart. Arm A was the documented default (`drafts: false`)
+# made explicit: a review was requested by comment on the draft and arrived in
+# 193s, with every workflow still `skipped`. This commit is arm B, and it asks
+# the other question — with NO comment posted, does the `synchronize` event
+# review a draft on its own?
+#
+# The split is #623's own review's correction: `drafts` governs the AUTOMATIC
+# path only, and `@coderabbitai review` fires independently of it, so arm A
+# proves nothing about this line. `@coderabbitai configuration` answered the
+# other half — `drafts` reads `# Source: Repository YAML (base)`, so the file
+# is read from the branch under review and the flip below is measurable.
 reviews:
   auto_review:
-    drafts: false
+    drafts: true
