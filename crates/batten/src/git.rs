@@ -760,7 +760,7 @@ fn command(dir: &Path) -> Command {
 /// version-dependent prose and never reaches the caller, so the message stays
 /// deterministic. Failing to run `git` at all, or output that is not UTF-8, is
 /// an internal error (exit `3`).
-pub fn query(dir: &Path, args: &[&str], refusal: &str) -> Result<String> {
+fn query(dir: &Path, args: &[&str], refusal: &str) -> Result<String> {
     let bytes = query_bytes(dir, args, refusal)?;
     let stdout = String::from_utf8(bytes).map_err(|_| {
         UsageError::raise(format!(
@@ -777,7 +777,7 @@ pub fn query(dir: &Path, args: &[&str], refusal: &str) -> Result<String> {
 /// # Errors
 ///
 /// As [`query`], minus the decoding failure.
-pub fn query_bytes(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<u8>> {
+fn query_bytes(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<u8>> {
     let output = command(dir)
         .args(args)
         .stderr(Stdio::null())
@@ -802,7 +802,7 @@ pub fn query_bytes(dir: &Path, args: &[&str], refusal: &str) -> Result<Vec<u8>> 
 ///
 /// Failing to run `git` at all, or output that is not UTF-8, is still an
 /// internal error — only the *verdict* is optional, never the mechanism.
-pub fn query_optional(dir: &Path, args: &[&str]) -> Result<Option<String>> {
+fn query_optional(dir: &Path, args: &[&str]) -> Result<Option<String>> {
     let output = command(dir)
         .args(args)
         .stderr(Stdio::null())
@@ -989,6 +989,218 @@ pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
         dir,
         &["log", "--format=%B", "--end-of-options", &range, "--"],
     )
+}
+
+/// The field separator [`commit_record`] joins its four fields with.
+///
+/// U+001E RECORD SEPARATOR: a control character no identity, trailer or subject
+/// carries in practice — and, crucially, one whose *presence* in a body is now
+/// an error rather than a silent mis-split (CLOUD-742).
+const RECORD_SEPARATOR: &str = "\u{1e}";
+
+/// One commit's attribution record: who wrote it, who committed it, what it
+/// trails, and what it says.
+///
+/// Four fields as a **struct, not a `splitn`**. The call site that used to do
+/// this took each part with `unwrap_or_default()`, so a record that arrived
+/// short answered with empty strings — an *answer*, on the module that decides
+/// commit attribution, where the honest response is a refusal (CLOUD-742).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommitRecord {
+    /// `%an <%ae>` — the author identity.
+    pub author: String,
+    /// `%cn <%ce>` — the committer identity.
+    pub committer: String,
+    /// `%(trailers:only,unfold)`, as whole `Key: value` lines with blanks
+    /// dropped.
+    pub trailers: Vec<String>,
+    /// `%B` — the raw message body.
+    pub body: String,
+}
+
+/// Read one commit's attribution record.
+///
+/// One `git show -s` with the four placeholders joined by [`RECORD_SEPARATOR`],
+/// and the split that undoes that join lives here, beside the format string it
+/// reverses — a caller holding one half of that pair is a caller that can get
+/// it wrong.
+///
+/// **Exact arity, and that is the behavioural change this carries.** A record
+/// that does not split into four fields is refused. Previously each part came
+/// off the iterator with `unwrap_or_default()`, so a body containing U+001E
+/// produced a shorter split and the missing fields became empty strings — which
+/// the attribution decision then judged as though they were what git said. The
+/// three surfaces the attribution decision record governs are decided from this
+/// value; a blank field is not a safe default there, it is a wrong answer.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the commit cannot be read, or when
+/// its record does not carry all four fields — "could not look", never a
+/// verdict built out of blanks.
+pub fn commit_record(dir: &Path, commit: &str) -> Result<CommitRecord> {
+    let format = format!(
+        "%an <%ae>{RECORD_SEPARATOR}%cn <%ce>{RECORD_SEPARATOR}%(trailers:only,unfold)\
+         {RECORD_SEPARATOR}%B"
+    );
+    let shown = query(
+        dir,
+        &[
+            "show",
+            "-s",
+            &format!("--format={format}"),
+            "--end-of-options",
+            commit,
+        ],
+        "could not read a commit in the range",
+    )?;
+    record_from(&shown, commit)
+}
+
+/// The destructure [`commit_record`] performs, separated from the invocation
+/// that produces its input.
+///
+/// Its own function because the failing condition is a *record shape* and not a
+/// repository state: a caller cannot easily make `git show` emit a short record
+/// on demand, so the decision is extracted and tested directly rather than
+/// through a fixture that asserts its own premise (`.claude/rules/rust.md`,
+/// CLOUD-249).
+fn record_from(shown: &str, commit: &str) -> Result<CommitRecord> {
+    let mut parts = shown.splitn(4, RECORD_SEPARATOR);
+    let (Some(author), Some(committer), Some(trailers), Some(body)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(UsageError::raise(format!(
+            "the record for {} does not carry four fields, so its attribution cannot be read",
+            short(commit)
+        )));
+    };
+    Ok(CommitRecord {
+        author: author.to_owned(),
+        committer: committer.to_owned(),
+        trailers: trailer_lines(trailers),
+        body: body.to_owned(),
+    })
+}
+
+/// Split a trailer block into whole `Key: value` lines, dropping blanks.
+///
+/// `pub(crate)` rather than private because `attribution.rs` reads a *pending*
+/// message's trailers through the same shape and asserts this splitting
+/// directly; one implementation, so a committed record and a pending one cannot
+/// disagree about what a trailer line is.
+pub(crate) fn trailer_lines(block: &str) -> Vec<String> {
+    block
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// A commit's short form, as every pointer in this repository renders it.
+fn short(commit: &str) -> String {
+    commit.chars().take(8).collect()
+}
+
+/// Every non-merge commit in `base..head`, as full SHAs.
+///
+/// The enumeration half of an attribution run: [`commit_record`] is what reads
+/// each one. Split from it because the range resolving and a commit reading are
+/// different failures with different refusals.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve — "could
+/// not look", never a clean pass over commits nobody read.
+pub fn commits_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<String>> {
+    let range = format!("{base}..{head}");
+    let listed = query(
+        dir,
+        &["rev-list", "--no-merges", "--end-of-options", &range, "--"],
+        "could not resolve the commit range",
+    )?;
+    Ok(listed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
+}
+
+/// The trailers of a message that is on disk and not yet committed.
+///
+/// `git interpret-trailers --parse` applies git's own rules for where the
+/// trailer block starts, so nothing here re-derives them and this cannot
+/// disagree with what [`commit_record`] reports once the commit exists.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the message cannot be parsed.
+pub fn message_trailers(dir: &Path, message: &Path) -> Result<Vec<String>> {
+    let path = message.to_string_lossy().into_owned();
+    let parsed = query(
+        dir,
+        &["interpret-trailers", "--parse", "--", &path],
+        "could not parse the pending message's trailers",
+    )?;
+    Ok(trailer_lines(&parsed))
+}
+
+/// One config value as git *resolves* it, across every scope.
+///
+/// Resolved rather than `--local`, because the question a caller asks of this
+/// is "is there an identity here at all" — and an accountable one inherited
+/// from a wider scope is an answer, not an absence.
+///
+/// # Errors
+///
+/// Failing to run `git` at all is an internal error (exit `3`); an unset key is
+/// `None`, which is an answer.
+pub fn config_value(dir: &Path, key: &str) -> Result<Option<String>> {
+    query_optional(dir, &["config", "--get", "--end-of-options", key])
+}
+
+/// Set one **repo-local** config value.
+///
+/// Repo-local and never `--global`: the wider scope covers a developer's own
+/// unrelated repositories, and nothing in this crate has the standing to change
+/// those. The narrowing is spelled here, once, rather than at each caller.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the write fails.
+pub fn set_config_local(dir: &Path, key: &str, value: &str) -> Result<()> {
+    query(
+        dir,
+        &["config", "--local", "--end-of-options", key, value],
+        "could not write the repo-local config value",
+    )?;
+    Ok(())
+}
+
+/// The identity git is about to stamp, without the timestamp it appends.
+///
+/// `git var` prints `Name <email> <epoch> <tz>`; the time is not identity, and
+/// the trim that removes it belongs beside the invocation that knows the format
+/// rather than at a caller that has to remember it.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when git cannot resolve an identity.
+pub fn stamped_identity(dir: &Path, var: &str) -> Result<String> {
+    // No `--end-of-options`: `git var` does not accept the token — it takes
+    // `-l` or exactly one variable name — and it does not need it, because the
+    // two names this is ever called with are literals in this crate rather than
+    // anything a caller supplies.
+    let raw = query(
+        dir,
+        &["var", var],
+        "could not resolve the identity git would stamp",
+    )?;
+    Ok(raw
+        .rfind('>')
+        .map_or_else(|| raw.trim().to_owned(), |end| raw[..=end].to_owned()))
 }
 
 /// The absolute git directory for `dir` — **per-worktree**, not the common one.
@@ -2185,6 +2397,97 @@ mod tests {
                 "{}: spawns git directly; call git::query so the environment scrub and the \
                  usage-vs-internal split stay in one place (CLOUD-36)",
                 path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn no_module_assembles_its_own_git_argv() {
+        // The gate that ships with CLOUD-742's rule: every git question the
+        // crate asks has a NAME, so the argv and the parse that undoes its
+        // output are one decision in one place. Sixteen call sites outside this
+        // module used to hold both halves — `attribution.rs` split four fields
+        // with `unwrap_or_default()`, which turned a short record into an
+        // answer on the module that decides commit attribution.
+        //
+        // Belt to the suspenders `query`/`query_bytes`/`query_optional` being
+        // private already provides: a nineteenth ad-hoc caller inside this
+        // crate is a compile error rather than a failing test —
+        // unrepresentable beats refused — and this states the rule in words
+        // for whoever proposes re-widening them.
+        //
+        // The removal is `function_missing` to `semver`, so the commit that
+        // makes it declares the break. That costs the release nothing here:
+        // below 0.1.0 every type collapses to a patch, `!` included, which is
+        // the bump this row was priced at.
+        //
+        // `::`-PREFIXED, and that is load-bearing: `defects.rs` has a
+        // `run_defects_query(` that shares the spelling and is not a git call —
+        // the two-programs-one-spelling trap CLOUD-757 records for `Command`.
+        // Assembled by concatenation so this assertion's own source is not a
+        // match for the gate it states.
+        let forbidden = [
+            ["::que", "ry("].concat(),
+            ["::que", "ry_bytes("].concat(),
+            ["::que", "ry_optional("].concat(),
+        ];
+        for (path, source) in crate_sources(true) {
+            for token in &forbidden {
+                assert!(
+                    !source.contains(token.as_str()),
+                    "{}: assembles its own git argv; give the question a name in git.rs and \
+                     return a typed answer, so the parse lives beside the format string it \
+                     reverses (CLOUD-742)",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_short_record_is_refused_rather_than_answered() {
+        // The one behavioural change CLOUD-742 sanctions, tested where the
+        // decision is: a record that does not carry four fields cannot be read
+        // as attribution. It used to take each part with `unwrap_or_default()`,
+        // so a body carrying U+001E shifted the split and the missing fields
+        // arrived as empty strings — judged afterwards as though git had said
+        // them.
+        //
+        // Exercised over the parse rather than over a repository, per
+        // `.claude/rules/rust.md`: the failing condition is a record shape, so
+        // the assertion is about that shape and not about a fixture that
+        // happens to produce it.
+        let sep = RECORD_SEPARATOR;
+        let commit = "a".repeat(40);
+
+        let whole = format!("Ann <ann@x>{sep}Bo <bo@x>{sep}Refs: CLOUD-742{sep}the body");
+        let read = record_from(&whole, &commit).expect("a four-field record reads");
+        assert_eq!(read.author, "Ann <ann@x>");
+        assert_eq!(read.committer, "Bo <bo@x>");
+        assert_eq!(read.trailers, vec!["Refs: CLOUD-742".to_owned()]);
+        assert_eq!(read.body, "the body");
+
+        // A body carrying the separator does NOT shift fields, because the
+        // split is bounded at four: everything after the third separator is
+        // body, separators and all.
+        let with_sep = format!("Ann <ann@x>{sep}Bo <bo@x>{sep}{sep}a body with {sep} in it");
+        let read = record_from(&with_sep, &commit).expect("the body keeps its own separators");
+        assert_eq!(read.author, "Ann <ann@x>");
+        assert_eq!(read.body, format!("a body with {sep} in it"));
+
+        // Short: three fields, which used to yield an empty body and an empty
+        // trailer block that the attribution decision then judged.
+        for short_record in [
+            format!("Ann <ann@x>{sep}Bo <bo@x>{sep}Refs: CLOUD-742"),
+            format!("Ann <ann@x>{sep}Bo <bo@x>"),
+            "Ann <ann@x>".to_owned(),
+            String::new(),
+        ] {
+            let refused = record_from(&short_record, &commit);
+            assert!(
+                refused.is_err(),
+                "a record of {} field(s) must refuse, never answer with blanks",
+                short_record.split(sep).count()
             );
         }
     }

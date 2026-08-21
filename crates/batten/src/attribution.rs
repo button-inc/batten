@@ -267,46 +267,29 @@ impl Attribution {
     }
 }
 
-/// The git pretty-format placeholders one `git show -s` call needs, joined by a
-/// separator no identity or trailer can contain.
-const RECORD_SEPARATOR: &str = "\u{1e}";
-
 /// Read every non-merge commit in `base..head`.
+///
+/// The enumeration and the per-commit read are both named questions in
+/// `git.rs` now (CLOUD-742): the four-field record arrives as a
+/// [`git::CommitRecord`], so this module no longer holds half of a format
+/// string and the split that reverses it.
 ///
 /// # Errors
 ///
 /// Returns an error when the range does not resolve or git cannot be run. That is
 /// exit `1` — "could not look" — never a clean pass over commits nobody read.
+/// A commit whose record does not carry all four fields is refused there, where
+/// it used to answer with empty strings here.
 pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitMeta>> {
-    let range = format!("{base}..{head}");
-    let listed = git::query(
-        dir,
-        &["rev-list", "--no-merges", &range],
-        "could not resolve the commit range",
-    )?;
-
     let mut commits = Vec::new();
-    for sha in listed.lines().filter(|line| !line.trim().is_empty()) {
-        let format = format!(
-            "%an <%ae>{RECORD_SEPARATOR}%cn <%ce>{RECORD_SEPARATOR}%(trailers:only,unfold)\
-             {RECORD_SEPARATOR}%B"
-        );
-        let shown = git::query(
-            dir,
-            &["show", "-s", &format!("--format={format}"), sha],
-            "could not read a commit in the range",
-        )?;
-        let mut parts = shown.splitn(4, RECORD_SEPARATOR);
-        let author = parts.next().unwrap_or_default().to_owned();
-        let committer = parts.next().unwrap_or_default().to_owned();
-        let trailers = trailer_lines(parts.next().unwrap_or_default());
-        let body = parts.next().unwrap_or_default().to_owned();
+    for sha in git::commits_in_range(dir, base, head)? {
+        let record = git::commit_record(dir, &sha)?;
         commits.push(CommitMeta {
-            label: short(sha),
-            author,
-            committer,
-            trailers,
-            body,
+            label: short(&sha),
+            author: record.author,
+            committer: record.committer,
+            trailers: record.trailers,
+            body: record.body,
         });
     }
     Ok(commits)
@@ -329,20 +312,11 @@ pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
             message.display()
         ))
     })?;
-    let path = message.to_string_lossy().into_owned();
-    // `git interpret-trailers --parse` applies git's own rules for where the
-    // trailer block starts, so this does not re-derive them and cannot disagree
-    // with what `%(trailers:only)` reports once the commit exists.
-    let parsed = git::query(
-        dir,
-        &["interpret-trailers", "--parse", "--", &path],
-        "could not parse the pending message's trailers",
-    )?;
     Ok(CommitMeta {
         label: "pending".to_owned(),
-        author: pending_identity(dir, "GIT_AUTHOR_IDENT")?,
-        committer: pending_identity(dir, "GIT_COMMITTER_IDENT")?,
-        trailers: trailer_lines(&parsed),
+        author: git::stamped_identity(dir, "GIT_AUTHOR_IDENT")?,
+        committer: git::stamped_identity(dir, "GIT_COMMITTER_IDENT")?,
+        trailers: git::message_trailers(dir, message)?,
         body,
     })
 }
@@ -361,8 +335,8 @@ pub fn read_message(dir: &Path, message: &Path) -> Result<CommitMeta> {
 ///
 /// Returns an error when git cannot be run or the write fails.
 pub fn set_identity(dir: &Path, attribution: &Attribution) -> Result<Outcome> {
-    let name = git::query_optional(dir, &["config", "--get", "user.name"])?.unwrap_or_default();
-    let email = git::query_optional(dir, &["config", "--get", "user.email"])?.unwrap_or_default();
+    let name = git::config_value(dir, "user.name")?.unwrap_or_default();
+    let email = git::config_value(dir, "user.email")?.unwrap_or_default();
 
     let outcome = if name.trim().is_empty() || email.trim().is_empty() {
         Outcome::WasUnset
@@ -379,21 +353,8 @@ pub fn set_identity(dir: &Path, attribution: &Attribution) -> Result<Outcome> {
         }
     };
 
-    git::query(
-        dir,
-        &["config", "--local", "user.name", &attribution.identity.name],
-        "could not write the repo-local user.name",
-    )?;
-    git::query(
-        dir,
-        &[
-            "config",
-            "--local",
-            "user.email",
-            &attribution.identity.email,
-        ],
-        "could not write the repo-local user.email",
-    )?;
+    git::set_config_local(dir, "user.name", &attribution.identity.name)?;
+    git::set_config_local(dir, "user.email", &attribution.identity.email)?;
     Ok(outcome)
 }
 
@@ -509,30 +470,6 @@ pub fn report(findings: &[Finding]) -> String {
         _ = writeln!(rendered, "{}", finding.line());
     }
     rendered
-}
-
-/// Split a trailer block into whole `Key: value` lines, dropping blanks.
-fn trailer_lines(block: &str) -> Vec<String> {
-    block
-        .lines()
-        .map(str::trim_end)
-        .filter(|line| !line.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-/// The identity git is about to stamp, without the timestamp it appends.
-///
-/// `git var` prints `Name <email> <epoch> <tz>`; the time is not identity.
-fn pending_identity(dir: &Path, var: &str) -> Result<String> {
-    let raw = git::query(
-        dir,
-        &["var", var],
-        "could not resolve the identity git would stamp",
-    )?;
-    Ok(raw
-        .rfind('>')
-        .map_or_else(|| raw.trim().to_owned(), |end| raw[..=end].to_owned()))
 }
 
 /// A commit's short form, as every other pointer in this repository renders it.
@@ -693,7 +630,7 @@ mod tests {
     #[test]
     fn trailer_blocks_drop_blank_lines() {
         assert_eq!(
-            trailer_lines("Refs: CLOUD-1\n\nSigned-off-by: A <a@b.test>\n"),
+            git::trailer_lines("Refs: CLOUD-1\n\nSigned-off-by: A <a@b.test>\n"),
             vec!["Refs: CLOUD-1", "Signed-off-by: A <a@b.test>"]
         );
     }
