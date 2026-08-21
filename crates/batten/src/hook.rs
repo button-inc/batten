@@ -2762,12 +2762,24 @@ fn policy_rules(policy: &Policy, envelope: &Envelope) -> Decision {
         };
         // The FIRST denial decides, matching every other gate in this chain:
         // first-match-wins, so declaration order is what a reviewer reads.
-        if let Some(cause) = denials.into_iter().next() {
+        if let Some(violation) = denials.first() {
+            // THE POINTER IS THE PREDICATE, NOT THE BUNDLE (CLOUD-832).
+            // `Module::attribute` resolves a `violation`'s own `rule` id when it
+            // named one and falls back to the registering row's id otherwise —
+            // which is the pre-CLOUD-832 behaviour, reached by a module that
+            // uses the bare-string `deny` shape. One place decides that
+            // fallback, because a waiver keys off the same answer and two
+            // spellings of it would let a waiver suppress something a finding
+            // does not name.
+            //
             // The cause is the module's own message, which is the consumer's
             // text exactly as a row's `reason` is — not a rendering of the
-            // policy body, which rule 4 would refuse. The pointer is the
-            // registering row's id.
-            return Decision::Deny(Refusal::new(module.id(), cause, Fix::None));
+            // policy body, which rule 4 would refuse.
+            return Decision::Deny(Refusal::new(
+                module.attribute(violation),
+                violation.msg.clone(),
+                Fix::None,
+            ));
         }
     }
     Decision::Allow
@@ -3838,6 +3850,7 @@ mod tests {
             derives: None,
             reads: None,
             module: None,
+            predicate_severity: None,
             criteria: None,
             tier: None,
             // A shape rule never reaches the findings store, so it is refused

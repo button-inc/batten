@@ -624,6 +624,7 @@ impl RuleKind {
             RuleKind::Policy => &[
                 "module",
                 "severity",
+                "predicate_severity",
                 "identity_key",
                 "reason",
                 "policy_url",
@@ -1080,6 +1081,39 @@ pub struct Rule {
     /// rule more expensive or narrower than its own kind already is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reads: Option<String>,
+    /// Per-predicate severity, keyed by an id the module publishes (CLOUD-832).
+    /// [`RuleKind::Policy`] only.
+    ///
+    /// **Why a row's single `severity` is not enough.** A bundle carries many
+    /// predicates and this repository's own rules span `deny` and lower
+    /// severities; one row cannot carry both, so without this key every
+    /// predicate in a bundle inherits one verdict and the bundle is as strict as
+    /// its strictest member or as lax as its laxest. That is the "severity
+    /// flattens" half of CLOUD-832, and it is the half a waiver cannot stand in
+    /// for — a waiver suppresses, it does not lower.
+    ///
+    /// Absent, and absent per key, means [`Rule::severity`] — the row's own
+    /// value is the default for every predicate it registers, so the narrow case
+    /// stays one line. A key naming an id no module publishes is refused at
+    /// load by [`crate::policy::load`], which is the only place that sees both
+    /// the row and the module's declared set; it would otherwise be a setting
+    /// that parses and does nothing, which house style §8 refuses everywhere
+    /// else.
+    ///
+    /// This does NOT widen §8's raise-only invariant, and the argument is worth
+    /// stating rather than leaving to luck, because the key appears in the
+    /// OVERRIDE schema too. Three refusals already standing close it:
+    /// [`crate::config::OverrideConfig`] admits rules a local file *adds* and
+    /// refuses a redefinition of a committed id, so there is no committed bar
+    /// here to lower; [`crate::policy::load`] refuses two rows registering one
+    /// module, so an override cannot re-register the same bundle at a lower
+    /// severity; and it refuses two modules publishing one predicate id, so an
+    /// override cannot smuggle a laxer copy of a predicate in beside the
+    /// original. On top of that a module is deny-only by construction — there is
+    /// no spelling for an allow — so a predicate's severity chooses how loudly it
+    /// refuses, never whether some other gate stops refusing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate_severity: Option<BTreeMap<String, RuleSeverity>>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -1457,6 +1491,28 @@ impl Rule {
     #[must_use]
     pub fn severity(&self) -> RuleSeverity {
         self.severity.unwrap_or(RuleSeverity::Allow)
+    }
+
+    /// The severity a denial is reported at: the predicate's own when
+    /// [`Rule::predicate_severity`] names it, the row's otherwise (CLOUD-832).
+    ///
+    /// One place, for [`crate::policy::Module::attribute`]'s reason: the id a
+    /// finding is reported under and the severity it is reported at have to be
+    /// resolved from the same answer, or a waiver written against what a reader
+    /// sees suppresses something else. `predicate` is `None` for every kind but
+    /// [`RuleKind::Policy`] and for a bare-string `deny`, and both answer
+    /// [`Rule::severity`] — which is the pre-CLOUD-832 behaviour reached without
+    /// a special case.
+    #[must_use]
+    pub fn severity_for(&self, predicate: Option<&str>) -> RuleSeverity {
+        let Some(predicate) = predicate else {
+            return self.severity();
+        };
+        self.predicate_severity
+            .as_ref()
+            .and_then(|table| table.get(predicate))
+            .copied()
+            .unwrap_or_else(|| self.severity())
     }
 
     /// Validate that the per-kind fields present match the declared `kind`.
@@ -4312,6 +4368,7 @@ mod tests {
             derives: None,
             reads: None,
             module: None,
+            predicate_severity: None,
             criteria: None,
             tier: None,
             // The one that needs no argv, so a fixture about a different column

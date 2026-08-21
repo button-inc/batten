@@ -76,7 +76,7 @@
 //! agreement — CLOUD-251's vacuous pass, which is exactly the failure this
 //! surface could rebuild.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::Result;
@@ -84,13 +84,69 @@ use crate::error::UsageError;
 use crate::facts::Look;
 use crate::rules::{Rule, RuleKind};
 
-/// The query every module answers, and the only one.
+/// The unattributed deny set: a set of bare strings, and the shape CLOUD-689
+/// shipped.
 ///
-/// A fixed query rather than a configurable one: what a policy row decides must
-/// be the same question for every module, or a reviewer reading `batten.toml`
-/// cannot tell what a row does without opening the module. The package is the
-/// consumer's; the rule name is Batten's.
+/// Fixed rather than configurable: what a policy row decides must be the same
+/// question for every module, or a reviewer reading `batten.toml` cannot tell
+/// what a row does without opening the module.
+///
+/// **Kept unchanged, and that is CLOUD-832's whole back-compatibility claim.** A
+/// bare string here yields a [`Violation`] whose `rule` is `None`, attributed to
+/// the registering row exactly as before, so the existing fixture and its tests
+/// pass untouched.
 const DENY_QUERY: &str = "data.batten.deny";
+
+/// The attributed deny set — Conftest's `violation` shape (CLOUD-832).
+///
+/// ```text
+/// violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product"} if {
+///   some p in input.tree.tracked
+///   endswith(p, ".o")
+/// }
+/// ```
+///
+/// This is what lets one module carry many *identified* predicates. Without it a
+/// bundle collapses every predicate it holds into one rule id, one severity and
+/// one waiver target — attribution dies (every finding names the bundle rather
+/// than the gate), severity flattens, and `mise run mutant` cannot be satisfied
+/// at all, because a single id has no per-gate mutation to declare.
+///
+/// Read *alongside* [`DENY_QUERY`] rather than replacing it: this is additive.
+const VIOLATION_QUERY: &str = "data.batten.violation";
+
+/// The ids a module publishes — a set of strings.
+///
+/// ```text
+/// rules contains "no-stray-artifact"
+/// ```
+///
+/// **The id set must be declarable or waivers and `mutant` have nothing to
+/// name.** A `[[waiver]]` naming an id no module declares becomes reportable
+/// (CLOUD-208's dead-waiver diagnostic, for free), and a `violation` carrying an
+/// id its module never published is refused rather than silently attributed.
+///
+/// Reading this is reading an *enabled* artifact, not discovering an authority,
+/// so house style §8 is untouched.
+const RULES_QUERY: &str = "data.batten.rules";
+
+/// One denial a module produced: the predicate that fired, and its own message.
+///
+/// `rule` is `Option` and the two arms are the two shapes, not a convenience:
+/// `None` is a bare string from [`DENY_QUERY`], attributed to the registering
+/// row; `Some` is a [`VIOLATION_QUERY`] entry naming a predicate the module
+/// published. [`Module::attribute`] is the one place that collapses them, so no
+/// caller re-derives the fallback and gets it differently.
+///
+/// `msg` is the **module's own text**, exactly as a row's `reason` is the
+/// consumer's — never a rendering of the policy body, which rule 4 would refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Violation {
+    /// The predicate id, when the module named one.
+    pub rule: Option<String>,
+    /// The module's message.
+    pub msg: String,
+}
 
 /// One registered module, loaded and compiled.
 ///
@@ -103,6 +159,13 @@ pub struct Module {
     id: String,
     /// The repository-relative path, for the pointer in a finding.
     path: String,
+    /// The predicate ids this module published through [`RULES_QUERY`].
+    ///
+    /// Read at load, once, and never re-queried: it is what a `violation`'s
+    /// `rule` is checked against and what a `[[waiver]]` is judged reachable
+    /// against. `BTreeSet` so the collision refusal names ids in a stable order
+    /// — §6's byte-stability reaches a config error's text too.
+    declared: BTreeSet<String>,
     /// The compiled evaluator, ready to take an input document.
     engine: regorus::Engine,
 }
@@ -119,6 +182,26 @@ impl Module {
     pub fn path(&self) -> &str {
         &self.path
     }
+
+    /// The predicate ids this module published.
+    #[must_use]
+    pub fn declared(&self) -> &BTreeSet<String> {
+        &self.declared
+    }
+
+    /// The id a denial is reported under: the predicate's own when it named one,
+    /// the registering row's otherwise.
+    ///
+    /// **One place, deliberately.** Severity resolution, `[[waiver]]`
+    /// suppression, `Refusal::new` and a tree `Finding`'s `rule` field all need
+    /// this fallback, and four spellings of it is how a waiver ends up
+    /// suppressing something a finding does not name. It is also what makes a
+    /// vendored preset's denial and an in-repo one indistinguishable in a
+    /// finding: neither carries a category, both carry an id.
+    #[must_use]
+    pub fn attribute<'a>(&'a self, violation: &'a Violation) -> &'a str {
+        violation.rule.as_deref().unwrap_or(&self.id)
+    }
 }
 
 impl std::fmt::Debug for Module {
@@ -128,6 +211,11 @@ impl std::fmt::Debug for Module {
         f.debug_struct("Module")
             .field("id", &self.id)
             .field("path", &self.path)
+            // The published ids are POINTERS — the same class as a rule id in a
+            // finding — so they are admissible here where a body never is. They
+            // are also the field a reader debugging an attribution question
+            // actually wants.
+            .field("declared", &self.declared)
             .finish_non_exhaustive()
     }
 }
@@ -158,6 +246,7 @@ impl Clone for Module {
         Self {
             id: self.id.clone(),
             path: self.path.clone(),
+            declared: self.declared.clone(),
             engine: self.engine.clone(),
         }
     }
@@ -182,6 +271,10 @@ impl Clone for Module {
 pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<Module>> {
     let mut modules = Vec::new();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
+    // Every predicate id published so far, and the module that published it —
+    // the value is what lets the collision refusal name BOTH sides, which is the
+    // difference between a pointer and a complaint.
+    let mut ids: BTreeMap<String, String> = BTreeMap::new();
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
         // `validate` already refuses a policy row with no `module`; this is the
         // located restatement, so a caller reaching `load` directly cannot get a
@@ -243,13 +336,144 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         engine
             .eval_query(DENY_QUERY.to_owned(), false)
             .map_err(|err| UsageError::raise(format!("`{path}` faults when evaluated: {err}")))?;
+        // The attributed set is smoke-queried too, and for the same reason: a
+        // conflict or a recursion reachable only through `violation` would
+        // otherwise be discovered by a denied tool call.
+        let smoke = engine
+            .eval_query(VIOLATION_QUERY.to_owned(), false)
+            .map_err(|err| UsageError::raise(format!("`{path}` faults when evaluated: {err}")))?;
+
+        // WHAT THE MODULE PUBLISHES, read once. A module carrying no `rules`
+        // rule publishes nothing, which is exactly the pre-CLOUD-832 module and
+        // is not an error — it simply cannot use the attributed shape.
+        let declared = declared_ids(&mut engine).map_err(|err| {
+            UsageError::raise(format!("`{path}` cannot publish its rule ids: {err}"))
+        })?;
+
+        // An id a `violation` names and the module never published is a config
+        // error HERE rather than a surprise at the gate — the same posture the
+        // smoke query above takes, applied to attribution. This can only see the
+        // violations the empty document reaches; `deny` treats an undeclared id
+        // met later as could-not-look, because a denial this gate cannot
+        // attribute is not one it can honestly report.
+        for violation in read_violations(&smoke).unwrap_or_default() {
+            let Some(named) = violation.rule.as_deref() else {
+                continue;
+            };
+            if !declared.contains(named) {
+                return Err(UsageError::raise(format!(
+                    "`{path}` raises `{named}`, which it does not declare in `{RULES_QUERY}`"
+                )));
+            }
+        }
+
+        // A `predicate_severity` key naming an id the module never published is a
+        // setting that parses and does nothing, which is the shape house style
+        // §8 refuses everywhere else in this config. This is the only place that
+        // sees both the row and the module's declared set, so it is the only
+        // place the check can live — `Rule::validate` has the row and not the
+        // module. Same shape as CLOUD-208's dead-waiver diagnostic, and for the
+        // same reason: a suppression or a severity aimed at nothing is a reader
+        // believing a gate is tuned when it is not.
+        if let Some(table) = rule.predicate_severity.as_ref() {
+            for named in table.keys() {
+                if !declared.contains(named.as_str()) {
+                    return Err(UsageError::raise(format!(
+                        "rule `{}` sets a severity for `{named}`, which `{path}` does not \
+                         declare in `{RULES_QUERY}`",
+                        rule.id
+                    )));
+                }
+            }
+        }
+
+        // ACROSS EVERY MODULE THIS LOAD SEES, and that is what keeps a folder
+        // from becoming a merge: there is no precedence to resolve because a
+        // collision is refused outright rather than silently won by whichever
+        // loaded last. It is also the clause that makes enumerating modules
+        // inside an enabled bundle safe (CLOUD-129's corrected shape), and it
+        // reaches across the vendored/in-repo boundary for free — a preset is
+        // just another module with a declared id set.
+        for id in &declared {
+            if let Some(owner) = ids.get(id.as_str()) {
+                return Err(UsageError::raise(format!(
+                    "`{path}` and `{owner}` both declare the rule id `{id}`; a finding                      names one predicate, so there is no precedence to resolve here"
+                )));
+            }
+        }
+        for id in &declared {
+            ids.insert(id.clone(), path.to_owned());
+        }
+
         modules.push(Module {
             id: rule.id.clone(),
             path: path.to_owned(),
+            declared,
             engine,
         });
     }
     Ok(modules)
+}
+
+/// The ids a compiled module publishes through [`RULES_QUERY`].
+///
+/// An absent or non-set `rules` rule is an EMPTY set rather than an error: a
+/// module written before CLOUD-832, or one using only the bare-string `deny`
+/// shape, publishes nothing and is entirely valid. Only a module that *faults*
+/// answering the query is a fault.
+fn declared_ids(engine: &mut regorus::Engine) -> Result<BTreeSet<String>, anyhow::Error> {
+    let results = engine.eval_query(RULES_QUERY.to_owned(), false)?;
+    let mut ids = BTreeSet::new();
+    for result in results.result {
+        for value in result.expressions {
+            match &value.value {
+                regorus::Value::Set(items) => {
+                    for item in items.iter() {
+                        if let Ok(text) = item.as_string() {
+                            ids.insert(text.to_string());
+                        }
+                    }
+                }
+                regorus::Value::Array(items) => {
+                    for item in items.iter() {
+                        if let Ok(text) = item.as_string() {
+                            ids.insert(text.to_string());
+                        }
+                    }
+                }
+                // Undefined is the ordinary case for a module with no `rules`
+                // rule. Anything else is a shape this gate cannot read, and
+                // reading it as "declares nothing" would turn every id the
+                // module raises into an undeclared-id refusal — a confusing
+                // error a long way from its cause.
+                regorus::Value::Undefined => {}
+                other => {
+                    anyhow::bail!(
+                        "`{RULES_QUERY}` answered a {} rather than a set of ids",
+                        shape(other)
+                    )
+                }
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// The stable one-word name of a value's shape, for a diagnostic.
+///
+/// The SHAPE and never the value (rule 4): a module's data is the consumer's,
+/// and a diagnostic that quoted it back would put policy content into a log.
+const fn shape(value: &regorus::Value) -> &'static str {
+    match value {
+        regorus::Value::Null => "null",
+        regorus::Value::Bool(_) => "boolean",
+        regorus::Value::Number(_) => "number",
+        regorus::Value::String(_) => "string",
+        regorus::Value::Array(_) => "array",
+        regorus::Value::Set(_) => "set",
+        regorus::Value::Object(_) => "object",
+        regorus::Value::Undefined => "undefined",
+    }
 }
 
 /// Evaluate one module over an input document and return its denials.
@@ -258,44 +482,137 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
 /// boundary and the input is data the caller already holds, which is what lets
 /// this be called from [`crate::hook::adjudicate`]'s chain.
 ///
+/// **Both shapes, one answer.** The bare-string [`DENY_QUERY`] set and the
+/// attributed [`VIOLATION_QUERY`] set are read into one `Vec<Violation>`, in
+/// that order — `deny` first, so a module carrying both keeps the declaration
+/// order a reviewer reads. A bare string yields `rule: None` and is attributed
+/// to the registering row exactly as it was before CLOUD-832.
+///
 /// Returns [`Look::CouldNotLook`] when the module faults or the input will not
 /// serialize — never an empty deny set, because "it ran and found nothing" and
 /// "it could not run" are different answers and collapsing them is CLOUD-251's
 /// vacuous pass.
+///
+/// **An undeclared id is also could-not-look**, and that arm is the one worth
+/// stating: a module raising a `violation` whose `rule` it never published gives
+/// this gate a denial it cannot attribute, and the two alternatives are both
+/// wrong — reporting it under the ROW id silently re-flattens the very
+/// attribution CLOUD-832 exists to add, and dropping it turns a real refusal
+/// into a pass. `load` refuses this outright for every violation the empty
+/// document reaches; this is the residue, on inputs load could not exercise.
 #[must_use]
-pub fn deny(module: &Module, input: &str) -> Look<Vec<String>> {
+pub fn deny(module: &Module, input: &str) -> Look<Vec<Violation>> {
     let mut engine = module.engine.clone();
     if engine.set_input_json(input).is_err() {
         return Look::CouldNotLook;
     }
-    let Ok(results) = engine.eval_query(DENY_QUERY.to_owned(), false) else {
+    let mut violations = Vec::new();
+
+    let Ok(unattributed) = engine.eval_query(DENY_QUERY.to_owned(), false) else {
         return Look::CouldNotLook;
     };
-    let mut denials = Vec::new();
-    for result in results.result {
-        for value in result.expressions {
+    match read_strings(&unattributed) {
+        Some(messages) => violations.extend(
+            messages
+                .into_iter()
+                .map(|msg| Violation { rule: None, msg }),
+        ),
+        None => return Look::CouldNotLook,
+    }
+
+    let Ok(attributed) = engine.eval_query(VIOLATION_QUERY.to_owned(), false) else {
+        return Look::CouldNotLook;
+    };
+    match read_violations(&attributed) {
+        Some(entries) => {
+            for entry in entries {
+                if let Some(named) = entry.rule.as_deref() {
+                    if !module.declared.contains(named) {
+                        return Look::CouldNotLook;
+                    }
+                }
+                violations.push(entry);
+            }
+        }
+        None => return Look::CouldNotLook,
+    }
+
+    Look::Is(violations)
+}
+
+/// The bare-string members of a `deny` result, or `None` for a shape this gate
+/// cannot read.
+///
+/// `None` is could-not-look at every call site, never "no denials": a module
+/// whose `deny` is neither a set nor an array decided nothing readable, and
+/// guessing it is empty is CLOUD-251's vacuous pass.
+fn read_strings(results: &regorus::QueryResults) -> Option<Vec<String>> {
+    let mut messages = Vec::new();
+    for result in &results.result {
+        for value in &result.expressions {
             match &value.value {
                 regorus::Value::Set(items) => {
                     for item in items.iter() {
                         if let Ok(text) = item.as_string() {
-                            denials.push(text.to_string());
+                            messages.push(text.to_string());
                         }
                     }
                 }
                 regorus::Value::Array(items) => {
                     for item in items.iter() {
                         if let Ok(text) = item.as_string() {
-                            denials.push(text.to_string());
+                            messages.push(text.to_string());
                         }
                     }
                 }
-                // A module whose `deny` is neither a set nor an array decided
-                // nothing this gate can read. Stated rather than wildcarded to
-                // "no denials": a shape we do not understand is could-not-look,
-                // and guessing it is empty is the vacuous pass again.
-                _ => return Look::CouldNotLook,
+                // Undefined is the ordinary shape of a module that has no
+                // `deny` rule at all, which is entirely valid once `violation`
+                // exists — it is an empty contribution, not an unreadable one.
+                regorus::Value::Undefined => {}
+                _ => return None,
             }
         }
     }
-    Look::Is(denials)
+    Some(messages)
+}
+
+/// The `{"rule": …, "msg": …}` members of a `violation` result, or `None` for a
+/// shape this gate cannot read.
+///
+/// A member missing `msg` is unreadable rather than empty-messaged: a refusal
+/// whose text is the empty string tells its reader nothing, and inventing one
+/// here would put Batten's words in the consumer's mouth. A member missing
+/// `rule` is fine and falls back to the row, which is [`DENY_QUERY`]'s
+/// behaviour reached by a different spelling.
+fn read_violations(results: &regorus::QueryResults) -> Option<Vec<Violation>> {
+    let mut violations = Vec::new();
+    for result in &results.result {
+        for value in &result.expressions {
+            let items: Vec<&regorus::Value> = match &value.value {
+                regorus::Value::Set(items) => items.iter().collect(),
+                regorus::Value::Array(items) => items.iter().collect(),
+                regorus::Value::Undefined => continue,
+                _ => return None,
+            };
+            for item in items {
+                let msg = item
+                    .as_object()
+                    .ok()?
+                    .get(&"msg".into())?
+                    .as_string()
+                    .ok()?;
+                let rule = item
+                    .as_object()
+                    .ok()?
+                    .get(&"rule".into())
+                    .and_then(|value| value.as_string().ok())
+                    .map(|text| text.to_string());
+                violations.push(Violation {
+                    rule,
+                    msg: msg.to_string(),
+                });
+            }
+        }
+    }
+    Some(violations)
 }

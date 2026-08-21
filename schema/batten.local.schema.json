@@ -406,6 +406,16 @@
             "null"
           ]
         },
+        "predicate_severity": {
+          "description": "Per-predicate severity, keyed by an id the module publishes (CLOUD-832).\n[`RuleKind::Policy`] only.\n\n**Why a row's single `severity` is not enough.** A bundle carries many\npredicates and this repository's own rules span `deny` and lower\nseverities; one row cannot carry both, so without this key every\npredicate in a bundle inherits one verdict and the bundle is as strict as\nits strictest member or as lax as its laxest. That is the \"severity\nflattens\" half of CLOUD-832, and it is the half a waiver cannot stand in\nfor — a waiver suppresses, it does not lower.\n\nAbsent, and absent per key, means [`Rule::severity`] — the row's own\nvalue is the default for every predicate it registers, so the narrow case\nstays one line. A key naming an id no module publishes is refused at\nload by [`crate::policy::load`], which is the only place that sees both\nthe row and the module's declared set; it would otherwise be a setting\nthat parses and does nothing, which house style §8 refuses everywhere\nelse.\n\nThis does NOT widen §8's raise-only invariant, and the argument is worth\nstating rather than leaving to luck, because the key appears in the\nOVERRIDE schema too. Three refusals already standing close it:\n[`crate::config::OverrideConfig`] admits rules a local file *adds* and\nrefuses a redefinition of a committed id, so there is no committed bar\nhere to lower; [`crate::policy::load`] refuses two rows registering one\nmodule, so an override cannot re-register the same bundle at a lower\nseverity; and it refuses two modules publishing one predicate id, so an\noverride cannot smuggle a laxer copy of a predicate in beside the\noriginal. On top of that a module is deny-only by construction — there is\nno spelling for an allow — so a predicate's severity chooses how loudly it\nrefuses, never whether some other gate stops refusing.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/RuleSeverity"
+          }
+        },
         "reads": {
           "description": "The derived value this rule compares its node against — [`Rule::pattern`]'s\n**alternative**, never an addition to it. [`RuleKind::Document`] only.\n\nA row carries exactly one of the two, the shape `forbid`'s\n`pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a\nload error rather than a precedence rule nobody can read.\n\nThree checks run at load and never later (house-style §8, and CLOUD-647\nmeasured that the obvious candidate engine reports the third at\n*evaluation*, which on the mediated path is the worst possible time):\nthe name must be derived by some row, the reference graph must be\nacyclic, and the derivation's [`RuleKind::fact_class`] must not make this\nrule more expensive or narrower than its own kind already is.",
           "type": [
