@@ -126,14 +126,43 @@ pub enum Provenance {
 /// Closing that is §8's signed content-addressed reference, filed separately;
 /// stating the residual here is what keeps a later reader from mistaking this
 /// for the stronger property.
+///
+/// **The fields are private, and that is the guarantee rather than tidiness.**
+/// Public fields would make this constructible from a literal by anyone, so
+/// [`Provenance::Pin`] would be spellable out of thin air and the promise above
+/// would be prose. [`Pin::verify`] is the only place one is built, exactly as
+/// `git::verdict` is the only place a [`crate::git::Verdict`] is;
+/// `the_pin_evidence_cannot_be_forged` is the source-level gate on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinEvidence {
     /// The ref this pin was minted for. A pin is served only for the same one.
-    pub reference: String,
+    reference: String,
     /// The commit the pinned bytes were read from.
-    pub commit: String,
-    /// The digest that verified them, as `sha256:<hex>`-style opaque token.
-    pub digest: String,
+    commit: String,
+    /// The digest that verified them, as an opaque token.
+    digest: String,
+}
+
+impl PinEvidence {
+    /// The ref this pin answers for.
+    #[must_use]
+    pub fn reference(&self) -> &str {
+        &self.reference
+    }
+
+    /// The commit the pinned bytes came from.
+    #[must_use]
+    pub fn commit(&self) -> &str {
+        &self.commit
+    }
+
+    /// The digest that verified the pinned bytes.
+    ///
+    /// An opaque token, never the bytes it covers (non-negotiable rule 4).
+    #[must_use]
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
 }
 
 /// A config that governed a run, and the proof of where it came from.
@@ -441,11 +470,12 @@ pub fn record_pin(dir: &Path, loaded: &Loaded) {
 /// to make impossible.
 #[must_use]
 pub fn pinned_note(evidence: &PinEvidence) -> String {
+    let commit = evidence.commit();
     format!(
         "{} is unreachable; judging by the last validated config, pinned at {} — fetch the ref to \
          judge by it again",
-        evidence.reference,
-        &evidence.commit[..evidence.commit.len().min(12)]
+        evidence.reference(),
+        &commit[..commit.len().min(12)]
     )
 }
 
@@ -2692,6 +2722,45 @@ mod tests {
             "transcript.path"
         );
         assert!(weakenings(&config(""), &base).is_empty());
+    }
+
+    #[test]
+    fn the_pin_evidence_cannot_be_forged() {
+        // THE GATE THAT SHIPS WITH THE CLAIM (non-negotiable rule 2, CLOUD-720).
+        // `Provenance`'s doc says a degraded load "is not a state this type can
+        // represent" — and that is only true while `PinEvidence` is
+        // unconstructible from a literal. It shipped with three `pub` fields, so
+        // the promise was prose: any caller could have written
+        // `Provenance::Pin(PinEvidence { .. })` out of nothing and produced a
+        // run claiming a validation no pin ever backed.
+        //
+        // Private fields move the guarantee to the crate boundary, which is
+        // where the forgery risk is: inside this module the one construction
+        // site is `Pin::verify`, and it is reviewable beside the check it
+        // performs. `git.rs`'s `no_ancestry_decides_merged_ness` is the shape —
+        // scan this file's own source, because the decision lives here and
+        // exempting it would gut the gate.
+        //
+        // The search token is assembled so this test's own source is not a
+        // match, and the slice starts AFTER the opening brace: the declaration
+        // line is itself `pub`, and reading it as a field is the exact defect
+        // this gate had on its first run.
+        let source = include_str!("trust.rs");
+        let needle = ["pub struct ", "PinEvidence {"].concat();
+        let open = source
+            .find(&needle)
+            .expect("the evidence type is declared here")
+            + needle.len();
+        let body = &source[open..];
+        let fields = &body[..body.find("\n}").expect("the declaration is closed")];
+        for line in fields.lines() {
+            assert!(
+                !line.trim_start().starts_with("pub "),
+                "PinEvidence must keep its fields private, or `Provenance::Pin` becomes \
+                 spellable from a literal outside this module and the type-level guarantee is \
+                 prose. Offending field: {line}"
+            );
+        }
     }
 
     #[test]
