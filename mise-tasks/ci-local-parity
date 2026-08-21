@@ -809,5 +809,85 @@ while IFS= read -r name; do
 		problem "job '$name' runs on pull_request but is missing from CI_REQUIRED_CHECKS — \`ci-wait\` would report green without it (CLOUD-327)."
 done <<<"$have_names"
 
+# ---------------------------------------------------------------------------
+# THE FOREIGN RUNNER'S SECOND SPELLING (CLOUD-662).
+#
+# Property 3 asks "does CI run what `verify` runs", and CLOUD-394 gave foreign
+# runners an exemption from it — correctly, because there is no local Windows and
+# the premise "a free local run would have caught it" is simply false there.
+# CLOUD-113 then landed the `windows` job inside that exemption, and the job does
+# not run a task. It runs `mise exec -- cargo test --workspace`, for a measured
+# reason its own comment records: `test:cargo`'s body is bash, `mise run` puts Git
+# Bash in the chain, and MSYS rewrites PATH across that boundary.
+#
+# That decision stands. What was never owned is its cost: the job's command is now
+# a SECOND SPELLING of the task's effective body, accurate today and only today.
+# Change `test:cargo` — add `--all-features`, narrow `--workspace`, add a target —
+# and every Linux leg follows the task while the Windows leg keeps running the old
+# command, green on work it no longer covers. Property 3 does not object, because
+# the exemption is per JOB rather than per property.
+#
+# THE TASK IS READ THROUGH `mise tasks info`, NOT BY PARSING THE TOML, for the
+# reason `step-receipt` reads it the same way: a second parser is a second
+# authority on a body mise already owns, and it would drift in the silent
+# direction the moment the task body's shape changed.
+#
+# The property is that the job's command IS the task's cargo invocation, not that
+# the two strings are equal — the task also carries a step-receipt short-circuit
+# that CI disables by construction, so an equality test would fail on a difference
+# that is deliberate.
+#
+# COULD-NOT-LOOK COLLAPSES TO A PROBLEM HERE, and that is a deliberate narrowing
+# of CLOUD-662's sketch rather than an oversight. That issue specifies exit 2 for
+# "no foreign-runner cargo job found", and it also specifies that this lives
+# INSIDE `ci-local-parity` rather than as its own task. This task's contract is
+# 0/1, `verify` maps a 2 from a gate to "main moved", and minting a new 2 here
+# would be a contract change reaching every caller for a distinction none of them
+# reads. What is load-bearing survives intact: a tree where the subject has
+# vanished is a refusal, never a pass.
+# At column 0 and pipe-free: `mutant` reads declarations with
+# `sed -n 's/^#MUTANT //p'`, `shfmt` reindents a comment inside a block, and the
+# declaration grammar is three pipe-separated fields.
+#MUTANT foreign-spelling-may-drift|s@^\t\tif \[ "\$command" != "mise exec -- \$task_cargo" \]; then$@\t\tif false; then@|a task that gained a flag the foreign runner did not is refused
+#MUTANT foreign-subject-may-vanish|s@^if \[ -z "\${foreign_cargo//\[\[:space:\]\]/}" \]; then$@if false; then@|a tree with no foreign-runner cargo job is refused
+foreign_cargo=""
+for wf in "$workflows"/*.yml; do
+	[ -e "$wf" ] || continue
+	while IFS=: read -r lineno line; do
+		[ -n "$lineno" ] || continue
+		# Parameter expansion rather than `sed`: the prefix is everything through
+		# the first `run:` and then any leading blanks, which the shell can strip
+		# without a process (SC2001).
+		command="${line#*run:}"
+		command="${command#"${command%%[![:space:]]*}"}"
+		foreign_cargo="$foreign_cargo$wf:$lineno	$command"$'\n'
+	done < <(grep -nE '^[[:space:]]*-?[[:space:]]*run:[[:space:]]*mise exec -- cargo ' "$wf")
+done
+
+# The task's own cargo line, defaulting to the real read. Overridable for the
+# same reason `timeout-check` takes its inputs as arguments: the decision is the
+# part worth testing, and it only tests if the suite can point it at a spelling
+# the committed tree must never carry.
+task_cargo="${PARITY_TASK_CARGO-}"
+if [ -z "${PARITY_TASK_CARGO+set}" ]; then
+	task_json=$(mise tasks info test:cargo --json 2>/dev/null) || task_json=""
+	task_cargo=$(jq -r '[.run[]?] | join("\n")' <<<"${task_json:-null}" 2>/dev/null |
+		sed -n 's/^[[:space:]]*if ![[:space:]]*\(cargo .*\); then exit 1; fi[[:space:]]*$/\1/p' |
+		head -n 1)
+fi
+
+if [ -z "${foreign_cargo//[[:space:]]/}" ]; then
+	problem "no foreign-runner job invokes cargo through \`mise exec\`, so the second-spelling property has no subject. This is could-not-look, not clean (CLOUD-662)."
+elif [ -z "${task_cargo//[[:space:]]/}" ]; then
+	problem "\`mise tasks info test:cargo\` yielded no \`cargo …\` invocation, so there is nothing for the foreign-runner jobs to be compared against. This is could-not-look, not clean (CLOUD-662)."
+else
+	while IFS=$'\t' read -r where command; do
+		[ -n "$where" ] || continue
+		if [ "$command" != "mise exec -- $task_cargo" ]; then
+			problem "$where runs a cargo invocation that is not \`[tasks.\"test:cargo\"]\`'s — the foreign-runner exemption means property 3 cannot see this, so the two spellings drift silently and the job goes green on work it no longer covers (CLOUD-662). The task's own line is in $manifest."
+		fi
+	done <<<"$foreign_cargo"
+fi
+
 [ "$fail" -eq 0 ] || exit 1
 echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger; every declared trigger can reach a job"

@@ -30,6 +30,16 @@ setup() {
 	# and a case about draft guards must not also have to be a case about landers.
 	renovate
 	bot_lander
+	# Property 16's subject, written by default for the reason the Renovate config
+	# and the lander are: that property refuses a tree with NO foreign-runner cargo
+	# job — "could not look", never clean — so every case unrelated to it must
+	# satisfy it. Its own cases delete the file or move the spelling.
+	foreign_runner
+	# The task side of the same property, pinned rather than read from the real
+	# `mise tasks info`: a fixture that reached into this repository's own manifest
+	# would compare a fixture workflow against the committed task and fail for a
+	# reason no case wrote.
+	export PARITY_TASK_CARGO="cargo test --workspace"
 	cat >"$MANIFEST" <<-'EOF'
 		CI_REQUIRED_CHECKS = "ci"
 
@@ -484,9 +494,12 @@ fanin() {
 	scheduled nightly "0 5 * * *"
 	run "$GATE"
 	[ "$status" -eq 0 ]
-	# Three: the PR workflow, the scheduled one, and the bot lander `setup` writes
-	# so property 15 is satisfied everywhere it is not the subject.
-	[[ "$output" == *"all 3 workflow(s) declare a concurrency group"* ]]
+	# Four: the PR workflow, the scheduled one, the bot lander `setup` writes so
+	# property 15 is satisfied everywhere it is not the subject, and the
+	# foreign-runner workflow it writes for property 16's benefit for the same
+	# reason. This line editing when a default fixture is added is the count
+	# assertion working.
+	[[ "$output" == *"all 4 workflow(s) declare a concurrency group"* ]]
 }
 
 # --- property 9: no two schedules collide -------------------------------------
@@ -598,6 +611,33 @@ triggered() {
 # bot prefixes, which is what property 15 asks for. Written by `setup` like the
 # Renovate fixture, so property 15's own cases are the only ones that have to
 # think about it — they delete or narrow it.
+foreign_runner() {
+	# Deliberately NOT a `pull_request` workflow. Property 16 scans every
+	# workflow for a foreign-runner cargo invocation, so a `workflow_dispatch`
+	# fixture exercises it exactly as a PR one would — and it stays out of scope
+	# for the landing-path properties, which is the same reason `bot_lander` is
+	# `workflow_run`. A case about a second spelling must not also have to be a
+	# case about draft guards and required-check rosters.
+	cat >"$WF/foreign.yml" <<-'EOF'
+		name: foreign
+
+		on:
+		  workflow_dispatch:
+
+		concurrency:
+		  group: foreign
+		  cancel-in-progress: false
+
+		jobs:
+		  windows:
+		    runs-on: windows-latest
+		    timeout-minutes: 30 # budget: grandfathered measured=2026-08-19
+		    steps:
+		      - run: mise exec -- cargo test --workspace
+	EOF
+	return 0
+}
+
 bot_lander() {
 	cat >"$WF/bot-lander.yml" <<-'EOF'
 		name: bot-lander
@@ -1162,4 +1202,65 @@ on_runner() {
 	run "$GATE"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *'declares no `packageRules`'* ]]
+}
+
+# --- property 16: the foreign runner's second spelling (CLOUD-662) ------------
+#
+# Property 3 asks "does CI run what verify runs", and CLOUD-394 gave foreign
+# runners an exemption from it — correctly, since there is no local Windows. The
+# `windows` job then landed inside that exemption running `mise exec -- cargo
+# test --workspace` rather than the task, for a measured Git Bash / MSYS PATH
+# reason that still stands. What nothing owned was the consequence: the job's
+# command is a second spelling of `[tasks."test:cargo"]`'s body, and the
+# exemption is per JOB rather than per property, so property 3 cannot see it
+# drift.
+
+@test "a foreign-runner command matching the task passes" {
+	# `workflow ci` because the landing-path properties need a pull_request
+	# workflow to exist at all; the foreign runner `setup` writes is deliberately
+	# not one.
+	workflow ci
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "a task that gained a flag the foreign runner did not is refused, and names both" {
+	# THE DISCRIMINATING ROW. Every Linux leg follows the task; the Windows leg
+	# keeps running the old command and goes green on work it no longer covers.
+	# Nothing else in this repository would notice.
+	PARITY_TASK_CARGO="cargo test --workspace --all-features" run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"foreign.yml"* ]]
+	[[ "$output" == *"mise.toml"* ]]
+	[[ "$output" == *"CLOUD-662"* ]]
+	# Pointer-only: the two locations and that they differ, never the commands.
+	[[ "$output" != *"--all-features"* ]]
+}
+
+@test "a foreign runner whose command drifted from the task is refused the same way" {
+	# The other side of the same drift: the job changes and the task does not.
+	sed_i 's|mise exec -- cargo test --workspace|mise exec -- cargo test --workspace --no-fail-fast|' "$WF/foreign.yml"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"foreign.yml"* ]]
+}
+
+@test "a tree with no foreign-runner cargo job is refused, not passed" {
+	# ANTI-VACUITY, and the reason this property is written at all. With the
+	# subject gone there is nothing to compare, and a gate that reported clean
+	# would be answering a question it never asked.
+	rm -f "$WF/foreign.yml"
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no subject"* ]]
+	[[ "$output" == *"could-not-look, not clean"* ]]
+}
+
+@test "a task yielding no cargo invocation is refused, not passed" {
+	# The same refusal from the other input: if the task's body stops carrying a
+	# cargo line, the comparison has no left-hand side.
+	PARITY_TASK_CARGO="" run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"yielded no"* ]]
+	[[ "$output" == *"could-not-look, not clean"* ]]
 }
