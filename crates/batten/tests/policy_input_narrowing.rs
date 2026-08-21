@@ -128,12 +128,25 @@ fn adjudicating_over_the_widened_document_spawns_no_git() {
 }
 
 #[test]
-fn a_policy_row_asks_the_boundary_for_no_fact_it_did_not_already_need() {
+fn a_mediated_call_policy_row_asks_the_boundary_for_no_fact_it_did_not_already_need() {
     // THE OTHER HALF, and the one a counter around `adjudicate` cannot see: the
     // boundary decides what to resolve BEFORE calling it, from
     // `required_checks_for` and `key_base_for`. Registering a policy row must
     // not add a question there — a module reads facts some other row paid for,
     // and never causes a read of its own.
+    //
+    // **SCOPED TO `RuleScope::MediatedCall`, AND THE SCOPE IS THE POINT**
+    // (CLOUD-850). The fixture was mediated-call already, but the name and the
+    // claim were unqualified, and the property MUST NOT generalize to the tree:
+    // there, a policy row declaring `documents` or `sources` IS the demand
+    // signal, and `acquire_declared` reads exactly what the rule set declared.
+    // Read as a claim about policy rows in general, this would forbid the
+    // capability CLOUD-850 exists to add.
+    //
+    // What survives unqualified is the narrower claim, which is the one worth
+    // having: on the MEDIATED path a module is a passenger on facts some other
+    // row already needed, because that path carries a 100ms budget per call and
+    // the tree surface does not.
     //
     // Fails by: widening `matching_receipt_rows` to select policy rows, or
     // resolving the fact set unconditionally because "a module might want it".

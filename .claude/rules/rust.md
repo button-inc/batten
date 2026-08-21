@@ -70,9 +70,11 @@ paragraph.
 | the `ignore` tree walk                 | serial                         | **stays, because nothing measured asks otherwise**          |
 | `capture`/`journal` lock               | `fs4` advisory                 | **stays**, on a reason that outlives the dependency premise |
 | `batten hook` runtime                  | none                           | **at most one, and never multi-thread**                     |
-| mediated-call fact resolution          | lazy and narrow                | **stays serial — the document is wide now, and it is free** |
+| mediated-call fact PROJECTION          | lazy and narrow                | **stays serial — measured free, and the document is wide**  |
+| tree-surface fact ACQUISITION          | shared, resolved once per run  | **stays serial until a number says otherwise**              |
 
-**The last row was conditional and its condition has now been met.** It read
+**The projection row was conditional and its condition has now been met; the
+acquisition row is conditional and its condition has not.** CLOUD-834's row read
 _"stays serial until the document is wide"_, and CLOUD-834 widened it: the policy
 input carries the whole `Surface::Hook` fact set — receipts, keys, stop, waivers,
 agent-sourced records — instead of four envelope fields. CLOUD-834's own body
@@ -94,10 +96,27 @@ machine, back to back:
 Every path inside the 0.966–1.102 spread a null comparison of one identical
 binary produces, and `passthrough` still sits **below** `noop` — the reading the
 section below calls load-bearing, and the one a wide document was supposed to
-destroy. So the verdict stands, and it is no longer conditional: **no runtime was
-bought, `tokio` stays absent from `Cargo.lock`, and `ambient_authority.rs`'s
-`AMBIENT_CRATES` is untouched.** To move it now, bring a number showing
-resolution — not projection — is the cost.
+destroy. So that verdict stands: **no runtime was bought, `tokio` stays absent
+from `Cargo.lock`, and `ambient_authority.rs`'s `AMBIENT_CRATES` is untouched.**
+
+**AND ITS SCOPE IS THE MEDIATED PATH'S PROJECTION, WHICH IS NOT THE WHOLE
+QUESTION** (CLOUD-850). The table above measures `batten hook` — a wide document
+built from facts the boundary had ALREADY RESOLVED for the typed rule table.
+CLOUD-834's own closing line says so: _"To move it now, bring a number showing
+resolution — not projection — is the cost."_ It was then written into this table
+as an unconditional verdict, which reads as a claim about fact resolution in
+general and is not one.
+
+Tree-surface **acquisition** is the other half, and #620 measured nothing about
+it: a migrated gate must CAUSE a file to be opened, because the bash task it
+replaces opened it. Its scale is different too — 82 gates, 27 of which open more
+than five files, on `Surface::Check`, which `perf-assert` deliberately budgets no
+ceiling for. So that row is stated separately and conditionally, and the
+condition is the one CLOUD-834 named: bring a number about acquisition. Until
+then it stays serial for the ordinary reason — nothing measured asks otherwise —
+and `documents_acquired` is the counter a future measurement would start from,
+since a per-path read is well inside the noise of a process start and a clock
+cannot see it.
 
 **"Because nothing measured asks otherwise" is the literal wording, and it is the
 point.** CLOUD-320's discipline is a verdict backed by a measurement rather than
