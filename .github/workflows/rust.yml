@@ -424,7 +424,7 @@ jobs:
           # `ci-tools-check` keeps these names honest against mise.toml but
           # cannot know which a job needs; that is what this comment and the
           # `windows` job's own red run are for. See the ci job for the rest.
-          install_args: rust hk aqua:jqlang/jq
+          install_args: rust hk aqua:jqlang/jq github:nextest-rs/nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A distinct key: this job's target dir is built by a different host
@@ -448,7 +448,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "PATH=$PATH"
-          for tool in hk jq cargo; do
+          for tool in hk jq cargo cargo-nextest; do
             if ! resolved=$(command -v "$tool"); then
               echo "::error::$tool is declared in install_args but does not resolve on PATH" >&2
               exit 1
@@ -472,7 +472,7 @@ jobs:
       # `mise exec` activates the same pinned toolchain and runs cargo directly,
       # so there is no shell translating the environment on the way through. The
       # task's own body buys nothing here anyway: its receipt short-circuit is
-      # disabled under CI by construction, leaving `cargo test --workspace`.
+      # disabled under CI by construction, leaving the one cargo statement.
       #
       # Property 3 of `ci-local-parity` does not object — this job's runner is
       # known-foreign and exempt (CLOUD-394) — but the parity it gives up is
@@ -480,4 +480,11 @@ jobs:
       # longer literally the one `verify` runs. What it runs is that task's only
       # effective statement, and the alternative was a green job nobody could
       # trust or a red one nobody could land.
-      - run: mise exec -- cargo test --workspace
+      #
+      # `nextest run`, since CLOUD-813: the runner changed on both sides at once,
+      # which is the only way property 16 lets it change at all. That property
+      # (CLOUD-662) reads `[tasks."test:cargo"]`'s single cargo statement through
+      # `mise tasks info` and refuses when this line is not `mise exec -- ` plus
+      # that statement, so the two spellings can no longer drift apart silently.
+      # `mise-tasks/no-doctests` covers the half nextest does not run.
+      - run: mise exec -- cargo nextest run --workspace

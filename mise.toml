@@ -145,6 +145,19 @@ zig = "0.16" # the linker for the macOS release build and the darwin-link gate: 
 # pin — the property is that nothing here builds it from source, which held at
 # the old 1.85 floor and holds unchanged at the pin the floor now tracks.
 "github:rust-cross/cargo-zigbuild" = "0.23"
+# The workspace test runner (CLOUD-813). `github:`, not `ubi:`, for the reason
+# stated three lines above — ubi locks a bare version and no checksum, which is
+# how the one unverified download got in (CLOUD-281). The tag is the whole
+# `cargo-nextest-<v>` string because this repository publishes several crates
+# from one repo and the release assets hang off the per-crate tag.
+#
+# Measured 2026-08-21 on this workspace, warm build excluded, 4 cores:
+# `cargo test --workspace --lib --bins --tests` 55s against
+# `cargo nextest run --workspace` 43s, both reporting 1913 passed. The counts
+# being equal is the load-bearing half — a runner that got faster by running
+# fewer is the failure this swap could hide, and it is asserted rather than
+# eyeballed.
+"github:nextest-rs/nextest" = "cargo-nextest-0.9.104"
 # The binary-level SBOM's producer (CLOUD-263). `mise-tasks/sbom` inventories the
 # repository at the tag; syft against a plain Rust binary recovers ZERO
 # rust-crate packages, because a Rust binary carries no dependency metadata unless
@@ -313,7 +326,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads"
+MUTANT_GATES = "msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,no-doctests,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -598,7 +611,7 @@ description = "Run the Rust workspace test suite"
 # that passed.
 run = '''
 if ./mise-tasks/step-receipt check test:cargo; then exit 0; fi
-if ! cargo test --workspace; then exit 1; fi
+if ! cargo nextest run --workspace; then exit 1; fi
 ./mise-tasks/step-receipt record test:cargo || true
 '''
 

@@ -533,6 +533,45 @@ url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323116"
 url = "https://github.com/tamasfe/taplo/releases/download/0.10.0/taplo-windows-x86_64.zip"
 url_api = "https://api.github.com/repos/tamasfe/taplo/releases/assets/257323062"
 
+[[tools."github:nextest-rs/nextest"]]
+version = "cargo-nextest-0.9.104"
+backend = "github:nextest-rs/nextest"
+
+[tools."github:nextest-rs/nextest"."platforms.linux-arm64"]
+checksum = "sha256:91efa420f3a49c98be5559295e8eb48d6d7982a59e9a41851dae57d7ac16ac90"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.104/cargo-nextest-0.9.104-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/293269184"
+
+[tools."github:nextest-rs/nextest"."platforms.linux-arm64-musl"]
+checksum = "sha256:91efa420f3a49c98be5559295e8eb48d6d7982a59e9a41851dae57d7ac16ac90"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.104/cargo-nextest-0.9.104-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/293269184"
+
+[tools."github:nextest-rs/nextest"."platforms.linux-x64"]
+checksum = "sha256:ad12bbf4e2e6a8c809287900ea712a45cec8a55c9c7fc79a6a73abb927a6fcbc"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.104/cargo-nextest-0.9.104-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/293266412"
+
+[tools."github:nextest-rs/nextest"."platforms.linux-x64-musl"]
+checksum = "sha256:34b329edc117ba756f10b9dae1470480ad7827b1a968dca6c0d170727ce6ba54"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.104/cargo-nextest-0.9.104-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/293266662"
+
+[tools."github:nextest-rs/nextest"."platforms.macos-arm64"]
+checksum = "sha256:37ed4b7dcbb5be0114ddb02bae82568485c5a029b3dc280e1cc05d1c723f40e8"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.104/cargo-nextest-0.9.104-universal-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/293269028"
+
+[tools."github:nextest-rs/nextest"."platforms.macos-x64"]
+checksum = "sha256:37ed4b7dcbb5be0114ddb02bae82568485c5a029b3dc280e1cc05d1c723f40e8"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.104/cargo-nextest-0.9.104-universal-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/293269028"
+
+[tools."github:nextest-rs/nextest"."platforms.windows-x64"]
+checksum = "sha256:ac2839dc68c6d9538c527eabc1d7efed60eeb2acb6f5fa0e79915fffe14a1021"
+url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.104/cargo-nextest-0.9.104-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/293272555"
+
 [[tools."github:obi1kenobi/cargo-semver-checks"]]
 version = "0.50.0"
 backend = "github:obi1kenobi/cargo-semver-checks"
