@@ -117,12 +117,15 @@ codex-cli .codex/hooks.json -}"
 # row rather than leaving a licence behind for the next command with a similar
 # path.
 #
-# TWELVE ROWS, NOT SIX, since CLOUD-777. The six added are the ones the old
-# `PreToolUse`-only scope could not see. Their owners are not invented:
-# CLOUD-312 is "the shell guards retire behind it", whose scope CLOUD-777 widened
-# from pre-tool to every point, and CLOUD-461 is named by CLOUD-777 itself as the
-# reason `contract-drift` cannot retire — no advisory channel, so there is
-# nowhere for what it reports to go.
+# ELEVEN ROWS. It was twelve until CLOUD-461 landed the advisory channel and
+# `contract-drift` retired into `batten hook` — its row is DELETED rather than
+# left behind, which the `wiring-declaration-stale` rule below enforces: a
+# retirement that lands must remove its licence, or the next command with a
+# similar path inherits one nobody granted.
+#
+# The rest were six until CLOUD-777, whose widened scope could finally see them.
+# Their owners are not invented: CLOUD-312 is "the shell guards retire behind
+# it", whose scope CLOUD-777 widened from pre-tool to every point.
 DECLARED="${HOOKS_WIRING_DECLARED-mise-tasks/issue-search-guard.sh CLOUD-312
 mise-tasks/issue-read-guard.sh CLOUD-312
 mise-tasks/board-move-guard.sh CLOUD-312
@@ -134,7 +137,6 @@ mise-tasks/mcp-attach-check.sh CLOUD-312
 mise-tasks/mcp-allow-check.sh CLOUD-312
 mise-tasks/stop-guard.sh CLOUD-312
 .claude/hooks/session-start.sh CLOUD-312
-mise-tasks/contract-drift.sh CLOUD-461
 mise-tasks/run-shape-guard.sh CLOUD-821}"
 
 violations=0

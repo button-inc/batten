@@ -416,25 +416,27 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   tune. It reads the payload through `payload-field`, never `jq`, because it is
   registered by path (`hook-pin-check`), and it is blind by construction to what
   an agent reads on its own initiative. Bypass: `BATTEN_FANOUT_GUARD_BYPASS=1`.
-- `contract-drift` is not `PreToolUse`, and it cannot
-  be: that event's model-facing channel is exit 2, which _blocks_ the call, and
-  CLOUD-97 and CLOUD-219 each ruled a deny out independently. So it runs on
-  `SessionStart`, seeding the snapshot before any tool does, since an autonomous
-  session's first batch is routinely fetch+rebase and a snapshot written after it
-  would record the drift as the baseline. The per-batch entry it was designed for
-  **stays absent**, and CLOUD-461 is why: `batten hook` has no advisory channel,
-  so there is nowhere for a once-per-batch reminder to land. Until then a
-  contract that changes mid-session is announced at the next session start and
-  not before — which is precisely what the re-read rule above exists to cover.
-  It hashes the tracked surface (`AGENTS.md`, `.claude/rules`,
-  `.claude/settings.json`, `hk.pkl`, `mise-tasks`) in one `git hash-object` pass,
-  keyed per **session** so a session that started after a change
+- **contract drift is `batten hook`'s now** (CLOUD-461), and it is not
+  `PreToolUse` — that event's model-facing channel is exit 2, which _blocks_ the
+  call, and CLOUD-97 and CLOUD-219 each ruled a deny out independently. It runs
+  on `SessionStart`, seeding the snapshot before any tool does, since an
+  autonomous session's first batch is routinely fetch+rebase and a snapshot
+  written after it would record the drift as the baseline — and on
+  `PostToolBatch`, which is the entry it was designed for and which **no longer
+  stays absent**: `encode_advice` gave a once-per-batch reminder somewhere to
+  land. So a contract that changes mid-session is announced at the next batch
+  boundary rather than at the next session start.
+  It hashes the `[contract] tracked` surface in `batten.toml` — globs, because a
+  newly added gate IS the drift, which `[epoch] tracked`'s literal paths cannot
+  see — keyed per **session** so a session that started after a change
   is not nudged about one it already has. Silence is the default; a change-set is
   reported once, because reporting overwrites the snapshot. Pointer-only — paths
-  and a count, never a byte of the file, asserted in `tests/contract-drift.bats`,
-  because a reminder carrying the new text is a mirror and a mirror is cleared by
-  reading the hook instead of the file. Bypass:
-  `BATTEN_CONTRACT_DRIFT_BYPASS=1`.
+  and a count, never a byte of the file, asserted in
+  `crates/batten/tests/contract_drift.rs` — because a reminder carrying the new
+  text is a mirror and a mirror is cleared by reading the hook instead of the
+  file. The shell task and `BATTEN_CONTRACT_DRIFT_BYPASS` are gone: a mediated
+  path takes the engine's own hatch, and the engine fails open on everything it
+  cannot read.
 - `ready-guard` denies `gh pr ready` unless `verify` and `linear-check` have both
   passed against this exact HEAD. Each writes a receipt under
   `.git/batten-receipts/` keyed to the commit it validated, and linear-check's

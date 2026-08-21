@@ -156,6 +156,12 @@ pub struct Config {
     /// hashes (CLOUD-32). Absent means the default: this file alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub epoch: Option<Epoch>,
+    /// Which files carry the contract a running session read at start
+    /// (CLOUD-461). Absent means the predicate is not used here, which
+    /// [`crate::contract::surface`] reports as **could not look** rather than as
+    /// "nothing moved".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract: Option<Contract>,
     /// The mutating-verb table (CLOUD-36): which programs change the world, in
     /// the one §5 effect vocabulary. Consumer-specific by nature, so it lives
     /// here and never in the crate (non-negotiable rule 1); the type and its
@@ -403,6 +409,41 @@ pub struct Epoch {
     /// function of the set rather than of how it was written.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tracked: Vec<String>,
+}
+
+/// The `[contract]` table: which files a running session must re-read when they
+/// move (CLOUD-461).
+///
+/// **A second table rather than a reuse of [`Epoch`], and the reason is
+/// structural.** `[epoch] tracked` is literal repo-relative paths, read one file
+/// each — right for a config epoch, which must be a function of a *stated* set
+/// or the value moves because of what happens to exist beside it. A contract
+/// surface is the opposite case: a rules directory and a task tree, where a
+/// newly added file **is** the drift. Globs are the whole point here and would
+/// be a defect there, so the two tables answer different questions rather than
+/// one table answering both badly.
+///
+/// Declared as config for the reason [`Epoch`] gives: which files carry a
+/// repository's contract is that repository's business, so a grep of
+/// `crates/batten` for any consumer's identifiers returns nothing
+/// (non-negotiable rule 1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Contract {
+    /// Globs over repo-relative `/`-separated paths whose bytes a session is
+    /// told about when they move. Order is irrelevant — the manifest is a
+    /// sorted map, so the snapshot is a function of the set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tracked: Vec<String>,
+    /// The subset of `tracked` that is the **hook wiring**, so the notice can
+    /// say the wiring moved without the core knowing any host's file layout
+    /// (CLOUD-525).
+    ///
+    /// Literal paths, not globs: this names specific files a consumer has
+    /// declared to be its wiring, and a glob here would let the notice claim the
+    /// wiring moved because something merely near it did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wiring: Vec<String>,
 }
 
 /// Parse and validate a `batten.toml` from `text`, attributing errors to
@@ -788,6 +829,7 @@ impl Config {
             scope: Vec::new(),
             protected: Vec::new(),
             unlanded: Vec::new(),
+            contract: None,
             epoch: None,
             verbs: Vec::new(),
             redirects: Vec::new(),

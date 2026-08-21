@@ -48,6 +48,17 @@
         }
       ]
     },
+    "contract": {
+      "description": "Which files carry the contract a running session read at start\n(CLOUD-461). Absent means the predicate is not used here, which\n[`crate::contract::surface`] reports as **could not look** rather than as\n\"nothing moved\".",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Contract"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "defects": {
       "description": "The append-only defect ledger (CLOUD-52): where it lives and what may be\nin it. Absent means this repository keeps no in-tree ledger and the gate\nis simply not active.",
       "anyOf": [
@@ -472,6 +483,27 @@
       "required": [
         "subject_pattern"
       ]
+    },
+    "Contract": {
+      "description": "The `[contract]` table: which files a running session must re-read when they\nmove (CLOUD-461).\n\n**A second table rather than a reuse of [`Epoch`], and the reason is\nstructural.** `[epoch] tracked` is literal repo-relative paths, read one file\neach — right for a config epoch, which must be a function of a *stated* set\nor the value moves because of what happens to exist beside it. A contract\nsurface is the opposite case: a rules directory and a task tree, where a\nnewly added file **is** the drift. Globs are the whole point here and would\nbe a defect there, so the two tables answer different questions rather than\none table answering both badly.\n\nDeclared as config for the reason [`Epoch`] gives: which files carry a\nrepository's contract is that repository's business, so a grep of\n`crates/batten` for any consumer's identifiers returns nothing\n(non-negotiable rule 1).",
+      "type": "object",
+      "properties": {
+        "tracked": {
+          "description": "Globs over repo-relative `/`-separated paths whose bytes a session is\ntold about when they move. Order is irrelevant — the manifest is a\nsorted map, so the snapshot is a function of the set.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wiring": {
+          "description": "The subset of `tracked` that is the **hook wiring**, so the notice can\nsay the wiring moved without the core knowing any host's file layout\n(CLOUD-525).\n\nLiteral paths, not globs: this names specific files a consumer has\ndeclared to be its wiring, and a glob here would let the notice claim the\nwiring moved because something merely near it did.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "Declared": {
       "description": "One agent-sourced fact a consumer declares: its name, and the command whose\noutput answers it.\n\n# Why the command is CONFIG rather than a crate constant\n\nNon-negotiable rule 1. `gh pr list --search …` names a forge, a query syntax\nand a workflow — all of them a consumer's facts, none of them the engine's.\nThe core knows that an agent-sourced fact has a name and a command; which\ncommand answers which question is `batten.toml`'s.\n\n# One value, read twice, which is the point\n\nThe same string is the command the deny asks the agent to run AND the command\nthe record is checked against. That is deliberate and is the lesson of the two\nissues this one follows: CLOUD-779 and CLOUD-601 were both a harness-level\ndeclaration kept in step BY HAND with the reachability it implied, and both\ndrifted. A fix text and a verification target that could disagree would be the\nsame defect a third time, on a surface where the disagreement is a forged\nfact rather than a silent allow.",

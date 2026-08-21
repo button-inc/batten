@@ -1858,3 +1858,29 @@ tracked = [
   ".mcp.json",
   ".claude/settings.json",
 ]
+
+# The contract surface a running session read at start (CLOUD-461). When one of
+# these moves, `batten hook` tells the session once, on the advisory channel —
+# hooks and instruction files are session-start snapshots (CLOUD-187), so a
+# contract that lands mid-session binds nothing until it is re-read.
+#
+# NOT `[epoch] tracked`, and the difference is why both tables exist. That one is
+# literal paths read one file each, because a config epoch must be a function of
+# a STATED set — otherwise the value moves because of what happens to exist
+# beside it. This one is globs over a rules directory and a task tree, because
+# here a newly added file IS the drift, which a stated set cannot see. The
+# overlap between the two lists is real and deliberate: they ask different
+# questions about some of the same files.
+[contract]
+tracked = [
+  "AGENTS.md",
+  ".claude/rules/**",
+  ".claude/settings.json",
+  "hk.pkl",
+  "mise-tasks/**",
+]
+# The subset that is the hook wiring, so the notice can say the wiring moved
+# without the engine knowing any host's file layout (CLOUD-525). Literal paths:
+# a glob here would let the notice claim the wiring moved because something
+# merely near it did.
+wiring = [".claude/settings.json"]

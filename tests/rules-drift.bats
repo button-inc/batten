@@ -115,13 +115,16 @@ and on `PostToolBatch` as well.'
 }
 
 @test "A PARAGRAPH SAYING AN EVENT IS ABSENT IS NOT A CLAIM THAT IT RUNS" {
-	# CLOUD-461 records that the `PostToolBatch` entry stays absent until `batten
-	# hook` grows an advisory channel. A sentence saying exactly that is correct
-	# prose, and a gate keyed on the event NAME rather than on the assertion would
-	# forbid the repo from writing down its own accepted gap.
+	# The mechanism, not the instance. CLOUD-461 was the instance — the repo
+	# needed to write down that a `PostToolBatch` entry stayed absent, and a gate
+	# keyed on the event NAME rather than on the assertion would have forbidden
+	# it from recording its own accepted gap. That gap CLOSED when the advisory
+	# channel landed, so the fixture is written generically: the case is about a
+	# paragraph that DENIES a wiring, and it must keep passing for whichever gap
+	# this repository writes down next.
 	rules 'It runs on `SessionStart`. The per-batch entry it was designed for stays
-absent, and CLOUD-461 is why: `batten hook` has no advisory channel, so a
-once-per-batch `PostToolBatch` reminder has nowhere to land.'
+absent, and an issue is why: nothing yet delivers a once-per-batch
+`PostToolBatch` reminder anywhere it could land.'
 	run "$GATE"
 	[ "$status" -eq 0 ]
 }

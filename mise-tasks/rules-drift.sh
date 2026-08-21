@@ -9,7 +9,7 @@
 # then restated four values anyway, two of which had drifted:
 #
 #   toolchain.md   `LAND_MAX_LAPS` (8)          mise-tasks/land.sh   :-2
-#   toolchain.md   contract-drift "runs on … `PostToolBatch`"    never wired
+#   toolchain.md   contract-drift "runs on … `PostToolBatch`"    was never wired
 #
 # A stale parenthetical in a rules file is not a typo. These files are read by an
 # agent that then acts without re-deriving, so it is a false premise delivered
@@ -111,11 +111,13 @@ done < <(
 #
 # PARAGRAPH-SCOPED, and keyed on the assertion rather than on the name, which is
 # `deferral-check`'s idiom and for the same reason. A rules file must stay able
-# to say an event is NOT wired — CLOUD-461 records that `contract-drift`'s
-# `PostToolBatch` entry stays absent until `batten hook` grows an advisory
-# channel, so a future sentence saying exactly that is correct prose and must
-# pass. What cannot stand is the assertion that a task RUNS on an event nothing
-# wires it to. So only a paragraph containing "runs on" is judged.
+# to say an event is NOT wired. CLOUD-461 was the motivating instance —
+# `contract-drift`'s `PostToolBatch` entry stayed absent until `batten hook`
+# grew an advisory channel, and the repo had to be able to write that down —
+# and it has since CLOSED, which changes nothing here: the next accepted gap
+# needs the same room. What cannot stand is the assertion that a task RUNS on
+# an event nothing wires it to. So only a paragraph containing "runs on" is
+# judged.
 events=$(jq -r '.hooks | keys[]' "$settings" 2>/dev/null || true)
 if [[ -z "$events" ]]; then
 	echo "::error:: rules-drift: no hook events readable from $settings, so every event named in the rules would report as unwired." >&2
@@ -134,10 +136,11 @@ for f in $files; do
 		[[ -n "$para" ]] || continue
 		case "$para" in *"runs on"*) ;; *) continue ;; esac
 		# SENTENCE-scoped inside the paragraph, and this is the tightening the
-		# false-positive case forced. The paragraph that states the wiring also
-		# states the accepted gap — "the per-batch entry stays absent, and
-		# CLOUD-461 is why" — so a paragraph-wide check would forbid the repo
-		# from writing down its own gap in the same breath as the wiring. Split
+		# false-positive case forced. A paragraph that states a wiring often
+		# states an accepted gap in the same breath — "it runs on X; the
+		# per-batch entry stays absent, and <issue> is why" — so a
+		# paragraph-wide check would forbid the repo from recording its own
+		# gaps beside the wiring they qualify. Split
 		# on `. `; a code span's dots (`mise.toml`, `.claude/settings.json`) carry
 		# no following space and survive intact.
 		for name in $known; do

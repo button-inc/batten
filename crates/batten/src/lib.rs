@@ -20,6 +20,7 @@ pub mod cli;
 pub mod commit;
 pub mod completion;
 pub mod config;
+pub mod contract;
 pub mod decision;
 pub mod defects;
 pub mod design;
@@ -1837,6 +1838,23 @@ fn run_hook(
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(harness, &envelope, overrides, mode, out, err)?;
     }
+    // The contract-drift predicate (CLOUD-461), on the two events that carry it.
+    //
+    // `SessionStart` is load-bearing rather than merely convenient: the first
+    // batch of an autonomous session is fetch-and-rebase, so a snapshot seeded at
+    // the END of that batch would record post-rebase state and the session would
+    // never learn what moved under it. Seeding at session start is what makes the
+    // first comparison honest.
+    //
+    // Not part of adjudication and unable to become part of it: this reports,
+    // `adjudicate` decides, and the two events named here are ones no host offers
+    // a deny channel for.
+    if matches!(
+        envelope.event,
+        hook::Event::PostToolBatch | hook::Event::SessionStart
+    ) {
+        report_contract_drift(harness, &envelope, overrides, out, err)?;
+    }
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
     // runs on every mediated tool call — and it is also what keeps a bypassed or
@@ -2174,6 +2192,68 @@ fn emit_advisory(
         None => output::verdict(err, text)?,
     }
     Ok(())
+}
+
+/// Tell this session what moved under it, once per change-set (CLOUD-461).
+///
+/// Fails **open** on everything it cannot establish — not a repository, no
+/// committed authority, no `[contract]` table, an unreadable snapshot — because
+/// the cost of a missed notice is one reminder and the cost of a refusing
+/// reporter is a blocked call at a moment nothing is meant to be blocked at.
+///
+/// The write happens **after** the emit and is the rate limit itself, the same
+/// shape `Decision::Waived`'s audit line has: `adjudicate` is pure and owns no
+/// channel, so the boundary both speaks and records, and the two cannot disagree
+/// about whether a notice was spent.
+fn report_contract_drift(
+    harness: hook::Harness,
+    envelope: &hook::Envelope,
+    overrides: &Overrides,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<()> {
+    let here = hook_authority_root();
+    if !here.join(config::CONFIG_FILE).exists() {
+        return Ok(());
+    }
+    let Ok(repo) = git::repo_root(here) else {
+        return Ok(());
+    };
+    let Ok(git_dir) = git::git_dir(&repo) else {
+        return Ok(());
+    };
+    let Some(declared) = resolve::resolve(here, overrides)?.contract else {
+        return Ok(());
+    };
+    let facts::Look::Is(current) = contract::surface(&repo, &declared.tracked)? else {
+        return Ok(());
+    };
+    let session = envelope.session.as_deref();
+
+    // No snapshot is the FIRST batch of this session, seeded silently. A session
+    // that started after a change has already read the new files at start, and
+    // nudging it about them is the noise that gets an advisory channel ignored.
+    let facts::Look::Is(previous) = contract::previous(&git_dir, session) else {
+        contract::record(&git_dir, session, &current)?;
+        return Ok(());
+    };
+
+    let change = contract::compare(&previous, &current);
+    if change.is_empty() {
+        return Ok(());
+    }
+    // Recorded BEFORE the emit: a notice the agent saw and the snapshot did not
+    // record is a notice the next batch repeats, which is precisely the nagging
+    // this bound exists to stop. Erring toward one missed reminder beats erring
+    // toward an unbounded stream of the same one.
+    contract::record(&git_dir, session, &current)?;
+    emit_advisory(
+        harness,
+        envelope,
+        out,
+        err,
+        &contract::render(&change, &declared.wiring),
+    )
 }
 
 fn drain_advisories(

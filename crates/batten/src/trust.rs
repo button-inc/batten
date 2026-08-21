@@ -797,6 +797,12 @@ pub const CENSUS: &[FieldCoverage] = &[
         coverage: Coverage::Compared(&[WeakeningKind::EpochPathRemoved]),
     },
     FieldCoverage {
+        field: "contract",
+        coverage: Coverage::NotPolicyBearing(
+            "the contract-drift predicate REPORTS and cannot refuse (CLOUD-461): it rides the              advisory channel at a batch boundary, where no host offers a deny channel at              all, so narrowing the surface changes what a session is TOLD and never whether              a call is allowed. And it is unreachable from an override in the first place —              `resolve` reads the table from the authority alone, for the reason `epoch` does",
+        ),
+    },
+    FieldCoverage {
         field: "verbs",
         coverage: Coverage::Compared(&[WeakeningKind::VerbRemoved]),
     },

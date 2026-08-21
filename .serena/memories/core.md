@@ -367,6 +367,19 @@ budget` and **enforced on `check`**. `[budget.<name>]` is a MAP, not a struct wi
   that text to the model as the deny reason, where `batten: ` reads as a crash.
 - `config.rs` — loads/validates one `batten.toml` (typed, no unknown keys,
   required `version`). Layering across sources is `resolve.rs`, not here.
+- `contract.rs` — the contract-drift predicate (CLOUD-461, CLOUD-525): hash the
+  `[contract] tracked` surface, compare against this session's snapshot under
+  `$GIT_DIR/batten-contract/<session>`, and report the change-set **once** on the
+  advisory channel. Reports, never refuses — `PreToolUse`'s only model-facing
+  channel is exit 2, which blocks, and CLOUD-97/CLOUD-219 each ruled a deny out.
+  **Deliberately not a `facts.rs` row**: a fact is what `adjudicate` consumes and
+  `Fact::ALL` drives the policy-input projection, so classifying this would oblige
+  a projection no rule could read; it obeys the fact model's disciplines (`Look`,
+  pointer-only, resolved at the boundary) without claiming a row in a table about
+  something else. **Not `[epoch] tracked`** either, and the module doc carries
+  why: an epoch must be a function of a _stated_ set, so `epoch.rs` is literal
+  paths read one file each — where here a newly added file IS the drift, which
+  only globs can see. The write is the rate limit; there is no second state file.
 - `defects.rs` — the in-tree append-only defect ledger (CLOUD-52): `[defects]`
   (`path` + `classes`, both consumer facts), one `deny_unknown_fields` `Record`,
   `defects add [-n]` / `defects query`, and the built-in gate `check` runs

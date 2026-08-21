@@ -291,6 +291,11 @@ pub struct Resolved {
     pub unlanded: Vec<String>,
     /// The governing config surface hashed into `config epoch` (CLOUD-32).
     pub epoch: Option<config::Epoch>,
+    /// The contract surface a running session is told about when it moves
+    /// (CLOUD-461). Authority-only, like [`Resolved::epoch`]: what a session
+    /// must re-read is the committed authority's claim, and a local file that
+    /// could narrow it would be a way to switch the reminder off quietly.
+    pub contract: Option<config::Contract>,
     /// The mutating-verb table, consumer data the authority supplies.
     #[serde(rename = "verb")]
     pub verbs: Vec<crate::verbs::MutatingVerb>,
@@ -1149,6 +1154,7 @@ fn assemble(
         protected: paths.protected,
         unlanded: paths.unlanded,
         epoch: repo.epoch.clone(),
+        contract: repo.contract.clone(),
         verbs: repo.verbs.clone(),
         patterns: repo.patterns.clone(),
         redirects: tables.redirects,
@@ -1211,6 +1217,7 @@ fn attribution(
         ("protected", paths.protected_source.clone()),
         ("unlanded", paths.unlanded_source.clone()),
         ("epoch", authority_set(repo.epoch.is_some())),
+        ("contract", authority_set(repo.contract.is_some())),
         ("verb", authority_set(!repo.verbs.is_empty())),
         ("pattern", authority_set(!repo.patterns.is_empty())),
         ("marker", authority_set(!repo.markers.is_empty())),
