@@ -112,6 +112,21 @@ impl std::fmt::Debug for Module {
     }
 }
 
+impl PartialEq for Module {
+    /// Equality is the **registration**, never the compiled engine.
+    ///
+    /// `regorus::Engine` has no meaningful equality, and it does not need one:
+    /// [`load`] refuses two rows registering one path, so within a resolved
+    /// policy the `(id, path)` pair determines the module. Comparing the
+    /// registration is what a caller asking "is this the same policy?" actually
+    /// means — `Policy` derives `PartialEq` for exactly that question.
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.path == other.path
+    }
+}
+
+impl Eq for Module {}
+
 impl Clone for Module {
     /// Derived by hand only because [`Module`] hand-writes [`Debug`]; the engine
     /// itself is `Clone`, so this is the ordinary field-wise clone.

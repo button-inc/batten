@@ -1847,6 +1847,15 @@ pub struct Policy {
     /// a declaration kept in step by hand with what it implies — and here the
     /// drift would not be a silent allow but a forged fact.
     facts: Vec<crate::facts::Declared>,
+    /// The registered policy modules, compiled at the boundary (CLOUD-647).
+    ///
+    /// Here for the same reason `facts` and `verbs` are: [`adjudicate`] is
+    /// contractually pure, so reading and compiling a module is the boundary's
+    /// work and what reaches the evaluator is a value. It is also what makes a
+    /// broken module a **config error at load** rather than a denied tool call —
+    /// regorus reports a conflict or a recursion at evaluation, which on this
+    /// path is the worst possible time and the wrong exit class.
+    modules: Vec<crate::policy::Module>,
 }
 
 impl Policy {
@@ -1865,6 +1874,7 @@ impl Policy {
             protected: PathSet::empty(),
             redirects: Vec::new(),
             facts: Vec::new(),
+            modules: Vec::new(),
         }
     }
 
@@ -1881,7 +1891,11 @@ impl Policy {
     /// Returns a [`UsageError`] (→ exit `1`) when the protected list is malformed
     /// — a `!` entry in an include-only key. Never a deny: a policy that cannot be
     /// read must fail loud, not refuse the call.
-    pub fn from_resolved(resolved: &Resolved, harness: Harness) -> anyhow::Result<Policy> {
+    pub fn from_resolved(
+        resolved: &Resolved,
+        harness: Harness,
+        root: &std::path::Path,
+    ) -> anyhow::Result<Policy> {
         Ok(Policy {
             harness,
             shapes: resolved
@@ -1895,6 +1909,11 @@ impl Policy {
             protected: PathSet::includes("protected", &resolved.protected)?,
             redirects: resolved.redirects.clone(),
             facts: resolved.facts.clone(),
+            // Boundary I/O, and this is the only place it happens: `load`
+            // reads, compiles and smoke-queries every registered module here so
+            // that `adjudicate` stays contractually pure and a broken module is
+            // a config error rather than a denied tool call (CLOUD-647).
+            modules: crate::policy::load(root, &resolved.rules)?,
         })
     }
 
@@ -2209,6 +2228,20 @@ fn adjudicated(
             // means if the invariant ever breaks.
             Decision::Allow | Decision::Waived(_) => {}
         }
+    }
+    // The policy gate sits here, before the command early-return, deliberately:
+    // a write tool carries no command, and every gate below this point is about
+    // a command line. A module decides over the call's FACTS, so it has an
+    // answer for a write as much as for a shell command, and putting it below
+    // would make it silently inert on exactly the surface CLOUD-312 found
+    // unjudged.
+    //
+    // After the hand-written rows above, matching this chain's standing
+    // precedence: a row a reviewer wrote by hand is the one they should see
+    // quoted back, and its reason is more specific than a module's.
+    match policy_rules(policy, envelope) {
+        decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
+        Decision::Allow | Decision::Waived(_) => {}
     }
     if envelope.command.is_empty() {
         return Decision::Allow;
@@ -2586,6 +2619,73 @@ fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
         return Decision::Deny(shape_refusal(rule));
     }
     Decision::Allow
+}
+
+/// The policy gate: hand every registered module the call's facts and read back
+/// its denials (CLOUD-647, CLOUD-689).
+///
+/// **Pure.** The modules were read, compiled and smoke-queried at the boundary
+/// by [`crate::policy::load`], and the input document below is built from the
+/// envelope this function was handed. Nothing here opens a file, starts a
+/// process, or reads a clock, which is what lets a consumer-authored predicate
+/// sit on the mediated path at all.
+///
+/// **Deny-only.** Only the module's `deny` set is consulted; there is no shape
+/// here for an allow, so a module can raise a gate and never lower one (§8's
+/// raise-only invariant, and the allow/deny contradiction class removed by
+/// construction rather than detected).
+///
+/// **A module that cannot answer allows.** [`crate::facts::Look::CouldNotLook`]
+/// is not a deny: a gate that refuses where it could not look becomes the reason
+/// work cannot proceed, which is the same fail-open posture `ReceiptFacts` and
+/// [`key_present`] already take. The load-time smoke query is what makes this
+/// arm rare rather than routine — a module that faults here almost certainly
+/// faulted there and never reached a running gate.
+fn policy_rules(policy: &Policy, envelope: &Envelope) -> Decision {
+    if policy.modules.is_empty() {
+        return Decision::Allow;
+    }
+    let Ok(input) = call_document(envelope) else {
+        return Decision::Allow;
+    };
+    for module in &policy.modules {
+        let crate::facts::Look::Is(denials) = crate::policy::deny(module, &input) else {
+            continue;
+        };
+        // The FIRST denial decides, matching every other gate in this chain:
+        // first-match-wins, so declaration order is what a reviewer reads.
+        if let Some(cause) = denials.into_iter().next() {
+            // The cause is the module's own message, which is the consumer's
+            // text exactly as a row's `reason` is — not a rendering of the
+            // policy body, which rule 4 would refuse. The pointer is the
+            // registering row's id.
+            return Decision::Deny(Refusal::new(module.id(), cause, Fix::None));
+        }
+    }
+    Decision::Allow
+}
+
+/// The input document a policy module decides over.
+///
+/// **Neutral facts only.** Every field is the concept rather than the host's
+/// spelling — `operation` and `event` are normalized (CLOUD-779), so a module
+/// written once decides the same way on all five supported harnesses. Putting
+/// `raw_tool` here would let a consumer write a predicate that silently stops
+/// firing on a host whose vocabulary differs, which is the exact defect
+/// CLOUD-779 measured on the protected-write gate.
+///
+/// Every field is [`crate::facts::Cost::Free`] — already in hand from the
+/// envelope — so this costs no resolution and the gate stays inside the hook
+/// budget.
+fn call_document(envelope: &Envelope) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&serde_json::json!({
+        "call": {
+            "event": envelope.event.as_str(),
+            "operation": envelope.operation.as_str(),
+            "command": envelope.command,
+            "writes": envelope.writes,
+        }
+    }))
 }
 
 /// Whether the work this call belongs to names a tracker key (CLOUD-446).
