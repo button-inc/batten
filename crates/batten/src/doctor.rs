@@ -249,6 +249,28 @@ pub struct HarnessWiring {
     ///   about this repository, not about the engine, and non-negotiable rule 1
     ///   is why it cannot move in here.
     pub siblings: usize,
+    /// How many commands sit on this host's **merged** surfaces — the files it
+    /// combines hook config from beyond the committed one (CLOUD-525).
+    ///
+    /// A COUNT, and here that is a **portability** property as well as rule 4's:
+    /// a merged path is under the user's home directory and differs per machine,
+    /// so emitting one would defeat §6 byte-stability and leak the layout of
+    /// somebody's disk. The count is what makes an undeclared registration
+    /// *visible*; deciding whether it is legitimate is a consumer's judgement,
+    /// for the reason [`HarnessWiring::siblings`] gives.
+    ///
+    /// **This is the number the committed surface cannot see.** Measured in one
+    /// container 2026-08-21, Claude Code ran three `Stop` handlers and four on
+    /// `SessionStart` while every gate read two and three.
+    pub merged: usize,
+    /// How many of this host's merged surfaces were readable.
+    ///
+    /// Three-valued rather than two: a merged file that is absent is the
+    /// ordinary case (most machines have no launcher file), and one that exists
+    /// and cannot be parsed is a different claim. Reporting only `merged` would
+    /// make "no extra registrations" and "could not look" the same number, which
+    /// is the collapse `Look` exists to prevent.
+    pub merged_surfaces_read: usize,
     /// What is wrong, in derivation order.
     pub findings: Vec<WiringFinding>,
     /// Whether this harness's wiring matches the derivation.
@@ -307,6 +329,14 @@ const MATCHER_NARROWS: &str = "hook-wiring-matcher-narrows";
 const COMMAND_DRIFT: &str = "hook-wiring-command-drift";
 /// The harness declares a wiring file and the checkout has none.
 const FILE_MISSING: &str = "hook-wiring-file-missing";
+/// A batten registration sits on a MERGED surface as well as the committed one
+/// (CLOUD-525).
+///
+/// A second authority for one decision, arriving from a file the repository does
+/// not own — so it cannot be fixed by editing the committed wiring, which is
+/// exactly why it needs its own id rather than folding into
+/// `event-registered-n-times`.
+const MERGED_REGISTRATION: &str = "hook-wiring-merged-registration";
 /// The wiring file is there and is not readable as the JSON object it must be.
 ///
 /// Distinct from missing on purpose: two different remedies — write one, or fix
@@ -375,6 +405,10 @@ fn entries_under(value: &serde_json::Value) -> Vec<(Option<&str>, &str)> {
 /// whether a command mentions batten at all, and whether it actually reaches the
 /// engine is decided below, where a wrong answer is a finding rather than a
 /// silence.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one harness's diagnosis reads as one sequence: locate the file, judge               batten's entries per derived event, then the rest of the surface. Splitting               it would thread `findings`, `registrations` and `siblings` through helpers               that exist only to satisfy a line count, and each of the three phases is               already commented as its own step."
+)]
 fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring> {
     let wiring = harness.wiring()?;
     let path = match wiring.file {
@@ -390,6 +424,8 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring>
         harness: harness.as_str(),
         registrations,
         siblings,
+        merged: 0,
+        merged_surfaces_read: 0,
         ok: findings.is_empty(),
         findings,
     };
@@ -487,7 +523,122 @@ fn diagnose_harness(dir: &Path, harness: hook::Harness) -> Option<HarnessWiring>
         }
     }
 
-    Some(row(findings, registrations, siblings))
+    // The MERGED surfaces (CLOUD-525). Read after the committed one and folded
+    // into the same row, because "what does this host run" is one question — the
+    // committed file is a partial answer to it, not a different question.
+    //
+    // Absent is the ordinary case and never a finding: most machines carry no
+    // launcher file, and a check that went red for its absence would be red on
+    // every developer's box for a state nobody can fix.
+    let (merged, merged_surfaces_read, merged_findings) = diagnose_merged(dir, harness, &command);
+    findings.extend(merged_findings);
+
+    Some(HarnessWiring {
+        harness: harness.as_str(),
+        registrations,
+        siblings,
+        merged,
+        merged_surfaces_read,
+        ok: findings.is_empty(),
+        findings,
+    })
+}
+
+/// Whether two paths name the same file on disk.
+///
+/// Compared by CANONICAL path rather than by string: a checkout reached through
+/// a symlink, or spelled with a `.`, is still the same file, and a string
+/// comparison would miss it and report the committed wiring as a merged second
+/// authority. A path that does not canonicalize does not exist, and a file that
+/// does not exist collides with nothing.
+///
+/// The collision is real rather than theoretical: several hosts spell their
+/// user-level surface and their project-level one identically, differing only in
+/// which directory they are resolved against, so a checkout that sits AT the
+/// home directory resolves both to one file.
+fn same_file(one: &Path, two: &Path) -> bool {
+    match (one.canonicalize(), two.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+/// Count what this host merges beyond its committed wiring (CLOUD-525).
+///
+/// Returns `(commands, surfaces_read, findings)`. **No path leaves this
+/// function**, on either channel: the home directory it resolves differs per
+/// machine, and a reason id carrying one would defeat both §6 byte-stability and
+/// rule 4. `a_wiring_reason_id_never_carries_a_path` is the assertion.
+///
+/// A batten registration found here IS a finding — a second authority for a
+/// decision the committed file already makes, arriving from a file the
+/// repository cannot edit. A non-batten one is only counted: whether a sibling
+/// is legitimate is a consumer's judgement, and this repository answers it in
+/// `hooks-wiring-check`'s `DECLARED` table rather than in the engine
+/// (non-negotiable rule 1).
+fn diagnose_merged(
+    dir: &Path,
+    harness: hook::Harness,
+    command: &str,
+) -> (usize, usize, Vec<WiringFinding>) {
+    use etcetera::BaseStrategy as _;
+
+    let surfaces = harness.merge_surfaces();
+    if surfaces.is_empty() {
+        return (0, 0, Vec::new());
+    }
+    let Ok(strategy) = etcetera::choose_base_strategy() else {
+        // No resolvable home is COULD NOT LOOK, and it reports zero surfaces
+        // read rather than zero registrations found — the distinction the
+        // `merged_surfaces_read` field exists to carry.
+        return (0, 0, Vec::new());
+    };
+    let home = strategy.home_dir().to_path_buf();
+
+    let mut merged = 0;
+    let mut read = 0;
+    let mut findings = Vec::new();
+    for surface in surfaces {
+        let path = home.join(surface);
+        // THE SAME FILE IS NOT A SECOND AUTHORITY. Several hosts spell their
+        // user-level surface and their project-level one identically, differing
+        // only in the directory each is resolved against, so a checkout sitting
+        // AT the home directory resolves both to one file. Counting it twice
+        // would report every one of batten's own registrations as a merged
+        // second authority — a finding about the reader rather than the wiring.
+        if same_file(&path, &dir.join(surface)) {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            continue;
+        };
+        read += 1;
+        // Every host that merges keys its hooks under the same word its
+        // committed file does, which `WiringFile` already states.
+        let Some(events) = committed_events(
+            &document,
+            harness
+                .wiring()
+                .map_or(hook::WiringFile::Whole(""), |w| w.file),
+        ) else {
+            continue;
+        };
+        for (event, value) in events.iter() {
+            for (_, entry) in entries_under(value) {
+                merged += 1;
+                if entry.contains(command) || entry.contains("batten") {
+                    findings.push(WiringFinding {
+                        event: event.clone(),
+                        reason: MERGED_REGISTRATION,
+                    });
+                }
+            }
+        }
+    }
+    (merged, read, findings)
 }
 
 /// Diagnose the hook wiring of every harness the core knows (CLOUD-777).

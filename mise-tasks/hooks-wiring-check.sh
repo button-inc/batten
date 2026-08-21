@@ -105,6 +105,25 @@ copilot-cli .github/hooks/batten.json -
 gemini-cli .gemini/settings.json -
 codex-cli .codex/hooks.json -}"
 
+# The surfaces a host MERGES its hook config from beyond the committed one
+# (CLOUD-525), as `<harness> <home-relative path>`.
+#
+# HOME-RELATIVE, and joined at the read. An absolute path differs per machine
+# and per user, so it could not be a table entry and must never be reported —
+# every finding below names the harness, the event and the DECLARED pattern,
+# which are stable strings, and never the resolved path.
+#
+# This is the same set `Harness::merge_surfaces` states in the core, and the
+# duplication is deliberate rather than a second authority: `doctor hooks`
+# reports a merged COUNT and never a name (rule 4), which makes an undeclared
+# registration visible without saying what it is. Turning that count into a named
+# verdict needs this consumer's `DECLARED` table, so the names live here — and
+# `merged-surface-census` in the suite asserts the two lists agree.
+MERGED="${HOOKS_WIRING_MERGED-claude-code .claude/settings.json
+claude-code .claude/settings.local.json
+claude-code .claude/launcher-settings.json
+gemini-cli .gemini/settings.json}"
+
 # What is wired today that should not be, each naming the issue that owns its
 # retirement. This is the gate going red on the state it exists to refuse — a
 # gate that shipped already-green over it would be one nothing can fail — with
@@ -117,7 +136,27 @@ codex-cli .codex/hooks.json -}"
 # row rather than leaving a licence behind for the next command with a similar
 # path.
 #
-# ELEVEN ROWS. It was twelve until CLOUD-461 landed the advisory channel and
+# THE LAST TWO ROWS ARE ON A MERGED SURFACE, NOT A COMMITTED ONE (CLOUD-525).
+# They are launcher-provisioned files under `$HOME` that this repository cannot
+# delete and that no committed file declares — measured in one container
+# 2026-08-21, they made `Stop` run three handlers and `SessionStart` four while
+# every gate read two and three. Declaring them is the difference between a
+# census and a demand: an added launcher hook becomes VISIBLE instead of silent,
+# and no run goes red on state this repo cannot fix.
+#
+# Named by BASENAME, unlike the committed rows: a merged command is reported
+# without its directory (§5), so the pattern it is matched against must be the
+# same shape. The basenames are distinctive enough to be unambiguous.
+#
+# BOTH are owned by CLOUD-605, and the second owner is a correction. CLOUD-525's
+# §2 named CLOUD-669 for the `SessionStart` one; read the script and it sets
+# `user.email`/`user.name`, which is identity — CLOUD-605's subject — where
+# CLOUD-669 is about `commit.gpgsign` and is DONE. A declared row naming a closed
+# issue as the owner of an open retirement is exactly what
+# `wiring-declaration-closed-owner` below refuses, reproduced while specifying
+# the mechanism against it.
+#
+# THIRTEEN ROWS. It was twelve until CLOUD-461 landed the advisory channel and
 # `contract-drift` retired into `batten hook` — its row is DELETED rather than
 # left behind, which the `wiring-declaration-stale` rule below enforces: a
 # retirement that lands must remove its licence, or the next command with a
@@ -137,7 +176,9 @@ mise-tasks/mcp-attach-check.sh CLOUD-312
 mise-tasks/mcp-allow-check.sh CLOUD-312
 mise-tasks/stop-guard.sh CLOUD-312
 .claude/hooks/session-start.sh CLOUD-312
-mise-tasks/run-shape-guard.sh CLOUD-821}"
+mise-tasks/run-shape-guard.sh CLOUD-821
+stop-hook-git-check.sh CLOUD-605
+session-start-git-identity.sh CLOUD-605}"
 
 violations=0
 report() { # pointer-only (rule 4): the file, the event, the rule id
@@ -217,7 +258,13 @@ while read -r harness event reason; do
 			continue
 		fi
 	fi
-	report "$wiring:$event" "${reason#hook-}"
+	# A MERGED finding is not about the committed file, so it must not be
+	# reported against its path (CLOUD-525 §5). It names the harness, the word
+	# `merged` and the event — stable strings, and no path on either side.
+	case "$reason" in
+	hook-wiring-merged-*) report "$harness:merged:$event" "${reason#hook-}" ;;
+	*) report "$wiring:$event" "${reason#hook-}" ;;
+	esac
 done < <(jq -r '.harnesses[] as $h | $h.findings[]? | "\($h.harness) \(.event) \(.reason)"' <<<"$diagnosis")
 
 # The census, inverted. The core ranges over `Harness::ALL`, so what needs
@@ -230,6 +277,44 @@ while read -r harness wiring launcher; do
 	grep -qxF "$harness" <<<"$diagnosed" ||
 		report "hooks-wiring-check:$harness" "wiring-harness-unknown"
 done <<<"$HARNESSES"
+
+# --- whose owners are already closed (CLOUD-525 §7(e)) -----------------------
+#
+# A declared row whose owner is a CLOSED issue is the permanent-exemption shape
+# the `DECLARED` pattern exists to refuse: the retirement's licence outlives the
+# row that was supposed to deliver it. `wiring-declaration-stale` already catches
+# the other half — a row matching nothing wired — and this is its sibling.
+#
+# AGENTS FETCH, GATES DECIDE, for the reason every board gate here gives: no
+# tracker credential exists on any gate path, so the caller pipes
+# `get_issue` payloads in and the verdict is this program's alone. Nothing here
+# makes a network call, so nothing here can hang, rate-limit, or answer
+# differently in the sandbox than in CI.
+#
+# ABSENT STDIN IS COULD-NOT-LOOK, NEVER A PASS AND NEVER A FAILURE. The rule is
+# unenforced when nobody supplies the board, which is the ordinary pre-commit
+# case — a gate that demanded a payload would be red on every commit, and one
+# that read "no payload" as "every owner is open" would be a check that cannot
+# discriminate. It reports what it did.
+closed_owners=""
+if [ ! -t 0 ]; then
+	payloads=$(cat 2>/dev/null || true)
+	if [ -n "$payloads" ]; then
+		closed_owners=$(jq -rs '
+		    [ .. | objects | select(has("id") and has("statusType"))
+		      | select(.statusType == "completed" or .statusType == "canceled")
+		      | .id ] | unique | .[]
+		  ' <<<"$payloads" 2>/dev/null || true)
+	fi
+fi
+
+if [ -n "$closed_owners" ]; then
+	while read -r pattern key; do
+		[ -n "$pattern" ] || continue
+		grep -qxF "$key" <<<"$closed_owners" &&
+			report "hooks-wiring-check:$pattern:$key" "wiring-declaration-closed-owner"
+	done <<<"$DECLARED"
+fi
 
 # --- the commands that are not batten's (CLOUD-713, widened by CLOUD-777) -----
 #
@@ -253,17 +338,45 @@ while read -r harness wiring launcher; do
 	if ! jq -e . "$wiring" >/dev/null 2>&1; then
 		continue
 	fi
-	if ! siblings=$(jq -r '
+	if ! siblings=$(jq -r --arg where "$wiring" '
 	    (.hooks // {}) | to_entries[] as $event
 	    | $event.value[]? | .hooks[]?
 	    | select(.command // "" | contains("batten") | not)
-	    | "\($event.key)\t\(.command)"
+	    | "\($where)\t\($event.key)\t\(.command)"
 	  ' "$wiring" 2>/dev/null); then
 		echo "::error:: hooks-wiring-check: could not read $wiring's non-batten entries" >&2
 		exit 2
 	fi
 
-	while IFS=$'\t' read -r event command; do
+	# The MERGED surfaces for this harness, appended to the committed file's
+	# siblings so both go through one DECLARED matching (CLOUD-525). A merged
+	# entry that is absent is the ordinary case and contributes nothing: most
+	# machines carry no launcher file, and a gate red for its absence would be red
+	# on every developer's box for a state nobody can fix.
+	while read -r merged_harness merged_rel; do
+		[[ -n "$merged_harness" ]] || continue
+		[[ "$merged_harness" == "$harness" ]] || continue
+		merged_file="$HOME/$merged_rel"
+		[[ -f "$merged_file" ]] || continue
+		jq -e . "$merged_file" >/dev/null 2>&1 || continue
+		# NEVER THE PATH, on either field (CLOUD-525 §5). The `where` is the
+		# harness plus the word `merged` — a stable string that says which
+		# SURFACE CLASS this came from — and the command is reduced to its
+		# basename, so a reader knows what to look at without the report
+		# carrying the layout of somebody's home directory. Reporting
+		# `$merged_file` would differ per machine and defeat §6 byte-stability
+		# as well as rule 4.
+		merged_siblings=$(jq -r --arg where "$harness:merged" '
+		    (.hooks // {}) | to_entries[] as $event
+		    | $event.value[]? | .hooks[]?
+		    | select(.command // "" | contains("batten") | not)
+		    | "\($where)\t\($event.key)\t\(.command | split("/") | last)"
+		  ' "$merged_file" 2>/dev/null) || continue
+		[[ -n "$merged_siblings" ]] || continue
+		siblings="${siblings:+$siblings$'\n'}$merged_siblings"
+	done <<<"$MERGED"
+
+	while IFS=$'\t' read -r where event command; do
 		[[ -n "$command" ]] || continue
 		# Substring rather than equality: the committed commands carry the host's
 		# `$CLAUDE_PROJECT_DIR` prefix unexpanded, and a declaration should name
@@ -278,13 +391,13 @@ while read -r harness wiring launcher; do
 				# decision someone made and records nobody to ask.
 				case "$key" in
 				CLOUD-[0-9]*) ;;
-				*) report "$wiring:$event:$pattern" "wiring-declaration-unowned" ;;
+				*) report "$where:$event:$pattern" "wiring-declaration-unowned" ;;
 				esac
 				;;
 			esac
 		done <<<"$DECLARED"
-		[[ "$declared" = 1 ]] ||
-			report "$wiring:$event:$command" "wiring-sibling-command"
+		[[ "$declared" == 1 ]] ||
+			report "$where:$event:$command" "wiring-sibling-command"
 	done <<<"$siblings"
 
 	# The other direction: a declared row that matches nothing wired IN THIS FILE.

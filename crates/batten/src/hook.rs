@@ -1226,6 +1226,73 @@ impl Harness {
     }
 }
 
+impl Harness {
+    /// The **home-relative** files this host merges hook configuration from,
+    /// beyond the committed one [`Harness::wiring`] names (CLOUD-525).
+    ///
+    /// # Why this is a harness fact and not a consumer's
+    ///
+    /// Non-negotiable rule 1 keeps consumer identifiers out of the core, and
+    /// this satisfies it exactly the way [`WiringFile`] does: **which files a
+    /// host merges its own hook config from is a fact about the host**, no more
+    /// a consumer identifier than `.claude/settings.json` is. A grep of
+    /// `crates/batten` for any particular repository's names still returns
+    /// nothing.
+    ///
+    /// # Home-relative, because absolute would be unstatable
+    ///
+    /// The paths are relative to the user's home directory and joined at the
+    /// read. An absolute path differs per machine and per user, so it could not
+    /// be a `const` here and could never be reported — §6 byte-stability and
+    /// rule 4 both forbid emitting one. What the core states is the **layout**;
+    /// where that layout lives is resolved once, at the boundary.
+    ///
+    /// # What this does NOT answer
+    ///
+    /// *What did this process load at start* — CLOUD-187's boundary, untouched
+    /// and unreachable from inside. This answers *what does this host merge*,
+    /// which is a different question with a different mechanism, and conflating
+    /// the two is what made the census look impossible. The merged set is a
+    /// strictly better approximation of the running wiring than the committed
+    /// set alone, and it is what every reader of the committed file already
+    /// treats as the whole story.
+    #[must_use]
+    // `match_same_arms` would collapse the two empty rows. Refused for the
+    // reason `capabilities` refuses it: they are empty for DIFFERENT measured
+    // reasons — three hosts declare a hooks-only project file and no user-level
+    // merge, and the neutral adapter is not a host at all — and collapsing them
+    // would delete the distinction and make a future divergence a structural
+    // edit rather than a one-value one.
+    #[allow(clippy::match_same_arms)]
+    pub const fn merge_surfaces(self) -> &'static [&'static str] {
+        match self {
+            // Measured in one container 2026-08-21: the committed file declares
+            // two `Stop` handlers and three on `SessionStart`, while the runtime
+            // ran three and four. The extra registrations came from a
+            // user-level file and a launcher-provisioned one, neither of which
+            // any committed surface declares and neither of which any gate read.
+            Harness::ClaudeCode => &[
+                ".claude/settings.json",
+                ".claude/settings.local.json",
+                ".claude/launcher-settings.json",
+            ],
+            // Gemini merges the same user-level file its committed wiring is
+            // keyed in — one layout, two locations.
+            Harness::GeminiCli => &[".gemini/settings.json"],
+            // EMPTY IS A MEASUREMENT HERE, not a gap: these hosts declare a
+            // hooks-only project file and the survey records no user-level merge
+            // for them, so there is nothing beyond the committed surface to
+            // read. Stated per host rather than wildcarded, so a host that turns
+            // out to merge has to be answered for rather than defaulting to
+            // "does not".
+            Harness::Cursor | Harness::CopilotCli | Harness::CodexCli => &[],
+            // Not a host: the neutral contract is an envelope in and an exit
+            // status out, with no file to merge.
+            Harness::ExitCode => &[],
+        }
+    }
+}
+
 /// The lifecycle events the core normalizes, whatever a host spells them.
 ///
 /// A vocabulary enum with a `const ALL`, the shape [`Harness`],

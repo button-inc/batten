@@ -42,15 +42,27 @@ setup() {
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	GATE="$REPO/mise-tasks/hooks-wiring-check.sh"
 	ROOT="$BATS_TEST_TMPDIR/root"
+	# A HOME that is NOT the fixture root, deliberately. A host's user-level
+	# surface and its project-level one share a spelling, so pointing HOME at the
+	# checkout makes them one file — which is a fact about the fixture, not about
+	# the wiring, and it reported every one of batten's own registrations as a
+	# merged second authority until this line existed.
+	FIXTURE_HOME="$BATS_TEST_TMPDIR/home"
 	WIRING="$ROOT/.claude/settings.json"
 	# Empty by default, so a fixture is judged against ITSELF rather than against
 	# this repository's declared retirements — which would report every one as
 	# stale on every case below. A case that wants a declaration sets it.
 	DECLARED=""
+	# Empty for the reason DECLARED is (CLOUD-525): the merged surfaces are files
+	# under the real `$HOME`, and a suite that read them would judge every case
+	# against whatever the developer's launcher happens to have provisioned. A
+	# case about a MERGED surface sets this and points HOME at the fixture root.
+	MERGED=""
 	# The table under test. Empty means "the fixture root's own", built in `gate`;
 	# a case about the TABLE sets it.
 	HARNESSES=""
 	mkdir -p "$ROOT/.claude" "$ROOT/.cursor" "$ROOT/.codex" "$ROOT/.github/hooks" "$ROOT/.gemini"
+	mkdir -p "$FIXTURE_HOME/.claude" "$FIXTURE_HOME/.gemini"
 	for harness in claude-code cursor copilot-cli gemini-cli codex-cli; do
 		emit_wiring "$harness"
 	done
@@ -88,10 +100,33 @@ copilot-cli $ROOT/.github/hooks/batten.json -
 gemini-cli $ROOT/.gemini/settings.json -
 codex-cli $ROOT/.codex/hooks.json -}"
 	(cd "$REPO" &&
-		HOOKS_WIRING_ROOT="$ROOT" \
+		HOME="$FIXTURE_HOME" \
+			HOOKS_WIRING_ROOT="$ROOT" \
 			HOOKS_WIRING_HARNESSES="$table" \
 			HOOKS_WIRING_DECLARED_FOR="claude-code" \
+			HOOKS_WIRING_MERGED="$MERGED" \
 			HOOKS_WIRING_DECLARED="$DECLARED" "$GATE")
+}
+
+# A merged surface for claude-code under the fixture HOME (CLOUD-525): a
+# launcher-provisioned file the repository does not own and cannot delete.
+with_merged() { # <event> <command>
+	# No nested block in the Python: `<<-` strips leading TABS, so a body whose
+	# inner indentation is a tab arrives flattened and unparseable. One expression,
+	# no `with`, and the relative indentation problem cannot arise.
+	python3 -c 'import json,sys; json.dump({"hooks": {sys.argv[2]: [{"hooks": [{"type": "command", "command": sys.argv[3]}]}]}}, open(sys.argv[1], "w"))' \
+		"$FIXTURE_HOME/.claude/launcher-settings.json" "$1" "$2"
+}
+
+# One `get_issue` payload for the owner-liveness rule to read (CLOUD-525 §7(e)).
+board() { # <json>
+	printf '%s\n' "$1" >"$BATS_TEST_TMPDIR/board.json"
+}
+
+# `gate`, with the board piped in. A separate helper rather than a flag on
+# `gate`, so a case that supplies no board reads as one that supplies none.
+gate_with_board() {
+	gate <"$BATS_TEST_TMPDIR/board.json"
 }
 
 # A COMPLETE claude-code wiring: batten once on each of the eight events that
@@ -470,6 +505,96 @@ with_sibling() { # <event> <sibling command>
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-declaration-stale"* ]]
+}
+
+# --- CLOUD-525: the surfaces the host MERGES, which no gate could see ---------
+#
+# The state the tree was in when this landed: `Stop` ran three handlers at
+# runtime and `SessionStart` four, while every gate read two and three and
+# reported green. These four cases are the census that closes it, and (a) is the
+# discriminator — it is red on a fixture reproducing exactly that state.
+
+@test "CLOUD-525 (a): an UNDECLARED registration on a merged surface is a violation" {
+	MERGED="claude-code .claude/launcher-settings.json"
+	complete_wiring
+	with_merged Stop '~/.claude/stop-hook-git-check.sh'
+	run gate
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-sibling-command"* ]]
+	# Named by SURFACE CLASS and basename, never by path: a merged file lives
+	# under `$HOME` and differs per machine (§5).
+	[[ "$output" == *"claude-code:merged:Stop:stop-hook-git-check.sh"* ]]
+	[[ "$output" != *"$FIXTURE_HOME"* ]]
+}
+
+@test "CLOUD-525 (b): the same registration declared with an owner passes" {
+	# A census, not a demand. The launcher's registrations are re-provisioned
+	# mid-session and cannot be deleted from here, so they are RECORDED with an
+	# owner — an added one becomes visible instead of silent, and no run goes red
+	# on state this repo cannot fix.
+	MERGED="claude-code .claude/launcher-settings.json"
+	DECLARED="stop-hook-git-check.sh CLOUD-605"
+	complete_wiring
+	with_merged Stop '~/.claude/stop-hook-git-check.sh'
+	run gate
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-525 (c): a declared row matching nothing on ANY surface is stale" {
+	MERGED="claude-code .claude/launcher-settings.json"
+	DECLARED="stop-hook-git-check.sh CLOUD-605"
+	complete_wiring
+	run gate
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-declaration-stale"* ]]
+}
+
+@test "CLOUD-525 (e): a declared row whose owner is a CLOSED issue is a violation" {
+	# The sibling of `stale`, and the permanent-exemption shape the DECLARED
+	# pattern exists to prevent: a retirement's licence outliving the row that was
+	# supposed to deliver it. Agents fetch, gates decide — the board arrives on
+	# stdin because no gate path has a tracker credential.
+	MERGED="claude-code .claude/launcher-settings.json"
+	DECLARED="stop-hook-git-check.sh CLOUD-605"
+	complete_wiring
+	with_merged Stop '~/.claude/stop-hook-git-check.sh'
+	board '{"id":"CLOUD-605","statusType":"completed"}'
+	run gate_with_board
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-declaration-closed-owner"* ]]
+}
+
+@test "CLOUD-525: an OPEN owner keeps the same declared row green" {
+	# The discriminator for (e): without this, a check that refused every declared
+	# row would pass (e) and prove nothing.
+	MERGED="claude-code .claude/launcher-settings.json"
+	DECLARED="stop-hook-git-check.sh CLOUD-605"
+	complete_wiring
+	with_merged Stop '~/.claude/stop-hook-git-check.sh'
+	board '{"id":"CLOUD-605","statusType":"unstarted"}'
+	run gate_with_board
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-525: with no board piped in, the owner rule is unenforced rather than assumed" {
+	# Could-not-look, and it must be neither a pass for the WRONG reason nor a
+	# failure: the ordinary pre-commit run supplies no payload, and a gate that
+	# demanded one would be red on every commit.
+	MERGED="claude-code .claude/launcher-settings.json"
+	DECLARED="stop-hook-git-check.sh CLOUD-605"
+	complete_wiring
+	with_merged Stop '~/.claude/stop-hook-git-check.sh'
+	run gate
+	[ "$status" -eq 0 ]
+}
+
+@test "CLOUD-525: an ABSENT merged surface is the ordinary case, not a finding" {
+	# Most machines carry no launcher file. A gate red for its absence would be
+	# red on every developer's box for a state nobody can fix.
+	MERGED="claude-code .claude/launcher-settings.json"
+	complete_wiring
+	run gate
+	[ "$status" -eq 0 ]
 }
 
 @test "THE SCOPE IS EVERY EVENT NOW: a Stop sibling is a violation too" {
