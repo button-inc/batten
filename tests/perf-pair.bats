@@ -30,8 +30,13 @@ setup() {
 
 @test "every arm is measured in the pinned fixture repo" {
 	# Five paths, each pointing at the same materialised fixture. `wired` joins
-	# them (CLOUD-697): its two arms differ in which LAUNCHER runs, not in the
+	# them (CLOUD-697): its two arms differ in which WIRING runs, not in the
 	# directory hyperfine is invoked from. `passthrough` joined with CLOUD-777.
+	#
+	# The `env -C` those arms carry (CLOUD-824) is not an exception to this. It
+	# sets the CHILD's cwd so each binary reads its own tree's `batten.toml` —
+	# exactly what the deleted launcher's `cd` did, and what the case above
+	# protects — while hyperfine itself is still invoked from the pinned fixture.
 	run bash -c "grep -cE '^pair [a-z]+ .*\\\$check_repo' '$TASK'"
 	[ "$output" -eq 5 ]
 }
@@ -55,11 +60,45 @@ setup() {
 }
 
 # The wired arms must pin their binary rather than inherit whatever the tree has
-# in `target/`. `$BATTEN_BIN` is the launcher's first resolution candidate, which
-# is the only reason this is expressible without touching the launcher.
+# in `target/`. Two arms, two binaries, and neither may resolve the other's.
+#
+# ASSERTED OVER THE CALL SITES since CLOUD-824, because the mechanism moved. It
+# used to count two literal `BATTEN_BIN=$base_bin` / `$head_bin` assignments,
+# which worked while the arm was a hardcoded launcher invocation. The launcher is
+# gone and each arm now derives its own tree's wiring, so the pinning happens in
+# one arm-agnostic helper — and the property to hold is that the helper takes the
+# binary as a PARAMETER and each call site passes its own.
 @test "the wired arms pin their binary per arm, not by resolution order" {
-	run bash -c "grep -cE 'BATTEN_BIN=\\\$(base|head)_bin' '$TASK'"
+	run bash -c "grep -cE 'wired_command \"\\\$(base_tree|PWD)\" \"\\\$(base|head)_bin\"' '$TASK'"
 	[ "$output" -eq 2 ]
+}
+
+@test "the helper cannot reach an arm's binary except through its parameter" {
+	# The other half, and the one that makes the case above a decision rather than
+	# a spelling: a helper naming `$head_bin` directly would satisfy two call sites
+	# and still measure one binary twice.
+	body=$(sed -n '/^wired_command() {/,/^}/p' "$TASK")
+	[ -n "$body" ]
+	[[ "$body" != *'$head_bin'* ]]
+	[[ "$body" != *'$base_bin'* ]]
+	# And it must actually USE the parameter, in both places a binary can enter:
+	# the launcher's resolution candidate, and the rewrite of a wiring that names
+	# the binary rather than a path.
+	[[ "$body" == *'BATTEN_BIN=%s'* ]]
+	[[ "$body" == *'command="$bin '* ]]
+}
+
+@test "each wired arm runs in its OWN tree, which is what replaced the cd" {
+	# `wired`'s whole distinction from `hook` is that it adjudicates against the
+	# repository's real `batten.toml` rather than the pinned one-rule fixture. The
+	# launcher's `cd` bought that; since CLOUD-824 `env -C` does. A head arm left
+	# in the fixture repo would measure a smaller policy and read as a speedup.
+	run grep -cE 'env -C %s' "$TASK"
+	[ "$output" -eq 1 ]
+	# Refused rather than assumed: BSD `env` has no `-C`, and measuring without it
+	# would run a different experiment under this one's name.
+	run grep -cE 'env -C / true' "$TASK"
+	[ "$output" -eq 1 ]
 }
 
 # hyperfine aborts on a non-zero exit unless `-i` is passed, and that is

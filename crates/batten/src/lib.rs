@@ -143,7 +143,7 @@ pub fn run(cli: Cli, mode: Mode, out: &mut dyn Write, err: &mut dyn Write) -> Re
         ),
         Some(Command::Config { command }) => run_config(&command, &overrides, out),
         Some(Command::Spec { format }) => run_spec(format, out),
-        Some(Command::Doctor { json }) => run_doctor(json, out),
+        Some(Command::Doctor { command }) => run_doctor(&command, out),
         // `init` reads no config — it is the verb that exists because there is
         // none — so the §8 chain is deliberately not threaded through it.
         Some(Command::Init { dry_run }) => run_init(dry_run, mode, out, err),
@@ -4052,7 +4052,14 @@ fn run_config(
 /// [`ExitCode::Violation`] by construction: a diagnostic never renders a policy
 /// verdict, so a mediating harness can never read "this checkout is
 /// misconfigured" as a deny (§7).
-fn run_doctor(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+fn run_doctor(command: &cli::DoctorCommand, out: &mut dyn Write) -> Result<ExitCode> {
+    match *command {
+        cli::DoctorCommand::Diagnose { json } => run_diagnose(json, out),
+        cli::DoctorCommand::Hooks { json } => run_doctor_hooks(json, out),
+    }
+}
+
+fn run_diagnose(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
     let report = doctor::diagnose(Path::new("."));
     if json {
         // A data channel emits its document unconditionally, including for a
@@ -4067,6 +4074,58 @@ fn run_doctor(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
             out,
             "doctor: {} check(s), {failed} failed",
             report.checks.len()
+        )?;
+    }
+    Ok(report.code())
+}
+
+/// Is batten wired on every hook surface of every harness (CLOUD-777)?
+///
+/// The question `doctor` exists to answer, asked of the one thing it could not:
+/// its own installation. It ships to a consumer, which the ~300 lines of bash it
+/// replaces never did — a repository adopting Batten had no way to ask *am I
+/// wired?* at all.
+///
+/// The exit code comes from [`doctor::WiringReport::code`], whose range excludes
+/// [`ExitCode::Violation`] by construction. A sub-verb inherits the promise the
+/// parent makes: a mediating harness reads `2` as a deny, and "your wiring is
+/// wrong" is not "policy says no".
+///
+/// The pointer line is `<harness> <event> <reason>` — a host token and a stable
+/// reason id, never a path (§6, rule 4). A harness with nothing wrong renders one
+/// `ok` line rather than nothing, so a silent run and a healthy one are
+/// distinguishable.
+fn run_doctor_hooks(json: bool, out: &mut dyn Write) -> Result<ExitCode> {
+    let report = doctor::diagnose_hooks(Path::new("."));
+    if json {
+        writeln!(out, "{}", serde_json::to_string_pretty(&report)?)?;
+    } else {
+        for harness in &report.harnesses {
+            if harness.findings.is_empty() {
+                writeln!(
+                    out,
+                    "{} ok {} registration(s), {} sibling(s)",
+                    harness.harness, harness.registrations, harness.siblings
+                )?;
+                continue;
+            }
+            for finding in &harness.findings {
+                writeln!(
+                    out,
+                    "{} {} {}",
+                    harness.harness, finding.event, finding.reason
+                )?;
+            }
+        }
+        let failed = report
+            .harnesses
+            .iter()
+            .filter(|harness| !harness.ok)
+            .count();
+        writeln!(
+            out,
+            "doctor hooks: {} harness(es), {failed} unwired",
+            report.harnesses.len()
         )?;
     }
     Ok(report.code())

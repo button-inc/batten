@@ -25,6 +25,7 @@
 //! this is a defect rather than a preference. The rest are the mirrors that stop
 //! the fix from being a change only worktrees exercise: the main root, and a
 //! subdirectory of it — the case the launcher was actually written for.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod common;
 

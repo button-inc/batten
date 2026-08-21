@@ -497,6 +497,18 @@ const CENSUS: &[Verb] = &[
         stdin: Stdin::Nothing,
         disposition: Disposition::PointerOnly,
     },
+    // The sub-verb inherits the parent's promise rather than restating it
+    // (CLOUD-777): a `Check`'s reason id is a stable token and a wiring finding's
+    // event is a host token, so neither can carry a path — which is what makes
+    // CLOUD-525's `$HOME` surface reportable at all. A non-batten sibling is a
+    // COUNT here for the same reason; naming one would put a consumer's disk
+    // layout in a diagnostic that promises not to.
+    Verb {
+        path: "doctor hooks",
+        args: &[],
+        stdin: Stdin::Nothing,
+        disposition: Disposition::PointerOnly,
+    },
     Verb {
         // `-n` so the census cannot author into the corpus. It changes nothing
         // about what is emitted here: the corpus already carries a `batten.toml`,
@@ -712,19 +724,24 @@ const CENSUS: &[Verb] = &[
     },
 ];
 
-/// The leaf paths of [`SURFACE`]: a row no other row is a subcommand of.
+/// Every path of [`SURFACE`] that RUNS — the object this census must be total
+/// over.
 ///
 /// Derived rather than listed, so a noun that grows a verb changes this set on
 /// its own and the census below is forced to keep up.
+///
+/// **"Runs" is not the same as "is a leaf" since CLOUD-777**, and the predicate
+/// is [`batten::surface::is_noun`] rather than a second copy of it here. A noun
+/// performs no default action and is excluded; a row that nests AND declares an
+/// answer of its own still runs bare and stays in. Today `doctor` is the one such
+/// row, because house style §2 spells the verb `doctor <SUB>` while §8 promises
+/// what bare `batten doctor` does — so it has to be classified here even though
+/// `doctor hooks` sits under it.
 fn leaf_paths() -> Vec<&'static str> {
     let mut leaves: Vec<&'static str> = SURFACE
         .iter()
+        .filter(|decl| !batten::surface::is_noun(decl))
         .map(|decl| decl.path)
-        .filter(|path| {
-            !SURFACE
-                .iter()
-                .any(|other| other.path.starts_with(&format!("{path} ")))
-        })
         .collect();
     leaves.sort_unstable();
     leaves

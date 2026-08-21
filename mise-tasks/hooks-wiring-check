@@ -78,7 +78,13 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-cd "${HOOKS_WIRING_ROOT:-$(git rev-parse --show-toplevel)}"
+# The CRATE is where the engine is built from; the ROOT is what gets judged, and
+# since this gate grew a suite the two are not always the same directory. Both
+# are captured before the `cd` so `--manifest-path` below can reach the manifest
+# from a fixture root that has none.
+crate_root=$(git rev-parse --show-toplevel)
+cd "${HOOKS_WIRING_ROOT:-$crate_root}"
+root=$(pwd)
 
 # The surface, as data: `<harness> <committed wiring file> <launcher substring>`.
 #
@@ -137,151 +143,114 @@ report() { # pointer-only (rule 4): the file, the event, the rule id
 	violations=$((violations + 1))
 }
 
-registrations=0
-
-# The harness census. The table above is a consumer's file layout, so it lives
-# here rather than in the core — but which harnesses EXIST is the core's answer,
-# and a table that silently covered five of six would be the vacuous pass this
-# whole gate exists to refuse.
+# --- the derivation half: ONE call into the binary (CLOUD-777) ---------------
 #
-# Read off clap's `possible values`, which is `Harness`'s own `ValueEnum`
-# projection and therefore `Harness::ALL` with no second list to drift. The
-# obvious source, `spec --json`, was tried first and carries no harness array —
-# the query returned empty, the census ran over nothing, and the gate reported
-# green having compared zero harnesses. That is the shape this file keeps
-# re-meeting, so the read is asserted rather than defaulted: **an unreadable
-# census is exit 2, "could not look", never an empty set that passes.**
-# `${VAR-}` rather than `${VAR:-}`, the idiom the other two arguments use: a
-# suite pointing this at a one-harness fixture states that fixture's whole
-# universe explicitly. An UNSET override reads the binary and refuses to guess;
-# an override set to empty is a stated "nothing else exists", which is an answer
-# rather than a failure to look. The difference is the whole of why the read
-# below is asserted.
-if [ -z "${HOOKS_WIRING_KNOWN+set}" ]; then
-	if ! harness_help=$(cargo run --quiet -p batten -- hook --harness '' 2>&1); then
-		: # clap exits non-zero on the invalid value; the message is the payload.
-	fi
-	all_harnesses=$(sed -n 's/.*\[possible values: \(.*\)\].*/\1/p' <<<"$harness_help" |
-		tr ',' '\n' | tr -d ' ')
-	if [ -z "$all_harnesses" ]; then
-		echo "::error:: hooks-wiring-check: could not read the harness set from the binary, so the table below cannot be checked for completeness. That is 'could not look', not 'the table is complete'." >&2
-		exit 2
-	fi
-else
-	all_harnesses="$HOOKS_WIRING_KNOWN"
+# This was ~200 lines of bash: `cargo run … generate hooks` once per harness, a
+# `jq` re-parse of each result, a second copy of `WiringFile`'s Key/Whole split
+# written as `(.hooks // .)`, and a harness census read out of clap's
+# `possible values`. All of it now happens in-process, where the types it is
+# reasoning about actually live. Deleting the second copy of the Key/Whole split
+# is the point rather than a side effect.
+#
+# It also means the check SHIPS. A repository adopting Batten had no way to ask
+# *am I wired?* — which is why CLOUD-777 could observe that "the other five
+# harnesses have no committed wiring in this repo to measure." `batten doctor
+# hooks` is that question, and this file is now one consumer of it.
+#
+# `-J`, not the pointer lines: the suppression below is per finding, and parsing
+# a rendering back into fields is the shape that drifts.
+#PIN-OK: jq
+if ! command -v jq >/dev/null 2>&1; then
+	echo "::error:: hooks-wiring-check: no jq on PATH. Run: mise install" >&2
+	exit 2
+fi
+# `cargo run`, not an installed binary, for the reason `batten-check` states: a
+# gate judges the WORKING TREE's engine and config together, which is the pair
+# that ships. `--manifest-path` is what lets it do that while the child's cwd is
+# the root under test rather than the crate.
+#
+# INJECTABLE, for the reason `HOOKS_WIRING_DECLARED` is: the "could not look" arm
+# below is a decision, and it only tests if a case can produce a diagnosis that
+# does not come back. Same seam `linear-check` and `unlanded-check` open with
+# `BATTEN_BIN`, and used the same way — a suite points it at a stub.
+diagnose="${HOOKS_WIRING_DIAGNOSIS-cargo run --quiet --manifest-path $crate_root/Cargo.toml -p batten -- doctor hooks -J}"
+if ! diagnosis=$(cd "$root" && $diagnose 2>/dev/null); then
+	# `doctor` exits 1 on an unhealthy diagnosis, which is an ANSWER; only an
+	# unparseable one is "could not look". So the status is not the test — the
+	# document is.
+	:
+fi
+if ! jq -e 'has("harnesses")' >/dev/null 2>&1 <<<"$diagnosis"; then
+	echo "::error:: hooks-wiring-check: \`batten doctor hooks -J\` did not answer, so the wiring cannot be judged. That is 'could not look', not 'the wiring is fine'." >&2
+	exit 2
 fi
 
-while read -r harness wiring launcher; do
+registrations=$(jq -r '[.harnesses[].registrations] | add // 0' <<<"$diagnosis")
+diagnosed=$(jq -r '.harnesses[].harness' <<<"$diagnosis")
+
+# THE LAUNCHER INDIRECTION IS RESOLVED HERE, WHICH IS THE WHOLE REASON THIS FILE
+# STILL EXISTS AS A GATE. The core compares a committed command against the
+# neutral `batten hook --harness <h>` it emits, and it cannot do otherwise:
+# naming a consumer's file layout from `crates/batten` is what non-negotiable
+# rule 1 forbids. So a consumer that fronts the engine with its own launcher gets
+# `hook-wiring-command-drift` from the core and answers for it here, against the
+# table above. Every row of this repository's table is `-` since CLOUD-824, and
+# the affordance is kept because the reason for it did not change with it.
+while read -r harness event reason; do
 	[ -n "$harness" ] || continue
-
-	if [ ! -f "$wiring" ]; then
-		echo "::error:: hooks-wiring-check: $wiring does not exist, so $harness's wiring cannot be judged. A gate that checks nothing must not report green." >&2
-		exit 2
+	wiring=$(awk -v h="$harness" '$1 == h {print $2}' <<<"$HARNESSES")
+	launcher=$(awk -v h="$harness" '$1 == h {print $3}' <<<"$HARNESSES")
+	if [ -z "$wiring" ]; then
+		report "hooks-wiring-check:$harness" "wiring-harness-unlisted"
+		continue
 	fi
-
-	# The derivation, canonicalized. `jq -cS` on both sides is what makes this a
-	# comparison of MEANING rather than of whitespace: the emitter's indentation
-	# is its own business, and a consumer's file is formatted by whatever wrote
-	# it.
-	if ! derived=$(cargo run --quiet -p batten -- generate hooks --harness "$harness"); then
-		echo "::error:: hooks-wiring-check: the binary could not emit the $harness wiring, so the committed one cannot be judged" >&2
-		exit 2
-	fi
-	# A `Key` harness emits the key's VALUE (events at top level); a `Whole` one
-	# emits the document (events under `.hooks`). One expression reads both, so
-	# the gate does not carry a second copy of `WiringFile`'s split.
-	if ! derived_events=$(jq -r '(.hooks // .) | keys_unsorted[]' <<<"$derived" 2>/dev/null); then
-		echo "::error:: hooks-wiring-check: the emitted $harness wiring is not a JSON object" >&2
-		exit 2
-	fi
-
-	# Every committed entry that CLAIMS to be batten's, as
-	# `<event>\t<matcher>\t<command>`.
-	#
-	# SELECTED BROADLY, JUDGED NARROWLY, and the difference is a false green this
-	# gate had while it was being written. Selecting on "does this command reach
-	# the engine" made the selector and the check the same predicate: renaming
-	# the launcher to `batten-hook-typo.sh` did not fail the gate, it made the
-	# entry INVISIBLE, and the gate reported "0 registrations agree" and exited
-	# 0. A gate that silently clears what it cannot see is the false green this
-	# repository keeps re-meeting.
-	#
-	# So the selector asks only whether an entry mentions batten at all — the
-	# other hooks in these files are `mise-tasks/*` and
-	# `.claude/hooks/session-start.sh`, none of which does — and whether it
-	# actually reaches the engine is decided below, where a wrong answer is a
-	# violation rather than a silence.
-	#
-	# `-` stands in for an absent matcher, because an empty field would collapse
-	# against the tab split and read as "no matcher" for a matcher of `""` too.
-	if ! committed=$(jq -r '
-	    (.hooks // {}) | to_entries[] as $event
-	    | $event.value[]? as $entry
-	    | $entry.hooks[]?
-	    | select(.command // "" | contains("batten"))
-	    | "\($event.key)\t\($entry.matcher // "-")\t\(.command)"
-	  ' "$wiring" 2>/dev/null); then
-		echo "::error:: hooks-wiring-check: could not read $wiring as JSON" >&2
-		exit 2
-	fi
-
-	while IFS=$'\t' read -r event matcher command; do
-		[ -n "$event" ] || continue
-		registrations=$((registrations + 1))
-
-		# The event must be one the derivation registers. An entry under an event
-		# the harness does not emit is a hook that can never fire — installed,
-		# green to every other check, enforcing nothing.
-		if ! grep -qxF "$event" <<<"$derived_events"; then
-			report "$wiring:$event" "wiring-event-underived"
+	if [ "$reason" = "hook-wiring-command-drift" ] && [ -n "$launcher" ] && [ "$launcher" != "-" ]; then
+		# A declared launcher stands in for the derived command, and only for
+		# THIS harness's own file: the substring is matched against what is
+		# actually registered, so a typo is still drift rather than a licence.
+		if jq -e --arg e "$event" --arg l "$launcher" '
+		      (.hooks // {}) | .[$e][]? | .hooks[]?
+		      | select(.command // "" | contains($l))
+		    ' "$wiring" >/dev/null 2>&1; then
 			continue
 		fi
+	fi
+	report "$wiring:$event" "${reason#hook-}"
+done < <(jq -r '.harnesses[] as $h | $h.findings[]? | "\($h.harness) \(.event) \(.reason)"' <<<"$diagnosis")
 
-		# No matcher. Not "a matcher we agree with" — none at all. The host's
-		# absent-matcher default is every tool, which is what lets `batten.toml`'s
-		# `mediated_call` rows be the only narrowing. A matcher here re-narrows in
-		# a second place, and a wrong one narrows enforcement silently: that is
-		# how the protected-write gate came to cover five tool names on one host.
-		if [ "$matcher" != "-" ]; then
-			report "$wiring:$event" "wiring-matcher-narrows"
-		fi
+# The census, inverted. The core ranges over `Harness::ALL`, so what needs
+# checking is no longer "does the table cover every harness" but "does the table
+# name one the core does not diagnose" — a row for a host that no longer exists,
+# which would make its launcher and its file path read as live.
+while read -r harness wiring launcher; do
+	[ -n "$harness" ] || continue
+	: "$wiring" "$launcher"
+	grep -qxF "$harness" <<<"$diagnosed" ||
+		report "hooks-wiring-check:$harness" "wiring-harness-unknown"
+done <<<"$HARNESSES"
 
-		# The command must reach the engine for THIS harness. The launcher is
-		# accepted as standing in for the derived command where the table declares
-		# one — that is the whole indirection this gate resolves — and anything
-		# else is drift.
-		derived_command=$(jq -r --arg e "$event" '(.hooks // .)[$e][0].hooks[0].command' <<<"$derived")
-		case "$command" in
-		*"$derived_command"*) ;;
-		*) if [ "$launcher" = "-" ] || [ "${command#*"$launcher"}" = "$command" ]; then
-			report "$wiring:$event" "wiring-command-drift"
-		fi ;;
-		esac
-	done <<<"$committed"
-
-	# EXACTLY ONE, in both directions. The engine emits one registration per
-	# event, so a second is a second authority for one decision — the shape
-	# non-negotiable 1 refuses one layer down — and a zero is a surface the
-	# decision says must be covered and is not.
-	while read -r event; do
-		[ -n "$event" ] || continue
-		count=$(awk -F'\t' -v e="$event" '$1 == e' <<<"$committed" | grep -c . || true)
-		case "$count" in
-		1) ;;
-		0) report "$wiring:$event" "wiring-event-unregistered" ;;
-		*) report "$wiring:$event" "wiring-event-registered-$count-times" ;;
-		esac
-	done <<<"$derived_events"
-
-	# --- the commands that are not batten's, on EVERY event (CLOUD-713, widened
-	# by CLOUD-777) ---------------------------------------------------------
-	#
-	# The rules above judge the entries that ARE batten's. Nothing judged the
-	# ones that are not, because the selector drops them — so
-	# `.claude/settings.json` accreted twelve commands beside the engine and no
-	# run ever went red. Measured 2026-08-19 at seven across five matchers on
-	# `PreToolUse` alone, one of which landed inside the twenty minutes between
-	# two readings taken while this gate was being written.
+# --- the commands that are not batten's (CLOUD-713, widened by CLOUD-777) -----
+#
+# THIS HALF STAYS IN BASH, and not for want of somewhere to put it. `doctor
+# hooks` reports a sibling COUNT and never a name, twice over: rule 4 forbids a
+# diagnostic from emitting a command line, which carries a path, and whether a
+# hook beside batten's is legitimate is a CONSUMER's judgement. This repository
+# refuses them and records who retires each — a fact about this repository, which
+# is exactly why it cannot move into `crates/batten`.
+while read -r harness wiring launcher; do
+	[ -n "$harness" ] || continue
+	: "$launcher"
+	if [ ! -f "$wiring" ]; then
+		# The core already reported `hook-wiring-file-missing` for this harness,
+		# so there is nothing to add and nothing to scan.
+		continue
+	fi
+	# And likewise for one it could not parse: the core reported
+	# `hook-wiring-file-unreadable`, which is the answer. Re-deriving it here as an
+	# exit 2 would replace a verdict somebody made with "could not look".
+	if ! jq -e . "$wiring" >/dev/null 2>&1; then
+		continue
+	fi
 	if ! siblings=$(jq -r '
 	    (.hooks // {}) | to_entries[] as $event
 	    | $event.value[]? | .hooks[]?
@@ -333,20 +302,9 @@ while read -r harness wiring launcher; do
 	fi
 done <<<"$HARNESSES"
 
-# The census: every harness the core knows either has a row above or is the one
-# with no hook-config surface. A table covering five of six would report green
-# over exactly the gap this gate exists to close, and `Harness::ALL` is what
-# makes a seventh adapter fail here rather than land unwired.
-while read -r known; do
-	[ -n "$known" ] || continue
-	[ "$known" = "exit-code" ] && continue
-	grep -q "^$known " <<<"$HARNESSES" ||
-		report "hooks-wiring-check:$known" "wiring-harness-unlisted"
-done <<<"$all_harnesses"
-
 if [ "$violations" -ne 0 ]; then
-	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong. For a \`wiring-sibling-command\`, the engine registers ONE command per event and adjudicates from batten.toml — retire the guard behind it (CLOUD-312), or add a declared row here naming the issue that will." >&2
+	echo "::error:: hooks-wiring-check: $violations wiring violation(s) above. For an entry that IS batten's, the derivation is the authority: edit the wiring, or the rows in crates/batten/src/hook.rs if the derivation is what is wrong — \`batten doctor hooks\` is the same read without this file's consumer-side table. For a \`wiring-sibling-command\`, the engine registers ONE command per event and adjudicates from batten.toml — retire the guard behind it (CLOUD-312), or add a declared row here naming the issue that will." >&2
 	exit 1
 fi
 
-echo "hooks-wiring-check: $registrations \`batten hook\` registration(s) across $(grep -c . <<<"$HARNESSES") harness(es) agree with the derivation — one per emitted event, no matcher — and every other command names the issue retiring it"
+echo "hooks-wiring-check: $registrations \`batten hook\` registration(s) across $(grep -c . <<<"$diagnosed") harness(es) agree with the derivation — one per emitted event, no matcher — and every other command names the issue retiring it"

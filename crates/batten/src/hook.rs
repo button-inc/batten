@@ -816,7 +816,7 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
 /// the one module allowed to. The search was an install concern. What the
 /// paragraph above still says is unchanged, and it is what keeps the emitter able
 /// to serve a consumer that does need one.
-fn wiring_command(harness: Harness) -> String {
+pub(crate) fn wiring_command(harness: Harness) -> String {
     format!("batten hook --harness {}", harness.as_str())
 }
 

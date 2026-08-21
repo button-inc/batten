@@ -220,8 +220,19 @@ if [ -z "$wired_cmd" ]; then
 fi
 # The settings file spells the project dir as a variable the harness expands.
 wired_cmd=${wired_cmd//\$CLAUDE_PROJECT_DIR/$PWD}
-if [ ! -x "$wired_cmd" ]; then
-	echo "::error:: perf: the wired PreToolUse command is not executable: $wired_cmd. No records written." >&2
+# A wiring that names the BINARY rather than a path resolves to the release build
+# this task already made (CLOUD-824 retired the launcher, so this is now the
+# ordinary case). Pinned to this tree's binary rather than to PATH: a host
+# resolves `batten` however it likes, and a figure published for some other
+# build describes nothing about this commit.
+case "$wired_cmd" in
+"batten "*) wired_cmd="$ABS_BIN ${wired_cmd#batten }" ;;
+esac
+# The first token is the program; the rest is its argv. Only the program has to
+# exist, and a wiring that names one which does not is the false green this
+# check exists for.
+if [ ! -x "${wired_cmd%% *}" ]; then
+	echo "::error:: perf: the wired PreToolUse command is not executable: ${wired_cmd%% *}. No records written." >&2
 	exit 1
 fi
 if [ "$wired_count" -ne 1 ]; then

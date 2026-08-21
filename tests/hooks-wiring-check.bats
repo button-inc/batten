@@ -31,27 +31,65 @@
 #   * a `Stop` sibling used to be out of scope ("PreToolUse ONLY"). CLOUD-312's
 #     scope widened with it: the entry point is every point.
 
+# A WHOLE FIXTURE ROOT, NOT ONE FILE, SINCE CLOUD-777 MOVED THE DERIVATION
+# IN-PROCESS. `batten doctor hooks` reads the harness surfaces under its own cwd
+# and ranges over `Harness::ALL`, so a fixture carrying one file would report four
+# `file-missing` rows before any mutation was reached. Every harness's wiring is
+# materialized from the emitter, and each case mutates the one it is about —
+# which is stronger than the old one-file shape rather than weaker: the other four
+# are asserted green in the same run.
 setup() {
 	REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 	GATE="$REPO/mise-tasks/hooks-wiring-check"
-	WIRING="$BATS_TEST_TMPDIR/settings.json"
+	ROOT="$BATS_TEST_TMPDIR/root"
+	WIRING="$ROOT/.claude/settings.json"
 	# Empty by default, so a fixture is judged against ITSELF rather than against
-	# this repository's twelve declared retirements — which would report all
-	# twelve as stale on every case below. A case that wants a declaration sets it.
+	# this repository's declared retirements — which would report every one as
+	# stale on every case below. A case that wants a declaration sets it.
 	DECLARED=""
-	# One harness, and the fixture's whole universe stated explicitly. An UNSET
-	# `HOOKS_WIRING_KNOWN` makes the gate read the real harness set and refuse to
-	# guess; setting it here is a case saying "these are all the hosts there are",
-	# which is what lets a one-harness fixture be green at all.
-	KNOWN="claude-code"
+	# The table under test. Empty means "the fixture root's own", built in `gate`;
+	# a case about the TABLE sets it.
+	HARNESSES=""
+	mkdir -p "$ROOT/.claude" "$ROOT/.cursor" "$ROOT/.codex" "$ROOT/.github/hooks" "$ROOT/.gemini"
+	for harness in claude-code cursor copilot-cli gemini-cli codex-cli; do
+		emit_wiring "$harness"
+	done
 }
 
-# Run the gate over a wiring file, from the real repo (the derivation comes from
-# the binary, which needs the real crate).
+# The derived wiring for one harness, written where that harness reads it.
+#
+# Emitted rather than typed: these are what the binary derives, so a hand-copied
+# fixture would drift from the derivation the gate compares against and start
+# failing for a reason no case here is about.
+emit_wiring() { # <harness>
+	local path derived
+	case "$1" in
+	claude-code) path="$ROOT/.claude/settings.json" ;;
+	cursor) path="$ROOT/.cursor/hooks.json" ;;
+	copilot-cli) path="$ROOT/.github/hooks/batten.json" ;;
+	gemini-cli) path="$ROOT/.gemini/settings.json" ;;
+	codex-cli) path="$ROOT/.codex/hooks.json" ;;
+	esac
+	derived=$(cd "$REPO" && cargo run --quiet -p batten -- generate hooks --harness "$1")
+	# A `Key` harness emits the key's VALUE; the committed file wraps it. A
+	# `Whole` one emits the document. One expression writes both, mirroring
+	# `WiringFile`'s split rather than guessing at it.
+	case "$1" in
+	claude-code | gemini-cli) printf '{"hooks":%s}\n' "$derived" >"$path" ;;
+	*) printf '%s\n' "$derived" >"$path" ;;
+	esac
+}
+
+# Run the gate over the fixture root.
 gate() {
+	local table="${HARNESSES:-claude-code $WIRING -
+cursor $ROOT/.cursor/hooks.json -
+copilot-cli $ROOT/.github/hooks/batten.json -
+gemini-cli $ROOT/.gemini/settings.json -
+codex-cli $ROOT/.codex/hooks.json -}"
 	(cd "$REPO" &&
-		HOOKS_WIRING_HARNESSES="claude-code $WIRING batten-hook.sh" \
-			HOOKS_WIRING_KNOWN="$KNOWN" \
+		HOOKS_WIRING_ROOT="$ROOT" \
+			HOOKS_WIRING_HARNESSES="$table" \
 			HOOKS_WIRING_DECLARED_FOR="claude-code" \
 			HOOKS_WIRING_DECLARED="$DECLARED" "$GATE")
 }
@@ -61,7 +99,7 @@ gate() {
 # and its completeness is the point — under CLOUD-777 a partial wiring is not a
 # smaller green, it is red.
 complete_wiring() { # <command>
-	local command="${1:-\$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook.sh}"
+	local command="${1:-batten hook --harness claude-code}"
 	python3 - "$WIRING" "$command" <<-'PY'
 		import json, sys
 		path, command = sys.argv[1], sys.argv[2]
@@ -108,9 +146,25 @@ mutate_event() { # <event> <matcher|second> <value>
 # own gate — and the only way that decision is testable is a fixture that uses
 # one, which is what `HOOKS_WIRING_HARNESSES` is for.
 @test "a declared launcher stands in for the derived command — that indirection is the point" {
-	complete_wiring '$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook.sh'
+	complete_wiring '$CLAUDE_PROJECT_DIR/.claude/hooks/batten-launcher.sh'
+	HARNESSES="claude-code $WIRING batten-launcher.sh
+cursor $ROOT/.cursor/hooks.json -
+copilot-cli $ROOT/.github/hooks/batten.json -
+gemini-cli $ROOT/.gemini/settings.json -
+codex-cli $ROOT/.codex/hooks.json -"
 	run gate
 	[ "$status" -eq 0 ]
+}
+
+@test "an UNDECLARED launcher is drift — the column is a declaration, not a wildcard" {
+	# The other half of the case above, and the one that makes it a decision: the
+	# core reports `command-drift` for anything that is not the derived command,
+	# and only a row naming the launcher stands it down. Without this, "a launcher
+	# passes" would be indistinguishable from "the drift check does not run".
+	complete_wiring '$CLAUDE_PROJECT_DIR/.claude/hooks/batten-launcher.sh'
+	run gate
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-command-drift"* ]]
 }
 
 @test "the derived command itself is accepted, so a consumer without a launcher still passes" {
@@ -120,21 +174,21 @@ mutate_event() { # <event> <matcher|second> <value>
 }
 
 @test "a command that reaches nothing is DRIFT, not silence" {
-	# The false green this suite exists for: one byte off the launcher's name.
-	complete_wiring '$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook-typo.sh'
+	# The false green this suite exists for: one byte off the derived command.
+	complete_wiring 'batten hoook --harness claude-code'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-command-drift"* ]]
 }
 
 @test "the pointer names the file and the event, never the entry body" {
-	complete_wiring '$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook-typo.sh'
+	complete_wiring 'batten hoook --harness claude-code'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"$WIRING:PreToolUse"* ]]
 	# Non-negotiable rule 4: a count and a `path:event`, never the command that
 	# drifted — the remedy is the same one edit either way.
-	[[ "$output" != *"batten-hook-typo.sh"* ]]
+	[[ "$output" != *"hoook"* ]]
 }
 
 @test "an event the derivation does not register is refused" {
@@ -174,7 +228,11 @@ mutate_event() { # <event> <matcher|second> <value>
 	mutate_event PostToolUse second 'batten hook --harness claude-code'
 	run gate
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"wiring-event-registered-2-times"* ]]
+	# `n`, not `2`. A reason id is a stable token — `&'static str` on the `Check`
+	# it came from — and interpolating the count would make the byte-stability §6
+	# asks for a function of the fixture. The count is in the row's
+	# `registrations` field for a reader who wants it.
+	[[ "$output" == *"wiring-event-registered-n-times"* ]]
 }
 
 @test "A DERIVED EVENT WITH NO REGISTRATION is refused — this is CLOUD-312's cutover" {
@@ -219,20 +277,46 @@ mutate_event() { # <event> <matcher|second> <value>
 	[[ "$output" == *"wiring-event-unregistered"* ]]
 }
 
-@test "an ABSENT wiring file is exit 2 — could not look is not a verdict" {
-	WIRING="$BATS_TEST_TMPDIR/does-not-exist.json"
+@test "an ABSENT wiring file is a FINDING now, which is stronger than exit 2" {
+	# It used to be "could not look". Since the derivation moved in-process the
+	# core knows which file each harness declares, so an absent one is not an
+	# unanswerable question — it is an unwired harness, named as one. Exit 1, and
+	# the reason says which.
+	rm "$WIRING"
 	run gate
-	[ "$status" -eq 2 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-file-missing"* ]]
 }
 
-@test "an unparseable wiring file is exit 2, never a silent pass" {
+@test "an unparseable wiring file is named distinctly from an absent one" {
+	# Two different remedies — write one, or fix one — so one reason id for both
+	# would send the reader to the wrong place.
 	printf 'not json at all\n' >"$WIRING"
 	run gate
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-file-unreadable"* ]]
+	[[ "$output" != *"wiring-file-missing"* ]]
+}
+
+@test "a diagnosis that cannot be READ is exit 2 — could not look is not a verdict" {
+	# The distinction survives the move, one layer up: a missing FILE is an answer
+	# the core gives, and a missing ANSWER is not an answer at all. A gate that
+	# read an empty document as "nothing wrong" is the false green this file keeps
+	# re-meeting, one layer further out each time.
+	HOOKS_WIRING_DIAGNOSIS="true" run gate
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"could not look"* ]]
+}
+
+@test "a diagnosis that is not the DOCUMENT is exit 2 too, not a pass" {
+	# Output alone is not an answer: a stub that prints valid JSON of the wrong
+	# shape must not read as a healthy set of zero harnesses.
+	HOOKS_WIRING_DIAGNOSIS="echo {}" run gate
 	[ "$status" -eq 2 ]
 }
 
 @test "every registration is judged, so one run names them all" {
-	complete_wiring '$CLAUDE_PROJECT_DIR/.claude/hooks/batten-hook-typo.sh'
+	complete_wiring 'batten hoook --harness claude-code'
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"PreToolUse"* ]]
@@ -279,41 +363,44 @@ mutate_event() { # <event> <matcher|second> <value>
 # empty, the census compared nothing, and the gate reported green. Same false
 # green as the selector above, one layer out.
 
-@test "A HARNESS THE CORE KNOWS AND THE TABLE OMITS is refused" {
-	complete_wiring
-	KNOWN="claude-code
-cursor"
+@test "A HARNESS THE CORE DIAGNOSES AND THE TABLE OMITS is refused" {
+	# The core ranges over `Harness::ALL`, so it diagnoses `cursor` whether or not
+	# this table mentions it — and a finding for a harness with no row here has no
+	# file to point at and no launcher column to consult. Reporting it as
+	# `unlisted` is what stops that being silent.
+	rm "$ROOT/.cursor/hooks.json"
+	HARNESSES="claude-code $WIRING -"
 	run gate
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"wiring-harness-unlisted"* ]]
 }
 
-@test "exit-code is exempt from the census: it has no hook-config surface" {
-	complete_wiring
-	KNOWN="claude-code
-exit-code"
+@test "A HARNESS THE TABLE NAMES AND THE CORE DOES NOT KNOW is refused too" {
+	# The census inverted, which is what moving the derivation in-process did to
+	# it. It used to ask "does the table cover every harness the core knows",
+	# because a table covering five of six would report green over exactly the gap
+	# the gate exists to close. The core answers that itself now. What is left is
+	# the other direction: a row for a host that no longer exists, whose file path
+	# and launcher column would read as live.
+	HARNESSES="claude-code $WIRING -
+cursor $ROOT/.cursor/hooks.json -
+copilot-cli $ROOT/.github/hooks/batten.json -
+gemini-cli $ROOT/.gemini/settings.json -
+codex-cli $ROOT/.codex/hooks.json -
+some-retired-host $ROOT/.retired/hooks.json -"
 	run gate
-	[ "$status" -eq 0 ]
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"wiring-harness-unknown"* ]]
 }
 
-@test "AN UNREADABLE CENSUS IS EXIT 2 — not an empty set that passes" {
-	# The distinction the whole census rests on. `${VAR+set}` rather than
-	# `${VAR:-}`: a case may STATE an empty universe, but a gate that could not
-	# look must never report the table complete.
-	complete_wiring
-	# A real git checkout that is NOT this crate, so `cargo run -p batten` cannot
-	# resolve a binary and the possible-values line never appears. Retrying the
-	# SETUP, never the measurement: if the repo cannot be created the case has not
-	# been established and says so rather than asserting on a premise it never made.
-	elsewhere="$BATS_TEST_TMPDIR/not-the-crate"
-	mkdir -p "$elsewhere"
-	git -C "$elsewhere" init -q . || skip "could not establish a scratch repo (CLOUD-448 shape)"
-	run env -u HOOKS_WIRING_KNOWN \
-		HOOKS_WIRING_ROOT="$elsewhere" \
-		HOOKS_WIRING_HARNESSES="claude-code $WIRING batten-hook.sh" \
-		HOOKS_WIRING_DECLARED="" bash "$GATE"
-	[ "$status" -eq 2 ]
-	[[ "$output" == *"could not read the harness set"* ]]
+@test "exit-code is absent from the diagnosis: it has no hook-config surface" {
+	# The neutral contract — envelope in, decision as exit status out — has no
+	# file to register in, so `Harness::wiring` returns `None` and it never
+	# reaches the table. Asserted here because a row for it would be reported
+	# `unknown`, which is the observable form of the exemption.
+	run gate
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"exit-code"* ]]
 }
 
 # --- the commands that are not batten's (CLOUD-713, widened by CLOUD-777) -----

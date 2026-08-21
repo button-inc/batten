@@ -315,6 +315,14 @@ mod tests {
                 // under it.
                 "design audit".to_owned(),
                 "doctor".to_owned(),
+                // The one row that is both a parent and a `read` verb of its own
+                // (CLOUD-777). House style §2 spells the verb `doctor <SUB>` and
+                // §8 promises what bare `doctor` does, so both are on the list —
+                // unlike every other noun here, which performs no default action
+                // and is absent for that reason. Both read committed files and
+                // spawn nothing: the sub-verb compares each harness's wiring
+                // against a derivation computed in-process.
+                "doctor hooks".to_owned(),
                 "generate".to_owned(),
                 "generate completions".to_owned(),
                 // §11's third derivation (CLOUD-62): the hook wiring a host
@@ -467,6 +475,7 @@ mod tests {
                 "design".to_owned(),
                 "design audit".to_owned(),
                 "doctor".to_owned(),
+                "doctor hooks".to_owned(),
                 "enforce".to_owned(),
                 "exec".to_owned(),
                 // The schema is emitted by `generate`, not `config`: it is a

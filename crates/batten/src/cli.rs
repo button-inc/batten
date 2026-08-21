@@ -69,8 +69,8 @@ pub enum Command {
     },
     /// Diagnose whether Batten can run in this repository.
     Doctor {
-        /// Emit the diagnosis as byte-stable JSON instead of pointer lines.
-        json: bool,
+        /// The chosen diagnosis: the bare report, or a focused sub-diagnostic.
+        command: DoctorCommand,
     },
     /// Emit an artifact derived from the command spec.
     Generate {
@@ -450,6 +450,28 @@ pub enum ConfigCommand {
     },
 }
 
+/// Diagnoses of `doctor` (house style §2: the verb nests focused
+/// sub-diagnostics).
+///
+/// [`DoctorCommand::Diagnose`] is what a bare `batten doctor` selects, so adding
+/// a sub-verb did not turn the parent into a noun that refuses to answer — house
+/// style §8 promises bare `doctor` validates the resolved config, and
+/// `surface::is_noun` is what keeps that promise structural.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DoctorCommand {
+    /// The bare report: config, git repository, command programs.
+    Diagnose {
+        /// Emit the diagnosis as byte-stable JSON instead of pointer lines.
+        json: bool,
+    },
+    /// Whether batten is wired on every hook surface of every harness.
+    Hooks {
+        /// Emit the per-harness diagnosis as byte-stable JSON.
+        json: bool,
+    },
+}
+
 /// Subcommands of `generate`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -679,6 +701,23 @@ fn design_of(matches: &ArgMatches) -> Option<DesignCommand> {
     }
 }
 
+/// **Infallible, unlike every other `*_of`**, and that is the whole difference
+/// between a verb that nests and a noun. The others return `None` for an absent
+/// subcommand because clap has already refused it (`subcommand_required`); here
+/// an absent one is the ordinary bare invocation and selects the report.
+fn doctor_of(matches: &ArgMatches) -> DoctorCommand {
+    match matches.subcommand() {
+        Some(("hooks", matches)) => DoctorCommand::Hooks {
+            json: flag(matches, "json"),
+        },
+        // The bare verb reads `-J` from its OWN matches, which is where clap put
+        // it when no subcommand was given.
+        _ => DoctorCommand::Diagnose {
+            json: flag(matches, "json"),
+        },
+    }
+}
+
 fn worktree_of(matches: &ArgMatches) -> Option<WorktreeCommand> {
     match matches.subcommand()? {
         ("status", matches) => Some(WorktreeCommand::Status {
@@ -783,8 +822,12 @@ fn command_of((name, matches): (&str, &ArgMatches)) -> Option<Command> {
         "spec" => matches
             .get_one::<SpecFormat>("format")
             .map(|format| Command::Spec { format: *format }),
+        // The one parent that still ACTS bare (house style §2 nests
+        // sub-diagnostics under `doctor`, §8 promises what bare `doctor` does),
+        // so an absent subcommand is the diagnosis rather than a usage error.
+        // `surface::is_noun` is the other half of that decision.
         "doctor" => Some(Command::Doctor {
-            json: flag(matches, "json"),
+            command: doctor_of(matches),
         }),
         "init" => Some(Command::Init {
             dry_run: flag(matches, "dry_run"),

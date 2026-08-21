@@ -244,30 +244,64 @@ pair hook "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook -
 # — and `perf-assert` budgets it, which is what this file's own census enforces.
 pair passthrough "$check_repo" "$base_bin hook --harness claude-code" "$head_bin hook --harness claude-code"
 
-# THE WIRED PATH (CLOUD-697): what `.claude/settings.json` actually invokes,
-# launcher included — the number an agent waits on, and the one `perf-assert`
-# budgets but no paired arm covered.
+# THE WIRED PATH (CLOUD-697): what `.claude/settings.json` actually invokes —
+# the number an agent waits on, and the one `perf-assert` budgets but no paired
+# arm covered.
 #
-# Each arm runs ITS OWN tree's launcher against its own binary, unlike the three
+# Each arm runs ITS OWN tree's wiring against its own binary, unlike the three
 # above which share the pinned fixture. That is the correct reading here and not
-# an inconsistency: `wired` measures what the installed wiring costs, and each
-# arm's wiring is its own. It also cannot reintroduce the config mismatch fixed
-# earlier — the base launcher `cd`s to the base tree and reads the base
-# `batten.toml`, which the base binary can load by construction.
+# an inconsistency: `wired` measures what the INSTALLED wiring costs, and each
+# arm's wiring is its own. It is also what makes this arm survive a change to the
+# wiring itself, which is exactly what CLOUD-824 was: the head tree invokes the
+# binary directly and the base tree still routes through
+# `.claude/hooks/batten-hook.sh`, so a hardcoded launcher path could not measure
+# the pair at all — and did not, which is how this was found.
+#
+# DERIVED PER TREE rather than hardcoded, the same read `mise-tasks/perf` makes
+# and for the same stated reason: a measurement must not describe a wiring the
+# repository no longer has.
 #
 # `env` rather than a generated shim: `--shell=none` runs argv directly, so this
 # is how per-arm environment is supplied at all. The extra exec is identical on
 # both arms and therefore divides out of the ratio, which is the only thing
 # `perf-compare` reads.
 #
-# `$BATTEN_BIN` is the launcher's FIRST resolution candidate, ahead of
-# `target/release/batten` — so this pins each arm to the binary built for it
-# rather than to whatever the tree happens to have lying in `target/`.
-readonly LAUNCHER=".claude/hooks/batten-hook.sh"
-if [ ! -x "$base_tree/$LAUNCHER" ] || [ ! -x "$PWD/$LAUNCHER" ]; then
-	echo "::error:: perf-pair: $LAUNCHER is missing or not executable in one of the two trees, so the wired pair cannot be measured. No measurement." >&2
+# `env -C` IS LOAD-BEARING, and it is what replaces the launcher's `cd`. The
+# wired path's whole distinction from `hook` above is that it adjudicates against
+# the REPOSITORY's own `batten.toml` rather than the pinned one-rule fixture, and
+# since CLOUD-824 the binary resolves that from its cwd through `git::repo_root`
+# rather than being `cd`'d there by a shell. Both arms are therefore run in their
+# own tree, which keeps them comparable — a head arm left in the fixture repo
+# would be measuring a smaller policy and would read as a speedup.
+#
+# `$BATTEN_BIN` is still exported for a tree whose wiring routes through a
+# launcher: it is that launcher's first resolution candidate, so each arm is
+# pinned to the binary built for it rather than to whatever `target/` holds.
+wired_command() { # <tree> <binary>
+	local tree="$1" bin="$2" command
+	command=$(jq -r '[.hooks.PreToolUse[]? | .hooks[].command | select(contains("batten"))] | .[0] // empty' \
+		"$tree/.claude/settings.json" 2>/dev/null) || command=""
+	if [ -z "$command" ]; then
+		echo "::error:: perf-pair: $tree wires no PreToolUse command reaching batten, so the wired pair cannot be measured. No measurement." >&2
+		exit 2
+	fi
+	# The settings file spells the project dir as a variable the harness expands.
+	command=${command//\$CLAUDE_PROJECT_DIR/$tree}
+	# A wiring that names the BINARY rather than a path is pinned to this arm's
+	# build. A host resolves `batten` on PATH; measuring whatever PATH happens to
+	# hold would compare two arms against one binary.
+	case "$command" in
+	"batten "*) command="$bin ${command#batten }" ;;
+	esac
+	printf 'env -C %s CLAUDE_PROJECT_DIR=%s BATTEN_BIN=%s %s' "$tree" "$tree" "$bin" "$command"
+}
+# Asserted rather than assumed: `env -C` is GNU coreutils and BSD `env` has no
+# such flag. Measuring without it would silently run both arms in the fixture
+# repo, which is a different measurement wearing this one's name.
+if ! env -C / true 2>/dev/null; then
+	echo "::error:: perf-pair: this env(1) has no -C, so the wired arms cannot be run in their own trees. No measurement." >&2
 	exit 2
 fi
 pair wired "$check_repo" \
-	"env CLAUDE_PROJECT_DIR=$base_tree BATTEN_BIN=$base_bin $base_tree/$LAUNCHER" \
-	"env CLAUDE_PROJECT_DIR=$PWD BATTEN_BIN=$head_bin $PWD/$LAUNCHER"
+	"$(wired_command "$base_tree" "$base_bin")" \
+	"$(wired_command "$PWD" "$head_bin")"

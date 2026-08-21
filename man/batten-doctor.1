@@ -4,7 +4,7 @@
 .SH NAME
 batten\-doctor \- Diagnose whether Batten can run in this repository
 .SH SYNOPSIS
-\fBbatten doctor\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] 
+\fBbatten doctor\fR [\fB\-J\fR|\fB\-\-json\fR] [\fB\-h\fR|\fB\-\-help\fR] [\fIsubcommands\fR]
 .SH DESCRIPTION
 Diagnose whether Batten can run in this repository
 .SH OPTIONS
@@ -14,3 +14,10 @@ Emit byte\-stable JSON instead of pointer lines
 .TP
 \fB\-h\fR, \fB\-\-help\fR
 Print help
+.SH SUBCOMMANDS
+.TP
+batten\-doctor\-hooks(1)
+Diagnose whether batten is wired on every hook surface of every harness
+.TP
+batten\-doctor\-help(1)
+Print this message or the help of the given subcommand(s)

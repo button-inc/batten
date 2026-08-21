@@ -1222,6 +1222,30 @@ pub const SURFACE: &[CommandDecl] = &[
         effect: Effect::Read,
         flags: &[JSON],
     },
+    // §2 spells the verb `doctor <SUB>` — "nests focused sub-diagnostics" — so a
+    // named sub-verb is the SPECIFIED shape rather than a new idea (CLOUD-777).
+    // The alternative considered and rejected was a fourth anonymous check inside
+    // `diagnose()`: a consumer asking *am I wired?* would then have to read one
+    // line out of a report about config and PATH, and per-harness detail would
+    // have nowhere to live, because that shape forces one boolean and one reason
+    // id for the whole question.
+    //
+    // Bare `doctor` keeps its own report unchanged — §8 promises it validates the
+    // resolved config, and `is_noun` is what stops this row turning the parent
+    // into a noun that refuses to answer.
+    //
+    // `read`, and structurally: it reads committed wiring files and compares them
+    // against a derivation computed in-process. Nothing is spawned, and §2's own
+    // row already classifies the verb this way.
+    CommandDecl {
+        path: "doctor hooks",
+        about: "Diagnose whether batten is wired on every hook surface of every harness",
+        // Per-harness detail is the whole reason this is a sub-verb rather than a
+        // line in `doctor`'s summary, and `-J` is where that detail goes.
+        data_channel: true,
+        effect: Effect::Read,
+        flags: &[JSON],
+    },
     // The scaffolding half of §12's onboarding pair, and the one verb whose
     // write target is inside the repository. `write` rather than `destructive`:
     // it creates a file and replaces nothing — an existing config is refused
@@ -1845,10 +1869,33 @@ fn arg_of(decl: &FlagDecl) -> Arg {
     }
 }
 
-/// Whether any row declares `path` as its parent — i.e. `path` is a noun that
-/// dispatches rather than a verb that acts.
+/// Whether any row declares `path` as its parent.
 fn has_children(path: &str) -> bool {
     SURFACE.iter().any(|decl| parent_of(decl.path) == path)
+}
+
+/// Whether `decl` is a **noun** — a row that dispatches and performs no default
+/// action of its own (§2).
+///
+/// Derived from the row rather than declared beside it, and the discriminator is
+/// the row's own answer: a noun emits nothing and takes nothing, so it carries no
+/// data channel and no flags. Every noun on this surface satisfies both today
+/// (`config`, `lint`, `generate`, `policy`, `capture`, `commit`, `attribution`,
+/// `worktree`, `provision`, `payload`, `receipt`, `defects`, `design`, `state`),
+/// and `tests::a_noun_declares_no_answer_of_its_own` is what keeps that true.
+///
+/// **The row that is both is `doctor`, and house style says so in two places.**
+/// §2 spells the verb `doctor <SUB>` — "diagnose environment; nests focused
+/// sub-diagnostics" — while §8 says "`batten doctor` validates the resolved
+/// config against the schema", which is a promise about the BARE invocation. A
+/// parent marked `subcommand_required` would break the second to satisfy the
+/// first, and that is not hypothetical: `payload` exists as a top-level noun
+/// precisely because nesting it under `hook` turned the `PreToolUse` mediator
+/// into a noun that refused to adjudicate (see that row's comment). So the test
+/// is what the row declares, not what it is called.
+#[must_use]
+pub fn is_noun(decl: &CommandDecl) -> bool {
+    has_children(decl.path) && !decl.data_channel && decl.flags.is_empty()
 }
 
 /// Attach every direct child of `prefix` to `parent`, recursively.
@@ -1864,7 +1911,8 @@ fn attach(parent: Command, prefix: &str) -> Command {
                 .fold(sub, |sub, flag| sub.arg(arg_of(flag)));
             let sub = attach(sub, decl.path);
             // A noun performs no default action: it lists its sub-verbs (§2).
-            let sub = if has_children(decl.path) {
+            // A row that nests AND declares an answer keeps acting bare.
+            let sub = if is_noun(decl) {
                 sub.subcommand_required(true).arg_required_else_help(true)
             } else {
                 sub
