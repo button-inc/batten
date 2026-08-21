@@ -55,7 +55,74 @@ name once and caches it for the session is wrong for part of that session by
 construction** — including an allow rule written at startup, which is what
 CLOUD-191 proposes. Re-search for the tool rather than remembering its name.
 
-## Recovering, in order
+## STOP — this memory does NOT cover the remote-session connector, and everything below fails for it
+
+**Read this section before the recovery steps.** Everything in this file was
+learned on **claude.ai data connectors** — Linear, Gmail, Xero. Those are normal
+connectors: they expose a per-tool permission control, and the recovery below is
+verified against them.
+
+**The Claude Code Remote / session-management connector is a different animal
+and NONE of it applies.** Its tools — `create_session`, `list_sessions`,
+`get_session`, `archive_session`, `send_message`, `create_trigger`,
+`send_later`, `add_repo` and the rest — carry a **mandatory-approval flag**. The
+tool's own prompt says it _"requires explicit approval regardless of permission
+mode."_ There is **no control surface** to grant them: they do not appear in
+connector settings the way Linear's tools do, so the thing you did for Linear
+cannot be done for these.
+
+**Every escape has been tested upstream and documented as failing**
+([anthropics/claude-code#76264](https://github.com/anthropics/claude-code/issues/76264),
+open, `area:permissions`, `enhancement`, no maintainer response, **no
+workaround**):
+
+1. `permissions.defaultMode: "bypassPermissions"` — no effect.
+2. **An explicit `permissions.allow` entry for the exact tool name — no effect.**
+   That is step 2 below. It works for Linear. **It does not work here.**
+3. A `PreToolUse` hook returning `permissionDecision: "allow"` — the hook fires
+   and the prompt still appears.
+
+There is a second, independent upstream defect on the same call path: the
+**CCR proxy** (`api.anthropic.com/v2/ccr-sessions/{id}/mcp`) returns
+`MCP tool call requires approval` **server-side, before Claude Code's permission
+logic is reached** ([#61044](https://github.com/anthropics/claude-code/issues/61044),
+`bug`/`area:mcp`/`area:permissions`/`platform:web`). It is a regression; these
+worked before. [#61097](https://github.com/anthropics/claude-code/issues/61097)
+adds that _"the 'Always allow' toggle in the connector UI does not change
+behavior — the cloud routine path appears to ignore it"_, and carries the one
+discriminating datum: **Anthropic-hosted connectors fail where custom remote MCP
+servers succeed in the same run.** Anthropic's reply there —
+_"this should be addressed! Monitoring here"_ — postdates none of our failures,
+so re-test after a client upgrade and report if it still fails.
+
+### What this means, operationally
+
+- **`create_session` cannot be granted. Do not try, and do not send the user to
+  any settings screen to try.** There is no such screen for these tools. Saying
+  otherwise is a fabrication, and it has been said to the user more than once.
+- **Do not "probe once to see if it works now."** The answer is upstream and
+  open. Re-derive it only from a changelog entry or a reply on those issues,
+  never by burning a turn on the call.
+- **The fleet is dispatched by hand.** That is settled — `CLOUD-731`, `CLOUD-784`
+  and `CLOUD-839` all record it — but the RECORDED REASON on those rows was
+  wrong or incomplete (they read as a local grant problem). The reason is the
+  mandatory-approval flag plus the CCR proxy, both upstream, neither fixable
+  here.
+- **`CLOUD-191`'s premise does not hold for this connector.** Resolving the
+  allowlist per call, from committed policy, whatever name the host chose, is
+  approach 2 above — documented as having no effect on mandatory-approval tools.
+  It remains valid for Linear-class connectors and only for those.
+
+### The tell, so this is recognisable without re-deriving it
+
+Read the injected config. A connector whose tools are grantable shows a mix —
+Linear measured **57 `always_allow`, 1 `always_ask`**. The remote-session
+connector shows **all 20 `always_ask`, including read-only `get_session` and
+`list_sessions`**. A connector where _every_ tool including the read-only ones
+is `always_ask` is a mandatory-approval connector, not an ungranted one, and no
+local change will move it.
+
+## Recovering a DATA connector (Linear/Gmail/Xero), in order
 
 1. **Find the live names.** The host writes its injected MCP config to
    `/tmp/mcp-config-cse_<session>.json`, keyed by connector **UUID** — the

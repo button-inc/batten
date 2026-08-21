@@ -29,11 +29,17 @@ Read on demand, never all of them.
   `.serena/` config.
 - `mem:prior-art-and-issue-hygiene` — surveying outside practice; adopting a
   tool or pattern; writing an issue or PR body.
-- `mem:connector-allowlist-recovery` — a connector's tools start prompting or
-  denying, reappear under a different name, or are **absent entirely** ("No such
-  tool available"); before telling anyone a connector is unattached or needs
+- `mem:connector-allowlist-recovery` — **any** `MCP tool call requires approval`,
+  including `create_session`/`list_sessions`/`get_session` (that one is upstream
+  and ungrantable — read the STOP section before answering, and never send anyone
+  to a settings screen for it); a connector's tools start prompting or denying,
+  reappear under a different name, or are **absent entirely** ("No such tool
+  available"); before telling anyone a connector is unattached or needs
   authorizing; and when `claim-check` has no payload to read, since a missing
   receipt stops `verify` and strands the branch.
+  **Read it BEFORE the first probe, not after it fails** — this has been
+  re-derived by experiment in at least three sessions, each time ending in advice
+  to change a setting that does not exist.
 - `mem:memory_maintenance` — writing, renaming or splitting a memory; the
   shipped convention template.
 
