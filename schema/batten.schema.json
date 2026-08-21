@@ -1216,6 +1216,13 @@
             "null"
           ]
         },
+        "content": {
+          "description": "A regex over the content a write would LAND, for a\n[`RuleKind::Shape`] row on the mediated path (CLOUD-758).\n\n**The first content-keyed predicate on this surface.** Every write-shaped\ngate before it was path-keyed — it could see which file was being touched\nand not what would end up in it, which is CLOUD-736's reported symptom:\n`git rm` on a workflow refused and a `Write` of one permitted.\n\nRegex-only with no literal twin, for [`Rule::exclude`]'s reason: a\npredicate over file content is inherently shape-based, and an enumeration\nof spellings rots.\n\n**Rule 4 is the load-bearing clause.** A row here DECIDES over the\ncontent and the refusal carries this rule's id and the path — never a\nmatched byte. The content reaches the typed predicate and stops: it is\nprojected into the policy input as a shape and a count, so no free-form\nconsumer message can echo it.\n\n**The predicate runs over the whole prospective content**, so a bare `^`\nanchors to the start of the FILE rather than of a line. A per-line\npredicate wants `(?m)`, and the difference is not academic: without it a\nrow catches a marker a write puts on the first byte and misses the same\nmarker three lines in.\n\nA tool whose shape carries no content — a shell command, an MCP call —\nyields [`crate::facts::Look::CouldNotLook`], and a row here does not fire\non it. That is *not* the same as matching an empty file, and collapsing\nthe two would make the row fire on every call as though it had looked.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "criteria": {
           "description": "What a [`RuleKind::Judge`] row asks the model — the committed evaluation\ninstruction handed to the judge command (CLOUD-56).\n\n**Committed, and that is the point.** The question a model is asked is\npolicy: it belongs in the authority a reviewer reads and a diff shows,\nnot in a prompt assembled at run time out of something else. It is also\nthe one payload class that carries no egress question at all\n([`crate::judge::RuleText`]) — it is the config author's own words, on\ntheir way back to them.",
           "type": [

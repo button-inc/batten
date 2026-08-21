@@ -1838,23 +1838,7 @@ fn run_hook(
     if Some(envelope.event) == harness.capabilities().degrade(hook::Event::PostToolBatch) {
         drain_advisories(harness, &envelope, overrides, mode, out, err)?;
     }
-    // The contract-drift predicate (CLOUD-461), on the two events that carry it.
-    //
-    // `SessionStart` is load-bearing rather than merely convenient: the first
-    // batch of an autonomous session is fetch-and-rebase, so a snapshot seeded at
-    // the END of that batch would record post-rebase state and the session would
-    // never learn what moved under it. Seeding at session start is what makes the
-    // first comparison honest.
-    //
-    // Not part of adjudication and unable to become part of it: this reports,
-    // `adjudicate` decides, and the two events named here are ones no host offers
-    // a deny channel for.
-    if matches!(
-        envelope.event,
-        hook::Event::PostToolBatch | hook::Event::SessionStart
-    ) {
-        report_contract_drift(harness, &envelope, overrides, out, err)?;
-    }
+    report_contract_drift(harness, &envelope, overrides, out, err)?;
     // Only now is config touched. Ordering the cheap refusals first is §4's
     // "cheap when irrelevant" applied to the hottest path in the binary — this
     // runs on every mediated tool call — and it is also what keeps a bypassed or
@@ -1990,6 +1974,7 @@ fn run_hook(
     } else {
         stop::StopFacts::default()
     };
+    let prospective = prospective_for(&policy, &envelope);
     let facts = hook::Facts {
         bypass,
         receipts: &receipts,
@@ -1997,6 +1982,7 @@ fn run_hook(
         stop: &stop,
         waived: &waived,
         sourced: &agent_sourced,
+        prospective: &prospective,
     };
     decide(harness, &envelope, &policy, &facts, mode, out, err)
 }
@@ -2212,6 +2198,22 @@ fn report_contract_drift(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<()> {
+    // The two events that carry the predicate, tested HERE rather than at the
+    // call site so the function owns which moments it serves.
+    //
+    // `SessionStart` is load-bearing rather than merely convenient: an
+    // autonomous session's first batch is routinely fetch-and-rebase, so a
+    // snapshot seeded at the END of that batch would record post-rebase state
+    // and the session would never learn what moved under it.
+    //
+    // Both are events no host offers a deny channel for, which is what makes
+    // this structurally unable to become part of adjudication.
+    if !matches!(
+        envelope.event,
+        hook::Event::PostToolBatch | hook::Event::SessionStart
+    ) {
+        return Ok(());
+    }
     let here = hook_authority_root();
     if !here.join(config::CONFIG_FILE).exists() {
         return Ok(());
@@ -2254,6 +2256,26 @@ fn report_contract_drift(
         err,
         &contract::render(&change, &declared.wiring),
     )
+}
+
+/// What this call's write would land, resolved only if a row asks (CLOUD-758).
+///
+/// The narrowing IS the cost argument. `facts::PROSPECTIVE` is `read` rather
+/// than `free` because the edit shape needs the file off disk, and that price is
+/// only acceptable because a repository declaring no content-keyed row — and any
+/// call that is not a write — never pays it. Same discipline as
+/// `Policy::required_checks_for` and `Policy::key_base_for`, which is CLOUD-460's
+/// lesson: a call no row selects for does less work than `--help`.
+///
+/// The un-asked answer is `CouldNotLook` rather than an empty string, because
+/// "nobody looked" and "the write is empty" are different claims and a content
+/// predicate must never confuse them.
+fn prospective_for(policy: &hook::Policy, envelope: &hook::Envelope) -> hook::ProspectiveFacts {
+    if policy.reads_prospective(envelope) {
+        hook::prospective_facts(hook_authority_root(), envelope)
+    } else {
+        facts::Look::CouldNotLook
+    }
 }
 
 fn drain_advisories(

@@ -321,6 +321,8 @@ pub enum Fact {
     /// What a command the AGENT ran said, read off the post-tool result buffer
     /// (CLOUD-776).
     AgentSourced,
+    /// What a write is about to put on disk, before it happens (CLOUD-758).
+    Prospective,
 }
 
 /// [`Fact::Bypass`] — the hatch is an environment variable, and the kernel
@@ -418,6 +420,34 @@ pub const LINES: Class = Class::new(Cost::Read, Surface::Check);
 /// resolves* rather than *what is known*, which is what having two axes was for.
 pub const AGENT_SOURCED: Class = Class::new(Cost::Read, Surface::Hook);
 
+/// [`Fact::Prospective`] — the content a `Write` or an `Edit` would land
+/// (CLOUD-758).
+///
+/// **`read`, and CLOUD-758's Ready block says `free`.** The correction is worth
+/// stating rather than quietly applying, because the issue's whole argument is
+/// that this is the cheapest fact in the system and the argument is *nearly*
+/// right.
+///
+/// A `Write` genuinely is free: `tool_input.content` was deserialized before
+/// [`crate::hook::adjudicate`] was called, and reading it spawns nothing and
+/// opens nothing. But the acceptance also demands *the computed post-edit
+/// content of an* `Edit`, and computing that means reading the file off disk —
+/// the envelope carries `old_string` and `new_string`, never the surrounding
+/// bytes. One bounded file read is exactly [`Cost::Read`], on the same standard
+/// that makes [`WAIVED`] `read` for a clock reading.
+///
+/// So the class is the **meet** of the two acquisition paths, which is what
+/// [`Class::meet`] says a composed fact is: at most as cheap as its most
+/// expensive input. Classifying it `free` on the strength of the cheaper arm is
+/// the ladder-shaped lie this module exists to refuse, one fact down.
+///
+/// [`Surface::Hook`] is unaffected and is the load-bearing half: the read is
+/// bounded, narrowed to calls a rule has already selected for, and needs no
+/// runtime — so it sits where [`RECEIPTS`] sits rather than where [`DOCUMENT`]
+/// does. Parsing an arbitrary document is unbounded in the input's size; reading
+/// the one file a call names is not.
+pub const PROSPECTIVE: Class = Class::new(Cost::Read, Surface::Hook);
+
 impl Fact {
     /// Every fact the boundary resolves today, so [`Fact::class`] is total.
     pub const ALL: &'static [Fact] = &[
@@ -430,6 +460,7 @@ impl Fact {
         Fact::Tracked,
         Fact::Lines,
         Fact::AgentSourced,
+        Fact::Prospective,
     ];
 
     /// The stable lowercase token (§6) — the field name in `lib.rs`'s `Facts`.
@@ -445,6 +476,7 @@ impl Fact {
             Fact::Tracked => "tracked",
             Fact::Lines => "lines",
             Fact::AgentSourced => "agent-sourced",
+            Fact::Prospective => "prospective",
         }
     }
 
@@ -468,6 +500,7 @@ impl Fact {
             Fact::Tracked => TRACKED,
             Fact::Lines => LINES,
             Fact::AgentSourced => AGENT_SOURCED,
+            Fact::Prospective => PROSPECTIVE,
         }
     }
 

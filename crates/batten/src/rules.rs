@@ -459,7 +459,15 @@ impl RuleKind {
             // produces reaches a model as the whole explanation, and a refusal
             // with nothing but an id is the un-actionable shape CLOUD-122 exists
             // to prevent.
-            RuleKind::Shape => &["pattern", "reason", "severity"],
+            // `pattern` is NOT here since CLOUD-758, and — exactly as the
+            // `receipt` note below says of the same move — its absence is a
+            // CONDITIONAL requirement rather than a relaxation. A shape row is
+            // keyed on a command line (`pattern`) or on the content a write
+            // would land (`content`), and a write carries no command line, so
+            // requiring the column unconditionally would make the content
+            // predicate unusable. `validate_shape_columns` refuses a row
+            // carrying neither, and one carrying both.
+            RuleKind::Shape => &["reason", "severity"],
             RuleKind::Ratchet => &["glob", "pattern", "direction", "base", "severity"],
             // Same `reason` obligation as a shape row, for the same reason: the
             // deny reaches a model as the whole explanation. `checks` is
@@ -949,6 +957,36 @@ pub struct Rule {
     /// comment looks like is a property of a repository, not of Batten.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exclude: Option<String>,
+    /// A regex over the content a write would LAND, for a
+    /// [`RuleKind::Shape`] row on the mediated path (CLOUD-758).
+    ///
+    /// **The first content-keyed predicate on this surface.** Every write-shaped
+    /// gate before it was path-keyed — it could see which file was being touched
+    /// and not what would end up in it, which is CLOUD-736's reported symptom:
+    /// `git rm` on a workflow refused and a `Write` of one permitted.
+    ///
+    /// Regex-only with no literal twin, for [`Rule::exclude`]'s reason: a
+    /// predicate over file content is inherently shape-based, and an enumeration
+    /// of spellings rots.
+    ///
+    /// **Rule 4 is the load-bearing clause.** A row here DECIDES over the
+    /// content and the refusal carries this rule's id and the path — never a
+    /// matched byte. The content reaches the typed predicate and stops: it is
+    /// projected into the policy input as a shape and a count, so no free-form
+    /// consumer message can echo it.
+    ///
+    /// **The predicate runs over the whole prospective content**, so a bare `^`
+    /// anchors to the start of the FILE rather than of a line. A per-line
+    /// predicate wants `(?m)`, and the difference is not academic: without it a
+    /// row catches a marker a write puts on the first byte and misses the same
+    /// marker three lines in.
+    ///
+    /// A tool whose shape carries no content — a shell command, an MCP call —
+    /// yields [`crate::facts::Look::CouldNotLook`], and a row here does not fire
+    /// on it. That is *not* the same as matching an empty file, and collapsing
+    /// the two would make the row fire on every call as though it had looked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     /// An extra literal that must appear in the mediated command **as written**
     /// for a [`RuleKind::Shape`] rule to fire. Optional, that kind only.
     ///
@@ -1781,6 +1819,37 @@ impl Rule {
     /// A [`UsageError`] (→ exit `1`) for a command-triggered row with no
     /// `pattern`, for a write-triggered row carrying either command column, and
     /// for an empty `checks` list.
+    /// A shape row is keyed on a command or on content — exactly one (CLOUD-758).
+    ///
+    /// The "one of" `forbid`'s `pattern`/`regex` pair carries, and for the same
+    /// reason: a row with NEITHER loads, matches every mediated call, and turns
+    /// a ban into a universal gate; a row with BOTH is two predicates where the
+    /// reader can see one, and a precedence rule nobody can read is worse than a
+    /// refusal.
+    ///
+    /// # Errors
+    ///
+    /// A [`UsageError`] (→ exit `1`) for a shape row carrying neither column, or
+    /// both.
+    fn validate_shape_columns(&self) -> anyhow::Result<()> {
+        if self.kind != RuleKind::Shape {
+            return Ok(());
+        }
+        match (self.pattern.is_some(), self.content.is_some()) {
+            (true, false) | (false, true) => Ok(()),
+            (false, false) => Err(UsageError::raise(format!(
+                "rule {}: kind \"shape\" requires `pattern` (a command line) or `content` (a \
+                 regex over what a write would land)",
+                self.id
+            ))),
+            (true, true) => Err(UsageError::raise(format!(
+                "rule {}: kind \"shape\" carries both `pattern` and `content`; a row is keyed \
+                 on a command or on written content, never on both",
+                self.id
+            ))),
+        }
+    }
+
     fn validate_receipt_columns(&self) -> anyhow::Result<()> {
         if self.kind != RuleKind::Receipt {
             return Ok(());
@@ -2108,6 +2177,7 @@ impl Rule {
         // Extracted for `validate_policy_source`'s reason, and it is the same
         // class of obligation: which columns a receipt row owes depends on a
         // value inside it, which the per-kind census cannot say.
+        self.validate_shape_columns()?;
         self.validate_receipt_columns()?;
         // Extracted rather than inlined, because `validate` is at its line ceiling
         // and a per-kind block is what it should shed first: the census above is
@@ -5814,6 +5884,7 @@ mod tests {
             pattern: None,
             regex: None,
             exclude: None,
+            content: None,
             contains: None,
             require_via: None,
             requires_key: None,
@@ -6469,6 +6540,13 @@ mod tests {
                 // it does not appear in `requires()`. Supplied here so the only
                 // possible complaint stays the pairing.
                 if *kind == RuleKind::Receipt {
+                    rule.pattern = Some("x".to_owned());
+                }
+                // And a sixth (CLOUD-758): a shape row carries exactly one of
+                // `pattern` or `content`, which the flat column list cannot say
+                // for the reason the five below give. Supplied so the only
+                // possible complaint stays the pairing.
+                if *kind == RuleKind::Shape {
                     rule.pattern = Some("x".to_owned());
                 }
                 // And once more, for the third "one of" (CLOUD-773): a document

@@ -2353,6 +2353,25 @@ impl Policy {
             .collect()
     }
 
+    /// Whether any row on this call decides over what the write would LAND
+    /// (CLOUD-758).
+    ///
+    /// `false` is the common answer and the point of the function: a repository
+    /// declaring no content-keyed row must not pay a file read on any call, and
+    /// a call that is not a write must not pay one either. Same narrowing
+    /// discipline as [`Policy::required_checks_for`] and
+    /// [`Policy::key_base_for`] — CLOUD-460's lesson, which is why a call no row
+    /// selects for still does less work than `--help`.
+    #[must_use]
+    pub fn reads_prospective(&self, envelope: &Envelope) -> bool {
+        envelope.event == Event::PreTool
+            && envelope.operation == Operation::Write
+            && self
+                .shapes
+                .iter()
+                .any(|rule| rule.kind == RuleKind::Shape && rule.content.is_some())
+    }
+
     /// The rev a `requires_key` row needs commit evidence read since, if one
     /// fires on this call at all (CLOUD-446).
     ///
@@ -2583,6 +2602,15 @@ fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decis
         // back here and be decided rather than silently falling through.
         Decision::Allow | Decision::Ask(_) | Decision::Waived(_) => {}
     }
+    // The content-keyed gate, AFTER the protected-path one and never instead of
+    // it (CLOUD-758). The two ask different questions — which file, and what
+    // would be in it — and CLOUD-736 is the case that needs both: a path gate
+    // alone permits an unreviewed creation, and a content gate alone permits a
+    // reviewed file being replaced wholesale.
+    match content_rules(policy, envelope, facts.prospective) {
+        decided @ Decision::Deny(_) => return decided,
+        Decision::Allow | Decision::Ask(_) | Decision::Waived(_) => {}
+    }
     // The write-triggered receipt gate (CLOUD-444), reached whether or not this
     // call also carries a command — a write tool carries none, and the early
     // return below is what made every write unjudgeable by anything but the
@@ -2713,6 +2741,85 @@ pub type KeyFacts = Option<Vec<String>>;
 /// input, which is the "exactly one key" property CLOUD-834 asserts.
 pub type AgentFacts = Option<std::collections::BTreeMap<String, crate::facts::Sourced>>;
 
+/// What a write would put on disk, resolved before it happens (CLOUD-758).
+///
+/// [`crate::facts::Look::CouldNotLook`] is the answer for a tool whose shape
+/// carries no content — a shell command, an MCP call — and it is emphatically
+/// **not** `Is(String::new())`, which means *this write would land an empty
+/// file*. Collapsing the two is the failure the three-valued contract exists to
+/// prevent: a content predicate would then fire on every `Bash` call as though
+/// it had inspected something, failing open in the one direction that looks like
+/// it looked.
+///
+/// **Never emitted**, for the reason [`Envelope::input`] is never emitted: this
+/// is whatever the agent was about to write, which may be a secret, a customer
+/// path, or the contents of a protected file. A rule may DECIDE over it; what is
+/// reported is `path:line` and a rule id (non-negotiable rule 4).
+pub type ProspectiveFacts = crate::facts::Look<String>;
+
+/// Compute what `envelope`'s write would land, reading the file only when the
+/// tool's shape requires it (CLOUD-758).
+///
+/// The two arms are the two acquisition paths [`crate::facts::PROSPECTIVE`]
+/// meets over:
+///
+/// * a whole-file write hands over the content itself — genuinely free, already
+///   deserialized by the time this is called.
+/// * an edit hands over the old and new spans and nothing around them, so the
+///   surrounding bytes come off disk. One bounded read of the one file the call
+///   already names, which is what makes the fact `read` rather than `free`.
+///
+/// Dispatched on the NEUTRAL [`Operation`], never on a host's tool name
+/// (CLOUD-779): every host spells its writes differently and
+/// [`Harness::operation_of`] has already answered.
+///
+/// A write whose file cannot be read is [`crate::facts::Look::CouldNotLook`]
+/// rather than an error — a gate that cannot look must never become a gate that
+/// blocks everything.
+#[must_use]
+pub fn prospective_facts(root: &std::path::Path, envelope: &Envelope) -> ProspectiveFacts {
+    use crate::facts::Look;
+
+    if envelope.operation != Operation::Write {
+        return Look::CouldNotLook;
+    }
+    if let Some(content) = envelope.input.pointer("/content").and_then(Value::as_str) {
+        return Look::Is(content.to_owned());
+    }
+    let (Some(old), Some(new)) = (
+        envelope
+            .input
+            .pointer("/old_string")
+            .and_then(Value::as_str),
+        envelope
+            .input
+            .pointer("/new_string")
+            .and_then(Value::as_str),
+    ) else {
+        return Look::CouldNotLook;
+    };
+    let Some(target) = envelope.writes.as_deref() else {
+        return Look::CouldNotLook;
+    };
+    let Ok(current) = std::fs::read_to_string(root.join(target)) else {
+        return Look::CouldNotLook;
+    };
+    // `replacen(.., 1)` rather than `replace`, and the default matters: the
+    // surveyed hosts replace the FIRST occurrence unless the call says
+    // otherwise, so modelling it as replace-all would decide over content the
+    // call would not actually produce.
+    let replace_all = envelope
+        .input
+        .pointer("/replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Look::Is(if replace_all {
+        current.replace(old, new)
+    } else {
+        current.replacen(old, new, 1)
+    })
+}
+
 /// The resolved fact set one mediated call is adjudicated against (CLOUD-834).
 ///
 /// **A struct rather than six parameters, and the compiler asked for it.** The
@@ -2743,6 +2850,8 @@ pub struct Facts<'a> {
     pub waived: &'a crate::waiver::Live,
     /// What the agent reported for each agent-sourced check.
     pub sourced: &'a AgentFacts,
+    /// What this call's write would land, before it happens (CLOUD-758).
+    pub prospective: &'a ProspectiveFacts,
 }
 
 impl<'a> Facts<'a> {
@@ -2762,6 +2871,10 @@ impl<'a> Facts<'a> {
             stop,
             waived,
             sourced: &None,
+            // Could-not-look, never "an empty write". A `Facts::none` caller has
+            // resolved nothing, which is a different claim from having looked
+            // and found no content.
+            prospective: &crate::facts::Look::CouldNotLook,
         }
     }
 }
@@ -3240,6 +3353,46 @@ fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
     Decision::Allow
 }
 
+/// Judge the content a write would land (CLOUD-758).
+///
+/// The first **content-keyed** gate on the mediated path. Every write-shaped
+/// gate before it asked which file was being touched; this asks what would end
+/// up in it, which is the half CLOUD-736 reports missing.
+///
+/// Three-valued, and the third value is what keeps it honest: a call whose shape
+/// carries no content is [`crate::facts::Look::CouldNotLook`] and **no row
+/// fires**. That is not "the content is empty" — a row keyed on an empty file
+/// would then fire on every shell command as though it had inspected one.
+///
+/// Pointer-only (rule 4): the refusal names the rule and the path. The matched
+/// bytes are not carried, and `Refusal` has no field one could occupy.
+fn content_rules(policy: &Policy, envelope: &Envelope, prospective: &ProspectiveFacts) -> Decision {
+    let crate::facts::Look::Is(content) = prospective else {
+        return Decision::Allow;
+    };
+    for rule in &policy.shapes {
+        if rule.kind != RuleKind::Shape {
+            continue;
+        }
+        if !blocks(rule.severity(), policy.fail_on_warning) {
+            continue;
+        }
+        let Some(expression) = rule.content.as_deref() else {
+            continue;
+        };
+        // A pattern that does not compile matches NOTHING rather than
+        // everything: `config lint` refuses it at load, and a hook that cannot
+        // read a row must not turn that into a refusal of the call.
+        let Ok(pattern) = regex::Regex::new(expression) else {
+            continue;
+        };
+        if pattern.is_match(content) {
+            return Decision::Deny(content_refusal(rule, envelope));
+        }
+    }
+    Decision::Allow
+}
+
 /// The paths a `policy` row contributes to the `protected` set (CLOUD-833).
 ///
 /// A row naming a `module` contributes that file. A row naming a `bundle`
@@ -3440,6 +3593,32 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
                     serde_json::Value::Object(out)
                 },
             )),
+            // THE SHAPE, NEVER THE TEXT, and this is where non-negotiable rule 4
+            // is decided for CLOUD-758 rather than promised.
+            //
+            // The content itself reaches the typed predicate and stops there. A
+            // policy module's `msg` is free-form text a consumer writes, so
+            // content placed in the policy input is content that can be echoed
+            // into a finding — and `Finding` having no field for a matched byte
+            // would then be a property of the renderer rather than of the type.
+            // `AgentSourced` is the precedent one arm up: it projects a command,
+            // a timestamp and a COUNT, and no byte of the buffer it summarizes.
+            //
+            // What a rule can ask here is whether there is content, and how much
+            // of it — enough to select, never enough to leak.
+            crate::facts::Fact::Prospective => {
+                let look = facts.prospective.as_str();
+                Some(match facts.prospective {
+                    crate::facts::Look::Is(content) => serde_json::json!({
+                        "look": look,
+                        "bytes": content.len(),
+                        "lines": content.lines().count(),
+                    }),
+                    crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                        serde_json::json!({ "look": look })
+                    }
+                })
+            }
             // Not resolvable on the mediated call, per `facts.rs`'s own table:
             // `Document` parses a file of unbounded size, so its cost is
             // unbounded in the input where a git ref read is not. Stated as an
@@ -3910,6 +4089,26 @@ fn blocks(severity: RuleSeverity, fail_on_warning: bool) -> bool {
 /// [`RuleKind::Shape`]: crate::rules::RuleKind::Shape
 fn shape_refusal(rule: &Rule) -> Refusal {
     let mut cause = "the mediated call matches a refused command shape".to_owned();
+    if let Some(url) = rule.policy_url.as_deref() {
+        cause.push_str(". See ");
+        cause.push_str(url);
+    }
+    Refusal::new(&rule.id, cause, Fix::declared(rule.reason.as_deref()))
+}
+
+/// Compose a content-keyed row's refusal (CLOUD-758).
+///
+/// **Pointer-only, and structurally rather than by discipline.** The cause names
+/// the rule and the path the write would land on; the matched bytes are never
+/// passed to this function, and [`Refusal`] has no field one could occupy —
+/// the same property the `secrets` kind has for a matched secret. So an author
+/// learns which row fired and which file to open, and the refusal cannot leak
+/// the thing it refused.
+fn content_refusal(rule: &Rule, envelope: &Envelope) -> Refusal {
+    let mut cause = match envelope.writes.as_deref() {
+        Some(path) => format!("the content this would write to {path} matches a refused shape"),
+        None => "the content this would write matches a refused shape".to_owned(),
+    };
     if let Some(url) = rule.policy_url.as_deref() {
         cause.push_str(". See ");
         cause.push_str(url);
@@ -4605,6 +4804,7 @@ mod tests {
                 stop,
                 waived: &crate::waiver::Live::new(),
                 sourced: &None,
+                prospective: &crate::facts::Look::CouldNotLook,
             },
         )
     }
@@ -4626,6 +4826,7 @@ mod tests {
             pattern: Some(pattern.to_owned()),
             regex: None,
             exclude: None,
+            content: None,
             contains: contains.map(ToOwned::to_owned),
             require_via: None,
             requires_key: None,

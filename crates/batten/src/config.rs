@@ -976,6 +976,7 @@ fn default_rules() -> Vec<Rule> {
         pattern: Some("<<<<<<< ".to_owned()),
         regex: None,
         exclude: None,
+        content: None,
         contains: None,
         require_via: None,
         requires_key: None,
