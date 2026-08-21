@@ -2845,18 +2845,17 @@ fn run(
     // once rather than once per rule. `documents_acquired` is what asserts it.
     let documents = acquire_declared(rules, root, &files)?;
 
+    let inputs = RunInputs {
+        provisions,
+        files: &files,
+        derived: &derived,
+        documents: &documents,
+        bundles,
+    };
+
     let mut scan = Scan::default();
     for rule in rules {
-        if let Some(why) = run_rule(
-            rule,
-            provisions,
-            root,
-            &files,
-            &derived,
-            &documents,
-            bundles,
-            &mut scan.findings,
-        )? {
+        if let Some(why) = run_rule(rule, root, &inputs, &mut scan.findings)? {
             scan.not_evaluated.insert(rule.id.clone(), why);
         }
     }
@@ -2915,14 +2914,23 @@ fn dedup_scoped(findings: &mut Vec<Finding>) {
 /// Returns `Some(reason)` when the rule **did not evaluate** — which is not the
 /// same as evaluating to nothing. Only that distinction lets the store hold a
 /// finding whose rule never looked instead of resolving it (CLOUD-81).
+/// What a run resolves ONCE, before any rule evaluates, and every rule then
+/// reads: the tree walk, the derived facts, and the acquired documents, plus
+/// the provisions and bundles the config carries. Grouped rather than passed
+/// one by one because it is exactly the set `run` hoists above its loop, and
+/// because it grows by a field every time an acquisition row lands.
+struct RunInputs<'a> {
+    provisions: &'a [crate::provision::Provision],
+    files: &'a [String],
+    derived: &'a BTreeMap<String, crate::facts::Look<String>>,
+    documents: &'a BTreeMap<String, Acquired>,
+    bundles: &'a [crate::policy::Bundle],
+}
+
 fn run_rule(
     rule: &Rule,
-    provisions: &[crate::provision::Provision],
     root: &Path,
-    files: &[String],
-    derived: &BTreeMap<String, crate::facts::Look<String>>,
-    documents: &BTreeMap<String, Acquired>,
-    bundles: &[crate::policy::Bundle],
+    inputs: &RunInputs<'_>,
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<Option<NotObserved>> {
     // Validation first, and it owns the empty-glob refusal now: the census in
@@ -2946,7 +2954,13 @@ fn run_rule(
     // is what decides, and returning here would switch those off by a value
     // nobody aimed at them.
     if rule.kind == RuleKind::Policy {
-        return Ok(policy_rule(rule, files, documents, bundles, findings));
+        return Ok(policy_rule(
+            rule,
+            inputs.files,
+            inputs.documents,
+            inputs.bundles,
+            findings,
+        ));
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -2964,7 +2978,11 @@ fn run_rule(
     // Compiled once for this rule, then matched against every path — never
     // re-parsed per file (CLOUD-214).
     let selector = Selector::new(glob)?;
-    let matched: Vec<&String> = files.iter().filter(|path| selector.matches(path)).collect();
+    let matched: Vec<&String> = inputs
+        .files
+        .iter()
+        .filter(|path| selector.matches(path))
+        .collect();
 
     // A ratchet is evaluated BEFORE the empty-match skip below, and the
     // distinction is the whole gate: for every other kind an empty match set
@@ -2973,7 +2991,7 @@ fn run_rule(
     // deletion this kind exists to catch. Skipping there would make the gate
     // silent in exactly its worst case.
     if rule.kind == RuleKind::Ratchet {
-        ratchet_rule(rule, root, glob, files, &matched, findings)?;
+        ratchet_rule(rule, root, glob, inputs.files, &matched, findings)?;
         return Ok(None);
     }
 
@@ -2994,10 +3012,12 @@ fn run_rule(
         RuleKind::Command => command_rule(rule, root, &matched, findings)?,
         RuleKind::Document => {
             for path in matched {
-                document_in_file(rule, root, path, derived, findings)?;
+                document_in_file(rule, root, path, inputs.derived, findings)?;
             }
         }
-        RuleKind::Secrets => crate::secrets::scan(rule, provisions, root, &matched, findings)?,
+        RuleKind::Secrets => {
+            crate::secrets::scan(rule, inputs.provisions, root, &matched, findings)?;
+        }
         // Unreachable: the shape, receipt, pipeline and policy kinds are
         // `mediated_call`-scoped and a ratchet
         // returned above. Stated rather than caught by a wildcard so adding a
@@ -4530,6 +4550,15 @@ fn document_in_file(
     // `Err` → exit 3. A gate that cannot look reports; it does not abort the
     // run it was one row of.
     let outcome = acquire(root, rel_path, Some(Want::Parsed(format)));
+    // One arm per acquisition outcome, wildcard-free, so a new `NotAcquired`
+    // cause or a new `Acquired` shape has to be decided here rather than
+    // defaulting to silence. Two of the arms report the same reason today for
+    // two unrelated causes, and merging them would delete the comments that say
+    // why each is here — so the lint is expected rather than obeyed.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "an arm per outcome is the property; the shared reason is a coincidence of two distinct causes"
+    )]
     let reason = match &outcome {
         // The tree does not carry it. Not this row's business and not a
         // finding — unchanged.

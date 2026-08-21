@@ -2950,6 +2950,16 @@ fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde
         // EXHAUSTIVE, NO WILDCARD ARM. `None` means "the model does not make
         // this resolvable on the hook surface", and `no_hook_fact_is_left_
         // unprojected` asserts that reading against `Class` in both directions.
+        // Each fact answers in its OWN arm, which is the property #620 built
+        // here (CLOUD-834): a wildcard would let a new variant join the model
+        // and go silently unprojected. Three of those arms now answer `None`
+        // with three different reasons written above them, and collapsing them
+        // into one pattern would delete exactly the reasons — so the lint is
+        // expected here rather than obeyed.
+        #[expect(
+            clippy::match_same_arms,
+            reason = "one arm per fact is the correspondence property; the shared `None` is a coincidence of three distinct reasons"
+        )]
         let projected = match *fact {
             crate::facts::Fact::Bypass => Some(serde_json::Value::Bool(facts.bypass)),
             crate::facts::Fact::Receipts => Some(facts.receipts.as_ref().map_or(
