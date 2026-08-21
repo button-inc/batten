@@ -103,15 +103,37 @@ jobs:
           # tests/bats — the shell test runner. Without it `mise run test:bats`
           # has no bats to run.
           submodules: true
+          # CLOUD-789: THE TRAILER HALF NEEDS THIS BRANCH'S OWN COMMITS.
+          # `config-lint` admits a groomed weakening only when a `Weakens:`
+          # trailer on a commit in `origin/main..HEAD` names it, and the claim
+          # receipt carrying the other half never exists on a runner. At the
+          # default depth 1 that range holds exactly one commit — the PR merge
+          # ref — so every commit that could carry the trailer is outside the
+          # clone and the read comes back empty. Absence admits nothing, so the
+          # gate refuses: the refusal working correctly on evidence that was
+          # never fetched, and still a red run on a branch whose local `verify`
+          # already proved both halves agree.
+          #
+          # A full history rather than a deeper bound, because the exclusion has
+          # to be EXACT: with either side still grafted, `origin/main..HEAD`
+          # stops at the shallow boundary and reports trunk commits as this
+          # branch's own — which would let a trailer inherited from `main` admit
+          # the same weakening on every branch cut after it. Measured at 10.8
+          # MiB packed, the price `commit-lint` and `perf` already pay to read a
+          # history rather than a tree.
+          fetch-depth: 0
       # The committed `ratchet` rows count against `origin/main` (CLOUD-55), and
       # `actions/checkout` fetches only this PR's head — so that ref does not
       # exist here. An unresolvable base is exit 1 by design, never a pass, which
       # is the correct behaviour and precisely why the ref has to be supplied
       # rather than the refusal softened.
       #
-      # `--depth=1` because a ratchet reads one tree, not a history: this is the
-      # whole cost of the trunk comparison, and it is one commit rather than the
-      # full clone `fetch-depth: 0` would pull on every run.
+      # UNBOUNDED, and it has to be: a `--depth=1` fetch into a repository that
+      # already has the history GRAFTS it back to one commit, so the bound that
+      # once made this step cheap would now undo the checkout above and take the
+      # trailer read's evidence away with it. The ratchet itself still reads one
+      # tree, not a history — the depth is gone because the clone already paid,
+      # not because the comparison grew.
       #
       # CLOUD-236 adds the second base to the same step: `config lint
       # --config-from` reads the committed authority out of the PR's OWN base
@@ -123,9 +145,9 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          git fetch --depth=1 origin main:refs/remotes/origin/main
+          git fetch origin main:refs/remotes/origin/main
           if [ "$BASE_REF" != main ]; then
-            git fetch --depth=1 origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
+            git fetch origin "$BASE_REF:refs/remotes/origin/$BASE_REF"
           fi
       - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
         with:

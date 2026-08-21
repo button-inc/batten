@@ -376,6 +376,34 @@ SEVERITY_KEY="rule[no-todo].severity"
 	}
 }
 
+@test "the job that arms the gate clones the history the trailer read needs" {
+	# THE SECOND GATE A RED RUN TAUGHT, and the same lesson as the one above: the
+	# armed path's inputs are assembled by the workflow, so a local run can prove
+	# the gate and still say nothing about what CI hands it.
+	#
+	# The trailer half reads `origin/main..HEAD`. At `actions/checkout`'s default
+	# depth of 1 that range is the PR merge ref ALONE — every commit that could
+	# carry a `Weakens:` trailer is outside the clone, the read is empty, and
+	# absence admits nothing. CLOUD-780 shipped a groomed, committed, locally
+	# proven admission and CI refused it on evidence it had never fetched.
+	#
+	# Both halves are asserted because either alone re-opens it: a bounded fetch
+	# anywhere in this job grafts the history back off, whatever the checkout
+	# asked for.
+	local wf="$REPO/.github/workflows/ci.yml"
+	run awk '/^  ci:/{j=1} j && /^  [a-z-]+:/ && !/^  ci:/{j=0} j' "$wf"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"fetch-depth: 0"* ]] || {
+		echo "the job arming CONFIG_LINT_BASE is shallow, so origin/main..HEAD holds no trailer to read" >&2
+		false
+	}
+	run grep -qE 'git fetch [^|]*--depth' "$wf"
+	[ "$status" -ne 0 ] || {
+		echo "a bounded fetch re-grafts the history the trailer read was given" >&2
+		false
+	}
+}
+
 @test "verify arms the same task CI arms" {
 	# `ci-local-parity` property 3 satisfied rather than dodged, and the reason
 	# it matters here is measured: the first arming ran in CI ALONE, so a
