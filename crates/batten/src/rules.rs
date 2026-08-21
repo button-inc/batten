@@ -55,6 +55,22 @@ use crate::identity;
 use crate::refusal::{Fix, Refusal};
 use crate::severity::{self, AdvisoryTier, ReportLevel, RuleSeverity};
 
+/// The columns a [`RuleKind::Pipeline`] row may carry — both predicate families
+/// plus the shared remedy (CLOUD-864).
+///
+/// Named rather than inlined in `RuleKind::permits` because the substitution
+/// family's column takes the list past one line, and eight more lines inside
+/// that match pushes the function past its length ceiling. `pipeline` is the
+/// only kind carrying two predicates, so it is also the only list worth naming.
+const PIPELINE_PERMITS: &[&str] = &[
+    "verdict",
+    "filters",
+    "substitutes",
+    "reason",
+    "policy_url",
+    "severity",
+];
+
 /// The kind of predicate a [`Rule`] applies to its matched files.
 ///
 /// Serialized as a lowercase `kind = "..."` token in `batten.toml`. Marked
@@ -458,13 +474,22 @@ impl RuleKind {
             // row has no command line to match, so requiring the column
             // unconditionally would make the new trigger unusable.
             RuleKind::Receipt => &["checks", "reason", "severity"],
-            // Both tables are required: a pipeline row with no verdict-bearing
-            // programs judges nothing, and one with no filters cannot recognise
-            // the substitution it exists to refuse. Either way the row loads,
-            // matches, and decides nothing — the present-and-inert gate this
-            // file is written against. `reason` carries the shared remedy, since
-            // the engine renders the per-shape cause itself.
-            RuleKind::Pipeline => &["verdict", "filters", "reason", "severity"],
+            // `verdict` and `filters` are NOT here since CLOUD-864, and their
+            // absence is a conditional requirement rather than a relaxation —
+            // the same move `Receipt`'s `pattern` makes above, for the same
+            // reason. This kind now carries two predicates: the discard family
+            // (`verdict` + `filters`) and the substitution family
+            // (`substitutes`). Requiring the discard pair unconditionally would
+            // oblige a substitution row to declare two tables it never reads,
+            // and a table nobody reads is the next thing to drift.
+            //
+            // A row must still declare ONE of the two whole — enforced in
+            // [`Rule::validate_pipeline_tables`], where the sibling columns are
+            // in scope. A pipeline row declaring neither loads, matches, and
+            // decides nothing, which is the present-and-inert gate this file is
+            // written against. `reason` carries the shared remedy, since the
+            // engine renders the per-shape cause itself.
+            RuleKind::Pipeline => &["reason", "severity"],
             // `criteria` is what the model is asked, and a judge row without one
             // sends a payload with no question attached. `no_fix_reason` is
             // required rather than merely permitted because a judge finding
@@ -580,10 +605,10 @@ impl RuleKind {
                 "policy_url",
                 "severity",
             ],
-            // No `pattern` and no `glob`: this kind is defined over the operators
-            // between segments, so a column selecting a command or a file would
-            // narrow nothing it reads.
-            RuleKind::Pipeline => &["verdict", "filters", "reason", "policy_url", "severity"],
+            // Named rather than inlined: with the substitution family's column
+            // the list no longer fits on one line, and eight more lines inside
+            // this match is what pushed `permits` past the length ceiling.
+            RuleKind::Pipeline => PIPELINE_PERMITS,
             // No `fix`: a judge finding is advisory, and a mutating repair
             // attached to a model's opinion is the shortest path from "may
             // inform" to "acted on the repository". No `severity` either — that
@@ -1371,6 +1396,24 @@ pub struct Rule {
     /// program, and no subcommand makes `tail` more or less of one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<String>>,
+    /// The text utilities whose use **as a first stage over a repository path**
+    /// stands in for a first-class tool, for a [`RuleKind::Pipeline`] row
+    /// (CLOUD-864).
+    ///
+    /// The second predicate this kind carries, and it belongs here for the
+    /// reason the kind exists: what separates a substitution from a legitimate
+    /// filter is not the program but **what surrounds it**. `grep pat crates/`
+    /// answers a question `Grep` answers better; `git ls-files | grep crates/`
+    /// is a filter over another command's output and no tool replaces it. Same
+    /// program, same operand, opposite verdicts — and only the position in the
+    /// pipeline tells them apart, which is precisely what a `shape` row cannot
+    /// see (`matching_shape_rows` iterates every segment with no index in scope,
+    /// so it would refuse the filter too).
+    ///
+    /// A plain name list, like `filters` and for the same reason: a substitute's
+    /// identity is the program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub substitutes: Option<Vec<String>>,
     /// What a [`RuleKind::Judge`] row asks the model — the committed evaluation
     /// instruction handed to the judge command (CLOUD-56).
     ///
@@ -1911,7 +1954,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 30] {
+    fn columns(&self) -> [(&'static str, bool); 31] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1946,6 +1989,7 @@ impl Rule {
             ("trigger", self.trigger.is_some()),
             ("verdict", self.verdict.is_some()),
             ("filters", self.filters.is_some()),
+            ("substitutes", self.substitutes.is_some()),
         ]
     }
 
@@ -2114,6 +2158,30 @@ impl Rule {
         if self.filters.as_ref().is_some_and(Vec::is_empty) {
             return Err(UsageError::raise(format!(
                 "rule {}: kind \"pipeline\" requires at least one `filters` entry; with none it cannot recognise the substitution it refuses",
+                self.id
+            )));
+        }
+        if self.substitutes.as_ref().is_some_and(Vec::is_empty) {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"pipeline\" requires at least one `substitutes` entry; with none it recognises no substitution",
+                self.id
+            )));
+        }
+        // ONE of the two families, whole (CLOUD-864). The per-kind required
+        // table cannot express this — it is a disjunction over sibling columns,
+        // and that table is a flat list — so the obligation lands here, which is
+        // the same place `Receipt`'s conditional `pattern` requirement lives.
+        //
+        // Stated as a disjunction rather than as "at least one column set" on
+        // purpose: a row carrying `verdict` and no `filters` recognises a
+        // verdict-bearing command and nothing that could discard it, which
+        // matches and decides nothing. Half a family is the inert row, not a
+        // narrower gate.
+        let discard_family = self.verdict.is_some() && self.filters.is_some();
+        let substitution_family = self.substitutes.is_some();
+        if !discard_family && !substitution_family {
+            return Err(UsageError::raise(format!(
+                "rule {}: kind \"pipeline\" needs either `verdict` AND `filters` (the discard family) or `substitutes` (the substitution family); with neither it matches nothing",
                 self.id
             )));
         }
@@ -5696,6 +5764,7 @@ mod tests {
             trigger: None,
             verdict: None,
             filters: None,
+            substitutes: None,
         }
     }
 

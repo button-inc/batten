@@ -225,3 +225,60 @@ fn each_shape_renders_its_own_cause() {
     assert!(cause("mise run verify >log 2>&1; ls").contains("only the last element"));
     assert!(cause("nohup mise run verify &").contains("orphans it"));
 }
+
+// --- the substitution family (CLOUD-864) --------------------------------------
+//
+// The second predicate this kind carries. Same file as the discard family
+// because they are decided over the same parse and by the same row kind, and
+// splitting them would hide that the ALLOW half of each is the other's deny:
+// a filter downstream of a pipe is refused by `verdict-not-discarded` when its
+// producer carries a verdict, and allowed by `no-tool-substitution` always.
+
+#[test]
+fn a_text_utility_aimed_at_a_repository_path_is_refused() {
+    // The measured shapes, from the transcript that produced the issue: 15
+    // `head -N`, 13 `grep`, 12 `ls`, 5 `cat`, 5 `sed -n`, 2 `find -name`.
+    assert_denied("sed -n '1,40p' AGENTS.md");
+    assert_denied("head -40 batten.toml");
+    assert_denied("cat .serena/project.yml");
+    assert_denied("grep -rn CLOUD crates/");
+    assert_denied("wc -l AGENTS.md");
+    // A path that only LOOKS like a path because it has an extension is still a
+    // path: the operand names a file this repository tracks.
+    assert_denied("tail -5 mise.toml");
+}
+
+#[test]
+fn the_same_utility_downstream_of_a_pipe_is_a_filter_and_is_untouched() {
+    // THE LOAD-BEARING HALF, and the reason this row is a `pipeline` and not a
+    // `shape`. `matching_shape_rows` iterates every segment with no index in
+    // scope, so a shape row carrying these programs would refuse every line
+    // below — ordinary work, and the false-positive class CLOUD-199 measured
+    // gets a guard bypassed.
+    assert_allowed("git ls-files | grep crates/batten");
+    assert_allowed("git status --short | grep '^ M'");
+    assert_allowed("git ls-files 'mise-tasks/*' | wc -l");
+    assert_allowed("git log --oneline | sed -n '1,3p'");
+    // Two stages down is still downstream.
+    assert_allowed("git ls-files | sort | head -20");
+}
+
+#[test]
+fn a_target_outside_the_repository_is_not_a_substitution() {
+    // `>/tmp/<task>.log` is the shape `verdict-not-discarded` MANDATES, so a row
+    // that refused reading one back would put the two rows in contradiction.
+    assert_allowed("cat /tmp/verify.log");
+    assert_allowed("tail -20 /tmp/land.log");
+    assert_allowed("cat ~/.config/some.conf");
+}
+
+#[test]
+fn an_operand_that_is_not_a_path_is_not_a_substitution() {
+    // A bare pattern, and stdin. `grep CLOUD` with no file is reading its input
+    // from somewhere else; refusing it would refuse a pipeline's tail written as
+    // two calls.
+    assert_allowed("grep -c CLOUD");
+    assert_allowed("cat -");
+    // A flag's value is not an operand: `-n 40` must not read as a path.
+    assert_allowed("head -n 40");
+}

@@ -39,7 +39,7 @@
 //! here beyond the returns below: §7 spends `2` on the policy verdict alone, so
 //! neither code a Batten failure can produce is one a host reads as a deny.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -2698,6 +2698,13 @@ fn pipeline_rules(policy: &Policy, command: &str) -> Decision {
     }
     let parsed = segments(command);
     for rule in rows {
+        // The substitution family (CLOUD-864), judged first because it decides
+        // over the same parse and shares nothing else with the discard family.
+        if let Some(substitutes) = rule.substitutes.as_deref()
+            && let Some(refusal) = substitution_decision(rule, substitutes, &parsed)
+        {
+            return Decision::Deny(refusal);
+        }
         let verdicts = rule.verdict.as_deref().unwrap_or_default();
         let filters = rule.filters.as_deref().unwrap_or_default();
         for (index, segment) in parsed.iter().enumerate() {
@@ -2758,6 +2765,92 @@ fn pipeline_rules(policy: &Policy, command: &str) -> Decision {
         }
     }
     Decision::Allow
+}
+
+/// Does any segment reach for a text utility where a first-class tool answers?
+///
+/// The predicate is a conjunction of three things, and dropping any one of them
+/// turns a working gate into a wrongly-refusing one (CLOUD-864):
+///
+/// 1. **the program is a declared substitute** — the row's list, never a literal
+///    here, because which utilities a consumer has better tools for is the
+///    consumer's fact;
+/// 2. **the segment is not downstream of a pipe** — `git ls-files | grep
+///    crates/batten` is a filter over another command's output, which no tool
+///    replaces. This is the clause a `shape` row cannot express, and the reason
+///    the predicate lives on this kind at all;
+/// 3. **an operand names a path inside the repository** — a bare `grep` reading
+///    stdin, or one aimed at `/tmp`, is not standing in for anything.
+///
+/// Deliberately blind to a path reached through a shell variable: `grep "$pat"
+/// "$dir"` carries no path this can see, and guessing at one would refuse work
+/// over a target nobody can name. Stated on the row rather than fixed here.
+fn substitution_decision(
+    rule: &Rule,
+    substitutes: &[String],
+    parsed: &[Segment],
+) -> Option<Refusal> {
+    for (index, segment) in parsed.iter().enumerate() {
+        let tokens: Vec<&str> = segment.words.iter().map(String::as_str).collect();
+        let program_index = effective_program(&tokens)?;
+        let program = tokens[program_index];
+        if !substitutes.iter().any(|entry| entry == program) {
+            continue;
+        }
+        // Clause 2. The PRECEDING segment's terminator is what says whether this
+        // stage was fed by a pipe — the existing discard predicate reads the
+        // FOLLOWING one, which is why both live here rather than one deriving
+        // the other.
+        if index > 0 && parsed[index - 1].terminator == Some(Separator::Pipe) {
+            continue;
+        }
+        let Some(target) = tokens[program_index + 1..]
+            .iter()
+            .find(|token| !token.starts_with('-') && repo_relative_path(token))
+        else {
+            continue;
+        };
+        return Some(substitution_refusal(rule, program, target));
+    }
+    None
+}
+
+/// Does this operand name something inside the repository?
+///
+/// Conservative on purpose, and every exclusion is a case the gate must NOT
+/// refuse: an absolute path is somewhere else (`>/tmp/x.log` is the shape
+/// `verdict-not-discarded` mandates), a `-` is stdin, and a bare word with no
+/// separator is a pattern rather than a path — `grep CLOUD file.md` must be
+/// judged on `file.md`, never on `CLOUD`.
+fn repo_relative_path(token: &str) -> bool {
+    if token.starts_with('/') || token.starts_with('~') || token == "-" {
+        return false;
+    }
+    if token.starts_with("..") {
+        return false;
+    }
+    // A separator or a known extension is what distinguishes a path from a
+    // pattern. Both readings are cheap and neither opens the filesystem: a gate
+    // that stat()ed its operands would answer differently on two checkouts.
+    token.contains('/') || Path::new(token).extension().is_some()
+}
+
+/// Compose a substitution refusal: what was reached for, and what answers it.
+///
+/// Names the displaced tool rather than the principle, which is the opposite of
+/// [`pipeline_refusal`]'s choice and deliberate. There the lesson was that a
+/// refusal worded around one command taught nothing transferable (CLOUD-199);
+/// here the transferable half is already in the row's `reason`, and what the
+/// caller cannot work out for itself is WHICH tool to reach for instead.
+fn substitution_refusal(rule: &Rule, program: &str, target: &str) -> Refusal {
+    let cause = format!(
+        "`{program}` was aimed at `{target}`, a path in this repository, as the first stage of the \
+         call — a question a first-class tool answers directly, and better: Read(offset, limit) \
+         for a file's contents, Grep for a pattern across the tree, Glob for paths. The same \
+         utility DOWNSTREAM of a pipe is untouched, because filtering another command's output is \
+         not standing in for anything"
+    );
+    Refusal::new(&rule.id, &cause, Fix::declared(rule.reason.as_deref()))
 }
 
 /// Compose a pipeline refusal: which shape, and the row's declared remedy.
@@ -4104,6 +4197,7 @@ mod tests {
             trigger: None,
             verdict: None,
             filters: None,
+            substitutes: None,
         }
     }
 

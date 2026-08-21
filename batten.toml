@@ -482,6 +482,43 @@ judged."""
 # The two tables are the consumer's, and they hang off the rule rather than the
 # config root because they are what this rule is DEFINED OVER — a global table
 # would be a second authority with no other reader.
+# The substitution family of the same kind (CLOUD-864). Measured over one
+# session's transcript: 34 of 38 Bash calls had a first-class tool that does the
+# job, and `Read`/`Grep`/`Glob` were used ZERO times — 15 `head -N`, 13 `grep`,
+# 12 `ls`, 5 `cat`, 5 `sed -n`, 2 `find -name`.
+#
+# THE ROW IS ON THIS KIND BECAUSE OF WHAT DISTINGUISHES THE TWO CASES, and there
+# is no other kind that can hold it. `grep pat crates/` answers a question `Grep`
+# answers better; `git ls-files | grep crates/batten` is a filter over another
+# command's output that no tool replaces. Same program, same operand, opposite
+# verdicts — only the POSITION separates them. A `shape` row cannot see it:
+# `matching_shape_rows` iterates every segment with no index in scope, so it
+# would refuse the filter too. This kind is already defined over what surrounds a
+# command, which is exactly the fact in question.
+#
+# The list is the consumer's, like `filters` above. Another repository's `awk` may
+# have no better answer available; here every one of these has one.
+#
+# WHAT IT DELIBERATELY DOES NOT CATCH, so nobody reads silence as coverage: a
+# path reached through a shell variable (`grep "$p" "$d"` names no path the
+# parser can see, and guessing would refuse work over an unnameable target); the
+# native `Grep`/`Read` tools, which arrive as structured input rather than a
+# command line; and anything outside the repository, which keeps the
+# `>/tmp/x.log` form the row above MANDATES allowed.
+[[rule]]
+id = "no-tool-substitution"
+kind = "pipeline"
+scope = "mediated_call"
+severity = "deny"
+substitutes = ["cat", "head", "tail", "sed", "grep", "rg", "find", "ls", "wc"]
+reason = """
+Reach for the tool that answers the question: Read(offset, limit) for a file's \
+contents, Grep for a pattern across the tree, Glob for paths, and Serena's \
+find_symbol/find_referencing_symbols when the question is which NAME something \
+resolves to. `.claude/rules/scanning.md` picks between them. Downstream of a \
+pipe these same utilities are filters over another command's output and are not \
+refused."""
+
 [[rule]]
 id = "verdict-not-discarded"
 kind = "pipeline"

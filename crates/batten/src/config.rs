@@ -945,6 +945,7 @@ fn default_rules() -> Vec<Rule> {
         trigger: None,
         verdict: None,
         filters: None,
+        substitutes: None,
         criteria: None,
         tier: None,
     }]

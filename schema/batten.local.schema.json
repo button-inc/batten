@@ -524,6 +524,16 @@
             "type": "string"
           }
         },
+        "substitutes": {
+          "description": "The text utilities whose use **as a first stage over a repository path**\nstands in for a first-class tool, for a [`RuleKind::Pipeline`] row\n(CLOUD-864).\n\nThe second predicate this kind carries, and it belongs here for the\nreason the kind exists: what separates a substitution from a legitimate\nfilter is not the program but **what surrounds it**. `grep pat crates/`\nanswers a question `Grep` answers better; `git ls-files | grep crates/`\nis a filter over another command's output and no tool replaces it. Same\nprogram, same operand, opposite verdicts — and only the position in the\npipeline tells them apart, which is precisely what a `shape` row cannot\nsee (`matching_shape_rows` iterates every segment with no index in scope,\nso it would refuse the filter too).\n\nA plain name list, like `filters` and for the same reason: a substitute's\nidentity is the program.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
         "tier": {
           "description": "How fast a [`RuleKind::Judge`] finding must be answered\n([`crate::severity::AdvisoryTier`], CLOUD-80). Absent means\n[`AdvisoryTier::Advisory`], the least-urgent rank.\n\nThis is the axis a judge row declares **instead of** `severity`, and the\nsubstitution is the whole advisory bound: `severity` decides the exit\ncontract, `tier` decides a response deadline. A judge row is refused the\n`severity` column outright, so the axis a model's opinion could ride into\nthe exit code does not exist for this kind.\n\nA default rather than a required column, unlike `severity` on every other\nkind: an omitted deadline resolves to the weakest one, which withholds no\ngate because there is no gate here to withhold.",
           "anyOf": [
