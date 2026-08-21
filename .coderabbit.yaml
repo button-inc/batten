@@ -1,20 +1,64 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 #
-# CLOUD-847's keystone probe. The row's whole gate rests on a review being
-# obtainable while a PR is still a draft — the phase AGENTS.md sizes as "iterate
-# at zero CI cost", because every job in ci.yml is `if: draft == false`.
+# CLOUD-847. The point of this file is NOT more review prose — it is a
+# CHECK: one commit status, on the head, in the free draft phase, that a batten
+# gate can decide over. Everything here serves that or removes noise that
+# competes with it.
 #
-# Two arms, one line apart. Arm A was the documented default (`drafts: false`)
-# made explicit: a review was requested by comment on the draft and arrived in
-# 193s, with every workflow still `skipped`. This commit is arm B, and it asks
-# the other question — with NO comment posted, does the `synchronize` event
-# review a draft on its own?
+# Measured on #623, 2026-08-21, and the defaults fail in three separate ways:
 #
-# The split is #623's own review's correction: `drafts` governs the AUTOMATIC
-# path only, and `@coderabbitai review` fires independently of it, so arm A
-# proves nothing about this line. `@coderabbitai configuration` answered the
-# other half — `drafts` reads `# Source: Repository YAML (base)`, so the file
-# is read from the branch under review and the flip below is measurable.
+#   1. `drafts: false` — the draft phase is the free phase (every job in ci.yml
+#      is `if: draft == false`), and it was the one phase nothing reviewed.
+#   2. `fail_commit_status: false` — the `CodeRabbit` status was `success` for a
+#      review carrying two Major findings AND `success` for "Review skipped:
+#      draft pull request". A status that is green either way is not a check.
+#   3. `auto_pause_after_reviewed_commits: 5` — automatic review pauses after
+#      five reviewed commits, which is a morning's iteration on a draft.
 reviews:
   auto_review:
+    # Review the free phase. NOTE (measured): flipping this on a feature branch
+    # does not move the skip decision — #623 pushed it and still got "Review
+    # skipped: draft pull request" 11s later. The auto-review gate reads the
+    # BASE branch, so this line only does anything once it is on `main`.
     drafts: true
+    # Iterating on a draft is the intended workflow, so the pause that assumes
+    # a reviewed PR is finished works against it.
+    auto_pause_after_reviewed_commits: 50
+  # The status is the product. `commit_status` posts it; `fail_commit_status`
+  # is what makes it MEAN something — red while actionable findings stand.
+  commit_status: true
+  fail_commit_status: true
+
+  # --- everything below is noise removal, not review policy ------------------
+  #
+  # A review that narrates the diff competes with the check for the reader's
+  # attention, and the reader here is usually an agent that needs a verdict.
+  high_level_summary: false
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  suggested_labels: false
+  suggested_reviewers: false
+  poem: false
+
+  tools:
+    # These already run as our own gates — `mise run ci` and the hk `gate` own
+    # them, and CI's verdict is the one `land` waits on. A second opinion posted
+    # as a PR comment adds a finding surface with no gate behind it, which is
+    # the shape non-negotiable rule 2 rejects.
+    clippy:
+      enabled: false
+    shellcheck:
+      enabled: false
+    actionlint:
+      enabled: false
+    zizmor:
+      enabled: false
+    yamllint:
+      enabled: false
+    markdownlint:
+      enabled: false
+    regal:
+      enabled: false
+    gitleaks:
+      enabled: false
