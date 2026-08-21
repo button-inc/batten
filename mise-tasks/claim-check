@@ -53,20 +53,26 @@
 #                          receipt would name a story nothing has refined.
 #   refined-this-session   the body changed since this clone recorded reading it
 #                          (`issue-read-check`'s baseline). Refinement must
-#                          PREDATE the session that implements it. Where no
-#                          baseline exists this falls back to the older reading —
-#                          `updatedAt` newer than the session-start stamp — which
-#                          is wrong in both directions and is why the baseline
-#                          exists (CLOUD-597, CLOUD-615).
+#                          PREDATE the session that implements it.
+#   no-read-receipt        there is no baseline to compare against, inside a
+#                          clone where there could be (CLOUD-820).
 #
-# WHY THE TIMESTAMP IS THE FORGERY-RESISTANT HALF. The payload is agent-supplied,
+# WHY THE BASELINE IS THE FORGERY-RESISTANT HALF. The payload is agent-supplied,
 # so any CONTENT claim in it can be authored by the thing being checked —
 # `not-ready` alone would be a gate an agent satisfies by writing better prose.
-# `updatedAt` is different in kind: the tracker mints it, and refining an issue
-# moves it FORWARD. There is no way to write a Ready block in this session that
-# carries an older one. A hand-edited payload defeats it, and that is fabrication
-# rather than honest error — outside the threat model, and recorded in the
-# issue's own history on the tracker regardless.
+# The baseline is different in kind: it is a hash this clone wrote down BEFORE
+# the body could be rewritten, and it lives under `.git/`, so a restart cannot
+# reset it. A hand-edited payload defeats it, and that is fabrication rather than
+# honest error — outside the threat model, and recorded in the issue's own
+# history on the tracker regardless.
+#
+# AND ABSENCE IS NOT AN ANSWER (CLOUD-820). The baseline can be DELETED, by an
+# agent's own clone, with no bypass and no record — and until this row it fell
+# through to the `updatedAt`-versus-stamp clock that CLOUD-597 and CLOUD-615 each
+# proved wrong in one direction. So the strong half was opt-out. It is a refusal
+# now, which is the posture this file already takes three rules down for the
+# session stamp; the fallback is DELETED rather than left as dead code, because
+# leaving it invites a future reader to restore it as the "lenient" branch.
 #
 # THE LEGITIMATE PATH MUST NOT PROMPT. Pulling a human-refined issue off the
 # frontier and carrying it to landed without asking permission between steps is
@@ -91,13 +97,14 @@
 # `BATTEN_CLAIM_CHECK_BYPASS`, because "this story was refined in my session" and
 # "I am resuming work that already looks occupied" are different decisions.
 #
-# The mutation drops the stamp comparison, so an issue refined seconds ago reads
-# as refined long ago and the incident replay mints a receipt again.
-#MUTANT claim-ignores-the-stamp|s/\[ "\$updated_epoch" -gt "\$stamp_epoch" \]/false/|THE INCIDENT REPLAY
-# And the same for the baseline, which is the path that actually answers now
-# (CLOUD-615): drop the body comparison and a Ready block this clone wrote reads
-# as untouched, which is the incident laundered through a container restart.
+# The mutation drops the body comparison, which is the path that answers now
+# (CLOUD-615): a Ready block this clone wrote then reads as untouched, which is
+# the incident laundered through a container restart.
 #MUTANT claim-ignores-the-body|s/\[ "\$now_hash" != "\$baseline" \]/false/|CLOUD-615 REPLAY: a body rewritten under this clone is refused even when the stamp is NEWER
+# And the mutation that restores what CLOUD-820 deleted: read an ABSENT baseline
+# as "nothing to compare, carry on" rather than as a refusal, which is the
+# opt-out this row closed — three ordinary steps, none a bypass, none reported.
+#MUTANT absent-baseline-is-a-pass|s@^\t\treport_sequence "\$id" "no-read-receipt.*@\t\t:@|A DELETED READ RECEIPT IS A REFUSAL, never a fall-through to the clock
 # The takeover must stay OPT-IN. Unset, the refusal is the answer; a mutation that
 # takes over unconditionally turns every collision into a silent claim, which is
 # the failure this gate exists to prevent.
@@ -306,8 +313,9 @@ fi
 # one demands it at its own site below, by name, as a refusal.
 #
 # So the entry contract is what EVERY issue needs: `id` and `status`.
-# `updatedAt` is asserted at the clock arm that reads it, for the same reason —
-# the baseline path reached first does not need it.
+# `updatedAt` is no longer read by any RULE — CLOUD-820 deleted the clock arm —
+# and survives only as a line in the receipt, where it is recorded rather than
+# decided on, so its absence is written as `-` and never refuses.
 #
 # `assignee` is deliberately NOT required, and this is a fact about the tracker
 # rather than a softening: Linear omits the key entirely for an unassigned issue,
@@ -362,27 +370,6 @@ stamp_file=""
 if stamp_dir=$(git rev-parse --git-dir 2>/dev/null); then
 	stamp_file="$stamp_dir/batten-receipts/session-start"
 fi
-
-# `stat` disagrees across platforms and `cross-check` covers macOS, so both
-# spellings are tried rather than one being assumed (CLOUD-282's class).
-mtime_of() {
-	stat -c %Y "$1" 2>/dev/null && return 0
-	stat -f %m "$1" 2>/dev/null && return 0
-	return 1
-}
-
-# An ISO-8601 instant to epoch seconds. GNU `date -d` first; BSD `date` reads -d
-# as a daylight-savings flag and fails, which is the fallthrough to its own
-# explicit-format form. Fractional seconds and the trailing Z are trimmed for
-# the BSD parse, which accepts neither.
-iso_epoch() {
-	local iso="$1" trimmed
-	date -u -d "$iso" +%s 2>/dev/null && return 0
-	trimmed="${iso%%.*}"
-	trimmed="${trimmed%Z}"
-	date -u -j -f '%Y-%m-%dT%H:%M:%S' "$trimmed" +%s 2>/dev/null && return 0
-	return 1
-}
 
 lint="$(dirname -- "${BASH_SOURCE[0]}")/ready-lint"
 
@@ -490,7 +477,7 @@ while read -r id; do
 	fi
 
 	# `refined-this-session`. The sequence predicate, and the forgery-resistant
-	# one: `updatedAt` is the tracker's, and refining moves it forward.
+	# one: the baseline is a hash this clone wrote down before the body could move.
 	#
 	# OUTSIDE A CHECKOUT the question is not applicable rather than unanswerable,
 	# and skipping it there closes no hole: the receipt is a side effect of being
@@ -510,54 +497,85 @@ while read -r id; do
 		report_sequence "$id" "no-session-stamp (run .claude/hooks/session-start.sh, or set BATTEN_CLAIM_CHECK_BYPASS)"
 		continue
 	fi
-	# THE BODY BASELINE FIRST, and the clocks only when there is none to read
-	# (CLOUD-597, CLOUD-615). `issue-read-check` records a hash of the body when
-	# this clone reads an issue, and `issue-read-guard` will not let a
-	# `save_issue` through without that receipt — so refining an issue always
-	# lays down what it looked like beforehand. Comparing the body now against
-	# that baseline asks the question this rule is named for: did the body change
-	# UNDER THIS CLONE. A reciprocal relation, a label or a bulk board touch does
-	# not move it; writing a Ready block does.
+	# THE BODY BASELINE, AND NOTHING ELSE (CLOUD-597, CLOUD-615, CLOUD-820).
+	# `issue-read-check` records a hash of the body when this clone reads an
+	# issue, and `issue-read-guard` will not let a `save_issue` through without
+	# that receipt — so refining an issue always lays down what it looked like
+	# beforehand. Comparing the body now against that baseline asks the question
+	# this rule is named for: did the body change UNDER THIS CLONE. A reciprocal
+	# relation, a label or a bulk board touch does not move it; writing a Ready
+	# block does.
 	#
-	# It replaces the clock pair rather than supplementing it because both clocks
+	# It REPLACED the clock pair rather than supplementing it, because both clocks
 	# were wrong in opposite directions and each hid the other: `updatedAt` moves
 	# on any write to the row, so the rule refused claims nobody had refined
 	# (CLOUD-597), and the stamp is truncated on every SessionStart, so a
 	# container restart laundered a self-refinement into a pass (CLOUD-615). The
 	# baseline lives under `.git/`, so a restart cannot reset it.
 	#
+	# AND UNTIL CLOUD-820 THE REPLACEMENT WAS OPT-OUT. The baseline cannot be
+	# reset; it can be DELETED, and an absent one fell through to exactly the
+	# comparison it replaced. Three ordinary steps, none a bypass and none
+	# reported: refine the issue, remove `issue-read.<KEY>` from your own clone,
+	# wait for a SessionStart to move the stamp past the refinement. Worse than a
+	# hatch, because it needs no attacker — the receipt was deleted for a
+	# legitimate reason (CLOUD-691's hollow-digest class) and the honest repair of
+	# one defect silently disarmed this gate.
+	#
+	# So absence is a REFUSAL, which is the posture the stamp arm above already
+	# takes and the words there apply unchanged: the sequence question is
+	# answerable inside a clone and we simply cannot see the answer. The remedy is
+	# local, cheap and named — one `issue-read-check` over the payload already in
+	# hand — and the bypass covers a human who means it.
+	#
 	# THE HONEST LIMIT, stated here because the next author will otherwise
 	# rediscover it by hitting it: a FRESH CLONE has no baseline, and neither had
 	# the stamp — an agent that refines in one container and implements in a new
-	# clone is invisible to both readings. Closing that needs an identity the
-	# harness supplies, which does not exist (CLOUD-615's third candidate).
-	baseline=$(awk 'NR==1{print $4}' "$stamp_dir/batten-receipts/issue-read.$id" 2>/dev/null) || baseline=""
-	if [ -n "$baseline" ] && [ "$baseline" != "-" ]; then
-		now_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || now_hash=""
-		if [ -z "$now_hash" ]; then
-			echo "::error:: claim-check: could not hash $id's body to compare against the read this clone recorded" >&2
+	# clone cannot be told from one that never read the issue. What changed is
+	# which way that resolves: it used to be a silent pass, and it is now a
+	# refusal an agent clears by taking the read it should have taken anyway.
+	# Closing it PROPERLY needs an identity the harness supplies, which does not
+	# exist (CLOUD-615's third candidate).
+	receipt_dir="$stamp_dir/batten-receipts"
+	receipt="$receipt_dir/issue-read.$id"
+	baseline=$(awk 'NR==1{print $4}' "$receipt" 2>/dev/null) || baseline=""
+	if [ -z "$baseline" ] || [ "$baseline" = "-" ]; then
+		# COULD NOT LOOK IS ITS OWN ANSWER, and it must not collapse into either
+		# of the other two (CLOUD-251, one more time). A receipt store this
+		# process cannot read is not a missing receipt: the file may be there and
+		# say the body is unchanged. Exit 2 is this script's channel for that
+		# everywhere else, so it is the channel here.
+		#
+		# A path that EXISTS and is not a readable regular file is the same
+		# answer, and it is the one a suite can exercise without depending on
+		# whether the runner is root — where `-r` is true whatever the mode bits
+		# say, so a permission fixture would assert nothing.
+		if [ -e "$receipt" ] && { [ ! -f "$receipt" ] || [ ! -r "$receipt" ]; }; then
+			echo "::error:: claim-check: $id's read receipt exists and cannot be read, so the body baseline could not be looked at — this is not the same as having none" >&2
 			exit 2
 		fi
-		if [ "$now_hash" != "$baseline" ]; then
-			report_sequence "$id" "refined-this-session (the body changed since this clone read it)"
+		if [ -e "$receipt_dir" ] && { [ ! -d "$receipt_dir" ] || [ ! -r "$receipt_dir" ] || [ ! -x "$receipt_dir" ]; }; then
+			echo "::error:: claim-check: the receipt store at \$GIT_DIR/batten-receipts cannot be read, so no baseline could be looked at for $id" >&2
+			exit 2
 		fi
+		# A hollow receipt (`body_hash` = `-`, CLOUD-691's class) certifies
+		# nothing, so it is absence rather than a weaker yes — the distinction
+		# that made this rule opt-out in the first place.
+		report_sequence "$id" "no-read-receipt (no body baseline for $id under \$GIT_DIR/batten-receipts — pipe this payload to \`mise run issue-read-check\` first, or set BATTEN_CLAIM_CHECK_BYPASS)"
 		continue
 	fi
-
-	updated=$(jq -r '.updatedAt // ""' <<<"$payload")
-	if [ -z "$updated" ]; then
-		report_sequence "$id" "no-updated-at (the payload cannot date its own refinement)"
-		continue
-	fi
-	stamp_epoch=$(mtime_of "$stamp_file") || stamp_epoch=""
-	updated_epoch=$(iso_epoch "$updated") || updated_epoch=""
-	if [ -z "$stamp_epoch" ] || [ -z "$updated_epoch" ]; then
-		echo "::error:: claim-check: could not compare $id's updatedAt against the session stamp" >&2
+	now_hash=$(jq -r '.description // ""' <<<"$payload" | git hash-object --stdin 2>/dev/null) || now_hash=""
+	if [ -z "$now_hash" ]; then
+		echo "::error:: claim-check: could not hash $id's body to compare against the read this clone recorded" >&2
 		exit 2
 	fi
-	if [ "$updated_epoch" -gt "$stamp_epoch" ]; then
-		report_sequence "$id" "refined-this-session (refinement must predate the session that implements it)"
-		continue
+	# NAMES WHICH COMPARISON DECIDED. Two comparisons used to print one rule id
+	# and differ only in a parenthetical, which is how a verdict reached by the
+	# clock was indistinguishable from one reached by the baseline — and so how
+	# the fall-through stayed invisible. There is one comparison now, and it says
+	# so.
+	if [ "$now_hash" != "$baseline" ]; then
+		report_sequence "$id" "refined-this-session (body baseline: the body changed since this clone read it)"
 	fi
 done <<<"$(jq -r '.[].id' <<<"$issues")"
 

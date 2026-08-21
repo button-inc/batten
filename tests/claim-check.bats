@@ -217,6 +217,7 @@ setup_repo() {
 
 @test "the pullable path mints a receipt for the current branch" {
 	setup_repo
+	read_receipt CLOUD-272
 	run bash -c "$(declare -f payload); payload CLOUD-272 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	[ -f "$RECEIPT" ]
@@ -251,6 +252,7 @@ setup_repo() {
 	# them.
 	setup_repo
 	body=$'**Refinement — Ready**\n\n* **Source of truth (§1).** here.\n* **Weakens:** `severity-lowered` at `rule[no-todo].severity` — the rule it guarded is retired.\n* **Blockers (§8).** None.'
+	read_receipt CLOUD-789 "$body"
 	run bash -c "$(declare -f payload); payload CLOUD-789 Todo '' '' \"\$1\" | (cd '$REPO' && $CHECK)" _ "$body"
 	[ "$status" -eq 0 ]
 	[[ "$(cat "$RECEIPT")" == *"weakens CLOUD-789 severity-lowered rule[no-todo].severity"* ]]
@@ -264,6 +266,7 @@ setup_repo() {
 	# Silence is the default. A receipt that admitted something nobody groomed
 	# would make the gate above self-serving.
 	setup_repo
+	read_receipt CLOUD-272
 	run bash -c "$(declare -f payload); payload CLOUD-272 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	[[ "$(cat "$RECEIPT")" != *"weakens "* ]]
@@ -275,6 +278,7 @@ setup_repo() {
 	# `--adopt` path and a human debugging a refusal both read by position).
 	setup_repo
 	body=$'**Refinement — Ready**\n\n* **Weakens:** `severity-lowered` at `rule[x].severity` — reason.\n* **Blockers (§8).** None.'
+	read_receipt CLOUD-789 "$body"
 	run bash -c "$(declare -f payload); payload CLOUD-789 Todo '' '' \"\$1\" | (cd '$REPO' && $CHECK)" _ "$body"
 	[ "$status" -eq 0 ]
 	[ "$(head -1 "$RECEIPT")" = "CLOUD-789" ]
@@ -340,10 +344,14 @@ refined_after_the_stamp() {
 }
 
 @test "THE INCIDENT REPLAY: an issue refined inside this session is refused at the claim" {
+	# The comparison is the BODY BASELINE, not the clock CLOUD-820 deleted: this
+	# clone read the issue, then the block was written under it, and the claim
+	# names a story this session refined. `updatedAt` is left at the epoch on
+	# purpose — the incident is real whatever the tracker's clock says, which is
+	# the whole of why the clock stopped being the comparison.
 	setup_repo
-	local later
-	later=$(refined_after_the_stamp)
-	run bash -c "$(declare -f payload); payload CLOUD-427 Todo '' '' '' '$later' | (cd '$REPO' && $CHECK)"
+	read_receipt CLOUD-427 "$UNREFINED"
+	run bash -c "$(declare -f payload); payload CLOUD-427 Todo '' '' '$REFINED' | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-427 refined-this-session"* ]]
 	[ ! -f "$RECEIPT" ]
@@ -355,12 +363,14 @@ refined_after_the_stamp() {
 	# ceremony — both new rules are silent on it, which is what keeps this a gate
 	# on the sequence rather than a gate on autonomy.
 	setup_repo
+	read_receipt CLOUD-230
 	run bash -c "$(declare -f payload); payload CLOUD-230 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"pullable"* ]]
 	[ -f "$RECEIPT" ]
 	[[ "$output" != *"refined-this-session"* ]]
 	[[ "$output" != *"not-ready"* ]]
+	[[ "$output" != *"no-read-receipt"* ]]
 }
 
 @test "a block ready-lint refuses mints no receipt" {
@@ -386,11 +396,19 @@ refined_after_the_stamp() {
 
 # Record what `issue-read-check` records: the read receipt whose fourth field is
 # the body hash this clone saw.
-baseline_for() { # baseline_for <key> <body>
+#
+# SINCE CLOUD-820 EVERY CLAIM INSIDE A CLONE NEEDS ONE, so this is no longer a
+# helper only the baseline cases reach for — it is the counterpart of the session
+# stamp `setup_repo` lays down, and a case that omits it is asserting the
+# `no-read-receipt` refusal whether it meant to or not. The body defaults to the
+# payload's own, so a case that is not ABOUT the baseline says only which key it
+# is claiming; a case that IS about it passes the two bodies explicitly.
+read_receipt() { # read_receipt <key> [body]
 	local receipt="$REPO/$(git -C "$REPO" rev-parse --git-dir)/batten-receipts/issue-read.$1"
+	local body="${2-$(payload "$1" | jq -r '.description')}"
 	mkdir -p "$(dirname "$receipt")"
 	printf '%s %s %s %s\n' "$1" - "$(date -u +%s)" \
-		"$(printf '%s\n' "$2" | git hash-object --stdin)" >"$receipt"
+		"$(printf '%s\n' "$body" | git hash-object --stdin)" >"$receipt"
 }
 
 @test "CLOUD-597 REPLAY: a row whose updatedAt moved but whose BODY did not is pullable" {
@@ -401,7 +419,7 @@ baseline_for() { # baseline_for <key> <body>
 	setup_repo
 	local later
 	later=$(refined_after_the_stamp)
-	baseline_for CLOUD-391 "$REFINED"
+	read_receipt CLOUD-391 "$REFINED"
 	run bash -c "$(declare -f payload); payload CLOUD-391 Todo '' '' '$REFINED' '$later' | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	[[ "$output" != *"refined-this-session"* ]]
@@ -415,7 +433,7 @@ baseline_for() { # baseline_for <key> <body>
 	# is supposed to catch. Here the stamp is fresh and `updatedAt` is old — the
 	# clock pair says "pullable" — and the baseline says the body changed.
 	setup_repo
-	baseline_for CLOUD-610 "$UNREFINED"
+	read_receipt CLOUD-610 "$UNREFINED"
 	: >"$STAMP" # the restart: a stamp newer than everything
 	run bash -c "$(declare -f payload); payload CLOUD-610 Todo '' '' '$REFINED' '2020-01-01T00:00:00.000Z' | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 1 ]
@@ -425,7 +443,7 @@ baseline_for() { # baseline_for <key> <body>
 
 @test "the baseline refusal is pointer-only — never a line of the body it compared" {
 	setup_repo
-	baseline_for CLOUD-610 "$UNREFINED"
+	read_receipt CLOUD-610 "$UNREFINED"
 	run bash -c "$(declare -f payload); payload CLOUD-610 Todo '' '' '$REFINED' '2020-01-01T00:00:00.000Z' | (cd '$REPO' && $CHECK)"
 	[[ "$output" != *"Something is broken"* ]]
 	[[ "$output" != *"Source of truth"* ]]
@@ -443,27 +461,101 @@ baseline_for() { # baseline_for <key> <body>
 	[ ! -f "$RECEIPT" ]
 }
 
-@test "a payload that cannot date its own refinement is refused" {
-	# The field is emptied on an OTHERWISE VALID payload, because `payload`'s
-	# `${6:-default}` cannot express "present but empty" and a hand-built payload
-	# would fail at `not-ready` first — testing the wrong rule while looking like
-	# it tested this one.
+# --- absence is not the weaker rule (CLOUD-820) ------------------------------
+#
+# The baseline replaced the clock pair and the replacement was OPT-OUT: no
+# receipt meant `baseline` was empty, the guard never fired, and the
+# `updatedAt`-versus-stamp comparison CLOUD-597 and CLOUD-615 each proved wrong
+# decided instead. Three ordinary steps reached it — refine, delete your own
+# clone's `issue-read.<KEY>`, wait for a SessionStart — and none of them was a
+# bypass or left a record. The receipt in the measured case was deleted for a
+# GOOD reason (CLOUD-691's hollow digest), which is what makes this reachable
+# without an attacker.
+
+@test "A DELETED READ RECEIPT IS A REFUSAL, never a fall-through to the clock" {
+	# Red before the change: the clock said pullable and minted a clean receipt.
+	# The stamp is fresh and `updatedAt` is ancient, which is exactly the reading
+	# the deleted fallback would have called pullable.
 	setup_repo
-	run bash -c "$(declare -f payload); payload CLOUD-230 Todo | jq -c '.updatedAt = \"\"' | (cd '$REPO' && $CHECK)"
+	: >"$STAMP"
+	run bash -c "$(declare -f payload); payload CLOUD-820 Todo '' '' '' '2020-01-01T00:00:00.000Z' | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"no-updated-at"* ]]
+	[[ "$output" == *"CLOUD-820 no-read-receipt"* ]]
 	[ ! -f "$RECEIPT" ]
 }
 
-@test "an UNPARSEABLE timestamp is exit 2, not a verdict about the story" {
-	# The distinction the whole exit table rests on: "this story was refined too
-	# recently" and "I could not read the date at all" are different answers, and
-	# collapsing the second into the first would convict a payload whose only
-	# defect is a format nobody here can parse.
+@test "the refusal names its remedy, and it is one command over the payload in hand" {
+	# A gate with an undiscoverable remedy is one a caller works around
+	# (CLOUD-403). The remedy here is cheap and local, which is what makes the
+	# refusal reasonable rather than a toll.
 	setup_repo
-	run bash -c "$(declare -f payload); payload CLOUD-230 Todo '' '' '' 'not-a-timestamp' | (cd '$REPO' && $CHECK)"
+	run bash -c "$(declare -f payload); payload CLOUD-820 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"issue-read-check"* ]]
+	[[ "$output" == *"BATTEN_CLAIM_CHECK_BYPASS"* ]]
+	# Pointer-only: the key and the rule id, never a body or a digest.
+	[[ "$output" != *"Refinement"* ]]
+	[[ "$output" != *"Source of truth"* ]]
+}
+
+@test "a HOLLOW receipt is absence, not a weaker yes" {
+	# CLOUD-691's class: `body_hash` = `-` certifies nothing. Reading it as a
+	# baseline would be the same defect one layer in.
+	setup_repo
+	local receipt="$REPO/.git/batten-receipts/issue-read.CLOUD-820"
+	mkdir -p "$(dirname "$receipt")"
+	printf 'CLOUD-820 - %s -\n' "$(date -u +%s)" >"$receipt"
+	run bash -c "$(declare -f payload); payload CLOUD-820 Todo | (cd '$REPO' && $CHECK)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-820 no-read-receipt"* ]]
+}
+
+@test "OUTSIDE a checkout the question stays not-applicable, exactly as the stamp does" {
+	# The composability `graph-check` and this gate share. The receipt is a side
+	# effect of being in a clone, so a run from anywhere else mints nothing for
+	# the mediated gate to honour and refusing would close no hole.
+	run bash -c "$(declare -f payload); payload CLOUD-820 Todo | (cd '$BATS_TEST_TMPDIR' && $CHECK)"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"pullable"* ]]
+	[[ "$output" != *"no-read-receipt"* ]]
+}
+
+@test "a receipt store this process cannot read is exit 2 — could not look, not absent" {
+	# CLOUD-251 one more time: three answers, not two. A store that cannot be
+	# read may hold a receipt saying the body is unchanged, so calling it absent
+	# would convict a claim on a question that was never asked.
+	#
+	# The fixture is a path that EXISTS and is not a readable regular file rather
+	# than one chmod-ed shut, because the runner is root under CI and in the web
+	# sandbox — where `-r` is true whatever the mode bits say, so a permission
+	# fixture would assert nothing at all.
+	setup_repo
+	mkdir -p "$REPO/.git/batten-receipts/issue-read.CLOUD-820"
+	run bash -c "$(declare -f payload); payload CLOUD-820 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 2 ]
-	[[ "$output" == *"could not compare"* ]]
+	[[ "$output" == *"could not be looked at"* ]]
+	[ ! -f "$RECEIPT" ]
+}
+
+@test "the bypass clears the absent baseline too, and says so in the receipt" {
+	# The one hatch that answers this rule: "I read and refined it myself, on
+	# purpose". The takeover does not, and the row below pins that.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-820 Todo | (cd '$REPO' && BATTEN_CLAIM_CHECK_BYPASS=1 $CHECK)"
+	[ "$status" -eq 0 ]
+	[ -f "$RECEIPT" ]
+	[[ "$(cat "$RECEIPT")" == *"ready-lint bypassed"* ]]
+}
+
+@test "--takeover does NOT clear an absent baseline" {
+	# `--takeover` answers "the competitor is this branch". Absence of a read
+	# receipt is not a competitor, and a resumed branch in a fresh container
+	# genuinely has not read the issue in THIS clone — which is the answer, not
+	# an obstacle to it.
+	setup_repo
+	run bash -c "$(declare -f payload); payload CLOUD-820 Todo | (cd '$REPO' && $CHECK --takeover)"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-820 no-read-receipt"* ]]
 	[ ! -f "$RECEIPT" ]
 }
 
@@ -472,9 +564,8 @@ baseline_for() { # baseline_for <key> <body>
 	# variable: the mediated gate's hatch says "do not refuse my edit", which is
 	# a different decision from "mint a receipt for a story refined just now".
 	setup_repo
-	local later
-	later=$(refined_after_the_stamp)
-	run bash -c "$(declare -f payload); payload CLOUD-427 Todo '' '' '' '$later' | (cd '$REPO' && BATTEN_CLAIM_CHECK_BYPASS=1 $CHECK)"
+	read_receipt CLOUD-427 "$UNREFINED"
+	run bash -c "$(declare -f payload); payload CLOUD-427 Todo '' '' '$REFINED' | (cd '$REPO' && BATTEN_CLAIM_CHECK_BYPASS=1 $CHECK)"
 	[ "$status" -eq 0 ]
 	[ -f "$RECEIPT" ]
 	[[ "$output" == *"BATTEN_CLAIM_CHECK_BYPASS set"* ]]
@@ -490,6 +581,7 @@ baseline_for() { # baseline_for <key> <body>
 	# reconstruct which revision the claimant had in front of them. Line 1 keeps
 	# the id list exactly where it was, so any reader that parsed it still works.
 	setup_repo
+	read_receipt CLOUD-230
 	run bash -c "$(declare -f payload); payload CLOUD-230 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	local body
@@ -512,6 +604,7 @@ baseline_for() { # baseline_for <key> <body>
 	# Measured before the fix: a receipt naming CLOUD-230 authorised every edit
 	# behind four unrelated stories and reported nothing.
 	setup_repo
+	read_receipt CLOUD-516
 	git -C "$REPO" update-ref refs/remotes/origin/main HEAD
 	local main
 	main=$(git -C "$REPO" rev-parse origin/main)
@@ -528,6 +621,7 @@ baseline_for() { # baseline_for <key> <body>
 	# Recording nothing at all, or a bare empty value, would let the reader treat
 	# it as a base that happens to match — the direction that fails toward Valid.
 	setup_repo
+	read_receipt CLOUD-516
 	run bash -c "$(declare -f payload); payload CLOUD-516 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	[[ "$(cat "$RECEIPT")" == *"base -"* ]]
@@ -595,6 +689,7 @@ baseline_for() { # baseline_for <key> <body>
 	# The anti-vacuity direction: if every receipt carried the line, its presence
 	# would say nothing about the claim it describes.
 	setup_repo
+	read_receipt CLOUD-230
 	run bash -c "$(declare -f payload); payload CLOUD-230 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	[[ "$(cat "$RECEIPT")" != *"takeover"* ]]
@@ -611,9 +706,8 @@ baseline_for() { # baseline_for <key> <body>
 
 @test "a sequence refusal is NOT cleared by --takeover" {
 	setup_repo
-	local later
-	later=$(refined_after_the_stamp)
-	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '' '$later' | (cd '$REPO' && $CHECK --takeover)"
+	read_receipt CLOUD-816 "$UNREFINED"
+	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '$REFINED' | (cd '$REPO' && $CHECK --takeover)"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"CLOUD-816 refined-this-session"* ]]
 	# No receipt: a takeover that minted one here would be a bypass wearing the
@@ -625,9 +719,8 @@ baseline_for() { # baseline_for <key> <body>
 	# A remedy that works for the wrong reason reads as permission. Offering
 	# `--takeover` for a rule it must not clear is how the hole shipped.
 	setup_repo
-	local later
-	later=$(refined_after_the_stamp)
-	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '' '$later' | (cd '$REPO' && $CHECK --takeover)"
+	read_receipt CLOUD-816 "$UNREFINED"
+	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '$REFINED' | (cd '$REPO' && $CHECK --takeover)"
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"BATTEN_CLAIM_CHECK_BYPASS"* ]]
 	[[ "$output" == *"does not clear them"* ]]
@@ -635,9 +728,8 @@ baseline_for() { # baseline_for <key> <body>
 
 @test "the bypass DOES clear a sequence refusal, so the two hatches stay distinct" {
 	setup_repo
-	local later
-	later=$(refined_after_the_stamp)
-	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '' '$later' | (cd '$REPO' && BATTEN_CLAIM_CHECK_BYPASS=1 $CHECK)"
+	read_receipt CLOUD-816 "$UNREFINED"
+	run bash -c "$(declare -f payload); payload CLOUD-816 Todo '' '' '$REFINED' | (cd '$REPO' && BATTEN_CLAIM_CHECK_BYPASS=1 $CHECK)"
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"pullable"* ]]
 	[ -f "$RECEIPT" ]
@@ -781,6 +873,7 @@ recorded_branch() { # recorded_branch <receipt-path>
 
 @test "the minted receipt records the branch it was minted for" {
 	setup_repo
+	read_receipt CLOUD-733
 	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	[ "$(recorded_branch "$RECEIPT")" = work ]
@@ -788,6 +881,7 @@ recorded_branch() { # recorded_branch <receipt-path>
 
 @test "A RENAMED BRANCH RECOVERS ITS CLAIM WITH --adopt" {
 	setup_repo
+	read_receipt CLOUD-733
 	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	rename_branch renamed
@@ -805,6 +899,7 @@ recorded_branch() { # recorded_branch <receipt-path>
 	# rename that silently keeps its claim is indistinguishable from a receipt
 	# adopting a branch it never described.
 	setup_repo
+	read_receipt CLOUD-733
 	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
 	[ "$status" -eq 0 ]
 	rename_branch renamed
@@ -815,6 +910,7 @@ recorded_branch() { # recorded_branch <receipt-path>
 	# The takeover's rule, for the same reason: a recovery indistinguishable from
 	# a clean pull is a bypass wearing a better name.
 	setup_repo
+	read_receipt CLOUD-733
 	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
 	rename_branch renamed
 	run bash -c "cd '$REPO' && $CHECK --adopt"
@@ -828,6 +924,7 @@ recorded_branch() { # recorded_branch <receipt-path>
 	# It is that branch's receipt, not a stray. Without this the recovery becomes
 	# a way to take over a live branch's claim without the takeover's record.
 	setup_repo
+	read_receipt CLOUD-733
 	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
 	git -C "$REPO" checkout -q -b other
 	run bash -c "cd '$REPO' && $CHECK --adopt"
@@ -838,6 +935,7 @@ recorded_branch() { # recorded_branch <receipt-path>
 
 @test "adopting onto a branch that already has a receipt is refused" {
 	setup_repo
+	read_receipt CLOUD-733
 	run bash -c "$(declare -f payload); payload CLOUD-733 Todo | (cd '$REPO' && $CHECK)"
 	# A second, orphaned receipt beside this branch's own.
 	printf 'CLOUD-999\nbranch gone\n' >"$REPO/.git/batten-receipts/claim.gone"
