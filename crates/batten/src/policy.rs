@@ -633,6 +633,8 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
 
         check_predicate_severity(rule, &declared, where_it_came_from)?;
 
+        check_tree_paths_are_emittable(rule, &bundle, where_it_came_from)?;
+
         claim_ids(&mut ids, &declared, where_it_came_from)?;
 
         bundles.push(bundle);
@@ -1040,6 +1042,91 @@ fn bundle_members(
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) naming the key and the source it was aimed at.
+/// Refuse a tree-scoped module that reads an `input.tree.<key>` the engine
+/// cannot produce (CLOUD-845).
+///
+/// **This is the class, not the instance.** The instance was
+/// `input.tree.tracked` — documented in this file's own module doc, never built
+/// by `rules::tree_document`, and therefore silent: Rego reads an undefined path
+/// as undefined, so the rule body never holds, so the `violation` set is empty,
+/// so a dead gate and a clean tree are byte-identical on the decision surface.
+/// A module's own `test_` rule cannot catch it either, because `with input as`
+/// lets the author supply the very shape the engine cannot make.
+///
+/// So the check is against the ENGINE's key set rather than against a list kept
+/// here: `Fact::tree_key` over the `Surface::Check` facts, plus the
+/// could-not-look channel. One table, read — never restated, which is the defect
+/// this whole row is an instance of.
+///
+/// **At load rather than in `policy test`.** CLOUD-845 §2(c) asks for the
+/// refusal in `policy test`; doing it here is strictly stronger and costs
+/// nothing extra, because a module that reads an unemittable key is dead on
+/// `check` too, and `check` is where it would actually be trusted. §5's exit
+/// class is unchanged: a config fault at load, exit `1`, never a policy verdict.
+///
+/// Mediated-call rows are untouched — they read `input.call` and `input.facts`,
+/// which `hook::call_document` owns and CLOUD-834 already asserts.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the offending key and the module path.
+/// Pointer-only: never a line of the module body.
+fn check_tree_paths_are_emittable(rule: &Rule, bundle: &Bundle, source: &str) -> Result<()> {
+    if rule.scope != crate::rules::RuleScope::Tree {
+        return Ok(());
+    }
+    let emittable = tree_keys();
+    let Some(described) = describe(&bundle.engine) else {
+        // Could-not-look on the AST is not a refusal: `load` has already
+        // compiled and smoke-queried this module, so a shape this reader does
+        // not recognise is its own limitation, and failing the config over it
+        // would make a reader upgrade a breaking change.
+        return Ok(());
+    };
+    for module in &described {
+        for rule_ast in &module.rules {
+            for path in &rule_ast.input_paths {
+                let Some(key) = path.strip_prefix("tree.") else {
+                    continue;
+                };
+                // Only the first segment names a key; `tree.documents["x"].y`
+                // arrives here as `tree.documents`.
+                let key = key.split('.').next().unwrap_or(key);
+                if key.is_empty() || emittable.contains(key) {
+                    continue;
+                }
+                let mut known: Vec<&str> = emittable.iter().copied().collect();
+                known.sort_unstable();
+                return Err(UsageError::raise(format!(
+                    "rule `{}` registers `{source}`, whose module {} reads \
+                     `input.tree.{key}`, which the engine never emits — the \
+                     predicate would be undefined and the gate silent. Emitted: {}",
+                    rule.id,
+                    module.path,
+                    known.join(", ")
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The keys `rules::tree_document` emits, derived from the fact model.
+///
+/// Named once here so the refusal above and the engine agree by construction
+/// rather than by two people keeping two lists in step.
+fn tree_keys() -> BTreeSet<&'static str> {
+    let mut keys: BTreeSet<&'static str> = crate::facts::Fact::ALL
+        .iter()
+        .filter(|fact| fact.class().surface == crate::facts::Surface::Check)
+        .filter_map(|fact| fact.tree_key())
+        .collect();
+    // The could-not-look channel, which is not a fact and deliberately has no
+    // `tree_key` — a module may legitimately decide ABOUT an absence.
+    keys.insert("missing");
+    keys
+}
+
 fn check_predicate_severity(rule: &Rule, declared: &BTreeSet<String>, source: &str) -> Result<()> {
     let Some(table) = rule.predicate_severity.as_ref() else {
         return Ok(());
@@ -1201,6 +1288,13 @@ struct DescribedRule {
     /// `<id>`) would be satisfied by a test that never touches the predicate,
     /// which is the decorative coverage this row exists to refuse.
     literals: Vec<String>,
+    /// Every `input.<dotted path>` this rule's AST reads (CLOUD-845).
+    ///
+    /// The reference is what makes a predicate dead when the engine cannot
+    /// produce the path — so this is the thing to check, not the string
+    /// literals beside it. Paths only: a reference is a NAME, never a value, so
+    /// rule 4 has nothing to say about carrying it.
+    input_paths: Vec<String>,
 }
 
 /// Read every module's rule names, spans and literals off the compiled AST.
@@ -1244,10 +1338,13 @@ fn describe(engine: &regorus::Engine) -> Option<Vec<Described>> {
             };
             let mut literals = Vec::new();
             collect_literals(rule, &mut literals);
+            let mut input_paths = Vec::new();
+            collect_input_paths(rule, &mut input_paths);
             rules.push(DescribedRule {
                 name,
                 head_line,
                 literals,
+                input_paths,
             });
         }
         described.push(Described {
@@ -1287,6 +1384,35 @@ fn reference_path(expr: &serde_json::Value) -> Option<String> {
         return Some(format!("{head}.{field}"));
     }
     None
+}
+
+/// Every `input.<dotted path>` a rule's AST subtree reads, without the `input.`
+/// prefix (CLOUD-845).
+///
+/// Built on [`reference_path`], which already renders a `RefDot` chain as a
+/// dotted string — so `input.tree.documents` arrives as `tree.documents` and a
+/// bracket index (`input.tree.documents["x"]`) simply stops the chain, which is
+/// what the caller wants: the KEY is the first segment and the rest is the
+/// module's business.
+fn collect_input_paths(value: &serde_json::Value, found: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(object) => {
+            if let Some(path) = reference_path(value)
+                && let Some(rest) = path.strip_prefix("input.")
+            {
+                found.push(rest.to_owned());
+            }
+            for child in object.values() {
+                collect_input_paths(child, found);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_input_paths(item, found);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Every string literal in a rule's AST subtree.

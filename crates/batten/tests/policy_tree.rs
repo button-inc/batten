@@ -357,3 +357,80 @@ violation contains {"rule": "no-stray-artifact", "msg": "a tracked build product
          wrong reason, which is the failure mode of the whole row"
     );
 }
+
+/// (c) from the row: a module reading a key the engine cannot produce is
+/// REFUSED, and the refusal names the key.
+///
+/// This is the half that closes the class rather than the instance. Building
+/// `tracked` fixed one dead gate; this makes the next one impossible to author,
+/// because the shape that hid it — Rego reading an undefined path as silently
+/// undefined — is now a config fault at load.
+#[test]
+fn a_module_reading_an_unemittable_tree_key_is_refused_naming_the_key() {
+    let root = scratch("unemittable");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "reads-a-ghost"
+
+violation contains {"rule": "reads-a-ghost", "msg": "x"} if {
+  some p in input.tree.nonesuch
+  endswith(p, ".o")
+}
+"#,
+    );
+
+    let err = batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+        .expect_err("a module reading a key the engine cannot emit is refused at load");
+    let message = format!("{err}");
+    assert!(
+        message.contains("nonesuch"),
+        "the refusal names the offending key: {message}"
+    );
+    assert!(
+        message.contains("policy/gate.rego"),
+        "and the module it is in, so the pointer is actionable: {message}"
+    );
+    // Rule 4: a pointer, never the module body.
+    assert!(
+        !message.contains("endswith"),
+        "pointer-only — no line of the module reaches the message: {message}"
+    );
+}
+
+/// The discriminator. Without it the case above passes on a `load` that refuses
+/// every tree module, which would be a gate nobody could satisfy.
+#[test]
+fn a_module_reading_only_emittable_tree_keys_loads() {
+    let root = scratch("emittable");
+    write_bundle(
+        &root,
+        r#"
+package batten
+
+import rego.v1
+
+rules contains "reads-real-keys"
+
+violation contains {"rule": "reads-real-keys", "msg": "x"} if {
+  some p in input.tree.tracked
+  endswith(p, ".o")
+}
+
+violation contains {"rule": "reads-real-keys", "msg": "y"} if {
+  input.tree.documents["config.toml"].stray
+}
+
+violation contains {"rule": "reads-real-keys", "msg": "z"} if {
+  count(input.tree.missing) > 0
+}
+"#,
+    );
+
+    batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
+        .expect("every key this module reads is one the engine emits");
+}
