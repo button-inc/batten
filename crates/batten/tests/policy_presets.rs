@@ -277,3 +277,46 @@ fn every_shipped_preset_publishes_its_ids() {
         );
     }
 }
+
+/// Every vendored preset's own suite is green (CLOUD-835).
+///
+/// **The mechanism half of the preset tests, and without it they are prose.** A
+/// `test_` rule in a shipped module that nothing runs is a comment that happens
+/// to parse: it can rot to red, or to vacuous, and the first reader to find out
+/// is a consumer who enabled the preset. This is what runs them, in the suite
+/// that already owns "the shipped presets are correct".
+///
+/// It asserts all four terms rather than only the failures, and the last two are
+/// the ones that would rot silently: a preset whose predicate nothing exercises
+/// still passes every test it has, and a preset that lost its tests entirely
+/// still loads and denies. Both are green to a failure count and neither is
+/// green here.
+#[test]
+fn every_shipped_preset_passes_its_own_suite() {
+    let root = scratch("suites");
+    for name in policy::preset_names() {
+        let bundles = policy::load(&root, &[preset_row("row", name)], None).expect("loads");
+        let Look::Is(suite) = policy::test(&bundles[0], "{}").expect("the suite runs") else {
+            panic!("the preset `{name}` has a suite that could not run at all");
+        };
+        assert!(
+            !suite.passed.is_empty(),
+            "the preset `{name}` passes no test, so nothing about it is established"
+        );
+        assert!(
+            suite.failed.is_empty(),
+            "the preset `{name}` fails {:?}",
+            suite.failed
+        );
+        assert!(
+            suite.unexercised.is_empty(),
+            "the preset `{name}` publishes {:?}, which no test makes fire",
+            suite.unexercised
+        );
+        assert!(
+            suite.untested_modules.is_empty(),
+            "the preset `{name}` ships {:?} with no test at all",
+            suite.untested_modules
+        );
+    }
+}

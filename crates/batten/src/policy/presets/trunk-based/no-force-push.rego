@@ -24,3 +24,41 @@ violation contains {
 	some word in words
 	word in {"--force", "-f"}
 }
+
+# The predicate's own tests (CLOUD-835), and the second one is the point: the
+# distinction this preset exists to draw is `--force` against
+# `--force-with-lease`, so a suite that only proved the deny fires would not
+# have tested the practice at all.
+#
+# `with input as` rather than a declared fixture: the input is local to the test
+# that depends on it, which is OPA and Conftest's own shape, and a preset ships
+# with no consumer tree to declare documents from.
+#
+# THESE LIVE IN THE REGISTERED MODULE, AND THAT COST WAS MEASURED. `policy::load`
+# compiles and smoke-queries every registered module on every mediated call, so a
+# `test_` rule here is evaluated on the hook path — the one place this repository
+# budgets in milliseconds. Measured 2026-08-21, `perf-pair` against the merge
+# base on one machine: `hook` 3.2 ms -> 3.3 ms and `wired` 7.2 ms -> 7.4 ms, both
+# ratio 1.03, inside the 0.966-1.102 spread a null comparison of one identical
+# binary produces. `noop`, `passthrough` and `check` did not move.
+#
+# So a sibling-file convention that kept tests out of the loaded set buys
+# nothing, and is not worth the second load path it would cost. Re-measure before
+# concluding otherwise: to move this row, bring a number.
+test_no_force_push if {
+	some v in violation with input as {"call": {"command": "git push --force origin main"}}
+	v.rule == "no-force-push"
+}
+
+test_short_force_flag_is_caught_too if {
+	some v in violation with input as {"call": {"command": "git push -f origin main"}}
+	v.rule == "no-force-push"
+}
+
+test_force_with_lease_is_left_alone if {
+	count(violation) == 0 with input as {"call": {"command": "git push --force-with-lease origin main"}}
+}
+
+test_another_tool_is_not_judged if {
+	count(violation) == 0 with input as {"call": {"command": "hg push --force"}}
+}

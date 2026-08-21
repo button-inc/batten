@@ -22,3 +22,19 @@ violation contains {
 	"commit" in words
 	"--allow-empty" in words
 }
+
+# The predicate's own tests (CLOUD-835). The negative cases are what make this a
+# test of the practice rather than of the string: an ordinary commit and another
+# tool's `--allow-empty` both have to stay unjudged.
+test_no_empty_commit if {
+	some v in violation with input as {"call": {"command": "git commit --allow-empty -m x"}}
+	v.rule == "no-empty-commit"
+}
+
+test_an_ordinary_commit_is_left_alone if {
+	count(violation) == 0 with input as {"call": {"command": "git commit -m x"}}
+}
+
+test_another_tool_is_not_judged if {
+	count(violation) == 0 with input as {"call": {"command": "hg commit --allow-empty"}}
+}
