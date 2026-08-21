@@ -68,7 +68,34 @@ paragraph.
 | the `ignore` tree walk                 | serial                         | **stays, because nothing measured asks otherwise**          |
 | `capture`/`journal` lock               | `fs4` advisory                 | **stays**, on a reason that outlives the dependency premise |
 | `batten hook` runtime                  | none                           | **at most one, and never multi-thread**                     |
-| mediated-call fact resolution          | lazy and narrow                | **stays serial until the document is wide**                 |
+| mediated-call fact resolution          | lazy and narrow                | **stays serial — the document is wide now, and it is free** |
+
+**The last row was conditional and its condition has now been met.** It read
+_"stays serial until the document is wide"_, and CLOUD-834 widened it: the policy
+input carries the whole `Surface::Hook` fact set — receipts, keys, stop, waivers,
+agent-sourced records — instead of four envelope fields. CLOUD-834's own body
+predicted this needed a tokio runtime, on the premise that a wide document is
+unaffordable resolved serially. **Measured, that premise is false**, because the
+premise mistook _projection_ for _acquisition_: those facts were already resolved
+at the boundary for the typed rule table, so widening the document serializes
+what is in hand and acquires nothing. `perf-pair` against the merge base, one
+machine, back to back:
+
+| path          | base   | head   | ratio |
+| ------------- | ------ | ------ | ----- |
+| `noop`        | 3.0 ms | 2.9 ms | 0.990 |
+| `passthrough` | 2.8 ms | 2.8 ms | 1.030 |
+| `check`       | 3.7 ms | 3.7 ms | 0.999 |
+| `hook`        | 3.3 ms | 3.4 ms | 1.027 |
+| `wired`       | 7.6 ms | 7.5 ms | 0.985 |
+
+Every path inside the 0.966–1.102 spread a null comparison of one identical
+binary produces, and `passthrough` still sits **below** `noop` — the reading the
+section below calls load-bearing, and the one a wide document was supposed to
+destroy. So the verdict stands, and it is no longer conditional: **no runtime was
+bought, `tokio` stays absent from `Cargo.lock`, and `ambient_authority.rs`'s
+`AMBIENT_CRATES` is untouched.** To move it now, bring a number showing
+resolution — not projection — is the cost.
 
 **"Because nothing measured asks otherwise" is the literal wording, and it is the
 point.** CLOUD-320's discipline is a verdict backed by a measurement rather than
