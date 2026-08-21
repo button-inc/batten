@@ -1533,6 +1533,17 @@ const EVENTS: &[EventRow] = &[
         adjudicated: false,
         state_decided: false,
     },
+    // Claude-only, and the one row whose `adjudicated: false` is a GAP rather
+    // than a design no-op (CLOUD-777). The host honours a deny at this moment —
+    // the two bash guards registered here exit 2 — so the column records that no
+    // rule KIND selects for it yet, not that nothing could. When one does, this
+    // row flips and `payload_at` is already able to prove it.
+    EventRow {
+        event: batten::hook::Event::UserPromptSubmit,
+        spelling: "UserPromptSubmit",
+        adjudicated: false,
+        state_decided: false,
+    },
     EventRow {
         event: batten::hook::Event::Unrecognized,
         spelling: "SomethingThisBuildDoesNotKnow",

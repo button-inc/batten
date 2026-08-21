@@ -793,6 +793,9 @@ const CLAUDE_SPELLINGS: &[(Event, &str)] = &[
     // harness declares it emits, so Codex and Copilot — which ship Claude's
     // spellings — register nothing for an event their own rows do not list.
     (Event::PostToolBatch, "PostToolBatch"),
+    // Safe to share for the same reason, and only Claude lists it in its own
+    // event set: a spelling is a NAME, not a registration.
+    (Event::UserPromptSubmit, "UserPromptSubmit"),
 ];
 
 /// The command a host's registration invokes.
@@ -904,7 +907,7 @@ const UNSURVEYED_ATTRIBUTION: AttributionCapabilities = AttributionCapabilities 
     config_surface: Declaration::Unknown,
 };
 
-/// Claude Code's set: the converged core plus the three it alone offers.
+/// Claude Code's set: the converged core plus the four it alone offers.
 const CLAUDE_EVENTS: &[Event] = &[
     Event::PreTool,
     Event::PostTool,
@@ -918,6 +921,14 @@ const CLAUDE_EVENTS: &[Event] = &[
     // events a host emits, and claiming it for the converged core would be
     // claiming something about hosts nobody surveyed.
     Event::PostToolBatch,
+    // CLOUD-777. The eighth, and the one whose ABSENCE made an acceptance clause
+    // vacuous: "every event a harness declares has a registration" demanded
+    // nothing here while two bash guards sat on the surface, because
+    // `Wiring::registrations` intersects with this list and this list did not
+    // carry it. Claude-only for the same reason as the three above — no other
+    // surveyed host emits it, and claiming it for the converged core would be
+    // claiming something about hosts nobody surveyed.
+    Event::UserPromptSubmit,
 ];
 
 impl Harness {
@@ -1127,6 +1138,25 @@ pub enum Event {
     /// between batches is not a decision point, and [`adjudicate`] allows every
     /// non-pre-tool event before any rule is consulted.
     PostToolBatch,
+    /// A turn's prompt has been submitted, before the model sees it.
+    /// **Claude-only** across the surveyed hosts.
+    ///
+    /// Appended for the reason [`Event::PostToolBatch`] above it was: this enum
+    /// carries no `repr`, so inserting ahead of an existing variant shifts a
+    /// discriminant a consumer may have cast, which `cargo semver-checks` reports
+    /// as `enum_no_repr_variant_discriminant_changed`. Reading order is
+    /// [`Event::ALL`]'s, which is what every census and the wiring emitter
+    /// iterate.
+    ///
+    /// **It carries a deny channel, and that is measured rather than assumed**
+    /// (CLOUD-777, 2026-08-21). This repository's own wiring is the evidence:
+    /// `mcp-attach-check` reaches `exit 2` on three paths and `mcp-allow-check`
+    /// on two, and neither emits any advisory shape — they are deny-issuing gates
+    /// on this surface, and the host honours them. So this is **not** one of the
+    /// stated no-ops beside it: [`adjudicated`]'s arm says that the channel is
+    /// real and that no rule kind selects for it yet, which is a gap with an
+    /// owner rather than a decision that there is nothing to decide.
+    UserPromptSubmit,
 }
 
 impl Event {
@@ -1139,6 +1169,14 @@ impl Event {
         Event::TaskCompleted,
         Event::ConfigChange,
         Event::PostToolBatch,
+        // Grouped with the other host-exclusive events rather than placed at the
+        // chronological start of a turn: this list is what the wiring emitter
+        // iterates, so its order is a committed artifact's key order, and the
+        // grouping that already holds — converged core, then the events one host
+        // alone offers — is the one a reader can check against
+        // `CONVERGED_EVENTS`. `Unrecognized` stays last because it is not a
+        // moment.
+        Event::UserPromptSubmit,
         Event::Unrecognized,
     ];
 
@@ -1155,6 +1193,7 @@ impl Event {
             Event::TaskCompleted => "task-completed",
             Event::ConfigChange => "config-change",
             Event::PostToolBatch => "post-tool-batch",
+            Event::UserPromptSubmit => "user-prompt-submit",
             Event::Unrecognized => "unrecognized",
         }
     }
@@ -1176,6 +1215,7 @@ impl Event {
             "TaskCompleted" => Event::TaskCompleted,
             "ConfigChange" => Event::ConfigChange,
             "PostToolBatch" => Event::PostToolBatch,
+            "UserPromptSubmit" => Event::UserPromptSubmit,
             _ => Event::Unrecognized,
         }
     }
@@ -1396,18 +1436,26 @@ pub struct Envelope {
 pub enum Field {
     /// The host's own event spelling, echoed back untouched.
     ///
-    /// UNNORMALIZED on purpose: [`Event`] has no `UserPromptSubmit` variant, and
-    /// `contract-drift` is wired to two events and echoes the name into its own
-    /// reply — a normalized answer would be wrong at one of them.
+    /// UNNORMALIZED on purpose, and the reason is now the ECHO rather than a gap
+    /// in [`Event`].
     ///
-    /// **Corrected 2026-08-20 (CLOUD-817).** This read *"knows neither
-    /// `UserPromptSubmit` nor `PostToolBatch`"* until `PostToolBatch` landed as a
-    /// variant (CLOUD-389) and nobody re-read the comment that cited its absence.
-    /// Half a stated reason was false, in the one place a reader checks the
-    /// reasoning against the enum. The surviving half is the whole argument now,
-    /// and it is thinner than the pair was: whether `UserPromptSubmit` should be a
-    /// variant at all is CLOUD-817's decision, and answering it *yes* removes this
-    /// premise rather than amending it again.
+    /// **The premise this cited is gone, re-read rather than amended a third
+    /// time (CLOUD-777, 2026-08-21).** The comment argued from absence twice: it
+    /// read *"knows neither `UserPromptSubmit` nor `PostToolBatch`"* until
+    /// `PostToolBatch` landed (CLOUD-389), was corrected to cite
+    /// `UserPromptSubmit` alone (CLOUD-817), and said in as many words that
+    /// answering CLOUD-817 *yes* would remove the premise rather than amend it.
+    /// It is answered yes: [`Event::UserPromptSubmit`] exists, so
+    /// [`Event::normalize`] now knows every spelling a supported host emits and
+    /// the absence argument has nothing left to stand on.
+    ///
+    /// What survives is a property of the CONSUMER rather than of the enum: a
+    /// hook wired to more than one event echoes this value back into its own
+    /// reply, and a host reads its own spelling there. `contract-drift` is the
+    /// registered example. Normalizing here would hand it `session-start` where
+    /// the host said `SessionStart`, so the field stays the host's token and
+    /// [`Envelope::event`] stays the concept — the same split those two fields
+    /// carry everywhere else.
     HookEventName,
     /// The host's session id.
     SessionId,
@@ -2134,7 +2182,7 @@ pub fn adjudicate(
 /// instead of a check repeated at each of the deny arms below. A deny site that
 /// forgot it would be a rule quietly unwaivable, which is exactly the asymmetry
 /// CLOUD-293 found and CLOUD-606 decided against.
-// `match_same_arms` would collapse the seven event arms below into one
+// `match_same_arms` would collapse the eight event arms below into one
 // `_ => Decision::Allow`. Refused for the reason `capabilities` and `encode_ask`
 // refuse it, and here the refusal IS the feature: the arms agree on the ANSWER
 // and disagree on the REASON, and CLOUD-777 exists because a fall-through and a
@@ -2211,6 +2259,17 @@ fn adjudicated(
         // this to the Stop family elsewhere, so deciding here as well would give
         // one question two answers.
         Event::TaskCompleted => return Decision::Allow,
+        // NOT a stated no-op, and the distinction is the point of the arm
+        // (CLOUD-777). Measured 2026-08-21 on this repository's own wiring: the
+        // two bash guards registered here reach `exit 2` on five paths between
+        // them and emit no advisory shape at all, so Claude Code honours a deny
+        // at this moment and the channel is real. What is missing is a rule kind
+        // that selects for it — every kind in `rules.rs` keys on a mediated CALL,
+        // and a submitted prompt is not one — so the honest answer today is
+        // allow, with the gap named rather than dressed as a design decision.
+        // CLOUD-312 owns the retirement of the two guards; when a kind can key on
+        // this event, this arm is where it dispatches.
+        Event::UserPromptSubmit => return Decision::Allow,
         // The host said something this build cannot normalize. Allow, loudly
         // elsewhere: an unrecognized event is a fact about the host, never a
         // reason to refuse a call (CLOUD-45), and guessing which moment it stands
