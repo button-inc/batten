@@ -722,21 +722,35 @@ impl RuleKind {
             // THE ONE KIND WHOSE CLASS DEPENDS ON ITS SCOPE (CLOUD-833), which
             // is why this function takes one at all.
             //
-            // On the mediated call it is `Free` x `Hook`: evaluating a bundle is
-            // CPU over the envelope the boundary already carries, and it
-            // acquires nothing. Measured against the pinned toolchain — ~39us
-            // per call at one predicate, ~2.2ms at seventy-nine, against the
-            // 100ms ceiling (the full series is on [`crate::policy::Bundle`]).
+            // On the mediated call it is `Read` x `Hook`, and the COST moved
+            // there in CLOUD-834. It was `Free` for one reason — the input
+            // document was four envelope fields, all `Cost::Free`, so evaluating
+            // a bundle acquired nothing. (Measured against the pinned toolchain:
+            // ~39us per call at one predicate, ~2.2ms at seventy-nine, against
+            // the 100ms ceiling; the full series is on
+            // [`crate::policy::Bundle`], and that CPU figure is unchanged.)
+            //
+            // `hook::call_document` now projects the resolved fact set, and four
+            // of the five facts it carries — `Receipts`, `Keys`, `Stop`,
+            // `Waived` — are `Cost::Read` in `facts.rs`'s own table. A row
+            // deciding over them is a row reading them, so `Class::meet` gives
+            // `Read`, and this must say so.
+            //
+            // **It is the composition claim that moves, not the invoice.** Those
+            // facts are resolved at the boundary for the typed rule table
+            // whether or not any module exists, so nothing here made the
+            // mediated call more expensive — measured, `perf-pair` unmoved. What
+            // would be false is a rule composing over a policy row as though the
+            // read were free, which is precisely the widening
+            // `validate_composition` exists to refuse (CLOUD-757). The cheap
+            // default is the one direction the mistake is expensive in.
             //
             // On the tree it is `Read` x `Check`: the bundle's declared
             // documents have to come off disk before there is an input document
             // to decide over, which is exactly what `Forbid` and `Document` pay
-            // and exactly what `Surface::Check` is for. Reporting it as `Free`
-            // here would let a rule compose over it as though the read were
-            // already paid, which is the widening `validate_composition`
-            // refuses.
+            // and exactly what `Surface::Check` is for.
             RuleKind::Policy => match scope {
-                RuleScope::MediatedCall => Class::new(Cost::Free, Surface::Hook),
+                RuleScope::MediatedCall => Class::new(Cost::Read, Surface::Hook),
                 RuleScope::Tree => Class::new(Cost::Read, Surface::Check),
             },
         }

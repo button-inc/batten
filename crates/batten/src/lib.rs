@@ -1871,7 +1871,7 @@ fn run_hook(
         // check; never-ran and command-mismatch both arrive as `Missing`, which
         // is the deny that carries the `Fix::Run` asking for the command.
         if let Some(verdicts) = verdicts.as_mut() {
-            for (check, _) in sourced {
+            for (check, _) in &sourced {
                 let Some(declared) = policy.agent_fact(check) else {
                     continue;
                 };
@@ -1880,11 +1880,12 @@ fn run_hook(
                     facts::Look::Is(_) => receipt::Validity::Valid,
                     facts::Look::IsNot | facts::Look::CouldNotLook => receipt::Validity::Missing,
                 };
-                verdicts.insert(check.clone(), verdict);
+                verdicts.insert((*check).clone(), verdict);
             }
         }
         verdicts
     };
+    let agent_sourced = agent_records(&sourced);
     // The key evidence (CLOUD-446), resolved on the same terms and for the same
     // reason: two git queries a pure `adjudicate` cannot make, spent only when a
     // `requires_key` row has already selected this command. A repository
@@ -1927,12 +1928,13 @@ fn run_hook(
     } else {
         stop::StopFacts::default()
     };
-    let facts = Facts {
+    let facts = hook::Facts {
         bypass,
         receipts: &receipts,
         keys: &keys,
         stop: &stop,
         waived: &waived,
+        sourced: &agent_sourced,
     };
     decide(harness, &envelope, &policy, &facts, mode, out, err)
 }
@@ -1959,6 +1961,32 @@ fn run_hook(
 /// one checkout its predicate cannot be evaluated in. It is checked before the
 /// range is read rather than after, because a truncated range answers
 /// confidently and wrongly.
+/// What the agent reported for each agent-sourced check (CLOUD-776, CLOUD-834).
+///
+/// **The records themselves, kept rather than discarded once the receipt-side
+/// verdict is derived.** A `Validity` answers "is this check satisfied"; the
+/// record answers "what did the agent run, and what did it find". `facts.rs`
+/// gives those two questions two variants, so the policy input carries them
+/// under two keys — folding one into the other would leave
+/// [`facts::Fact::AgentSourced`] with no spelling of its own, which is the
+/// "exactly one key" property CLOUD-834 asserts.
+///
+/// Same narrowing as every other fact on this path: `checks` is empty unless a
+/// required check is agent-sourced, so a repository declaring none pays nothing
+/// and the answer is `None` rather than an empty map.
+fn agent_records(checks: &[(&String, &rules::ReceiptKey)]) -> hook::AgentFacts {
+    if checks.is_empty() {
+        return None;
+    }
+    let mut records = std::collections::BTreeMap::new();
+    for (check, _) in checks {
+        if let Some(record) = receipt::sourced_record(check) {
+            records.insert((*check).clone(), record);
+        }
+    }
+    Some(records)
+}
+
 fn key_facts(base: &str) -> hook::KeyFacts {
     let repo = git::repo_root(Path::new(".")).ok()?;
     if git::is_shallow(&repo).ok()? {
@@ -2472,34 +2500,6 @@ fn load_exec_settings(
     Ok((config.exec_patterns, settings))
 }
 
-/// Everything the boundary looked up because [`hook::adjudicate`] cannot.
-///
-/// One bundle rather than three parameters, and the grouping is the contract
-/// rather than a signature convenience: `adjudicate` is contractually pure — no
-/// I/O, no environment, no clock — so every field here is a question about a
-/// checkout or a store that had to be answered *before* the decision. A fourth
-/// such fact adds a field and touches no call site, which is the point; the
-/// alternative was a parameter list that grew one argument per gate until clippy
-/// counted them (CLOUD-446).
-///
-/// `bypass` joined them with CLOUD-610 rather than staying a sibling parameter,
-/// and it belongs by the same reading: the hatch is an environment variable, so
-/// it is one more thing the boundary looked up because the core may not. Keeping
-/// it outside would have left `decide` one argument over clippy's ceiling for a
-/// value that answers the same question every other field here answers.
-struct Facts<'a> {
-    /// The caller-resolved [`hook::BYPASS_ENV`] hatch.
-    bypass: bool,
-    /// The receipt verdicts this call is judged against, or "could not look".
-    receipts: &'a hook::ReceiptFacts,
-    /// The tracker-key evidence a `requires_key` row is judged against.
-    keys: &'a hook::KeyFacts,
-    /// The end-of-turn facts, default on every event but `Stop`.
-    stop: &'a stop::StopFacts,
-    /// The rules a live waiver suppresses today, with the expiry each claims.
-    waived: &'a waiver::Live,
-}
-
 /// Map one decoded call onto its harness's decision channel.
 ///
 /// Split out of [`run_hook`] so the mapping is reachable without the process's
@@ -2510,20 +2510,12 @@ fn decide(
     harness: hook::Harness,
     envelope: &hook::Envelope,
     policy: &hook::Policy,
-    facts: &Facts<'_>,
+    facts: &hook::Facts<'_>,
     mode: Mode,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Result<ExitCode> {
-    match hook::adjudicate(
-        policy,
-        envelope,
-        facts.bypass,
-        facts.receipts,
-        facts.keys,
-        facts.stop,
-        facts.waived,
-    ) {
+    match hook::adjudicate(policy, envelope, facts) {
         hook::Decision::Allow => Ok(ExitCode::Success),
         // A suppressed deny (CLOUD-610) is an allow that owes a record, and this
         // is where the record is written — on the ERROR channel, at `Normal`, in

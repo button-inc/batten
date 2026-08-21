@@ -2182,17 +2182,9 @@ impl Policy {
 ///   has none — so a waiver over one is refused at the config surface long before
 ///   it could reach this match.
 #[must_use]
-pub fn adjudicate(
-    policy: &Policy,
-    envelope: &Envelope,
-    bypass: bool,
-    receipts: &ReceiptFacts,
-    keys: &KeyFacts,
-    stop: &crate::stop::StopFacts,
-    waived: &crate::waiver::Live,
-) -> Decision {
-    match adjudicated(policy, envelope, bypass, receipts, keys, stop) {
-        Decision::Deny(refusal) => match waived.get(refusal.rule()) {
+pub fn adjudicate(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+    match adjudicated(policy, envelope, facts) {
+        Decision::Deny(refusal) => match facts.waived.get(refusal.rule()) {
             Some(expires) => Decision::Waived(crate::waiver::Suppressed {
                 rule: refusal.rule().to_owned(),
                 expires: expires.clone(),
@@ -2218,14 +2210,18 @@ pub fn adjudicate(
 // nobody wrote for it, which is what registering on every surface makes likely
 // rather than hypothetical.
 #[allow(clippy::match_same_arms)]
-fn adjudicated(
-    policy: &Policy,
-    envelope: &Envelope,
-    bypass: bool,
-    receipts: &ReceiptFacts,
-    keys: &KeyFacts,
-    stop: &crate::stop::StopFacts,
-) -> Decision {
+fn adjudicated(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+    // Destructured once so the chain below reads as it always has. The bundle is
+    // about how the fact set TRAVELS; each gate still names the single fact it
+    // decides on, which is what keeps a reader able to see that `shape_rules`
+    // cannot see a receipt.
+    let Facts {
+        bypass,
+        receipts,
+        keys,
+        stop,
+        ..
+    } = *facts;
     // The end-of-turn gate (CLOUD-85), which the note below anticipated: the
     // stop event has its own surface, and this is it. Its inputs arrive as a
     // value for the same reason `receipts` do — this function is contractually
@@ -2364,7 +2360,7 @@ fn adjudicated(
     // After the hand-written rows above, matching this chain's standing
     // precedence: a row a reviewer wrote by hand is the one they should see
     // quoted back, and its reason is more specific than a module's.
-    match policy_rules(policy, envelope) {
+    match policy_rules(policy, envelope, facts) {
         decided @ (Decision::Deny(_) | Decision::Ask(_)) => return decided,
         Decision::Allow | Decision::Waived(_) => {}
     }
@@ -2451,6 +2447,70 @@ pub type ReceiptFacts = Option<std::collections::BTreeMap<String, Validity>>;
 /// anywhere — and a field a caller could *print* is one an unreviewed edit turns
 /// into a leaked commit message (non-negotiable rule 4).
 pub type KeyFacts = Option<Vec<String>>;
+
+/// What the AGENT reported for each agent-sourced check (CLOUD-776, CLOUD-834).
+///
+/// `None` is could-not-look, exactly as [`ReceiptFacts`]'s is; a check absent
+/// from the map is one the boundary was not asked about. Kept beside the
+/// receipt verdicts rather than folded into them because they answer different
+/// questions: a `Validity` says whether the check is satisfied, and this says
+/// what the agent actually ran and what it found. Collapsing the two would give
+/// [`crate::facts::Fact::AgentSourced`] no spelling of its own in the policy
+/// input, which is the "exactly one key" property CLOUD-834 asserts.
+pub type AgentFacts = Option<std::collections::BTreeMap<String, crate::facts::Sourced>>;
+
+/// The resolved fact set one mediated call is adjudicated against (CLOUD-834).
+///
+/// **A struct rather than six parameters, and the compiler asked for it.** The
+/// facts arrived one at a time — `receipts` with CLOUD-202, `keys` with
+/// CLOUD-446, `stop` with CLOUD-85, `waived` with CLOUD-610 — each a positional
+/// argument, and projecting the last two took the signature past
+/// `clippy::too_many_arguments`. Collecting them is the fix the lint is for: the
+/// thing being passed is *the fact set*, which is a noun `facts.rs` already
+/// names, and a caller can no longer transpose two `&None`s of the same type.
+///
+/// **Resolved at the boundary, held by value.** Every field is a fact the
+/// boundary already looked up before [`adjudicate`] was called — which is what
+/// keeps that function contractually pure, and why projecting the set into the
+/// policy input costs no resolution. `Option::None` is could-not-look
+/// throughout, never "resolved to nothing".
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub struct Facts<'a> {
+    /// The caller-resolved [`BYPASS_ENV`] hatch.
+    pub bypass: bool,
+    /// The receipt verdicts this call is judged against.
+    pub receipts: &'a ReceiptFacts,
+    /// The tracker-key evidence a `requires_key` row is judged against.
+    pub keys: &'a KeyFacts,
+    /// The end-of-turn facts, default on every event but `Stop`.
+    pub stop: &'a crate::stop::StopFacts,
+    /// The rules a live waiver suppresses today, with the expiry each claims.
+    pub waived: &'a crate::waiver::Live,
+    /// What the agent reported for each agent-sourced check.
+    pub sourced: &'a AgentFacts,
+}
+
+impl<'a> Facts<'a> {
+    /// The fact set a caller that resolved nothing hands in.
+    ///
+    /// Every field its could-not-look value, which is what a surface with no
+    /// question to ask should pass — never a fabricated empty answer.
+    #[must_use]
+    pub const fn none(
+        stop: &'a crate::stop::StopFacts,
+        waived: &'a crate::waiver::Live,
+    ) -> Facts<'a> {
+        Facts {
+            bypass: false,
+            receipts: &None,
+            keys: &None,
+            stop,
+            waived,
+            sourced: &None,
+        }
+    }
+}
 
 /// Deny a call whose declared receipts are not all valid (CLOUD-312).
 ///
@@ -2788,11 +2848,17 @@ fn policy_protected_paths(rule: &Rule) -> Vec<String> {
 /// [`key_present`] already take. The load-time smoke query is what makes this
 /// arm rare rather than routine — a module that faults here almost certainly
 /// faulted there and never reached a running gate.
-fn policy_rules(policy: &Policy, envelope: &Envelope) -> Decision {
+fn policy_rules(policy: &Policy, envelope: &Envelope, facts: &Facts<'_>) -> Decision {
+    // NOTHING IS PROJECTED FOR A CALL NO ROW SELECTS FOR, and this early return
+    // is where that is true rather than in a comment (CLOUD-460, CLOUD-834 §2).
+    // It is also why widening the document costs the pass-through path nothing:
+    // the facts below were resolved for the typed rule table whether or not a
+    // module exists, and a repository with no policy row never reaches the
+    // serialization at all.
     if policy.bundles.is_empty() {
         return Decision::Allow;
     }
-    let Ok(input) = call_document(envelope) else {
+    let Ok(input) = call_document(envelope, facts) else {
         return Decision::Allow;
     };
     for bundle in &policy.bundles {
@@ -2833,17 +2899,121 @@ fn policy_rules(policy: &Policy, envelope: &Envelope) -> Decision {
 /// firing on a host whose vocabulary differs, which is the exact defect
 /// CLOUD-779 measured on the protected-write gate.
 ///
-/// Every field is [`crate::facts::Cost::Free`] — already in hand from the
-/// envelope — so this costs no resolution and the gate stays inside the hook
-/// budget.
-fn call_document(envelope: &Envelope) -> Result<String, serde_json::Error> {
+/// # The `facts` half is a PROJECTION of `facts.rs`, never a second vocabulary
+///
+/// CLOUD-834. Before it, this document was four envelope fields and the typed
+/// fact model reached Rego nowhere: `ReceiptFacts`, `KeyFacts`, `StopFacts` and
+/// the live waivers were resolved at the boundary, handed to the typed rule
+/// table, and invisible to a module. Two fact surfaces that did not meet.
+///
+/// So the keys under `facts` are [`crate::facts::Fact::as_str`] and the match
+/// below is **exhaustive with no wildcard arm**: an eighth variant fails to
+/// compile here rather than silently going unprojected. That is the same
+/// discipline `Fact::class` already uses one layer down, and the reason this is
+/// a projection rather than a widening — re-deriving the vocabulary in JSON is
+/// exactly the defect CLOUD-757 exists to prevent.
+///
+/// **Which facts appear is `Class`'s answer, not this function's.**
+/// [`crate::facts::Surface::Hook`] is the predicate; `Document` and
+/// `AgentSourced` are absent because the model says they are not resolvable
+/// here, and if that classification changes this function follows it rather
+/// than being edited to agree.
+///
+/// # It costs no resolution, and that is measured rather than argued
+///
+/// Every fact projected here was **already resolved** at the boundary for the
+/// typed rule table before `adjudicate` was called. This function serializes
+/// what it is handed; it acquires nothing, and a call no policy row selects for
+/// never reaches it at all (see [`policy_rules`]'s early return). The published
+/// `passthrough` figure sitting *below* `noop` is the property that protects,
+/// and `tests/agent_facts.rs` asserts it by counter rather than by clock.
+///
+/// # Null is could-not-look, and the key is always present
+///
+/// A fact the boundary could not resolve projects as `null`, never as absent
+/// and never as a falsy default: `Look::CouldNotLook` and "resolved to nothing"
+/// are different answers, and collapsing them is CLOUD-251's vacuous pass. One
+/// shape always — a document whose keys come and go is unparseable, and in Rego
+/// `input.facts.receipts == null` and `not input.facts.receipts` are distinct
+/// tests, which is what makes the distinction usable by a predicate.
+///
+/// # Rule 4 governs OUTPUT, not input
+///
+/// A module receiving these facts in-process is not egress: nothing prints
+/// them, `Module` holds no `source` field, and findings stay pointer-only. The
+/// `Field` allowlist next door is narrow for a reason that does not transfer —
+/// it prints values to a shell, and into the agent's context window.
+fn call_document(envelope: &Envelope, facts: &Facts<'_>) -> Result<String, serde_json::Error> {
+    let mut projected_facts = serde_json::Map::new();
+    for fact in crate::facts::Fact::ALL {
+        // EXHAUSTIVE, NO WILDCARD ARM. `None` means "the model does not make
+        // this resolvable on the hook surface", and `no_hook_fact_is_left_
+        // unprojected` asserts that reading against `Class` in both directions.
+        let projected = match *fact {
+            crate::facts::Fact::Bypass => Some(serde_json::Value::Bool(facts.bypass)),
+            crate::facts::Fact::Receipts => Some(facts.receipts.as_ref().map_or(
+                serde_json::Value::Null,
+                |verdicts| {
+                    // The VERDICT's stable token, never the receipt statement:
+                    // a receipt carries a subject commit and a recorded ref, and
+                    // a predicate decides on `valid` / `stale-head` /
+                    // `stale-main` / `missing` — which is the whole of what
+                    // `receipt status` reports too.
+                    let mut out = serde_json::Map::new();
+                    for (check, validity) in verdicts {
+                        out.insert(check.clone(), serde_json::Value::from(validity.as_str()));
+                    }
+                    serde_json::Value::Object(out)
+                },
+            )),
+            crate::facts::Fact::Keys => Some(
+                facts
+                    .keys
+                    .as_ref()
+                    .map_or(serde_json::Value::Null, |found| serde_json::json!(found)),
+            ),
+            crate::facts::Fact::Stop => Some(serde_json::json!(facts.stop)),
+            crate::facts::Fact::Waived => Some(serde_json::json!(facts.waived)),
+            crate::facts::Fact::AgentSourced => Some(facts.sourced.as_ref().map_or(
+                serde_json::Value::Null,
+                |records| {
+                    // WHAT THE AGENT RAN, not what it printed. `Sourced` is
+                    // payload-free by construction — `rows` is a COUNT reduced
+                    // at the boundary and no byte of the buffer is stored — so
+                    // this projects the whole record without a rule 4 question.
+                    let mut out = serde_json::Map::new();
+                    for (check, record) in records {
+                        out.insert(
+                            check.clone(),
+                            serde_json::json!({
+                                "command": record.command,
+                                "seen-at": record.seen_at,
+                                "rows": record.rows,
+                            }),
+                        );
+                    }
+                    serde_json::Value::Object(out)
+                },
+            )),
+            // Not resolvable on the mediated call, per `facts.rs`'s own table:
+            // `Document` parses a file of unbounded size, so its cost is
+            // unbounded in the input where a git ref read is not. Stated as an
+            // arm rather than a wildcard so a reclassification has to come
+            // through here.
+            crate::facts::Fact::Document => None,
+        };
+        if let Some(value) = projected {
+            projected_facts.insert(fact.as_str().to_owned(), value);
+        }
+    }
     serde_json::to_string(&serde_json::json!({
         "call": {
             "event": envelope.event.as_str(),
             "operation": envelope.operation.as_str(),
             "command": envelope.command,
             "writes": envelope.writes,
-        }
+        },
+        "facts": projected_facts,
     }))
 }
 
@@ -3846,11 +4016,14 @@ mod tests {
         super::adjudicate(
             policy,
             envelope,
-            bypass,
-            receipts,
-            keys,
-            stop,
-            &crate::waiver::Live::new(),
+            &Facts {
+                bypass,
+                receipts,
+                keys,
+                stop,
+                waived: &crate::waiver::Live::new(),
+                sourced: &None,
+            },
         )
     }
 
@@ -4074,11 +4247,7 @@ mod tests {
         super::adjudicate(
             &gh_policy(),
             &envelope(command),
-            false,
-            &None,
-            &None,
-            &crate::stop::StopFacts::default(),
-            waived,
+            &Facts::none(&crate::stop::StopFacts::default(), waived),
         )
     }
 
@@ -4906,6 +5075,201 @@ mod tests {
             protected: PathSet::empty(),
             redirects: Vec::new(),
         }
+    }
+
+    /// EVERY HOOK-RESOLVABLE FACT IS PROJECTED, AND NOTHING ELSE IS.
+    ///
+    /// CLOUD-834's acceptance, in both directions, because the document drifts
+    /// from the model the moment only one of them is checked — which is exactly
+    /// how `Field`'s allowlist drifted from the envelope.
+    ///
+    /// The compile-time half is `call_document`'s wildcard-free match: an eighth
+    /// `Fact` variant fails to build. This is the runtime half, and it is the
+    /// one that catches a variant given an arm that quietly returns `None`.
+    ///
+    /// Fails by: dropping a `Some(...)` arm to `None`, or inventing a `facts`
+    /// key that no `Fact` variant names.
+    #[test]
+    fn every_hook_resolvable_fact_is_projected_under_its_own_token() {
+        let document = call_document(
+            &envelope("git status"),
+            &Facts::none(
+                &crate::stop::StopFacts::default(),
+                &crate::waiver::Live::new(),
+            ),
+        )
+        .expect("the document serializes");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&document).expect("the document parses");
+        let facts = parsed
+            .get("facts")
+            .and_then(serde_json::Value::as_object)
+            .expect("the document carries a facts object");
+
+        let expected: std::collections::BTreeSet<&str> = crate::facts::Fact::ALL
+            .iter()
+            .filter(|fact| fact.class().resolvable_on(crate::facts::Surface::Hook))
+            .map(|fact| fact.as_str())
+            .collect();
+        let projected: std::collections::BTreeSet<&str> =
+            facts.keys().map(String::as_str).collect();
+
+        assert_eq!(
+            projected, expected,
+            "the projected keys and the model's hook-resolvable facts disagree"
+        );
+        assert!(
+            !expected.is_empty(),
+            "a vacuous pass: the model says no fact is resolvable on the hook \
+             surface, so this case would hold over an empty document"
+        );
+    }
+
+    /// A fact the boundary could not resolve is `null`, never absent.
+    ///
+    /// One shape always. `Look::CouldNotLook` and "resolved to nothing" are
+    /// different answers, and a Rego predicate distinguishes them only if the
+    /// key is present — `input.facts.receipts == null` against
+    /// `not input.facts.receipts`. A document whose keys come and go cannot be
+    /// written against at all.
+    ///
+    /// Fails by: skipping the insert when the `Option` is `None`.
+    #[test]
+    fn a_fact_the_boundary_could_not_resolve_is_null_rather_than_absent() {
+        let document = call_document(
+            &envelope("git status"),
+            &Facts::none(
+                &crate::stop::StopFacts::default(),
+                &crate::waiver::Live::new(),
+            ),
+        )
+        .expect("the document serializes");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&document).expect("the document parses");
+        for could_not_look in ["receipts", "keys"] {
+            assert_eq!(
+                parsed
+                    .get("facts")
+                    .and_then(|facts| facts.get(could_not_look)),
+                Some(&serde_json::Value::Null),
+                "`{could_not_look}` must be present and null, never missing"
+            );
+        }
+    }
+
+    /// The projection carries the VERDICT token, never the receipt statement.
+    ///
+    /// A receipt records a subject commit and the `origin/main` it was linear
+    /// against. A predicate decides on `valid` / `stale-head` / `stale-main` /
+    /// `missing`, which is the whole of what `receipt status` reports, and
+    /// widening the projection to the statement would put git object ids in
+    /// front of consumer-authored code for no predicate that needs them.
+    ///
+    /// Fails by: serializing the statement instead of `Validity::as_str`.
+    #[test]
+    fn a_receipt_projects_its_verdict_token_and_nothing_else() {
+        let mut verdicts = std::collections::BTreeMap::new();
+        verdicts.insert("verify".to_owned(), crate::receipt::Validity::StaleHead);
+        let document = call_document(
+            &envelope("git status"),
+            &Facts {
+                receipts: &Some(verdicts),
+                ..Facts::none(
+                    &crate::stop::StopFacts::default(),
+                    &crate::waiver::Live::new(),
+                )
+            },
+        )
+        .expect("the document serializes");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&document).expect("the document parses");
+        assert_eq!(
+            parsed["facts"]["receipts"]["verify"],
+            serde_json::Value::from("stale-head")
+        );
+    }
+
+    /// A MODULE CAN DECIDE ON A PROJECTED FACT, and goes green when it changes.
+    ///
+    /// CLOUD-834 §7(a). The end-to-end case: before this row a predicate could
+    /// decide on the call and nothing about the checkout, so a module reading
+    /// `input.facts` matched nothing and every such gate silently allowed.
+    ///
+    /// Both directions in one pair, because a deny alone would also be produced
+    /// by a module that ignored the fact and denied unconditionally.
+    #[test]
+    fn a_module_decides_on_a_projected_fact() {
+        const READS_A_RECEIPT: &str = r#"
+package batten.receipts
+
+import rego.v1
+
+rules contains "verify-receipt-stale"
+
+violation contains {
+	"rule": "verify-receipt-stale",
+	"msg": "the verify receipt is stale for this HEAD",
+} if {
+	input.facts.receipts.verify == "stale-head"
+}
+"#;
+        let policy = module_policy(READS_A_RECEIPT);
+        let stale = {
+            let mut verdicts = std::collections::BTreeMap::new();
+            verdicts.insert("verify".to_owned(), crate::receipt::Validity::StaleHead);
+            Some(verdicts)
+        };
+        let fresh = {
+            let mut verdicts = std::collections::BTreeMap::new();
+            verdicts.insert("verify".to_owned(), crate::receipt::Validity::Valid);
+            Some(verdicts)
+        };
+        let envelope = envelope("git push");
+
+        let denied = adjudicate(
+            &policy,
+            &envelope,
+            false,
+            &stale,
+            &None,
+            &crate::stop::StopFacts::default(),
+        );
+        assert!(
+            matches!(denied, Decision::Deny(_)),
+            "a module reading a projected fact must be able to decide on it: {denied:?}"
+        );
+
+        // THE DISCRIMINATOR. Same module, same call, one changed fact.
+        let allowed = adjudicate(
+            &policy,
+            &envelope,
+            false,
+            &fresh,
+            &None,
+            &crate::stop::StopFacts::default(),
+        );
+        assert_eq!(
+            allowed,
+            Decision::Allow,
+            "the deny above must come from the FACT, not from the module firing \
+             unconditionally"
+        );
+
+        // AND THE WITHHELD CASE (§7(a)): a boundary that could not look
+        // resolves to null, which the predicate must not read as a match.
+        let unresolved = adjudicate(
+            &policy,
+            &envelope,
+            false,
+            &None,
+            &None,
+            &crate::stop::StopFacts::default(),
+        );
+        assert_eq!(
+            unresolved,
+            Decision::Allow,
+            "could-not-look must not read as the verdict the predicate tests for"
+        );
     }
 
     /// A bundle ROOT joins `protected`, and so does everything under it.

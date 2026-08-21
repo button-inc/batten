@@ -136,6 +136,7 @@ use std::path::{Path, PathBuf};
     reason = "stays: this module is two-backend BY DECISION (CLOUD-780) — gix where a library makes a defect unrepresentable, spawned `git` where it does not, and every remaining spawn is unported rather than unportable"
 )]
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -827,6 +828,30 @@ pub fn list_tree(dir: &Path, reference: &str, directory: &str) -> Result<Vec<Str
     Ok(paths)
 }
 
+/// How many `git` children this process has built (CLOUD-834).
+///
+/// **A counter, because a clock cannot discriminate here.** The claim it exists
+/// to defend is that a mediated call no rule selects for resolves *nothing* —
+/// and a git query is ~6.7ms against a 100ms budget, well inside the noise of a
+/// process start. That is how CLOUD-460's four-subprocesses-per-call went
+/// unmeasured, and `.claude/rules/rust.md` is explicit that a timing assertion
+/// discriminates nothing in this class.
+///
+/// Sound because [`command`] is the ONE place a `git` child is constructed, kept
+/// one by `no_second_git_invoker_exists` — the same argument
+/// [`crate::policy::engines_constructed`] rests on.
+static QUERIES_SPAWNED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many `git` children this process has built.
+///
+/// Monotonic and process-global: callers take a delta, and a test asserting one
+/// must be the only thing invoking git in its process — which is why
+/// `tests/policy_input_narrowing.rs` is its own binary.
+#[must_use]
+pub fn queries_spawned() -> usize {
+    QUERIES_SPAWNED.load(Ordering::Relaxed)
+}
+
 /// The `git` child every query in this module is built from: `-C dir`, with
 /// the redirect variables scrubbed so the answer is about the directory it was
 /// handed and not about whatever repository the ambient environment names.
@@ -835,6 +860,7 @@ pub fn list_tree(dir: &Path, reference: &str, directory: &str) -> Result<Vec<Str
     reason = "stays: the ONE git invoker (`no_second_git_invoker_exists` keeps it one), taking fixed argv with no caller token, measured at 6.7ms of the 100ms mediated-call budget — so nothing measured asks it to move (CLOUD-770)"
 )]
 fn command(dir: &Path) -> Command {
+    QUERIES_SPAWNED.fetch_add(1, Ordering::Relaxed);
     let mut command = Command::new("git");
     command.arg("-C").arg(dir);
     for var in DISCOVERY_REDIRECTS {
