@@ -20,9 +20,15 @@
 #      mirrors review PROGRESS. Green with findings is the documented behaviour,
 #      not a misconfiguration.
 reviews:
-  # THE VERDICT. With this on, findings arrive as CHANGES_REQUESTED rather than
-  # a comment, so `reviewDecision` answers "is this head reviewed and clear" in
-  # one GitHub-native field — the same field branch protection requires.
+  # THE VERDICT. With this on, a formal review carrying CHANGES_REQUESTED is
+  # submitted ALONGSIDE the finding comments — it does not replace them — so
+  # `reviewDecision` answers "was this head reviewed, and did the reviewer
+  # object" in one GitHub-native field, the same one branch protection requires.
+  #
+  # MEASURED CAVEAT (arm F): the decision is the reviewer's to clear, and three
+  # reviews of this file went 1 -> 2 -> 4 unresolved findings without ever
+  # reaching APPROVED. So a gate must not key on APPROVED; it keys on a review
+  # existing plus no unresolved thread, which the author can discharge.
   request_changes_workflow: true
 
   auto_review:
@@ -77,5 +83,9 @@ reviews:
       enabled: false
     regal:
       enabled: false
-    gitleaks:
-      enabled: false
+    # gitleaks stays ENABLED, and it is the exception that proves the rule above.
+    # Our own scanning runs under `mise run ci`, which is `if: draft == false` —
+    # so switching this off would leave the draft phase, the phase this row is
+    # trying to make the working phase, with no secret scanning at all. A leaked
+    # secret is leaked at push time; late detection is the one class where the
+    # duplicate is worth paying for.
