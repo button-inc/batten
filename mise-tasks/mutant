@@ -78,7 +78,16 @@ declared=0
 # corrupts, for the reason `step-receipt`'s spec table lives in `step-receipt`: a
 # declaration in a second file is a second authority that drifts.
 for gate in ${gates//,/ }; do
+	# A GATE IS NO LONGER ONLY A SHELL TASK (CLOUD-843). The retirement campaign
+	# moves predicates out of `mise-tasks/` and into policy modules, and a
+	# migration that could not declare a mutation would REDUCE the enforced set
+	# while reporting the census going down — the exact false progress that
+	# campaign exists to make visible. So the subject is resolved rather than
+	# assumed: a shell task first, then the module of the same name. The suite is
+	# `tests/<gate>.bats` either way, and a `#MUTANT` row is a `#` comment in both
+	# languages, so nothing else about this task changes.
 	src="mise-tasks/$gate"
+	[ -f "$src" ] || src="policy/$gate.rego"
 	suite="tests/$gate.bats"
 	[ -f "$src" ] || {
 		echo "$gate no-such-gate"

@@ -211,14 +211,11 @@ bg_guard() { # the same call, marked run_in_background
 	denied "$output"
 }
 
-@test "a git commit naming no message source at all is denied" {
-	# Opens $EDITOR in a non-interactive call and blocks there — after the whole
-	# gate has already run.
-	run guard 'git commit'
-	denied "$output"
-	run guard 'git commit -a'
-	denied "$output"
-}
+# The `no message source at all` case is gone with its subject: that family is
+# `policy/run-shape.rego` now, and its negative controls are in
+# `tests/run-shape.bats`, which drives the compiled binary rather than this
+# file's stub. The rows below still assert this guard does not OVER-fire on the
+# same shapes, which is a property of what remains.
 
 @test "the denial names -F <path>, which is the form that cannot rebind" {
 	# A message that only says "this is wrong" reproduces the error: the author

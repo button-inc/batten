@@ -1499,6 +1499,24 @@ severity = "deny"
 scope = "tree"
 no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabled, not here: `cargo tree -i <crate>` names who turned it on, and the `regorus` feature list in Cargo.toml is where the pin is stated rather than where it is decided"
 
+# The first migrated gate of the bash-retirement campaign (CLOUD-843 track 2):
+# `run-shape-guard`'s no-message-source family, as a consumer-authored module
+# rather than a vendored preset. It names `git`, which a preset may not — a
+# preset carries a PRACTICE and this carries one tool's argv, so it belongs on
+# this side of the boundary (non-negotiable rule 1).
+#
+# `module` rather than `bundle`: one predicate, one file, and a folder would
+# enable whatever later lands beside it without a row saying so.
+#
+# Mediated-call scoped, because the predicate is over a command line. The other
+# four families of that guard stay in bash and its header says which and why.
+[[rule]]
+id = "commit-message-obtainable"
+kind = "policy"
+scope = "mediated_call"
+module = "policy/run-shape.rego"
+severity = "deny"
+
 [[rule]]
 id = "claim-not-raced"
 kind = "command"
