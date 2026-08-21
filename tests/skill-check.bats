@@ -172,3 +172,54 @@ link_vendor() {
 	run grep -q 'mise run skill-check' "$BATS_TEST_DIRNAME/../hk.pkl"
 	[ "$status" -eq 0 ]
 }
+
+# --- every skill, not just the default one (CLOUD-864) -------------------------
+#
+# The hk step globs `skills/**` and invokes the task with no arguments, so before
+# the discovery loop a SECOND skill fired the step and was then never read. These
+# three cases are the discriminating set: the first shows a second skill's
+# violation is now seen, the second shows discovery does not depend on the file
+# being tracked (the defect the first version of the loop shipped with), and the
+# third shows a well-formed second skill is still clean — without it, a loop that
+# reported on everything would satisfy the other two.
+
+second_skill() { # a minimal skill that names no batten verb, as a real one would not
+	mkdir -p "$ROOT/skills/other" "$ROOT/.claude/skills/other"
+	printf '# Other\n\nNothing about the binary here.\n' >"$ROOT/skills/other/SKILL.md"
+}
+
+@test "a second skill with no vendor symlink is a violation" {
+	second_skill
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"skills/other/SKILL.md:0 skill-vendor-path-not-a-symlink"* ]]
+}
+
+@test "a second skill is discovered while UNTRACKED — presence is the predicate" {
+	# `git ls-files` returns nothing here: the fixture repo is `git init`-ed and
+	# nothing is ever staged. A git-sourced discovery passes this case, which is
+	# exactly how the first version of the loop shipped a gate that skipped the
+	# newest skill in the tree.
+	second_skill
+	run git -C "$ROOT" ls-files 'skills/*/SKILL.md'
+	[ -z "$output" ]
+	run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"skills/other/SKILL.md"* ]]
+}
+
+@test "a well-formed second skill leaves the run clean" {
+	second_skill
+	ln -sfn ../../../skills/other/SKILL.md "$ROOT/.claude/skills/other/SKILL.md"
+	run "$CHECK"
+	[ "$status" -eq 0 ]
+}
+
+@test "a second skill over budget is reported against its own path" {
+	second_skill
+	ln -sfn ../../../skills/other/SKILL.md "$ROOT/.claude/skills/other/SKILL.md"
+	SKILL_MAX_LINES=1 run "$CHECK"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"skills/other/SKILL.md:"* ]]
+	[[ "$output" == *"skill-over-budget"* ]]
+}

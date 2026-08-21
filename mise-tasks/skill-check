@@ -44,6 +44,41 @@ vendor="${2:-.claude/skills/batten/SKILL.md}"
 # The ceiling, stated once. Raising it is a visible diff in this file.
 max_lines="${SKILL_MAX_LINES:-300}"
 
+# EVERY skill, not just the one named above (CLOUD-864). The hk step globs
+# `skills/**` but invokes this with no arguments, so before this loop a second
+# skill FIRED the step and was then never read — the step reported on
+# `skills/batten/SKILL.md` and called it a pass. A coverage claim with no
+# coverage is the failure this repository names most often, and it was one
+# `skills/<name>/SKILL.md` away from shipping.
+#
+# The split is by what the check's AUTHORITY is, and only two of the four
+# generalise. The budget and the one-set-of-bytes symlink are properties of any
+# skill. The verb and exit-table checks read `batten spec` and `batten --help`,
+# so they are assertions about a skill that DESCRIBES BATTEN and mean nothing
+# over one that does not — running them everywhere would report every sentence
+# of a Serena skill as fiction.
+#
+# An explicit argument still selects one pair, because the bats suite drives a
+# single-skill fixture that way and because narrowing to one skill is the useful
+# thing to do while writing one.
+#
+# DISCOVERED FROM THE FILESYSTEM, NOT FROM `git ls-files`, and the difference is
+# not academic. The first version of this loop asked git, and a newly authored
+# skill is untracked until it is staged — so the gate skipped the one skill most
+# likely to be wrong, and passed. Measured here: with `skills/serena/SKILL.md`
+# present and its vendor symlink deleted, the git-sourced loop reported clean.
+# That is the same silent-exemption defect the loop exists to remove, reproduced
+# inside the fix for it. The harness loads a skill because the file is THERE, so
+# presence is the predicate; the tracked-tree gates (`memories-check`,
+# `module-map-check`) ask git because their subject genuinely is the commit.
+shopt -s nullglob
+if [ "$#" -gt 0 ]; then
+	generic_skills="$skill"
+else
+	generic_skills=$(printf '%s\n' skills/*/SKILL.md)
+fi
+shopt -u nullglob
+
 # Both readings come from the binary. `BATTEN_BIN` lets the suite point at an
 # already-built binary instead of paying a cargo invocation per case; the default
 # is the same `cargo run` shape `policy-budget` uses, so a developer needs no
@@ -90,11 +125,40 @@ report() { # pointer-only: path:line predicate-id
 	violations=$((violations + 1))
 }
 
-# --- the budget ---------------------------------------------------------------
-lines=$(wc -l <"$skill")
-if [ "$lines" -gt "$max_lines" ]; then
-	report "$skill:$lines" "skill-over-budget ($lines > $max_lines)"
-fi
+# --- the budget and the byte identity, over EVERY skill ------------------------
+#
+# `vendor_for` derives the reached path from the authored one rather than taking
+# it as a second argument, so a new skill cannot be added with its symlink
+# unchecked — the derivation is the convention, and a skill that does not follow
+# it fails here instead of being silently exempt.
+vendor_for() {
+	case "$1" in
+	"$skill") echo "$vendor" ;;
+	skills/*) echo ".claude/skills/${1#skills/}" ;;
+	*) echo "" ;;
+	esac
+}
+
+lines=0
+while IFS= read -r one; do
+	[ -n "$one" ] || continue
+	[ -f "$one" ] || continue
+	one_lines=$(wc -l <"$one")
+	if [ "$one_lines" -gt "$max_lines" ]; then
+		report "$one:$one_lines" "skill-over-budget ($one_lines > $max_lines)"
+	fi
+	# Reported for the summary line, which names the skill this run was aimed at.
+	[ "$one" = "$skill" ] && lines="$one_lines"
+
+	one_vendor=$(vendor_for "$one")
+	if [ -z "$one_vendor" ]; then
+		report "$one:0" "skill-vendor-path-underivable"
+	elif [ ! -L "$one_vendor" ]; then
+		report "$one_vendor:0" "skill-vendor-path-not-a-symlink"
+	elif [ "$(readlink -f "$one_vendor")" != "$(readlink -f "$one")" ]; then
+		report "$one_vendor:0" "skill-vendor-path-resolves-elsewhere"
+	fi
+done <<<"$generic_skills"
 
 # --- no fiction: every verb named resolves in the spec -------------------------
 #
@@ -177,12 +241,8 @@ while IFS= read -r row; do
 	fi
 done < <(sed -n 's/^  \([0-3]\)  \(.*\)$/\1 \2/p' <<<"$help")
 
-# --- one set of bytes, not two -------------------------------------------------
-if [ ! -L "$vendor" ]; then
-	report "$vendor:0" "skill-vendor-path-not-a-symlink"
-elif [ "$(readlink -f "$vendor")" != "$(readlink -f "$skill")" ]; then
-	report "$vendor:0" "skill-vendor-path-resolves-elsewhere"
-fi
+# One set of bytes is asserted in the loop above, for every skill rather than
+# only for this run's subject — see the comment there.
 
 if [ "$violations" -ne 0 ]; then
 	echo "::error:: skill-check: $violations violation(s) — the shipped skill is over budget or describes a surface the binary does not have" >&2

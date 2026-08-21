@@ -52,6 +52,22 @@ project_name: "batten"
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
 languages:
 - rust
+# CLOUD-864. `bash` is declared BEFORE it can match anything, deliberately.
+# `Language.BASH` is `FilenameMatcher(".sh", ".bash")` — solidlsp/ls_config.py:474,
+# extension-only — so it covers zero files while `mise-tasks/*` are extensionless,
+# and starts covering ~29k lines the moment CLOUD-865's rename lands. Declaring it
+# after the rename would mean doing the rename without the instrument it buys.
+- bash
+# No setup for yaml; toml auto-downloads Taplo. Between them: the workflows and
+# every TOML authority in the tree, batten.toml included.
+- yaml
+- toml
+# Upstream marks markdown experimental and requires the explicit enable. It covers
+# AGENTS.md, `.claude/rules/` and the memories. Delete this one line if the index
+# destabilises — nothing else depends on it.
+- markdown
+# Every language added here is re-indexed on every cold container: there is no
+# persistent symbol cache (CLOUD-670). That is the cost this list accepts.
 
 # the encoding used by text files in the project
 # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
@@ -171,7 +187,16 @@ ls_additional_workspace_folders: []
 
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
-initial_prompt: ''
+# CLOUD-864. ONE line, and the length is a budget fact rather than a style
+# choice: [budget.instructions] in batten.toml counts this string against the
+# SAME ceiling as AGENTS.md, which sits at 197/199 lines. LINES bind here, not
+# tokens — at one line the set is 198/199 with 238 tokens spare, and a second
+# line would sit exactly on the ceiling and fail the next unrelated change.
+# `mise run policy-budget` is the gate. Anything longer buys its room from
+# AGENTS.md; the detail belongs in skills/serena/SKILL.md, which loads on
+# trigger and costs this budget nothing.
+initial_prompt: |
+  Read a file with Read(offset,limit), search with Grep, list with Glob, resolve a name with Serena — a shell text utility aimed at a repo path is the wrong instrument, not a shortcut; `.claude/rules/scanning.md` picks between them.
 
 # optional shell command to run before the language backend (LSP or JetBrains) is initialised.
 # the command runs in the project root directory and is only executed if the project is trusted
