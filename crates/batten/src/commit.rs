@@ -153,23 +153,11 @@ impl Commit {
 /// Returns an error when the range does not resolve or git cannot be run. That is
 /// exit `1` — "could not look" — never a clean pass over commits nobody read.
 pub fn read_range(dir: &Path, base: &str, head: &str) -> Result<Vec<Subject>> {
-    let range = format!("{base}..{head}");
-    // `%H %s`: the SHA is fixed-width and a subject cannot contain a newline, so
-    // one line per commit parses unambiguously on the first space.
-    let listed = git::query(
-        dir,
-        &["log", "--no-merges", "--format=%H %s", &range],
-        "could not resolve the commit range",
-    )?;
-    Ok(listed
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            let (sha, text) = line.split_once(' ').unwrap_or((line, ""));
-            Subject {
-                label: short(sha),
-                text: text.to_owned(),
-            }
+    Ok(git::subjects_in_range(dir, base, head)?
+        .into_iter()
+        .map(|read| Subject {
+            label: short(&read.commit),
+            text: read.subject,
         })
         .collect())
 }

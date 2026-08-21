@@ -991,6 +991,72 @@ pub fn log_messages(dir: &Path, base: &str) -> Result<Option<String>> {
     )
 }
 
+/// One commit's subject line, keyed to the commit that carries it.
+///
+/// A pair rather than a `String` the caller re-splits: the subject is the part
+/// after the first space of a `%H %s` line, and a caller that has to know that
+/// is a caller that can get it wrong (CLOUD-742).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommitSubject {
+    /// The commit's full SHA.
+    pub commit: String,
+    /// Its subject line — git's `%s`, which cannot contain a newline.
+    pub subject: String,
+}
+
+/// Every non-merge commit's subject in `base..head`.
+///
+/// One `git log` rather than a `rev-list` followed by a `show` per commit: the
+/// subject is available from the same walk that enumerates the range, so the
+/// second pass buys nothing.
+///
+/// `%H %s`, split on the FIRST space: the SHA is fixed-width hex and a subject
+/// cannot contain a newline, so one line per commit parses unambiguously. That
+/// reading lives here and not at the call site — the format string and the
+/// parse that undoes it are one decision, and `commit.rs` held half of it.
+///
+/// `--end-of-options`, because `base` and `head` are caller-influenced in the
+/// same way [`resolve_ref`]'s `name` is.
+///
+/// # Errors
+///
+/// Raises a [`UsageError`] (exit `1`) when the range does not resolve — "could
+/// not look", never a clean pass over commits nobody read. A line git emits
+/// that carries no space is refused rather than read as a subject-less commit:
+/// `%H %s` cannot produce one, so seeing one means the walk answered something
+/// other than the question asked.
+pub fn subjects_in_range(dir: &Path, base: &str, head: &str) -> Result<Vec<CommitSubject>> {
+    let range = format!("{base}..{head}");
+    let listed = query(
+        dir,
+        &[
+            "log",
+            "--no-merges",
+            "--format=%H %s",
+            "--end-of-options",
+            &range,
+            "--",
+        ],
+        "could not resolve the commit range",
+    )?;
+    listed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (commit, subject) = line.split_once(' ').ok_or_else(|| {
+                UsageError::raise(
+                    "a commit line carries no subject field, so the range cannot be read",
+                )
+            })?;
+            Ok(CommitSubject {
+                commit: commit.to_owned(),
+                subject: subject.to_owned(),
+            })
+        })
+        .collect()
+}
+
 /// Whether git ignores `path` — the scratch-work question (CLOUD-444).
 ///
 /// `check-ignore` rather than a reimplementation of the ignore rules: the
