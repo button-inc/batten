@@ -253,6 +253,38 @@ assistant prose, and no exit code attaches to a sentence. Every other guard here
 works because what it judges crosses a tool boundary. Recorded rather than
 implied, so nobody re-derives it: CLOUD-200.
 
+### A sixth shape, measured 2026-08-21: the blocker asserted but never tested
+
+AGENTS.md's predicate says "a block reported as a decision (a block is a bug)".
+That wording assumes the block is **real** — the reader's remedy is to go fix it.
+The shape that escaped is one layer earlier: a blocker **asserted without being
+tested**, so the deferral reads as principled and there is nothing for anyone to
+check. Two in one session, both wrong, both one command from being settled:
+
+| asserted blocker                                                                 | why it was false                                                                                                  | cost of testing it                   |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| "measuring whether CodeRabbit reviews drafts needs a fresh draft PR" (CLOUD-847) | three PRs that session were opened as drafts and readied later; the experiment was already in their event history | one `list_workflow_runs` call        |
+| "the `land.bats` hang is a race" (CLOUD-848)                                     | inferred from a single green suite run; never reproduced                                                          | a bounded loop, free local execution |
+
+**A real block and an assumed one are indistinguishable in prose, and that is the
+defect.** Both come out as one confident sentence, so the punt predicate cannot
+discriminate them by reading. What discriminates is whether a command was run. So
+the obligation attaches to the assertion rather than to the deferral: **naming a
+blocker obliges the check that establishes it**, in the same turn, or the blocker
+is a guess and must be written as one.
+
+This is the same failure as the "worked survey" entries above, seen from the other
+end. Those record the adoption test being run and throwing candidates out; this
+records a candidate explanation being adopted because nobody ran the test on it.
+The `#[expect]` discipline in `mem:core`'s spawn census is the shape that works:
+an annotation that goes stale is red in both directions. A prose blocker goes
+stale silently.
+
+No gate reaches this either, for the reason above — the assertion is prose. But
+the tell is cheap and specific: a sentence containing "needs", "requires",
+"cannot be done without" or "is a race" **about this session's own next action**,
+with no tool call behind it in the same turn.
+
 **Generated output is not written by anyone and is not committed.** CI derives it
 from the code and publishes it; nothing lands in the tree. Two things follow.
 `no-docs-tree` is not an obstacle to documentation — it fails on _tracked_
