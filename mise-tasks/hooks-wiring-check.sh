@@ -358,6 +358,16 @@ while read -r harness wiring launcher; do
 		[[ "$merged_harness" == "$harness" ]] || continue
 		merged_file="$HOME/$merged_rel"
 		[[ -f "$merged_file" ]] || continue
+		# THE SAME FILE IS NOT A SECOND SURFACE, and `doctor.rs` already
+		# refuses this in the half it owns — this is the same exclusion on the
+		# consumer side, which was missing. A host's user-level surface and its
+		# project-level one share a spelling, so a checkout sitting AT the home
+		# directory resolves both to one file: the loop would then scan one
+		# command twice, once with its full path from the committed surface and
+		# once as a basename from the merged one, and report a merged finding
+		# for a registration that is only committed. `-ef` compares by device
+		# and inode, so a symlinked checkout is caught too.
+		[[ "$merged_file" -ef "$wiring" ]] && continue
 		jq -e . "$merged_file" >/dev/null 2>&1 || continue
 		# NEVER THE PATH, on either field (CLOUD-525 §5). The `where` is the
 		# harness plus the word `merged` — a stable string that says which

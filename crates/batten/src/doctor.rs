@@ -615,7 +615,6 @@ fn diagnose_merged(
         let Ok(document) = serde_json::from_str::<serde_json::Value>(&raw) else {
             continue;
         };
-        read += 1;
         // Every host that merges keys its hooks under the same word its
         // committed file does, which `WiringFile` already states.
         let Some(events) = committed_events(
@@ -626,6 +625,14 @@ fn diagnose_merged(
         ) else {
             continue;
         };
+        // Counted AFTER the shape is validated, not after the parse. A document
+        // that is JSON and is not a wiring file — `{"hooks": []}`, an array where
+        // the map belongs — would otherwise report `merged_surfaces_read: 1` with
+        // `merged: 0`, which is byte-identical to a valid file declaring no
+        // hooks. That collapse is the exact one this field exists to prevent:
+        // "looked and found none" and "could not look" have to stay apart, and a
+        // counter incremented one step too early makes them the same number.
+        read += 1;
         for (event, value) in events.iter() {
             for (_, entry) in entries_under(value) {
                 merged += 1;
@@ -975,6 +982,39 @@ mod tests {
         assert!(!report.ok);
         assert_ne!(report.code(), ExitCode::Violation);
         assert_eq!(report.code(), ExitCode::Usage);
+    }
+
+    /// A merged surface is COUNTED only once its shape is valid (CLOUD-525).
+    ///
+    /// `merged_surfaces_read` exists to keep "looked and found no hooks" apart
+    /// from "could not look", and a counter incremented after the JSON parse
+    /// rather than after the shape check makes them the same number: a document
+    /// that is valid JSON and is not a wiring file reports one surface read and
+    /// zero registrations, exactly like a valid file declaring none.
+    ///
+    /// Asserted on `committed_events`, which is the predicate the counter now
+    /// depends on — the read itself needs a home directory this suite does not
+    /// control.
+    ///
+    /// Fails by: moving the increment back above the `committed_events` call.
+    #[test]
+    fn a_document_that_is_not_a_wiring_file_is_could_not_look_rather_than_empty() {
+        let file = hook::WiringFile::Key {
+            path: "wherever",
+            key: "hooks",
+        };
+        // An array where the map belongs: parses, and is not a wiring file.
+        let wrong_shape = serde_json::json!({ "hooks": [] });
+        assert!(
+            committed_events(&wrong_shape, file).is_none(),
+            "a `hooks` that is not an object is unreadable, not empty"
+        );
+        // And a genuinely empty map IS readable, so the two answers differ.
+        let empty = serde_json::json!({ "hooks": {} });
+        assert!(
+            committed_events(&empty, file).is_some_and(|events| events.is_empty()),
+            "an empty hook map is a valid surface declaring nothing"
+        );
     }
 
     #[test]
