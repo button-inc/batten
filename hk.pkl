@@ -42,9 +42,24 @@ local gate = new Mapping<String, Step> {
   // second place tool names are written down. `mise install` does not fail on
   // an unknown name, so drift between the two files surfaces late as "command
   // not found". This is that rule's mechanism: the names must resolve.
+  // The glob is every workflow, not `ci.yml` alone: since CLOUD-812 this gate
+  // also asks whether a `pull_request` workflow runs the mise action with no
+  // `install_args` at all, and that question is about files `ci.yml` does not
+  // name. A glob narrower than the subject means the pre-commit tier never
+  // selects the step that would have caught the very file being added.
   ["ci-tools-check"] {
-    glob = List(".github/workflows/ci.yml", "mise.toml")
+    glob = List(".github/workflows/*.yml", "mise.toml")
     check = "mise run ci-tools-check"
+  }
+  // The honesty gate for `rust.yml`'s `paths:` filter (CLOUD-398). It ships with
+  // the filter because a filter that is too NARROW fails silently: the four jobs
+  // are absent, `checks-green` accepts absent by design, and the run is green
+  // without their verdict. `mise.toml` is in the glob because the filter has to
+  // select it — the jobs invoke `mise run` tasks — so a change here is a change
+  // to what the filter must cover.
+  ["rust-paths-check"] {
+    glob = List(".github/workflows/rust.yml", "mise.toml")
+    check = "mise run rust-paths-check"
   }
   // CLOUD-266's rule reaches the one budget nobody had looked at (CLOUD-668).
   // The MCP startup budget was the host's 30000ms default, never measured, and

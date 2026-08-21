@@ -271,7 +271,7 @@ CI_REQUIRED_CHECKS = "ci,cross,commit-lint,zizmor,darwin-link (aarch64-apple-dar
 # that one success as the whole roster, and `land` posted /fast-forward into a
 # branch protection still listing the other six as expected. The bot was
 # rejected. A stall is recoverable; a false green is not (CLOUD-337).
-CI_ABSENT_OK_CHECKS = "zizmor,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
+CI_ABSENT_OK_CHECKS = "zizmor,cross,darwin-link (aarch64-apple-darwin),semver,windows,action (ubuntu-latest),action (macos-latest),action (windows-latest),action-violation,action-deny,action-usage,action-internal (ubuntu-latest),action-internal (macos-latest),action-final"
 # The conclusions that CONSTITUTE AN ANSWER about a required check, written once
 # and read by `checks-green` and by `land`'s `graded_runs` — for exactly the
 # reason CI_REQUIRED_CHECKS is written once (CLOUD-327), and against exactly the
@@ -313,7 +313,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-tools-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads"
+MUTANT_GATES = "msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-tools-check,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.

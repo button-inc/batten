@@ -243,3 +243,14 @@ binding_env() {
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"carries a binding install_args list"* ]]
 }
+
+@test "a tool name that resolves nowhere fails in a PR workflow other than the first argument" {
+	# CLOUD-398 moved four jobs into rust.yml with their install_args, so the
+	# single-file name pass stopped covering them. Same predicate, every file.
+	pr_workflow "        with:
+          install_args: rustlang" "$(binding_env)"
+	run "$CHECK" "$WORKFLOW" "$CONFIG" "$BATS_TEST_TMPDIR"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"rustlang"* ]]
+	[[ "$output" == *"command not found"* ]]
+}

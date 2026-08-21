@@ -171,6 +171,31 @@ if [ -d "$WORKFLOW_DIR" ]; then
 			echo "::error:: $wf narrows install_args but does not set MISE_TASK_RUN_AUTO_INSTALL and MISE_EXEC_AUTO_INSTALL, so mise re-installs the rest at task time and the list decides nothing (CLOUD-180)." >&2
 			status=1
 		fi
+
+		# AND THE NAMES IN *THAT* WORKFLOW RESOLVE TOO. The pass above judges one
+		# file, the one named by the first argument, and that was the whole gate
+		# when `ci.yml` was the only workflow with per-job lists. It is not any
+		# more: CLOUD-398 moved four jobs into `rust.yml`, taking their
+		# `install_args` with them, and a rename in `mise.toml` that missed those
+		# lists would have failed nowhere — `mise install` does not error on an
+		# unknown tool name, so it surfaces later as "command not found" in
+		# whichever step needed it. Same predicate, every file it applies to.
+		if [ "$wf" != "$WORKFLOW" ]; then
+			while IFS= read -r tool; do
+				[ -n "$tool" ] || continue
+				if ! grep -qxF "$tool" <<<"$declared"; then
+					echo "::error:: $wf installs '$tool', which is not a [tools] entry in $CONFIG. CI would skip it and fail later as 'command not found'." >&2
+					status=1
+				fi
+			done < <(
+				awk '
+					/^[ \t]*install_args:/ {
+						sub(/^[ \t]*install_args:[ \t]*/, "")
+						print
+					}
+				' "$wf" | tr -s '[:blank:]' '\n' | grep -v '^$' | sort -u
+			)
+		fi
 	done
 fi
 
