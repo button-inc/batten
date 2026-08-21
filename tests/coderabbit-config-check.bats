@@ -9,7 +9,7 @@
 # every per-key assertion by having none to judge.
 
 setup() {
-	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/coderabbit-config-check"
+	CHECK="$BATS_TEST_DIRNAME/../mise-tasks/coderabbit-config-check.sh"
 	cd "$BATS_TEST_DIRNAME/.." || return 1
 }
 

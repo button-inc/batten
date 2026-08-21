@@ -44,7 +44,7 @@ cd "${REFERENCE_ROOT:-$(git rev-parse --show-toplevel)}"
 
 # The path is the render task's to decide, asked rather than restated — the same
 # `--names` handshake `release-assets-check` uses for `sbom` and `checksums`.
-RENDER="$(cd "$(dirname "$0")" && pwd)/render/cli"
+RENDER="$(cd "$(dirname "$0")" && pwd)/render/cli.sh"
 if [ ! -x "$RENDER" ]; then
 	echo "::error:: reference-check: cannot run $RENDER, so the reference's path is unknown. A gate that checks nothing must not report green." >&2
 	exit 2

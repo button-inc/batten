@@ -65,7 +65,7 @@ for shell in bash zsh fish; do
 	add_row "completions/batten.$shell" generate completions --shell "$shell"
 done
 
-MAN_PAGES="$(cd "$(dirname "$0")" && pwd)/man-pages"
+MAN_PAGES="$(cd "$(dirname "$0")" && pwd)/man-pages.sh"
 if [ ! -x "$MAN_PAGES" ]; then
 	echo "::error:: derived-check: cannot run $MAN_PAGES, so the man page set is unknown. A gate that checks nothing must not report green." >&2
 	exit 2

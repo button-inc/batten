@@ -38,7 +38,7 @@ set -euo pipefail
 
 # Resolved BEFORE the cd: `$0` may be relative, and moving first would leave this
 # pointing at a sibling of whatever tree is being judged rather than of this file.
-SBOM="$(cd "$(dirname "$0")" && pwd)/sbom"
+SBOM="$(cd "$(dirname "$0")" && pwd)/sbom.sh"
 
 cd "${SBOM_ROOT:-$(git rev-parse --show-toplevel)}"
 

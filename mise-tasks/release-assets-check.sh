@@ -74,12 +74,12 @@ composed=$(awk '
 # on the scrape because an empty result is a real answer the guard below judges,
 # not a failure. Basenames, because a release asset is named by its basename.
 TASKS="$(cd "$(dirname "$0")" && pwd)"
-SBOM="$TASKS/sbom"
+SBOM="$TASKS/sbom.sh"
 # The CLI reference (CLOUD-171), asked the same way and for the same reason the
 # SBOM is: it is uploaded through a step output, so the literal scrape below
 # cannot see it — and widening that `.json` regex to admit `.md` would not help
 # either, since the operand on the line is `"$REFERENCE"`.
-RENDER_CLI="$TASKS/render/cli"
+RENDER_CLI="$TASKS/render/cli.sh"
 uploads=$(grep -F 'gh release upload' "$WORKFLOW" || true)
 literal=$(tr ' ' '\n' <<<"$uploads" | sed -nE 's#^"?([A-Za-z0-9_./-]+\.json)"?$#\1#p' || true)
 derived=""
@@ -93,7 +93,7 @@ fi
 # them so this file never re-derives the stem (CLOUD-263). They are PER-TARGET and
 # therefore not "extras": they join the same exact-name set below, because a
 # missing one is exactly the failure this clause exists to name.
-SBOM_BINARY="$TASKS/sbom-binary"
+SBOM_BINARY="$TASKS/sbom-binary.sh"
 if [ -x "$SBOM_BINARY" ] && [ -n "$composed" ]; then
 	while IFS= read -r leg; do
 		[ -n "$leg" ] || continue
@@ -166,7 +166,7 @@ done <<<"$extras"
 # SBOM's does. It is deliberately NOT derived from the upload line: the literal
 # scrape above recognises `.json` operands only, and widening that regex to admit
 # an extensionless name would make it match far more of the line than intended.
-CHECKSUMS="$(cd "$(dirname "$0")" && pwd)/checksums"
+CHECKSUMS="$(cd "$(dirname "$0")" && pwd)/checksums.sh"
 manifest=""
 if [ -x "$CHECKSUMS" ]; then
 	manifest=$("$CHECKSUMS" --names | sed -nE 's#^sums=##p' | sed 's#^.*/##')

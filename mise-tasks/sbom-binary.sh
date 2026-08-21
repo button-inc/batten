@@ -49,7 +49,7 @@ OUT_DIR="${SBOM_BINARY_OUT_DIR:-dist}"
 # legs upload seven distinct names, and a second spelling of that contract is how
 # two legs end up racing for one asset (CLOUD-262 keeps its single document
 # outside the matrix for exactly this reason).
-DIST="$(cd "$(dirname "$0")" && pwd)/dist"
+DIST="$(cd "$(dirname "$0")" && pwd)/dist.sh"
 
 # Resolved BEFORE any cd, like `sbom-check`'s: `$0` may be relative.
 if [ ! -x "$DIST" ]; then
