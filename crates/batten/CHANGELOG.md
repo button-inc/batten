@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.99](https://github.com/button-inc/batten/compare/v0.0.98...v0.0.99) - 2026-08-21
+
+### Added
+
+- *(policy)* [**breaking**] analyse a composed rule set as a whole, and prove the sweep reached it
+- *(policy)* ship vendored preset bundles, compiled in and enabled by name
+- *(rules)* let a policy row decide on the tree, not only on the mediated call
+- *(policy)* compose a bundle into one engine, and pin the rule names not the package
+- *(policy)* give a module's predicates their own ids, severities and waivers
+- *(rules)* gate the evaluator's IO-free pin instead of asserting it
+- *(doctor)* [**breaking**] `doctor hooks`, so the wiring check ships and stops being bash
+- *(hook)* Event::UserPromptSubmit, so the surface clause stops being vacuous
+
+### Fixed
+
+- *(policy)* assert the preset path by component, not by string prefix
+- *(policy)* take the five clippy findings on their merits
+- *(hook)* resolve the authority root in the binary, and delete the launcher
+
 ## [0.0.98](https://github.com/button-inc/batten/compare/v0.0.97...v0.0.98) - 2026-08-21
 
 ### Added
