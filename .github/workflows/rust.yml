@@ -431,6 +431,19 @@ jobs:
           # toolchain than every other job's, so sharing an entry would thrash
           # it — the same reason semver and perf carry their own.
           key: windows
+          # AND A SHARED KEY, which is what lets a job in ANOTHER workflow fill
+          # this entry (CLOUD-840). rust-cache composes
+          # `v0-rust-{key}-{shared-key or job id}-{os}-{arch}-{hashes}`, read off
+          # two live entries rather than from the docs — so without this the job
+          # ID is part of the key and a warm job under any other name computes a
+          # different one and the two never meet. Set to the same word as `key`,
+          # so the composed string is byte-identical to what this job has always
+          # written and no existing cache is orphaned by adding it.
+          #
+          # The warm side is `cache-warm-windows` in `release-plz.yml`. Both
+          # spellings must agree; that they are two places is the cost of the
+          # only trigger this repository is allowed to hang a warm job on.
+          shared-key: windows
       # A JOB THAT DECLARES A TOOL MUST BE ABLE TO REACH IT, asserted before the
       # suite rather than discovered inside it. `ci-tools-check` holds these
       # names against `mise.toml`, which is a different question: it cannot know

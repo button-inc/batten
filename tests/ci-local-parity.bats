@@ -393,6 +393,68 @@ fanin() {
 	[ "$status" -eq 0 ]
 }
 
+@test "a foreign-runner job that runs nothing is not a second spelling" {
+	# CLOUD-840. The refusal says a drifted job "goes green on work it no longer
+	# covers", which presupposes it covers work. `--no-run` builds the test
+	# binaries and executes none, so there is no verdict to be wrong — that is
+	# `release-plz.yml`'s cache-warm job, which compiles on a Windows runner
+	# purely to fill the base-branch cache.
+	#
+	# `workflow ci` first: without a pull_request workflow the gate refuses on a
+	# different property entirely, and the row would assert nothing about this
+	# one. The sibling below was passing exactly that way until this was fixed.
+	workflow ci
+	cat >"$WF/warm.yml" <<-'EOF'
+		name: warm
+
+		on:
+		  workflow_dispatch:
+
+		concurrency:
+		  group: warm
+		  cancel-in-progress: false
+
+		jobs:
+		  cache-warm-windows:
+		    runs-on: windows-latest
+		    timeout-minutes: 30 # budget: grandfathered measured=2026-08-21
+		    steps:
+		      - run: mise exec -- cargo nextest run --no-run --workspace
+	EOF
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
+@test "the no-run exemption cannot be used to escape the property" {
+	# THE ROW THAT MAKES THE EXEMPTION SAFE. If the real foreign job gained
+	# `--no-run` it would stop being compared — and it also stops counting as the
+	# subject, so the tree refuses rather than silently ceasing to test there.
+	# Without this, `--no-run` would be a documented way to switch the property
+	# off, which is worse than not having it.
+	rm -f "$WF/foreign.yml"
+	workflow ci
+	cat >"$WF/warm.yml" <<-'EOF'
+		name: warm
+
+		on:
+		  workflow_dispatch:
+
+		concurrency:
+		  group: warm
+		  cancel-in-progress: false
+
+		jobs:
+		  cache-warm-windows:
+		    runs-on: windows-latest
+		    timeout-minutes: 30 # budget: grandfathered measured=2026-08-21
+		    steps:
+		      - run: mise exec -- cargo nextest run --no-run --workspace
+	EOF
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"second-spelling property has no subject"* ]]
+}
+
 @test "this repository's real workflows pass" {
 	# The assertion that catches the gate drifting from what it guards.
 	#

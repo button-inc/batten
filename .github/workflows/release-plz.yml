@@ -56,6 +56,62 @@ env:
   MISE_LOCKFILE: "true"
 
 jobs:
+  # THE BASE-BRANCH CACHE, AND WHY IT IS PARKED IN THE RELEASE WORKFLOW
+  # (CLOUD-840). Measured 2026-08-21: the `windows` job restores its rust-cache
+  # in 7s — a miss — compiles cold for ~8m20s, then spends 70s writing 182MB
+  # that nothing will ever read. The key is stable and identical across pull
+  # requests; it just lives on `refs/pull/N/merge` every time, and GitHub scopes
+  # a cache read to the run's own ref plus the BASE branch. No pull request can
+  # read another's, and `rust.yml` triggers on `pull_request` only, so none has
+  # ever existed on `main` to inherit.
+  #
+  # This job is here rather than in a workflow of its own because AGENTS.md
+  # forbids adding a push-to-`main` trigger, and `release-plz.yml` already has
+  # one. That rule exists so CI does not re-run on a SHA it already judged; this
+  # job judges nothing — it compiles to fill a cache — so it is not the thing the
+  # rule forbids. CLOUD-176 identified the same attachment point.
+  #
+  # `continue-on-error` because a warm job must never be able to red the release
+  # lane. Neither `workflow_run` consumer watches this workflow (both key off
+  # `[CI, commit-lint]`), so the blast radius is already small; this makes it
+  # zero.
+  #
+  # `--no-run` builds every test binary and executes none. The artifacts are what
+  # the cache is for, and running the suite here would be a second verdict on a
+  # SHA `main` already carries — which IS what the trigger rule forbids.
+  #
+  # WHETHER THIS PAYS IS UNSETTLED AND IS THE POINT OF LANDING IT. Within-PR
+  # caching already covers runs 2..N (CLOUD-176), so warming only ever helps run
+  # 1, and merges roughly equal pull requests. If this job compiles cold every
+  # time it costs ~17 billed minutes to save ~11 and it loses, exactly as
+  # CLOUD-176 predicted for the Linux legs. If it restores the previous warm
+  # entry and compiles only the delta, it costs a few and wins. That number
+  # arrives on the next merge and decides whether this stays.
+  cache-warm-windows:
+    name: cache-warm-windows
+    runs-on: windows-latest
+    timeout-minutes: 30 # budget: grandfathered measured=2026-08-21
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@9dda3952d607125725deac9ec10a5f0e245d266b # v4.2.4+9dda395 retry fix, pre-release (CLOUD-404)
+        with:
+          # Exactly what the `windows` job installs, minus the tools only its
+          # assertions need: the cache being filled is a cargo target dir.
+          install_args: rust github:nextest-rs/nextest
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Both spellings must match `rust.yml`'s `windows` job exactly or this
+          # writes an entry that job cannot read, which is the current failure
+          # with extra steps.
+          key: windows
+          shared-key: windows
+      - run: mise exec -- cargo nextest run --no-run --workspace
+
   release-plz:
     runs-on: ubuntu-latest
     timeout-minutes: 15 # budget: grandfathered measured=2026-08-10

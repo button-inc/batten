@@ -850,10 +850,28 @@ done <<<"$have_names"
 # declaration grammar is three pipe-separated fields.
 #MUTANT foreign-spelling-may-drift|s@^\t\tif \[ "\$command" != "mise exec -- \$task_cargo" \]; then$@\t\tif false; then@|a task that gained a flag the foreign runner did not is refused
 #MUTANT foreign-subject-may-vanish|s@^if \[ -z "\${foreign_cargo//\[\[:space:\]\]/}" \]; then$@if false; then@|a tree with no foreign-runner cargo job is refused
+# A JOB THAT RUNS NOTHING IS NOT A SECOND SPELLING (CLOUD-840). The refusal below
+# says a drifted job "goes green on work it no longer covers" — which presupposes
+# it covers work. `--no-run` builds the test binaries and executes none, so there
+# is no verdict to be wrong: `release-plz.yml`'s `cache-warm-windows` compiles on
+# a Windows runner purely to fill the base-branch cache.
+#
+# Scoping by TRIGGER was the other candidate and is worse. It would have exempted
+# every non-`pull_request` workflow, which is not the distinction that matters —
+# a manually dispatched job that RUNS the suite is a second spelling and can
+# drift, and this suite's own subject fixture is deliberately `workflow_dispatch`
+# for exactly that reason.
+#
+# And this narrowing DEFENDS ITSELF where the other would not. If the `windows`
+# job ever gained `--no-run`, it would stop being compared here — but it would
+# also stop counting toward the anti-vacuity term below, leaving no subject at
+# all, so the tree refuses rather than silently ceasing to test on Windows. The
+# exemption cannot be used to escape the property.
 foreign_cargo=""
 for wf in "$workflows"/*.yml; do
 	[ -e "$wf" ] || continue
 	while IFS=: read -r lineno line; do
+		case "$line" in *" --no-run"*) continue ;; esac
 		[ -n "$lineno" ] || continue
 		# Parameter expansion rather than `sed`: the prefix is everything through
 		# the first `run:` and then any leading blanks, which the shell can strip
