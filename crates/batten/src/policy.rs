@@ -389,6 +389,19 @@ impl Bundle {
         &self.declared
     }
 
+    /// The pointer a bundle-level diagnostic is reported against: its first
+    /// module's path, or the enabling row's id when it holds none.
+    ///
+    /// One accessor rather than the expression re-derived per call site, for
+    /// [`Bundle::attribute`]'s reason — two spellings of a pointer send two
+    /// readers to two places for one fault.
+    #[must_use]
+    pub fn pointer(&self) -> &str {
+        self.modules
+            .first()
+            .map_or(self.id.as_str(), |module| module.path.as_str())
+    }
+
     /// The id a denial is reported under: the predicate's own when it named one,
     /// the enabling row's otherwise.
     ///
@@ -1070,4 +1083,131 @@ fn claim_ids(
         ids.insert(id.clone(), source.to_owned());
     }
     Ok(())
+}
+
+/// What a whole-set sweep found (CLOUD-647).
+///
+/// # Why a set-level answer is needed at all
+///
+/// Batten's stability now depends on properties of the rule *set* — a rule that
+/// can never fire, two that contradict, a cycle — and nothing decided any of
+/// them. At 33 committed rows that was still tractable by reading; it does not
+/// stay tractable, and "read it carefully" is not a gate: non-negotiable rule 3
+/// makes a model verdict inadmissible, so the alternative to a decidable
+/// mechanism here is not careful review, it is nothing.
+///
+/// # Why the sweep has to be DRIVEN
+///
+/// Regorus refuses a conflict and a recursion at **evaluation**, never at
+/// `add_policy` — five cases, measured on 0.11.0. So a conflict on a path no
+/// query exercises is silently unreported, and "load the policies and get a
+/// verdict on the set" is not what the engine offers. Something has to reach
+/// every rule, and something has to PROVE it reached them, or a green sweep and
+/// a sweep that analysed nothing are the same answer.
+///
+/// [`analyse`] drives one query over the whole package and reads regorus's
+/// `coverage` report back to establish the second half.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Analysis {
+    /// Module paths the sweep entered — at least one line evaluated.
+    pub swept: Vec<String>,
+    /// Module paths the sweep never entered at all.
+    ///
+    /// **The anti-vacuity term, and the whole reason `coverage` is a pinned
+    /// feature rather than a reporting nicety.** A module the sweep never
+    /// reached contributes nothing to the analysis, so every conflict and cycle
+    /// inside it is unreported — and the run is green. That is precisely the
+    /// false green this row opened on: a policy set that loads clean, passes
+    /// every per-row check, and contains a rule that can never fire.
+    ///
+    /// Not the same as "not covered": a predicate body that is simply FALSE on
+    /// the input is not covered and is entirely healthy. Entering the file at
+    /// all is what is asserted here.
+    pub unswept: Vec<String>,
+}
+
+/// Drive a sweep over a bundle's composed rule set and prove it reached every
+/// module (CLOUD-647).
+///
+/// One query over [`PACKAGE_QUERY`], which forces evaluation of every rule in
+/// the package rather than the one rule name a narrower query would reach — the
+/// property CLOUD-837 bought by pinning the rule names instead of the package,
+/// and the reason this analysis is possible at all. A conflict or a recursion
+/// anywhere under it surfaces here as an evaluation error.
+///
+/// **Pointer-only, and this function is where that takes real care.**
+/// `regorus::coverage::File` carries a `code` field holding the policy body, and
+/// `Report::to_string_pretty` renders the whole of it. Neither reaches this
+/// return value: only line SETS are read, and only their emptiness is used.
+/// Rule 4 admits a pointer and refuses a payload, and a coverage report is the
+/// most payload-shaped thing in this crate.
+///
+/// Returns [`Look::CouldNotLook`] when the sweep cannot run — never an empty
+/// finding set, because a sweep that did not happen has established nothing.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the composed set faults: a rule conflict or
+/// a recursion, refused where a config error belongs rather than at the gate.
+pub fn analyse(bundle: &Bundle) -> Result<Look<Analysis>> {
+    let mut engine = bundle.engine.clone();
+    engine.set_enable_coverage(true);
+    if engine.set_input_json("{}").is_err() {
+        return Ok(Look::CouldNotLook);
+    }
+    // The driven sweep. An error here is the set refusing itself — a conflict
+    // between two complete rules, or a cycle — which regorus reports with the
+    // offending rule sites and a dependency chain. That diagnostic is
+    // pointer-shaped already, which is what makes it admissible.
+    engine
+        .eval_query(PACKAGE_QUERY.to_owned(), false)
+        .map_err(|err| {
+            UsageError::raise(format!(
+                "`{}` does not resolve as a set: {err}",
+                bundle.pointer()
+            ))
+        })?;
+
+    let Ok(report) = engine.get_coverage_report() else {
+        return Ok(Look::CouldNotLook);
+    };
+
+    // MEASURED, AND IT CHANGED THE IMPLEMENTATION: a module the sweep never
+    // entered produces **no report entry at all**, not an entry whose `covered`
+    // set is empty. So "unswept" cannot be read off the report — it is the
+    // difference between what the bundle HOLDS and what the report mentions.
+    // Reading it the other way returned an empty `unswept` for a bundle that was
+    // half dark, which is the exact false green this analysis exists to refuse,
+    // reproduced inside the thing meant to catch it.
+    //
+    // `file.code` is deliberately untouched throughout. Only the PATH travels
+    // and only whether any line was entered is read: a coverage report is the
+    // most payload-shaped thing in this crate, and rule 4 admits a pointer.
+    let reached: BTreeSet<&str> = report
+        .files
+        .iter()
+        .filter(|file| !file.covered.is_empty())
+        .map(|file| file.path.as_str())
+        .collect();
+
+    // A bundle that holds modules and produced no coverage entry at all is
+    // could-not-look rather than "every module dark". The report is how this
+    // function knows anything, and an empty one cannot tell a sweep that reached
+    // nothing from a coverage read that did not happen — so it reports neither.
+    if reached.is_empty() && !bundle.modules.is_empty() {
+        return Ok(Look::CouldNotLook);
+    }
+
+    let mut swept = Vec::new();
+    let mut unswept = Vec::new();
+    for module in &bundle.modules {
+        if reached.contains(module.path.as_str()) {
+            swept.push(module.path.clone());
+        } else {
+            unswept.push(module.path.clone());
+        }
+    }
+    swept.sort();
+    unswept.sort();
+    Ok(Look::Is(Analysis { swept, unswept }))
 }

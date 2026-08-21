@@ -120,6 +120,25 @@ const WAIVER_NAMES_NO_RULE: &str = "waiver-names-no-rule";
 /// A waiver whose expiry has passed. It has already stopped suppressing — this is
 /// the alarm that says so, rather than leaving a dead row in the file forever.
 const WAIVER_EXPIRED: &str = "waiver-expired";
+/// A policy bundle whose composed rule set will not resolve: two complete rules
+/// conflicting, or a cycle (CLOUD-647).
+///
+/// **Refused HERE rather than at the gate**, which is the whole reason this
+/// smell exists. Regorus reports a conflict and a recursion at *evaluation*,
+/// never at `add_policy`, so left alone the first thing to discover a cyclic
+/// bundle is a denied tool call — the worst possible moment and the wrong exit
+/// class, where house style §8 wants a config fault refused by `config lint`.
+const POLICY_SET_UNRESOLVABLE: &str = "policy-set-unresolvable";
+/// A module inside an enabled bundle that the whole-set sweep never entered
+/// (CLOUD-647).
+///
+/// **The anti-vacuity term.** A module the sweep did not reach contributes
+/// nothing to the analysis, so every conflict and cycle inside it goes
+/// unreported and the run is green — a policy set that loads clean, passes every
+/// per-row check, and contains a rule that can never fire. That false green is
+/// what this row was opened about, and without this smell the two above pass on
+/// a gate that analysed nothing.
+const POLICY_MODULE_UNSWEPT: &str = "policy-module-unswept";
 /// A waiver over a rule whose `kind` mints no [`crate::rules::Finding`], so
 /// [`crate::waiver::apply`] never sees one to suppress (CLOUD-293). The third
 /// dead-suppression shape, and the one that survives both the others: the rule
@@ -196,6 +215,7 @@ pub fn smells(
     source: &str,
     base: Option<&Config>,
     today: crate::waiver::Date,
+    bundles: &[crate::policy::Bundle],
 ) -> Result<Vec<Smell>> {
     // Parse through the real loader first, so a malformed config produces the
     // same message it would anywhere else rather than this module's own.
@@ -235,6 +255,59 @@ pub fn smells(
                 at: Where::Line(line_of(text, rule.id.span().start)),
                 id: RULE_DISABLED,
             });
+        }
+    }
+
+    // WHOLE-SET ANALYSIS OVER THE COMPOSED REGO SETS (CLOUD-647). Every other
+    // smell in this function is a property of one row or one pair of rows; these
+    // two are properties of a SET, which is the class nothing decided before.
+    //
+    // The bundles arrive already loaded, so this function stays a pure function
+    // of its inputs — `lint::run` owns the I/O, the way it already owns reading
+    // the base ref. A `smells` that loaded bundles itself would be doing
+    // acquisition inside a predicate, which is the shape the fact model exists
+    // to keep out.
+    //
+    // Located at the enabling row's `id` span, so two bundles report at two
+    // lines — the property CLOUD-233's dedup bug returned through when two
+    // smells shared a location.
+    for bundle in bundles {
+        let Some(row) = located
+            .rules
+            .iter()
+            .find(|rule| rule.id.get_ref() == bundle.id())
+        else {
+            continue;
+        };
+        let at = Where::Line(line_of(text, row.id.span().start));
+        match crate::policy::analyse(bundle) {
+            // The set refuses itself: a conflict between two complete rules, or
+            // a cycle. Regorus names both sites and the dependency chain, and
+            // that diagnostic is pointer-shaped already — but it is the ENGINE's
+            // text, so only the smell id travels here and the operator reads the
+            // detail from `check`'s own refusal.
+            Err(_) => found.push(Smell {
+                at,
+                id: POLICY_SET_UNRESOLVABLE,
+            }),
+            Ok(crate::facts::Look::Is(analysis)) => {
+                // One smell per unswept module rather than one per bundle: a
+                // reader fixing this needs to know how many modules are dark,
+                // and a single pointer would hide the second.
+                for _ in &analysis.unswept {
+                    found.push(Smell {
+                        at: at.clone(),
+                        id: POLICY_MODULE_UNSWEPT,
+                    });
+                }
+            }
+            // COULD NOT LOOK IS NOT CLEAN, and it is not a smell either. The
+            // sweep did not happen, so nothing about this set has been
+            // established — reporting a smell would name a defect nobody has
+            // evidence for, and reporting nothing is what a caller already reads
+            // as "asked and found nothing". This is the one arm that is silent
+            // on purpose, and `config lint`'s exit code is unchanged by it.
+            Ok(crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook) => {}
         }
     }
 
@@ -377,7 +450,28 @@ pub fn run(dir: &Path, base_ref: Option<&str>, today: crate::waiver::Date) -> Re
         }
         Err(err) => return Err(err.into()),
     };
-    smells(&text, &path.display().to_string(), base.as_ref(), today)
+    // THE BUNDLES ARE LOADED HERE, where the I/O already lives (CLOUD-647).
+    // `smells` stays a pure function of its inputs; this function already owns
+    // reading the working file and the base ref, so it owns this too.
+    //
+    // A bundle that will not LOAD is a different fault from one that will not
+    // RESOLVE, and it is already refused with its own message by
+    // `policy::load` — an unreadable module, an undeclared id, a colliding one.
+    // Reaching that refusal here would replace a specific diagnostic with a
+    // generic smell, so a load failure yields no bundles and the set analysis
+    // reports nothing about a set it never saw.
+    let bundles = config::parse(&text, &path.display().to_string())
+        .ok()
+        .map(|config| crate::policy::load(dir, &config.rules, base_ref))
+        .and_then(std::result::Result::ok)
+        .unwrap_or_default();
+    smells(
+        &text,
+        &path.display().to_string(),
+        base.as_ref(),
+        today,
+        &bundles,
+    )
 }
 
 /// Compare the committed `[ci]` against a host ruleset payload (CLOUD-54).
@@ -447,7 +541,7 @@ mod tests {
     }
 
     fn ids(text: &str) -> Vec<&'static str> {
-        smells(text, "test", None, today())
+        smells(text, "test", None, today(), &[])
             .unwrap()
             .into_iter()
             .map(|smell| smell.id)
@@ -494,7 +588,7 @@ mod tests {
     #[test]
     fn a_smell_carries_the_line_its_key_sits_on() {
         let text = "version = 1\n\nprotected = []\n";
-        let found = smells(text, "test", None, today()).unwrap();
+        let found = smells(text, "test", None, today(), &[]).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].at,
@@ -511,7 +605,7 @@ mod tests {
             "base",
         )
         .unwrap();
-        let found = smells("version = 1\n", "test", Some(&base), today()).unwrap();
+        let found = smells("version = 1\n", "test", Some(&base), today(), &[]).unwrap();
         let ids: Vec<&str> = found.iter().map(|smell| smell.id).collect();
         assert!(ids.contains(&"protected-removed"), "got: {ids:?}");
         assert!(ids.contains(&"strictness-lowered"), "got: {ids:?}");
@@ -523,7 +617,7 @@ mod tests {
         // the conversion must not trade that key for a line number the working
         // file may not even have. `batten.toml:0` pointed nowhere.
         let base = config::parse("version = 1\nprotected = [\"a\"]\n", "base").unwrap();
-        let found = smells("version = 1\n", "test", Some(&base), today()).unwrap();
+        let found = smells("version = 1\n", "test", Some(&base), today(), &[]).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].at, Where::Key("protected[a]".to_owned()));
         assert_eq!(
@@ -558,7 +652,7 @@ mod tests {
             rule("one", "warn"),
             rule("two", "warn")
         );
-        let found = smells(&working, "test", Some(&base), today()).unwrap();
+        let found = smells(&working, "test", Some(&base), today(), &[]).unwrap();
         let lowered: Vec<&Smell> = found
             .iter()
             .filter(|smell| smell.id == "severity-lowered")
@@ -582,13 +676,13 @@ mod tests {
         // simply cannot answer the comparison question, and must not report a
         // clean answer to it.
         let text = "version = 1\n";
-        assert!(smells(text, "test", None, today()).unwrap().is_empty());
+        assert!(smells(text, "test", None, today(), &[]).unwrap().is_empty());
     }
 
     #[test]
     fn the_report_is_sorted_and_so_byte_stable() {
         let text = "version = 1\nunlanded = []\nscope = []\nprotected = []\n";
-        let found = smells(text, "test", None, today()).unwrap();
+        let found = smells(text, "test", None, today(), &[]).unwrap();
         let mut sorted = found.clone();
         sorted.sort();
         assert_eq!(found, sorted);
@@ -624,14 +718,14 @@ mod tests {
         // The same bytes, judged on a date before the expiry, are clean — which is
         // §6 holding with a clock in the design: the verdict is a function of
         // (bytes, date) and of nothing else.
-        let earlier = smells(&text, "test", None, Date::parse("2026-01-01").unwrap()).unwrap();
+        let earlier = smells(&text, "test", None, Date::parse("2026-01-01").unwrap(), &[]).unwrap();
         assert!(earlier.is_empty());
     }
 
     #[test]
     fn the_waiver_pointer_names_the_line_the_rule_key_sits_on() {
         let text = with_waivers(&waiver_row("typo", "2099-01-01"));
-        let found = smells(&text, "test", None, today()).unwrap();
+        let found = smells(&text, "test", None, today(), &[]).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].line_text(), "batten.toml:11 waiver-names-no-rule");
         assert!(
@@ -706,7 +800,7 @@ mod tests {
     #[test]
     fn the_unreachable_pointer_names_the_waiver_and_the_kind() {
         let text = with_judge_rule(&waiver_row("intentional", "2099-01-01"));
-        let found = smells(&text, "test", None, today()).unwrap();
+        let found = smells(&text, "test", None, today(), &[]).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(
             found[0].line_text(),
@@ -750,7 +844,7 @@ mod tests {
              expires = \"2099-01-01\"\npath = \"vendor/**\"\n",
             waiver_row("intentional", "2099-01-01")
         ));
-        let found = smells(&text, "test", None, today()).unwrap();
+        let found = smells(&text, "test", None, today(), &[]).unwrap();
         assert_eq!(
             found.iter().map(Smell::line_text).collect::<Vec<_>>(),
             vec![
@@ -776,14 +870,14 @@ mod tests {
         // "weakened" rather than a second copy in this module.
         let base = config::parse(&with_waivers(""), "base").unwrap();
         let working = with_waivers(&waiver_row("r", "2099-01-01"));
-        let found = smells(&working, "test", Some(&base), today()).unwrap();
+        let found = smells(&working, "test", Some(&base), today(), &[]).unwrap();
         let ids: Vec<&str> = found.iter().map(|smell| smell.id).collect();
         assert!(ids.contains(&"waiver-added"), "got: {ids:?}");
     }
 
     #[test]
     fn a_malformed_config_is_a_usage_error() {
-        let err = smells("version = 1\nnot toml\n", "test", None, today()).unwrap_err();
+        let err = smells("version = 1\nnot toml\n", "test", None, today(), &[]).unwrap_err();
         assert!(err.downcast_ref::<crate::UsageError>().is_some());
     }
 }
