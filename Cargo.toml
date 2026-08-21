@@ -169,11 +169,33 @@ gix = { version = "0.86", default-features = false, features = [
 # `default-features = false` is load-bearing, not tidiness. The default
 # `full-opa` pulls `http` and `jsonschema`; consumer-authored policy with
 # network reach anywhere near the mediated path is a hole, and the feature list
-# is where it is closed. Measured 2026-08-20 against the pinned 1.97.1: this set
-# resolves a 45-package closure carrying none of `reqwest`, `jsonschema`,
-# `hyper`, `rustls`, `openssl-sys`, `native-tls`, `ring`, `globset` or `glob` —
-# so nothing in it declares a `links` key and `macos-link-check` rule 1 is
-# cleared without an exception.
+# is where it is closed. This set resolves a 41-package closure from the
+# `regorus` node carrying none of `reqwest`, `jsonschema`, `hyper`, `rustls`,
+# `openssl-sys`, `native-tls`, `ring`, `globset` or `glob` — so nothing in it
+# declares a `links` key and `macos-link-check` rule 1 is cleared without an
+# exception.
+#
+# THAT SENTENCE IS NO LONGER A PROMISE (CLOUD-831). `mise-tasks/evaluator-
+# closure-check` re-runs it on every gate invocation, and the `[[rule]]` row
+# `evaluator-closure-io-free` in `batten.toml` is what makes a firing a refusal.
+# The nine names live in the gate rather than being restated here a third time —
+# `mise-tasks/rules-drift`'s lesson is that a constant copied with nothing
+# holding the copies in agreement drifts, and this comment's own package count
+# was the proof: it read 45, measured 2026-08-20 by hand, against a graph that
+# resolved otherwise the same week.
+#
+# THE COUNT IS THE GATE'S OUTPUT, and its method is part of the number. 41 is
+# the ACTIVATED closure — optional dependencies nothing enabled are excluded,
+# the correction `macos-link-check` already made after refusing a link over a
+# dormant `defmt`. The whole resolve from the same node is 46 and `Cargo.lock`'s
+# union is 56; all three are "the closure" under different readings, which is
+# exactly why the method is stated. Re-read it with `mise run
+# evaluator-closure-check`, never by hand.
+#
+# The count is REPORTED and never asserted. Which of the nine are absent is a
+# property of this commit and is gated; how many packages upstream resolves to
+# is a property of the world, and gating it would fire on every legitimate bump
+# (`mise-tasks/lock-complete`'s split, applied here).
 #
 # `coverage` is not optional either, and not for reporting. Regorus refuses a
 # conflict or a recursion at EVALUATION, never at `add_policy` — five cases,

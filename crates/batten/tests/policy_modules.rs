@@ -72,6 +72,54 @@ deny contains msg if {
 }
 ";
 
+/// A module reaching for the network, and the whole of CLOUD-831's behavioural
+/// half.
+///
+/// `http.send` is a real OPA builtin that regorus gates behind its own `http`
+/// feature. The workspace manifest pins `default-features = false` precisely so
+/// that feature never enters the closure, and this is what asks the question the
+/// pin exists to answer — *can a module reach the network* — rather than
+/// asserting a string in a manifest.
+const REACHES_THE_NETWORK: &str = r#"
+package batten
+
+import rego.v1
+
+deny contains "the module reached the network" if {
+    http.send({"method": "get", "url": "http://example.invalid/"})
+}
+"#;
+
+/// The same shape over the `jsonschema` builtin, which the same feature line
+/// keeps out. Two builtins rather than one because the manifest names two, and a
+/// test covering half the pin would report the pin held while half of it drifted.
+const REACHES_JSONSCHEMA: &str = r#"
+package batten
+
+import rego.v1
+
+deny contains "the module validated a schema" if {
+    json.verify_schema({"type": "object"})
+}
+"#;
+
+/// The discriminator's control: a builtin that IS in the closure.
+///
+/// Without this, `no_evaluator_feature_admits_io` cannot tell "the builtin is
+/// absent" from "this test cannot make a module deny at all" — it would assert
+/// its own premise before its conclusion, which is what `.claude/rules/rust.md`
+/// and CLOUD-249 refuse. `count` ships with the evaluator under any feature set,
+/// so this module MUST deny for the assertions below to mean anything.
+const REACHES_AN_INCLUDED_BUILTIN: &str = r#"
+package batten
+
+import rego.v1
+
+deny contains "the module called a builtin that is in the closure" if {
+    count([1, 2, 3]) == 3
+}
+"#;
+
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("batten-policy-{name}-{}", std::process::id()));
     fs::create_dir_all(&dir).expect("scratch");
@@ -178,4 +226,111 @@ fn a_module_holds_no_source_and_cannot_leak_one_through_debug() {
         !rendered.contains("deny contains"),
         "no byte of the policy body reaches a log: {rendered}"
     );
+}
+
+/// The pin `policy.rs`'s module doc has cited since CLOUD-689 and nothing has
+/// ever enforced (CLOUD-831).
+///
+/// # What this asserts, and why it is behavioural rather than textual
+///
+/// `policy.rs` admits consumer-authored code to the mediated call on one claim:
+/// a module "cannot open a file, start a process, or reach the network". The
+/// workspace manifest closes that with `default-features = false`, keeping
+/// regorus's `http` and `jsonschema` features out of the closure — and the doc
+/// comment names *this test* as what keeps it from drifting. Until CLOUD-831 the
+/// name resolved to nothing (CLOUD-589's class, on the highest-consequence claim
+/// in the crate).
+///
+/// A test over the manifest TEXT would not do: **Cargo unifies features across
+/// the graph**, so a second workspace crate or any dependency taking regorus with
+/// default features unions `http` back on with no edit to the line that states
+/// the pin. This asks the evaluator instead, which stays true under unification.
+///
+/// # Shown able to fail (CLOUD-418)
+///
+/// `--features probe-evaluator-io` turns regorus's `http` feature on and the
+/// `http.send` assertion below goes red. That is the whole point of the test and
+/// it is in the diff rather than asserted: `tests/evaluator-io.bats` builds it
+/// both ways and refuses a build that stays green with the feature on. Under the
+/// shipped feature set the probe is off and costs the closure nothing —
+/// `regorus`'s `http` feature is `[]`, gating only the builtin's registration,
+/// so `Cargo.lock` is byte-identical either way.
+///
+/// The `jsonschema` half below gets no feature-flipped twin, and the manifest
+/// records why: `regorus/jsonschema` admits a second copy of a crate this
+/// workspace already resolves at a different major, which is not free. One
+/// exercised discriminator is what CLOUD-418 asks for; the jsonschema assertion
+/// still pins the shipped set.
+///
+/// The `count` control is the other half of discriminating: it proves the
+/// harness can make a module deny at all, so a `CouldNotLook` above is the
+/// builtin's absence rather than a broken fixture.
+#[test]
+#[cfg_attr(
+    feature = "probe-evaluator-io",
+    ignore = "the probe build turns the IO features ON; tests/evaluator-io.bats \
+              runs this case there and requires it to FAIL"
+)]
+fn no_evaluator_feature_admits_io() {
+    let root = scratch("evaluator-io");
+
+    // The control first. If this does not deny, nothing below discriminates.
+    let included = module_file(&root, "included.rego", REACHES_AN_INCLUDED_BUILTIN);
+    let modules = policy::load(&root, &[row("policy-included", &included)], None)
+        .expect("a module over an in-closure builtin loads");
+    assert_eq!(
+        policy::deny(&modules[0], "{}"),
+        Look::Is(vec![
+            "the module called a builtin that is in the closure".to_owned()
+        ]),
+        "the control must deny, or an absent-builtin verdict below is unattributable"
+    );
+
+    // `http.send` — the network. Whether regorus refuses this at compile or at
+    // the smoke query, `load` turns it into a config error (exit 1) and the
+    // module never decides a call. Either way it DOES NOT ANSWER, which is the
+    // property the doc claims; both arms are accepted here and the assertion is
+    // over the outcome that matters.
+    let network = module_file(&root, "network.rego", REACHES_THE_NETWORK);
+    match policy::load(&root, &[row("policy-network", &network)], None) {
+        Err(refused) => {
+            let text = format!("{refused}");
+            assert!(
+                text.contains("network.rego"),
+                "the refusal points at the module: {text}"
+            );
+        }
+        Ok(loaded) => {
+            let answer = policy::deny(&loaded[0], "{}");
+            assert!(
+                answer.could_not_look(),
+                "a module invoking `http.send` must not produce a deny — it must \
+                 not be able to run at all. `http` has entered the evaluator's \
+                 closure, which is the drift `Cargo.toml`'s feature list exists \
+                 to prevent and `evaluator-closure-check` is the other half of."
+            );
+        }
+    }
+
+    // `json.verify_schema` — the `jsonschema` builtin, the second name the
+    // manifest pins out. Same shape: a test covering one of the two would report
+    // the pin held while half of it drifted.
+    let schema = module_file(&root, "schema.rego", REACHES_JSONSCHEMA);
+    match policy::load(&root, &[row("policy-schema", &schema)], None) {
+        Err(refused) => {
+            let text = format!("{refused}");
+            assert!(
+                text.contains("schema.rego"),
+                "the refusal points at the module: {text}"
+            );
+        }
+        Ok(loaded) => {
+            let answer = policy::deny(&loaded[0], "{}");
+            assert!(
+                answer.could_not_look(),
+                "a module invoking the `jsonschema` builtin must not answer; \
+                 `jsonschema` has entered the evaluator's closure"
+            );
+        }
+    }
 }

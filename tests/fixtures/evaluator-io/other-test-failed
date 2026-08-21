@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# The harness ran, and the summary says FAILED — but a DIFFERENT test failed and
+# the named one was filtered out. A gate reading only the summary line takes this
+# as its evidence; it is not.
+echo 'running 1 test'
+echo 'test a_cyclic_module_is_refused_at_load ... FAILED'
+echo ''
+echo 'failures:'
+echo '    a_cyclic_module_is_refused_at_load'
+echo ''
+echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out'
+exit 101

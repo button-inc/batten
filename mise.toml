@@ -326,7 +326,7 @@ CI_ANSWERED_CONCLUSIONS = "success,neutral,failure,timed_out,action_required"
 #
 # Seeded with the gates this bundle touches, so every "mutation-checked per
 # CLOUD-418" obligation in it is cashed rather than cited.
-MUTANT_GATES = "msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,no-doctests,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads"
+MUTANT_GATES = "evaluator-closure-check,evaluator-io-check,msrv-pin-agreement,issue-read-check,cap-drift,digest-major-agreement,bot-issue,renovate-config-validator,lock-complete,signing-posture,mcp-timeout-budget,land,land-lock,checks-green,ci-lease-precondition,ci-local-parity,ci-tools-check,no-doctests,rust-paths-check,finding-sink-check,issue-search-check,issue-search-guard,run-shape-guard,graph-check,board-move-guard,board-write-record,board-diff-overlap,filed-here-check,reclaim-census,done-pr-check,claim-check,pr-unsubscribed,fanout-guard,connector-allow-resolve,connector-allow-guard,mcp-attach-check,serena-mcp,mcp-allow-check,target-prune,claimed-keys,released,in-progress-drain,unlanded-check,landed-check,spec-ref-check,merged-pr-keys,board-payloads"
 
 # --- GitHub reachability behind an egress proxy (Claude Code web sandbox etc.) ---
 # mise resolves every tool's release through GitHub's *API* host, api.github.com.
@@ -1255,6 +1255,26 @@ sonar_rc=0
 mise run sonar-gate || sonar_rc=$?
 if [ "$sonar_rc" != 0 ] && [ "$sonar_rc" != 3 ]; then
   echo "::error:: verify: sonar-gate failed — see its message. No receipt written." >&2
+  exit 1
+fi
+# The IO-free evaluator test, shown able to FAIL (CLOUD-831, CLOUD-418). The
+# closure half of that pin is a `batten.toml` rule row and rides `batten-check`
+# above; this half cannot, because its subject is a BUILD with a different
+# feature set and no rule kind can ask for one.
+#
+# Cheap on the common change: receipt-gated on the Rust specs, so it costs a
+# checksum read unless the crate, its manifests or the lockfile moved. When it
+# does run it pays one feature-toggled compile — which is the commit worth
+# paying for, since that is exactly when the test could have stopped
+# discriminating.
+#
+# NOT a CI job, and that is `ci-local-parity` satisfied rather than dodged: the
+# constraint is that every task CI runs is one `verify` runs, not the reverse.
+# `ready-guard` refuses `gh pr ready` without a verify receipt for this HEAD, so
+# a test that has quietly stopped discriminating blocks the PR before it can
+# spend a runner.
+if ! mise run evaluator-io-check; then
+  echo "::error:: verify: evaluator-io-check refused — the IO-free evaluator test no longer discriminates, or its probe build could not run. No receipt written." >&2
   exit 1
 fi
 # The latency regression gate (CLOUD-172). `perf-assert` holds the published

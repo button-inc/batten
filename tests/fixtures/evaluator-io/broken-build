@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# `cargo test` exiting non-zero without ever running a test. No `test result:`
+# line at all, because the harness never started.
+#
+# A quoted heredoc rather than `echo`: this is verbatim compiler output, and it
+# carries backticks that shellcheck reads as command substitution inside single
+# quotes (SC2016). Quoting the delimiter says "these bytes are data" once,
+# instead of a disable comment per line saying it repeatedly.
+cat >&2 <<'CARGO'
+error[E0432]: unresolved import `batten::policy::Bundle`
+error: could not compile `batten` (test "policy_modules") due to 1 previous error
+CARGO
+exit 101

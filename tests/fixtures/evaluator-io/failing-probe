@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# The real shape of the probe build's output when the test runs and falsifies.
+# The `failures:` listing is what the gate reads: the per-test line differs
+# between plain and --quiet, that listing does not.
+echo 'running 1 test'
+echo 'test no_evaluator_feature_admits_io ... FAILED'
+echo ''
+echo 'failures:'
+echo '    no_evaluator_feature_admits_io'
+echo ''
+echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out'
+exit 101

@@ -47,6 +47,38 @@ path = "src/main.rs"
 name = "batten"
 path = "src/lib.rs"
 
+# The negative case for `no_evaluator_feature_admits_io`, and nothing else
+# (CLOUD-831 §7). A gate that is never shown to fail ships as coverage
+# (CLOUD-418): the IO-free test asserts a module cannot reach `http.send`, and
+# without a build where it CAN that assertion discriminates nothing.
+#
+# OFF in every shipped and every default build. `tests/evaluator-io.bats` is the
+# only caller, and it requires the test to FAIL here — a probe build that stays
+# green is the finding, not a pass.
+#
+# IT COSTS THE CLOSURE NOTHING, which is why this is affordable at all and why
+# the `evaluator-closure-check` gate is not weakened by its existence. Measured
+# against regorus 0.11.0, 2026-08-21: `http = []` — a bare feature gating only
+# the builtin's registration, pulling no package and leaving `Cargo.lock`
+# byte-identical. And both gates that read the graph —
+# `evaluator-closure-check` and `macos-link-check` — walk ACTIVATED edges from
+# `cargo metadata`'s default-feature resolve, so an off-by-default feature is
+# invisible to them by construction rather than by luck.
+#
+# WHY `regorus/jsonschema` IS NOT HERE, stated rather than left as an omission.
+# It was measured on the same day and REJECTED: it names `dep:jsonschema` at
+# `^0.47`, while this crate's dev-dependency resolves `0.49`, so enabling it
+# admits a SECOND copy of the crate — 69 lines of lockfile churn and a duplicate
+# `fancy-regex` behind it. A probe feature that changes the shipped lock is no
+# longer free, and a duplicate version is a finding `cargo deny` is entitled to
+# refuse. `no_evaluator_feature_admits_io` still asserts the jsonschema builtin
+# is absent under the shipped set; what it does not get is a second
+# feature-flipped negative case, and one discriminator is what CLOUD-418 asks
+# for. Recorded on CLOUD-831 so the wider spelling is not reintroduced as a
+# completeness fix.
+[features]
+probe-evaluator-io = ["regorus/http"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

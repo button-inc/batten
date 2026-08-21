@@ -22,8 +22,28 @@
 //! a policy row is [`crate::rules::Authority::Supplied`]: the module is a pure
 //! function over the input document. It cannot open a file, start a process, or
 //! reach the network — the workspace manifest pins `default-features = false`
-//! precisely so `http` and `jsonschema` never enter the closure, and
-//! `no_evaluator_feature_admits_io` is what keeps that from drifting.
+//! precisely so `http` and `jsonschema` never enter the closure.
+//!
+//! **Two mechanisms keep that from drifting, and until CLOUD-831 there were
+//! zero.** This paragraph cited a test named `no_evaluator_feature_admits_io`
+//! that did not exist — one grep hit, and it was this comment making the claim
+//! (CLOUD-589's class, on the highest-consequence claim in the crate). Both
+//! halves are real now, and they answer different questions:
+//!
+//! * `no_evaluator_feature_admits_io` in `crates/batten/tests/policy_modules.rs`
+//!   is the BEHAVIOURAL half: it hands [`deny`] a module invoking `http.send`
+//!   and asserts it does not answer. That asks *can a module reach the network*
+//!   rather than testing a string in a manifest, so it stays true when the
+//!   feature arrives by Cargo's cross-graph feature unification rather than by
+//!   an edit. Shown able to fail under `--features probe-evaluator-io`.
+//! * `mise-tasks/evaluator-closure-check`, wired as `batten.toml`'s
+//!   `evaluator-closure-io-free` row, is the CLOSURE half: it walks the resolved
+//!   graph from the `regorus` node and refuses any of the nine IO-bearing crates
+//!   the manifest names becoming reachable.
+//!
+//! Neither subsumes the other. The first would still pass if an IO crate entered
+//! the closure behind a builtin nothing calls; the second would still pass if a
+//! future evaluator gained IO with no new dependency.
 //!
 //! That is the whole argument for admitting consumer-authored code to the
 //! mediated call. A [`crate::rules::RuleKind::Command`] row spawns a process with

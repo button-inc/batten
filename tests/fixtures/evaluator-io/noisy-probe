@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# A genuine probe failure that is LOUD: a real one prints the fixture's module
+# source, the assertion message and a backtrace. The gate must report its verdict
+# and none of this (non-negotiable rule 4).
+echo 'running 1 test'
+echo 'test no_evaluator_feature_admits_io ... FAILED'
+echo 'deny contains "x" if { http.send({}) }   # POLICY-BODY-LEAKED'
+echo 'thread panicked at crates/batten/tests/policy_modules.rs:303' >&2
+echo ''
+echo 'failures:'
+echo '    no_evaluator_feature_admits_io'
+echo ''
+echo 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out'
+exit 101

@@ -172,6 +172,16 @@ batten-check)
 	tools="$rust_tools"
 	known=yes
 	;;
+evaluator-io-check)
+	# The Rust specs plus nothing else: the probe build's verdict is a function
+	# of the crate source, the manifests (which is where the `probe-evaluator-io`
+	# feature and the `regorus` feature list live) and the lockfile. `batten.toml`
+	# rides along in `$rust_specs` and steers nothing here, which costs a
+	# needless re-run on a config-only change and is the safe direction.
+	specs="$rust_specs"
+	tools="$rust_tools"
+	known=yes
+	;;
 test:bats)
 	specs=""
 	tools="bats --version"

@@ -1439,6 +1439,37 @@ no_fix_reason = "the missing node is in the workflow, not in this file; add the 
 # (CLOUD-614). Naming the program the row exists to run makes the trigger and the
 # mechanism the same object, and keeps this out of every fixture that does not
 # carry it.
+# The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s
+# module doc admits consumer-authored code to the MEDIATED CALL on the claim that
+# a module "cannot open a file, start a process, or reach the network", and cited
+# a test named `no_evaluator_feature_admits_io` that did not exist — CLOUD-589's
+# class, on the highest-consequence claim in the crate. That test exists now, and
+# this row is its defence-in-depth half.
+#
+# A `command` row rather than a `forbid` over the manifest text, deliberately.
+# Cargo unifies features across the graph, so `http` can re-enter the closure
+# with NO edit to the `regorus` feature list — a `forbid` matches the line that
+# states the pin and is blind to the failure mode that matters. Only the resolved
+# graph can answer, and reading it means spawning `cargo metadata`.
+#
+# Tree-scoped and spawning, so it runs under `enforce` / the hk gate and never on
+# the mediated path — which is the right side of the CLOUD-170 split for a gate
+# whose subject is the mediated path.
+#
+# `glob` names the check's own file so the trigger and the mechanism are one
+# object (CLOUD-614), matching `claim-not-raced` below. The gate reads
+# `Cargo.lock` and `Cargo.toml`, not this file — the glob is what decides WHEN it
+# is worth asking, and asking on a change to the gate itself is the case that
+# must never be skipped.
+[[rule]]
+id = "evaluator-closure-io-free"
+kind = "command"
+glob = "mise-tasks/evaluator-closure-check"
+check = "mise run evaluator-closure-check"
+severity = "deny"
+scope = "tree"
+no_fix_reason = "an IO crate reaching the evaluator is closed where it was enabled, not here: `cargo tree -i <crate>` names who turned it on, and the `regorus` feature list in Cargo.toml is where the pin is stated rather than where it is decided"
+
 [[rule]]
 id = "claim-not-raced"
 kind = "command"
