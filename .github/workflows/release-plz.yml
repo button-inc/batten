@@ -53,6 +53,26 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # WHAT MAKES THE CACHE-WARM JOB'S `install_args` BIND, and it is worth 163
+  # seconds (CLOUD-840). mise auto-installs a missing tool when a task runs or
+  # when `mise exec` needs one, both default true — so every `cargo`/`rustc`
+  # call through mise's shims can enter the install/verify path. `rust-cache`
+  # makes several of those composing its key, before it emits a single line.
+  #
+  # Measured on the second warm cycle, from the step's own log: the step ran
+  # 15:52:07 -> 15:54:58, and "Cache Configuration" did not print until
+  # 15:54:50. The cache work inside that is 2.7s of download for 182MB and 3.6s
+  # of extract — about 8 seconds. The other 163 are pre-flight. `rust.yml`'s
+  # `windows` job restores the same entry in 12s, and the only difference
+  # between them is these two lines.
+  #
+  # CLOUD-812 set them in `ci.yml`, `commit-lint.yml` and `zizmor.yml` and
+  # correctly stopped there: this workflow had no job that ran cargo. Adding one
+  # without them is what re-opened it. `ci-tools-check` cannot catch that — its
+  # absence direction is scoped to `pull_request` workflows, and this one is
+  # push-triggered.
+  MISE_TASK_RUN_AUTO_INSTALL: "false"
+  MISE_EXEC_AUTO_INSTALL: "false"
   # Restores locked installs, which `[settings] lockfile = false` turns off
   # along with the install-time write it exists to deny (CLOUD-223). A runner
   # should install locked, and its checkout is disposable, so a write here
