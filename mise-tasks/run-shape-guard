@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-#MISE description="PreToolUse hook body: deny a foreground sleep, which spends the session's turn, and a git commit that cannot obtain a message, which spends the whole gate first"
+#MISE description="PreToolUse hook body: deny a foreground sleep, which spends the session's turn, a git commit that cannot obtain a message, which spends the whole gate first, and a mediated cargo that is a weaker form of a task's own argv"
 #
-# TWO FAMILIES, and what is NOT here is the point. This guard used to carry five
-# predicates; the three that discard a verdict — a pager or filter pipe, a
+# THREE FAMILIES, and what is NOT here is the point. This guard used to carry
+# five predicates; the three that discard a verdict — a pager or filter pipe, a
 # trailing list element, `nohup`/`&` — moved into the engine with CLOUD-443 as
 # `batten.toml`'s `verdict-not-discarded` row, and the corpus that proved them is
 # `crates/batten/tests/pipeline_shapes.rs`. They are gone from here rather than
 # duplicated, because a predicate enforced in two places is two authorities that
 # drift.
 #
-# These two remain because the engine cannot express them, each for its own
-# reason rather than for want of a rule kind:
+# These remain because the engine cannot express them, each for its own reason
+# rather than for want of a rule kind:
 #
 #   foreground-sleep `cd repo; sleep 90; git log --oneline -1` waits inside the
 #                   call. It fails GREEN only up to ~2 minutes; past that the
@@ -32,13 +32,24 @@
 #                   going to refuse. The predicate is over heredoc BINDING, which
 #                   no shape or operator table describes.
 #
+#   cargo-substitutes-for-a-task  `mise exec -- cargo clippy -p batten
+#                   --all-targets` is the escape `no-bare-cargo`'s own refusal
+#                   text recommends, and it is WEAKER than the task it stands in
+#                   for — measured clean over 10 `expect_used` errors, then
+#                   quoted as verification. Its predicate is over `mise.toml`'s
+#                   task bodies, a FILE the rule reads; a `mediated_call` kind
+#                   cannot spawn (`no_mediated_call_kind_spawns_a_process`) and a
+#                   `shape` row's pattern is a literal, so neither can derive a
+#                   mapping that must not be restated. CLOUD-822.
+#
 # One root cause, shared with the three that left: treating a Bash call as a
 # terminal that should print something short, when it is a supervised process
 # whose exit status and lifetime are the interface. A foreground `sleep` sits at
 # the terminal waiting, which is the one thing a supervised process must never
-# do; a commit that can never obtain a message spends the gate before saying so.
+# do; a commit that can never obtain a message spends the gate before saying so;
+# a weaker `cargo` prints an exit 0 that means nothing and gets quoted anyway.
 #
-# Retiring these two as well is CLOUD-613.
+# Retiring these as well is CLOUD-613.
 #
 # Fails OPEN on anything it cannot parse, and honours BATTEN_RUN_SHAPE_BYPASS=1.
 #
@@ -73,6 +84,10 @@ raw=$(cat) || exit 0
 # the pairing, and refused this file while it was being wired.
 here="$(dirname -- "${BASH_SOURCE[0]}")"
 field="$here/payload-field"
+# `mise.toml` is the one authority for what a task actually runs (CLOUD-822),
+# resolved beside this file rather than from cwd: a `PreToolUse` hook is invoked
+# from wherever the call was made.
+MISE_TOML="$here/../mise.toml"
 [ -x "$field" ] || exit 0
 
 cmd=$(printf '%s' "$raw" | "$field" command) || exit 0
@@ -125,11 +140,25 @@ scrubbed=$(printf '%s' "$body" | perl -0777 -pe "s/'[^']*'/QUOTED/g; s/\"[^\"]*\
 # skip is `gh-guard-check`'s: in the web sandbox `mise exec -- …` is often the
 # only working form, so a guard that stops at the wrapper token sees none of the
 # calls that matter.
+# RESOLVED_VIA and RESOLVED_ARGV are set as a side effect, for the CLOUD-822 rule
+# below, which needs two things this signature cannot carry: whether the call was
+# MEDIATED through `mise exec` (a bare one belongs to the engine's
+# `no-bare-cargo`, and two rules reporting one command is the drift this file's
+# header refuses), and the flags — which `words` deliberately drops. Set here
+# rather than re-derived by a second wrapper-skipping loop, because two loops
+# agreeing about what `env -i timeout 5 mise exec -- cargo` resolves to is a
+# coincidence waiting to end. Existing callers read three words and are
+# unaffected; they call this in a subshell, where the globals simply do not
+# escape.
+RESOLVED_VIA=direct
+RESOLVED_ARGV=()
 resolve() {
 	local seg=$1
 	local -a toks words
 	read -r -a toks <<<"$seg"
 	local count=${#toks[@]} i=0
+	RESOLVED_VIA=direct
+	RESOLVED_ARGV=()
 	while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; do i=$((i + 1)); done
 	while :; do
 		case "${toks[$i]:-}" in
@@ -142,6 +171,7 @@ resolve() {
 			# task and IS the thing being judged.
 			case "${toks[$((i + 1))]:-}" in
 			exec | x)
+				RESOLVED_VIA=mise
 				i=$((i + 2))
 				while [ "$i" -lt "$count" ] && [[ ${toks[$i]} =~ ^(-|[^ ]*@) ]]; do i=$((i + 1)); done
 				;;
@@ -153,6 +183,7 @@ resolve() {
 	done
 	local prog=${toks[$i]:-}
 	prog=${prog##*/}
+	RESOLVED_ARGV=("${toks[@]:$i}")
 	words=()
 	local t
 	for t in "${toks[@]:$((i + 1))}"; do
@@ -381,6 +412,218 @@ $COMMIT_REMEDY"
 
 $COMMIT_REMEDY"
 		fi
+	done
+done
+
+# --- cargo-substitutes-for-a-task (CLOUD-822) --------------------------------
+#
+# `no-bare-cargo` gates the TOOLCHAIN and not the STRICTNESS, and its own refusal
+# text hands out the gap: "or `mise exec -- cargo ...` for a one-off." That
+# escape fixes which compiler runs and says nothing about which lint set does.
+# `mise run lint:clippy` adds `-D warnings`, which promotes the workspace's
+# warn-level `unwrap_used`/`expect_used` to errors; the escape omits it.
+#
+# Measured 2026-08-21, three times in one session. `mise exec -- cargo check -p
+# batten` missed 15 `Policy` literals short a field — the lib test target did not
+# compile, on two PUSHED commits. `mise exec -- cargo clippy -p batten
+# --all-targets` missed 10 `expect_used` errors and a `needless_raw_string_hashes`.
+# `--all-targets` is MORE thorough than the default and still weaker than the
+# task, because thoroughness and strictness are different axes, and adding flags
+# does not converge on the task.
+#
+# WORSE THAN AN ORDINARY MISS: the exit 0 was then quoted as verification, into a
+# commit message and a summary. The wrong answer did not merely fail to help.
+#
+# THE MAPPING IS DERIVED, NEVER RESTATED (§1). `mise.toml` already holds the real
+# command lines, so this reads them — the discipline `hooks-wiring-check` uses
+# against `render_wiring`, and what keeps this off CLOUD-691's shape, where a
+# predicate enumerating spellings lags the thing it guards.
+#
+# ONLY THE MEDIATED FORM, so the two rules never report one command. A bare
+# `cargo clippy` is the engine's `no-bare-cargo`, and `RESOLVED_VIA` is what
+# tells them apart.
+#
+# The mutation makes the flag comparison unfalsifiable, so no invocation is ever
+# weaker than a task and the escape is allowed again — the state this row found,
+# where the false green was reportable and every case below still passed.
+#MUTANT cargo-substitution-allowed|s@missing="\$flag"@missing=""@|THE MEASURED SHAPE: a weaker clippy through the sanctioned escape is refused
+
+# The cargo argv of one command line, split into the three things "weaker" is
+# decided over. Sets CARGO_SUB, CARGO_FLAGS and CARGO_TAIL.
+#
+# THE `--` SEPARATOR MEANS TWO DIFFERENT THINGS, and the discriminator is derived
+# rather than listed: after `cargo clippy --` come more LINT FLAGS (`-D
+# warnings`), and after `cargo run --` comes a different program's ARGV
+# (`provision apply`). Which one it is, is whether the first token past `--`
+# starts with a dash. That distinction is load-bearing — without it `cargo run -p
+# batten -- check` reads as a weaker `cargo run --quiet -p batten -- provision
+# apply`, which is not a substitution at all but a different command, and a guard
+# that denies those is one CLOUD-199 measured getting switched off.
+cargo_shape() { # cargo_shape <tokens from `cargo` onward>
+	local -a toks=("$@")
+	local count=${#toks[@]} i=1 t
+	CARGO_SUB=""
+	CARGO_FLAGS=""
+	CARGO_TAIL=""
+	# `+nightly` selects a toolchain, not a subcommand.
+	while [ "$i" -lt "$count" ] && [ "${toks[$i]#+}" != "${toks[$i]}" ]; do i=$((i + 1)); done
+	while [ "$i" -lt "$count" ]; do
+		t=${toks[$i]}
+		[ "$t" = "--" ] && break
+		case "$t" in
+		-*) CARGO_FLAGS="$CARGO_FLAGS $t" ;;
+		*) if [ -z "$CARGO_SUB" ]; then CARGO_SUB=$t; else CARGO_FLAGS="$CARGO_FLAGS $t"; fi ;;
+		esac
+		i=$((i + 1))
+	done
+	[ "$i" -lt "$count" ] || return 0
+	i=$((i + 1)) # step over the `--`
+	case "${toks[$i]:-}" in
+	-*)
+		# More flags for the same subcommand. `-D warnings` IS the strictness
+		# this rule exists to notice, so it belongs on the flag side.
+		while [ "$i" -lt "$count" ]; do
+			CARGO_FLAGS="$CARGO_FLAGS ${toks[$i]}"
+			i=$((i + 1))
+		done
+		;;
+	?*)
+		# A program argv: identity, not strictness, so it is compared whole.
+		while [ "$i" -lt "$count" ]; do
+			CARGO_TAIL="$CARGO_TAIL ${toks[$i]}"
+			i=$((i + 1))
+		done
+		;;
+	esac
+}
+
+# Every `cargo` command line `mise.toml`'s task bodies declare, as
+# `<task><TAB><line>`.
+#
+# ONLY `run` BODIES ARE READ. A `description` naming a command is prose, and
+# reading it registered `test:bats` as wrapping `cargo test` while this was being
+# written — a task whose body runs no cargo at all.
+#
+# `awk`, not a pinned `taplo` or `jq`: this guard is registered BY PATH and does
+# not get mise's env, which is the whole reason `payload-field` exists and what
+# `hook-pin-check` refuses. The triple-quote delimiters are built from character
+# codes rather than written as literals, so this stays quotable inside the single
+# quotes the shell puts around it.
+declared_cargo_lines() {
+	awk '
+		BEGIN {
+			sq = sprintf("%c", 39)
+			dq = sprintf("%c", 34)
+			tq_s = sq sq sq
+			tq_d = dq dq dq
+		}
+		/^\[/ {
+			inrun = 0
+			name = ""
+			if ($0 ~ /^\[tasks[.]/) {
+				name = $0
+				sub(/^\[tasks[.]/, "", name)
+				sub(/\]$/, "", name)
+				gsub(dq, "", name)
+			}
+			next
+		}
+		name == "" { next }
+		{
+			trimmed = $0
+			sub(/^[[:space:]]+/, "", trimmed)
+			sub(/[[:space:]]+$/, "", trimmed)
+		}
+		inrun {
+			if (trimmed == tq_s || trimmed == tq_d) { inrun = 0; next }
+			print name "\t" $0
+			next
+		}
+		trimmed ~ /^run[[:space:]]*=/ {
+			rest = trimmed
+			sub(/^run[[:space:]]*=[[:space:]]*/, "", rest)
+			if (rest == tq_s || rest == tq_d) { inrun = 1; next }
+			first = substr(rest, 1, 1)
+			if (first == sq || first == dq) { rest = substr(rest, 2, length(rest) - 2) }
+			print name "\t" rest
+			next
+		}
+	' "$1"
+}
+
+for element in "${elements[@]}"; do
+	cargo_stages=()
+	while IFS= read -r cargo_stage_line; do
+		cargo_stages+=("$cargo_stage_line")
+	done < <(printf '%s\n' "$element" | tr '|' '\n')
+	for stage in "${cargo_stages[@]}"; do
+		# Called OUTSIDE a subshell, unlike the two rules above: the argv and the
+		# wrapper this rule needs are side-effect globals, and `$(…)` would eat
+		# them. The alternative is a second copy of the wrapper-skipping loop,
+		# which is the drift this file's header refuses.
+		resolve "$stage" >/dev/null
+		prog=${RESOLVED_ARGV[0]:-}
+		prog=${prog##*/}
+		[ "$prog" = cargo ] || continue
+		[ "$RESOLVED_VIA" = mise ] || continue
+		[ -f "$MISE_TOML" ] || continue
+		cargo_shape "${RESOLVED_ARGV[@]}"
+		[ -n "$CARGO_SUB" ] || continue
+		want_sub=$CARGO_SUB
+		want_flags=$CARGO_FLAGS
+		want_tail=$CARGO_TAIL
+		wrapped=""
+		while IFS=$'\t' read -r task line; do
+			[ -n "$task" ] || continue
+			# Cut at the first shell operator, so `if ! cargo test --workspace;
+			# then exit 1; fi` yields the argv and not the words around it.
+			line=${line%%;*}
+			read -r -a line_toks <<<"$(sed -E 's/[|&<>]/ /g' <<<"$line")"
+			start=-1
+			for idx in "${!line_toks[@]}"; do
+				if [ "${line_toks[$idx]##*/}" = cargo ]; then
+					start=$idx
+					break
+				fi
+			done
+			[ "$start" -ge 0 ] || continue
+			cargo_shape "${line_toks[@]:$start}"
+			[ "$CARGO_SUB" = "$want_sub" ] || continue
+			# A different program argv is a different command, not a weaker one.
+			[ "$CARGO_TAIL" = "$want_tail" ] || continue
+			# WEAKER IS DECIDABLE, never judged: the task carries at least one
+			# flag token this invocation omits. An EQUAL argv is not weaker, so
+			# spelling a task's own line out by hand stays allowed.
+			missing=""
+			# shellcheck disable=SC2086  # word splitting is the comparison
+			for flag in $CARGO_FLAGS; do
+				case " $want_flags " in
+				*" $flag "*) ;;
+				*) missing="$flag" ;;
+				esac
+			done
+			[ -n "$missing" ] || continue
+			case " $wrapped " in
+			*" $task "*) ;;
+			*) wrapped="$wrapped $task" ;;
+			esac
+		done < <(declared_cargo_lines "$MISE_TOML")
+		# A subcommand no task wraps is a genuine one-off and is UNTOUCHED: the
+		# refusal is about SUBSTITUTION, not about the escape existing.
+		[ -n "$wrapped" ] || continue
+		# EVERY task it is weaker than, sorted, because which one "should have
+		# run" is not derivable — several tasks legitimately wrap one subcommand,
+		# and picking between them needs a judgement a gate must not make. Sorted
+		# so the output is byte-stable. Pointer-only: the subcommand and task
+		# names, never the tree or the diff.
+		# shellcheck disable=SC2086  # word splitting is how the list is re-read
+		named=$(printf '%s\n' $wrapped | sort | tr '\n' ' ')
+		named=${named% }
+		deny "Refused: this is a WEAKER form of a task that already declares \`cargo $want_sub\` — ${named// /, }. Each of those carries flags this invocation omits.
+
+\`mise exec -- cargo ...\` fixes the TOOLCHAIN and says nothing about the STRICTNESS: \`mise run lint:clippy\` adds \`-D warnings\`, which promotes the workspace's warn-level lints to errors, and the escape does not. Measured 2026-08-21, \`mise exec -- cargo clippy -p batten --all-targets\` reported clean over 10 \`expect_used\` errors — and \`--all-targets\` is MORE thorough than the default, because thoroughness and strictness are different axes. That exit 0 was then quoted as verification.
+
+Run the task instead: \`mise run <task>\`. A subcommand no task wraps is untouched, so a genuine one-off still works. Bypass with BATTEN_RUN_SHAPE_BYPASS=1."
 	done
 done
 

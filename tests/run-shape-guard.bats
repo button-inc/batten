@@ -8,8 +8,12 @@
 # suites asserting one predicate, which is how the two come to disagree.
 #
 # What remains is a foreground `sleep`, whose predicate is over the CALL's
-# `run_in_background` rather than over the command string, and a `git commit`
-# that can never obtain a message, whose predicate is over heredoc binding.
+# `run_in_background` rather than over the command string; a `git commit` that
+# can never obtain a message, whose predicate is over heredoc binding; and a
+# mediated `cargo` that is a weaker form of a task's own argv (CLOUD-822), whose
+# predicate is over a file — `mise.toml`'s task bodies — that no rule kind on the
+# mediated call may read, since none of them may spawn and a `shape` pattern is a
+# literal.
 
 setup() {
 	GUARD="$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard"
@@ -223,5 +227,168 @@ bg_guard() { # the same call, marked run_in_background
 	run guard 'echo "git commit -F - hangs the gate"'
 	[[ "$output" != *'"deny"'* ]]
 	run guard "$(printf 'cat > t.bats <<%s\nrun git commit -F -\n%s\n' BATS BATS)"
+	[[ "$output" != *'"deny"'* ]]
+}
+
+# --- cargo-substitutes-for-a-task (CLOUD-822) --------------------------------
+#
+# `no-bare-cargo` gates the toolchain and not the strictness, and its own refusal
+# text hands out the gap. Measured 2026-08-21: `mise exec -- cargo clippy -p
+# batten --all-targets` reported clean over 10 `expect_used` errors, and that
+# exit 0 was then quoted as verification in a commit message and a summary.
+#
+# The semantic rows below run against a FIXTURE `mise.toml`, because what they
+# assert is the DERIVATION — which shapes are weaker, which are merely different
+# — and pinning that to whichever tasks this repo happens to declare today would
+# make them a test of `mise.toml` rather than of the rule. The two rows that do
+# use the real tree are the ones CLOUD-822 measured, and they should track it.
+
+# A copy of the guard beside a fixture `mise.toml`, which is where it resolves
+# the task table from. `payload-field` travels with it: the guard reads every
+# payload through that helper rather than `jq`, because a by-path registration
+# does not get mise's env (`hook-pin-check`).
+fixture_guard() { # fixture_guard <mise.toml body>
+	FIXTURE="$BATS_TEST_TMPDIR/tree"
+	mkdir -p "$FIXTURE/mise-tasks"
+	cp "$BATS_TEST_DIRNAME/../mise-tasks/run-shape-guard" \
+		"$BATS_TEST_DIRNAME/../mise-tasks/payload-field" "$FIXTURE/mise-tasks/"
+	printf '%s\n' "$1" >"$FIXTURE/mise.toml"
+}
+
+# BATTEN_BIN exists for exactly this: `payload-field` resolves the binary from
+# its OWN location, so a copy beside a fixture `mise.toml` finds no `target/`.
+# Pointing it at the real build keeps the fixture about the task table — which is
+# the only thing these rows vary — rather than about the toolchain.
+fguard() { # fguard <command>
+	local bin=""
+	local candidate
+	for candidate in "$BATS_TEST_DIRNAME/../target/release/batten" "$BATS_TEST_DIRNAME/../target/debug/batten"; do
+		[ -x "$candidate" ] && bin="$candidate" && break
+	done
+	if [ -z "$bin" ]; then
+		skip "no batten binary to read the payload with — run \`mise run build:release\`"
+	fi
+	jq -nc --arg c "$1" '{tool_input: {command: $c}}' |
+		BATTEN_BIN="$bin" "$FIXTURE/mise-tasks/run-shape-guard"
+}
+
+TASKS='[tasks."lint:clippy"]
+description = "Clippy with warnings denied"
+run = """
+if ! cargo clippy --all-targets --all-features -- -D warnings; then exit 1; fi
+"""
+
+[tasks.batten-check]
+run = """
+if ! cargo run --quiet -p batten -- provision apply; then exit 1; fi
+"""
+
+[tasks.deny]
+run = "cargo deny check"'
+
+@test "THE MEASURED SHAPE: a weaker clippy through the sanctioned escape is refused" {
+	run guard 'mise exec -- cargo clippy -p batten --all-targets'
+	denied "$output"
+	[[ "$output" == *"lint:clippy"* ]]
+	# Pointer-only: the subcommand and the task names, never the tree or a diff.
+	[[ "$output" == *'`cargo clippy`'* ]]
+}
+
+@test "the task itself is allowed — this rule is about substitution, not about cargo" {
+	run guard 'mise run lint:clippy'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a subcommand no task wraps is a genuine one-off and is untouched" {
+	run guard 'mise exec -- cargo tree'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a BARE cargo is no-bare-cargo's, so the two never report one command" {
+	# The engine's row already denies it, on the toolchain axis. Two rules
+	# reporting one command is the drift this file's header refuses, and
+	# `RESOLVED_VIA` is what tells the mediated form from the bare one.
+	run guard 'cargo clippy --all-targets'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "an EQUAL argv is not weaker, so spelling a task's own line out is allowed" {
+	fixture_guard "$TASKS"
+	run fguard 'mise exec -- cargo deny check'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "a narrower argv IS weaker, and the task it is weaker than is named" {
+	fixture_guard "$TASKS"
+	run fguard 'mise exec -- cargo clippy -p batten --all-targets'
+	denied "$output"
+	[[ "$output" == *"lint:clippy"* ]]
+}
+
+@test "a DIFFERENT program argv is a different command, not a weaker one" {
+	# The `--` separator means two things. After `cargo clippy --` come more lint
+	# flags; after `cargo run --` comes another program's argv. Without that
+	# split, `cargo run -p batten -- check` reads as a weaker `cargo run --quiet
+	# -p batten -- provision apply`, and denying it is the pure false positive
+	# CLOUD-199 measured getting a guard switched off.
+	fixture_guard "$TASKS"
+	run fguard 'mise exec -- cargo run -p batten -- check'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "the SAME program argv, missing a flag, is a substitution" {
+	# The complement of the row above: same argv past `--`, and the task carries
+	# `--quiet` this invocation omits.
+	fixture_guard "$TASKS"
+	run fguard 'mise exec -- cargo run -p batten -- provision apply'
+	denied "$output"
+	[[ "$output" == *"batten-check"* ]]
+}
+
+@test "post-dash-dash LINT flags count as strictness, which is the whole measurement" {
+	# `-D warnings` is what `mise run lint:clippy` adds and the escape omits. If
+	# the tail past `--` were always read as a program argv, the one flag this
+	# row exists for would be invisible.
+	fixture_guard "$TASKS"
+	run fguard 'mise exec -- cargo clippy --all-targets --all-features'
+	denied "$output"
+	[[ "$output" == *"lint:clippy"* ]]
+}
+
+@test "THE MAPPING IS DERIVED: retitle the task's cargo line and the verdict follows" {
+	# §1's whole point. `mise.toml` already holds the real command lines, so
+	# nothing here restates them — and a task that stops wrapping a subcommand
+	# stops the refusal with no edit to the guard. Measured live while this
+	# landed: `test:cargo` moved from `cargo test` to `cargo nextest run` on
+	# main, and `cargo test` became a one-off the same instant.
+	fixture_guard '[tasks."test:cargo"]
+run = "cargo nextest run --workspace"'
+	run fguard 'mise exec -- cargo test -p batten'
+	[[ "$output" != *'"deny"'* ]]
+	run fguard 'mise exec -- cargo nextest run -p batten'
+	denied "$output"
+	[[ "$output" == *"test:cargo"* ]]
+}
+
+@test "a description naming a command is prose, never a declaration" {
+	# Only `run` bodies are read. Reading descriptions registered `test:bats` as
+	# wrapping `cargo test` while this was being written — a task whose body runs
+	# no cargo at all, so the refusal named a task that could not have helped.
+	fixture_guard '[tasks."test:bats"]
+description = "Run the shell suite — cargo test for the mise-tasks/ programs"
+run = "./tests/bats/bin/bats tests/*.bats"'
+	run fguard 'mise exec -- cargo test -p batten'
+	[[ "$output" != *'"deny"'* ]]
+}
+
+@test "the refusal names its bypass, since one that cannot be reached is not a remedy" {
+	run guard 'mise exec -- cargo clippy -p batten'
+	denied "$output"
+	[[ "$output" == *"BATTEN_RUN_SHAPE_BYPASS=1"* ]]
+	[[ "$output" == *"mise run"* ]]
+}
+
+@test "the bypass actually clears it" {
+	run bash -c "jq -nc --arg c 'mise exec -- cargo clippy -p batten' '{tool_input: {command: \$c}}' | BATTEN_RUN_SHAPE_BYPASS=1 '$GUARD'"
 	[[ "$output" != *'"deny"'* ]]
 }

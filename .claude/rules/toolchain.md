@@ -185,7 +185,7 @@ of `memory-guard`, whose last five write shapes — a destination-only copy, an
 in-place stream edit, and a version-control move or remove — became expressible
 as `[[verb]]` qualifiers in CLOUD-442, so that guard is **deleted** rather than
 still runnable, and `run-shape-guard`'s three verdict-discarding shapes
-(CLOUD-443), leaving that guard only the two families named below. It carries
+(CLOUD-443), leaving that guard only the families named below. It carries
 `issue-guard`'s **naming** half as of CLOUD-446 — a `requires_key` modifier on
 the two `gh pr create`/`ready` shape rows — and structurally cannot carry its
 duplicate-claim half, which needs `gh pr list` plus a `gh pr view` per
@@ -371,8 +371,8 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   the principle — read the status from the harness — rather than naming one
   command, since complying with the narrower wording is how the second instance
   happened.
-- `run-shape-guard` is what remains after that move, and it is **two families the
-  engine cannot express**. A **foreground `sleep`** throws away the SESSION
+- `run-shape-guard` is what remains after that move, and it is **three families
+  the engine cannot express**. A **foreground `sleep`** throws away the SESSION
   rather than a verdict: the harness kills the call at ~2 minutes, so a poll
   meant to be patient fails instead — measured at exit 143 and 144 over a hung
   commit, after which the container was reclaimed with the work uncommitted.
@@ -385,7 +385,16 @@ call` with no `CLOUD-*` key **in that same paragraph** stops the lap. Two open
   that changed a decision). Registered by path on `PreToolUse`/`Bash`, which it
   had never been until that issue. A **`git commit` that cannot obtain a
   message** spends the whole gate first, because `githooks(5)` runs `pre-commit`
-  before git asks for one; its predicate is over heredoc binding. Retiring both
+  before git asks for one; its predicate is over heredoc binding. A **mediated
+  `cargo` that is a weaker form of a declared task's argv** is refused naming
+  that task (CLOUD-822): `mise exec -- cargo clippy` — the escape
+  `no-bare-cargo`'s own refusal recommends — fixes the toolchain and says nothing
+  about the strictness, so it reported clean over 10 `expect_used` errors and
+  that exit 0 was then quoted as verification. The mapping is DERIVED from
+  `mise.toml`'s task bodies, never restated, which is also why it cannot be a
+  `shape` row: a pattern is a literal, and no `mediated_call` kind may spawn. A
+  subcommand no task wraps is a genuine one-off and is untouched; a bare `cargo`
+  stays `no-bare-cargo`'s, so the two never report one command. Retiring all
   into the engine is CLOUD-613. Bypass: `BATTEN_RUN_SHAPE_BYPASS=1`.
 - `fanout-guard` is the one entry on `Task` (CLOUD-287): a subagent spawn was the
   only unmediated call in the wiring, and the workflow contract's "a subagent
