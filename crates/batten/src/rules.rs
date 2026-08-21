@@ -631,6 +631,7 @@ impl RuleKind {
             RuleKind::Policy => &[
                 "module",
                 "bundle",
+                "preset",
                 "documents",
                 "severity",
                 "predicate_severity",
@@ -786,6 +787,26 @@ impl RuleScope {
             RuleScope::MediatedCall => "mediated_call",
         }
     }
+}
+
+/// The published schema for [`Rule::preset`]: a string constrained to the
+/// **embedded** preset names (CLOUD-836 §4).
+///
+/// Generated from [`crate::policy::preset_names`] rather than written out, so
+/// the schema and the binary cannot disagree about what may be enabled. A
+/// hand-maintained enum here would be a second authority over the same set, and
+/// the failure mode is the quiet one: an editor accepting a name the loader then
+/// refuses, or refusing one it accepts.
+fn preset_name_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let _ = generator;
+    let names: Vec<serde_json::Value> = crate::policy::preset_names()
+        .into_iter()
+        .map(|name| serde_json::Value::String(name.to_owned()))
+        .collect();
+    schemars::json_schema!({
+        "type": ["string", "null"],
+        "enum": names,
+    })
 }
 
 /// One declarative rule from `batten.toml`'s `[[rule]]` array.
@@ -1151,6 +1172,24 @@ pub struct Rule {
     /// refuses, never whether some other gate stops refusing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predicate_severity: Option<BTreeMap<String, RuleSeverity>>,
+    /// The vendored preset this rule enables, by name (CLOUD-836).
+    /// [`RuleKind::Policy`] only, and the third of the three mutually-exclusive
+    /// sources — [`Rule::module`] is one file, [`Rule::bundle`] one folder, this
+    /// one a bundle compiled into the binary.
+    ///
+    /// **A preset is not an authority; it is content the authority enables.**
+    /// That is what keeps it clear of CLOUD-29's one-committed-authority rule,
+    /// and why enabling one is explicit here rather than default-on: a consumer
+    /// who enables nothing gets nothing, so this adds no implicit behaviour for
+    /// §8 to have an opinion about.
+    ///
+    /// The valid names are [`crate::policy::preset_names`], derived from the
+    /// embedded set — an unknown name is a config error at load (exit `1`),
+    /// never a silent no-op, and the published schema's enum is generated from
+    /// the same list so the two cannot disagree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preset_name_schema")]
+    pub preset: Option<String>,
     /// The bundle root this rule enables, as a repository-relative directory
     /// (CLOUD-833). [`RuleKind::Policy`] only, and the **alternative** to
     /// [`Rule::module`] rather than an addition to it.
@@ -1767,24 +1806,31 @@ impl Rule {
         // reason: a row with both is a load error rather than a precedence rule
         // nobody can read.
         if self.kind == RuleKind::Policy {
-            match (self.module.as_deref(), self.bundle.as_deref()) {
-                (Some(_), Some(_)) => {
+            let sources = [
+                self.module.as_deref().map(|_| "module"),
+                self.bundle.as_deref().map(|_| "bundle"),
+                self.preset.as_deref().map(|_| "preset"),
+            ];
+            let named: Vec<&str> = sources.into_iter().flatten().collect();
+            match named.len() {
+                0 => {
                     return Err(UsageError::raise(format!(
-                        "rule {}: kind \"policy\" takes `module` (one file) or `bundle` (a \
-                         folder), never both — two sources for one row is a precedence \
+                        "rule {}: kind \"policy\" requires one of `module` (one file), \
+                         `bundle` (a folder) or `preset` (a vendored bundle); a row naming \
+                         none enables no policy and could only ever decide nothing",
+                        self.id
+                    )));
+                }
+                1 => {}
+                _ => {
+                    return Err(UsageError::raise(format!(
+                        "rule {}: kind \"policy\" takes exactly one of `module`, `bundle` or \
+                         `preset`, and this names {}; two sources for one row is a precedence \
                          question nobody should have to answer",
-                        self.id
+                        self.id,
+                        named.join(" and ")
                     )));
                 }
-                (None, None) => {
-                    return Err(UsageError::raise(format!(
-                        "rule {}: kind \"policy\" requires `module` (one file) or `bundle` (a \
-                         folder); a row naming neither enables no policy and could only ever \
-                         decide nothing",
-                        self.id
-                    )));
-                }
-                _ => {}
             }
             // `documents` is what a TREE row is handed. On the mediated call the
             // input is the envelope the boundary already carries, so a `documents`
@@ -4679,6 +4725,7 @@ mod tests {
             reads: None,
             module: None,
             bundle: None,
+            preset: None,
             documents: Vec::new(),
             predicate_severity: None,
             criteria: None,

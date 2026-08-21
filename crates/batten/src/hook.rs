@@ -3890,6 +3890,7 @@ mod tests {
             reads: None,
             module: None,
             bundle: None,
+            preset: None,
             documents: Vec::new(),
             predicate_severity: None,
             criteria: None,

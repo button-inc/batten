@@ -1292,6 +1292,17 @@
             "$ref": "#/$defs/RuleSeverity"
           }
         },
+        "preset": {
+          "description": "The vendored preset this rule enables, by name (CLOUD-836).\n[`RuleKind::Policy`] only, and the third of the three mutually-exclusive\nsources — [`Rule::module`] is one file, [`Rule::bundle`] one folder, this\none a bundle compiled into the binary.\n\n**A preset is not an authority; it is content the authority enables.**\nThat is what keeps it clear of CLOUD-29's one-committed-authority rule,\nand why enabling one is explicit here rather than default-on: a consumer\nwho enables nothing gets nothing, so this adds no implicit behaviour for\n§8 to have an opinion about.\n\nThe valid names are [`crate::policy::preset_names`], derived from the\nembedded set — an unknown name is a config error at load (exit `1`),\nnever a silent no-op, and the published schema's enum is generated from\nthe same list so the two cannot disagree.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "commit-hygiene",
+            "trunk-based"
+          ]
+        },
         "reads": {
           "description": "The derived value this rule compares its node against — [`Rule::pattern`]'s\n**alternative**, never an addition to it. [`RuleKind::Document`] only.\n\nA row carries exactly one of the two, the shape `forbid`'s\n`pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a\nload error rather than a precedence rule nobody can read.\n\nThree checks run at load and never later (house-style §8, and CLOUD-647\nmeasured that the obvious candidate engine reports the third at\n*evaluation*, which on the mediated path is the worst possible time):\nthe name must be derived by some row, the reference graph must be\nacyclic, and the derivation's [`RuleKind::fact_class`] must not make this\nrule more expensive or narrower than its own kind already is.",
           "type": [

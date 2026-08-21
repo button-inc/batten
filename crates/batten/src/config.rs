@@ -894,6 +894,7 @@ fn default_rules() -> Vec<Rule> {
         reads: None,
         module: None,
         bundle: None,
+        preset: None,
         documents: Vec::new(),
         predicate_severity: None,
         no_fix_reason: None,

@@ -1439,6 +1439,35 @@ no_fix_reason = "the missing node is in the workflow, not in this file; add the 
 # (CLOUD-614). Naming the program the row exists to run makes the trigger and the
 # mechanism the same object, and keeps this out of every fixture that does not
 # carry it.
+# CONSUMER #1 EATS THE SAME FOOD (CLOUD-836). Batten ships vendored preset
+# bundles compiled into the binary, and this repository enables one like any
+# other consumer would — which is the only way the surface gets exercised by
+# something other than its own tests.
+#
+# `trunk-based` rather than `commit-hygiene`, and the choice is on the merits:
+# AGENTS.md's landing contract is trunk-based development, `main` is the one
+# long-lived branch, and a force push there is exactly the shape the practice
+# refuses. `--force-with-lease` stays admitted, which is what the preset's own
+# comment argues for — banning both would push toward the bypass rather than
+# toward the safer flag.
+#
+# `commit-hygiene` is deliberately NOT enabled here, and that is a decision
+# rather than an oversight: its `no-empty-commit` predicate overlaps AGENTS.md's
+# own "never push an empty commit to kick CI", which the landing loop already
+# enforces where it can act on it. Enabling a second gate over the same practice
+# would double a refusal without doubling the coverage, and the row that fired
+# would be a question of which one a reader happened to read first.
+#
+# Mediated-call scoped, because the preset's predicate is over a command line.
+# A tree-scoped row would hand it a document it has no predicate for and read as
+# a configured gate that never fires.
+[[rule]]
+id = "trunk-based-preset"
+kind = "policy"
+scope = "mediated_call"
+preset = "trunk-based"
+severity = "deny"
+
 # The evaluator's IO-free pin, given a mechanism (CLOUD-831). `policy.rs`'s
 # module doc admits consumer-authored code to the MEDIATED CALL on the claim that
 # a module "cannot open a file, start a process, or reach the network", and cited

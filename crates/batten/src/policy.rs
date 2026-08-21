@@ -189,6 +189,86 @@ pub struct Violation {
     pub msg: String,
 }
 
+/// Every vendored preset: its name, and the modules it ships.
+///
+/// # Why Batten ships defaults at all
+///
+/// A consumer adopting Batten got an empty `batten.toml` and had to author every
+/// predicate from scratch, which is the anomaly rather than the discipline —
+/// Conftest ships OCI bundles, Semgrep `p/default`, ESLint `eslint:recommended`,
+/// Clippy its lint groups. And the non-negotiable that looks like it forbids
+/// this argues *for* it: "adopt prior art; don't expand the core". A preset is
+/// prior art shipped **as data**, which is the opposite of expanding the core.
+///
+/// # Why this is not the OCI distribution CLOUD-129 rejected
+///
+/// That verdict was about *remote policy fetch* being a supply-chain surface,
+/// and it is intact. There is no network here, no registry and no
+/// trust-on-first-use: `include_str!` at build time, so the bytes ship inside
+/// the binary the operator already trusts, under the same checksum as everything
+/// else in it. Its other ground — one committed authority per repo — does not
+/// reach a preset either, because **a preset is not an authority; it is content
+/// the authority enables.**
+///
+/// # Rule 1 lives here, and this is the most inviting place in the crate to
+/// break it
+///
+/// The temptation is to vendor *this repository's* gates. A preset may contain
+/// predicates true of a **practice** — trunk-based branching, commit shape — and
+/// never one naming a path, a task, a tracker key or an entity. The mechanism
+/// is not new prose: `batten.toml`'s rule-1 `forbid` rows glob `crates/**`, and
+/// these sources are under it, so they are already scanned on every gate
+/// invocation. `presets_are_inside_the_rule_one_glob` asserts that coverage
+/// rather than leaving it to be true by accident.
+///
+/// # One list, derived
+///
+/// The valid name set is [`preset_names`], read off this table — never a
+/// hand-maintained second list, which is `surface::SURFACE`'s discipline and the
+/// reason a preset cannot be enabled that does not exist.
+const PRESETS: &[(&str, &[(&str, &str)])] = &[
+    (
+        "commit-hygiene",
+        &[(
+            "<preset:commit-hygiene>/no-empty-commit.rego",
+            include_str!("policy/presets/commit-hygiene/no-empty-commit.rego"),
+        )],
+    ),
+    (
+        "trunk-based",
+        &[(
+            "<preset:trunk-based>/no-force-push.rego",
+            include_str!("policy/presets/trunk-based/no-force-push.rego"),
+        )],
+    ),
+];
+
+/// Every vendored preset's name, in a stable order.
+///
+/// Derived from [`PRESETS`] so the binary and the published schema cannot
+/// disagree about what may be enabled — the same discipline `surface::SURFACE`
+/// carries, and the reason an unknown name is a config error rather than a
+/// silent no-op.
+#[must_use]
+pub fn preset_names() -> Vec<&'static str> {
+    PRESETS.iter().map(|(name, _)| *name).collect()
+}
+
+/// The modules a named preset ships, or `None` when nothing ships under that
+/// name.
+///
+/// The pointer paths are `<preset:name>/…` rather than a filesystem path,
+/// deliberately: a preset has no path in the consumer's tree, and printing one
+/// would send a reader looking for a file that is not there. A finding still
+/// names the PREDICATE rather than this, so it stays indistinguishable in shape
+/// from an in-repo one.
+fn preset_modules(name: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    PRESETS
+        .iter()
+        .find(|(preset, _)| *preset == name)
+        .map(|(_, modules)| *modules)
+}
+
 /// One module inside a bundle: its repository-relative path, and nothing else.
 ///
 /// **It no longer holds an engine, and that is CLOUD-837's whole change.**
@@ -429,17 +509,18 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
     // difference between a pointer and a complaint.
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
-        // `validate` already refuses a policy row naming neither `module` nor
-        // `bundle`, and one naming both; this is the located restatement, so a
-        // caller reaching `load` directly cannot get a silent skip instead of a
-        // refusal.
+        // `validate` already refuses a policy row naming none of the three
+        // sources, and one naming more than one; this is the located
+        // restatement, so a caller reaching `load` directly cannot get a silent
+        // skip instead of a refusal.
         let source_key = rule
             .module
             .as_deref()
             .or(rule.bundle.as_deref())
+            .or(rule.preset.as_deref())
             .ok_or_else(|| {
                 UsageError::raise(format!(
-                    "rule `{}` is a policy row with neither `module` nor `bundle`",
+                    "rule `{}` is a policy row naming neither `module`, `bundle` nor `preset`",
                     rule.id
                 ))
             })?;
@@ -475,6 +556,35 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         // folder is not the implicit discovery §8 forbids** — the authority
         // names the root, nothing merges, and every module is deny-only by
         // construction, so the set can only ADD refusals.
+        // A PRESET IS READ FROM THE BINARY, not from the tree, which is the whole
+        // of its supply-chain claim: no network, no registry, no
+        // trust-on-first-use, and nothing for `--config-from` to disagree about
+        // because the bytes are the same at every ref this binary is run at.
+        //
+        // An unknown name is a config error rather than a silent no-op — a
+        // consumer who enabled `trunk-basd` should be told, not quietly gated by
+        // nothing.
+        if let Some(name) = rule.preset.as_deref() {
+            let modules = preset_modules(name).ok_or_else(|| {
+                UsageError::raise(format!(
+                    "rule `{}` enables the preset `{name}`, which this binary does not ship; \
+                     the ones it does are {}",
+                    rule.id,
+                    preset_names().join(", ")
+                ))
+            })?;
+            let sources: Vec<(String, String)> = modules
+                .iter()
+                .map(|(path, source)| ((*path).to_owned(), (*source).to_owned()))
+                .collect();
+            let bundle = compile(&rule.id, &sources)?;
+            let declared = bundle.declared.clone();
+            check_predicate_severity(rule, &declared, source_key)?;
+            claim_ids(&mut ids, &declared, source_key)?;
+            bundles.push(bundle);
+            continue;
+        }
+
         let paths = match (rule.module.as_deref(), rule.bundle.as_deref()) {
             (Some(module), _) => vec![module.to_owned()],
             (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
@@ -508,47 +618,9 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         // The pointer a bundle-level fault is reported against.
         let where_it_came_from = source_key;
 
-        // A `predicate_severity` key naming an id the bundle never published is a
-        // setting that parses and does nothing, which is the shape house style
-        // §8 refuses everywhere else in this config. This is the only place that
-        // sees both the row and the bundle's declared set, so it is the only
-        // place the check can live — `Rule::validate` has the row and not the
-        // module. Same shape as CLOUD-208's dead-waiver diagnostic, and for the
-        // same reason: a suppression or a severity aimed at nothing is a reader
-        // believing a gate is tuned when it is not.
-        if let Some(table) = rule.predicate_severity.as_ref() {
-            for named in table.keys() {
-                if !declared.contains(named.as_str()) {
-                    return Err(UsageError::raise(format!(
-                        "rule `{}` sets a severity for `{named}`, which `{where_it_came_from}` \
-                         does not declare in `{RULES_RULE}`",
-                        rule.id
-                    )));
-                }
-            }
-        }
+        check_predicate_severity(rule, &declared, where_it_came_from)?;
 
-        // ACROSS EVERY BUNDLE THIS LOAD SEES, and that is what keeps a folder
-        // from becoming a merge: there is no precedence to resolve because a
-        // collision is refused outright rather than silently won by whichever
-        // loaded last. It is also the clause that makes enumerating modules
-        // inside an enabled bundle safe (CLOUD-129's corrected shape), and it
-        // reaches across the vendored/in-repo boundary for free — a preset is
-        // just another bundle with a declared id set. Bundles are ISOLATED as
-        // engines and still visible to each other HERE, which is the whole
-        // point: a preset cannot supply a helper, and cannot silently shadow an
-        // id either.
-        for id in &declared {
-            if let Some(owner) = ids.get(id) {
-                return Err(UsageError::raise(format!(
-                    "`{where_it_came_from}` and `{owner}` both declare the rule id `{id}`; a \
-                     finding names one predicate, so there is no precedence to resolve here"
-                )));
-            }
-        }
-        for id in &declared {
-            ids.insert(id.clone(), where_it_came_from.to_owned());
-        }
+        claim_ids(&mut ids, &declared, where_it_came_from)?;
 
         bundles.push(bundle);
     }
@@ -926,4 +998,76 @@ fn bundle_members(
         )));
     }
     Ok(members)
+}
+
+/// Refuse a `predicate_severity` key naming an id the bundle never published.
+///
+/// A setting that parses and does nothing is the shape house style §8 refuses
+/// everywhere else in this config, and this is the only place that sees both the
+/// row and the bundle's declared set — `Rule::validate` has the row and not the
+/// module. Same shape as CLOUD-208's dead-waiver diagnostic, and for the same
+/// reason: a severity aimed at nothing leaves a reader believing a predicate is
+/// tuned when it is not.
+///
+/// One function rather than a copy per source kind, because an in-repo bundle
+/// and a vendored preset must be judged identically — the moment they are not,
+/// "which kind of bundle is this" becomes a question a reader has to ask about
+/// their own config.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the key and the source it was aimed at.
+fn check_predicate_severity(rule: &Rule, declared: &BTreeSet<String>, source: &str) -> Result<()> {
+    let Some(table) = rule.predicate_severity.as_ref() else {
+        return Ok(());
+    };
+    for named in table.keys() {
+        if !declared.contains(named.as_str()) {
+            return Err(UsageError::raise(format!(
+                "rule `{}` sets a severity for `{named}`, which `{source}` does not declare in \
+                 `{RULES_RULE}`",
+                rule.id
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Claim a bundle's predicate ids, refusing one another bundle already claimed.
+///
+/// **Across every bundle this load sees**, and that is what keeps a folder from
+/// becoming a merge: there is no precedence to resolve because a collision is
+/// refused outright rather than silently won by whichever loaded last. It is the
+/// clause that makes enumerating modules inside an enabled bundle safe
+/// (CLOUD-129's corrected shape).
+///
+/// It reaches **across the vendored/in-repo boundary** for free, because a
+/// preset is just another bundle with a declared id set — so a consumer can
+/// never be silently shadowed by a vendored predicate, nor shadow one. Bundles
+/// are isolated as *engines* and still visible to each other here, and that
+/// difference is the whole design: a preset cannot supply a helper, and cannot
+/// steal an id either.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) naming the id and **both** sources that declare
+/// it — a message naming one sends the reader to whichever the loader happened
+/// to reach second.
+fn claim_ids(
+    ids: &mut BTreeMap<String, String>,
+    declared: &BTreeSet<String>,
+    source: &str,
+) -> Result<()> {
+    for id in declared {
+        if let Some(owner) = ids.get(id) {
+            return Err(UsageError::raise(format!(
+                "`{source}` and `{owner}` both declare the rule id `{id}`; a finding names one \
+                 predicate, so there is no precedence to resolve here"
+            )));
+        }
+    }
+    for id in declared {
+        ids.insert(id.clone(), source.to_owned());
+    }
+    Ok(())
 }
