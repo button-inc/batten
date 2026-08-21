@@ -10,6 +10,17 @@
 
 setup() {
 	GATE="$BATS_TEST_DIRNAME/../mise-tasks/perf-compare"
+	# The DEFAULT threshold is what most cases below assert, so it has to be
+	# pinned rather than inherited. `perf-compare` reads
+	# `${BENCH_REGRESSION_RATIO:-1.30}`, and that override is a documented input
+	# — one case sets it deliberately — so a caller who exports it made every
+	# other case here judge a threshold it never named. Measured the first time
+	# anyone used it: `BENCH_REGRESSION_RATIO=1.60 mise run land` turned "a pair
+	# within the threshold passes" and "the threshold is a boundary, not a
+	# suggestion" red, in a run that changed neither the gate nor the fixtures.
+	# Same discipline as `GIT_CONFIG_GLOBAL=/dev/null` in the git fixtures: a
+	# suite that reads the environment it runs inside is not a suite.
+	unset BENCH_REGRESSION_RATIO
 }
 
 # A full pair, head within noise of base.
