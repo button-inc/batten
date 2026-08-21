@@ -120,6 +120,15 @@ const CONTENT: &[Canary] = &[
         tag: "captured",
         source: "the inline evidence bytes of a design-evidence capture",
     },
+    Canary {
+        tag: "lineread",
+        // CLOUD-846's §5, and the reason the lines fact is safe to have at all:
+        // a module may SEE a line, and a finding may not CARRY one. This is the
+        // byte that proves it structurally rather than by review — without it,
+        // the widest fact on the tree surface would rest on nobody having
+        // written the leak yet.
+        source: "a line of a file a `policy` row declared under `lines`",
+    },
 ];
 
 /// Bytes the caller wrote **as policy**. Only an `Echoes` verb may emit one.
@@ -198,6 +207,14 @@ fn authority(spawning: bool) -> String {
          pattern = \"rm\"\n\
          contains = \"-rf\"\n\
          reason = \"remove it through the surface that owns it\"\n\
+         \n\
+         [[rule]]\n\
+         id = \"tree-policy\"\n\
+         kind = \"policy\"\n\
+         scope = \"tree\"\n\
+         bundle = \"policy/\"\n\
+         lines = [\"lineread.md\"]\n\
+         severity = \"deny\"\n\
          \n\
          [[waiver]]\n\
          rule = \"no-canary-waived\"\n\
@@ -286,6 +303,23 @@ impl Corpus {
                 ),
             )
             .file("counted.txt", &format!("{}\n", canary("counted")))
+            // A file a `policy` row reads as LINES (CLOUD-846). The module below
+            // decides over it and denies; the canary is the line's content, so
+            // any verb that echoed what the module saw fails the census.
+            .file(
+                "lineread.md",
+                &format!("# heading\n\n{}\n", canary("lineread")),
+            )
+            .file(
+                "policy/lines.rego",
+                "package batten\n\
+                 import rego.v1\n\
+                 rules contains \"no-canary-line\"\n\
+                 violation contains {\"rule\": \"no-canary-line\", \"msg\": \"a canary line\"} if {\n\
+                 \tsome line in input.tree.lines[\"lineread.md\"]\n\
+                 \tstartswith(line, \"Q7v\")\n\
+                 }\n",
+            )
             .file(
                 "defects.jsonl",
                 &format!(
