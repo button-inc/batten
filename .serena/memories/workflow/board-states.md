@@ -288,6 +288,25 @@ Review`, exit 1. It is `landed-check`'s terminal twin — both name In Review
   measured precedence is written down, write the condition it was measured
   under.
 
+  **And the condition turns out to be the one that decides it: `Closes` BEATS
+  the branch name, while `Refs:` does not.** Measured 2026-08-21 on CLOUD-860.
+  Branch `claude/groom-cloud-847-tfh0or` — naming a different, already-In-Review
+  row — carried PR #635 whose body read `Closes CLOUD-860`. On merge the
+  integration moved **CLOUD-860** to In Review and attached #635 to it, two
+  seconds after the merge. The branch name lost.
+
+  Read against CLOUD-270 above, whose PR body merely NAMED its issue, the two
+  measurements agree on one rule rather than conflicting: this is CLOUD-192's
+  closing-versus-contributing split outranking the branch, not a precedence
+  order among equals. A CLOSING key redirects the automation; a contributing
+  mention does not, and a branch name outranks the mention alone.
+
+  So the practical guidance narrows rather than reverses. A branch naming
+  another key is safe **iff** the body closes the key you mean; without a
+  closing key it still lands on the branch's issue. A session that predicted a
+  hand-correction here from the older wording wrote the prediction twice before
+  the board falsified it.
+
 - **It does not guard on the source column, so it can resurrect a dead issue.**
   CLOUD-35 was **Canceled** when that merge landed, and the automation moved it
   to Done — a closed-out issue silently reappearing as completed work it never
