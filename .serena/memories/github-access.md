@@ -66,6 +66,23 @@ carries the permission via App auth and edits the body directly — the same
 resolution as `get_check_runs` above, for the same reason. `gh pr create` and
 `gh pr ready` are unaffected; only the edit path queries those fields.
 
+## `add_repo` is blocked, so the repo scope cannot be widened at all
+
+Measured 2026-08-21. `add_repo` is served by the Claude Code Remote toolbox
+server, whose every tool carries a mandatory-approval flag and returns
+`MCP tool call requires approval` (`mem:connector-allowlist-recovery`'s STOP
+section has the mechanism and the upstream issues). So:
+
+- **A session cannot attach a second repository**, for any purpose — not to read
+  one, not to clone one, not to comment on its issues.
+- **The scope you start with is the scope you have.** The system prompt's "call
+  `add_repo` to bring in a repository" is unreachable here; do not offer it to
+  the user as a next step, and do not spend a turn on it.
+- **The consequence that bites hardest:** a session that reproduces an upstream
+  bug cannot reach `anthropics/claude-code` to file or update the report. That is
+  why `#87548` — our own reproduction — sat un-updated from 2026-08-18. Hand the
+  user the comment text to paste; it is the only channel.
+
 ## Provider outages — status page first, then poll for recovery
 
 When a hosted dependency misbehaves (jobs that never start, calls that hang/5xx,
