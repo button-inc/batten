@@ -429,21 +429,26 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
     // difference between a pointer and a complaint.
     let mut ids: BTreeMap<String, String> = BTreeMap::new();
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
-        // `validate` already refuses a policy row with no `module`; this is the
-        // located restatement, so a caller reaching `load` directly cannot get a
-        // silent skip instead of a refusal.
-        let path = rule.module.as_deref().ok_or_else(|| {
-            UsageError::raise(format!(
-                "rule `{}` is a policy row with no `module`",
-                rule.id
-            ))
-        })?;
-        // Two rows naming one module is dead config: the second registration
+        // `validate` already refuses a policy row naming neither `module` nor
+        // `bundle`, and one naming both; this is the located restatement, so a
+        // caller reaching `load` directly cannot get a silent skip instead of a
+        // refusal.
+        let source_key = rule
+            .module
+            .as_deref()
+            .or(rule.bundle.as_deref())
+            .ok_or_else(|| {
+                UsageError::raise(format!(
+                    "rule `{}` is a policy row with neither `module` nor `bundle`",
+                    rule.id
+                ))
+            })?;
+        // Two rows naming one source is dead config: the second enablement
         // decides nothing the first did not, and "which one denied me" is not a
         // question a reviewer should have to answer.
-        if !seen.insert(path) {
+        if !seen.insert(source_key) {
             return Err(UsageError::raise(format!(
-                "rule `{}` registers `{path}`, which another rule already registers",
+                "rule `{}` registers `{source_key}`, which another rule already registers",
                 rule.id
             )));
         }
@@ -464,8 +469,19 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         // and the moment a row can name a folder this is the only line that
         // changes. Writing it as a scalar is how per-module isolation got built
         // the first time.
+        //
+        // A `bundle` row enumerates the `.rego` files under its root; a `module`
+        // row is the one-file case. **Enumeration inside an explicitly enabled
+        // folder is not the implicit discovery §8 forbids** — the authority
+        // names the root, nothing merges, and every module is deny-only by
+        // construction, so the set can only ADD refusals.
+        let paths = match (rule.module.as_deref(), rule.bundle.as_deref()) {
+            (Some(module), _) => vec![module.to_owned()],
+            (None, Some(bundle)) => bundle_members(root, bundle, reference, &rule.id)?,
+            (None, None) => Vec::new(),
+        };
         let mut sources = Vec::new();
-        for path in [path] {
+        for path in &paths {
             let source = match reference {
                 Some(reference) => crate::git::show(root, reference, path).map_err(|_| {
                     UsageError::raise(format!(
@@ -480,7 +496,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
                     ))
                 })?,
             };
-            sources.push((path.to_owned(), source));
+            sources.push((path.clone(), source));
         }
 
         // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
@@ -490,7 +506,7 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
         let declared = bundle.declared.clone();
 
         // The pointer a bundle-level fault is reported against.
-        let where_it_came_from = path;
+        let where_it_came_from = source_key;
 
         // A `predicate_severity` key naming an id the bundle never published is a
         // setting that parses and does nothing, which is the shape house style
@@ -837,4 +853,77 @@ pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
     }
 
     Look::Is(violations)
+}
+
+/// The `.rego` modules inside an enabled bundle root, in sorted order.
+///
+/// # Why enumerating here does not reopen §8
+///
+/// §8 forbids *implicit discovery* — the upward directory walk and the `conf.d`
+/// merge — because merging can weaken. This does neither. The one committed
+/// authority names the root explicitly, so nothing is found that was not
+/// enabled; and every module inside is deny-only by construction, so the set can
+/// only ADD refusals. §8's invariant is raise-only, and a set that cannot
+/// subtract satisfies it more strongly than the typed rule table does.
+///
+/// **Sorted, because the order is part of the answer.** Two modules in one
+/// bundle compose into one engine, and a bundle that compiled in directory order
+/// would produce a different diagnostic on two machines for the same tree —
+/// §6's byte-stability reaches a config error's text.
+///
+/// Non-recursive, deliberately: a bundle is a folder of modules, and descending
+/// would make "which files am I enabling" a question a reader answers by walking
+/// the tree rather than by reading the row.
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when the root cannot be listed, and when it
+/// contains no `.rego` module at all — an empty bundle enables nothing while
+/// reading in the config as a configured gate, which is the shape house style §8
+/// refuses everywhere else.
+fn bundle_members(
+    root: &Path,
+    bundle: &str,
+    reference: Option<&str>,
+    rule_id: &str,
+) -> Result<Vec<String>> {
+    let prefix = bundle.trim_end_matches('/');
+    let mut members: Vec<String> = if let Some(reference) = reference {
+        // UNDER `--config-from`, THE MEMBERSHIP COMES FROM THE REF TOO. Listing
+        // the working tree here would pair a base's rules with the working
+        // tree's module SET — an agent could add a module and change what the
+        // base policy decides, which is precisely the influence that flag exists
+        // to exclude, arriving through the folder instead of through a file.
+        crate::git::list_tree(root, reference, prefix).map_err(|_| {
+            UsageError::raise(format!(
+                "rule `{rule_id}` enables `{prefix}`, which cannot be listed at {reference}"
+            ))
+        })?
+    } else {
+        let dir = root.join(prefix);
+        let entries = std::fs::read_dir(&dir).map_err(|_| {
+            UsageError::raise(format!(
+                "rule `{rule_id}` enables `{prefix}`, which cannot be listed"
+            ))
+        })?;
+        entries
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.path().is_file())
+            .filter_map(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .map(|name| format!("{prefix}/{name}"))
+            })
+            .collect()
+    };
+    members.retain(|path| path.ends_with(".rego"));
+    members.sort();
+    if members.is_empty() {
+        return Err(UsageError::raise(format!(
+            "rule `{rule_id}` enables `{prefix}`, which carries no `.rego` module; an empty \
+             bundle enables nothing while reading as a configured gate"
+        )));
+    }
+    Ok(members)
 }

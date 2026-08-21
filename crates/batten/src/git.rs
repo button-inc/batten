@@ -757,6 +757,76 @@ pub fn show(dir: &Path, reference: &str, path: &str) -> Result<String> {
         .map_err(|_| UsageError::raise(format!("{path} at {reference} is not valid UTF-8")))
 }
 
+/// The files directly inside `directory` at `reference`, as repo-relative paths.
+///
+/// [`show`]'s sibling, and it exists for the same reason (CLOUD-833): under
+/// `--config-from <ref>` a bundle's MEMBERSHIP has to come from the ref as
+/// surely as a module's bytes do. Listing the working tree instead would let an
+/// agent add a `.rego` file and change what the BASE policy decides — the
+/// influence that flag exists to exclude, arriving through the folder rather
+/// than through a file.
+///
+/// Non-recursive: it returns the blobs one level down, matching what a bundle
+/// is. Sub-trees are skipped rather than descended, so "which files am I
+/// enabling" stays a question a reader answers from the row.
+///
+/// It shares [`show`]'s whole boundary posture — no argv, so no path can be
+/// read as an option; [`gix::open::Options::isolated`], so an ambient `GIT_DIR`
+/// cannot redirect the answer.
+///
+/// `directory` is repo-relative and `/`-separated, as git addresses trees.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the ref does not resolve, the
+/// path is absent at that ref, or the object there is not a directory — bad
+/// input naming config this binary cannot honour, never a policy verdict.
+pub fn list_tree(dir: &Path, reference: &str, directory: &str) -> Result<Vec<String>> {
+    if !dir.is_dir() {
+        return Err(UsageError::raise(format!(
+            "{} is not a directory",
+            dir.display()
+        )));
+    }
+    let repository = open(dir)?;
+    let resolved = repository
+        .rev_parse_single(reference)
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} in this repository")))?;
+    let tree = resolved
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read the object {reference} names")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot resolve {reference} to a tree")))?;
+
+    let entry = tree
+        .lookup_entry_by_path(directory)
+        .map_err(|_| UsageError::raise(format!("cannot read {directory} at {reference}")))?
+        .ok_or_else(|| UsageError::raise(format!("{directory} is absent at {reference}")))?;
+    if !entry.mode().is_tree() {
+        return Err(UsageError::raise(format!(
+            "{directory} at {reference} is not a directory"
+        )));
+    }
+    let inner = entry
+        .object()
+        .map_err(|_| UsageError::raise(format!("cannot read {directory} at {reference}")))?
+        .peel_to_tree()
+        .map_err(|_| UsageError::raise(format!("cannot read {directory} at {reference}")))?;
+
+    let prefix = directory.trim_end_matches('/');
+    let mut paths: Vec<String> = inner
+        .iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.mode().is_blob())
+        .map(|entry| format!("{prefix}/{}", entry.filename()))
+        .collect();
+    // Sorted for §6's byte-stability: git's own tree order is stable, but the
+    // caller composes these into one engine and a diagnostic naming them must
+    // not depend on which reader produced the list.
+    paths.sort();
+    Ok(paths)
+}
+
 /// The `git` child every query in this module is built from: `-C dir`, with
 /// the redirect variables scrubbed so the answer is about the directory it was
 /// handed and not about whatever repository the ambient environment names.

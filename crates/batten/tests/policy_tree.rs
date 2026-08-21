@@ -1,0 +1,282 @@
+//! A `policy` row on the TREE surface (CLOUD-833): the four cases §7 names, and
+//! the protected-path property that is the sharpest consequence of a bundle
+//! being a folder.
+//!
+//! Why this surface exists at all: 79 of 133 `mise-tasks` programs are
+//! gate-described, and nearly every one is a predicate over files and repo state
+//! with no mediated call in sight. `RuleKind::Policy` paired with
+//! `RuleScope::MediatedCall` alone, so the retirement campaign had nowhere to
+//! migrate them to.
+//!
+//! Why it is safe here and a `command` row is not: `run_static` backs `check`
+//! and refuses any kind that spawns, because a `command` row runs a process with
+//! the calling user's authority. A policy module is `Authority::Supplied` — a
+//! pure function over an input document — so admitting it makes `check` MORE
+//! capable without making it less honest. `check_still_refuses_a_spawning_kind`
+//! is what keeps that from quietly becoming "check runs anything".
+
+// Panicking on setup failure is the idiomatic way for a test to fail loudly.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use batten::rules::{self, Rule};
+
+/// A tree-scoped policy row enabling `bundle` over `documents`.
+///
+/// Deserialized rather than struct-literalled: `Rule` carries
+/// `deny_unknown_fields`, so this exercises the column census a consumer's
+/// `batten.toml` goes through and a row the loader would refuse cannot be
+/// smuggled into a test by hand.
+fn tree_row(id: &str, bundle: &str, documents: &[&str]) -> Rule {
+    serde_json::from_value(serde_json::json!({
+        "id": id,
+        "kind": "policy",
+        "scope": "tree",
+        "bundle": bundle,
+        "documents": documents,
+        "severity": "deny",
+    }))
+    .expect("a tree-scoped policy row the loader accepts")
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("batten-tree-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(dir.join("policy")).expect("scratch");
+    dir
+}
+
+/// A bundle that refuses a tracked path under `docs/` — deliberately generic in
+/// shape, and expressed over a declared document rather than an ambient walk.
+const NO_STRAY: &str = r#"
+package batten
+
+import rego.v1
+
+rules contains "no-stray-key"
+
+violation contains {"rule": "no-stray-key", "msg": "the manifest declares a stray key"} if {
+    input.tree.documents["config.toml"].stray
+}
+"#;
+
+fn write_bundle(root: &Path, source: &str) {
+    fs::write(root.join("policy").join("gate.rego"), source).expect("write module");
+}
+
+fn scan(root: &Path, rules: &[Rule]) -> rules::Scan {
+    rules::run_static(rules, &[], root).expect("the read surface runs a policy row")
+}
+
+/// (a) A tree-scoped bundle denies on a fixture that violates.
+#[test]
+fn a_tree_scoped_bundle_denies_by_predicate_id() {
+    let root = scratch("denies");
+    write_bundle(&root, NO_STRAY);
+    fs::write(root.join("config.toml"), "stray = true\n").expect("fixture");
+
+    let scan = scan(
+        &root,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert_eq!(scan.findings.len(), 1, "the predicate fired");
+    assert_eq!(
+        scan.findings[0].rule, "no-stray-key",
+        "THE PREDICATE'S id, not the row's — a finding names the gate rather \
+         than the bundle that happens to hold it (CLOUD-832)"
+    );
+    assert!(
+        !scan.findings[0].path.contains("stray = true"),
+        "pointer-only: never a byte of the document's value (rule 4)"
+    );
+}
+
+/// (a), the other half. Without this the case above passes on a bundle that
+/// denies unconditionally, which is not a gate.
+#[test]
+fn the_same_bundle_is_green_on_a_fixture_that_does_not_violate() {
+    let root = scratch("clean");
+    write_bundle(&root, NO_STRAY);
+    fs::write(root.join("config.toml"), "tidy = true\n").expect("fixture");
+
+    let scan = scan(
+        &root,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert!(
+        scan.findings.is_empty(),
+        "the predicate decides both ways: {:?}",
+        scan.findings
+    );
+    assert!(
+        !scan.not_evaluated.contains_key("repo-policy"),
+        "and it EVALUATED — a rule reported as skipped here would make the case \
+         above pass for the wrong reason"
+    );
+}
+
+/// (b) **Load-bearing.** A declared document the tree does not carry is
+/// could-not-look, never an empty deny set.
+///
+/// This is CLOUD-251's vacuous pass in the place it would be least visible: the
+/// module would be handed an input whose key is simply absent, every Rego
+/// predicate over it would be silently undefined, and the row would report clean
+/// having established nothing.
+#[test]
+fn a_declared_document_the_tree_lacks_is_could_not_look_and_never_a_pass() {
+    let root = scratch("missing");
+    write_bundle(&root, NO_STRAY);
+    // `config.toml` is declared and deliberately absent.
+
+    let scan = scan(
+        &root,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert!(
+        scan.findings.is_empty(),
+        "a rule that could not look reports no finding"
+    );
+    assert!(
+        scan.not_evaluated.contains_key("repo-policy"),
+        "but it must be recorded as NOT EVALUATED, so the store holds rather \
+         than resolves — silence here is the vacuous pass"
+    );
+}
+
+/// The same arm for a document that exists and will not parse.
+///
+/// A file that cannot be read says nothing about what it contains, which is
+/// `Format::read`'s own three-valued contract carried through to this surface.
+#[test]
+fn a_declared_document_that_will_not_parse_is_could_not_look() {
+    let root = scratch("unparseable");
+    write_bundle(&root, NO_STRAY);
+    fs::write(root.join("config.toml"), "this = = not toml\n").expect("fixture");
+
+    let scan = scan(
+        &root,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert!(scan.findings.is_empty());
+    assert!(
+        scan.not_evaluated.contains_key("repo-policy"),
+        "an unparseable declared input is could-not-look, not agreement"
+    );
+}
+
+/// (c) **Load-bearing.** Admitting policy to the read surface did not open it
+/// generally.
+///
+/// `check` still refuses every kind that runs a configured command, naming the
+/// verb that would. This is the case that keeps CLOUD-833 from reading as "the
+/// read-effect verb now runs anything".
+#[test]
+fn check_still_refuses_a_spawning_kind() {
+    let root = scratch("spawning");
+    write_bundle(&root, NO_STRAY);
+    let command: Rule = serde_json::from_value(serde_json::json!({
+        "id": "runs-a-program",
+        "kind": "command",
+        "scope": "tree",
+        "glob": "**",
+        "check": "true",
+        "severity": "deny",
+    }))
+    .expect("a command row");
+
+    let err = rules::run_static(&[command], &[], &root)
+        .expect_err("a read-effect verb will not run a configured command");
+    let text = format!("{err}");
+    assert!(
+        text.contains(rules::SPAWNING_VERB),
+        "the refusal names the verb that WOULD run it: {text}"
+    );
+}
+
+/// (d) A row whose declared inputs are unchanged does no work it does not need
+/// to — house style §4's "cheap when irrelevant".
+///
+/// Asserted over the INPUTS rather than by timing: the bound is that only
+/// declared paths are read, so a document the row does not name must not reach
+/// the module even when it sits beside one that does. A rule that walked the
+/// tree would see it, and would make the `read` classification a lie by degrees.
+#[test]
+fn only_the_declared_documents_reach_the_bundle() {
+    let root = scratch("bounded");
+    let source = r#"
+package batten
+
+import rego.v1
+
+rules contains "saw-undeclared"
+
+violation contains {"rule": "saw-undeclared", "msg": "an undeclared document reached the module"} if {
+    input.tree.documents["undeclared.toml"]
+}
+"#;
+    write_bundle(&root, source);
+    fs::write(root.join("config.toml"), "tidy = true\n").expect("declared");
+    fs::write(root.join("undeclared.toml"), "stray = true\n").expect("undeclared");
+
+    let scan = scan(
+        &root,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert!(
+        scan.findings.is_empty(),
+        "a file the row does not declare is not in the input document, even \
+         though it sits beside one that is: {:?}",
+        scan.findings
+    );
+}
+
+/// A bundle root with no `.rego` module at all is refused at load.
+///
+/// An empty bundle enables nothing while reading in the config as a configured
+/// gate — the shape house style §8 refuses everywhere else.
+#[test]
+fn an_empty_bundle_root_is_refused_at_load() {
+    let root = scratch("empty-bundle");
+    let err = rules::run_static(
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+        &[],
+        &root,
+    )
+    .expect_err("a folder with no modules enables nothing");
+    assert!(format!("{err}").contains("no `.rego` module"));
+}
+
+/// Every module in an enabled bundle is loaded, not just the first.
+///
+/// The property that makes a folder worth having, and the one whose absence
+/// would be invisible: a second module that silently never ran would look
+/// exactly like a second module that found nothing.
+#[test]
+fn every_module_under_the_bundle_root_is_enabled() {
+    let root = scratch("many-modules");
+    fs::write(
+        root.join("policy").join("a.rego"),
+        "package batten.a\nimport rego.v1\nrules contains \"from-a\"\nviolation contains {\"rule\": \"from-a\", \"msg\": \"a\"} if { input.tree.documents[\"config.toml\"].stray }\n",
+    )
+    .expect("module a");
+    fs::write(
+        root.join("policy").join("b.rego"),
+        "package batten.b\nimport rego.v1\nrules contains \"from-b\"\nviolation contains {\"rule\": \"from-b\", \"msg\": \"b\"} if { input.tree.documents[\"config.toml\"].stray }\n",
+    )
+    .expect("module b");
+    fs::write(root.join("config.toml"), "stray = true\n").expect("fixture");
+
+    let scan = scan(
+        &root,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    let mut fired: Vec<&str> = scan.findings.iter().map(|f| f.rule.as_str()).collect();
+    fired.sort_unstable();
+    assert_eq!(
+        fired,
+        vec!["from-a", "from-b"],
+        "both modules in the folder decided, each under its own id"
+    );
+}

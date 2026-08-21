@@ -481,6 +481,59 @@ impl Format {
         }
     }
 
+    /// The format a path's extension names, when it names one this crate parses.
+    ///
+    /// **Extension-based, and only where the row did not say.** A
+    /// [`crate::rules::RuleKind::Document`] row states its `format` explicitly,
+    /// and that stays the authority there — the column exists because a file
+    /// named `.json` that is really JSON5 would parse-fail and report
+    /// "could not look" forever, blaming the file for the guess. A tree-scoped
+    /// `policy` row declares a LIST of documents rather than one, so a per-path
+    /// column would mean a parallel list nobody could keep aligned; the
+    /// extension is the honest default there, and a path whose extension names
+    /// nothing is [`Look::CouldNotLook`] rather than a guess.
+    ///
+    /// `Pkl` is deliberately absent: it is declarable and unparseable
+    /// ([`Format::parseable`]), so returning it here would promise a read that
+    /// cannot happen.
+    #[must_use]
+    pub fn for_path(path: &str) -> Option<Format> {
+        let extension = path.rsplit_once('.').map(|(_, ext)| ext)?;
+        // Searched over `ALL` rather than matched on the extension string, and
+        // that inversion is what keeps the axis total: a match on the extension
+        // needs a wildcard (there are infinitely many strings), and a wildcard
+        // is precisely what `no_axis_match_carries_a_wildcard_arm` refuses —
+        // a format added later would classify itself instead of failing to
+        // compile. Asking each variant which extensions it owns puts the
+        // decision back on the enum, where the compiler can insist on it.
+        Format::ALL
+            .iter()
+            .copied()
+            .find(|format| format.extensions().contains(&extension))
+    }
+
+    /// The filename extensions this format owns, without the dot.
+    ///
+    /// Beside the variant rather than in a lookup table, for
+    /// [`Format::parseable`]'s reason: adding a format has to be a deliberate
+    /// act at every site that classifies one, and a table somewhere else is a
+    /// second authority that goes stale silently.
+    ///
+    /// `Pkl` owns none deliberately — it is declarable and unparseable, so
+    /// claiming `.pkl` here would promise a read that cannot happen and turn
+    /// every `.pkl` in a declared list from an honest could-not-look into a
+    /// parse failure blamed on the file.
+    #[must_use]
+    pub const fn extensions(self) -> &'static [&'static str] {
+        match self {
+            Format::Toml => &["toml"],
+            Format::Yaml => &["yaml", "yml"],
+            Format::Json => &["json"],
+            Format::Json5 => &["json5"],
+            Format::Pkl => &[],
+        }
+    }
+
     /// Parse `text` as this format.
     ///
     /// Three-valued by construction (CLOUD-757): a document that parses is
@@ -556,6 +609,41 @@ pub enum Node {
 }
 
 impl Node {
+    /// This node as JSON, for an evaluator that takes an input document.
+    ///
+    /// The canonical tree is the authority and this is a **projection of it**,
+    /// which is what keeps CLOUD-772's "one canonical tree" true with a second
+    /// consumer attached: TOML, YAML, JSON and JSON5 all arrive here as the same
+    /// shape, so a policy module written against one format decides identically
+    /// over another. A second parser aimed at the evaluator would have
+    /// reintroduced exactly the per-consumer re-derivation the fact model exists
+    /// to stop.
+    ///
+    /// [`Node::Number`] carries its source spelling verbatim, so it is emitted
+    /// as a JSON number when it round-trips and as a string when it does not —
+    /// a TOML datetime or an oversized integer keeps its bytes rather than being
+    /// silently reshaped into something the source did not say.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            Node::Null => serde_json::Value::Null,
+            Node::Bool(flag) => serde_json::Value::Bool(*flag),
+            Node::Number(text) => text.parse::<serde_json::Number>().map_or_else(
+                |_| serde_json::Value::String(text.clone()),
+                serde_json::Value::Number,
+            ),
+            Node::Text(text) => serde_json::Value::String(text.clone()),
+            Node::List(items) => {
+                serde_json::Value::Array(items.iter().map(Node::to_json).collect())
+            }
+            Node::Map(map) => serde_json::Value::Object(
+                map.iter()
+                    .map(|(key, item)| (key.clone(), item.to_json()))
+                    .collect(),
+            ),
+        }
+    }
+
     fn from_toml(value: &toml::Value) -> Node {
         match value {
             toml::Value::String(text) => Node::Text(text.clone()),

@@ -1116,6 +1116,13 @@
             "null"
           ]
         },
+        "bundle": {
+          "description": "The bundle root this rule enables, as a repository-relative directory\n(CLOUD-833). [`RuleKind::Policy`] only, and the **alternative** to\n[`Rule::module`] rather than an addition to it.\n\nA row carries exactly one of the two, the shape `forbid`'s\n`pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a\nload error rather than a precedence rule nobody can read.\n\n**Why a folder does not reopen §8.** §8 forbids *implicit discovery* —\nthe upward directory walk and the `conf.d` merge — because merging can\nweaken. Nothing here merges. The one committed authority names the root\nexplicitly, and every module inside it is deny-only by construction, so\nenumerating them can only ADD refusals. §8's invariant is raise-only, and\na set that cannot subtract satisfies it more strongly than the typed rule\ntable does. Globbing for `*.rego` anywhere ELSE would be the thing §8\nrefuses; naming this root is the opposite of it.\n\nThe root joins the `protected` set for the same reason a named module\ndoes — see [`Rule::module`]. A folder must not be less protected than a\nfile was.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "check": {
           "description": "The **inspection-only** command template a [`RuleKind::Command`] rule\nruns as its gate. Required by that kind, rejected by any other.\n\nSplit on whitespace into `program` plus arguments and executed\n**directly — never through a shell**, so what runs is exactly what a\nreviewer reads (§9: rules \"name a command already on the operator's\nPATH\"). A bare [`FILES_PLACEHOLDER`] argument expands in place to the\nmatched paths; omit it and the command self-discovers.\n\nNamed for the half it is, not for the act of running: §9's duality has\ntwo commands, and a column called `run` could name either. Enforcement\nis always this one.",
           "type": [
@@ -1164,6 +1171,13 @@
               "type": "null"
             }
           ]
+        },
+        "documents": {
+          "description": "The documents a tree-scoped policy row hands its bundle (CLOUD-833).\n[`RuleKind::Policy`] with [`RuleScope::Tree`] only.\n\n**Bounded by declaration, never by an ambient walk.** A bundle is handed\nexactly the documents its row names, the way [`crate::facts::Declared`]\nalready works — which is what keeps house style §4's \"cheap when\nirrelevant\" true: a row whose declared inputs are unchanged does no work\nat all. A rule that walked the tree would pay for every file on every\ninvocation and would make the `read` classification a lie by degrees.\n\nEach entry is a repository-relative path. The parsed result is\n`input.tree.documents[<path>]`, built by\n[`crate::rules::tree_document`] from `facts.rs`'s existing `Format`/`Node`\nsubstrate (CLOUD-772) — reused rather than re-implemented, so no second\nparser lands.\n\nA declared document the tree does not carry is\n[`crate::facts::Look::CouldNotLook`] and never an empty input: a module\nthat could not see its subject has not established anything about it,\nwhich is CLOUD-251's vacuous pass in the place it would be least visible.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "exclude": {
           "description": "A regex that **un**-matches: a matched line carrying it is not a finding.\n\n[`RuleKind::Forbid`] only, and regex-only with no literal twin — an\nexclusion is inherently shape-based, and the measured one (a whole-line\ncomment, `^[[:space:]]*#`) cannot be written as a literal at all.\n\nComment-awareness lives here, in the consumer's config, rather than as a\n`skip_comments` flag in the engine: per-language comment syntax inside\n`crates/batten` would break non-negotiable rule 1, and it would also be\nwrong — `no-conflict-markers` must still fire inside a comment. What a\ncomment looks like is a property of a repository, not of Batten.",

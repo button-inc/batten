@@ -488,9 +488,16 @@ impl RuleKind {
             // column list cannot express "one of". `validate` carries that.
             RuleKind::Document => &["glob", "format", "node", "severity"],
             // No `glob`: a policy row is not selected by the files it reads, it
-            // is handed the fact set. `module` is the registration itself — a row
-            // without one names no policy and could only ever decide nothing.
-            RuleKind::Policy => &["module", "severity"],
+            // is handed the fact set.
+            //
+            // `module` is NOT in the required list since CLOUD-833, and its
+            // absence here is load-bearing rather than a relaxation: a row names
+            // exactly one of `module` (a file) or `bundle` (a folder), and a
+            // flat column list cannot express "one of". `validate` carries that,
+            // the same split `Document`'s `pattern`/`reads` pair already uses —
+            // and a row naming NEITHER is still refused there, so nothing got
+            // looser.
+            RuleKind::Policy => &["severity"],
         }
     }
 
@@ -623,6 +630,8 @@ impl RuleKind {
             // over one decision.
             RuleKind::Policy => &[
                 "module",
+                "bundle",
+                "documents",
                 "severity",
                 "predicate_severity",
                 "identity_key",
@@ -652,16 +661,30 @@ impl RuleKind {
             | RuleKind::Judge
             | RuleKind::Secrets
             | RuleKind::Document => &[RuleScope::Tree],
-            // `Policy` is `MediatedCall` alone, and the pairing is `fact_class`
-            // read back exactly as `Document`'s is: the class is
-            // `Free` x `Hook`, so the mediated call is the surface it was built
-            // for. It is here rather than beside `Command` because `authority`
-            // says `Supplied` -- the pin over that axis is what admits it, and a
-            // kind that could acquire would be refused this scope no matter what
-            // this table said.
-            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline | RuleKind::Policy => {
-                &[RuleScope::MediatedCall]
-            }
+            RuleKind::Shape | RuleKind::Receipt | RuleKind::Pipeline => &[RuleScope::MediatedCall],
+            // `Policy` is the only kind that takes BOTH, and CLOUD-833 is why.
+            //
+            // It arrived `MediatedCall`-alone, which was right for what
+            // CLOUD-689 built and wrong for what the retirement campaign needs:
+            // 79 of 133 `mise-tasks` programs are gate-described, and nearly
+            // every one is a predicate over files and repo state with no
+            // mediated call in sight. A kind confined to the hook gave that
+            // campaign nowhere to migrate to.
+            //
+            // **Admitting it to the read-only surface makes `check` more capable
+            // without making it less honest, and that is the argument rather
+            // than a convenience.** `run_static` refuses any kind that
+            // `carries_ambient_authority`, because a `command` row spawns a
+            // process with the calling user's authority. A policy module is
+            // `Authority::Supplied` — a pure function over an input document
+            // that cannot open a file, start a process or reach the network, a
+            // property CLOUD-831 now gates rather than asserts. So a tree-scoped
+            // policy row is admissible exactly where a `command` row is not.
+            //
+            // The pairing is still `fact_class` read back, as every other row
+            // here is — the class is now a function of kind AND scope, and the
+            // `Tree` half is `Read` x `Check`.
+            RuleKind::Policy => &[RuleScope::MediatedCall, RuleScope::Tree],
         }
     }
 
@@ -676,7 +699,7 @@ impl RuleKind {
     /// reading rule more expensive or narrower than it declares is refused at
     /// load rather than answering from a fact that was never resolvable there.
     #[must_use]
-    pub const fn fact_class(self) -> crate::facts::Class {
+    pub const fn fact_class(self, scope: RuleScope) -> crate::facts::Class {
         use crate::facts::{Class, Cost, Surface};
         match self {
             // Reads matched files, on the tree surface. `Ratchet` adds fixed git
@@ -693,14 +716,28 @@ impl RuleKind {
             // Adjudicated per mediated call over data the boundary already
             // carries. `Receipt` pays a bounded git read there; the other two
             // read only the envelope, which is `Cost::Free` — already in hand.
-            // `Policy` joins them: evaluating a module is CPU over data already
-            // in hand, and it acquires nothing. Measured 2026-08-20 against the
-            // pinned toolchain -- ~0.1ms to parse and compile, ~0.5ms p95 for the
-            // whole path on a fresh process, against the 100ms ceiling.
-            RuleKind::Shape | RuleKind::Pipeline | RuleKind::Policy => {
-                Class::new(Cost::Free, Surface::Hook)
-            }
+            RuleKind::Shape | RuleKind::Pipeline => Class::new(Cost::Free, Surface::Hook),
             RuleKind::Receipt => Class::new(Cost::Read, Surface::Hook),
+            // THE ONE KIND WHOSE CLASS DEPENDS ON ITS SCOPE (CLOUD-833), which
+            // is why this function takes one at all.
+            //
+            // On the mediated call it is `Free` x `Hook`: evaluating a bundle is
+            // CPU over the envelope the boundary already carries, and it
+            // acquires nothing. Measured against the pinned toolchain — ~39us
+            // per call at one predicate, ~2.2ms at seventy-nine, against the
+            // 100ms ceiling (the full series is on [`crate::policy::Bundle`]).
+            //
+            // On the tree it is `Read` x `Check`: the bundle's declared
+            // documents have to come off disk before there is an input document
+            // to decide over, which is exactly what `Forbid` and `Document` pay
+            // and exactly what `Surface::Check` is for. Reporting it as `Free`
+            // here would let a rule compose over it as though the read were
+            // already paid, which is the widening `validate_composition`
+            // refuses.
+            RuleKind::Policy => match scope {
+                RuleScope::MediatedCall => Class::new(Cost::Free, Surface::Hook),
+                RuleScope::Tree => Class::new(Cost::Read, Surface::Check),
+            },
         }
     }
 }
@@ -1114,6 +1151,50 @@ pub struct Rule {
     /// refuses, never whether some other gate stops refusing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predicate_severity: Option<BTreeMap<String, RuleSeverity>>,
+    /// The bundle root this rule enables, as a repository-relative directory
+    /// (CLOUD-833). [`RuleKind::Policy`] only, and the **alternative** to
+    /// [`Rule::module`] rather than an addition to it.
+    ///
+    /// A row carries exactly one of the two, the shape `forbid`'s
+    /// `pattern`/`regex` pair already uses (CLOUD-283): a row carrying both is a
+    /// load error rather than a precedence rule nobody can read.
+    ///
+    /// **Why a folder does not reopen §8.** §8 forbids *implicit discovery* —
+    /// the upward directory walk and the `conf.d` merge — because merging can
+    /// weaken. Nothing here merges. The one committed authority names the root
+    /// explicitly, and every module inside it is deny-only by construction, so
+    /// enumerating them can only ADD refusals. §8's invariant is raise-only, and
+    /// a set that cannot subtract satisfies it more strongly than the typed rule
+    /// table does. Globbing for `*.rego` anywhere ELSE would be the thing §8
+    /// refuses; naming this root is the opposite of it.
+    ///
+    /// The root joins the `protected` set for the same reason a named module
+    /// does — see [`Rule::module`]. A folder must not be less protected than a
+    /// file was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle: Option<String>,
+    /// The documents a tree-scoped policy row hands its bundle (CLOUD-833).
+    /// [`RuleKind::Policy`] with [`RuleScope::Tree`] only.
+    ///
+    /// **Bounded by declaration, never by an ambient walk.** A bundle is handed
+    /// exactly the documents its row names, the way [`crate::facts::Declared`]
+    /// already works — which is what keeps house style §4's "cheap when
+    /// irrelevant" true: a row whose declared inputs are unchanged does no work
+    /// at all. A rule that walked the tree would pay for every file on every
+    /// invocation and would make the `read` classification a lie by degrees.
+    ///
+    /// Each entry is a repository-relative path. The parsed result is
+    /// `input.tree.documents[<path>]`, built by
+    /// [`crate::rules::tree_document`] from `facts.rs`'s existing `Format`/`Node`
+    /// substrate (CLOUD-772) — reused rather than re-implemented, so no second
+    /// parser lands.
+    ///
+    /// A declared document the tree does not carry is
+    /// [`crate::facts::Look::CouldNotLook`] and never an empty input: a module
+    /// that could not see its subject has not established anything about it,
+    /// which is CLOUD-251's vacuous pass in the place it would be least visible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<String>,
     /// The registered policy module this rule evaluates, as a repository-relative
     /// path (CLOUD-647). [`RuleKind::Policy`] only.
     ///
@@ -1680,6 +1761,58 @@ impl Rule {
                 _ => {}
             }
         }
+        // A policy row names exactly one source, and `permits` cannot say so —
+        // a flat column list has no "one of" (CLOUD-833). Same split
+        // `Document`'s `pattern`/`reads` pair already carries, and the same
+        // reason: a row with both is a load error rather than a precedence rule
+        // nobody can read.
+        if self.kind == RuleKind::Policy {
+            match (self.module.as_deref(), self.bundle.as_deref()) {
+                (Some(_), Some(_)) => {
+                    return Err(UsageError::raise(format!(
+                        "rule {}: kind \"policy\" takes `module` (one file) or `bundle` (a \
+                         folder), never both — two sources for one row is a precedence \
+                         question nobody should have to answer",
+                        self.id
+                    )));
+                }
+                (None, None) => {
+                    return Err(UsageError::raise(format!(
+                        "rule {}: kind \"policy\" requires `module` (one file) or `bundle` (a \
+                         folder); a row naming neither enables no policy and could only ever \
+                         decide nothing",
+                        self.id
+                    )));
+                }
+                _ => {}
+            }
+            // `documents` is what a TREE row is handed. On the mediated call the
+            // input is the envelope the boundary already carries, so a `documents`
+            // list there is a key that parses and is never read — the shape §8
+            // refuses everywhere else in this config.
+            if self.scope == RuleScope::MediatedCall && !self.documents.is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `documents` is what a `scope = \"tree\"` row hands its bundle; \
+                     on the mediated call the input is the call's own facts, so this list \
+                     would never be read",
+                    self.id
+                )));
+            }
+            // And the converse: a tree row with no declared documents is handed
+            // an empty tree and decides nothing about the repository. Refused
+            // rather than allowed to read as a configured gate — this kind's
+            // whole claim on the read surface is that its inputs are BOUNDED by
+            // declaration, and a row that declares none has not bounded
+            // anything, it has asked nothing.
+            if self.scope == RuleScope::Tree && self.documents.is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: kind \"policy\" with `scope = \"tree\"` requires `documents` — \
+                     the inputs it is handed. A row declaring none is handed an empty tree \
+                     and reads as a gate that decides nothing",
+                    self.id
+                )));
+            }
+        }
         // A receipt row naming an empty `checks` list gates its trigger on
         // nothing and allows every call, which reads as coverage from the file.
         if self.kind == RuleKind::Receipt && self.checks.as_ref().is_some_and(Vec::is_empty) {
@@ -2207,15 +2340,24 @@ fn validate_composition(rules: &[Rule], at: Option<Located<'_>>) -> anyhow::Resu
         // predicate rather than a comparison per axis, because "did this
         // reference move me" is one question and asking it twice invites the
         // two halves to drift.
-        let mine = rule.kind.fact_class();
-        if mine.meet(producer.kind.fact_class()) != mine {
+        //
+        // EACH SIDE IS JUDGED AT ITS OWN SCOPE (CLOUD-833). `fact_class` used to
+        // key on the kind alone; a `policy` row is `Free` x `Hook` on the
+        // mediated call and `Read` x `Check` on the tree, so asking for one
+        // rule's class while holding the other's scope would compare two things
+        // neither row declares. `rule.scope` and `producer.scope` are the values
+        // each row actually carries, and passing anything else here is how this
+        // check would start answering a question nobody asked.
+        let mine = rule.kind.fact_class(rule.scope);
+        let theirs = producer.kind.fact_class(producer.scope);
+        if mine.meet(theirs) != mine {
             return Err(UsageError::raise(format!(
                 "{}: reads `{name}`, derived by {} at cost `{}` on surface `{}`, which a rule at \
                  cost `{}` on surface `{}` cannot carry — composition takes the meet on both axes",
                 pointer_for(at, &rule.id),
                 pointer_for(at, &producer.id),
-                producer.kind.fact_class().cost.as_str(),
-                producer.kind.fact_class().surface.as_str(),
+                theirs.cost.as_str(),
+                theirs.surface.as_str(),
                 mine.cost.as_str(),
                 mine.surface.as_str()
             )));
@@ -2333,6 +2475,16 @@ pub fn run_static(
     _provisions: &[crate::provision::Provision],
     root: &Path,
 ) -> anyhow::Result<Scan> {
+    // POLICY BUNDLES ARE LOADED HERE, on the read surface, and that is
+    // CLOUD-833's substantive claim rather than a formality. `run_static` backs
+    // `check` and refuses any kind that `carries_ambient_authority` — a
+    // `command` row spawns a process with the calling user's authority, which is
+    // why it is confined to `enforce`. A policy module is `Authority::Supplied`:
+    // a pure function over an input document that cannot open a file, start a
+    // process or reach the network, a property CLOUD-831 gates rather than
+    // asserts. So admitting it here makes `check` MORE capable without making it
+    // less honest, and the spawning refusal below is untouched.
+    let bundles = crate::policy::load(root, rules, None)?;
     // Refuse before any work: the read-only surface must not even begin a run
     // it cannot complete honestly.
     for rule in rules {
@@ -2354,7 +2506,7 @@ pub fn run_static(
             ));
         }
     }
-    run(rules, &[], root)
+    run(rules, &[], root, &bundles)
 }
 
 /// Run only the rules that cannot spawn a process, and report the ones that can
@@ -2399,7 +2551,8 @@ pub fn run_recorded(
         .iter()
         .partition(|rule| !rule.kind.carries_ambient_authority());
     let evaluable: Vec<Rule> = evaluable.into_iter().cloned().collect();
-    let mut scan = run(&evaluable, provisions, root)?;
+    let bundles = crate::policy::load(root, &evaluable, None)?;
+    let mut scan = run(&evaluable, provisions, root, &bundles)?;
     for rule in withheld {
         // `RuleSkipped`, not a variant of its own. The distinction between "the
         // input precondition was unmet" and "this surface cannot run the kind"
@@ -2443,7 +2596,8 @@ pub fn run_all(
             )));
         }
     }
-    run(rules, provisions, root)
+    let bundles = crate::policy::load(root, rules, None)?;
+    run(rules, provisions, root, &bundles)
 }
 
 /// Run every rule in `rules` against the tree rooted at `root`, returning all
@@ -2458,6 +2612,7 @@ fn run(
     rules: &[Rule],
     provisions: &[crate::provision::Provision],
     root: &Path,
+    bundles: &[crate::policy::Bundle],
 ) -> anyhow::Result<Scan> {
     let files = tree_files(root)?;
     // Resolved ONCE for the whole run, before any rule is evaluated (CLOUD-773).
@@ -2468,7 +2623,15 @@ fn run(
 
     let mut scan = Scan::default();
     for rule in rules {
-        if let Some(why) = run_rule(rule, provisions, root, &files, &derived, &mut scan.findings)? {
+        if let Some(why) = run_rule(
+            rule,
+            provisions,
+            root,
+            &files,
+            &derived,
+            bundles,
+            &mut scan.findings,
+        )? {
             scan.not_evaluated.insert(rule.id.clone(), why);
         }
     }
@@ -2533,6 +2696,7 @@ fn run_rule(
     root: &Path,
     files: &[String],
     derived: &BTreeMap<String, crate::facts::Look<String>>,
+    bundles: &[crate::policy::Bundle],
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<Option<NotObserved>> {
     // Validation first, and it owns the empty-glob refusal now: the census in
@@ -2544,6 +2708,19 @@ fn run_rule(
     // skip here is a rule another surface owns, never one nothing runs.
     if rule.scope != RuleScope::Tree {
         return Ok(Some(NotObserved::RuleSkipped));
+    }
+    // BEFORE THE GLOB GATE, because a policy row has no glob (CLOUD-833). It is
+    // not selected by the files it reads — it is handed the documents it
+    // declares — so the census does not ask it for one and the early return
+    // below would skip every such row silently.
+    //
+    // Also before the `allow` check, deliberately: severity on this kind is
+    // resolved PER PREDICATE (CLOUD-832), so a row whose own severity is `allow`
+    // may still carry predicates tuned to `deny`. The per-violation check inside
+    // is what decides, and returning here would switch those off by a value
+    // nobody aimed at them.
+    if rule.kind == RuleKind::Policy {
+        return policy_rule(rule, root, bundles, findings);
     }
     let Some(glob) = rule.glob.as_deref() else {
         // Unreachable for a tree-scoped kind, whose census requires `glob`.
@@ -2612,7 +2789,140 @@ fn run_rule(
         | RuleKind::Receipt
         | RuleKind::Pipeline
         | RuleKind::Policy
-        | RuleKind::Judge => {}
+        | RuleKind::Judge => {} // `Policy` is unreachable here for a THIRD reason as of CLOUD-833: it
+                                // returns above, before the glob gate, because it has no glob to be
+                                // selected by. Left in the list rather than removed so adding a scope to
+                                // it has to come back to this match.
+    }
+    Ok(None)
+}
+
+/// The input document a tree-scoped policy bundle decides over (CLOUD-833).
+///
+/// Mirrors `hook::call_document`'s role on the mediated side, and the two are
+/// deliberately different shapes because they answer different questions: the
+/// hook's document is the CALL, this one is the TREE.
+///
+/// ```text
+/// {"tree": {"documents": {"<declared path>": <parsed>}, "missing": ["<path>"]}}
+/// ```
+///
+/// **Bounded by declaration, never by an ambient walk.** Only the paths the row
+/// names are read, which is what keeps house style §4's "cheap when irrelevant"
+/// true and what makes the `read` classification honest — a rule that walked the
+/// tree would pay for every file on every invocation.
+///
+/// **A declared document the tree does not carry is named in `missing`, not
+/// omitted.** Omitting it would hand the module an input where the key is simply
+/// absent, and a Rego predicate over an absent key is silently undefined —
+/// CLOUD-251's vacuous pass, arriving as a clean gate. The caller reads
+/// `missing` and reports could-not-look; the list is in the document as well so
+/// a module can decide *about* the absence when that is the predicate.
+///
+/// The parsed value is [`crate::facts::Node::to_json`], the projection of the
+/// one canonical tree CLOUD-772 landed — never a second parser.
+fn tree_document(root: &Path, documents: &[String]) -> (String, Vec<String>) {
+    let mut parsed = serde_json::Map::new();
+    let mut missing = Vec::new();
+    for path in documents {
+        let Some(format) = crate::facts::Format::for_path(path) else {
+            // An extension this crate does not parse. Could-not-look rather than
+            // a guess: reading an unknown extension as JSON would blame the file
+            // for the assumption.
+            missing.push(path.clone());
+            continue;
+        };
+        let Ok(text) = fs::read_to_string(root.join(path)) else {
+            missing.push(path.clone());
+            continue;
+        };
+        match format.read(&text) {
+            crate::facts::Look::Is(node) => {
+                parsed.insert(path.clone(), node.to_json());
+            }
+            // A file that will not parse says nothing about what it contains,
+            // which is exactly `Format::read`'s own three-valued contract.
+            crate::facts::Look::IsNot | crate::facts::Look::CouldNotLook => {
+                missing.push(path.clone());
+            }
+        }
+    }
+    let document = serde_json::json!({
+        "tree": {
+            "documents": serde_json::Value::Object(parsed),
+            "missing": missing.clone(),
+        }
+    });
+    // `to_string` on a value this function built cannot fail, and the fallback is
+    // an input the evaluator will reject rather than a silent empty tree — which
+    // the caller reads as could-not-look, the honest answer if it ever happened.
+    (
+        serde_json::to_string(&document).unwrap_or_else(|_| String::from("{")),
+        missing,
+    )
+}
+
+/// Evaluate a tree-scoped [`RuleKind::Policy`] row against its bundle.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when the row's bundle failed to load,
+/// which is a config error rather than a verdict.
+fn policy_rule(
+    rule: &Rule,
+    root: &Path,
+    bundles: &[crate::policy::Bundle],
+    findings: &mut Vec<Finding>,
+) -> anyhow::Result<Option<NotObserved>> {
+    let Some(bundle) = bundles.iter().find(|bundle| bundle.id() == rule.id) else {
+        // The row enabled a bundle the caller did not load. Not a pass: this
+        // surface has nothing to decide with, and reporting clean would be a
+        // gate that never ran reading as one that found nothing.
+        return Ok(Some(NotObserved::RuleSkipped));
+    };
+    let (input, missing) = tree_document(root, &rule.documents);
+    if !missing.is_empty() {
+        // COULD NOT LOOK, and never an empty deny set (CLOUD-251). A bundle
+        // handed a document the tree does not carry has not established anything
+        // about it, and the store holds the finding rather than resolving it.
+        return Ok(Some(NotObserved::RuleSkipped));
+    }
+    let crate::facts::Look::Is(violations) = crate::policy::deny(bundle, &input) else {
+        return Ok(Some(NotObserved::RuleSkipped));
+    };
+    for violation in &violations {
+        let id = bundle.attribute(violation);
+        let severity = rule.severity_for(violation.rule.as_deref());
+        if severity == RuleSeverity::Allow {
+            continue;
+        }
+        findings.push(Finding {
+            // THE PREDICATE'S ID, not the row's (CLOUD-832). `waiver::apply`
+            // matches on this field, so a waiver names the gate a reader saw
+            // rather than the bundle that happens to hold it.
+            rule: id.to_owned(),
+            severity,
+            // The bundle root is the pointer. A denial is about the tree the
+            // module read, not about any one of its declared documents — the
+            // module decides which of them mattered and says so in its own
+            // message, which is the consumer's text exactly as a row's `reason`
+            // is.
+            path: rule
+                .bundle
+                .clone()
+                .or_else(|| rule.module.clone())
+                .unwrap_or_else(|| rule.id.clone()),
+            line: None,
+            check: rule.settling_check().unwrap_or(Check::Reevaluate),
+            remediation: rule.remediation(),
+            identity: identity::StoredIdentity::new(
+                identity::FindingKind::Scope,
+                // Keyed on the PREDICATE, so the same gate breaking again is one
+                // finding rather than a new one per run, and two predicates in
+                // one bundle are two findings rather than one.
+                identity::scope_fingerprint(id, &violation.msg),
+            ),
+        });
     }
     Ok(None)
 }
@@ -4368,6 +4678,8 @@ mod tests {
             derives: None,
             reads: None,
             module: None,
+            bundle: None,
+            documents: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,
@@ -4866,16 +5178,22 @@ mod tests {
                 Authority::Supplied,
                 "{kind:?} reaches the mediated call and is not supplied-only"
             );
+            // At the scope the bound is ABOUT (CLOUD-833). `fact_class` is a
+            // function of kind and scope now, and a kind that takes both — today
+            // `Policy` — has a different class on each. Asking for its tree
+            // class here would judge the mediated-call bound against a surface
+            // the mediated call never uses.
+            let mediated = kind.fact_class(RuleScope::MediatedCall);
             assert!(
                 matches!(
-                    kind.fact_class().cost,
+                    mediated.cost,
                     crate::facts::Cost::Free | crate::facts::Cost::Read
                 ),
                 "{kind:?} reaches the mediated call at cost `{}`",
-                kind.fact_class().cost.as_str()
+                mediated.cost.as_str()
             );
             assert_eq!(
-                kind.fact_class().surface,
+                mediated.surface,
                 crate::facts::Surface::Hook,
                 "{kind:?} reaches the mediated call from a narrower surface"
             );
@@ -4888,18 +5206,27 @@ mod tests {
         // land: a kind classified `Supplied` must not be classified `effect` by
         // the cost axis, and one that spawns must not read as free. Adding a kind
         // and classifying it on one axis only is the mistake this catches.
+        // OVER EVERY PAIRING, not every kind (CLOUD-833). The class is a
+        // function of kind and scope, so a sweep over kinds alone would judge
+        // each one at whichever scope this loop happened to pick — and would go
+        // silent on exactly the kind that has two.
         for kind in RuleKind::ALL {
-            let spends = matches!(
-                kind.fact_class().cost,
-                crate::facts::Cost::Effect | crate::facts::Cost::Stateful
-            );
-            assert_eq!(
-                kind.carries_ambient_authority(),
-                spends,
-                "{kind:?} is `{}` on the authority axis and `{}` on the cost axis",
-                kind.authority().as_str(),
-                kind.fact_class().cost.as_str()
-            );
+            for scope in kind.scopes() {
+                let class = kind.fact_class(*scope);
+                let spends = matches!(
+                    class.cost,
+                    crate::facts::Cost::Effect | crate::facts::Cost::Stateful
+                );
+                assert_eq!(
+                    kind.carries_ambient_authority(),
+                    spends,
+                    "{kind:?} at scope `{}` is `{}` on the authority axis and `{}` on the \
+                     cost axis",
+                    scope.as_str(),
+                    kind.authority().as_str(),
+                    class.cost.as_str()
+                );
+            }
         }
     }
 
@@ -4988,6 +5315,20 @@ mod tests {
                 // complaint stays the pairing.
                 if *kind == RuleKind::Document {
                     rule.pattern = Some("x".to_owned());
+                }
+                // And the fourth and fifth, both CLOUD-833's. A policy row
+                // carries exactly one of `module` or `bundle`, which a flat
+                // column list cannot express any more than the four above; and a
+                // tree-scoped one is required `documents`, which depends on the
+                // row's SCOPE rather than on its kind — something `requires()`
+                // is keyed on the kind alone and structurally cannot say.
+                // Supplied here so the only possible complaint stays the
+                // pairing, which is what this test is about.
+                if *kind == RuleKind::Policy {
+                    rule.module = Some("policy/x.rego".to_owned());
+                    if *scope == RuleScope::Tree {
+                        rule.documents = vec!["batten.toml".to_owned()];
+                    }
                 }
                 let result = rule.validate();
                 if kind.scopes().contains(scope) {
@@ -5303,11 +5644,13 @@ mod tests {
         //
         // Fails by: meeting only the cost axis in `validate_composition`.
         assert_eq!(
-            RuleKind::Receipt.fact_class().surface,
+            RuleKind::Receipt
+                .fact_class(RuleScope::MediatedCall)
+                .surface,
             crate::facts::Surface::Hook
         );
         assert_eq!(
-            RuleKind::Document.fact_class().surface,
+            RuleKind::Document.fact_class(RuleScope::Tree).surface,
             crate::facts::Surface::Check
         );
         let err = validate_composition(&pair(RuleKind::Receipt, RuleKind::Document), None)
@@ -5323,11 +5666,11 @@ mod tests {
         //
         // Fails by: meeting only the surface axis in `validate_composition`.
         assert_eq!(
-            RuleKind::Document.fact_class().cost,
+            RuleKind::Document.fact_class(RuleScope::Tree).cost,
             crate::facts::Cost::Read
         );
         assert_eq!(
-            RuleKind::Secrets.fact_class().cost,
+            RuleKind::Secrets.fact_class(RuleScope::Tree).cost,
             crate::facts::Cost::Effect
         );
         let err = validate_composition(&pair(RuleKind::Document, RuleKind::Secrets), None)

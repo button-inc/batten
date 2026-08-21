@@ -1978,14 +1978,23 @@ impl Policy {
                 .collect(),
             fail_on_warning: resolved.fail_on_warning,
             verbs: resolved.verbs.clone(),
-            // EVERY REGISTERED MODULE IS A PROTECTED PATH, derived rather than
-            // asked for (CLOUD-763's fourth bound). §8's security property is
-            // that "an agent's context can never influence the rules it is
-            // judged by", and a module a consumer forgot to list in `protected`
-            // is exactly that influence. Deriving it from the rule table means
-            // registering a module protects it by construction — there is no
-            // spelling for a registered-but-unprotected module, so the bound
-            // cannot be half-configured.
+            // EVERY ENABLED MODULE **AND EVERY BUNDLE ROOT** IS A PROTECTED
+            // PATH, derived rather than asked for (CLOUD-763's fourth bound,
+            // CLOUD-833's sharpest consequence). §8's security property is that
+            // "an agent's context can never influence the rules it is judged
+            // by", and a module a consumer forgot to list in `protected` is
+            // exactly that influence. Deriving it from the rule table means
+            // enabling policy protects it by construction — there is no spelling
+            // for an enabled-but-unprotected module, so the bound cannot be
+            // half-configured.
+            //
+            // THE ROOT, NOT THE FILES UNDER IT, and that is the whole of the
+            // extension: a bundle is a folder whose membership changes without a
+            // config edit, so protecting the names present at load would lapse
+            // the moment a module was added. `<root>/**` is what keeps the
+            // property total — a folder must not be less protected than a named
+            // file was, which is exactly what would have happened if this had
+            // been left reading `module` alone.
             protected: PathSet::includes(
                 "protected",
                 &resolved
@@ -1997,7 +2006,7 @@ impl Policy {
                             .rules
                             .iter()
                             .filter(|rule| rule.kind == RuleKind::Policy)
-                            .filter_map(|rule| rule.module.clone()),
+                            .flat_map(policy_protected_paths),
                     )
                     .collect::<Vec<String>>(),
             )?,
@@ -2013,6 +2022,9 @@ impl Policy {
 
     /// The host capability row this policy is being evaluated against
     /// (CLOUD-779, CLOUD-601).
+    ///
+    /// (See [`policy_protected_paths`] above for the derivation `protected`
+    /// folds in.)
     ///
     /// The read side of the plumbing declared on [`Policy::harness`]: a gate that
     /// needs to know whether the host can be asked, whether its stop event can
@@ -2732,6 +2744,28 @@ fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
         return Decision::Deny(shape_refusal(rule));
     }
     Decision::Allow
+}
+
+/// The paths a `policy` row contributes to the `protected` set (CLOUD-833).
+///
+/// A row naming a `module` contributes that file. A row naming a `bundle`
+/// contributes **the root and everything under it** — `<root>` so the folder
+/// itself cannot be replaced, and `<root>/**` so its members cannot be edited.
+///
+/// Enumerating the files present at load would not do: a bundle's membership
+/// changes without a config edit, so the set would silently stop covering a
+/// module added afterwards. That is the same "holds for named files and lapses
+/// for a folder" failure §8's out-of-band property cannot afford, which is why
+/// this is a glob rather than a listing.
+fn policy_protected_paths(rule: &Rule) -> Vec<String> {
+    if let Some(module) = rule.module.as_deref() {
+        return vec![module.to_owned()];
+    }
+    let Some(bundle) = rule.bundle.as_deref() else {
+        return Vec::new();
+    };
+    let root = bundle.trim_end_matches('/');
+    vec![root.to_owned(), format!("{root}/**")]
 }
 
 /// The policy gate: hand every registered module the call's facts and read back
@@ -3855,6 +3889,8 @@ mod tests {
             derives: None,
             reads: None,
             module: None,
+            bundle: None,
+            documents: Vec::new(),
             predicate_severity: None,
             criteria: None,
             tier: None,
@@ -4869,6 +4905,61 @@ mod tests {
             protected: PathSet::empty(),
             redirects: Vec::new(),
         }
+    }
+
+    /// A bundle ROOT joins `protected`, and so does everything under it.
+    ///
+    /// **CLOUD-833's sharpest consequence.** §8's security property is that
+    /// policy loads out-of-band of the model's context window, so an agent's
+    /// context can never influence the rules it is judged by. That held for a
+    /// named `module` because the path was in the config. A bundle is a FOLDER
+    /// whose membership changes without a config edit, so the property would
+    /// have held for named files and silently lapsed for a folder — an agent
+    /// could add or edit a `.rego` under an enabled root and change what judges
+    /// it.
+    ///
+    /// Fails by: deriving the files present at load instead of the root glob,
+    /// which covers today's modules and nothing added afterwards.
+    #[test]
+    fn a_bundle_root_and_its_members_are_protected_paths() {
+        let bundle: Rule = serde_json::from_value(serde_json::json!({
+            "id": "repo-policy",
+            "kind": "policy",
+            "scope": "tree",
+            "bundle": "policy/",
+            "documents": ["batten.toml"],
+            "severity": "deny",
+        }))
+        .expect("a tree-scoped policy row");
+        let derived = policy_protected_paths(&bundle);
+        assert!(
+            derived.iter().any(|path| path == "policy"),
+            "the root itself, so the folder cannot be replaced: {derived:?}"
+        );
+        assert!(
+            derived.iter().any(|path| path == "policy/**"),
+            "AND everything under it, so a module added after load is covered \
+             too — enumerating the files present would lapse the moment one \
+             arrived: {derived:?}"
+        );
+    }
+
+    /// A `module` row still contributes exactly its file.
+    ///
+    /// The other half of the pair: widening the derivation must not have turned
+    /// a named file into a folder glob, which would protect paths the config
+    /// never named.
+    #[test]
+    fn a_named_module_still_contributes_only_itself() {
+        let named: Rule = serde_json::from_value(serde_json::json!({
+            "id": "one-module",
+            "kind": "policy",
+            "scope": "mediated_call",
+            "module": "policy/gate.rego",
+            "severity": "deny",
+        }))
+        .expect("a module row");
+        assert_eq!(policy_protected_paths(&named), vec!["policy/gate.rego"]);
     }
 
     /// The wiring assertion (CLOUD-418), and the one the six `policy_modules`
