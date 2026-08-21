@@ -33,9 +33,22 @@ instead.
 
 **So the fleet is dispatched BY HAND**, and that is settled rather than a
 workaround to re-litigate: `CLOUD-731`, `CLOUD-784`, `CLOUD-839` are the
-precedents. **What an agent produces is the prompts, not the sessions**: write
-each bundle's prompt into the dispatch row on the board (never into chat, which
-dies with the container), and a human opens the sessions and pastes them.
+precedents. **What an agent produces is the prompts, not the sessions.**
+
+**Write them BOTH places, and this is not a style point — getting it wrong
+withholds the deliverable.** The board is where they must persist, because chat
+dies with the container. **Chat is where they must appear, because that is the
+only surface the human can paste from.** A prompt that exists only in a Linear
+row is not delivered: the human would have to go open the row, find it, and copy
+it out of rendered markdown. Measured 2026-08-21 — an earlier version of this
+paragraph said "never into chat", and the session followed it, wrote the prompts
+to the row, told the user they were dispatch-ready, and delivered nothing the
+user could use. They asked for them in chat four separate times.
+
+So: **fenced code blocks in the reply, one per bundle, complete and
+self-contained**, and the same text appended to the dispatch row. Do not
+summarise the prompt in chat and point at the row for the full text; the
+paste has to be the thing in front of them.
 
 **Two consequences of hand dispatch that bite, both measured:**
 
