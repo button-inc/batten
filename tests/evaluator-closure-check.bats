@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/evaluator-closure-check
 # The closure half of CLOUD-831's pin, and the reason it takes a metadata
 # fixture rather than only running against the real tree.
 #

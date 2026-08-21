@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# subject: mise-tasks/evaluator-io-check
 # The decision `evaluator-io-check` makes is ONE THING — the inversion — and this
 # suite is over that decision rather than over a two-minute rebuild.
 #
