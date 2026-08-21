@@ -1,38 +1,52 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 #
-# CLOUD-847. The point of this file is NOT more review prose — it is a
-# CHECK: one commit status, on the head, in the free draft phase, that a batten
-# gate can decide over. Everything here serves that or removes noise that
-# competes with it.
+# CLOUD-847. The point of this file is NOT more review prose — it is a VERDICT
+# on the head, in the free draft phase, that a batten gate can decide over.
 #
-# Measured on #623, 2026-08-21, and the defaults fail in three separate ways:
+# Measured on #623, 2026-08-21, in three arms. Two of the three defaults fail,
+# and the third failure is one this file cannot fix from a branch:
 #
 #   1. `drafts: false` — the draft phase is the free phase (every job in ci.yml
 #      is `if: draft == false`), and it was the one phase nothing reviewed.
-#   2. `fail_commit_status: false` — the `CodeRabbit` status was `success` for a
-#      review carrying two Major findings AND `success` for "Review skipped:
-#      draft pull request". A status that is green either way is not a check.
-#   3. `auto_pause_after_reviewed_commits: 5` — automatic review pauses after
-#      five reviewed commits, which is a morning's iteration on a draft.
+#      Arm A: `@coderabbitai review` reviews a draft in 193s, no matrix bought.
+#   2. `request_changes_workflow: false` — the bot COMMENTS. A comment is not a
+#      verdict: GitHub`s `reviewDecision` stays null, so nothing on the PR says
+#      "findings outstanding" in a form a gate can read.
+#   3. The commit status is NOT that verdict, and this file used to claim it
+#      was. Arm C: with `fail_commit_status: true` in force at head c2778af,
+#      a review posting "Actionable comments posted: 1" still set
+#      `CodeRabbit = success — Review completed`. The reference says why —
+#      `fail_commit_status` fails "on review errors", and `commit_status` only
+#      mirrors review PROGRESS. Green with findings is the documented behaviour,
+#      not a misconfiguration.
 reviews:
-  auto_review:
-    # Review the free phase. NOTE (measured): flipping this on a feature branch
-    # does not move the skip decision — #623 pushed it and still got "Review
-    # skipped: draft pull request" 11s later. The auto-review gate reads the
-    # BASE branch, so this line only does anything once it is on `main`.
-    drafts: true
-    # Iterating on a draft is the intended workflow, so the pause that assumes
-    # a reviewed PR is finished works against it.
-    auto_pause_after_reviewed_commits: 50
-  # The status is the product. `commit_status` posts it; `fail_commit_status`
-  # is what makes it MEAN something — red while actionable findings stand.
-  commit_status: true
-  fail_commit_status: true
+  # THE VERDICT. With this on, findings arrive as CHANGES_REQUESTED rather than
+  # a comment, so `reviewDecision` answers "is this head reviewed and clear" in
+  # one GitHub-native field — the same field branch protection requires.
+  request_changes_workflow: true
 
-  # --- everything below is noise removal, not review policy ------------------
+  auto_review:
+    # Review the free phase. MEASURED CAVEAT: setting this on a feature branch
+    # is not enough. At head c2778af `@coderabbitai configuration` reported
+    # `drafts: true` sourced from this file, and the synchronize STILL posted
+    # "Review skipped: draft pull request" — twice, 10s and 11s after the push.
+    # The review honours the branch file; the auto-review skip did not. Landing
+    # this on `main` is the prediction that distinguishes event-time config
+    # resolution from a default-branch requirement.
+    drafts: true
+    # Iterating on a draft is the intended workflow, so a pause that assumes a
+    # reviewed PR is finished works against it. Five is a morning.
+    auto_pause_after_reviewed_commits: 50
+
+  # Kept, correctly described: a progress mirror on the legacy status API, which
+  # is what lets a required-check wiring see the review at all. It is not the
+  # findings signal — see the header.
+  commit_status: true
+
+  # --- noise removal, not review policy -------------------------------------
   #
-  # A review that narrates the diff competes with the check for the reader's
-  # attention, and the reader here is usually an agent that needs a verdict.
+  # A review that narrates the diff competes with the verdict for the reader`s
+  # attention, and the reader here is usually an agent that needs an answer.
   high_level_summary: false
   changed_files_summary: false
   sequence_diagrams: false
@@ -43,7 +57,7 @@ reviews:
 
   tools:
     # These already run as our own gates — `mise run ci` and the hk `gate` own
-    # them, and CI's verdict is the one `land` waits on. A second opinion posted
+    # them, and CI`s verdict is the one `land` waits on. A second opinion posted
     # as a PR comment adds a finding surface with no gate behind it, which is
     # the shape non-negotiable rule 2 rejects.
     clippy:
