@@ -74,10 +74,10 @@
 #
 # The mutation admits `tests/fixtures/` back into the corpus, so a citation that
 # resolves only against a quotation of itself passes — the vacuity above, restored.
-#MUTANT fixtures-satisfy-a-citation|s@:!:tests/fixtures/@:!:tests/no-such-dir/@|only under tests/fixtures
+#MUTANT fixtures-satisfy-a-citation|s@:!:tests/fixtures/@:!:tests/no-such-dir/@|resolves only in a fixture and nowhere else
 # And the block-selection mutation: read the FIRST opener rather than the last, so
 # a superseded clause's stale citations are judged as live obligations.
-#MUTANT superseded-block-is-judged|s@tail -n1@head -n1@|superseded block and a live one
+#MUTANT superseded-block-is-judged|s@tail -n1@head -n1@|the last opener is the live block
 set -uo pipefail
 
 # THE ROOT IS `git::repo_root`'S ANSWER, NEVER `--show-toplevel` (CLOUD-824). That

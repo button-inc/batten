@@ -87,6 +87,36 @@ at_root() { run env READY_CITES_ROOT="$ROOT" "$GATE" <"$PAYLOAD"; }
 
 # --- the synthetic decision table --------------------------------------------
 
+# The two cases the MUTANT rows are aimed at are HERE rather than among the
+# real-tree pair above, and that is forced: `mutant` runs each filtered case from a
+# staged copy of the tree, where `git grep` and the repo root resolve to nothing, so
+# a real-tree case is red before any mutation and reads as vacuously caught. A
+# synthetic root travels.
+
+@test "a citation that resolves only in a fixture and nowhere else is refused" {
+	# The vacuity guard as a decision, not as an observation about this repository.
+	# `only_in_a_fixture_and_nowhere_else` appears once in the synthetic root, under
+	# `tests/fixtures/`, which is exactly the shape of a fixture quoting a citation.
+	synthetic
+	block7 'The case `only_in_a_fixture_and_nowhere_else` holds.'
+	at_root
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"only_in_a_fixture_and_nowhere_else absent-cited-test"* ]]
+}
+
+@test "the last opener is the live block and an earlier one is history" {
+	# `ready-lint` takes the FIRST opener; this takes the LAST. A body carrying a
+	# superseded block whose citations no longer resolve is still Ready, because a
+	# superseded clause carries no obligation.
+	synthetic
+	PAYLOAD="$BATS_TEST_TMPDIR/p.json"
+	local d
+	d=$(printf '**Refinement — Ready (SUPERSEDED)**\n\n* **Test obligation (§7).** The case `a_name_that_is_absent_entirely` holds.\n\n**Refinement — Ready (2026-08-21)**\n\n* **Test obligation (§7).** The case `a_real_test_that_exists_here` holds.\n')
+	jq -nc --arg d "$d" '{id: "CLOUD-999", description: $d}' >"$PAYLOAD"
+	at_root
+	[ "$status" -eq 0 ]
+}
+
 @test "a §7 citing a test that exists passes" {
 	synthetic
 	block7 'The case `a_real_test_that_exists_here` still holds.'
