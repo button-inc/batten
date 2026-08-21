@@ -1483,6 +1483,88 @@ pub fn upstream_of_head(dir: &Path) -> Result<Option<String>> {
 /// count held, and reporting zero would read as "nothing was deleted" having
 /// looked at nothing.
 pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<usize> {
+    let mut total = 0;
+    for_each_blob_at_rev(dir, rev, glob, |_, text| {
+        total += text.matches(pattern).count();
+    })?;
+    Ok(total)
+}
+
+/// Which of `paths` name a blob at `rev` (CLOUD-807).
+///
+/// The base-side half of `retires_with`'s admission. A declared subject is only
+/// evidence that something DIED if it was alive at the base rev: without this,
+/// a header naming a path that never existed would report "absent from the
+/// working tree" and admit the deletion it was supposed to justify. That is the
+/// header rotting into a lie, and it is the case the row's §7(d) names.
+///
+/// Looked up entry-by-entry rather than by walking the tree, because the caller
+/// asks about a handful of declared paths and a subject is a path a consumer
+/// typed, never a glob. A path naming a tree rather than a blob answers `false`:
+/// a directory is not a subject a suite can be said to cover.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `rev` does not resolve, matching
+/// [`count_at_rev`] — a lookup that could not see the baseline must not answer
+/// "absent", which is the admitting direction.
+pub fn paths_present_at_rev(
+    dir: &Path,
+    rev: &str,
+    paths: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    let repository = open(dir)?;
+    let unresolved = || {
+        UsageError::raise(format!(
+            "ratchet base {rev:?} does not resolve to a tree in this repository"
+        ))
+    };
+    let resolved = repository.rev_parse_single(rev).map_err(|_| unresolved())?;
+    let tree = resolved
+        .object()
+        .map_err(|_| unresolved())?
+        .peel_to_tree()
+        .map_err(|_| unresolved())?;
+
+    let mut present = BTreeSet::new();
+    for path in paths {
+        // A lookup that fails to read is "not present", the REFUSING direction
+        // for an admission: the caller denies a decrease it cannot justify.
+        let Ok(Some(entry)) = tree.lookup_entry_by_path(path.as_str()) else {
+            continue;
+        };
+        if entry.mode().is_blob() {
+            present.insert(path.clone());
+        }
+    }
+    Ok(present)
+}
+
+/// Visit every glob-matching blob at `rev`, handing the callback its path and
+/// its UTF-8 text (CLOUD-807).
+///
+/// The base-tree walk [`count_at_rev`] is a sum over — extracted rather than
+/// copied, so the two halves of a ratchet keep ONE authority on which blobs a
+/// glob selects at a rev. `retires_with` needs the same walk to read a
+/// per-file count and a declared-subject header out of the same pass, and a
+/// second traversal beside this one is exactly how the gitlink and
+/// `core.quotePath` skews below got in.
+///
+/// Every selection and skip rule is documented at the site it applies; see
+/// [`count_at_rev`] for why each one is a correctness property rather than a
+/// convenience.
+///
+/// # Errors
+///
+/// Returns a [`UsageError`] (→ exit `1`) when `rev` does not resolve, for the
+/// reason [`count_at_rev`] gives: a baseline that could not be read is never a
+/// pass.
+pub fn for_each_blob_at_rev(
+    dir: &Path,
+    rev: &str,
+    glob: &str,
+    mut visit: impl FnMut(&str, &str),
+) -> Result<()> {
     let repository = open(dir)?;
     let unresolved = || {
         UsageError::raise(format!(
@@ -1516,7 +1598,6 @@ pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<
         .breadthfirst(&mut recorder)
         .map_err(|_| UsageError::raise(format!("cannot walk the tree at {rev:?}")))?;
 
-    let mut total = 0;
     for entry in recorder.records {
         // A gitlink is skipped, explicitly. `crate::rules::tree_files` stops at a
         // nested repository, so this half must not count one either or the two
@@ -1547,9 +1628,9 @@ pub fn count_at_rev(dir: &Path, rev: &str, glob: &str, pattern: &str) -> Result<
         let Ok(text) = std::str::from_utf8(&object.data) else {
             continue;
         };
-        total += text.matches(pattern).count();
+        visit(path, text);
     }
-    Ok(total)
+    Ok(())
 }
 
 /// The remote's default branch, as a full remote-tracking ref.

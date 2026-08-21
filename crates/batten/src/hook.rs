@@ -3763,6 +3763,7 @@ mod tests {
             identity_key: None,
             direction: None,
             base: None,
+            retires_with: None,
             format: None,
             node: None,
             derives: None,

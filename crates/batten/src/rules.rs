@@ -547,6 +547,13 @@ impl RuleKind {
                 "pattern",
                 "direction",
                 "base",
+                // Optional, and optional is the whole of its compatibility story
+                // (CLOUD-807): a ratchet without it behaves exactly as it did
+                // before the column existed. Listed here rather than in
+                // `requires` for the reason `require_via` gives — a modifier
+                // that narrows by DEFAULT would silently change every row that
+                // never asked for it.
+                "retires_with",
                 "reason",
                 "policy_url",
                 "no_fix_reason",
@@ -981,6 +988,48 @@ pub struct Rule {
     /// second spelling of it would be the trunk name written twice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The header token a [`RuleKind::Ratchet`]'s files declare their SUBJECT
+    /// with, turning the row into *a decrease is admitted when the subject
+    /// died* (CLOUD-807).
+    ///
+    /// A bare ratchet means *this count may not fall*, and the only hatch for a
+    /// legitimate reduction is a `[[waiver]]` — which expires, and which cannot
+    /// say WHICH reductions are legitimate. This modifier says it. The value is
+    /// the line prefix a matched file writes its subject after; everything to
+    /// the end of that line is read as whitespace-separated paths.
+    ///
+    /// **The vocabulary is the consumer's** (non-negotiable rule 1). `#
+    /// subject:` is one repository's comment syntax, not Batten's, so the token
+    /// is config and this crate never names a specific repo's files. What the
+    /// core knows is the RELATIONSHIP: a file declares paths, and those paths
+    /// dying is what buys its own deletion.
+    ///
+    /// Declaring it has two consequences, and the second is what makes the
+    /// first honest:
+    ///
+    /// 1. **Admission.** A decrease is admitted iff every file whose own count
+    ///    fell declares a subject, and every path that subject names was a blob
+    ///    at `base` and is absent from the working tree.
+    /// 2. **Obligation.** EVERY matched file must carry a resolvable header —
+    ///    not merely the ones a given change touches. Absent, empty, or naming
+    ///    a path that no longer exists is a finding at the row's severity.
+    ///
+    /// Without (2) the admission rests on a header nobody checks, and a suite
+    /// outliving its subject — the header rotted into a lie — reads exactly
+    /// like one that never had a subject at all.
+    ///
+    /// **Headers are read from the BASE tree.** A retired file does not exist
+    /// in the working tree, so base is the only place its subject can be read —
+    /// and it is also the right place: a change cannot rewrite its own
+    /// permission by editing the header in the same commit. The price is that
+    /// widening a too-narrow header before a retirement takes a prior landed
+    /// commit, which is the correct direction for the trade, since a header
+    /// narrower than the truth is a hole and one wider than it is only friction.
+    ///
+    /// Requires `base`, like the ratchet's count itself: the admission is
+    /// decidable from two trees and one of them has to be named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retires_with: Option<String>,
     /// How to parse the documents a [`RuleKind::Document`] row selects. Required
     /// by that kind, rejected by every other.
     ///
@@ -1426,7 +1475,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 29] {
+    fn columns(&self) -> [(&'static str, bool); 30] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1450,6 +1499,7 @@ impl Rule {
             ("identity_key", self.identity_key.is_some()),
             ("direction", self.direction.is_some()),
             ("base", self.base.is_some()),
+            ("retires_with", self.retires_with.is_some()),
             ("format", self.format.is_some()),
             ("node", self.node.is_some()),
             ("derives", self.derives.is_some()),
@@ -1522,6 +1572,29 @@ impl Rule {
                     self.id
                 ))
             })?;
+        }
+        // The same shape for `retires_with` (CLOUD-807), and here rather than in
+        // the census for the reason stated above it: `base` is already required
+        // by the ratchet kind, but the obligation is on the VALUE, so a future
+        // kind taking this column inherits the refusal rather than the omission.
+        if let Some(token) = self.retires_with.as_deref() {
+            if self.base.is_none() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `retires_with` requires `base` — the rev a subject must have been alive at",
+                    self.id
+                )));
+            }
+            // An empty token matches at the start of every line, so every file
+            // would "declare" a subject of whatever its first line happens to
+            // say. That reads as a configured admission and decides nothing —
+            // the failure `requires_key`'s compile-at-load closes, in the one
+            // form this column can take it.
+            if token.trim().is_empty() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `retires_with` cannot be blank — it is the line prefix a subject is declared after, and an empty one matches every line",
+                    self.id
+                )));
+            }
         }
         // The two trigger-dependent obligations (CLOUD-444). They live here
         // rather than in the column census because the census is a per-kind
@@ -2441,7 +2514,7 @@ fn run_rule(
     // deletion this kind exists to catch. Skipping there would make the gate
     // silent in exactly its worst case.
     if rule.kind == RuleKind::Ratchet {
-        ratchet_rule(rule, root, glob, &matched, findings)?;
+        ratchet_rule(rule, root, glob, files, &matched, findings)?;
         return Ok(None);
     }
 
@@ -2504,6 +2577,7 @@ fn ratchet_rule(
     rule: &Rule,
     root: &Path,
     glob: &str,
+    files: &[String],
     matched: &[&String],
     findings: &mut Vec<Finding>,
 ) -> anyhow::Result<()> {
@@ -2521,43 +2595,241 @@ fn ratchet_rule(
         return Ok(());
     };
 
-    let base_count = crate::git::count_at_rev(root, base, glob, pattern)?;
+    // The base half, per file rather than summed, so ONE walk answers both the
+    // aggregate the direction is judged on and the per-file deltas
+    // `retires_with` needs. A row without the column sums this and asks nothing
+    // else, which is what makes the column's absence byte-identical to the
+    // behaviour before it existed.
+    let mut base_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut base_text: BTreeMap<String, String> = BTreeMap::new();
+    let retires_with = rule.retires_with.as_deref();
+    crate::git::for_each_blob_at_rev(root, base, glob, |path, text| {
+        base_counts.insert(path.to_owned(), text.matches(pattern).count());
+        // Held only for the column that reads it: a ratchet without
+        // `retires_with` must not start buffering the base tree's text.
+        if retires_with.is_some() {
+            base_text.insert(path.to_owned(), text.to_owned());
+        }
+    })?;
+    let base_count: usize = base_counts.values().sum();
+
+    let mut working_counts: BTreeMap<&str, usize> = BTreeMap::new();
     let mut working_count = 0;
     for path in matched {
         let text = fs::read_to_string(root.join(path)).unwrap_or_default();
-        working_count += text.matches(pattern).count();
+        let count = text.matches(pattern).count();
+        working_count += count;
+        working_counts.insert(path.as_str(), count);
+        // Consequence two of the column (CLOUD-807): EVERY matched file owes a
+        // resolvable subject, not merely the ones this change touched. Without
+        // it the admission below rests on a header nobody checks, and a suite
+        // that outlived its subject is indistinguishable from one that never
+        // declared one.
+        if let Some(token) = retires_with {
+            unresolved_subject(rule, path, &text, token, files, findings);
+        }
     }
 
-    if direction.violated(base_count, working_count) {
-        findings.push(Finding {
-            // The plain rule id, deliberately: `waiver::apply` matches on this
-            // field, so decorating it would make a ratchet the one finding kind
-            // no waiver could suppress — and the waiver is the designed hatch
-            // for a legitimate reduction.
-            rule: rule.id.clone(),
-            severity: rule.severity(),
-            // The glob plus the two counts. The glob is the tightest honest
-            // pointer — the finding is about the whole matched set, not a file,
-            // and naming one would misdirect — and the counts ride here because
-            // a line-less finding renders as `<path> <rule>`, so this is the one
-            // field that can carry them without a second output shape. `git
-            // diff` answers *where*; the deleted text itself is payload and
-            // never appears (rule 4).
-            path: format!("{glob} {base_count}->{working_count}"),
-            line: None,
-            check: rule.settling_check().unwrap_or(Check::Reevaluate),
-            remediation: rule.remediation(),
-            identity: identity::StoredIdentity::new(
-                identity::FindingKind::Scope,
-                // Keyed on the rule and its glob, never the counts: the same
-                // ratchet breaking again is one finding, not a new one per
-                // integer pair.
-                identity::scope_fingerprint(&rule.id, glob),
-            ),
-        });
+    if !direction.violated(base_count, working_count) {
+        return Ok(());
     }
+
+    // The admission (CLOUD-807). A decrease is bought by the affected files'
+    // subjects having DIED — declared at `base`, alive at `base`, absent now.
+    // Anything else falls through to the refusal below, so a row that cannot
+    // justify its decrease still denies at its own severity.
+    let mut blockers: BTreeSet<String> = BTreeSet::new();
+    if let Some(token) = retires_with {
+        let mut declared: BTreeSet<String> = BTreeSet::new();
+        for (path, was) in &base_counts {
+            let now = working_counts.get(path.as_str()).copied().unwrap_or(0);
+            if now >= *was {
+                continue;
+            }
+            // Read from the BASE text, never the working one. A retired file has
+            // no working copy to read, and allowing the working copy would let a
+            // change rewrite its own permission in the commit that spends it.
+            let subject = base_text
+                .get(path)
+                .map(|text| declared_subject(text, token))
+                .unwrap_or_default();
+            if subject.is_empty() {
+                blockers.insert(format!("{SUBJECT_UNDECLARED} {path}"));
+                continue;
+            }
+            declared.extend(subject);
+        }
+        // Alive at `base` is the anti-rot term: without it a header naming a
+        // path that never existed reports "absent from the working tree" and
+        // admits the very deletion it was supposed to justify.
+        let alive_at_base = crate::git::paths_present_at_rev(root, base, &declared)?;
+        let present: BTreeSet<&str> = files.iter().map(String::as_str).collect();
+        for path in &declared {
+            if !alive_at_base.contains(path) {
+                blockers.insert(format!("{SUBJECT_NEVER_EXISTED} {path}"));
+            } else if present.contains(path.as_str()) {
+                blockers.insert(format!("{SUBJECT_ALIVE} {path}"));
+            }
+        }
+        if blockers.is_empty() {
+            // Every affected file's subject died in this same change. This is
+            // the retirement the `[[waiver]]` used to have to express by
+            // switching the whole rule off.
+            return Ok(());
+        }
+    }
+
+    findings.push(Finding {
+        // The plain rule id, deliberately: `waiver::apply` matches on this
+        // field, so decorating it would make a ratchet the one finding kind
+        // no waiver could suppress — and the waiver is the designed hatch
+        // for a legitimate reduction.
+        rule: rule.id.clone(),
+        severity: rule.severity(),
+        // The glob plus the two counts. The glob is the tightest honest
+        // pointer — the finding is about the whole matched set, not a file,
+        // and naming one would misdirect — and the counts ride here because
+        // a line-less finding renders as `<path> <rule>`, so this is the one
+        // field that can carry them without a second output shape. `git
+        // diff` answers *where*; the deleted text itself is payload and
+        // never appears (rule 4).
+        //
+        // A `retires_with` row appends WHY the decrease was not admitted, which
+        // the row's §5 asks for: the subject paths are the consumer's own
+        // declared config text — the same reading that lets a `document` row
+        // report its node path — and they are what a reader needs to find the
+        // header again. Never a case name, never a line of the deleted suite.
+        path: format!(
+            "{glob} {base_count}->{working_count}{}",
+            render_blockers(&blockers)
+        ),
+        line: None,
+        check: rule.settling_check().unwrap_or(Check::Reevaluate),
+        remediation: rule.remediation(),
+        identity: identity::StoredIdentity::new(
+            identity::FindingKind::Scope,
+            // Keyed on the rule and its glob, never the counts: the same
+            // ratchet breaking again is one finding, not a new one per
+            // integer pair.
+            identity::scope_fingerprint(&rule.id, glob),
+        ),
+    });
     Ok(())
 }
+
+/// The paths `text` declares as its subject after `token` (CLOUD-807).
+///
+/// Every declaring line is read and the paths unioned, rather than the first
+/// winning. Two declarations naming different subjects then require BOTH to die,
+/// which is the refusing direction: a stray line can only make a retirement
+/// harder to buy, never easier.
+fn declared_subject(text: &str, token: &str) -> BTreeSet<String> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix(token))
+        .flat_map(str::split_whitespace)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Raise a finding when `path` does not declare a subject that still resolves.
+///
+/// # Pointer-only (non-negotiable rule 4)
+///
+/// The finding carries the file and the LINE OF THE DECLARATION — so the dead
+/// path a reader needs is the line the pointer already lands on, and nothing of
+/// the suite's own content has to travel to say it. A file with no declaration
+/// at all points at line 1, where the header belongs.
+fn unresolved_subject(
+    rule: &Rule,
+    path: &str,
+    text: &str,
+    token: &str,
+    files: &[String],
+    findings: &mut Vec<Finding>,
+) {
+    let declaration = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.starts_with(token));
+    let (line, reason) = match declaration {
+        None => (1, SUBJECT_UNDECLARED),
+        Some((index, _)) => {
+            let subject = declared_subject(text, token);
+            if subject.is_empty() {
+                (index + 1, SUBJECT_UNDECLARED)
+            } else if subject
+                .iter()
+                .all(|named| files.iter().any(|have| have == named))
+            {
+                return;
+            } else {
+                // The header rotted into a lie: it names a path this tree no
+                // longer has. That is the row's §7(c) — a suite outliving its
+                // subject — caught by the same resolution that catches a
+                // missing header, because they are the same defect.
+                (index + 1, SUBJECT_UNRESOLVABLE)
+            }
+        }
+    };
+    let Ok(default) = identity::code_fingerprint(
+        &rule.id,
+        path,
+        &format!("{token} {reason}"),
+        identity::SpanNormalization::Verbatim,
+    ) else {
+        return;
+    };
+    findings.push(Finding {
+        rule: rule.id.clone(),
+        severity: rule.severity(),
+        path: path.to_owned(),
+        line: Some(line),
+        identity: identity_of(rule, identity::FindingKind::Code, default),
+        check: rule.settling_check().unwrap_or(Check::Reevaluate),
+        remediation: rule.remediation(),
+    });
+}
+
+/// Render why a decrease was refused, bounded and sorted.
+///
+/// Sorted because the report is byte-stable across runs in both channels, and
+/// a `BTreeSet` iterated in order is what makes that a property of the type
+/// rather than of the walk. Bounded because a change deleting many suites at
+/// once would otherwise put an unbounded list in one finding — the same reading
+/// `cardinality_cap` applies one level up, at the scale this field can carry.
+fn render_blockers(blockers: &BTreeSet<String>) -> String {
+    if blockers.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<&str> = blockers
+        .iter()
+        .take(MAX_BLOCKERS_REPORTED)
+        .map(String::as_str)
+        .collect();
+    let rest = blockers.len().saturating_sub(shown.len());
+    let more = if rest == 0 {
+        String::new()
+    } else {
+        format!(" +{rest} more")
+    };
+    format!(" [{}{more}]", shown.join(", "))
+}
+
+/// An affected file that declared no subject, so nothing bought its decrease.
+const SUBJECT_UNDECLARED: &str = "subject-undeclared";
+
+/// A declared subject that is still present, so the suite still has work to do.
+const SUBJECT_ALIVE: &str = "subject-alive";
+
+/// A declared subject that was not a blob at `base` — a header that was already
+/// a lie before this change, and which would otherwise admit any deletion.
+const SUBJECT_NEVER_EXISTED: &str = "subject-never-existed";
+
+/// A declared subject this tree no longer has, under a suite that survived it.
+const SUBJECT_UNRESOLVABLE: &str = "subject-unresolvable";
+
+/// How many refusal reasons one ratchet finding names before it summarises.
+const MAX_BLOCKERS_REPORTED: usize = 3;
 
 /// The argument a `check` template uses to mark where the matched paths go.
 pub const FILES_PLACEHOLDER: &str = "{{files}}";
@@ -3906,6 +4178,57 @@ mod tests {
             .is_err()
         );
 
+        // `retires_with` (CLOUD-807), the optional half. Present with `base` it
+        // loads; the two value-dependent refusals are the ones the column
+        // census cannot express, so they are asserted here rather than left to
+        // the generic driver above.
+        assert!(
+            Rule {
+                retires_with: Some("# subject:".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_ok(),
+            "a ratchet may declare the header its files name a subject with"
+        );
+        assert!(
+            Rule {
+                retires_with: Some("# subject:".to_owned()),
+                base: None,
+                ..base.clone()
+            }
+            .validate()
+            .is_err(),
+            "`retires_with` without `base` has no rev to ask a subject was alive at"
+        );
+        // A blank token strips off the front of EVERY line, so every file would
+        // declare whatever its first line happens to say — an admission that
+        // reads as configured and decides nothing.
+        for blank_token in ["", "   "] {
+            assert!(
+                Rule {
+                    retires_with: Some(blank_token.to_owned()),
+                    ..base.clone()
+                }
+                .validate()
+                .is_err(),
+                "a blank `retires_with` is refused at load, not discovered at scan"
+            );
+        }
+        // And it is a ratchet's column alone: no other kind compares two trees,
+        // so nothing else could act on a declared subject.
+        assert!(
+            Rule {
+                kind: RuleKind::Forbid,
+                direction: None,
+                retires_with: Some("# subject:".to_owned()),
+                ..base.clone()
+            }
+            .validate()
+            .is_err(),
+            "`retires_with` on a kind that reads one tree is refused"
+        );
+
         // `direction`/`base` on a kind that is not a ratchet is equally refused.
         assert!(
             Rule {
@@ -3983,6 +4306,7 @@ mod tests {
             identity_key: None,
             direction: None,
             base: None,
+            retires_with: None,
             format: None,
             node: None,
             derives: None,
