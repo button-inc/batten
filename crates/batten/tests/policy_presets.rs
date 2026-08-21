@@ -223,10 +223,29 @@ fn presets_are_inside_the_rule_one_glob() {
     let relative = presets
         .strip_prefix(repo_root)
         .expect("presets sit under the workspace root");
-    let relative = relative.to_str().expect("a utf-8 path");
-    assert!(
-        relative.starts_with("crates/"),
-        "the rule-1 rows glob `crates/**`; presets at `{relative}` would be \
+
+    // BY PATH COMPONENT, never by string prefix. `Path::join` keeps the
+    // separator it was handed, so on Windows this reads
+    // `crates\batten\src/policy/presets` — mixed — and `starts_with("crates/")`
+    // is false for a directory that is plainly under `crates`. Measured: this
+    // assertion was written as a string test and went red on the `windows` job
+    // while passing everywhere else, which is a test asserting a property of the
+    // host's separator rather than of the tree.
+    let first = relative
+        .components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str());
+    // Rendered with `/` for the message, so the pointer reads the same on every
+    // host — §6's byte-stability applied to a failure message.
+    let shown = relative
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>()
+        .join("/");
+    assert_eq!(
+        first,
+        Some("crates"),
+        "the rule-1 rows glob `crates/**`; presets at `{shown}` would be \
          outside it, and rule 1 over presets would be prose again"
     );
 
