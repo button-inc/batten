@@ -150,8 +150,8 @@ case "\$sub" in
     esac
     echo readied ;;
   # CLOUD-465: the OPEN PR for this branch, and the stub FILTERS because the real
-  # endpoint does. Without that a case cannot tell $(--state open) from its
-  # absence, and the assertion that $(land) binds the open PR proves nothing —
+  # endpoint does. Without that a case cannot tell \$(--state open) from its
+  # absence, and the assertion that \$(land) binds the open PR proves nothing —
   # measured, when removing the flag left both cases green. Two bodies: what an
   # open-only query returns, and what an unfiltered one returns for a branch name
   # whose older PRs merged, which is the shape every second landing produces.
@@ -1881,8 +1881,15 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# was added, which is what it is for. Exercised below.
 	# 29 since CLOUD-514: a row this branch filed and never groomed to Ready. It
 	# sits beside the deferral stop and stops the lap the same way. Exercised below.
-	[ "$stops" -eq 29 ] || {
-		echo "land has $stops stopping conditions; this suite covers 29."
+	# 30 since CLOUD-861: the disk filled DURING verify. It is a separate stop
+	# rather than a branch inside the generic verify one because the two need
+	# opposite advice — that stop says "reproduce and fix locally", which is
+	# right for a refusal of this tree and wrong for an environment failure with
+	# nothing in the diff to reproduce. It precedes the generic stop for the same
+	# reason. Exercised below, with an anti-vacuity twin holding the narrowing to
+	# its scope: an ordinary failure must still get the original advice.
+	[ "$stops" -eq 30 ] || {
+		echo "land has $stops stopping conditions; this suite covers 30."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -2926,4 +2933,47 @@ EOF
 	[ "$status" -eq 4 ]
 	[[ "$output" == *"admitted as the successor"* ]]
 	[ "$(lock_calls reserve)" -eq 1 ]
+}
+
+# --- CLOUD-861: a full disk is the environment, not a verdict on this tree ----
+
+@test "CLOUD-861: an ENOSPC during verify is reported as the environment, not as a defect to reproduce" {
+	# THE DISCRIMINATING ROW, and it is red against `land` as it stood on
+	# 2026-08-21. Measured that day: `target-prune` passed the lap with 6242MB
+	# against its 4096MB floor, the `cargo test` link step then consumed all of
+	# it, and the stop said "verify failed ... Reproduce and fix locally" over a
+	# tree with nothing wrong in it. The advice is correct for a real refusal and
+	# actively misleading for this one — the same misattribution CLOUD-811
+	# records in `linear-check`.
+	task_fails verify
+	printf '%s\n' \
+		'[hooks] test - rustc-LLVM ERROR: IO failure on output stream: No space left on device' \
+		>"$BATS_TEST_TMPDIR/rc.mise.verify.says"
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	# Named as the environment, with the reclaim to run.
+	[[ "$output" == *"the disk filled"* ]]
+	[[ "$output" == *"target-prune"* ]]
+	[[ "$output" == *"incremental"* ]]
+	# And NOT as this branch's defect. This is the assertion that fails today.
+	[[ "$output" != *"Reproduce and fix locally"* ]]
+	# Still a stop on lap 1, not a retry loop into the backstop: the disk does
+	# not empty itself, so lapping would spend the budget re-hitting the wall.
+	[ "$(verify_calls)" -eq 1 ]
+	[ "$(comments)" -eq 0 ]
+}
+
+@test "an ordinary verify failure still says reproduce it locally" {
+	# ANTI-VACUITY. The row above is a narrowing, and a narrowing that swallowed
+	# the general case would turn every refusal into "check your disk" — which
+	# is CLOUD-811's defect rebuilt facing the other way. A failure carrying no
+	# ENOSPC line keeps the advice that is right for it.
+	task_fails verify
+	printf '%s\n' \
+		'[hooks] crates/batten/tests/primitives.rs:1171 no-consumer-repo-name' \
+		>"$BATS_TEST_TMPDIR/rc.mise.verify.says"
+	run "$LAND"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"Reproduce and fix locally"* ]]
+	[[ "$output" != *"the disk filled"* ]]
 }

@@ -1205,6 +1205,18 @@ while :; do
 		# message assembled after the cleanup would name a file that is gone. It
 		# is only ever read on the stop path below; a lap that laps pays nothing.
 		verify_tail="$(tail -n "${LAND_VERIFY_TAIL_LINES:-40}" "$log_v" 2>/dev/null || true)"
+		# CLOUD-861: a full disk is not a verdict about this tree. Grepped over
+		# the WHOLE log rather than `$verify_tail`, because the linker writes
+		# ENOSPC where it fails and the gate keeps running after it — measured
+		# 2026-08-21, the line landed ~40 lines above the tail and the stop below
+		# reported a clean-looking test failure instead.
+		#
+		# `grep -qF` over a literal, never a `df` reading: the question is what
+		# THIS run hit, and by the time the stop is composed the space may have
+		# been reclaimed by another process. The string is the compiler's, so a
+		# reclaim between failure and report cannot erase the evidence.
+		verify_enospc=""
+		grep -qF 'No space left on device' "$log_v" 2>/dev/null && verify_enospc=1
 		rm -f "$rc_v" "$rc_vm" "$log_v"
 		if [ -z "$verify_rc" ] && [ "$vmain_rc" = "0" ]; then
 			echo "land: lap $lap — main moved past $(git rev-parse --short origin/main) while verify ran; its receipt would be void, so the rest of the gate is not paid out. Lapping."
@@ -1227,6 +1239,20 @@ while :; do
 		# `path:line` the refusing step already printed. Pointer-only by
 		# inheritance: every gate's output is held to non-negotiable rule 4, and
 		# these bytes were on the terminal a moment ago regardless.
+		# CLOUD-861, and it precedes the arm below because that arm's advice —
+		# "reproduce and fix locally" — is actively wrong here: there is nothing
+		# in the diff to fix and nothing to reproduce. `target-prune` runs at lap
+		# start and answers "is there room to BEGIN"; the build then consumed
+		# 6242MB of certified headroom, so the floor cannot see this class at all.
+		# Same misattribution shape CLOUD-811 records in `linear-check`: a task
+		# reading every non-zero exit as a verdict about the thing it is about.
+		#
+		# Pointer-only per non-negotiable rule 4: MB free and the reclaim to run,
+		# never a listing of the build tree.
+		if [ "$verify_rc" != 0 ] && [ -n "$verify_enospc" ]; then
+			free_mb="$(df -Pm . 2>/dev/null | awk 'NR == 2 { print $4 }')"
+			die "verify could not run on $(git rev-parse --short HEAD): the disk filled during it (${free_mb:-unknown}MB free now). This is the environment, NOT this branch — there is nothing here to reproduce. Reclaim and run \`mise run land\` again: \`mise run target-prune\` takes the superseded artifacts, and \`target/debug/incremental\` is the one it cannot (it is never superseded, only unbounded)."
+		fi
 		[ "$verify_rc" = 0 ] ||
 			die "verify failed on $(git rev-parse --short HEAD) (exit $verify_rc). Reproduce and fix locally; CI is not where you discover this. Its last words:
 $verify_tail"
