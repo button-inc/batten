@@ -262,6 +262,12 @@ stub_git() {
 	# we bet on has NOT landed. Both are the ordinary readings — a lease is held
 	# by someone whose work is still in flight.
 	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_ancestor"
+	# CLOUD-862's two, defaulted so every case that is not about recovery behaves
+	# exactly as before: 1 = the adopted base has not landed, and 1 = this tree
+	# is not built on it. With no `specbet` file written, `recover_speculation`
+	# returns on its first read and neither is consulted at all.
+	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_landed"
+	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_ontree"
 	cat >"$STUB/git" <<EOF
 #!/usr/bin/env bash
 echo "\$*" >>"$BATS_TEST_TMPDIR/gitlog"
@@ -293,7 +299,17 @@ case "\$*" in
   # its own file rather than another caller of rc.spec_ancestor — an rc that
   # answered two questions is what made the speculation silently no-op once.
   "merge-base --is-ancestor"*refs/batten-spec/live) exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_live")" ;;
+  # A FOURTH and FIFTH (CLOUD-862), and they exist for the reason the comment
+  # above gives twice already: recovering a bet left by a dead run asks "did the
+  # adopted base land" and "is this tree actually built on it", and one rc
+  # answering both is how a recovery would silently decide it had nothing to do.
+  # Ordered before the catch-all and after the exact linearity arm, since the
+  # adopted sha is a wildcard on the left of each.
+  "merge-base --is-ancestor"*origin/main) exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_landed")" ;;
+  "merge-base --is-ancestor"*HEAD) exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_ontree")" ;;
   "merge-base"*)                 exit "\$(cat "$BATS_TEST_TMPDIR/rc.spec_ancestor")" ;;
+  "rev-parse --verify -q refs/batten-spec/base") cat "$BATS_TEST_TMPDIR/specbet" 2>/dev/null || exit 1 ;;
+  "update-ref -d refs/batten-spec/base") rm -f "$BATS_TEST_TMPDIR/specbet"; exit 0 ;;
   "ls-remote --heads origin "*)  cat "$BATS_TEST_TMPDIR/lsremote" ;;
   "rebase --abort")              exit 0 ;;
   # The SPECULATIVE rebase is a different event from the lap's rebase onto main
@@ -1888,8 +1904,14 @@ head_verdict() { echo "$1" >"$BATS_TEST_TMPDIR/rc.mise.checks-green"; }
 	# nothing in the diff to reproduce. It precedes the generic stop for the same
 	# reason. Exercised below, with an anti-vacuity twin holding the narrowing to
 	# its scope: an ordinary failure must still get the original advice.
-	[ "$stops" -eq 30 ] || {
-		echo "land has $stops stopping conditions; this suite covers 30."
+	# 31 since CLOUD-862: the replay-unwind for an ADOPTED bet cannot resolve.
+	# It is a second stop rather than a branch of the reset-unwind's because the
+	# two fail for different reasons and only one of them is recoverable by the
+	# operator — a reset that fails means the undo point is gone, a replay that
+	# fails means another branch's commits will not come off, and the second is
+	# the one that must never reach a push. Exercised below.
+	[ "$stops" -eq 31 ] || {
+		echo "land has $stops stopping conditions; this suite covers 31."
 		echo "Add a case for the new one — an unexercised exit is how the refusal path stayed dead."
 		return 1
 	}
@@ -2309,7 +2331,18 @@ holder_is_green() {
 	LAND_LOCK_MAX_WAITS=1 run "$LAND"
 	[ "$status" -eq 4 ]
 	[[ "$output" != *"speculatively linearized"* ]]
-	[[ "$(cat "$BATS_TEST_TMPDIR/gitlog")" != *batten-spec* ]]
+	# NARROWED, not weakened (CLOUD-862). This read `!= *batten-spec*` — no
+	# mention of the ref at all — until the recovery path started probing it once
+	# per lap to settle a bet a dead run may have left. That probe is a
+	# `rev-parse`: read-only, no fetch, no rebase, and it is what makes the
+	# stranding detectable at all. What the row actually asserts is that no
+	# SPECULATION happened, so it names the two calls that would be one.
+	# PER LINE, not over the whole file. A `[[ $(cat …) != *fetch*batten-spec* ]]`
+	# reads the log as one string, so an unrelated `fetch` on one line and the
+	# recovery's `rev-parse` on another satisfy the glob together — it fired on
+	# exactly that and said a speculation had happened when none had.
+	! grep -qE '^fetch .*batten-spec' "$BATS_TEST_TMPDIR/gitlog"
+	! grep -qE '^rebase' "$BATS_TEST_TMPDIR/gitlog"
 }
 
 @test "A CONFLICTING SPECULATION FALLS BACK — it is information, not a stop" {
@@ -2976,4 +3009,75 @@ EOF
 	[ "$status" -eq 1 ]
 	[[ "$output" == *"Reproduce and fix locally"* ]]
 	[[ "$output" != *"the disk filled"* ]]
+}
+
+# --- CLOUD-862: a bet the process that placed it never settled ---------------
+#
+# The measured incident: a `land` speculated onto a sibling branch's head, was
+# stopped before it could settle, and the NEXT `land` ran a full clean `verify`
+# and reached the push carrying seven of that branch's unlanded commits. The
+# state was on disk the whole time; `settle_speculation` opened on a shell
+# variable and so never looked.
+#
+# `stranded` is the lever the suite lacked: a bet ref present with no in-process
+# state behind it, which is exactly what a killed run leaves.
+stranded() {
+	echo 5peccccc5peccccc >"$BATS_TEST_TMPDIR/specbet"
+	# The tree IS built on the adopted base — it was rebased onto it before the
+	# run died. Without this the ref is stale rather than stranded, and the two
+	# must not be confused.
+	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_ontree"
+}
+
+@test "CLOUD-862: a bet left by a dead run is adopted and unwound before anything is pushed" {
+	# THE DISCRIMINATING ROW. Red against `land` without the recovery: with no
+	# `spec_base` set in this process, settle returned 0 on its first line and
+	# the borrowed range rode all the way to the push.
+	stranded
+	bet_is_dead
+	pr_state MERGED
+	run "$LAND"
+	[[ "$output" == *"adopting an unsettled speculation"* ]]
+	[[ "$output" == *"no longer landing"* ]]
+	# Unwound by REPLAY, not by reset: an adopted bet has no undo point, and the
+	# base is all that is needed to put this branch's own commits back on main.
+	grep -q '^rebase --onto origin/main 5peccccc5peccccc$' "$BATS_TEST_TMPDIR/gitlog"
+	# And the ref is gone, so the next run does not adopt it a second time.
+	[ ! -f "$BATS_TEST_TMPDIR/specbet" ]
+}
+
+@test "CLOUD-862: an adopted bet whose base LANDED keeps the tree and just drops the ref" {
+	# ANTI-VACUITY, and the reading that stops the fix being "never speculate".
+	# The holder landed while nobody was watching, so the linearization was
+	# correct all along and unwinding it would throw away a warm tree for nothing.
+	stranded
+	echo 0 >"$BATS_TEST_TMPDIR/rc.spec_landed"
+	pr_state MERGED
+	run "$LAND"
+	[[ "$output" == *"the speculation landed"* ]]
+	[[ "$(cat "$BATS_TEST_TMPDIR/gitlog")" != *"rebase --onto origin/main"* ]]
+	[ ! -f "$BATS_TEST_TMPDIR/specbet" ]
+}
+
+@test "CLOUD-862: a bet ref naming a commit this tree is not built on is dropped, not acted on" {
+	# The third reading, and the one that keeps the ref honest rather than
+	# merely present: a ref left by a clone that reset names a base this HEAD
+	# never carried. Adopting it would replay off a commit that is not in the
+	# history and take this branch's own work with it.
+	echo 5peccccc5peccccc >"$BATS_TEST_TMPDIR/specbet"
+	echo 1 >"$BATS_TEST_TMPDIR/rc.spec_ontree"
+	pr_state MERGED
+	run "$LAND"
+	[[ "$output" != *"adopting an unsettled speculation"* ]]
+	[[ "$(cat "$BATS_TEST_TMPDIR/gitlog")" != *"rebase --onto origin/main"* ]]
+	[ ! -f "$BATS_TEST_TMPDIR/specbet" ]
+}
+
+@test "a run with no bet ref is untouched by the recovery path" {
+	# ANTI-VACUITY for the whole mechanism: the ordinary land, which is every
+	# land, must not pay for or notice any of this.
+	pr_state MERGED
+	run "$LAND"
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"adopting an unsettled speculation"* ]]
 }

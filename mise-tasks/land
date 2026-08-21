@@ -538,6 +538,61 @@ spec_ref=refs/batten-spec/base
 # two different commits, and reusing `$spec_ref` would overwrite the base while
 # answering a question about it.
 spec_live_ref=refs/batten-spec/live
+# CLOUD-862. Set when this process ADOPTED a bet it did not place, which is the
+# case `spec_undo` cannot serve: that variable is the pre-bet HEAD and it died
+# with the process that placed it. An adopted bet unwinds by replaying onto
+# `origin/main` from the base instead, which needs only the base — the repair
+# that recovered this branch by hand was exactly `rebase --onto origin/main
+# <base>`, and it never consulted an undo point.
+spec_recovered=0
+
+# `$spec_ref` EXISTING MEANS A BET IS LIVE, and that is the property CLOUD-862
+# adds. It did not hold before: the ref is a fetch destination written before the
+# bet is decided (`speculate` below), so it equally marked a candidate fetched
+# and declined, a bet already settled, and a bet in flight. A later `land` could
+# read it and learn nothing.
+#
+# Making it mean one thing costs one call on every path that leaves without a
+# live bet. Deliberately NOT a second ref beside it: the state was never missing,
+# only unreadable, and a sibling ref would be two authorities on one fact.
+forget_bet() {
+	git update-ref -d "$spec_ref" 2>/dev/null || true
+	spec_base=
+	spec_undo=
+	spec_main=
+	spec_recovered=0
+}
+
+# Adopt a bet this process did not place. Runs before `settle_speculation`'s own
+# logic, so the settle that follows is the ordinary one — there is no second
+# settle path to keep in agreement with the first.
+#
+# The ancestry pair is the whole predicate, and both halves are load-bearing:
+# the base must be an ancestor of HEAD (this tree really is linearized on it,
+# rather than the ref being left over from a clone that reset) and must NOT be
+# an ancestor of `origin/main` (it has not landed, so the bet is still open).
+# A ref failing either test is stale and is dropped rather than acted on.
+recover_speculation() {
+	local recovered
+	[ -z "$spec_base" ] || return 0
+	recovered=$(git rev-parse --verify -q "$spec_ref" 2>/dev/null) || return 0
+	# DELIBERATELY NOT deciding "did it land" here. `settle_speculation`'s first
+	# arm already answers that, and answers it out loud; an arm here would be a
+	# second place deciding one thing, and the one that stayed silent — which is
+	# how this whole class went unnoticed. Adopt, then let the ordinary settle
+	# run. The only judgement this function makes is whether the ref describes
+	# THIS tree at all.
+	if ! git merge-base --is-ancestor "$recovered" HEAD 2>/dev/null; then
+		# The ref names a commit this tree is not built on, so whatever it was
+		# recording is not true of this HEAD.
+		forget_bet
+		return 0
+	fi
+	spec_base="$recovered"
+	spec_recovered=1
+	publish_speculation
+	echo "land: adopting an unsettled speculation on $(git rev-parse --short "$recovered") left by an earlier run; settling it before anything is pushed"
+}
 
 # THREE OUTCOMES, NOT TWO, and conflating the middle one with the last is the
 # defect worth naming: a bet is usually still PENDING at the next lap. The holder
@@ -576,8 +631,21 @@ bet_is_live() {
 # so there is nothing to re-linearize by hand — and `speculate` re-bets on
 # whoever holds the lease now, which is the "rewind onto the next holder" half.
 unwind_speculation() {
-	echo "land: $1; unwinding to $(git rev-parse --short "$spec_undo") rather than carrying another branch's commits"
-	git reset -q --hard "$spec_undo" || die "could not unwind the speculative rebase; the tree is not somewhere this loop can push from."
+	# TWO UNWINDS, because an adopted bet has no undo point (CLOUD-862). The
+	# reset is exact and stays the path whenever this process placed the bet.
+	# The replay is for a bet inherited from a dead run: it needs only the base,
+	# and it is what recovered this branch by hand — `origin/main..HEAD` minus
+	# the borrowed range is precisely this branch's own commits.
+	if [ -n "$spec_undo" ]; then
+		echo "land: $1; unwinding to $(git rev-parse --short "$spec_undo") rather than carrying another branch's commits"
+		git reset -q --hard "$spec_undo" || die "could not unwind the speculative rebase; the tree is not somewhere this loop can push from."
+	else
+		echo "land: $1; replaying this branch's own commits onto $(git rev-parse --short origin/main) rather than carrying another branch's"
+		git rebase --onto origin/main "$spec_base" >/dev/null 2>&1 || {
+			git rebase --abort 2>/dev/null || true
+			die "could not replay off the adopted speculation base $(git rev-parse --short "$spec_base"); the tree carries another branch's commits and this loop must not push it."
+		}
+	fi
 	if [ "$spec_pushed" = 1 ]; then
 		# Re-draft BEFORE moving the ref, the same ordering the red path uses:
 		# the corrective push emits a `synchronize`, and a ready PR would spend a
@@ -591,21 +659,35 @@ unwind_speculation() {
 		# successor's ready/push pair is owed again for the new one.
 		admitted_sha=
 	fi
-	spec_base=
-	spec_undo=
-	spec_main=
+	forget_bet
 	publish_speculation
 }
 
 settle_speculation() {
+	# ASK GIT BEFORE ASKING THE PROCESS (CLOUD-862). This used to open on
+	# `[ -n "$spec_base" ] || return 0`, so a `land` that had not placed the bet
+	# itself returned on the first line — while the ref holding the answer sat
+	# on disk beside it. Measured: a stopped `land` left seven of another
+	# branch's commits in the tree, and the next one ran a full clean `verify`
+	# and reached the push with them.
+	recover_speculation
 	[ -n "$spec_base" ] || return 0
 	if git merge-base --is-ancestor "$spec_base" origin/main 2>/dev/null; then
 		echo "land: the speculation landed — already linearized on $(git rev-parse --short origin/main), no rebase needed"
-		spec_base=
-		spec_undo=
-		spec_main=
+		forget_bet
 		spec_pushed=0
 		publish_speculation
+		return 0
+	fi
+	# An ADOPTED bet has no `spec_main` to compare against — the process that
+	# recorded it is gone — so the "has main moved" arm cannot judge it. The
+	# lease can: `bet_is_live` reads who holds it NOW and whether the base is
+	# still on the branch about to land, which is the question either way.
+	if [ "$spec_recovered" = 1 ]; then
+		if bet_is_live; then
+			return 0
+		fi
+		unwind_speculation "an earlier run bet on a base that is no longer landing"
 		return 0
 	fi
 	if [ "$(git rev-parse origin/main)" = "$spec_main" ]; then
@@ -643,7 +725,10 @@ speculate() {
 		echo "land: cannot fetch $head_ref to speculate on; staying linearized on main"
 		return 0
 	}
-	base=$(git rev-parse "$spec_ref" 2>/dev/null) || return 0
+	base=$(git rev-parse "$spec_ref" 2>/dev/null) || {
+		git update-ref -d "$spec_ref" 2>/dev/null || true
+		return 0
+	}
 	# ONE OUTSTANDING BET AT A TIME. A waiter laps repeatedly while the same
 	# holder lands, and re-betting on each lap would overwrite `spec_undo` with a
 	# HEAD that is itself speculative — so unwinding would restore a tree that
@@ -653,7 +738,12 @@ speculate() {
 	[ "$spec_base" != "$base" ] || return 0
 	# Already a descendant — nothing to speculate, and rebasing would be a no-op
 	# that still mints a new sha and throws away this HEAD's verify receipt.
-	git merge-base --is-ancestor "$base" HEAD && return 0
+	# The ref goes with it (CLOUD-862): the fetch wrote it before this branch was
+	# taken, and leaving it behind is what made its existence mean nothing.
+	if git merge-base --is-ancestor "$base" HEAD; then
+		git update-ref -d "$spec_ref" 2>/dev/null || true
+		return 0
+	fi
 	# Only ever our own last NON-speculative HEAD. Settling clears it, so a bet
 	# placed after a settled one records the right undo point.
 	[ -n "$spec_undo" ] || spec_undo=$(git rev-parse HEAD)
@@ -661,6 +751,8 @@ speculate() {
 		git rebase --abort 2>/dev/null || true
 		git reset -q --hard "$spec_undo" 2>/dev/null || true
 		spec_undo=
+		# No bet was placed, so the ref must not claim one (CLOUD-862).
+		git update-ref -d "$spec_ref" 2>/dev/null || true
 		# A conflict discovered here is the whole point of doing this early: it
 		# is free now and expensive later. Reported, not resolved — resolving
 		# another branch's conflict before it has landed would be resolving it
