@@ -159,7 +159,7 @@ fn repo_with_config(name: &str, contents: &str) -> PathBuf {
 /// tests passed locally, against the outer repo's `origin/main`, and failed on a
 /// CI runner that has no such ref. A fixture that reads the repository it is
 /// running inside is not a fixture.
-/// Seed the surfaces the committed `[budget.instructions]` set declares.
+/// Seed the surfaces the committed config declares.
 ///
 /// A fixture standing in for a repository using the committed config owes it
 /// every declared entry, because a dead one is exit 1 per entry (CLOUD-298's
@@ -172,6 +172,7 @@ fn committed_budget_surfaces(dir: &Path) {
     fs::create_dir_all(dir.join(".serena")).expect("create fixture serena dir");
     fs::write(dir.join(".serena/project.yml"), "initial_prompt: ''\n")
         .expect("write fixture project config");
+    committed_policy_modules(dir);
 }
 
 /// Also seeds the scanner the committed `no-secrets` row resolves, and returns
@@ -2262,6 +2263,34 @@ fn render_gaps(config: &str, gaps: &[CensusGap]) -> String {
     report
 }
 
+/// Copy every registered policy module into a fixture carrying the committed
+/// authority (CLOUD-843).
+///
+/// A `policy` row naming a module the tree does not carry is refused at LOAD,
+/// before any rule runs — correctly, since a silently absent module is a gate
+/// that decides nothing. So a fixture missing them fails on that refusal rather
+/// than on the rule it is about, which is the same precondition the budget
+/// surfaces and the `no-secrets` scanner already owe.
+///
+/// The DIRECTORY is mirrored rather than a list named here. The retirement
+/// campaign adds a module per migrated gate, and a hand-kept list would make
+/// every one of them a second edit somewhere else — whose omission surfaces as
+/// whichever rule the fixture was actually about appearing to fail.
+fn committed_policy_modules(dir: &Path) {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../policy");
+    let Ok(entries) = fs::read_dir(&source) else {
+        return;
+    };
+    fs::create_dir_all(dir.join("policy")).expect("create fixture policy dir");
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "rego") {
+            fs::copy(&path, dir.join("policy").join(entry.file_name()))
+                .expect("copy the committed policy module");
+        }
+    }
+}
+
 /// The committed authority, read once per case that needs its bytes.
 fn committed_config() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../batten.toml");
@@ -2277,11 +2306,13 @@ fn committed_config() -> String {
 /// sources answers, and the branch name is set rather than inherited from
 /// whatever `init.defaultBranch` the runner carries.
 fn keyless_committed_config_fixture(name: &str) -> PathBuf {
-    Fixture::new(&format!("shape-census-{name}"))
+    let dir = Fixture::new(&format!("shape-census-{name}"))
         .config(&committed_config())
         .git()
         .base_commit()
-        .build()
+        .build();
+    committed_policy_modules(&dir);
+    dir
 }
 
 #[test]
