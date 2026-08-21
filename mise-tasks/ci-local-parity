@@ -907,5 +907,70 @@ else
 	done <<<"$foreign_cargo"
 fi
 
+# Property 17. A `--no-run` job compiles to fill a cache and judges nothing, which
+# is why property 16 exempts it — but that exemption is also what makes it easy to
+# leave running for nothing. Measured 2026-08-21 (CLOUD-840): the repository held
+# two `v0-rust-windows-…` entries and both carried the SAME key, unchanged across
+# five merges, because the key follows the toolchain and the dependency set rather
+# than workspace source. `rust-cache` skips saving when the key already exists, so
+# each of those cycles compiled for ~145s and wrote nothing, at ~6.4 billed
+# minutes on a 2x runner.
+#
+# The fix is one `if:` reading the restore step's `cache-hit`, and the reason it
+# needs a gate rather than a comment is the direction it can rot in. If the ACTION
+# stops emitting `cache-hit` the expression is empty, the guard holds, and the
+# compile runs — wasteful, but visible in the bill. If the `id:` is dropped or
+# renamed while the `if:` keeps naming it, the expression is ALSO empty and the
+# job silently reverts to compiling every time, which is the state this property
+# exists to leave behind. Same symptom, no signal. So the predicate is textual and
+# names both halves: the guard must be present, and the step id it reads must
+# exist in the same file.
+#
+# Vacuity is not a defect here, unlike property 16's. A tree with no `--no-run`
+# job has no cache-warm job to guard, which is a legitimate shape rather than a
+# look that failed — so this one is silent on an empty subject set by design.
+#MUTANT warm-compile-may-be-unguarded|s@grep -qE '\^\[\[:space:\]\]\*if:\.\*cache-hit' <<<"$step"@false@|a cache-warm compile with no cache-hit guard is refused
+#MUTANT warm-guard-may-name-a-missing-id|s@grep -qE "\^\[\[:space:\]\]\*id:\[\[:space:\]\]\*\${step_id}\[\[:space:\]\]\*\$" "$wf"@true@|a guard naming a step id that does not exist is refused
+for wf in "$workflows"/*.yml; do
+	[ -e "$wf" ] || continue
+	# Only where a cache is actually restored. A `--no-run` build in a workflow
+	# that caches nothing has no `cache-hit` to read and nothing to be wasted on,
+	# so guarding it would be cargo cult. Removing the restore step to silence
+	# this is not an escape worth gating: a warm job with no cache to fill has
+	# stopped being a warm job, which is a louder defect than an unguarded one.
+	grep -qF 'Swatinem/rust-cache' "$wf" || continue
+	# Split the file into step blocks: a step begins at a `- ` list item and runs
+	# to the next one, so an `if:` written above or below its `run:` lands in the
+	# same block either way. `awk` joins each block with a marker rather than a
+	# newline so one block is one `read`.
+	while IFS= read -r step; do
+		[ -n "$step" ] || continue
+		# Back to real lines, so the predicates below can anchor on `run:` and
+		# `if:` rather than matching prose. A comment explaining `--no-run` is not
+		# a compile step, and the first version of this property said it was.
+		step=${step//$'\a'/$'\n'}
+		grep -qE '^[[:space:]]*-?[[:space:]]*run:.*--no-run' <<<"$step" || continue
+
+		if ! grep -qE '^[[:space:]]*if:.*cache-hit' <<<"$step"; then
+			problem "$wf compiles with \`--no-run\` to fill a cache but does not guard that step on the restore's \`cache-hit\`, so it recompiles and writes nothing on every run whose key has not moved (CLOUD-840)."
+			continue
+		fi
+
+		# The guard names a step; that step must exist, or the expression is empty
+		# and the guard silently admits everything.
+		step_id=$(sed -n 's/.*steps\.\([A-Za-z0-9_-]*\)\.outputs\.cache-hit.*/\1/p' <<<"$step")
+		step_id=${step_id%%$'\n'*}
+		if [ -n "$step_id" ] && ! grep -qE "^[[:space:]]*id:[[:space:]]*${step_id}[[:space:]]*$" "$wf"; then
+			problem "$wf guards its \`--no-run\` compile on \`steps.$step_id.outputs.cache-hit\`, but no step in that file declares \`id: $step_id\` — the expression resolves to empty, so the guard admits every run and the waste it exists to stop returns silently (CLOUD-840)."
+		fi
+	done < <(
+		awk '
+			/^[[:space:]]*-[[:space:]]/ { if (block != "") print block; block = "" }
+			{ block = block $0 "\a" }
+			END { if (block != "") print block }
+		' "$wf"
+	)
+done
+
 [ "$fail" -eq 0 ] || exit 1
 echo "ci-local-parity: $checked pull_request workflow(s) — draft-gated, self-superseding, lease-gated before they spend, running nothing verify does not, asserting every needs: they wait on, named in full by CI_REQUIRED_CHECKS, and subscribing to ready_for_review wherever a required check depends on it; the release PR opens as a draft; all $all_seen workflow(s) declare a concurrency group, decide green through checks-green wherever they read check status, and no two share a cron expression; no dependabot config has come back, the Renovate config keeps the five keys that decide what its lane spends and covers and sets its commit type where a preset cannot outrank it, every ecosystem this repository maintains is named in it, and every live bot's branch prefix has a workflow scoped to it at the trigger; every declared trigger can reach a job"

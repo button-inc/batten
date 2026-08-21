@@ -104,13 +104,18 @@ jobs:
   # the cache is for, and running the suite here would be a second verdict on a
   # SHA `main` already carries — which IS what the trigger rule forbids.
   #
-  # WHETHER THIS PAYS IS UNSETTLED AND IS THE POINT OF LANDING IT. Within-PR
-  # caching already covers runs 2..N (CLOUD-176), so warming only ever helps run
-  # 1, and merges roughly equal pull requests. If this job compiles cold every
-  # time it costs ~17 billed minutes to save ~11 and it loses, exactly as
-  # CLOUD-176 predicted for the Linux legs. If it restores the previous warm
-  # entry and compiles only the delta, it costs a few and wins. That number
-  # arrives on the next merge and decides whether this stays.
+  # WHETHER THIS PAYS WAS THE POINT OF LANDING IT, AND THE NUMBERS ARE IN.
+  # Within-PR caching already covers runs 2..N (CLOUD-176), so warming only ever
+  # helps run 1, and merges roughly equal pull requests. Measured 2026-08-21 on
+  # the `windows` job's own runs: the one cache MISS (run 32496183419, restore
+  # 6s) spent 681s in `cargo nextest run --workspace`, against a 419s mean over
+  # twelve cache hits. So an avoided miss is worth ~262s of wall clock, ~8.7
+  # billed minutes at 2x, on the longest job in the matrix.
+  #
+  # The cost side was 6.4 billed minutes on EVERY merge, which lost. The guard on
+  # the compile step below is what fixes that, and its evidence is recorded
+  # there: the cache key moves only when the toolchain or the dependency set
+  # does, so almost every cycle was paying a full compile to write nothing.
   cache-warm-windows:
     name: cache-warm-windows
     runs-on: windows-latest
@@ -128,13 +133,47 @@ jobs:
           # assertions need: the cache being filled is a cargo target dir.
           install_args: rust github:nextest-rs/nextest
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        # The `id` is load-bearing, not decoration: the compile step below reads
+        # this step's `cache-hit` output to decide whether there is anything to
+        # warm. `ci-local-parity` property 17 holds the pair together.
+        id: rust-cache
         with:
           # Both spellings must match `rust.yml`'s `windows` job exactly or this
           # writes an entry that job cannot read, which is the current failure
           # with extra steps.
           key: windows
           shared-key: windows
+      # COMPILE ONLY WHEN THERE IS NOTHING TO RESTORE, and the evidence for this
+      # is that every warm cycle after the first was pure waste (CLOUD-840).
+      #
+      # Read off the cache API on 2026-08-21: the repository held exactly two
+      # `v0-rust-windows-…` entries, both the SAME key
+      # `v0-rust-windows-Windows_NT-x64-d44ea756-97231082`, created 15:19 on
+      # `refs/heads/main` and 15:24 on `refs/pull/572/merge`. Five merges landed
+      # between 15:19 and 18:28, several of them touching `crates/**`, and the
+      # key never moved. It does not depend on workspace source — only on the
+      # toolchain and the dependency set — and `rust-cache` skips saving when the
+      # key already exists. So each of those cycles restored 182MB, recompiled
+      # `batten` for ~145s, wrote nothing, and cost ~6.4 billed minutes at the 2x
+      # Windows multiplier.
+      #
+      # The recompile is doubly wasted: `rust-cache` runs with
+      # `cache-workspace-crates: false`, so the workspace crate's artifacts were
+      # never going into the cache this job exists to fill.
+      #
+      # `cache-hit` is true only on an EXACT key match, which is precisely the
+      # case where the post-run save would be a no-op. Guarding on it means the
+      # job pays the full compile when the key moves — a dependency bump or a
+      # toolchain change, which is what makes a pull request miss — and pays only
+      # a runner boot and a restore otherwise.
+      #
+      # The failure direction is safe by construction: if the action ever stops
+      # emitting `cache-hit`, the expression is empty, `!= 'true'` holds, and the
+      # compile runs exactly as it does today. The rot that would be silent is
+      # the opposite one — the `id` disappearing while the `if` keeps referring to
+      # it — and that is what property 17 refuses.
       - run: mise exec -- cargo nextest run --no-run --workspace
+        if: steps.rust-cache.outputs.cache-hit != 'true'
 
   release-plz:
     runs-on: ubuntu-latest

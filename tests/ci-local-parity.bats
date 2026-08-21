@@ -425,6 +425,100 @@ fanin() {
 	[ "$status" -eq 0 ]
 }
 
+@test "a cache-warm compile with no cache-hit guard is refused" {
+	# CLOUD-840. The exemption property 16 grants a `--no-run` job is also what
+	# makes it easy to leave running for nothing. Measured 2026-08-21: the two
+	# `v0-rust-windows-…` entries in the repository carried the SAME key across
+	# five merges, because the key follows the toolchain and the dependency set
+	# rather than workspace source — and `rust-cache` skips saving when the key
+	# already exists. So every cycle after the first compiled for ~145s and wrote
+	# nothing, at ~6.4 billed minutes on a 2x runner.
+	workflow ci
+	cat >"$WF/warm.yml" <<-'EOF'
+		name: warm
+
+		on:
+		  workflow_dispatch:
+
+		concurrency:
+		  group: warm
+		  cancel-in-progress: false
+
+		jobs:
+		  cache-warm-windows:
+		    runs-on: windows-latest
+		    timeout-minutes: 30 # budget: grandfathered measured=2026-08-21
+		    steps:
+		      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+		        id: rust-cache
+		      - run: mise exec -- cargo nextest run --no-run --workspace
+	EOF
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"does not guard that step"* ]]
+}
+
+@test "a guard naming a step id that does not exist is refused" {
+	# THE ROT THAT WOULD OTHERWISE BE SILENT. If the action stops emitting
+	# `cache-hit` the expression is empty, the guard holds, and the compile runs —
+	# wasteful but visible in the bill. If the `id:` is renamed or dropped while
+	# the `if:` keeps naming it, the expression is ALSO empty and the job quietly
+	# goes back to compiling every time. Same symptom, no signal, so the gate has
+	# to read both halves rather than just the guard.
+	workflow ci
+	cat >"$WF/warm.yml" <<-'EOF'
+		name: warm
+
+		on:
+		  workflow_dispatch:
+
+		concurrency:
+		  group: warm
+		  cancel-in-progress: false
+
+		jobs:
+		  cache-warm-windows:
+		    runs-on: windows-latest
+		    timeout-minutes: 30 # budget: grandfathered measured=2026-08-21
+		    steps:
+		      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+		        id: renamed-since
+		      - run: mise exec -- cargo nextest run --no-run --workspace
+		        if: steps.rust-cache.outputs.cache-hit != 'true'
+	EOF
+	run "$GATE"
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"no step in that file declares"* ]]
+}
+
+@test "a guarded cache-warm compile passes" {
+	# The positive direction, so the two rows above are shown to discriminate
+	# rather than to refuse everything with `--no-run` in it.
+	workflow ci
+	cat >"$WF/warm.yml" <<-'EOF'
+		name: warm
+
+		on:
+		  workflow_dispatch:
+
+		concurrency:
+		  group: warm
+		  cancel-in-progress: false
+
+		jobs:
+		  cache-warm-windows:
+		    runs-on: windows-latest
+		    timeout-minutes: 30 # budget: grandfathered measured=2026-08-21
+		    steps:
+		      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+		        id: rust-cache
+		      - run: mise exec -- cargo nextest run --no-run --workspace
+		        if: steps.rust-cache.outputs.cache-hit != 'true'
+	EOF
+	run "$GATE"
+	[ "$status" -eq 0 ]
+}
+
 @test "the no-run exemption cannot be used to escape the property" {
 	# THE ROW THAT MAKES THE EXEMPTION SAFE. If the real foreign job gained
 	# `--no-run` it would stop being compared — and it also stops counting as the
