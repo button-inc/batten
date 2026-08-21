@@ -434,3 +434,63 @@ violation contains {"rule": "reads-real-keys", "msg": "z"} if {
     batten::policy::load(&root, &[tree_row("repo-policy", "policy/", &[])], None)
         .expect("every key this module reads is one the engine emits");
 }
+
+/// The third of `missing`'s three causes, split out as a CONFIG FAULT
+/// (CLOUD-845).
+///
+/// An extension this build has no parser for was checked before any I/O and
+/// dropped into `missing`, so the rule skipped silently — a migrated gate could
+/// go dead by declaring `CLAUDE.md` or a `.bats` suite, with the file never
+/// opened. No state of the filesystem fixes that, which is what makes it a
+/// config error rather than a could-not-look.
+///
+/// Asserted through `run_static`, the surface a consumer actually reaches, so
+/// the case covers the refusal REACHING them rather than a private helper
+/// returning the right value.
+#[test]
+fn a_document_with_no_parser_is_refused_rather_than_skipped() {
+    let root = scratch("no-parser");
+    write_bundle(&root, NO_STRAY);
+    fs::write(root.join("CLAUDE.md"), "# prose\n").expect("the file EXISTS");
+
+    let err = rules::run_static(
+        &[tree_row("repo-policy", "policy/", &["CLAUDE.md"])],
+        &[],
+        &root,
+    )
+    .expect_err("a declared document this build cannot parse is a config fault");
+    let message = format!("{err}");
+    assert!(
+        message.contains("CLAUDE.md"),
+        "the refusal names the path: {message}"
+    );
+    assert!(
+        message.contains("parser"),
+        "and says what is wrong with it — reporting it as a missing file would \
+         be the silent skip this splits apart: {message}"
+    );
+    assert!(
+        !message.contains("# prose"),
+        "pointer-only: the file is not even opened, let alone quoted: {message}"
+    );
+}
+
+/// The discriminator: a parseable extension still evaluates. Without it the case
+/// above passes on a `run_static` that refuses every declared document.
+#[test]
+fn a_document_with_a_parser_still_evaluates() {
+    let root = scratch("has-parser");
+    write_bundle(&root, NO_STRAY);
+    fs::write(root.join("config.toml"), "stray = true\n").expect("fixture");
+
+    let scan = scan(
+        &root,
+        &[tree_row("repo-policy", "policy/", &["config.toml"])],
+    );
+    assert_eq!(
+        scan.findings.len(),
+        1,
+        "TOML is one of the four formats this build parses: {:?}",
+        scan.findings
+    );
+}

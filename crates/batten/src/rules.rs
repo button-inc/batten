@@ -1761,6 +1761,31 @@ impl Rule {
                 self.id
             )));
         }
+        // A DECLARED DOCUMENT THIS BUILD CAN NEVER PARSE IS A CONFIG FAULT, not
+        // a verdict (CLOUD-845). It used to be neither: `tree_document` checked
+        // the extension BEFORE any I/O and dropped the path into `missing`, so
+        // `policy_rule` skipped the whole rule — silently, green, without the
+        // file ever being opened. A row declaring a prose, script or
+        // configuration-language path this build parses none of therefore looked
+        // exactly like a row whose document was absent, and a migrated gate could
+        // go dead by declaring the wrong extension just as surely as by naming a
+        // field the engine never emits.
+        //
+        // The split is what §5's exit-1 attaches to: no state of the filesystem
+        // makes an unparseable extension parseable, so reporting it as
+        // could-not-look would report a permanent authoring error as a transient
+        // one. Absent, unreadable and unparsed stay verdicts; this one is caught
+        // at load, where a config error belongs.
+        for path in &self.documents {
+            if crate::facts::Format::for_path(path).is_none() {
+                return Err(UsageError::raise(format!(
+                    "rule {}: `documents` names `{path}`, whose extension this build has no \
+                     parser for — the row would skip silently rather than decide. Parseable \
+                     extensions are TOML, YAML, JSON and JSON5",
+                    self.id
+                )));
+            }
+        }
         // THE CONVERSE WAS A REFUSAL AND IS NOT ONE ANY MORE (CLOUD-845). It
         // read: a tree row with no declared documents "is handed an empty tree
         // and decides nothing about the repository", so refusing it was better
