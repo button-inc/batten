@@ -223,10 +223,10 @@ fn scratch(name: &str) -> std::path::PathBuf {
 fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
     let root = scratch("denies");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let modules = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
-    assert_eq!(modules.len(), 1);
+    let bundles = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
+    assert_eq!(bundles.len(), 1);
 
-    let denied = policy::deny(&modules[0], r#"{"call":{"operation":"write"}}"#);
+    let denied = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
     assert_eq!(
         denied,
         Look::Is(vec![unattributed("a write, refused by the module")]),
@@ -235,7 +235,7 @@ fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
 
     // The same module, a fact it does not match: an answer, and the answer is
     // "no denials". Distinct from could-not-look, which the next test pins.
-    let allowed = policy::deny(&modules[0], r#"{"call":{"operation":"read"}}"#);
+    let allowed = policy::deny(&bundles[0], r#"{"call":{"operation":"read"}}"#);
     assert_eq!(allowed, Look::Is(Vec::new()));
     assert!(
         !allowed.could_not_look(),
@@ -248,9 +248,9 @@ fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
 fn an_unparseable_input_is_could_not_look_and_never_an_empty_deny_set() {
     let root = scratch("couldnotlook");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let modules = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
+    let bundles = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
 
-    let answer = policy::deny(&modules[0], "{not json");
+    let answer = policy::deny(&bundles[0], "{not json");
     assert!(
         answer.could_not_look(),
         "a document the evaluator cannot take is not evidence that nothing denies"
@@ -312,8 +312,8 @@ fn a_module_holds_no_source_and_cannot_leak_one_through_debug() {
     // re-derived it. This asserts the rendering, which is the reachable half.
     let root = scratch("pointer");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let modules = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
-    let rendered = format!("{:?}", modules[0]);
+    let bundles = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
+    let rendered = format!("{:?}", bundles[0]);
     assert!(rendered.contains("policy-writes"), "the pointer is present");
     assert!(
         !rendered.contains("deny contains"),
@@ -369,10 +369,10 @@ fn no_evaluator_feature_admits_io() {
 
     // The control first. If this does not deny, nothing below discriminates.
     let included = module_file(&root, "included.rego", REACHES_AN_INCLUDED_BUILTIN);
-    let modules = policy::load(&root, &[row("policy-included", &included)], None)
+    let bundles = policy::load(&root, &[row("policy-included", &included)], None)
         .expect("a module over an in-closure builtin loads");
     assert_eq!(
-        policy::deny(&modules[0], "{}"),
+        policy::deny(&bundles[0], "{}"),
         Look::Is(vec![unattributed(
             "the module called a builtin that is in the closure"
         )]),
@@ -439,9 +439,9 @@ fn no_evaluator_feature_admits_io() {
 fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
     let root = scratch("two-predicates");
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
-    let modules = policy::load(&root, &[row("policy-two", &path)], None).expect("load");
+    let bundles = policy::load(&root, &[row("policy-two", &path)], None).expect("load");
 
-    let denied = policy::deny(&modules[0], r#"{"call":{"operation":"write"}}"#);
+    let denied = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
     let Look::Is(violations) = denied else {
         panic!("the module answered, so this must not be could-not-look");
     };
@@ -452,7 +452,7 @@ fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
     // evaluator rather than the property.
     let mut pointers: Vec<&str> = violations
         .iter()
-        .map(|violation| modules[0].attribute(violation))
+        .map(|violation| bundles[0].attribute(violation))
         .collect();
     pointers.sort_unstable();
     assert_eq!(
@@ -492,14 +492,14 @@ fn one_module_carries_two_predicates_that_deny_under_their_own_ids() {
 fn a_bare_string_deny_still_reports_under_the_registering_row() {
     let root = scratch("bare-string");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let modules = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
+    let bundles = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
 
     assert!(
-        modules[0].declared().is_empty(),
+        bundles[0].declared().is_empty(),
         "a module with no `rules` rule publishes nothing, and that is not an error"
     );
 
-    let Look::Is(violations) = policy::deny(&modules[0], r#"{"call":{"operation":"write"}}"#)
+    let Look::Is(violations) = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#)
     else {
         panic!("the module answered");
     };
@@ -508,7 +508,7 @@ fn a_bare_string_deny_still_reports_under_the_registering_row() {
         vec![unattributed("a write, refused by the module")]
     );
     assert_eq!(
-        modules[0].attribute(&violations[0]),
+        bundles[0].attribute(&violations[0]),
         "policy-writes",
         "an unattributed denial falls back to the row, which is the pre-CLOUD-832 behaviour"
     );
@@ -585,15 +585,15 @@ fn two_modules_declaring_one_id_are_refused_at_load() {
 fn a_waiver_over_one_predicate_does_not_suppress_its_sibling() {
     let root = scratch("waiver-sibling");
     let path = module_file(&root, "two.rego", TWO_PREDICATES);
-    let modules = policy::load(&root, &[row("policy-two", &path)], None).expect("load");
+    let bundles = policy::load(&root, &[row("policy-two", &path)], None).expect("load");
 
-    let Look::Is(violations) = policy::deny(&modules[0], r#"{"call":{"operation":"write"}}"#)
+    let Look::Is(violations) = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#)
     else {
         panic!("the module answered");
     };
     let ids: Vec<&str> = violations
         .iter()
-        .map(|violation| modules[0].attribute(violation))
+        .map(|violation| bundles[0].attribute(violation))
         .collect();
 
     // A waiver names ONE predicate. The other must be untouched.
@@ -636,10 +636,10 @@ violation contains {"rule": "only-on-a-write", "msg": "reached later"} if {
 }
 "#;
     let path = module_file(&root, "late.rego", source);
-    let modules = policy::load(&root, &[row("policy-late", &path)], None)
+    let bundles = policy::load(&root, &[row("policy-late", &path)], None)
         .expect("load cannot reach this violation, so it loads");
 
-    let answer = policy::deny(&modules[0], r#"{"call":{"operation":"write"}}"#);
+    let answer = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#);
     assert!(
         answer.could_not_look(),
         "an unattributable denial is not an answer this gate can read"
@@ -692,7 +692,7 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
             .into_iter()
             .collect(),
     );
-    let modules = policy::load(&root, &[rule.clone()], None).expect("load");
+    let bundles = policy::load(&root, &[rule.clone()], None).expect("load");
 
     assert_eq!(
         rule.severity_for(Some("no-stray-artifact")),
@@ -715,9 +715,178 @@ fn severity_resolves_per_predicate_and_falls_back_to_the_row() {
     // The module still loads and still denies: tuning a severity changes how
     // loudly a predicate refuses, never whether it does. §8's raise-only
     // invariant is untouched because a module has no spelling for an allow.
-    let Look::Is(violations) = policy::deny(&modules[0], r#"{"call":{"operation":"write"}}"#)
+    let Look::Is(violations) = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#)
     else {
         panic!("the module answered");
     };
     assert_eq!(violations.len(), 2);
+}
+
+/// A module in a SUB-PACKAGE is reached, and denies (CLOUD-837).
+///
+/// **Red on `main` before this row**, and in the worst possible way: the query
+/// was pinned at `data.batten.deny`, so `package batten.git` loaded clean,
+/// smoke-queried clean, and was then silently never reached. A bundle of 79
+/// predicates had one flat namespace available to it and no diagnostic saying so.
+///
+/// Asserts it **denies**, not merely that it loads — a test asserting the latter
+/// passes on a module that answers nothing, which is exactly the state being
+/// fixed.
+#[test]
+fn a_sub_package_module_is_reached_and_denies() {
+    let root = scratch("sub-package");
+    let source = r#"
+package batten.git
+
+import rego.v1
+
+rules contains "no-force-push"
+
+violation contains {"rule": "no-force-push", "msg": "a force push at the trunk"} if {
+    input.call.operation == "write"
+}
+"#;
+    let path = module_file(&root, "git.rego", source);
+    let bundles =
+        policy::load(&root, &[row("policy-git", &path)], None).expect("a sub-package module loads");
+
+    assert!(
+        bundles[0].declared().contains("no-force-push"),
+        "the ids a sub-package publishes are reached too, not just its denials"
+    );
+
+    let Look::Is(violations) = policy::deny(&bundles[0], r#"{"call":{"operation":"write"}}"#)
+    else {
+        panic!("the module answered");
+    };
+    assert_eq!(
+        violations,
+        vec![attributed("no-force-push", "a force push at the trunk")],
+        "the package prefix is `batten` and the RULE NAMES are what is fixed; \
+         pinning the whole path leaves this module silently unreachable"
+    );
+}
+
+/// A helper defined in one module of a bundle is callable from another.
+///
+/// **The discriminator, and the reason CLOUD-837 exists.** Under per-module
+/// isolation this cannot even evaluate — module B's engine has never seen module
+/// A — so two predicates needing the same path normalisation had to define it
+/// twice. At 79 predicates that is verbatim the defect `policy.rs`'s own doc
+/// opens by decrying, rebuilt in a second language. Measured on this branch
+/// before the split: `error: could not find function shared.is_protected`.
+///
+/// Drives `policy::compile` rather than `policy::load` deliberately. The
+/// property is about the ENGINE — N modules, one evaluator — and a row cannot
+/// name a folder until CLOUD-833 widens the column. Testing through `load` would
+/// therefore assert the config surface's current shape rather than the
+/// composition this row lands, and would have to be rewritten the moment it
+/// widens.
+#[test]
+fn a_helper_in_one_module_is_callable_from_another_in_the_same_bundle() {
+    let helper = r#"
+package batten.shared
+
+import rego.v1
+
+is_protected(path) if {
+    startswith(path, "policy/")
+}
+"#;
+    let consumer = r#"
+package batten
+
+import rego.v1
+
+import data.batten.shared
+
+rules contains "no-protected-write"
+
+violation contains {"rule": "no-protected-write", "msg": "a write under a protected root"} if {
+    shared.is_protected(input.call.path)
+}
+"#;
+    let bundle = policy::compile(
+        "policy-repo",
+        &[
+            ("shared.rego".to_owned(), helper.to_owned()),
+            ("consumer.rego".to_owned(), consumer.to_owned()),
+        ],
+    )
+    .expect("two modules compose into one rule set");
+
+    assert_eq!(bundle.modules().len(), 2, "both modules are in the bundle");
+
+    // The helper actually RUNS from the other module — asserting it merely
+    // compiled would pass on a bundle whose consumer never reaches it.
+    let Look::Is(violations) = policy::deny(&bundle, r#"{"call":{"path":"policy/git.rego"}}"#)
+    else {
+        panic!("the bundle answered");
+    };
+    assert_eq!(
+        violations,
+        vec![attributed(
+            "no-protected-write",
+            "a write under a protected root"
+        )],
+        "module B called module A's helper; under per-module isolation this \
+         evaluates to `could not find function shared.is_protected`"
+    );
+
+    // And the negative, so the case discriminates rather than asserting that
+    // something — anything — denied: a path the helper does not match is silent.
+    assert_eq!(
+        policy::deny(&bundle, r#"{"call":{"path":"crates/batten/src/lib.rs"}}"#),
+        Look::Is(Vec::new()),
+        "the helper decides, and it decides both ways"
+    );
+}
+
+/// A bundle of N modules builds ONE engine, asserted by count (CLOUD-837).
+///
+/// A **counter, not a clock**: engine construction is cheap enough that a
+/// per-module implementation and a per-bundle one are indistinguishable on a
+/// wall clock, which is how the N-linear cost went unmeasured for as long as it
+/// did. Restoring `Engine::new()` to the per-module loop turns this red.
+///
+/// This case lives in its own test binary, `tests/policy_engine_count.rs`: the
+/// counter is process-global, and cargo runs the tests inside one binary
+/// concurrently, so a delta measured here would race every other case that
+/// compiles a bundle.
+#[test]
+fn a_bundle_of_n_modules_is_one_engine_by_construction() {
+    // The type-level half of the same claim, which is the part that cannot
+    // regress silently: `Bundle` holds one engine, not a collection of them, so
+    // a per-module implementation could not be written without changing the
+    // struct. The count in `policy_engine_count.rs` is what catches an engine
+    // built somewhere else and thrown away.
+    let bundle = policy::compile(
+        "policy-many",
+        &[
+            (
+                "a.rego".to_owned(),
+                "package batten.a\nimport rego.v1\nrules contains \"a\"\n".to_owned(),
+            ),
+            (
+                "b.rego".to_owned(),
+                "package batten.b\nimport rego.v1\nrules contains \"b\"\n".to_owned(),
+            ),
+            (
+                "c.rego".to_owned(),
+                "package batten.c\nimport rego.v1\nrules contains \"c\"\n".to_owned(),
+            ),
+        ],
+    )
+    .expect("three modules, one bundle");
+
+    assert_eq!(bundle.modules().len(), 3);
+    assert_eq!(
+        bundle
+            .declared()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["a", "b", "c"],
+        "and every sub-package's published ids are reached, not just the first"
+    );
 }

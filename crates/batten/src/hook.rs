@@ -1913,15 +1913,20 @@ pub struct Policy {
     /// a declaration kept in step by hand with what it implies — and here the
     /// drift would not be a silent allow but a forged fact.
     facts: Vec<crate::facts::Declared>,
-    /// The registered policy modules, compiled at the boundary (CLOUD-647).
+    /// The enabled policy bundles, compiled at the boundary (CLOUD-647,
+    /// CLOUD-837).
     ///
     /// Here for the same reason `facts` and `verbs` are: [`adjudicate`] is
-    /// contractually pure, so reading and compiling a module is the boundary's
+    /// contractually pure, so reading and compiling a bundle is the boundary's
     /// work and what reaches the evaluator is a value. It is also what makes a
     /// broken module a **config error at load** rather than a denied tool call —
     /// regorus reports a conflict or a recursion at evaluation, which on this
     /// path is the worst possible time and the wrong exit class.
-    modules: Vec<crate::policy::Module>,
+    ///
+    /// A BUNDLE rather than a module since CLOUD-837: one engine holds every
+    /// module a row enables, so they compose into one rule set instead of N
+    /// isolated ones that cannot share a helper.
+    bundles: Vec<crate::policy::Bundle>,
 }
 
 impl Policy {
@@ -1940,7 +1945,7 @@ impl Policy {
             protected: PathSet::empty(),
             redirects: Vec::new(),
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
         }
     }
 
@@ -2002,7 +2007,7 @@ impl Policy {
             // reads, compiles and smoke-queries every registered module here so
             // that `adjudicate` stays contractually pure and a broken module is
             // a config error rather than a denied tool call (CLOUD-647).
-            modules: crate::policy::load(root, &resolved.rules, reference)?,
+            bundles: crate::policy::load(root, &resolved.rules, reference)?,
         })
     }
 
@@ -2130,11 +2135,11 @@ impl Policy {
         self.shapes.is_empty()
             // A repository whose only mediated-call policy is a registered
             // module has declared something, and this predicate short-circuits
-            // `adjudicated` before any gate runs — so omitting `modules` here
+            // `adjudicated` before any gate runs — so omitting `bundles` here
             // makes the policy gate unreachable rather than merely unused.
             // Caught by `a_module_denies_through_the_adjudication_chain`, which
             // is the case the unit tests over `policy::deny` cannot make.
-            && self.modules.is_empty()
+            && self.bundles.is_empty()
             && (self.verbs.is_empty() || self.protected.is_empty())
     }
 }
@@ -2750,14 +2755,14 @@ fn shape_rules(policy: &Policy, command: &str, keys: &KeyFacts) -> Decision {
 /// arm rare rather than routine — a module that faults here almost certainly
 /// faulted there and never reached a running gate.
 fn policy_rules(policy: &Policy, envelope: &Envelope) -> Decision {
-    if policy.modules.is_empty() {
+    if policy.bundles.is_empty() {
         return Decision::Allow;
     }
     let Ok(input) = call_document(envelope) else {
         return Decision::Allow;
     };
-    for module in &policy.modules {
-        let crate::facts::Look::Is(denials) = crate::policy::deny(module, &input) else {
+    for bundle in &policy.bundles {
+        let crate::facts::Look::Is(denials) = crate::policy::deny(bundle, &input) else {
             continue;
         };
         // The FIRST denial decides, matching every other gate in this chain:
@@ -2776,7 +2781,7 @@ fn policy_rules(policy: &Policy, envelope: &Envelope) -> Decision {
             // text exactly as a row's `reason` is — not a rendering of the
             // policy body, which rule 4 would refuse.
             return Decision::Deny(Refusal::new(
-                module.attribute(violation),
+                bundle.attribute(violation),
                 violation.msg.clone(),
                 Fix::None,
             ));
@@ -3914,7 +3919,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,
@@ -3946,7 +3951,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
@@ -4207,7 +4212,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![shape("no-bare-cargo", "cargo", None)],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4282,7 +4287,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4643,7 +4648,7 @@ mod tests {
         let policy = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4672,7 +4677,7 @@ mod tests {
         let advisory = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule.clone()],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4695,7 +4700,7 @@ mod tests {
         let promoted = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: true,
             verbs: Vec::new(),
@@ -4726,7 +4731,7 @@ mod tests {
         let policy = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![
                 shape("first", "gh pr merge", None),
                 shape("second", "gh pr merge", None),
@@ -4769,7 +4774,7 @@ mod tests {
         let policy = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4827,7 +4832,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4857,7 +4862,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: crate::policy::load(&dir, &[row], None).expect("load"),
+            bundles: crate::policy::load(&dir, &[row], None).expect("load"),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4998,7 +5003,7 @@ deny contains "refused by the module" if {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -5250,7 +5255,7 @@ deny contains "refused by the module" if {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -5902,7 +5907,7 @@ deny contains "refused by the module" if {
         let no_paths = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
@@ -5983,7 +5988,7 @@ deny contains "refused by the module" if {
         let guarding = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: verbs.clone(),
@@ -5994,7 +5999,7 @@ deny contains "refused by the module" if {
         let elsewhere = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
-            modules: Vec::new(),
+            bundles: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,

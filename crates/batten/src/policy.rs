@@ -1,5 +1,5 @@
-//! The policy evaluator: a registered module decides over the resolved facts
-//! (CLOUD-647, CLOUD-689).
+//! The policy evaluator: an enabled bundle decides over the resolved facts
+//! (CLOUD-647, CLOUD-689, CLOUD-837).
 //!
 //! # Why a second language at all
 //!
@@ -15,6 +15,20 @@
 //! This module is not here to write shorter predicates than Rust would. It is
 //! here so one composed rule set decides from one fact set, instead of the same
 //! predicate being re-derived per consumer.
+//!
+//! **That sentence was false for as long as it stood, and CLOUD-837 made it
+//! true.** `Engine::new()` sat inside `load`'s loop, so every registered module
+//! got its own isolated evaluator: there was no composed rule set, there were N
+//! isolated ones, and nothing could reach across them. Two predicates needing
+//! the same path normalisation had to define it twice — the defect this section
+//! opens by decrying, rebuilt in a second language. The unit is the [`Bundle`]
+//! now: one engine, `add_policy` once per file into it, one compile.
+//!
+//! Bundles stay isolated from *each other*, which is the other half of the same
+//! decision: a vendored preset cannot silently supply a helper an in-repo module
+//! depends on, and a consumer's module cannot shadow a preset's internals.
+//! Cross-bundle id collisions are still caught, because [`load`] sees every
+//! declared id set regardless of which engine holds it.
 //!
 //! # The bound is the fact set, and it is why facts came first
 //!
@@ -78,6 +92,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::Result;
 use crate::error::UsageError;
@@ -95,7 +110,33 @@ use crate::rules::{Rule, RuleKind};
 /// bare string here yields a [`Violation`] whose `rule` is `None`, attributed to
 /// the registering row exactly as before, so the existing fixture and its tests
 /// pass untouched.
-const DENY_QUERY: &str = "data.batten.deny";
+/// The one query, and the package prefix it is rooted at.
+///
+/// **Fixed rather than configurable, and that reasoning is kept**: what a policy
+/// row decides must be the same question for every module, or a reviewer reading
+/// `batten.toml` cannot tell what a row does without opening the module.
+///
+/// What CLOUD-837 changed is the LEVEL it is pinned at. This was
+/// `data.batten.deny`, which fixed both halves — and the comment above it
+/// claimed "the package is the consumer's; the rule name is Batten's" while the
+/// constant said the opposite. The fixtures confirmed the constant won: every
+/// test module declared `package batten`, and `package batten.git`,
+/// `batten.ci`, `batten.board` were unreachable. For a bundle that meant no
+/// namespacing at all — 79 predicates in one flat namespace, and by
+/// [`Bundle`]'s own reason unable to share anything across it either.
+///
+/// So the PREFIX is Batten's and the sub-package is the consumer's, and what
+/// stays fixed is the three rule names below.
+const PACKAGE_QUERY: &str = "data.batten";
+
+/// The unattributed deny set: a set of bare strings, and the shape CLOUD-689
+/// shipped.
+///
+/// **Kept unchanged, and that is the back-compatibility claim.** A bare string
+/// here yields a [`Violation`] whose `rule` is `None`, attributed to the
+/// registering row exactly as before, so the existing fixture and its tests pass
+/// untouched.
+const DENY_RULE: &str = "deny";
 
 /// The attributed deny set — Conftest's `violation` shape (CLOUD-832).
 ///
@@ -112,8 +153,8 @@ const DENY_QUERY: &str = "data.batten.deny";
 /// than the gate), severity flattens, and `mise run mutant` cannot be satisfied
 /// at all, because a single id has no per-gate mutation to declare.
 ///
-/// Read *alongside* [`DENY_QUERY`] rather than replacing it: this is additive.
-const VIOLATION_QUERY: &str = "data.batten.violation";
+/// Read *alongside* [`DENY_RULE`] rather than replacing it: this is additive.
+const VIOLATION_RULE: &str = "violation";
 
 /// The ids a module publishes — a set of strings.
 ///
@@ -128,14 +169,14 @@ const VIOLATION_QUERY: &str = "data.batten.violation";
 ///
 /// Reading this is reading an *enabled* artifact, not discovering an authority,
 /// so house style §8 is untouched.
-const RULES_QUERY: &str = "data.batten.rules";
+const RULES_RULE: &str = "rules";
 
 /// One denial a module produced: the predicate that fired, and its own message.
 ///
 /// `rule` is `Option` and the two arms are the two shapes, not a convenience:
-/// `None` is a bare string from [`DENY_QUERY`], attributed to the registering
-/// row; `Some` is a [`VIOLATION_QUERY`] entry naming a predicate the module
-/// published. [`Module::attribute`] is the one place that collapses them, so no
+/// `None` is a bare string from [`DENY_RULE`], attributed to the registering
+/// row; `Some` is a [`VIOLATION_RULE`] entry naming a predicate the module
+/// published. [`Bundle::attribute`] is the one place that collapses them, so no
 /// caller re-derives the fallback and gets it differently.
 ///
 /// `msg` is the **module's own text**, exactly as a row's `reason` is the
@@ -148,49 +189,128 @@ pub struct Violation {
     pub msg: String,
 }
 
-/// One registered module, loaded and compiled.
+/// One module inside a bundle: its repository-relative path, and nothing else.
 ///
-/// Holds the rule's `id` and the module's path for pointer-only reporting, and
-/// the compiled engine. The **source is not a field**: nothing downstream may
-/// render a policy body, and the cheapest way to keep that true is to give it
-/// nowhere to live past compilation (rule 4).
+/// **It no longer holds an engine, and that is CLOUD-837's whole change.**
+/// `Engine::new()` used to sit inside `load`'s loop, so every registered module
+/// got its own isolated evaluator. There was therefore no composed rule set —
+/// there were N isolated ones, and nothing could reach across them: two
+/// predicates needing the same path normalisation had to define it twice, which
+/// is *verbatim the defect this module's own doc opens by decrying*. CLOUD-647's
+/// evidence table already counts the live instance in the layer being replaced —
+/// nine re-derived copies of the issue-key regex, already diverged in
+/// case-sensitivity — and per-module isolation rebuilds exactly that, in a second
+/// language.
+///
+/// What survives here is the pointer. A parse diagnostic names a file, and a
+/// bundle that fails to compile has to say which of its modules did.
+///
+/// The **source is not a field**: nothing downstream may render a policy body,
+/// and the cheapest way to keep that true is to give it nowhere to live past
+/// compilation (rule 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Module {
-    /// The `id` of the [`RuleKind::Policy`] row that registered this module.
-    id: String,
     /// The repository-relative path, for the pointer in a finding.
     path: String,
-    /// The predicate ids this module published through [`RULES_QUERY`].
-    ///
-    /// Read at load, once, and never re-queried: it is what a `violation`'s
-    /// `rule` is checked against and what a `[[waiver]]` is judged reachable
-    /// against. `BTreeSet` so the collision refusal names ids in a stable order
-    /// — §6's byte-stability reaches a config error's text too.
-    declared: BTreeSet<String>,
-    /// The compiled evaluator, ready to take an input document.
-    engine: regorus::Engine,
 }
 
 impl Module {
-    /// The registering rule's id.
-    #[must_use]
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
     /// The module's repository-relative path.
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
     }
+}
 
-    /// The predicate ids this module published.
+/// One enabled bundle: **one engine**, the modules that compiled into it, and
+/// the predicate ids they publish (CLOUD-837).
+///
+/// # One engine per bundle, not per module
+///
+/// `add_policy` is called once per file into the shared engine and the bundle
+/// compiles once. This is how Conftest and OPA load a policy directory, and it
+/// is what makes a helper defined in one module callable from another — the
+/// property that stops 79 predicates re-deriving the same path test 79 times.
+///
+/// # Bundles stay isolated from each other
+///
+/// A vendored preset is its own bundle with its own engine, never merged into a
+/// consumer's. So a preset cannot silently supply a helper an in-repo module
+/// depends on, and a consumer's module cannot shadow a preset's internals.
+/// Cross-bundle *id* collision stays detectable regardless, because [`load`]
+/// sees every declared id set no matter which engine holds it (CLOUD-832).
+///
+/// # What this cost, measured rather than assumed
+///
+/// The published `wired` figure of 8.4ms was taken at **N = 1**, and a
+/// 79-predicate bundle had never been priced at all — the same class of unpriced
+/// per-call multiplication CLOUD-460 measured when one `receipt` row cost every
+/// mediated call four git subprocesses. Re-measured on the pinned toolchain,
+/// release profile, 200 warm iterations per point:
+///
+/// ```text
+/// N=  1  load=  0.57ms  per-call=    39us      <- the baseline the 8.4ms figure was taken at
+/// N= 10  load=  0.84ms  per-call=   270us
+/// N= 40  load=  3.15ms  per-call=  1065us
+/// N= 79  load=  5.83ms  per-call=  2150us
+/// ```
+///
+/// **Per-call cost is still proportional to the predicate count, and saying so
+/// is the point.** One engine per bundle removed N `Engine::new()` calls and N
+/// `engine.clone()` calls per adjudication; it did not and could not make
+/// evaluation flat, because a query over `data.batten` reaches every rule in the
+/// package. Reporting this as "composition made it cheap" would be the same
+/// mistake the 8.4ms figure invited — a number taken at one N and quoted at
+/// another.
+///
+/// At the realistic end that is ~2.2ms against the 100ms ceiling, so the surface
+/// is affordable; what the numbers say is that the budget is spent on
+/// *predicates*, and a bundle that grows past a few hundred is the thing to
+/// measure again rather than assume.
+///
+/// # Attribution is structural now, not convenient
+///
+/// With one engine there is no "which module answered" to report, because the
+/// engine is the unit. A finding's pointer therefore comes from the violation's
+/// own `rule` id — which is why CLOUD-832 had to land first, and is the
+/// strongest form of that row's argument.
+pub struct Bundle {
+    /// The `id` of the [`RuleKind::Policy`] row that enabled this bundle.
+    id: String,
+    /// The modules compiled into this bundle's engine, in load order.
+    modules: Vec<Module>,
+    /// The predicate ids the bundle's modules published through [`RULES_RULE`].
+    ///
+    /// Read at load, once, and never re-queried: it is what a `violation`'s
+    /// `rule` is checked against and what a `[[waiver]]` is judged reachable
+    /// against. `BTreeSet` so the collision refusal names ids in a stable order —
+    /// §6's byte-stability reaches a config error's text too.
+    declared: BTreeSet<String>,
+    /// The one compiled evaluator, ready to take an input document.
+    engine: regorus::Engine,
+}
+
+impl Bundle {
+    /// The enabling rule's id.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The modules compiled into this bundle.
+    #[must_use]
+    pub fn modules(&self) -> &[Module] {
+        &self.modules
+    }
+
+    /// The predicate ids this bundle publishes.
     #[must_use]
     pub fn declared(&self) -> &BTreeSet<String> {
         &self.declared
     }
 
     /// The id a denial is reported under: the predicate's own when it named one,
-    /// the registering row's otherwise.
+    /// the enabling row's otherwise.
     ///
     /// **One place, deliberately.** Severity resolution, `[[waiver]]`
     /// suppression, `Refusal::new` and a tree `Finding`'s `rule` field all need
@@ -204,13 +324,15 @@ impl Module {
     }
 }
 
-impl std::fmt::Debug for Module {
-    /// Names the row and the path and **never the source**, so a policy body
-    /// cannot reach a log through a derived `Debug` (rule 4).
+impl std::fmt::Debug for Bundle {
+    /// Names the row, its modules' paths and the ids they publish — and **never
+    /// a source**, so a policy body cannot reach a log through a derived `Debug`
+    /// (rule 4). Inherited from `Module`'s hand-written one rather than
+    /// re-derived, which is the requirement CLOUD-837 §5 states outright.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Module")
+        f.debug_struct("Bundle")
             .field("id", &self.id)
-            .field("path", &self.path)
+            .field("modules", &self.modules)
             // The published ids are POINTERS — the same class as a rule id in a
             // finding — so they are admissible here where a body never is. They
             // are also the field a reader debugging an attribution question
@@ -220,36 +342,67 @@ impl std::fmt::Debug for Module {
     }
 }
 
-impl PartialEq for Module {
-    /// Equality is the **registration**, never the compiled engine.
+impl PartialEq for Bundle {
+    /// Equality is the **enablement**, never the compiled engine.
     ///
     /// `regorus::Engine` has no meaningful equality, and it does not need one:
-    /// [`load`] refuses two rows registering one path, so within a resolved
-    /// policy the `(id, path)` pair determines the module. Comparing the
-    /// registration is what a caller asking "is this the same policy?" actually
-    /// means — `Policy` derives `PartialEq` for exactly that question.
+    /// [`load`] refuses two rows enabling one module, so within a resolved
+    /// policy the `(id, modules)` pair determines the bundle. Comparing that is
+    /// what a caller asking "is this the same policy?" actually means —
+    /// `Policy` derives `PartialEq` for exactly that question.
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.path == other.path
+        self.id == other.id && self.modules == other.modules
     }
 }
 
-impl Eq for Module {}
+impl Eq for Bundle {}
 
-impl Clone for Module {
-    /// Derived by hand only because [`Module`] hand-writes [`Debug`]; the engine
-    /// itself is `Clone`, so this is the ordinary field-wise clone.
-    ///
+impl Clone for Bundle {
     /// Written out rather than derived so the `Debug` above cannot be silently
     /// re-derived alongside it, which would put a policy body back in reach of a
     /// log (rule 4).
     fn clone(&self) -> Self {
         Self {
             id: self.id.clone(),
-            path: self.path.clone(),
+            modules: self.modules.clone(),
             declared: self.declared.clone(),
             engine: self.engine.clone(),
         }
     }
+}
+
+/// Every `Engine::new()` this process has performed.
+///
+/// A **counter, not a timing assertion**, and CLOUD-837 §7 says why: the claim
+/// is "N modules yield one engine", and a wall-clock measurement of that
+/// discriminates nothing — engine construction is cheap enough that a
+/// per-module implementation and a per-bundle one are indistinguishable on a
+/// clock, which is exactly how the N-linear cost went unmeasured for as long as
+/// it did.
+///
+/// Read it with [`engines_constructed`], around a single [`load`] call. The
+/// count is process-global, so a test asserting a delta must be the only thing
+/// building engines in its process — `tests/policy_engine_count.rs` is its own
+/// binary for that reason.
+static ENGINES_CONSTRUCTED: AtomicUsize = AtomicUsize::new(0);
+
+/// The one place an evaluator is constructed.
+///
+/// Funnelled through a single function so [`ENGINES_CONSTRUCTED`] cannot be
+/// bypassed by a second `Engine::new()` appearing elsewhere — the counter would
+/// then under-report, and a gate that under-reports is worse than none.
+fn new_engine() -> regorus::Engine {
+    ENGINES_CONSTRUCTED.fetch_add(1, Ordering::Relaxed);
+    regorus::Engine::new()
+}
+
+/// How many evaluators this process has constructed.
+///
+/// Exposed for the construction-count assertion described on
+/// [`ENGINES_CONSTRUCTED`]. Monotonic: callers take a delta.
+#[must_use]
+pub fn engines_constructed() -> usize {
+    ENGINES_CONSTRUCTED.load(Ordering::Relaxed)
 }
 
 /// Load, compile and smoke-test every module the rule set registers.
@@ -268,8 +421,8 @@ impl Clone for Module {
 /// faults. Every one of those is a config error at load rather than a surprise
 /// at the gate, which is the whole reason this function drives a query it throws
 /// away.
-pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<Module>> {
-    let mut modules = Vec::new();
+pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<Bundle>> {
+    let mut bundles = Vec::new();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     // Every predicate id published so far, and the module that published it —
     // the value is what lets the collision refusal name BOTH sides, which is the
@@ -294,83 +447,55 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
                 rule.id
             )));
         }
-        // THE MODULE COMES FROM WHEREVER THE RULES CAME FROM, and that is the
-        // whole of this branch. Under `--config-from <ref>` the authority is read
-        // from the ref (`trust::load_base`), so reading the module off disk would
-        // pair a base's rules with the working tree's predicates — and an agent
-        // editing a registered `.rego` would change what the BASE policy decides.
-        // That is exactly the influence `--config-from` exists to exclude, and it
-        // is CLOUD-243's shape on the surface where it bites hardest.
+
+        // The module comes from wherever the RULES came from, and that is the
+        // whole of this branch. Under `--config-from <ref>` the authority is
+        // read from the ref (`trust::load_base`), so reading the module off disk
+        // would pair a base's rules with the working tree's predicates — and an
+        // agent editing an enabled `.rego` would change what the BASE policy
+        // decides. That is exactly the influence `--config-from` exists to
+        // exclude, and it is CLOUD-243's shape on the surface where it bites
+        // hardest.
         //
         // `git::show` is the gix-backed reader CLOUD-718 hardened, and it takes
         // the path as data rather than interpolating it into an argv.
-        let source = match reference {
-            Some(reference) => crate::git::show(root, reference, path).map_err(|_| {
-                UsageError::raise(format!(
-                    "rule `{}` registers `{path}`, which is absent at {reference}",
-                    rule.id
-                ))
-            })?,
-            None => std::fs::read_to_string(root.join(path)).map_err(|_| {
-                UsageError::raise(format!(
-                    "rule `{}` registers `{path}`, which cannot be read",
-                    rule.id
-                ))
-            })?,
-        };
-        let mut engine = regorus::Engine::new();
-        // The error is the engine's own, and it names a line in the MODULE, not
-        // a byte of it — a parse diagnostic is a pointer, which is what rule 4
-        // admits. The source itself never travels.
-        engine
-            .add_policy(path.to_owned(), source)
-            .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
-        // The smoke query, and it is the point of this function rather than a
-        // precaution. Regorus reports a rule conflict and a recursion at
-        // EVALUATION; without driving one here, the first thing that discovers a
-        // cyclic module is a denied tool call, at the wrong time and in the wrong
-        // exit class.
-        engine.set_input_json("{}").map_err(|err| {
-            UsageError::raise(format!("`{path}` rejected an empty input document: {err}"))
-        })?;
-        engine
-            .eval_query(DENY_QUERY.to_owned(), false)
-            .map_err(|err| UsageError::raise(format!("`{path}` faults when evaluated: {err}")))?;
-        // The attributed set is smoke-queried too, and for the same reason: a
-        // conflict or a recursion reachable only through `violation` would
-        // otherwise be discovered by a denied tool call.
-        let smoke = engine
-            .eval_query(VIOLATION_QUERY.to_owned(), false)
-            .map_err(|err| UsageError::raise(format!("`{path}` faults when evaluated: {err}")))?;
-
-        // WHAT THE MODULE PUBLISHES, read once. A module carrying no `rules`
-        // rule publishes nothing, which is exactly the pre-CLOUD-832 module and
-        // is not an error — it simply cannot use the attributed shape.
-        let declared = declared_ids(&mut engine).map_err(|err| {
-            UsageError::raise(format!("`{path}` cannot publish its rule ids: {err}"))
-        })?;
-
-        // An id a `violation` names and the module never published is a config
-        // error HERE rather than a surprise at the gate — the same posture the
-        // smoke query above takes, applied to attribution. This can only see the
-        // violations the empty document reaches; `deny` treats an undeclared id
-        // met later as could-not-look, because a denial this gate cannot
-        // attribute is not one it can honestly report.
-        for violation in read_violations(&smoke).unwrap_or_default() {
-            let Some(named) = violation.rule.as_deref() else {
-                continue;
+        //
+        // A `Vec` because the unit is the BUNDLE: today a row names one file,
+        // and the moment a row can name a folder this is the only line that
+        // changes. Writing it as a scalar is how per-module isolation got built
+        // the first time.
+        let mut sources = Vec::new();
+        for path in [path] {
+            let source = match reference {
+                Some(reference) => crate::git::show(root, reference, path).map_err(|_| {
+                    UsageError::raise(format!(
+                        "rule `{}` registers `{path}`, which is absent at {reference}",
+                        rule.id
+                    ))
+                })?,
+                None => std::fs::read_to_string(root.join(path)).map_err(|_| {
+                    UsageError::raise(format!(
+                        "rule `{}` registers `{path}`, which cannot be read",
+                        rule.id
+                    ))
+                })?,
             };
-            if !declared.contains(named) {
-                return Err(UsageError::raise(format!(
-                    "`{path}` raises `{named}`, which it does not declare in `{RULES_QUERY}`"
-                )));
-            }
+            sources.push((path.to_owned(), source));
         }
 
-        // A `predicate_severity` key naming an id the module never published is a
+        // EVERYTHING PAST THE READ IS PURE, and the split is what lets the
+        // composition property be tested without a filesystem: `compile` builds
+        // one engine from N sources, which is the whole of CLOUD-837.
+        let bundle = compile(&rule.id, &sources)?;
+        let declared = bundle.declared.clone();
+
+        // The pointer a bundle-level fault is reported against.
+        let where_it_came_from = path;
+
+        // A `predicate_severity` key naming an id the bundle never published is a
         // setting that parses and does nothing, which is the shape house style
         // §8 refuses everywhere else in this config. This is the only place that
-        // sees both the row and the module's declared set, so it is the only
+        // sees both the row and the bundle's declared set, so it is the only
         // place the check can live — `Rule::validate` has the row and not the
         // module. Same shape as CLOUD-208's dead-waiver diagnostic, and for the
         // same reason: a suppression or a severity aimed at nothing is a reader
@@ -379,139 +504,317 @@ pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<
             for named in table.keys() {
                 if !declared.contains(named.as_str()) {
                     return Err(UsageError::raise(format!(
-                        "rule `{}` sets a severity for `{named}`, which `{path}` does not \
-                         declare in `{RULES_QUERY}`",
+                        "rule `{}` sets a severity for `{named}`, which `{where_it_came_from}` \
+                         does not declare in `{RULES_RULE}`",
                         rule.id
                     )));
                 }
             }
         }
 
-        // ACROSS EVERY MODULE THIS LOAD SEES, and that is what keeps a folder
+        // ACROSS EVERY BUNDLE THIS LOAD SEES, and that is what keeps a folder
         // from becoming a merge: there is no precedence to resolve because a
         // collision is refused outright rather than silently won by whichever
         // loaded last. It is also the clause that makes enumerating modules
         // inside an enabled bundle safe (CLOUD-129's corrected shape), and it
         // reaches across the vendored/in-repo boundary for free — a preset is
-        // just another module with a declared id set.
+        // just another bundle with a declared id set. Bundles are ISOLATED as
+        // engines and still visible to each other HERE, which is the whole
+        // point: a preset cannot supply a helper, and cannot silently shadow an
+        // id either.
         for id in &declared {
-            if let Some(owner) = ids.get(id.as_str()) {
+            if let Some(owner) = ids.get(id) {
                 return Err(UsageError::raise(format!(
-                    "`{path}` and `{owner}` both declare the rule id `{id}`; a finding                      names one predicate, so there is no precedence to resolve here"
+                    "`{where_it_came_from}` and `{owner}` both declare the rule id `{id}`; a \
+                     finding names one predicate, so there is no precedence to resolve here"
                 )));
             }
         }
         for id in &declared {
-            ids.insert(id.clone(), path.to_owned());
+            ids.insert(id.clone(), where_it_came_from.to_owned());
         }
 
-        modules.push(Module {
-            id: rule.id.clone(),
-            path: path.to_owned(),
-            declared,
-            engine,
-        });
+        bundles.push(bundle);
     }
-    Ok(modules)
+    Ok(bundles)
 }
 
-/// The ids a compiled module publishes through [`RULES_QUERY`].
+/// Compose `sources` into **one** bundle: one engine, one compile, one smoke
+/// query (CLOUD-837).
 ///
-/// An absent or non-set `rules` rule is an EMPTY set rather than an error: a
-/// module written before CLOUD-832, or one using only the bare-string `deny`
-/// shape, publishes nothing and is entirely valid. Only a module that *faults*
-/// answering the query is a fault.
-fn declared_ids(engine: &mut regorus::Engine) -> Result<BTreeSet<String>, anyhow::Error> {
-    let results = engine.eval_query(RULES_QUERY.to_owned(), false)?;
-    let mut ids = BTreeSet::new();
-    for result in results.result {
-        for value in result.expressions {
-            match &value.value {
-                regorus::Value::Set(items) => {
-                    for item in items.iter() {
-                        if let Ok(text) = item.as_string() {
-                            ids.insert(text.to_string());
-                        }
+/// This is the composition half of [`load`], split from its I/O so the property
+/// that matters can be tested without a filesystem — and so the loop that adds
+/// modules to an engine has exactly one implementation.
+///
+/// `sources` is `(path, text)`. The path is the pointer a parse diagnostic
+/// names; the text is dropped after `add_policy`, which is what keeps a policy
+/// body out of reach of a log (rule 4).
+///
+/// # Errors
+///
+/// A [`UsageError`] (exit `1`) when any module fails to compile — **a malformed
+/// module fails its whole bundle**, which is correct: a bundle is one rule set,
+/// and half of one decides nothing coherent — when the bundle faults answering
+/// the smoke query, when `rules` answers a shape that is not a set of ids, or
+/// when a `violation` reachable on an empty document raises an id the bundle
+/// does not declare.
+pub fn compile(id: &str, sources: &[(String, String)]) -> Result<Bundle> {
+    // ONE ENGINE FOR THE WHOLE BUNDLE. `add_policy` once per file into it, so
+    // the bundle compiles once and a helper defined in one module is callable
+    // from another. This is how Conftest and OPA load a policy directory, and
+    // constructing the engine outside the loop is the entire fix: it used to sit
+    // inside it, which is why there was no composed rule set to speak of.
+    let mut engine = new_engine();
+    let mut modules = Vec::new();
+    for (path, source) in sources {
+        engine
+            .add_policy(path.clone(), source.clone())
+            .map_err(|err| UsageError::raise(format!("`{path}` does not compile: {err}")))?;
+        modules.push(Module { path: path.clone() });
+    }
+
+    // The pointer a bundle-level fault is reported against: the first module,
+    // because regorus's own diagnostics already name the offending file and this
+    // is the fallback for the queries below, which are over the composed set
+    // rather than over any one module.
+    let pointer = sources
+        .first()
+        .map_or_else(|| id.to_owned(), |(path, _)| path.clone());
+
+    // The smoke query, and it is the point of this function rather than a
+    // precaution. Regorus reports a rule conflict and a recursion at EVALUATION;
+    // without driving one here, the first thing that discovers a cyclic module
+    // is a denied tool call, at the wrong time and in the wrong exit class.
+    engine.set_input_json("{}").map_err(|err| {
+        UsageError::raise(format!(
+            "`{pointer}` rejected an empty input document: {err}"
+        ))
+    })?;
+    let smoke = engine
+        .eval_query(PACKAGE_QUERY.to_owned(), false)
+        .map_err(|err| UsageError::raise(format!("`{pointer}` faults when evaluated: {err}")))?;
+
+    // WHAT THE BUNDLE PUBLISHES, read once. A bundle whose modules carry no
+    // `rules` rule publishes nothing, which is exactly the pre-CLOUD-832 module
+    // and is not an error — it simply cannot use the attributed shape.
+    let declared = collect_strings(&smoke, RULES_RULE).ok_or_else(|| {
+        UsageError::raise(format!(
+            "`{pointer}` answered `{RULES_RULE}` with a shape that is not a set of ids"
+        ))
+    })?;
+
+    // An id a `violation` names and the bundle never published is a config error
+    // HERE rather than a surprise at the gate — the same posture the smoke query
+    // above takes, applied to attribution. This can only see the violations the
+    // empty document reaches; `deny` treats an undeclared id met later as
+    // could-not-look, because a denial this gate cannot attribute is not one it
+    // can honestly report.
+    for violation in collect_violations(&smoke).unwrap_or_default() {
+        let Some(named) = violation.rule.as_deref() else {
+            continue;
+        };
+        if !declared.contains(named) {
+            return Err(UsageError::raise(format!(
+                "`{pointer}` raises `{named}`, which it does not declare in `{RULES_RULE}`"
+            )));
+        }
+    }
+
+    Ok(Bundle {
+        id: id.to_owned(),
+        modules,
+        declared,
+        engine,
+    })
+}
+
+/// Walk a `data.batten` result for every member named `rule_name`, at any depth,
+/// and read its strings.
+///
+/// **This is what pins the RULE NAME rather than the package** (CLOUD-837). The
+/// query is rooted at `data.batten` and this walk finds `deny`, `violation` and
+/// `rules` wherever they sit under it — so `package batten.git`,
+/// `package batten.ci` and `package batten.board` are all reachable, and 79
+/// predicates need not share one flat namespace.
+///
+/// `None` is could-not-look at every call site, never "no denials": a member
+/// whose value is neither a set nor an array decided nothing readable, and
+/// guessing it is empty is CLOUD-251's vacuous pass.
+fn collect_strings(results: &regorus::QueryResults, rule_name: &str) -> Option<BTreeSet<String>> {
+    let mut found = BTreeSet::new();
+    for value in package_members(results, rule_name) {
+        match value {
+            regorus::Value::Set(items) => {
+                for item in items.iter() {
+                    if let Ok(text) = item.as_string() {
+                        found.insert(text.to_string());
                     }
-                }
-                regorus::Value::Array(items) => {
-                    for item in items.iter() {
-                        if let Ok(text) = item.as_string() {
-                            ids.insert(text.to_string());
-                        }
-                    }
-                }
-                // Undefined is the ordinary case for a module with no `rules`
-                // rule. Anything else is a shape this gate cannot read, and
-                // reading it as "declares nothing" would turn every id the
-                // module raises into an undeclared-id refusal — a confusing
-                // error a long way from its cause.
-                regorus::Value::Undefined => {}
-                other => {
-                    anyhow::bail!(
-                        "`{RULES_QUERY}` answered a {} rather than a set of ids",
-                        shape(other)
-                    )
                 }
             }
+            regorus::Value::Array(items) => {
+                for item in items.iter() {
+                    if let Ok(text) = item.as_string() {
+                        found.insert(text.to_string());
+                    }
+                }
+            }
+            // Undefined is the ordinary shape of a package that has no rule of
+            // this name at all, which is entirely valid — an empty contribution,
+            // not an unreadable one.
+            regorus::Value::Undefined => {}
+            _ => return None,
         }
     }
-    Ok(ids)
+    Some(found)
 }
 
-/// The stable one-word name of a value's shape, for a diagnostic.
+/// The same walk over [`DENY_RULE`], preserving order.
 ///
-/// The SHAPE and never the value (rule 4): a module's data is the consumer's,
-/// and a diagnostic that quoted it back would put policy content into a log.
-const fn shape(value: &regorus::Value) -> &'static str {
-    match value {
-        regorus::Value::Null => "null",
-        regorus::Value::Bool(_) => "boolean",
-        regorus::Value::Number(_) => "number",
-        regorus::Value::String(_) => "string",
-        regorus::Value::Array(_) => "array",
-        regorus::Value::Set(_) => "set",
-        regorus::Value::Object(_) => "object",
-        regorus::Value::Undefined => "undefined",
+/// A `BTreeSet` would be wrong here: two predicates may legitimately produce the
+/// same message, and collapsing them would under-report.
+fn collect_deny_messages(results: &regorus::QueryResults) -> Option<Vec<String>> {
+    let mut messages = Vec::new();
+    for value in package_members(results, DENY_RULE) {
+        match value {
+            regorus::Value::Set(items) => {
+                for item in items.iter() {
+                    if let Ok(text) = item.as_string() {
+                        messages.push(text.to_string());
+                    }
+                }
+            }
+            regorus::Value::Array(items) => {
+                for item in items.iter() {
+                    if let Ok(text) = item.as_string() {
+                        messages.push(text.to_string());
+                    }
+                }
+            }
+            regorus::Value::Undefined => {}
+            _ => return None,
+        }
+    }
+    Some(messages)
+}
+
+/// The `{"rule": …, "msg": …}` members of every `violation` under the package,
+/// or `None` for a shape this gate cannot read.
+///
+/// A member missing `msg` is unreadable rather than empty-messaged: a refusal
+/// whose text is the empty string tells its reader nothing, and inventing one
+/// here would put Batten's words in the consumer's mouth. A member missing
+/// `rule` is fine and falls back to the row, which is [`DENY_RULE`]'s behaviour
+/// reached by a different spelling.
+fn collect_violations(results: &regorus::QueryResults) -> Option<Vec<Violation>> {
+    let mut violations = Vec::new();
+    for value in package_members(results, VIOLATION_RULE) {
+        let items: Vec<&regorus::Value> = match value {
+            regorus::Value::Set(items) => items.iter().collect(),
+            regorus::Value::Array(items) => items.iter().collect(),
+            regorus::Value::Undefined => continue,
+            _ => return None,
+        };
+        for item in items {
+            let object = item.as_object().ok()?;
+            let msg = object.get(&"msg".into())?.as_string().ok()?;
+            let rule = object
+                .get(&"rule".into())
+                .and_then(|value| value.as_string().ok())
+                .map(std::string::ToString::to_string);
+            violations.push(Violation {
+                rule,
+                msg: msg.to_string(),
+            });
+        }
+    }
+    Some(violations)
+}
+
+/// Every value named `rule_name` anywhere under the queried package.
+///
+/// Recurses into object values, which is what a sub-package is in the `data`
+/// document: `package batten.git`'s rules appear as `{"git": {"deny": …}}` under
+/// `data.batten`. Only objects are descended into — a rule's own value is a set,
+/// an array or a scalar, and treating one of those as a namespace would let a
+/// module's DATA masquerade as a predicate.
+fn package_members<'a>(
+    results: &'a regorus::QueryResults,
+    rule_name: &str,
+) -> Vec<&'a regorus::Value> {
+    let mut found = Vec::new();
+    for result in &results.result {
+        for expression in &result.expressions {
+            descend(&expression.value, rule_name, &mut found);
+        }
+    }
+    found
+}
+
+/// The recursive half of [`package_members`].
+fn descend<'a>(value: &'a regorus::Value, rule_name: &str, found: &mut Vec<&'a regorus::Value>) {
+    let Ok(object) = value.as_object() else {
+        return;
+    };
+    for (key, child) in object {
+        let Ok(name) = key.as_string() else {
+            continue;
+        };
+        if name.as_ref() == rule_name {
+            found.push(child);
+        } else {
+            // A sub-package, or a helper rule whose value happens to be an
+            // object. Descending into the latter costs a walk and finds nothing,
+            // which is cheaper than the alternative — asking regorus which
+            // members are packages, a distinction the `data` document does not
+            // carry.
+            descend(child, rule_name, found);
+        }
     }
 }
 
-/// Evaluate one module over an input document and return its denials.
+/// Evaluate a bundle over an input document and return its denials.
 ///
 /// Pure: no I/O, no environment, no clock. The engine was compiled at the
 /// boundary and the input is data the caller already holds, which is what lets
 /// this be called from [`crate::hook::adjudicate`]'s chain.
 ///
-/// **Both shapes, one answer.** The bare-string [`DENY_QUERY`] set and the
-/// attributed [`VIOLATION_QUERY`] set are read into one `Vec<Violation>`, in
-/// that order — `deny` first, so a module carrying both keeps the declaration
-/// order a reviewer reads. A bare string yields `rule: None` and is attributed
-/// to the registering row exactly as it was before CLOUD-832.
+/// **One engine, one clone.** Before CLOUD-837 this cloned an engine per module
+/// per mediated call, an N-linear cost on the 100ms path that had only ever been
+/// measured at N = 1. A bundle clones once whatever it holds.
 ///
-/// Returns [`Look::CouldNotLook`] when the module faults or the input will not
+/// **Both shapes, one answer.** The bare-string [`DENY_RULE`] set and the
+/// attributed [`VIOLATION_RULE`] set are read into one `Vec<Violation>`, in that
+/// order. A bare string yields `rule: None` and is attributed to the enabling
+/// row exactly as it was before CLOUD-832.
+///
+/// Returns [`Look::CouldNotLook`] when the bundle faults or the input will not
 /// serialize — never an empty deny set, because "it ran and found nothing" and
 /// "it could not run" are different answers and collapsing them is CLOUD-251's
 /// vacuous pass.
 ///
 /// **An undeclared id is also could-not-look**, and that arm is the one worth
-/// stating: a module raising a `violation` whose `rule` it never published gives
-/// this gate a denial it cannot attribute, and the two alternatives are both
-/// wrong — reporting it under the ROW id silently re-flattens the very
-/// attribution CLOUD-832 exists to add, and dropping it turns a real refusal
-/// into a pass. `load` refuses this outright for every violation the empty
-/// document reaches; this is the residue, on inputs load could not exercise.
+/// stating: a module raising a `violation` whose `rule` its bundle never
+/// published gives this gate a denial it cannot attribute, and the two
+/// alternatives are both wrong — reporting it under the ROW id silently
+/// re-flattens the very attribution CLOUD-832 exists to add, and dropping it
+/// turns a real refusal into a pass. [`load`] refuses this outright for every
+/// violation the empty document reaches; this is the residue, on inputs load
+/// could not exercise.
 #[must_use]
-pub fn deny(module: &Module, input: &str) -> Look<Vec<Violation>> {
-    let mut engine = module.engine.clone();
+pub fn deny(bundle: &Bundle, input: &str) -> Look<Vec<Violation>> {
+    let mut engine = bundle.engine.clone();
     if engine.set_input_json(input).is_err() {
         return Look::CouldNotLook;
     }
-    let mut violations = Vec::new();
-
-    let Ok(unattributed) = engine.eval_query(DENY_QUERY.to_owned(), false) else {
+    // ONE QUERY for both shapes, because the engine is the unit now: the whole
+    // `data.batten` document comes back once and is walked twice, rather than
+    // paying an evaluation per rule name.
+    let Ok(answered) = engine.eval_query(PACKAGE_QUERY.to_owned(), false) else {
         return Look::CouldNotLook;
     };
-    match read_strings(&unattributed) {
+
+    let mut violations = Vec::new();
+    match collect_deny_messages(&answered) {
         Some(messages) => violations.extend(
             messages
                 .into_iter()
@@ -519,15 +822,11 @@ pub fn deny(module: &Module, input: &str) -> Look<Vec<Violation>> {
         ),
         None => return Look::CouldNotLook,
     }
-
-    let Ok(attributed) = engine.eval_query(VIOLATION_QUERY.to_owned(), false) else {
-        return Look::CouldNotLook;
-    };
-    match read_violations(&attributed) {
+    match collect_violations(&answered) {
         Some(entries) => {
             for entry in entries {
                 if let Some(named) = entry.rule.as_deref() {
-                    if !module.declared.contains(named) {
+                    if !bundle.declared.contains(named) {
                         return Look::CouldNotLook;
                     }
                 }
@@ -538,81 +837,4 @@ pub fn deny(module: &Module, input: &str) -> Look<Vec<Violation>> {
     }
 
     Look::Is(violations)
-}
-
-/// The bare-string members of a `deny` result, or `None` for a shape this gate
-/// cannot read.
-///
-/// `None` is could-not-look at every call site, never "no denials": a module
-/// whose `deny` is neither a set nor an array decided nothing readable, and
-/// guessing it is empty is CLOUD-251's vacuous pass.
-fn read_strings(results: &regorus::QueryResults) -> Option<Vec<String>> {
-    let mut messages = Vec::new();
-    for result in &results.result {
-        for value in &result.expressions {
-            match &value.value {
-                regorus::Value::Set(items) => {
-                    for item in items.iter() {
-                        if let Ok(text) = item.as_string() {
-                            messages.push(text.to_string());
-                        }
-                    }
-                }
-                regorus::Value::Array(items) => {
-                    for item in items.iter() {
-                        if let Ok(text) = item.as_string() {
-                            messages.push(text.to_string());
-                        }
-                    }
-                }
-                // Undefined is the ordinary shape of a module that has no
-                // `deny` rule at all, which is entirely valid once `violation`
-                // exists — it is an empty contribution, not an unreadable one.
-                regorus::Value::Undefined => {}
-                _ => return None,
-            }
-        }
-    }
-    Some(messages)
-}
-
-/// The `{"rule": …, "msg": …}` members of a `violation` result, or `None` for a
-/// shape this gate cannot read.
-///
-/// A member missing `msg` is unreadable rather than empty-messaged: a refusal
-/// whose text is the empty string tells its reader nothing, and inventing one
-/// here would put Batten's words in the consumer's mouth. A member missing
-/// `rule` is fine and falls back to the row, which is [`DENY_QUERY`]'s
-/// behaviour reached by a different spelling.
-fn read_violations(results: &regorus::QueryResults) -> Option<Vec<Violation>> {
-    let mut violations = Vec::new();
-    for result in &results.result {
-        for value in &result.expressions {
-            let items: Vec<&regorus::Value> = match &value.value {
-                regorus::Value::Set(items) => items.iter().collect(),
-                regorus::Value::Array(items) => items.iter().collect(),
-                regorus::Value::Undefined => continue,
-                _ => return None,
-            };
-            for item in items {
-                let msg = item
-                    .as_object()
-                    .ok()?
-                    .get(&"msg".into())?
-                    .as_string()
-                    .ok()?;
-                let rule = item
-                    .as_object()
-                    .ok()?
-                    .get(&"rule".into())
-                    .and_then(|value| value.as_string().ok())
-                    .map(|text| text.to_string());
-                violations.push(Violation {
-                    rule,
-                    msg: msg.to_string(),
-                });
-            }
-        }
-    }
-    Some(violations)
 }
