@@ -933,10 +933,10 @@ fn a_run_that_never_reached_a_verdict_records_nothing() {
     // that spawns a process before it begins (`rules::run_static`), so this run
     // loads the base config perfectly well and then stops — and a config that
     // merely parsed proved less than the pin claims about it.
-    let base = format!(
+    let base =
         "version = 1\n[trust]\noffline_fallback = true\n\n[[rule]]\nid = \"spawns\"\nkind = \
-         \"command\"\nrun = \"true\"\n"
-    );
+                \"command\"\nrun = \"true\"\n"
+            .to_owned();
     let repo = pr_fixture("trust-pin-no-verdict", &base, &base, &[]);
     let state = scratch("trust-pin-no-verdict-state");
 
