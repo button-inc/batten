@@ -5,6 +5,51 @@ deciding whether to. The gates this protocol leans on are `mise run ready-lint`
 and `mise run graph-check` (CLOUD-179, CLOUD-175); the board model is
 `mem:workflow/board-states`.
 
+## READ FIRST: you cannot open the sessions. `create_session` is blocked upstream.
+
+**Every parameter this memory documents for `create_session` — permission mode,
+effort, title, tags — is accurate and unusable, because the call itself is
+refused.** It returns `MCP tool call requires approval`, in every session, with
+no human to approve it. Do not probe it "to see if it works now". Do not add an
+allow rule. Do not send anyone to a settings screen.
+
+Why, sourced rather than re-derived
+([#76264](https://github.com/anthropics/claude-code/issues/76264),
+[#61044](https://github.com/anthropics/claude-code/issues/61044),
+[#61097](https://github.com/anthropics/claude-code/issues/61097); full detail and
+the recognisable tell in `mem:connector-allowlist-recovery`'s STOP section): the
+session-management tools carry a **mandatory-approval flag** — _"requires
+explicit approval regardless of permission mode"_ — and all three escapes are
+documented as tested and failing (`bypassPermissions`, an explicit
+`permissions.allow` entry for the exact tool name, and a `PreToolUse` hook
+returning allow). A second upstream defect has the CCR proxy refusing
+server-side, before the permission layer is reached.
+
+**The governing principle, and the reason this keeps recurring:** the refusal is
+the REMOTE's behaviour, and **we can only change our harness.** Every attempt so
+far has tried to change the remote's mind — a grant, a translation, a
+bypass — and every one of them is a documented dead end. Design around it
+instead.
+
+**So the fleet is dispatched BY HAND**, and that is settled rather than a
+workaround to re-litigate: `CLOUD-731`, `CLOUD-784`, `CLOUD-839` are the
+precedents. **What an agent produces is the prompts, not the sessions**: write
+each bundle's prompt into the dispatch row on the board (never into chat, which
+dies with the container), and a human opens the sessions and pastes them.
+
+**Two consequences of hand dispatch that bite, both measured:**
+
+- `get_session` is blocked too, so a child's `permission_mode` cannot be read
+  back after it starts. CLOUD-728 measured the cost: five bundles came up
+  `default` instead of the intended mode and ran to landed unsupervised. Whoever
+  opens the sessions confirms the mode in the UI; no agent can confirm it for
+  them.
+- The mode is **not inherited** from the pasting session in the way the
+  parameter docs below imply. Read that section for what the values do, not for
+  what a dispatcher can rely on.
+
+Re-open this only from a changelog entry or a reply on those upstream issues.
+
 ## Shape
 
 One **planner** session keeps the ready queue full; N **implementer** sessions

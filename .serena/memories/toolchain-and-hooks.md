@@ -163,6 +163,17 @@ The account-specific names belong in **user-level** `~/.claude/settings.json`,
 never in the repo — rule 1 keeps consumer identifiers out of committed config,
 and a UUID is meaningless to any other clone.
 
+**That paragraph is scoped to claude.ai DATA connectors (Linear, Gmail, Xero) and
+does not generalise.** The Claude Code Remote session-management tools —
+`create_session`, `list_sessions`, `get_session`, `send_later`, `create_trigger`
+— carry a mandatory-approval flag that ignores `permissions.allow` entirely, at
+any spelling and at any level. Adding the live name to `~/.claude/settings.json`
+is [#76264](https://github.com/anthropics/claude-code/issues/76264)'s escape 2,
+documented as having **no effect**, and it has now been tried in at least three
+sessions. Read `mem:connector-allowlist-recovery`'s STOP section before acting on
+any `MCP tool call requires approval`; the tell is a connector where _every_ tool
+including the read-only ones is `always_ask`.
+
 So `mise run mcp-allow-check` (in the shared hk `gate`, globbed on
 `.claude/settings.json`) asserts only what is repo-verifiable: no allow rule
 globs the server segment, since the CLI accepts a tool-name glob only after a

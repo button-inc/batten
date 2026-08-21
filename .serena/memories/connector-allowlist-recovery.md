@@ -113,6 +113,32 @@ so re-test after a client upgrade and report if it still fails.
   approach 2 above — documented as having no effect on mandatory-approval tools.
   It remains valid for Linear-class connectors and only for those.
 
+### Our upstream report exists — add to it, do not file a fourth
+
+[anthropics/claude-code#87548](https://github.com/anthropics/claude-code/issues/87548)
+is **ours**: open, labelled `bug` / `has repro` / `area:mcp` / `area:permissions`
+/ `platform:web`, filed 2026-08-18, **no Anthropic response and no follow-up
+since**. It carries the discriminating observation the other reports lack — the
+refusal is **per-tool, not per-server**: on one Linear connector `list_teams`,
+`list_issues`, `get_issue`, `save_issue` and `save_comment` all work while
+`list_comments` is denied every time, and the whole toolbox server is denied
+including argument-free `get_session`.
+
+**An agent cannot update it.** `add_repo` for `anthropics/claude-code` is served
+by the same blocked connector and returns the same `MCP tool call requires
+approval`, so the session that reproduces the bug is structurally unable to
+report it. That is why the report has sat un-updated: not neglect, no route.
+**Hand the user the comment text to paste** — that is the only channel.
+
+Evidence worth adding when someone can post it, measured 2026-08-21: the injected
+config's `permission_policy` per tool, Linear **57 `always_allow` / 1
+`always_ask`** against the toolbox server's **20 of 20 `always_ask`**; and the
+cross-link to [#76264](https://github.com/anthropics/claude-code/issues/76264),
+which our report does not cite and which names the mechanism — a
+mandatory-approval flag whose prompt reads _"requires explicit approval
+regardless of permission mode"_, with `bypassPermissions`, `permissions.allow`
+and a `PreToolUse` allow hook all recorded as tested and failing.
+
 ### The tell, so this is recognisable without re-deriving it
 
 Read the injected config. A connector whose tools are grantable shows a mix —
