@@ -929,7 +929,7 @@ fi
 # Vacuity is not a defect here, unlike property 16's. A tree with no `--no-run`
 # job has no cache-warm job to guard, which is a legitimate shape rather than a
 # look that failed — so this one is silent on an empty subject set by design.
-#MUTANT warm-compile-may-be-unguarded|s@grep -qE '\^\[\[:space:\]\]\*if:\.\*cache-hit' <<<"$step"@false@|a cache-warm compile with no cache-hit guard is refused
+#MUTANT warm-compile-may-be-unguarded|s@grep -qE '\^\[\[:space:\]\]\*if:\.\*cache-hit' <<<"$step"@true@|a cache-warm compile with no cache-hit guard is refused
 #MUTANT warm-guard-may-name-a-missing-id|s@grep -qE "\^\[\[:space:\]\]\*id:\[\[:space:\]\]\*\${step_id}\[\[:space:\]\]\*\$" "$wf"@true@|a guard naming a step id that does not exist is refused
 for wf in "$workflows"/*.yml; do
 	[ -e "$wf" ] || continue
