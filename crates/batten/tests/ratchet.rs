@@ -403,3 +403,245 @@ fn the_base_count_does_not_move_with_the_hosts_quote_path_setting() {
         "and report the same counts — a host setting must not move a ratchet"
     );
 }
+
+// --- `retires_with`: a decrease admitted exactly when the subject died -------
+//
+// CLOUD-807. Before this column the only hatch for a legitimate reduction was a
+// `[[waiver]]`, which expires and which cannot say WHICH reductions are
+// legitimate — so a suite quietly gutted and a suite retired with its subject
+// were indistinguishable. The negative case below is the one a blanket waiver
+// cannot express, and asserting only the happy path would pass against a rule
+// that admits everything.
+
+/// Two cases in one suite that declares its subject, plus the subject itself.
+const ALPHA_SUITE: &str = "# subject: programs/alpha\n@case one\n@case two\n";
+
+/// A second suite, so a fixture can retire the first without emptying the glob.
+const BETA_SUITE: &str = "# subject: programs/beta\n@case only\n";
+
+/// A ratchet over the suites, keyed to a declared subject.
+fn retirement_config(retires_with: Option<&str>) -> String {
+    let column = match retires_with {
+        None => String::new(),
+        Some(token) => format!("retires_with = \"{token}\"\n"),
+    };
+    format!(
+        "version = 1\n\n[[rule]]\nid = \"suites-not-gutted\"\nkind = \"ratchet\"\nglob = \"suites/**/*.t\"\npattern = \"@case \"\ndirection = \"non_decreasing\"\nbase = \"main\"\nseverity = \"deny\"\n{column}"
+    )
+}
+
+/// A repo with two declared suites and the two programs they name.
+fn retirement_repo(name: &str, retires_with: Option<&str>) -> PathBuf {
+    retirement_repo_declaring(name, retires_with, ALPHA_SUITE)
+}
+
+/// The same, with `alpha` declaring whatever the caller needs **at base**.
+///
+/// The base state is the FIRST commit rather than a second one plus a moved
+/// branch: git refuses to force a branch that is checked out, which is the same
+/// defect `no-branch-f-main` gates on the bats corpus.
+fn retirement_repo_declaring(name: &str, retires_with: Option<&str>, alpha: &str) -> PathBuf {
+    let dir = Fixture::new(name)
+        .config(&retirement_config(retires_with))
+        .files(&[
+            ("suites/alpha.t", alpha),
+            ("suites/beta.t", BETA_SUITE),
+            ("programs/alpha", "alpha\n"),
+            ("programs/beta", "beta\n"),
+        ])
+        .git()
+        .build();
+    git_in(&dir, &["add", "-A"]);
+    git_in(&dir, &["commit", "-q", "-m", "base"]);
+    dir
+}
+
+#[test]
+fn a_retirement_that_takes_its_subject_with_it_is_admitted() {
+    // Row (a). The suite and the program it declares die in the same change, so
+    // what falls is the case count and not the coverage.
+    let dir = retirement_repo("retires-with-subject", Some("# subject:"));
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+    fs::remove_file(dir.join("programs/alpha")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a decrease whose subject died is admitted: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn deleting_cases_while_the_subject_lives_still_denies() {
+    // Row (b), and the load-bearing one: this is what the blanket waiver could
+    // not express, and what a happy-path-only assertion would miss entirely.
+    let dir = retirement_repo("retires-subject-alive", Some("# subject:"));
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the subject is still there, so nothing bought the decrease"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("suites-not-gutted"),
+        "the finding names the rule: {text:?}"
+    );
+    assert!(
+        text.contains("3->1"),
+        "the finding names the two counts: {text:?}"
+    );
+    assert!(
+        text.contains("subject-alive programs/alpha"),
+        "the finding names the subject that did not die: {text:?}"
+    );
+}
+
+#[test]
+fn a_subject_that_dies_under_a_surviving_suite_is_a_finding_at_the_declaration() {
+    // Row (c): the ratchet itself is clean — no case was deleted — and the
+    // header has rotted into a lie. Caught by the obligation half, which is why
+    // that half exists rather than only checking the files a change touched.
+    let dir = retirement_repo("retires-dead-subject", Some("# subject:"));
+    fs::remove_file(dir.join("programs/alpha")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a suite outliving its subject is a finding"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("suites/alpha.t:1"),
+        "the pointer lands on the declaration itself: {text:?}"
+    );
+}
+
+#[test]
+fn a_suite_with_no_declared_subject_is_refused() {
+    // Row (d). The header cannot rot into a lie if a missing one is already red,
+    // and this is what stops the admission resting on a header nobody checks.
+    let dir = retirement_repo("retires-undeclared", Some("# subject:"));
+    common::write(&dir, "suites/gamma.t", "@case fresh\n");
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a suite declaring no subject is refused even though the count ROSE"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("suites/gamma.t:1"),
+        "the pointer names the file owing a header: {text:?}"
+    );
+}
+
+#[test]
+fn a_multi_path_subject_needs_every_path_to_die() {
+    // The too-narrow-subject hole, asserted directly: a suite covering two
+    // programs is not retirable while either still has work to do. Union
+    // semantics are the refusing direction, deliberately.
+    let dir = retirement_repo_declaring(
+        "retires-multi",
+        Some("# subject:"),
+        "# subject: programs/alpha programs/beta\n@case one\n@case two\n",
+    );
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+    fs::remove_file(dir.join("programs/alpha")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "one of the two declared programs survives, so the suite still covers something"
+    );
+    assert!(
+        stdout(&output).contains("subject-alive programs/beta"),
+        "the finding names the survivor: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_change_cannot_rewrite_its_own_permission() {
+    // The header is read from the BASE tree. Rewriting it in the same commit
+    // that spends it would make the permission self-issued — the shape
+    // `claim-check` refuses one level up, in the rule engine.
+    let dir = retirement_repo("retires-self-authorised", Some("# subject:"));
+    // The working copy now claims a subject that is already gone...
+    common::write(
+        &dir,
+        "suites/alpha.t",
+        "# subject: programs/never\n@case one\n",
+    );
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "the base header names programs/alpha, which is still alive"
+    );
+    assert!(
+        stdout(&output).contains("subject-alive programs/alpha"),
+        "the BASE subject decides, not the rewritten one: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_subject_that_never_existed_admits_nothing() {
+    // The anti-rot term. Without alive-at-base, a header naming a path that was
+    // never there reports "absent from the working tree" and admits the very
+    // deletion it was supposed to justify — a gate that reads as present and
+    // denies nothing.
+    let dir = retirement_repo_declaring(
+        "retires-phantom",
+        Some("# subject:"),
+        "# subject: programs/never\n@case one\n@case two\n",
+    );
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "a subject that was never a blob at base cannot have died"
+    );
+    assert!(
+        stdout(&output).contains("subject-never-existed programs/never"),
+        "the finding says which way the header is a lie: {:?}",
+        stdout(&output)
+    );
+}
+
+#[test]
+fn a_ratchet_without_the_column_is_unchanged() {
+    // The compatibility property, asserted rather than assumed: the same
+    // deletion that row (a) admits is refused by a row that declares no header,
+    // and no header obligation is imposed on its files.
+    let dir = retirement_repo("retires-absent-column", None);
+    fs::remove_file(dir.join("suites/alpha.t")).unwrap();
+    fs::remove_file(dir.join("programs/alpha")).unwrap();
+
+    let output = check(&dir);
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "without the column a decrease is a decrease, exactly as before"
+    );
+    let text = stdout(&output);
+    assert!(
+        text.contains("3->1"),
+        "the finding is the plain count pair: {text:?}"
+    );
+    assert!(
+        !text.contains("subject-"),
+        "no subject reasoning rides on a row that declared none: {text:?}"
+    );
+}
