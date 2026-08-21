@@ -519,11 +519,105 @@ CLOUD-4 (now In Progress)"
 	# Stated rather than worked around. §1 forbids a second copy of the status
 	# list, so the vocabulary is whatever the closure spells — the same way the
 	# frontier is already relative to what was piped.
+	#
+	# CLOUD-838 gave the GLOSS form's silence a sibling that is not silent: the
+	# same unspellable column, asserted with a present-tense connective, is
+	# refused at exit 2 by the rows below. This shape stays exit 0 deliberately —
+	# with no vocabulary to lean on, `— **In Review**` and `— **Batten**` are the
+	# same bytes, and telling them apart needs the second authority §1 forbids.
 	issue CLOUD-1 Todo "" ""
 	issue CLOUD-2 Done "" ""
 	describe CLOUD-1 "* CLOUD-2 — **In Review**"
 	check
 	[ "$status" -eq 0 ]
+}
+
+# --- CLOUD-838: the alphabet's own anti-vacuity arm ---------------------------
+#
+# The scan's vocabulary is the piped set's OCCUPIED statuses, so a claim naming
+# any other column never matched and the row passed silently — and a row that
+# LEFT a column is exactly the row whose old column nothing in the set occupies.
+# The predicate was weakest where it was most needed.
+
+@test "a claim naming a column no piped issue occupies is refused, not ignored" {
+	# Red before the arm: silent, exit 0.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Todo "" ""
+	describe CLOUD-1 "CLOUD-2 is now Canceled, on a measurement."
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"graph status-claim-unscannable (CLOUD-1 claims CLOUD-2 is Canceled"* ]]
+	# Keyed to the SET, like status-claim-unjudgeable: which closure was piped is
+	# the caller's choice, not this issue's dishonesty.
+	[[ "$output" != *"CLOUD-1 status-claim-unscannable"* ]]
+}
+
+@test "the same claim, over a set that DOES occupy the column, is judged as before" {
+	# The vocabulary can spell it now, so the existing exit-1 rule decides and the
+	# new arm must stand down — one claim, one rule id, never both.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Done "" ""
+	issue CLOUD-3 Canceled "" ""
+	describe CLOUD-1 "CLOUD-2 is now Canceled, on a measurement."
+	check
+	[ "$status" -eq 1 ]
+	[[ "$output" == *"CLOUD-1 status-claim-disagrees (CLOUD-2 claimed Canceled, board says Done)"* ]]
+	[[ "$output" != *"status-claim-unscannable"* ]]
+}
+
+@test "a body carrying a stale claim AND its own correction reports the stale one" {
+	# CLOUD-743's real shape, measured 2026-08-21 and the case the whole row
+	# exists for. The correction is in the vocabulary (`Todo` is occupied), so the
+	# gate matched it, compared it against the board, and passed — satisfied by
+	# the accurate half of a body whose other half was false.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Todo "" ""
+	describe CLOUD-1 "CLOUD-2 is now Canceled, on a measurement.
+
+Note also that CLOUD-2 is Todo, not Canceled."
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"graph status-claim-unscannable (CLOUD-1 claims CLOUD-2 is Canceled"* ]]
+	# The correction agrees with the board, so nothing disagrees — which is
+	# precisely why the row above alone does not pin this.
+	[[ "$output" != *"status-claim-disagrees"* ]]
+}
+
+@test "ordinary prose is not a claim, however capitalized" {
+	# The bound on false triggers, and both halves of it. A capitalized word with
+	# no connective is a mention; a connective with no capital is narration.
+	# Measured over this repo's whole tracked tree: the claim shape occurs six
+	# times and every one is a real column claim.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Todo "" ""
+	describe CLOUD-1 "CLOUD-2 Batten's engine, per the note above.
+CLOUD-2 is the durable artifact this campaign rests on.
+Splits the representation CLOUD-2 introduced; see Regorus for the rationale."
+	check
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"status-claim"* ]]
+}
+
+@test "an unscannable report is pointer-only — no surrounding prose echoed" {
+	local secret="ACME Corp escalation"
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Todo "" ""
+	describe CLOUD-1 "$secret: CLOUD-2 is now Canceled."
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"status-claim-unscannable"* ]]
+	[[ "$output" != *"$secret"* ]]
+}
+
+@test "a multi-word column is named whole, never its first word" {
+	# `In` points at nothing a reader can act on. The span is capitalized WORDS,
+	# because the columns it has to name are multi-word.
+	issue CLOUD-1 Todo "" ""
+	issue CLOUD-2 Todo "" ""
+	describe CLOUD-1 "CLOUD-2 is now In Review."
+	check
+	[ "$status" -eq 2 ]
+	[[ "$output" == *"claims CLOUD-2 is In Review"* ]]
 }
 
 @test "ANTI-VACUITY: a set with no status claims anywhere still exits 0" {

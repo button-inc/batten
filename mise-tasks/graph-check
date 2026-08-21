@@ -37,6 +37,9 @@
 #
 #   status-claim-disagrees       a body asserts a column that is false -> exit 1
 #   status-claim-unjudgeable     it asserts one about an unpiped id    -> exit 2
+#   status-claim-unscannable     it asserts one in a column no piped   -> exit 2
+#                                issue occupies, so the scan's own
+#                                alphabet cannot spell it
 #   unjudgeable-description      a payload carries no description key  -> exit 2
 #
 # DECLARED FIELD SET (CLOUD-526), stated because a gate that never writes its
@@ -54,6 +57,12 @@
 # let 174 open issues accumulate with no phase: visible in the output, invisible
 # in the exit code, and therefore invisible to `verify` and CI.
 #MUTANT milestone-refusal-is-a-note|s@^\t\treport "\$id" "todo-unmilestoned"@\t\tnote "$id" "todo-unmilestoned"@|in a set where others carry one, is refused
+#
+# CLOUD-838's arm takes the same directive, for the same reason one level down:
+# demoted to a note the unscannable claim still prints and still exits 0, so the
+# arm is visible in the output and invisible to `verify` and CI — which is the
+# reading the row above records as having let 174 unmilestoned rows accumulate.
+#MUTANT unscannable-refusal-is-a-note|s@^\t\tunjudged "graph" "status-claim-unscannable@\t\tnote "graph" "status-claim-unscannable@|a claim naming a column no piped issue occupies is refused
 #
 # "At least one linked PR attachment" is a deliberate approximation of "landed":
 # it is checkable from the payload alone. Commit containment and "all referenced
@@ -238,6 +247,12 @@ fi
 # shellcheck disable=SC2016  # the $ is a regex metacharacter being escaped, not an expansion
 columns=$(jq -r '[.[].status] | unique | .[]' <<<"$issues" | sed 's/[][\.*^$(){}?+|/]/\\&/g' | paste -sd'|' -)
 
+# A CAPITALIZED SPAN — one or more capitalized words (CLOUD-838). This is what
+# stands in for a column the alphabet above cannot spell, and it is multi-word
+# because the columns it has to name are: reporting `In` for a claim of
+# `In Review` would point at nothing a reader can act on.
+CAPSPAN='[A-Z][A-Za-z]*([[:space:]]+[A-Z][A-Za-z]*)*'
+
 # ANTI-VACUITY, the conjunct CLOUD-251 applied to `blockedBy`: a set whose
 # descriptions were projected away has nothing to scan, and "found no claims"
 # would read as "made no false claims". Set-keyed for the same reason as
@@ -300,6 +315,58 @@ while IFS=$'\t' read -r claimer desc; do
 			report "$claimer" "status-claim-disagrees ($cited claimed $claimed, board says $actual)"
 		fi
 	done < <(grep -oE "CLOUD-[0-9]+[^[:alnum:]\\\\]*((is|is now|now)[^[:alnum:]\\\\]*)?($columns)" <<<"$prose" || true)
+
+	# --- the alphabet's own anti-vacuity arm (CLOUD-838) ---------------------
+	#
+	# The scan above can only judge a claim whose column word is in `$columns`,
+	# and `$columns` is the piped set's OCCUPIED statuses. So a claim naming any
+	# other column is not refuted, not reported unjudgeable — the regex simply
+	# never matches it, and the row passes silently. That inverts the predicate:
+	# the claims most likely to be stale are claims that a row LEFT a column,
+	# and a row that left one is precisely the row whose old column nothing in
+	# the set need occupy any more. The gate is weakest where it is most needed.
+	#
+	# MEASURED 2026-08-21 on CLOUD-743, which carries a claim and its own
+	# correction ~40 lines apart: `CLOUD-740 is now Canceled` (false) and
+	# `CLOUD-740 is Todo, not Canceled` (true). Over a 19-row closure the gate
+	# matched the CORRECTION — `Todo` is in the vocabulary because piped rows sit
+	# in it — compared it against the board, and passed. The false claim beside it
+	# was invisible, because no piped row is `Canceled`.
+	#
+	# So this is the arm `unjudgeable-milestone` already has one level up
+	# (CLOUD-695), applied one level down: not to a field missing from the input,
+	# but to a word missing from the input's alphabet. `could not look` gets its
+	# own channel instead of collapsing into `nothing to see` — CLOUD-251's split.
+	#
+	# THE CONNECTIVE IS REQUIRED HERE AND OPTIONAL ABOVE, and the asymmetry is the
+	# whole bound on false triggers. Above, `$columns` is what says a span is a
+	# column claim at all, so a gloss (`CLOUD-87 — **In Progress**`) is safe to
+	# match. Here there is no vocabulary to lean on: any capitalized word would
+	# qualify, so `| CLOUD-3 | Batten |` and `| CLOUD-3 | Done |` are the same
+	# bytes to a gate forbidden a second copy of the status list (§1). The
+	# present-tense connective is the only thing left that distinguishes an
+	# ASSERTION from a mention, so it is mandatory — which leaves the gloss form
+	# of an unspellable column uncovered, and that is a stated bound rather than
+	# an oversight: closing it needs an authority this gate must not have.
+	#
+	# Ordinary prose survives it for the same reason it survives the scan above:
+	# `CLOUD-129 is the durable artifact` has a connective and no capital.
+	while IFS= read -r claim; do
+		[ -n "$claim" ] || continue
+		token=$(grep -oE "${CAPSPAN}\$" <<<"$claim") || token=""
+		[ -n "$token" ] || continue
+		# In the alphabet: the scan above already judged it, and reporting here
+		# too would double-report one claim under two rule ids.
+		if grep -qxE "($columns)" <<<"$token"; then
+			continue
+		fi
+		cited=$(grep -oE 'CLOUD-[0-9]+' <<<"$claim" | tail -n1)
+		# Keyed to the SET, like `status-claim-unjudgeable`: which closure was
+		# piped is the caller's choice, not this issue's dishonesty. Pointer-only
+		# per non-negotiable rule 4 — two ids and one token, never the prose. The
+		# refusal names its own remedy, which is one re-fetch.
+		unjudged "graph" "status-claim-unscannable ($claimer claims $cited is $token, which no piped issue occupies — pipe one that does)"
+	done < <(grep -oE "CLOUD-[0-9]+[^[:alnum:]\\\\]*(is|is now|now)[^[:alnum:]\\\\]*${CAPSPAN}" <<<"$prose" || true)
 done < <(jq -r '.[] | select((.description | type) == "string") | [.id, .description] | @tsv' <<<"$issues" | by_num)
 
 # --- the frontier and WIP, on stdout ------------------------------------------
