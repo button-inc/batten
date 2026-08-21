@@ -38,6 +38,13 @@ violation contains {
 	"rule": "commit-names-no-message-source",
 	"msg": "this `git commit` names no message source — no `-m`, `-F`, `-C`, `--no-edit`, `--fixup` or `--squash` — so git opens $EDITOR and blocks there, after `pre-commit` has already spent the whole gate (~4 minutes measured, CLOUD-488). Write the message to a file and use `git commit -F <path>`, the one form that cannot rebind",
 } if {
+	# THE CHEAP TERM FIRST, and it is load-bearing rather than tidy. Everything
+	# below — the heredoc scan, both quote passes, the list and pipe splits — is
+	# computed only if this holds, and a command with no `commit` in it anywhere
+	# cannot be a `git commit`. Measured 2026-08-21 on the wired path: without
+	# it every mediated call pays the whole analysis, +1.9ms against a binary
+	# that answers in 5.8ms.
+	contains(input.call.command, "commit")
 	some stage in stages
 	git_commit(stage)
 	not names_a_message_source(stage)
@@ -61,14 +68,11 @@ openers[i] := delim if {
 	delim != ""
 }
 
+default first_word(_) := ""
+
 first_word(s) := w if {
 	parts := [p | some p in split(trim_space(s), " "); p != ""]
 	w := parts[0]
-}
-
-first_word(s) := "" if {
-	parts := [p | some p in split(trim_space(s), " "); p != ""]
-	count(parts) == 0
 }
 
 # A line is body text while some opener above it is still unclosed. The
@@ -143,15 +147,16 @@ program_index(stage) := idx if {
 	idx := candidates[0]
 }
 
-skippable(tok) if tok in wrappers
-
-skippable(tok) if startswith(tok, "-")
-
-skippable(tok) if contains(tok, "=")
-
-skippable(tok) if contains(tok, "@")
-
-skippable(tok) if substring(tok, 0, 1) in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+skippable(tok) if {
+	some answer in [
+		tok in wrappers,
+		startswith(tok, "-"),
+		contains(tok, "="),
+		contains(tok, "@"),
+		substring(tok, 0, 1) in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"},
+	]
+	answer
+}
 
 basename(tok) := b if {
 	parts := split(tok, "/")
@@ -180,13 +185,8 @@ long_flags := {"--message", "--file", "--reuse-message", "--reedit-message", "--
 
 names_a_message_source(stage) if {
 	some t in tokens(stage)
-	t in long_flags
-}
-
-names_a_message_source(stage) if {
-	some t in tokens(stage)
 	some flag in long_flags
-	startswith(t, concat("", [flag, "="]))
+	startswith(t, flag)
 }
 
 # A short cluster — `-m`, `-am`, `-F`, `-C`, `-c`: one `-`, then letters, at
