@@ -1396,10 +1396,18 @@ pub struct Envelope {
 pub enum Field {
     /// The host's own event spelling, echoed back untouched.
     ///
-    /// UNNORMALIZED on purpose: [`Event`] knows neither `UserPromptSubmit` nor
-    /// `PostToolBatch`, and `contract-drift` is wired to two events and echoes
-    /// the name into its own reply — a normalized answer would be wrong at one
-    /// of them.
+    /// UNNORMALIZED on purpose: [`Event`] has no `UserPromptSubmit` variant, and
+    /// `contract-drift` is wired to two events and echoes the name into its own
+    /// reply — a normalized answer would be wrong at one of them.
+    ///
+    /// **Corrected 2026-08-20 (CLOUD-817).** This read *"knows neither
+    /// `UserPromptSubmit` nor `PostToolBatch`"* until `PostToolBatch` landed as a
+    /// variant (CLOUD-389) and nobody re-read the comment that cited its absence.
+    /// Half a stated reason was false, in the one place a reader checks the
+    /// reasoning against the enum. The surviving half is the whole argument now,
+    /// and it is thinner than the pair was: whether `UserPromptSubmit` should be a
+    /// variant at all is CLOUD-817's decision, and answering it *yes* removes this
+    /// premise rather than amending it again.
     HookEventName,
     /// The host's session id.
     SessionId,
