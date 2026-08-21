@@ -117,9 +117,13 @@ fi
 # THE CORPUS: tracked files under crates/ and tests/, minus tests/fixtures/. The
 # exclusion is the vacuity guard argued for in the header, not tidiness.
 # An array, not a string: the file list is passed as argv to `grep`, and an
-# unquoted expansion to get there is a glob over every path the corpus holds.
+# unquoted expansion to get there is a glob over every path the corpus holds. Read
+# with a NUL-delimited loop rather than `mapfile`, which is bash 4 and banned here
+# (`no-bash4-mapfile`) — and `-z` is what makes a path containing a newline safe.
 corpus=()
-mapfile -t corpus < <(git ls-files -- 'crates' 'tests' ':!:tests/fixtures/*' 2>/dev/null || true)
+while IFS= read -r -d '' f; do
+	corpus+=("$f")
+done < <(git ls-files -z -- 'crates' 'tests' ':!:tests/fixtures/*' 2>/dev/null || true)
 if [ "${#corpus[@]}" -eq 0 ]; then
 	echo "::error:: ready-cites-check: no tracked files under crates/ or tests/ — a citation cannot be resolved against an empty corpus" >&2
 	exit 2
