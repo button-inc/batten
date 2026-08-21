@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.101](https://github.com/button-inc/batten/compare/v0.0.100...v0.0.101) - 2026-08-21
+
+### Added
+
+- *(hook)* [**breaking**] project the resolved fact set into the policy input
+
+### Fixed
+
+- *(hook)* take CodeRabbit's two findings on the projection
+
 ## [0.0.100](https://github.com/button-inc/batten/compare/v0.0.99...v0.0.100) - 2026-08-21
 
 ### Added
