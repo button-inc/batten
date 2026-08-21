@@ -2133,7 +2133,8 @@ fn load_policy(
     // folding the table into `Policy` would put an undecided value in the one
     // structure whose whole point is that everything in it is decided.
     let resolved = resolve::resolve(here, overrides)?;
-    let policy = hook::Policy::from_resolved(&resolved, harness, here)?;
+    let policy =
+        hook::Policy::from_resolved(&resolved, harness, here, overrides.config_from.as_deref())?;
     Ok((policy, resolved.waivers))
 }
 

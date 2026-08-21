@@ -148,6 +148,10 @@ impl Clone for Module {
 /// Boundary I/O, called once per process from the config resolution path — never
 /// from [`crate::hook::adjudicate`], which is contractually pure.
 ///
+/// `reference` is the `--config-from` ref when one is in play. It is not
+/// optional politeness: the module has to come from the same place the rules
+/// did, or a base-ref comparison reads the working tree's predicates.
+///
 /// # Errors
 ///
 /// A [`UsageError`] (exit `1`) when a row registers no module, when the file is
@@ -155,7 +159,7 @@ impl Clone for Module {
 /// faults. Every one of those is a config error at load rather than a surprise
 /// at the gate, which is the whole reason this function drives a query it throws
 /// away.
-pub fn load(root: &Path, rules: &[Rule]) -> Result<Vec<Module>> {
+pub fn load(root: &Path, rules: &[Rule], reference: Option<&str>) -> Result<Vec<Module>> {
     let mut modules = Vec::new();
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for rule in rules.iter().filter(|r| r.kind == RuleKind::Policy) {
@@ -177,12 +181,30 @@ pub fn load(root: &Path, rules: &[Rule]) -> Result<Vec<Module>> {
                 rule.id
             )));
         }
-        let source = std::fs::read_to_string(root.join(path)).map_err(|_| {
-            UsageError::raise(format!(
-                "rule `{}` registers `{path}`, which cannot be read",
-                rule.id
-            ))
-        })?;
+        // THE MODULE COMES FROM WHEREVER THE RULES CAME FROM, and that is the
+        // whole of this branch. Under `--config-from <ref>` the authority is read
+        // from the ref (`trust::load_base`), so reading the module off disk would
+        // pair a base's rules with the working tree's predicates — and an agent
+        // editing a registered `.rego` would change what the BASE policy decides.
+        // That is exactly the influence `--config-from` exists to exclude, and it
+        // is CLOUD-243's shape on the surface where it bites hardest.
+        //
+        // `git::show` is the gix-backed reader CLOUD-718 hardened, and it takes
+        // the path as data rather than interpolating it into an argv.
+        let source = match reference {
+            Some(reference) => crate::git::show(root, reference, path).map_err(|_| {
+                UsageError::raise(format!(
+                    "rule `{}` registers `{path}`, which is absent at {reference}",
+                    rule.id
+                ))
+            })?,
+            None => std::fs::read_to_string(root.join(path)).map_err(|_| {
+                UsageError::raise(format!(
+                    "rule `{}` registers `{path}`, which cannot be read",
+                    rule.id
+                ))
+            })?,
+        };
         let mut engine = regorus::Engine::new();
         // The error is the engine's own, and it names a line in the MODULE, not
         // a byte of it — a parse diagnostic is a pointer, which is what rule 4

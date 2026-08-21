@@ -1,0 +1,25 @@
+version = 1
+
+# A `policy` rule hands a REGISTERED module the resolved fact set and reads back
+# denials. It is adjudicated by `batten hook` against one mediated call, never by
+# the tree engine — so this fixture pins the routing half exactly as the `shape`,
+# `receipt` and `pipeline` fixtures beside it do: `check` walks past a
+# `mediated_call` row and reports nothing, rather than erroring on a rule it
+# cannot evaluate or evaluating it as though it selected files.
+#
+# The module is REGISTERED, never discovered. §8 forbids the upward directory
+# walk and the `conf.d` merge; naming the file here, in the one committed
+# authority, is the opposite of both. A fixture that globbed a directory would be
+# pinning the thing §8 refuses.
+#
+# The file behind `module` is materialized beside this one, so the row is a real
+# registration rather than a shell: `policy::load` compiles every module and
+# drives a smoke query at load, and a fixture pointing at nothing would be
+# testing that refusal instead of the routing.
+[[rule]]
+id = "module-refuses-a-shape"
+kind = "policy"
+scope = "mediated_call"
+module = "gate.rego"
+severity = "deny"
+reason = "the module decides; this row only registers it"

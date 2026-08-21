@@ -79,7 +79,7 @@ fn scratch(name: &str) -> std::path::PathBuf {
 fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
     let root = scratch("denies");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let modules = policy::load(&root, &[row("policy-writes", &path)]).expect("load");
+    let modules = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
     assert_eq!(modules.len(), 1);
 
     let denied = policy::deny(&modules[0], r#"{"call":{"operation":"write"}}"#);
@@ -104,7 +104,7 @@ fn a_module_denies_on_a_fact_and_is_silent_otherwise() {
 fn an_unparseable_input_is_could_not_look_and_never_an_empty_deny_set() {
     let root = scratch("couldnotlook");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let modules = policy::load(&root, &[row("policy-writes", &path)]).expect("load");
+    let modules = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
 
     let answer = policy::deny(&modules[0], "{not json");
     assert!(
@@ -121,7 +121,7 @@ fn a_cyclic_module_is_refused_at_load() {
     // in `load`, this module compiles clean here and faults at the gate.
     let root = scratch("cyclic");
     let path = module_file(&root, "cyclic.rego", CYCLIC);
-    let err = policy::load(&root, &[row("policy-cyclic", &path)])
+    let err = policy::load(&root, &[row("policy-cyclic", &path)], None)
         .expect_err("a cycle is a config error, not a runtime surprise");
     let text = format!("{err}");
     assert!(
@@ -144,7 +144,7 @@ fn a_cyclic_module_is_refused_at_load() {
 #[test]
 fn a_module_that_cannot_be_read_is_refused_at_load() {
     let root = scratch("absent");
-    let err = policy::load(&root, &[row("policy-absent", "nowhere.rego")])
+    let err = policy::load(&root, &[row("policy-absent", "nowhere.rego")], None)
         .expect_err("a registration naming no file decides nothing and must not load");
     assert!(format!("{err}").contains("nowhere.rego"));
 }
@@ -156,7 +156,7 @@ fn two_rows_registering_one_module_are_refused_at_load() {
     // answer. Same reasoning as the duplicate derived-value name (CLOUD-773).
     let root = scratch("duplicate");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let err = policy::load(&root, &[row("first", &path), row("second", &path)])
+    let err = policy::load(&root, &[row("first", &path), row("second", &path)], None)
         .expect_err("one module, two registrations");
     assert!(format!("{err}").contains("already registers"));
 }
@@ -168,7 +168,7 @@ fn a_module_holds_no_source_and_cannot_leak_one_through_debug() {
     // re-derived it. This asserts the rendering, which is the reachable half.
     let root = scratch("pointer");
     let path = module_file(&root, "writes.rego", DENIES_WRITES);
-    let modules = policy::load(&root, &[row("policy-writes", &path)]).expect("load");
+    let modules = policy::load(&root, &[row("policy-writes", &path)], None).expect("load");
     let rendered = format!("{:?}", modules[0]);
     assert!(rendered.contains("policy-writes"), "the pointer is present");
     assert!(

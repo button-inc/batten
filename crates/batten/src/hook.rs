@@ -1903,6 +1903,7 @@ impl Policy {
         resolved: &Resolved,
         harness: Harness,
         root: &std::path::Path,
+        reference: Option<&str>,
     ) -> anyhow::Result<Policy> {
         Ok(Policy {
             harness,
@@ -1914,14 +1915,36 @@ impl Policy {
                 .collect(),
             fail_on_warning: resolved.fail_on_warning,
             verbs: resolved.verbs.clone(),
-            protected: PathSet::includes("protected", &resolved.protected)?,
+            // EVERY REGISTERED MODULE IS A PROTECTED PATH, derived rather than
+            // asked for (CLOUD-763's fourth bound). §8's security property is
+            // that "an agent's context can never influence the rules it is
+            // judged by", and a module a consumer forgot to list in `protected`
+            // is exactly that influence. Deriving it from the rule table means
+            // registering a module protects it by construction — there is no
+            // spelling for a registered-but-unprotected module, so the bound
+            // cannot be half-configured.
+            protected: PathSet::includes(
+                "protected",
+                &resolved
+                    .protected
+                    .iter()
+                    .cloned()
+                    .chain(
+                        resolved
+                            .rules
+                            .iter()
+                            .filter(|rule| rule.kind == RuleKind::Policy)
+                            .filter_map(|rule| rule.module.clone()),
+                    )
+                    .collect::<Vec<String>>(),
+            )?,
             redirects: resolved.redirects.clone(),
             facts: resolved.facts.clone(),
             // Boundary I/O, and this is the only place it happens: `load`
             // reads, compiles and smoke-queries every registered module here so
             // that `adjudicate` stays contractually pure and a broken module is
             // a config error rather than a denied tool call (CLOUD-647).
-            modules: crate::policy::load(root, &resolved.rules)?,
+            modules: crate::policy::load(root, &resolved.rules, reference)?,
         })
     }
 
@@ -2046,7 +2069,15 @@ impl Policy {
     /// "which calls mutate" stays one declared list rather than two.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.shapes.is_empty() && (self.verbs.is_empty() || self.protected.is_empty())
+        self.shapes.is_empty()
+            // A repository whose only mediated-call policy is a registered
+            // module has declared something, and this predicate short-circuits
+            // `adjudicated` before any gate runs — so omitting `modules` here
+            // makes the policy gate unreachable rather than merely unused.
+            // Caught by `a_module_denies_through_the_adjudication_chain`, which
+            // is the case the unit tests over `policy::deny` cannot make.
+            && self.modules.is_empty()
+            && (self.verbs.is_empty() || self.protected.is_empty())
     }
 }
 
@@ -3800,6 +3831,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,
@@ -3831,6 +3863,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
@@ -4091,6 +4124,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![shape("no-bare-cargo", "cargo", None)],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4165,6 +4199,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4525,6 +4560,7 @@ mod tests {
         let policy = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4553,6 +4589,7 @@ mod tests {
         let advisory = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule.clone()],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4575,6 +4612,7 @@ mod tests {
         let promoted = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: true,
             verbs: Vec::new(),
@@ -4605,6 +4643,7 @@ mod tests {
         let policy = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![
                 shape("first", "gh pr merge", None),
                 shape("second", "gh pr merge", None),
@@ -4647,6 +4686,7 @@ mod tests {
         let policy = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4704,12 +4744,141 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
             protected: PathSet::empty(),
             redirects: Vec::new(),
         }
+    }
+
+    /// A policy carrying one registered module, compiled from a real file.
+    ///
+    /// Built through [`crate::policy::load`] rather than by hand, because a
+    /// `Module` with no compiled engine is not a thing the boundary can produce
+    /// and a test that fabricated one would be exercising a state the loader
+    /// refuses.
+    fn module_policy(source: &str) -> Policy {
+        let dir = std::env::temp_dir().join(format!("batten-hook-policy-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        std::fs::write(dir.join("gate.rego"), source).expect("write module");
+        let row: Rule = serde_json::from_value(serde_json::json!({
+            "id": "module-gate",
+            "kind": "policy",
+            "scope": "mediated_call",
+            "module": "gate.rego",
+            "severity": "deny",
+        }))
+        .expect("a policy row the loader accepts");
+        Policy {
+            harness: Harness::ExitCode,
+            facts: Vec::new(),
+            modules: crate::policy::load(&dir, &[row], None).expect("load"),
+            shapes: Vec::new(),
+            fail_on_warning: false,
+            verbs: Vec::new(),
+            protected: PathSet::empty(),
+            redirects: Vec::new(),
+        }
+    }
+
+    /// The wiring assertion (CLOUD-418), and the one the six `policy_modules`
+    /// cases cannot make: those exercise `policy::load` and `policy::deny`
+    /// directly, so every one of them passes on a chain that never calls
+    /// `policy_rules`. This drives the real entry point.
+    #[test]
+    fn a_module_denies_through_the_adjudication_chain() {
+        const DENIES_A_COMMAND: &str = r#"
+package batten
+
+import rego.v1
+
+deny contains "refused by the module" if {
+    contains(input.call.command, "forbidden")
+}
+"#;
+        let policy = module_policy(DENIES_A_COMMAND);
+
+        let decision = adjudicate(
+            &policy,
+            &envelope("run forbidden thing"),
+            false,
+            &None,
+            &None,
+            &crate::stop::StopFacts::default(),
+        );
+        match decision {
+            Decision::Deny(refusal) => {
+                let rendered = format!("{refusal:?}");
+                assert!(
+                    rendered.contains("refused by the module"),
+                    "the module's own message travels: {rendered}"
+                );
+                assert!(
+                    !rendered.contains("deny contains"),
+                    "no byte of the policy body reaches the refusal (rule 4): {rendered}"
+                );
+            }
+            other => panic!("the chain did not reach the policy gate: {other:?}"),
+        }
+
+        // The same policy, a command it does not match: the gate ran and had no
+        // answer, which must not be a deny.
+        assert_eq!(
+            adjudicate(
+                &policy,
+                &envelope("run something else"),
+                false,
+                &None,
+                &None,
+                &crate::stop::StopFacts::default(),
+            ),
+            Decision::Allow,
+            "a module that matches nothing allows"
+        );
+    }
+
+    /// CLOUD-763's fourth bound, DERIVED rather than configured.
+    ///
+    /// §8's security property is that an agent's context can never influence the
+    /// rules it is judged by, and a module a consumer forgot to list in
+    /// `protected` is exactly that influence. Registering it protects it, so
+    /// "registered but unprotected" has no spelling.
+    ///
+    /// Driven through `resolve` rather than a hand-built `Resolved`, because the
+    /// derivation lives in `from_resolved`: a struct literal would assert the
+    /// field the test set rather than the one the loader computes.
+    #[test]
+    fn a_registered_module_is_protected_without_being_listed() {
+        let dir = std::env::temp_dir().join(format!("batten-protect-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("scratch");
+        std::fs::write(
+            dir.join("guard.rego"),
+            "package batten\n\nimport rego.v1\n\ndeny contains \"x\" if { false }\n",
+        )
+        .expect("write module");
+        std::fs::write(
+            dir.join("batten.toml"),
+            // NOTHING in `protected` — that absence is the premise.
+            "version = 1\n\n[[rule]]\nid = \"policy-guard\"\nkind = \"policy\"\n\
+             scope = \"mediated_call\"\nmodule = \"guard.rego\"\nseverity = \"deny\"\n",
+        )
+        .expect("write authority");
+
+        let resolved = crate::resolve::resolve(&dir, &crate::resolve::Overrides::default())
+            .expect("the authority resolves");
+        assert!(
+            resolved.protected.is_empty(),
+            "the consumer declared no protected paths, which is what makes this a real case"
+        );
+
+        let policy =
+            Policy::from_resolved(&resolved, Harness::ExitCode, &dir, None).expect("policy loads");
+        assert!(
+            policy.protected.contains("guard.rego"),
+            "a registered module is protected by construction, not by configuration"
+        );
     }
 
     /// The resolved half of [`ReceiptFacts`] — what a boundary that COULD look
@@ -4746,6 +4915,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -4997,6 +5167,7 @@ mod tests {
         Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: vec![rule],
             fail_on_warning: false,
             verbs: Vec::new(),
@@ -5648,6 +5819,7 @@ mod tests {
         let no_paths = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: vec![verb("rm", None)],
@@ -5728,6 +5900,7 @@ mod tests {
         let guarding = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs: verbs.clone(),
@@ -5738,6 +5911,7 @@ mod tests {
         let elsewhere = Policy {
             harness: Harness::ExitCode,
             facts: Vec::new(),
+            modules: Vec::new(),
             shapes: Vec::new(),
             fail_on_warning: false,
             verbs,

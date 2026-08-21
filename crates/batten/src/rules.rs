@@ -1426,7 +1426,7 @@ impl Rule {
     /// about all of them makes that failure impossible, and
     /// [`tests::every_optional_rule_field_is_classified_by_every_kind`] fails if
     /// a column is added here without being placed.
-    fn columns(&self) -> [(&'static str, bool); 28] {
+    fn columns(&self) -> [(&'static str, bool); 29] {
         [
             // In the census because it is now per-kind, which is what makes
             // "required by every kind but the judge" a fact the existing
@@ -1454,6 +1454,7 @@ impl Rule {
             ("node", self.node.is_some()),
             ("derives", self.derives.is_some()),
             ("reads", self.reads.is_some()),
+            ("module", self.module.is_some()),
             ("checks", self.checks.is_some()),
             ("key", self.key.is_some()),
             ("trigger", self.trigger.is_some()),
@@ -4572,6 +4573,10 @@ mod tests {
                         "no_fix_reason" => rule.no_fix_reason = Some("answered by hand".to_owned()),
                         "format" => rule.format = Some(crate::facts::Format::Toml),
                         "node" => rule.node = Some("a.b".to_owned()),
+                        // A path, not a body: this census is about scope
+                        // pairings, and `policy::load` is what decides whether
+                        // the file behind it compiles.
+                        "module" => rule.module = Some("policy/x.rego".to_owned()),
                         other => panic!("unclassified required column `{other}`"),
                     }
                 }
