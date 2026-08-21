@@ -1372,7 +1372,7 @@ fn run_policy_test(json: bool, overrides: &Overrides, out: &mut dyn Write) -> Re
     // The same shared acquisition a real `check` does, so a suite's input is the
     // one the engine would build — including the one-read-per-path property
     // (CLOUD-850).
-    let documents = rules::acquire_declared(&config.rules, root, &tracked);
+    let documents = rules::acquire_declared(&config.rules, root, &tracked)?;
 
     let mut reports = Vec::new();
     for rule in config

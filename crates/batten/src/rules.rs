@@ -2784,7 +2784,7 @@ fn run(
     // Resolved ONCE for the whole run, beside the two above and for the same
     // reason (CLOUD-850): every document the rule set declares, read and parsed
     // once rather than once per rule. `documents_acquired` is what asserts it.
-    let documents = acquire_declared(rules, root, &files);
+    let documents = acquire_declared(rules, root, &files)?;
 
     let mut scan = Scan::default();
     for rule in rules {
@@ -3107,6 +3107,57 @@ pub(crate) fn acquire_document(
     }
 }
 
+/// The most documents one run may acquire before it refuses (CLOUD-850).
+///
+/// **A backstop, not a tuned threshold, and the distinction is the whole
+/// justification.** `mise-tasks/perf-assert` budgets four paths and deliberately
+/// budgets no `check` path, on a reason that is sound and stays: *"`check` is
+/// bounded by the repository it is pointed at — a tree walk over a large
+/// consumer repo is legitimately slower and no ceiling here could tell that
+/// apart from a regression."* What follows is not that `check` needs no bound;
+/// it is that the bound cannot be a **time**. This is a COUNT, which is a
+/// property of the rule set rather than of the machine, so it discriminates
+/// exactly where a clock could not.
+///
+/// The value is deliberately far above any real rule set — CLOUD-843's whole
+/// campaign is 82 gates, and the worst-behaved of them opens 673 files — because
+/// a backstop that a legitimate consumer can reach is a gate that fails on
+/// correct use. Non-negotiable rule 3 says a gate decides rather than estimates,
+/// and what this decides is "the read set stopped being declared", not "this
+/// repository is too big".
+///
+/// Not a config key: house style §8 keeps configuration narrow, and a consumer
+/// raising its own ceiling would be a consumer switching off the only bound this
+/// surface has.
+const READ_BUDGET: usize = 10_000;
+
+/// Refuse a run whose declared read set has passed `limit` (CLOUD-850).
+///
+/// **Extracted so it is testable at any size**, which is `.claude/rules/rust.md`'s
+/// standing instruction: where the environment cannot cheaply produce the failing
+/// condition, extract the decision and test it directly rather than asserting a
+/// conclusion over a precondition that was never created. Building a
+/// ten-thousand-file fixture to exercise a `>=` would be that precondition, and
+/// a test that skipped it would assert its own premise.
+///
+/// # Errors
+///
+/// A [`UsageError`] (→ exit `1`) carrying a COUNT and a LIMIT and nothing else.
+/// §5's pointer-only rule is stricter than usual here: the natural thing to print
+/// is the path list, and that list is exactly the consumer's file names, so a
+/// refusal that printed it would put the shape of a private tree into an error
+/// message. A count is not a pointer — it is less — and that is the right amount.
+fn refuse_over_budget(acquired: usize, limit: usize) -> anyhow::Result<()> {
+    if acquired < limit {
+        return Ok(());
+    }
+    Err(UsageError::raise(format!(
+        "the declared read set exceeds this run\u{2019}s budget: {} documents, limit {limit}. \
+         A rule set this wide has stopped declaring what it reads",
+        acquired + 1
+    )))
+}
+
 /// The documents one policy row hands its bundle: its literal [`Rule::documents`]
 /// plus everything its [`Rule::sources`] globs select (CLOUD-850).
 ///
@@ -3154,7 +3205,7 @@ pub(crate) fn acquire_declared(
     rules: &[Rule],
     root: &Path,
     files: &[String],
-) -> BTreeMap<String, Acquired> {
+) -> anyhow::Result<BTreeMap<String, Acquired>> {
     let mut cache: BTreeMap<String, Acquired> = BTreeMap::new();
     for rule in rules
         .iter()
@@ -3173,11 +3224,19 @@ pub(crate) fn acquire_declared(
                 // rows over one path is ONE read and ONE parse.
                 continue;
             }
+            // THE BUDGET, checked before the read rather than after it, so the
+            // refusal is a bound and not a report of one already exceeded.
+            //
+            // POINTER-ONLY, and here that means less than a pointer (§5): a
+            // count and a limit, never the path list. The list is exactly the
+            // consumer's file names, and a refusal that printed it would put the
+            // shape of a private tree into an error message.
+            refuse_over_budget(cache.len(), READ_BUDGET)?;
             let acquired = acquire_document(root, &path, crate::facts::Format::for_path(&path));
             cache.insert(path, acquired);
         }
     }
-    cache
+    Ok(cache)
 }
 
 /// The input document a tree-scoped policy bundle decides over (CLOUD-833),
@@ -5164,6 +5223,40 @@ mod tests {
             checked > 0,
             "the module doc shows no `input.tree.` example; this gate is reading \
              nothing and would pass on any document"
+        );
+    }
+
+    // --- the per-run read budget (CLOUD-850) ---------------------------------
+
+    #[test]
+    fn the_read_budget_refuses_at_the_limit_and_not_below_it() {
+        // §7(d), both halves in one function, because either alone is a gate
+        // that cannot discriminate: one that never refuses is not a budget, and
+        // one that always refuses is not usable.
+        //
+        // `perf-assert` budgets no `check` path, on the sound reason that a tree
+        // walk over a large consumer repo is legitimately slower and no TIME
+        // could tell that apart from a regression. This is a COUNT — a property
+        // of the rule set rather than of the machine — which is exactly where a
+        // clock could not decide and this can.
+        super::refuse_over_budget(0, 4).expect("an empty read set is under any budget");
+        super::refuse_over_budget(3, 4).expect("just below the limit does not refuse");
+
+        let err = super::refuse_over_budget(4, 4).expect_err("at the limit it refuses");
+        let message = format!("{err}");
+        assert!(
+            message.contains('4'),
+            "the refusal names the limit it enforced: {message}"
+        );
+
+        // POINTER-ONLY, and here LESS than a pointer (§5). The natural thing to
+        // print is the path list, and that list is the consumer's own file
+        // names — a refusal that printed it would put the shape of a private
+        // tree into an error message. A count carries the same decision and
+        // none of the content.
+        assert!(
+            !message.contains('/') && !message.contains(".toml"),
+            "no path, no extension, nothing shaped like a file name: {message}"
         );
     }
 
