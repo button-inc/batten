@@ -19,6 +19,14 @@ setup() {
 		ln -s "$REPO/$entry" "$ROOT/$entry"
 	done
 	cp "$REPO/batten.toml" "$ROOT/batten.toml"
+	# The registered policy module travels with the authority that registers it
+	# (CLOUD-843). `batten` refuses to load a config naming a module it cannot
+	# read — correctly, since a silently absent module is a gate that decides
+	# nothing — so a fixture copying the real `batten.toml` has to bring
+	# `policy/` too. Symlinked rather than copied: nothing here walks it, and the
+	# module is read by path. Same principle as the `ratchet` base and the
+	# `no-secrets` scanner below — satisfy the precondition, do not strip the row.
+	ln -s "$REPO/policy" "$ROOT/policy"
 	# COPIED, not symlinked: the copied batten.toml declares
 	# `[budget.instructions]` over AGENTS.md, and since CLOUD-50 `batten check`
 	# enforces every declared budget — an entry matching no file is exit 1 per
